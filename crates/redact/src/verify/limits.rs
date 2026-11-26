@@ -37,6 +37,10 @@ pub(crate) const MIN_STRUCTURED_NEEDLE: usize = 6;
 /// follow: the bound the interpreter itself walks forms at, so the proof reaches everything a
 /// redaction could have removed and the two cannot drift apart.
 pub(crate) const MAX_DEPTH: usize = crate::interp::MAX_DEPTH;
+/// Most searches, on one page, of a pattern cell, soft-mask group, Type3 glyph or form inside them
+/// for images in a scope of names other than the first it was searched in: what it draws there
+/// can differ only where it looks names up through what draws it. More can't be checked.
+pub(crate) const MAX_RESEARCHES: usize = 4096;
 /// Most pixels an image may have for the proof to inspect it (larger ones are removed by
 /// [`apply`](crate::apply), and the proof's pixel look has the same ceiling: `crate::image`).
 pub(crate) const MAX_PIXELS: u64 = crate::image::MAX_PIXELS;

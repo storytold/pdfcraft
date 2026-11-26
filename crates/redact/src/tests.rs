@@ -3540,7 +3540,15 @@ fn the_pages_check_does_not_follow_a_form_with_resources_of_its_own() {
         stream(image, b"p"),
     ]);
     let mut xo = Dict::from_iter([(b"FmOwn".to_vec(), Object::Ref(ObjRef::new(3, 0))), (b"Im1".to_vec(), Object::Ref(ObjRef::new(5, 0)))]);
-    crate::interp::prune(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &mut xo, &[b"Im1".to_vec()], &[b"/FmOwn Do".to_vec()]).unwrap();
+    crate::interp::prune(
+        &doc,
+        &mut pdfcraft_cos::DecodeBudget::page(),
+        &mut crate::interp::ScopedReads::default(),
+        &mut xo,
+        &[b"Im1".to_vec()],
+        &[b"/FmOwn Do".to_vec()],
+    )
+    .unwrap();
     assert!(!xo.contains(b"Im1") && xo.contains(b"FmOwn"), "{xo:?}");
 }
 
@@ -3569,6 +3577,145 @@ fn what_content_draws_through_its_resources_is_read_up_to_two_million_operators(
             crate::interp::resource_ops(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &res, &[b"/Fm Do".to_vec()]).is_ok(),
             read,
             "a form of {ops} operators"
+        );
+    }
+}
+
+/// Forms with resources of their own are read up to 2,000,000 of their operators between them; past
+/// that the later ones aren't read, and the read goes on, partial. `/Small`, drawn after `/Big`,
+/// draws `/Im` through its caller's names, and counts only while `/Big` stays within them.
+#[test]
+fn forms_with_resources_of_their_own_are_read_up_to_two_million_operators() {
+    for (ops, read) in [(1_999_999, true), (2_000_000, false)] {
+        let doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /ProcSet [/PDF] >>", b"n ".repeat(ops)),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /ProcSet [/PDF] >>", b"/Im Do"),
+        ]);
+        let forms = Dict::from_iter([(b"Big".to_vec(), Object::Ref(ObjRef::new(3, 0))), (b"Small".to_vec(), Object::Ref(ObjRef::new(4, 0)))]);
+        let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(forms))]);
+        let found = crate::interp::resource_ops(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &res, &[b"/Big Do /Small Do".to_vec()]).unwrap();
+        assert_eq!(found.ops.iter().any(|op| op.last_name() == Some(b"Im".as_slice())), read, "/Big of {ops} operators");
+        assert_eq!(found.partial, !read, "/Big of {ops} operators");
+    }
+}
+
+/// `/B`, whose own resources give nothing, draws `/Im`: drawn inside `/A`, whose own `/Im` is a
+/// form, its `/Im` is `/A`'s, and not what the resources read give, though they give an `/Im` too;
+/// drawn by the content, it is theirs. The reads share one page's: `/B`, read once, is taken through
+/// the names of the forms on the way to it each time, in either order, and each read is whole.
+#[test]
+fn a_form_read_once_is_taken_through_the_names_on_the_way_to_it() {
+    let doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im 4 0 R /B 5 0 R >> >>", b"/B Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b""),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >>", b"/Im Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b""),
+    ]);
+    let names = Dict::from_iter([
+        (b"A".to_vec(), Object::Ref(ObjRef::new(3, 0))),
+        (b"B".to_vec(), Object::Ref(ObjRef::new(5, 0))),
+        (b"Im".to_vec(), Object::Ref(ObjRef::new(6, 0))),
+    ]);
+    let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(names))]);
+    let draws_im = |content: &[u8], scoped: &mut crate::interp::ScopedReads| {
+        let found = crate::interp::resource_ops_with(&doc, &mut pdfcraft_cos::DecodeBudget::page(), scoped, &res, None, &[content.to_vec()]).unwrap();
+        assert!(!found.partial, "{}", String::from_utf8_lossy(content));
+        found.ops.iter().any(|op| op.is("Do") && op.last_name() == Some(b"Im".as_slice()))
+    };
+    let mut scoped = crate::interp::ScopedReads::default();
+    assert!(!draws_im(b"/A Do", &mut scoped), "inside /A");
+    assert!(draws_im(b"/B Do", &mut scoped), "by the content, after /A");
+    let mut scoped = crate::interp::ScopedReads::default();
+    assert!(draws_im(b"/B Do", &mut scoped), "by the content");
+    assert!(!draws_im(b"/A Do", &mut scoped), "inside /A, after the content");
+}
+
+/// Forms with resources of their own are read in up to 65,536 scopes; past that the later ones
+/// aren't read, and the read is partial. 255 forms each draw, through their own names, the same 256
+/// forms with resources of their own: a scope for each of the 255 and for each pair, 65,535; one
+/// more drawing none of the 256 makes 65,536, and one drawing one of them needs 65,537.
+#[test]
+fn forms_with_resources_of_their_own_are_read_in_up_to_65536_scopes() {
+    for (last_draws, partial) in [("", false), ("/S0 Do", true)] {
+        let names: String = (0..256).map(|i| format!("/S{i} {} 0 R ", 4 + i)).collect();
+        let draws: String = (0..256).map(|i| format!("/S{i} Do ")).collect();
+        let mut objs = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+            format!("<< {names}>>").into_bytes(),
+        ];
+        for _ in 0..256 {
+            objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /ProcSet [/PDF] >>", b""));
+        }
+        for i in 0..256 {
+            let content = if i < 255 { draws.as_bytes() } else { last_draws.as_bytes() };
+            objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject 3 0 R >>", content));
+        }
+        let doc = pdf(objs);
+        let firsts: Dict = (0..256u32).map(|i| (format!("F{i}").into_bytes(), Object::Ref(ObjRef::new(260 + i, 0)))).collect();
+        let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(firsts))]);
+        let content: String = (0..256).map(|i| format!("/F{i} Do ")).collect();
+        let found = crate::interp::resource_ops(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &res, &[content.into_bytes()]).unwrap();
+        assert_eq!(found.partial, partial, "the last form drawing {last_draws:?}");
+    }
+}
+
+/// 255 forms each draw the same 256 forms with resources of their own, as above, so each of those
+/// is read once and taken again 254 times (65,024 in all), at what it hands on. Drawing one name
+/// its own resources give, 1,000 times, it is cheap to take again, and the read is whole; so it is
+/// keeping one operator of 10,000 operands and a string of 4,096 bytes, which is handed on with
+/// only the last two, as names or null, and keeping one operator 1,000 times, handed on once.
+/// Drawing 1,000 such names, or one of 4,096 bytes, each taking again costs them, and past
+/// 2,000,000 the read is partial; so for drawing five forms without resources, each holding six
+/// different marks that name nothing (malformed: no operand, or dictionaries alone), each read in
+/// one of 65,280 scopes and taken again in each of the others at one for each mark.
+#[test]
+fn a_form_taken_again_costs_the_names_it_hands_on() {
+    let long = "X".repeat(4096);
+    let names: Vec<u8> = (0..1000).flat_map(|i| format!("/X{i} Do ").into_bytes()).collect();
+    let marks: String = (0..5).map(|i| format!("/G{i} {} 0 R ", 518 + i)).collect();
+    let rows: [(Vec<u8>, String, bool); 6] = [
+        (b"/X Do ".repeat(1000), "/Resources << /XObject << /X 516 0 R >> >>".into(), false),
+        ([b"0 ".repeat(10_000), format!("({long}) /P0 scn").into_bytes()].concat(), "/Resources << /ProcSet [/PDF] >>".into(), false),
+        (b"/P0 scn ".repeat(1000), "/Resources << /ProcSet [/PDF] >>".into(), false),
+        (names, "/Resources << /XObject 517 0 R >>".into(), true),
+        (format!("/{long} Do").into_bytes(), format!("/Resources << /XObject << /{long} 516 0 R >> >>"), true),
+        (b"/G0 Do /G1 Do /G2 Do /G3 Do /G4 Do".to_vec(), format!("/Resources << /XObject << {marks}>> >>"), true),
+    ];
+    for (content, own, partial) in rows {
+        let seconds: String = (0..256).map(|i| format!("/S{i} {} 0 R ", 4 + i)).collect();
+        let draws: String = (0..256).map(|i| format!("/S{i} Do ")).collect();
+        let mut objs = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+            format!("<< {seconds}>>").into_bytes(),
+        ];
+        for _ in 0..256 {
+            objs.push(stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 1 1] {own}"), &content));
+        }
+        for _ in 0..256 {
+            objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject 3 0 R >>", draws.as_bytes()));
+        }
+        objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b""));
+        let xs: String = (0..1000).map(|i| format!("/X{i} 516 0 R ")).collect();
+        objs.push(format!("<< {xs}>>").into_bytes());
+        for _ in 0..5 {
+            objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b"BDC << >> BDC << >> << >> BDC DP << >> DP << >> << >> DP"));
+        }
+        let doc = pdf(objs);
+        let firsts: Dict = (0..255u32).map(|i| (format!("F{i}").into_bytes(), Object::Ref(ObjRef::new(260 + i, 0)))).collect();
+        let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(firsts))]);
+        let content: String = (0..255).map(|i| format!("/F{i} Do ")).collect();
+        let found = crate::interp::resource_ops(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &res, &[content.into_bytes()]).unwrap();
+        let label = &own[..own.len().min(60)];
+        assert_eq!(found.partial, partial, "{label}");
+        assert!(
+            found.ops.iter().all(|op| op.operands.len() <= 2 && op.operands.iter().all(|o| matches!(o, Object::Name(_) | Object::Null))),
+            "{label}"
         );
     }
 }
@@ -3917,6 +4064,123 @@ fn a_form_with_resources_of_its_own_does_not_keep_its_callers_image() {
     let xo = saved.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
     let Object::Stream(own) = &*saved.get(xo.get(b"Im1").and_then(Object::as_ref).unwrap()) else { panic!("/Im1 is a stream") };
     assert_eq!(decoded_image(&saved, own).unwrap(), b"PUBIMGSHOWNAGAIN", "the form's own image stays");
+}
+
+/// `/F`, with resources of its own, draws `/Child` through the page's names: its own give no
+/// `/Child`, or give one that is no stream. `/Child`, without resources of its own, shows a glyph
+/// of `/F`'s Type 3 font and draws `/F`'s image, outside the mark. `/F` is rewritten for the text
+/// under the mark, and keeps both: its cleanups read `/Child` as the walk does.
+#[test]
+fn a_rewritten_form_keeps_what_a_form_it_draws_through_its_callers_names_draws_with() {
+    for (label, child) in [("absent", ""), ("no stream", "/Child 11 0 R")] {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /F 5 0 R /Child 6 0 R >> >> >>".to_vec(),
+            stream("", b"/F Do"),
+            stream(
+                &format!(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /H 9 0 R /T3 7 0 R >> /XObject << /Im 10 0 R {child} >> >>"
+                ),
+                b"BT /H 12 Tf 20 250 Td (SECRET) Tj ET /Child Do",
+            ),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"BT /T3 12 Tf 20 50 Td (a) Tj ET q 10 0 0 10 100 50 cm /Im Do Q"),
+            b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 8 0 R >> \
+              /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] >>"
+                .to_vec(),
+            stream("", b"1000 0 0 0 1000 1000 d1 0 0 1000 1000 re f"),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
+            gray_image(b"CHILDIMAGE"),
+            b"<< /Type /XObject >>".to_vec(),
+        ]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.glyphs, r.forms_rewritten), (6, 1), "{label}");
+        let page = content(&doc, 0);
+        let words: Vec<&str> = page.split_whitespace().collect();
+        let drawn = words.windows(2).find(|w| w[1] == "Do").map(|w| w[0].trim_start_matches('/')).unwrap();
+        let form = named_stream(&doc, 0, drawn.as_bytes()).unwrap();
+        assert!(String::from_utf8_lossy(&form.decoded().unwrap()).contains("/Child Do"), "{label}");
+        let res = doc.resolve(form.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let has = |category: &[u8], name: &[u8]| res.get(category).and_then(|c| doc.dict(c)).is_some_and(|c| c.contains(name));
+        assert!(has(b"Font", b"T3") && has(b"XObject", b"Im"), "{label}: {res:?}");
+    }
+}
+
+/// `/F`, with resources of its own, marks its text under the mark with its own `/MC1`, whose
+/// description holds words, and draws `/Child`, through the page's names or its own, which marks
+/// content with `/MC1` too. Without resources of its own `/Child` reads the page's properties, and
+/// with empty ones its own: either way nothing names `/F`'s `/MC1` once the text is gone, and its
+/// description leaves the file.
+#[test]
+fn a_rewritten_forms_property_a_form_it_draws_names_too_goes() {
+    for (via, child_name) in [("the page's names", ""), ("its own names", "/XObject << /Child 8 0 R >>")] {
+        for child_res in ["", "/Resources << >>"] {
+            let f = stream(
+                &format!(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /Properties << /MC1 9 0 R >> {child_name} >>"
+                ),
+                b"/Span /MC1 BDC BT /F1 12 Tf 20 250 Td (SECRET) Tj ET EMC /Child Do",
+            );
+            let child = stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] {child_res}"), b"/Span /MC1 BDC 0 0 10 10 re f EMC");
+            let described = b"<< /Alt (DESCRIBED) /ActualText (DESCRIBED) >>".to_vec();
+            let mut doc = one_page(b"/F Do", "/XObject << /F 7 0 R /Child 8 0 R >>", vec![f, child, described]);
+            mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+            assert_eq!(apply(&mut doc, None).map(|r| (r.glyphs, r.forms_rewritten)), Ok((6, 1)), "{via}, {child_res:?}");
+            assert!(!surviving_references::full_save_holds(&doc, b"DESCRIBED"), "{via}, {child_res:?}");
+        }
+    }
+}
+
+/// The same, `/F`'s resources shared by reference with `/Y`, which the page draws beside the mark
+/// and which draws `/Child` too, and the page's properties giving an `/MC1` of their own. Without
+/// resources of its own, `/Child` names the page's, which stays; with empty ones, its own, and the
+/// page's goes. Either way the description of `/F`'s `/MC1`, which nothing names now, leaves the
+/// file. `/F` alone is the control.
+#[test]
+fn a_shared_forms_property_a_form_it_draws_names_too_goes() {
+    for with_y in [false, true] {
+        for child_res in ["", "/Resources << >>"] {
+            let form = "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources 10 0 R";
+            let f = stream(form, b"/Span /MC1 BDC BT /F1 12 Tf 20 250 Td (SECRET) Tj ET EMC /Child Do");
+            let child = stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] {child_res}"), b"/Span /MC1 BDC 0 0 10 10 re f EMC");
+            let described = b"<< /Alt (DESCRIBED) /ActualText (DESCRIBED) >>".to_vec();
+            let shared = b"<< /Font << /F1 5 0 R >> /Properties << /MC1 9 0 R >> /XObject << /Child 8 0 R >> >>".to_vec();
+            let y = stream(form, b"/Child Do");
+            let (content, xobjects): (&[u8], &str) = if with_y { (b"/F Do /Y Do", "/F 7 0 R /Y 11 0 R") } else { (b"/F Do", "/F 7 0 R") };
+            let res = format!("/XObject << {xobjects} >> /Properties << /MC1 12 0 R >>");
+            let page_property = b"<< /Lang (PAGEPROPERTY) >>".to_vec();
+            let mut doc = one_page(content, &res, vec![f, child, described, shared, y, page_property]);
+            mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+            assert_eq!(apply(&mut doc, None).map(|r| (r.glyphs, r.forms_rewritten)), Ok((6, 1)), "{with_y}, {child_res:?}");
+            assert!(!surviving_references::full_save_holds(&doc, b"DESCRIBED"), "{with_y}, {child_res:?}");
+            assert_eq!(surviving_references::full_save_holds(&doc, b"PAGEPROPERTY"), child_res.is_empty(), "{with_y}, {child_res:?}");
+        }
+    }
+}
+
+/// `/F`'s own resources give `/Bogus` as a reference to an object the file doesn't define. `/G`,
+/// rewritten for its text under the mark, draws `/F`'s `/Im` beside it, and its rewrite is a new
+/// object, which may take `/Bogus`'s number, read as nothing before it was written: `/F`'s cleanups
+/// still read it and keep `/Im`, whichever number that is. Without `/Bogus` is the control.
+#[test]
+fn a_rewritten_forms_cleanups_read_a_form_written_under_a_number_that_named_nothing() {
+    for n in [0, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22] {
+        let bogus = if n == 0 { String::new() } else { format!("/Bogus {n} 0 R") };
+        let f = stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /G 8 0 R /Im 9 0 R {bogus} >> >>"),
+            b"/G Do",
+        );
+        let g = stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << >>",
+            b"BT /F1 12 Tf 20 250 Td (SECRET) Tj ET q 10 0 0 10 100 50 cm /Im Do Q",
+        );
+        let image = stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"KEPT_IMAGE_BYTES");
+        let mut doc = one_page(b"/F Do", "/XObject << /F 7 0 R >>", vec![f, g, image]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        assert_eq!(apply(&mut doc, None).map(|r| (r.glyphs, r.forms_rewritten)), Ok((6, 2)), "{bogus:?}");
+        assert!(surviving_references::full_save_holds(&doc, b"KEPT_IMAGE_BYTES"), "{bogus:?}");
+    }
 }
 
 /// Remove Hidden Information has the same rewrite: an off layer's image named by an inherited
@@ -6398,6 +6662,7 @@ mod annotation_geometry;
 mod descriptions;
 mod elsewhere;
 mod form_matrix;
+mod form_names;
 mod hidden_scope;
 mod identification;
 mod inline_images;
