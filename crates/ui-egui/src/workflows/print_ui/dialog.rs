@@ -379,9 +379,9 @@ impl PdfCraftApp {
 
     /// Page Setup…: the driver's paper and orientation dialog, owned by the main window.
     fn page_setup(&mut self) {
-        // PLAN: assumed `main_window_handle(&self) -> Option<isize>`, the window service's accessor for the main window.
+        // The print dialog is the active window, so the driver's dialog stays in front of it.
         #[cfg(windows)]
-        let parent = self.main_window_handle();
+        let parent = winsafe::HWND::GetActiveWindow().map(|h| h.ptr() as isize);
         #[cfg(not(windows))]
         let parent = None;
         let d = &mut self.print_draft;

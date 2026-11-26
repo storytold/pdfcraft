@@ -137,8 +137,6 @@ use platform::macos_association;
 #[cfg(not(target_arch = "wasm32"))]
 use platform::open_worker;
 pub use platform::ui_scale;
-#[cfg(test)]
-use state::CopyPage;
 #[cfg(not(target_arch = "wasm32"))]
 use state::OpenRequest;
 pub use state::{

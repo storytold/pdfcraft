@@ -341,7 +341,7 @@ trailer << /Root 1 0 R >>
     h.get_by_label("Blue").click();
     h.run_steps(3);
 
-    let notice = support::shown_notice(&mut h);
+    let notice = support::shown_notice(&h);
     let state = h.state();
     let doc = state.session.get(id).expect("document");
     assert_eq!(doc.comment_props(0, 0).and_then(|props| props.color), Some([1.0, 0.94, 0.0]), "the comment keeps its colour");
@@ -1285,7 +1285,6 @@ fn panel_posts_comment_and_reply_row() {
 // `PdfCraftApp::dialogs.get_mut_by_id::<HostedParamDialog>(id)` for the hosted Comment Properties
 // dialog (pdf-comments-w11); the row keys are the dialog's own (`comment.props.colour`, ...).
 const PROP_COLOUR: &str = "comment.props.colour";
-const PROP_BORDER: &str = "comment.props.border";
 const PROP_FILL: &str = "comment.props.fill";
 
 /// Write the row `key` of the open Comment Properties dialog; the dialog shows it in its next pass.
@@ -1829,7 +1828,7 @@ fn delete_one_reply_row() {
     h.event(egui::Event::Text("Right reply, reworded".into()));
     h.run_steps(2);
     // The document's own Save sits earlier in the tree than the editor's.
-    h.query_all_by_label("Save").filter(|n| !n.accesskit_node().is_disabled()).last().expect("the editor's Save").click();
+    h.query_all_by_label("Save").rfind(|n| !n.accesskit_node().is_disabled()).expect("the editor's Save").click();
     h.run_steps(3);
     assert_eq!(texts(&h), ["The comment", "Right reply, reworded", "Accepted set by Ben"]);
 

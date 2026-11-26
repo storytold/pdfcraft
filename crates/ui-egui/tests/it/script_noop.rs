@@ -2,7 +2,6 @@
 use crate::support::AppHarness as _;
 use egui_kittest::{Harness, kittest::Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest};
-use pdfcraft_ui_egui::PdfCraftApp;
 use std::sync::Arc;
 
 fn hidden_text() -> Vec<u8> {

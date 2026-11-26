@@ -101,7 +101,7 @@ fn cases() -> Vec<Case> {
             },
             applied: |a| {
                 let v = &a.views[0].view;
-                v.display == craft::pages::PageDisplay::TwoUp && v.continuous != crate::control::new_app().views.first().map_or(true, |_| true)
+                v.display == craft::pages::PageDisplay::TwoUp && v.continuous != crate::control::new_app().views.first().is_none_or(|_| true)
             },
         },
         Case {
@@ -167,7 +167,7 @@ fn edited(case: &Case) -> H {
 fn preference_rows_apply_live_and_survive_closing() {
     for case in cases() {
         let mut h = edited(&case);
-        assert!((case.applied)(h.state()), "{}: a row applies immediately", case.name);
+        assert!((case.applied)(h.state()), "{} ({}): a row applies immediately", case.name, case.page);
         click(&mut h, "OK");
         h.run_steps(3);
         assert!(!preferences_shown(&h), "{}: OK closes the window", case.name);

@@ -93,8 +93,7 @@ mod tests {
         // No lanes: a job runs only when the test runs it.
         let queue = JobQueue::new(Arc::new(ManualJobs::new()), Wake::none(), QueueOptions { lanes: 0, ..QueueOptions::default() });
         app.recent_check = RecentCheck::new(queue);
-        let listed = || vec![crate::state::RecentFile { name: "a.pdf".into(), path: "/gone/a.pdf".into(), pages: 1, size: 0 }];
-        app.recent = listed();
+        app.recent = vec![crate::state::RecentFile { name: "a.pdf".into(), path: "/gone/a.pdf".into(), pages: 1, size: 0 }];
         app.recent_check.restored(vec!["/gone/a.pdf".into()]);
         app.check_restored_recent();
         app.recent_check.opened("/gone/a.pdf");

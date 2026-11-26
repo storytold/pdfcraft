@@ -211,7 +211,7 @@ fn a_pick_for_a_document_that_is_no_longer_active_is_dropped() {
     h.answer(Picked::Paths(vec![file]));
     assert_eq!(pages(h.state(), 0), 3, "the document the pick was for is unchanged");
     assert_eq!(pages(h.state(), 1), 4, "the newly active document is unchanged");
-    assert!(support::shown_notice(&mut h).is_some(), "the user is told why nothing happened");
+    assert!(support::shown_notice(&h).is_some(), "the user is told why nothing happened");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -330,17 +330,12 @@ fn type_into(r: &mut Rig, label: &str, text: &str) {
 }
 
 /// What the Extract dialog is filled with; `None` leaves a field as the dialog opened it.
+#[derive(Default)]
 struct Extract<'a> {
     name: Option<&'a str>,
     pages: Option<&'a str>,
     separate: bool,
     delete: bool,
-}
-
-impl Default for Extract<'_> {
-    fn default() -> Self {
-        Self { name: None, pages: None, separate: false, delete: false }
-    }
 }
 
 /// Opens Extract pages through its command and fills it in; leaves the dialog open.
@@ -532,7 +527,7 @@ fn extracted_pages_are_not_deleted_if_the_document_was_edited_while_choosing_the
     h.answer(Picked::Paths(vec![dir.clone()]));
     assert!(h.files.file(&dir.join("doc0 (page 1).pdf")).is_some(), "the extracted file is still written");
     assert_eq!(pages(h.state(), 0), 2, "nothing more is deleted");
-    assert!(support::shown_notice(&mut h).is_some(), "the user is told");
+    assert!(support::shown_notice(&h).is_some(), "the user is told");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -609,7 +604,7 @@ fn a_browser_insert_that_arrives_after_switching_documents_changes_neither() {
     h.answer(Picked::Contents(vec![("b.pdf".into(), fixture(1))]));
     assert_eq!(pages(h.state(), 0), 3, "A is unchanged");
     assert_eq!(pages(h.state(), 1), 1, "C is unchanged");
-    assert!(support::shown_notice(&mut h).is_some(), "the user is told why nothing happened");
+    assert!(support::shown_notice(&h).is_some(), "the user is told why nothing happened");
 }
 
 #[test]
@@ -632,7 +627,7 @@ fn replace_pages_applies_only_to_the_document_its_dialog_was_opened_on() {
         press(&mut h, "OK");
         if switch {
             assert!(!dirty(h.state(), 0) && !dirty(h.state(), 1), "neither document is changed");
-            assert!(support::shown_notice(&mut h).is_some(), "the user is told why");
+            assert!(support::shown_notice(&h).is_some(), "the user is told why");
         } else {
             assert!(dirty(h.state(), 0) && !dirty(h.state(), 1), "the first document's page is replaced");
         }
@@ -647,7 +642,7 @@ fn a_failed_startup_url_is_reported_in_the_app() {
     let mut h = harness(&[]);
     h.deliver("missing.pdf", b"HTTP 404".to_vec());
     h.steps(2);
-    assert!(support::shown_notice(&mut h).is_some(), "the failure is reported");
+    assert!(support::shown_notice(&h).is_some(), "the failure is reported");
     assert!(h.state().views.is_empty(), "no document was opened");
 }
 
@@ -769,7 +764,7 @@ fn a_broken_late_startup_file_reports_its_error_without_changing_the_active_docu
     h.steps(2);
     assert_eq!(h.state().active, Some(0));
     assert_eq!(h.state().views.len(), 1);
-    let notice = support::shown_notice(&mut h).expect("the failure is reported");
+    let notice = support::shown_notice(&h).expect("the failure is reported");
     assert!(notice.contains("broken.pdf"), "{notice}");
 }
 
@@ -895,10 +890,10 @@ fn a_background_startup_forms_script_notice_waits_until_its_tab_is_selected() {
     h.deliver("late-form.pdf", pdfcraft_xfa::fixtures::shell(&template));
     h.steps(2);
     assert_eq!(h.state().active, Some(0));
-    assert!(support::shown_notice(&mut h).is_none(), "the background form must not interrupt the current document");
+    assert!(support::shown_notice(&h).is_none(), "the background form must not interrupt the current document");
     h.get_by_label("late-form.pdf").click();
     h.steps(2);
-    let notice = support::shown_notice(&mut h).expect("the form's message shows once its tab is selected");
+    let notice = support::shown_notice(&h).expect("the form's message shows once its tab is selected");
     assert!(notice.contains("Late form opened"), "{notice}");
 }
 
@@ -1070,7 +1065,7 @@ fn files_written_from_an_attachment_tab_stay_inside_the_chosen_folder() {
         open_extract(&mut h, Extract { separate: true, ..Default::default() });
         confirm_extract(&mut h);
         h.answer(Picked::Paths(vec![out.clone()]));
-        assert!(support::shown_notice(&mut h).is_some(), "{name}: Extract reports what it wrote");
+        assert!(support::shown_notice(&h).is_some(), "{name}: Extract reports what it wrote");
         assert_eq!(files_written(&h), written, "{name}");
         std::fs::remove_dir_all(dir.0.join("a")).unwrap();
     }

@@ -85,7 +85,7 @@ fn html_sets(clipboard: &RecordingClipboard) -> Vec<(String, String)> {
         .writes()
         .iter()
         .filter_map(|flavors| {
-            let part = |mime: &str| flavors.iter().find(|f| f.mime.to_string() == mime).map(|f| String::from_utf8_lossy(&f.data).into_owned());
+            let part = |mime: &str| flavors.iter().find(|f| f.mime == mime).map(|f| String::from_utf8_lossy(&f.data).into_owned());
             Some((part("text/html")?, part("text/plain").unwrap_or_default()))
         })
         .collect()

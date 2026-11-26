@@ -605,7 +605,7 @@ mod review13_ui_tests {
     /// Script focus reveals the requested field page before opening its editor.
     #[test]
     fn script_focus_reveals_an_offscreen_widget() {
-        let ctx = &egui::Context::default();
+        let _ctx = &egui::Context::default();
         let ctx = &egui::Context::default();
         let (mut app, id) = app(ctx);
         app.session
@@ -659,7 +659,7 @@ mod link_script_tests {
     /// window's prompt, the answer resumes it, and its field change and openDoc consent apply.
     #[test]
     fn a_javascript_link_asks_its_menu_and_applies_its_result() {
-        let ctx = &egui::Context::default();
+        let _ctx = &egui::Context::default();
         let ctx = &egui::Context::default();
         // An absolute path on this system (the document has no folder): on Windows, Acrobat's
         // `/C/…` form, which reads as `C:/…`.

@@ -104,7 +104,7 @@ fn replace_all_from_the_find_bar_is_one_undo_step() {
     h.get_by_label(&replace_all()).click();
     h.run_steps(4);
     assert_eq!(texts(&h), ["dog and dog", "a dog"]);
-    assert!(support::shown_notice(&mut h).is_some(), "Replace all says what it did");
+    assert!(support::shown_notice(&h).is_some(), "Replace all says what it did");
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Replace all"));
     // One Undo puts every page back.

@@ -144,11 +144,8 @@ mod tests {
         let (a, b) = (DocId(1), DocId(2));
         let mut d = ConvertColoursDraft::default();
         d.for_document(a);
-        let mut chosen = PageRange::default();
-        chosen.scope = PageScope::Range;
-        chosen.from = 4;
-        chosen.to = Some(5);
-        d.range = chosen.clone();
+        let chosen = PageRange { scope: PageScope::Range, from: 4, to: Some(5), ..PageRange::default() };
+        d.range = chosen;
         d.for_document(a);
         assert_eq!(d.range, chosen, "same document keeps its range");
         d.for_document(b);
