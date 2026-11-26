@@ -932,6 +932,74 @@ fn a_type3_glyph_a_soft_mask_shows_is_kept() {
     assert!(full_save_holds(&doc, b"PAGE_GLYPH_C"), "the glyph the page still shows was unlinked");
 }
 
+/// A page showing `content` with glyphs A, B and C of a Type 3 font written directly in its
+/// `/Font` map. Their programs are objects 5 to 7.
+fn direct_type3_page(content: &[u8]) -> Document {
+    let font = String::from_utf8(type3_abc(5)).unwrap();
+    pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /T3 {font} >> >> >>").into_bytes(),
+        stream("", content),
+        stream("", b"% REDACTED_GLYPH_A"),
+        stream("", b"% KEPT_GLYPH_B"),
+        stream("", b"% UNUSED_GLYPH_C"),
+    ])
+}
+
+/// A Type 3 font written directly in the page's resources refused the whole redaction. It gets an
+/// object of its own now: the marked glyph and its program go, and the other glyph still draws.
+#[test]
+fn a_type3_font_written_directly_in_the_pages_resources_is_cleaned() {
+    let mut doc = direct_type3_page(b"BT /T3 10 Tf 10 100 Td (AB) Tj ET");
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    assert_eq!(under(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]]), 0, "the marked glyph is still drawn");
+    assert_eq!(under(&mut doc, 0, &[[15.1, 95.0, 21.0, 110.0]]), 1, "the unmarked glyph no longer draws");
+    assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "the redacted glyph program survived");
+    assert!(full_save_holds(&doc, b"KEPT_GLYPH_B"), "the glyph the page still shows was unlinked");
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+    let fonts = doc.resolve(res.get(b"Font").unwrap()).as_dict().unwrap().clone();
+    assert!(fonts.get(b"T3").unwrap().as_ref().is_some(), "the font is not an object of its own");
+}
+
+/// Remove Hidden Information runs the same cleanup after it takes hidden text off a page.
+#[test]
+fn removing_hidden_text_in_a_type3_font_written_directly_cleans_the_font() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = direct_type3_page(b"BT /T3 10 Tf 3 Tr 10 100 Td (A) Tj 0 Tr 0 100 Td (B) Tj ET");
+    remove_hidden(&mut doc, &[Hidden::HiddenText]).unwrap();
+    assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "the hidden glyph's program survived");
+    assert!(full_save_holds(&doc, b"KEPT_GLYPH_B"), "the glyph the page still shows was unlinked");
+}
+
+/// The same font written directly in a form's resources and in a graphics state's `/Font` array
+/// becomes two objects, each cleaned by what it shows: the state's font showed only the marked A,
+/// and the form still shows B.
+#[test]
+fn a_type3_font_written_directly_in_a_form_and_a_graphics_state_is_cleaned() {
+    let font = String::from_utf8(type3_abc(7)).unwrap();
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"/GS1 gs BT 10 100 Td (A) Tj ET /Fm Do"),
+        format!("<< /ExtGState << /GS1 << /Font [{font} 10] >> >> /XObject << /Fm 6 0 R >> >>").into_bytes(),
+        stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /T3 {font} >> >>"),
+            b"BT /T3 10 Tf 10 200 Td (B) Tj ET",
+        ),
+        stream("", b"% REDACTED_GLYPH_A"),
+        stream("", b"% FORM_GLYPH_B"),
+        stream("", b"% UNUSED_GLYPH_C"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "the redacted glyph program survived");
+    assert!(full_save_holds(&doc, b"FORM_GLYPH_B"), "the glyph the form shows was unlinked");
+}
+
 /// Resource cleanup read a form without /Resources of its own again for every name that could
 /// still reach the removed image. Here 3 000 names of one redacted image sit in the inherited
 /// /Pages resources, and the other page draws a large such form: it is read once, and every name

@@ -14,9 +14,8 @@ fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
     res.get(key).and_then(|o| doc.resolve(o).as_dict().cloned()).unwrap_or_default()
 }
 
-/// Identifies a font in the document. Only fonts that are indirect objects are cleaned: a Type 3
-/// font held directly in a resource dictionary fails closed (see [`unlink_type3`]), because its
-/// glyph programs could not be told apart or rewritten reliably.
+/// Identifies a font in the document by its object. A Type 3 font written directly in a resource
+/// dictionary that discovery reads is given an object of its own first (see [`unlink_type3`]).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum FontKey {
     Ref(ObjRef),
@@ -103,7 +102,7 @@ pub(crate) fn type3_code_to_glyph(doc: &Document, font_dict: &Dict) -> Result<[O
 fn resolve_font_in_res(doc: &Document, res: &Dict, font_name: &[u8]) -> Option<(FontKey, Dict)> {
     let fonts = res_dict(doc, res, b"Font");
     let font_obj = fonts.get(font_name)?;
-    // A direct Type 3 font is refused during discovery, so none reaches the scan.
+    // Discovery gave an object to every direct Type 3 font it cleans: a direct one isn't one of them.
     let font_ref = font_obj.as_ref()?;
     let dict = doc.resolve(font_obj).as_dict()?.clone();
     (dict.name(b"Subtype") == Some(b"Type3")).then_some((FontKey::Ref(font_ref), dict))
@@ -692,7 +691,17 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
         }
     }
 
-    let form_holders = reachable_form_holders(doc, &holders)?;
+    let mut form_holders = reachable_form_holders(doc, &holders)?;
+
+    // Discovery names a font by its object. A Type 3 font written directly where it looks gets an
+    // object of its own first; the forms' resources are then read again.
+    let mut giving = Giving::default();
+    for holder in holders.iter().map(|(node, _)| *node).chain(form_holders.iter().map(|(form, _)| *form)) {
+        give_type3_fonts_objects(doc, &Object::Ref(holder), Part::Holder, &mut giving)?;
+    }
+    if giving.gave {
+        form_holders = reachable_form_holders(doc, &holders)?;
+    }
 
     // Discover all Type 3 fonts in holders and forms.
     let mut type3_fonts: HashMap<FontKey, Dict> = HashMap::new();
@@ -791,9 +800,95 @@ fn reachable_form_holders(doc: &Document, holders: &[(ObjRef, Vec<ObjRef>)]) -> 
     Ok(form_holders)
 }
 
+/// A part of what a page-tree node or a form lists, down to the fonts discovery reads.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Part {
+    /// The node or form: its `/Resources`.
+    Holder,
+    /// A resource dictionary: its `/Font` and `/ExtGState` maps.
+    Resources,
+    /// A `/Font` map: every entry is a font.
+    Fonts,
+    /// An `/ExtGState` map: every entry is a graphics state.
+    States,
+    /// A graphics state: its `/Font` entry.
+    State,
+    /// A graphics state's `[font size]` array.
+    FontAndSize,
+    /// A font: one written directly that is a Type 3 font gets an object.
+    Font,
+}
+
+/// What [`give_type3_fonts_objects`] has read, as which part, and whether it gave a font an object.
+#[derive(Default)]
+struct Giving {
+    seen: HashSet<(ObjRef, Part)>,
+    gave: bool,
+}
+
+/// `value`, a `part` of what a holder lists, with each Type 3 font written directly in it moved to
+/// an object of its own and its entry pointed there. ISO 32000-2 lets a font dictionary be direct,
+/// and both draw the same, but discovery names a font by its object ([`FontKey`]). A part that is
+/// an object of its own is changed there, so what shares it shares the new font object too, and
+/// `None` comes back; a direct part that changed comes back for its holder to store. The same
+/// direct font written in two places becomes two objects: each is drawn only through the entry
+/// that holds it, so each one's glyphs are counted where they are shown. The parts nest a fixed
+/// number of levels and each object is read once per part. A reference to a reference is left as
+/// it is, and discovery still refuses a direct font behind one.
+fn give_type3_fonts_objects(doc: &mut Document, value: &Object, part: Part, giving: &mut Giving) -> Result<Option<Object>, CosError> {
+    if let Object::Ref(r) = value {
+        let held = doc.get(*r);
+        if part != Part::Font
+            && !matches!(*held, Object::Ref(_))
+            && giving.seen.insert((*r, part))
+            && let Some(changed) = give_type3_fonts_objects(doc, &held, part, giving)?
+        {
+            doc.set_existing(*r, changed)?;
+        }
+        return Ok(None);
+    }
+    let mut value = value.clone();
+    // Where the fonts are below this part: entries of a dictionary, or an array's first element.
+    let children: Vec<(Option<Vec<u8>>, Part)> = match (part, value.as_dict()) {
+        (Part::Font, Some(font)) => {
+            let type3 = font.name(b"Subtype") == Some(b"Type3");
+            giving.gave |= type3;
+            return Ok(type3.then(|| Object::Ref(doc.add(value))));
+        }
+        (Part::Holder, Some(_)) => vec![(Some(b"Resources".to_vec()), Part::Resources)],
+        (Part::Resources, Some(_)) => vec![(Some(b"Font".to_vec()), Part::Fonts), (Some(b"ExtGState".to_vec()), Part::States)],
+        (Part::Fonts, Some(d)) => d.iter().map(|(n, _)| (Some(n.to_vec()), Part::Font)).collect(),
+        (Part::States, Some(d)) => d.iter().map(|(n, _)| (Some(n.to_vec()), Part::State)).collect(),
+        (Part::State, Some(_)) => vec![(Some(b"Font".to_vec()), Part::FontAndSize)],
+        (Part::FontAndSize, None) => vec![(None, Part::Font)],
+        _ => return Ok(None),
+    };
+    let mut changed = false;
+    for (key, child) in children {
+        let Some(entry) = slot(&mut value, key.as_deref()).cloned() else { continue };
+        if let Some(given) = give_type3_fonts_objects(doc, &entry, child, giving)?
+            && let Some(entry) = slot(&mut value, key.as_deref())
+        {
+            *entry = given;
+            changed = true;
+        }
+    }
+    Ok(changed.then_some(value))
+}
+
+/// The entry `key` of a dictionary, or without a key, the first element of an array.
+fn slot<'a>(value: &'a mut Object, key: Option<&[u8]>) -> Option<&'a mut Object> {
+    match (key, value) {
+        (Some(key), value) => value.as_dict_mut()?.get_mut(key),
+        (None, Object::Array(elements)) => elements.first_mut(),
+        (None, _) => None,
+    }
+}
+
 /// Record every Type 3 font named by a resource dictionary's `/Font` and `/ExtGState` entries.
-/// A Type 3 font held directly in a resource dictionary can neither be named reliably nor have its
-/// glyph programs rewritten, so redaction fails closed rather than leaving its glyphs unchecked.
+/// [`unlink_type3`] gave each one written directly there an object of its own first. One still
+/// direct (behind a reference to a reference) can't be named, so redaction fails closed rather
+/// than leave its glyphs unchecked.
 fn collect_type3_fonts(doc: &Document, res: &Dict, t3_fonts: &mut HashMap<FontKey, Dict>) -> Result<(), CosError> {
     let direct = || CosError::Syntax {
         offset: 0,
