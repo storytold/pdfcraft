@@ -609,11 +609,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::import_outline(doc, parent, *index, bookmarks, *replace)?;
         }
         Edit::BookmarksFromStructure => {
-            let entries: Vec<_> = pdfcraft_a11y::headings(doc)
-                .into_iter()
-                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj, left: None, top: None })
-                .collect();
-            pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
+            pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &crate::suggest_outline::structure_entries(doc).0)?;
         }
         Edit::BookmarksFromTextStyles { levels } => {
             if levels.is_empty() {
