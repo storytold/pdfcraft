@@ -187,6 +187,11 @@ pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let shown = Panel::new(tl!("Add a stamp").to_string()).show(ui, |ui, _| {
         Stack::new().scroll(Scroll::vertical()).show(ui, |ui, _| {
             Text::new(tl!("Choose a stamp, then click on the page to place it.").to_string()).shade(Shade::Faint).show(ui);
+            // Keep the order for this draw even if the Custom section deletes its last stamp.
+            let has_custom = !app.custom_stamps.is_empty();
+            if has_custom {
+                crate::stamps_ui::palette_section(app, ui);
+            }
             let titles = [
                 (StampGroup::Dynamic, tl!("Dynamic")),
                 (StampGroup::SignHere, tl!("Sign Here")),
@@ -227,7 +232,9 @@ pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             {
                 app.quick_tool = crate::QuickTool::Stamp(*kind);
             }
-            crate::stamps_ui::palette_section(app, ui);
+            if !has_custom {
+                crate::stamps_ui::palette_section(app, ui);
+            }
         });
     });
     if shown.output.closed.is_some() || shown.output.action == Some(HeaderAction::Close) {
