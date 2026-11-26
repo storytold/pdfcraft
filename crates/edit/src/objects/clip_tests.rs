@@ -226,3 +226,71 @@ fn copying_and_pasting_refuse_what_they_cannot_do_and_change_nothing() {
     let mut work = stray.clone();
     paste_objects(&mut work, 1, &copied, [0.0, 0.0]).unwrap();
 }
+
+/// Text in a Type 3 font without resources of its own (as pdfTeX, Ghostscript and matplotlib
+/// write them), pasted onto a page whose names differ (#8476): its glyphs name no resource, so
+/// renaming the page's font under another name changes nothing they draw, and the paste draws
+/// the same. A glyph that names a renamed resource would find the page's, so that is refused.
+#[test]
+fn type3_text_pastes_under_renamed_resources_unless_its_glyphs_name_them() {
+    for (glyph, pastes) in [("1000 0 0 0 1000 1000 d1 0 0 1000 1000 re f", true), ("1000 0 0 0 1000 1000 d1 /GS0 gs 0 0 1000 1000 re f", false)] {
+        let mut doc = pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 300] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> /ExtGState << /GS0 << /ca 0.5 >> >> >> >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 8 0 R >> /ExtGState << /GS0 << /ca 1 >> >> >> >>".into(),
+            stream("BT /F1 20 Tf 20 200 Td (aaa) Tj ET"),
+            stream(""),
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 9 0 R >> \
+             /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] >>"
+                .into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".into(),
+            stream(glyph),
+        ]);
+        let all: Vec<_> = editable_objects(&doc, 0).unwrap().into_iter().map(|o| o.target).collect();
+        let copied = copy_objects(&doc, 0, &all).unwrap();
+        let pasted = paste_objects(&mut doc, 1, &copied, [0.0, 0.0]);
+        assert_eq!(pasted.is_ok(), pastes, "{glyph}: {pasted:?}");
+        if pastes {
+            let area = [copied.rect[0] - 2.0, copied.rect[1] - 2.0, copied.rect[2] + 2.0, copied.rect[3] + 2.0];
+            let before = pixels(&render(&doc, 0), area, [0.0, 0.0]);
+            assert!(before.chunks(4).any(|p| p != [255, 255, 255, 255]), "the glyphs are drawn");
+            assert_eq!(before, pixels(&render(&doc, 1), area, [0.0, 0.0]), "the paste draws the same pixels");
+        }
+    }
+}
+
+/// Artwork without resources of its own, copied without any text that names its font: the copy
+/// still brings the font the artwork looks up in the page's resources. Pasted onto a page that
+/// shares that font as /F1, only the artwork's own entry is renamed, which its content doesn't
+/// name, so it draws the same; where the page's /F1 is another font, the paste is refused rather
+/// than drawn with it.
+#[test]
+fn a_copy_brings_the_resources_inheriting_artwork_names() {
+    for (fonts, pastes) in [("/Font << /F1 7 0 R >>", true), ("/Font << /F1 8 0 R >>", false)] {
+        let art = "BT /F1 20 Tf 0 5 Td (Art) Tj ET";
+        let mut doc = pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 300] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> /XObject << /Art 9 0 R >> >> >>".into(),
+            format!("<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << {fonts} >> >>"),
+            stream("q 1 0 0 1 20 100 cm /Art Do Q"),
+            stream(""),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".into(),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 100 30] /Length {} >>\nstream\n{art}\nendstream", art.len()),
+        ]);
+        let all: Vec<_> = editable_objects(&doc, 0).unwrap().into_iter().map(|o| o.target).collect();
+        let copied = copy_objects(&doc, 0, &all).unwrap();
+        let font = copied.resources.get(b"Font").and_then(Object::as_dict).and_then(|f| f.get(b"F1")).cloned();
+        assert_eq!(font, Some(Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))), "{:?}", copied.resources);
+        let pasted = paste_objects(&mut doc, 1, &copied, [0.0, 0.0]);
+        assert_eq!(pasted.is_ok(), pastes, "{fonts}: {pasted:?}");
+        if pastes {
+            let area = [15.0, 95.0, 125.0, 135.0];
+            let before = pixels(&render(&doc, 0), area, [0.0, 0.0]);
+            assert!(before.chunks(4).any(|p| p != [255, 255, 255, 255]), "the artwork is drawn");
+            assert_eq!(before, pixels(&render(&doc, 1), area, [0.0, 0.0]), "the paste draws the same pixels");
+        }
+    }
+}

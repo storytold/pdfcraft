@@ -13897,9 +13897,9 @@ fn ungroup_art(content: &[u8], group: bool, build: impl FnOnce(&mut Document) ->
 
 /// A nested form, Type 3 font or tiling pattern without `/Resources` takes its names from the
 /// form drawing it (the renderer chains them). Once the form's names are renamed into the page's,
-/// it would find the page's instead (the page's Courier `F1`, not the form's Times), so ungroup
-/// refuses. With resources of its own it is unaffected, and so is a form without resources of
-/// its own, whose names are already the page's.
+/// one that names a renamed resource would find the page's instead (the page's Courier `F1`, not
+/// the form's Times), so ungroup refuses. With resources of its own it is unaffected, and so is a
+/// form without resources of its own, whose names are already the page's.
 #[test]
 fn ungroup_refuses_nested_content_that_inherits_renamed_resources() {
     let times = || {
@@ -13923,6 +13923,11 @@ fn ungroup_refuses_nested_content_that_inherits_renamed_resources() {
             "type3" => {
                 d.set(b"Type".to_vec(), Object::name("Font"));
                 d.set(b"Subtype".to_vec(), Object::name("Type3"));
+                // Its glyph names the font that is renamed.
+                let glyph = doc.add(Object::Stream(Stream::flate(Dict::new(), b"0 0 d0 BT /F1 9 Tf (n) Tj ET")));
+                let mut procs = Dict::new();
+                procs.set(b"b".to_vec(), Object::Ref(glyph));
+                d.set(b"CharProcs".to_vec(), Object::Dict(procs));
                 ("Font", Object::Dict(d))
             }
             _ => {
