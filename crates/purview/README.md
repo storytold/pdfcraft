@@ -19,7 +19,8 @@ applied before saving.
 Access-token expiry is retained in memory. An expired token or SDK `NoAuthToken`/expired/invalid-token
 challenge requires browser reauthentication with the same active account. Reauthentication keeps
 open protected working bytes, then revalidates every protected original before rights resume; a
-failed revalidation clears effective rights. Use synthetic documents only until MFA, Conditional
+failed revalidation clears effective rights and suspends the document display and cached renderer
+without discarding private working edits. Use synthetic documents only until MFA, Conditional
 Access, challenge handling, and rights refresh are verified in a real tenant.
 Without the SDK, the fallback cannot reliably detect label-only metadata, especially in
 compressed PDF streams; do not rely on an ordinary build to preserve or enforce those labels.

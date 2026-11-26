@@ -57,6 +57,10 @@ impl Automation {
 
     pub(crate) fn renderer(&mut self, id: DocId) -> Result<&mut PageRenderer> {
         let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
+        if let Err(error) = doc.check_viewing() {
+            self.renderers.remove(&id);
+            return Err(failed(error.to_string()));
+        }
         // The document's own view settings: layer visibility, hidden comments, reading colours
         // (tools that change one drop this cache so the next render reads it again).
         let config =
@@ -73,6 +77,7 @@ impl Automation {
     /// so a caller can tell that the picture is incomplete, as `pdfcraft-cli render` does (#4340).
     pub(crate) fn page_render(&mut self, a: &Args) -> Result<Vec<Content>> {
         let id = self.doc(a)?.id;
+        self.session.get(id).ok_or_else(|| failed("no such document"))?.check_viewing().map_err(failed)?;
         let page = self.page(a)?;
         let dpi = a.opt_num("dpi")?.unwrap_or(DEFAULT_DPI);
         if !(1.0..=MAX_DPI).contains(&dpi) {
@@ -286,6 +291,7 @@ impl Automation {
         extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
     ) -> Result<Value> {
         let doc = self.doc(a)?;
+        doc.check_viewing().map_err(failed)?;
         let (id, n) = (doc.id, doc.info.pages.len());
         let query = a.str("query")?;
         let limit = usize::try_from(a.opt_int("limit")?.unwrap_or(500).max(1)).unwrap_or(usize::MAX);

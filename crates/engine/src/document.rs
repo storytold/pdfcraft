@@ -600,6 +600,14 @@ impl Document {
         if self.allows_copying() { Ok(()) } else { Err(EditError::NotPermitted("copying text and images")) }
     }
 
+    pub fn check_viewing(&self) -> Result<(), EditError> {
+        if self.purview().is_some_and(|state| state.protected && !state.rights.can_view()) {
+            Err(EditError::Protection("Microsoft Purview viewing rights must be revalidated".into()))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Require explicit export rights before producing an unprotected derivative of an MIP file.
     pub fn check_unprotected_export(&self) -> Result<(), EditError> {
         if self.purview().is_some_and(|state| state.protected && !state.rights.can_export()) {

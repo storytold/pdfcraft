@@ -116,7 +116,7 @@ pub struct DocPages<'a> {
 impl<'a> DocPages<'a> {
     /// The pages of document `doc`; with no such document there are no pages.
     pub fn new(session: &'a Session, doc: DocId) -> Self {
-        let document = session.get(doc);
+        let document = session.get(doc).filter(|document| document.check_viewing().is_ok());
         Self {
             info: document.map(|d| &d.info),
             bytes: document.map(|d| d.display.clone()).unwrap_or_default(),

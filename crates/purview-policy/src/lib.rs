@@ -93,6 +93,10 @@ impl PurviewRights {
         self.owner
     }
 
+    pub fn can_view(&self) -> bool {
+        self.owner || self.view
+    }
+
     pub fn can_save(&self) -> bool {
         self.owner || self.save || self.edit
     }
@@ -277,6 +281,7 @@ mod tests {
         let view_only = PurviewRights { view: true, ..PurviewRights::default() };
         assert!(!view_only.can_copy());
         assert!(!view_only.can_print());
+        assert!(view_only.can_view());
         assert!(!view_only.can_edit());
         assert!(!view_only.can_save());
 
@@ -287,6 +292,7 @@ mod tests {
 
         let owner = PurviewRights { owner: true, ..PurviewRights::default() };
         assert!(owner.can_copy());
+        assert!(owner.can_view());
         assert!(owner.can_print());
         assert!(owner.can_edit());
         assert!(owner.can_save());

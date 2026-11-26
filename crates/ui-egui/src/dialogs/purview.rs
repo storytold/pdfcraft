@@ -147,7 +147,7 @@ fn document_section(ui: &mut egui::Ui, document: &PurviewDocument) {
     if document.protected {
         ui.heading(tl!("Document capabilities"));
         for (name, allowed) in [
-            ("View", document.rights.view),
+            ("View", document.rights.can_view()),
             ("Edit", document.rights.can_edit()),
             ("Save", document.rights.can_save()),
             ("Print", document.rights.can_print()),

@@ -412,8 +412,9 @@ Retry opening once an account is ready; it does not offer actions for a differen
 The POC now retains token expiry and supports browser reauthentication with the same active
 account while protected documents are open. A different account is rejected. Reauthentication
 preserves current working edits and revalidates every protected original before rights resume;
-unknown or failed rights clear the effective rights. SDK `NoAuthToken`, expired, and invalid-token
-errors are surfaced as sign-in challenges. Do not work around a failure by exporting plaintext.
+unknown or failed rights clear the effective rights and suspend the display/cached render output
+without discarding private working edits. SDK `NoAuthToken`, expired, and invalid-token errors are
+surfaced as sign-in challenges. Do not work around a failure by exporting plaintext.
 MFA, Conditional Access, challenge behavior, and renewal with unsaved edits still require a real
 tenant before use with sensitive documents.
 Live tenant verification of this flow is tracked in

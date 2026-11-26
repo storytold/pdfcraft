@@ -3275,6 +3275,8 @@ fn purview_reauthentication_revalidates_rights_without_changing_working_edits() 
 
     assert!(session.get(id).unwrap().purview().unwrap().rights.owner);
     assert_eq!(session.get(id).unwrap().info_value("Title").as_deref(), Some("unsaved"));
+    assert!(session.get(id).unwrap().check_viewing().is_ok());
+    assert!(!session.get(id).unwrap().display.is_empty());
 }
 
 #[test]
@@ -3289,6 +3291,8 @@ fn failed_purview_revalidation_clears_stale_rights() {
     assert!(!rights.view);
     assert!(!rights.can_save());
     assert!(!rights.can_export());
+    assert!(session.get(id).unwrap().check_viewing().is_err());
+    assert!(session.get(id).unwrap().display.is_empty());
 }
 
 #[test]

@@ -89,6 +89,20 @@ fn purview_mutation_result(
 }
 
 impl Session {
+    fn suspend_purview_view(&mut self) {
+        for document in &mut self.docs {
+            if let Some(state) = document.purview.as_mut().filter(|state| state.document.protected) {
+                state.document.rights = crate::PurviewRights::default();
+                document.display = Arc::new(Vec::new());
+                document.form = Arc::new(Vec::new());
+                document.renderer = RenderPool::new_inline(document.display.clone(), document.config.clone());
+                document.marker_scan = std::sync::OnceLock::new();
+                document.links = std::sync::OnceLock::new();
+                document.generation = document.generation.saturating_add(1);
+            }
+        }
+    }
+
     pub fn set_purview_provider(&mut self, provider: Arc<dyn crate::PurviewProvider>) {
         self.purview = Some(provider);
     }
@@ -179,6 +193,9 @@ impl Session {
                 if !opened.document.protected {
                     return Err(crate::PurviewError::Native(format!("Microsoft Purview no longer reports the document {name} as protected")));
                 }
+                if !opened.document.rights.can_view() {
+                    return Err(crate::PurviewError::NoAccess);
+                }
                 refreshed.push((
                     id,
                     crate::PurviewDocumentState {
@@ -194,17 +211,18 @@ impl Session {
         let refreshed = match result {
             Ok(refreshed) => refreshed,
             Err(error) => {
-                for document in &mut self.docs {
-                    if let Some(state) = document.purview.as_mut().filter(|state| state.document.protected) {
-                        state.document.rights = crate::PurviewRights::default();
-                    }
-                }
+                self.suspend_purview_view();
                 return Err(error);
             }
         };
         for (id, state) in refreshed {
             if let Some(document) = self.docs.iter_mut().find(|document| document.id == id) {
                 document.purview = Some(state);
+                if let Err(error) = Self::refresh(document) {
+                    self.suspend_purview_view();
+                    return Err(crate::PurviewError::Native(format!("Microsoft Purview revalidation could not restore the protected view: {error}")));
+                }
+                document.generation = document.generation.saturating_add(1);
             }
         }
         Ok(())
