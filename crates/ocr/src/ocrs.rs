@@ -4,6 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
+use rten_imageproc::{RectF, RotatedRect};
+
 use super::{Line, MAX_PIXELS, MAX_SIDE, OcrError, OcrImage, RecognizeOptions, Recognizer, Word};
 
 /// The validated byte length of a `width` × `height` RGBA raster, with the same caps
@@ -32,6 +34,15 @@ pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
 /// The model files, as named in ATTRIBUTION.toml.
 pub const DETECTION_MODEL: &str = "text-detection.onnx";
 pub const RECOGNITION_MODEL: &str = "text-recognition.onnx";
+/// Their SHA-256s, as in ATTRIBUTION.toml. [`Ocr::from_bytes`] loads nothing else: rten's ONNX
+/// parser can spin forever on bytes that aren't a model (64 × 0xff does).
+pub const DETECTION_MODEL_SHA256: &str = "a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe";
+pub const RECOGNITION_MODEL_SHA256: &str = "86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5";
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
 
 pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -76,22 +87,83 @@ impl Models {
     }
 }
 
+/// How far each found line is widened before its image is cut out for recognition, as fractions
+/// of the line's median word height: above and below every word, and before its first and after
+/// its last word. ocrs grows each word box by a fixed 3 pixels, a sliver of a letter on a page
+/// scanned at 300 dpi or more: the line images clipped the first and last letters ("The" read as
+/// "he", "and" as "an", closing full stops lost), and the more so the higher the resolution.
+/// Chosen on synthetic pages at 150 to 400 dpi, clean and noisy, and on MDPBench's pages. More
+/// padding above and below costs small, noisy text (the recogniser scales each line image to a
+/// fixed height, so the margin leaves less height for the letters): at 0.15 the 8 pt "Telefon"
+/// label of a noisy form scanned at 150 dpi read "Teleton".
+const LINE_PAD_ACROSS: f32 = 0.12;
+const LINE_PAD_ALONG: f32 = 0.1;
+
+/// Widen `line` (its word boxes, in reading order) as [`LINE_PAD_ACROSS`] and
+/// [`LINE_PAD_ALONG`] say, after the lines were found, so finding them is unchanged. Returns the
+/// box the words covered before, which the recognised words are clipped to: the text layer sizes
+/// its text from them.
+fn pad_line(line: &mut [RotatedRect]) -> Option<RectF> {
+    let before = rten_imageproc::bounding_rect(line.iter())?;
+    // A box's height runs along its up axis and its width along the line, whichever way the
+    // line lies on the page.
+    let mut heights: Vec<f32> = line.iter().map(RotatedRect::height).filter(|h| h.is_finite() && *h > 0.0).collect();
+    heights.sort_by(f32::total_cmp);
+    let height = heights.get(heights.len() / 2).copied().unwrap_or(0.0);
+    let last = line.len().saturating_sub(1);
+    for (i, r) in line.iter_mut().enumerate() {
+        let along = if i == 0 || i == last { 2.0 * LINE_PAD_ALONG * height } else { 0.0 };
+        let across = 2.0 * LINE_PAD_ACROSS * height;
+        r.resize(r.width() + along, r.height() + across);
+    }
+    Some(before)
+}
+
+/// `rect` ([left, top, right, bottom]) clipped to `to`; unchanged if that leaves nothing: a word
+/// wholly in the padding is a letter the line found had cut off, and keeps its own box.
+fn clip(rect: [f32; 4], to: Option<RectF>) -> [f32; 4] {
+    let Some(to) = to else { return rect };
+    let [l, t, r, b] = rect;
+    let clipped = [l.max(to.left()), t.max(to.top()), r.min(to.right()), b.min(to.bottom())];
+    if clipped[0] < clipped[2] && clipped[1] < clipped[3] { clipped } else { rect }
+}
+
 /// A loaded recogniser. Loading takes a moment; keep one and reuse it.
 pub struct Ocr {
     engine: ocrs::OcrEngine,
+    /// The detection model's fixed input size, (width, height) pixels, when it declares one: a
+    /// page much larger than that is detected in tiles.
+    pub(crate) detector_input: Option<(u32, u32)>,
 }
 
 impl Ocr {
     pub fn load(models: &Models) -> Result<Ocr, OcrError> {
         let load = |p: &Path| rten::Model::load_file(p).map_err(|e| OcrError::Load(p.display().to_string(), e.to_string()));
+        Self::with_models(load(&models.detection)?, load(&models.recognition)?)
+    }
+
+    /// Load the models from the contents of their files, where there is no file system (the web
+    /// build downloads them). Bytes that aren't the files ATTRIBUTION.toml names are an error.
+    pub fn from_bytes(detection: Vec<u8>, recognition: Vec<u8>) -> Result<Ocr, OcrError> {
+        let load = |name: &str, sha256: &str, data: Vec<u8>| {
+            if sha256_hex(&data) != sha256 {
+                return Err(OcrError::Load(name.into(), "not the expected model file (SHA-256 differs)".into()));
+            }
+            rten::Model::load(data).map_err(|e| OcrError::Load(name.into(), e.to_string()))
+        };
+        Self::with_models(load(DETECTION_MODEL, DETECTION_MODEL_SHA256, detection)?, load(RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256, recognition)?)
+    }
+
+    fn with_models(detection: rten::Model, recognition: rten::Model) -> Result<Ocr, OcrError> {
+        let detector_input = detector_input(&detection);
         let params = ocrs::OcrEngineParams {
-            detection_model: Some(load(&models.detection)?),
-            recognition_model: Some(load(&models.recognition)?),
+            detection_model: Some(detection),
+            recognition_model: Some(recognition),
             alphabet: Some(ALPHABET.into()),
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
-        Ok(Ocr { engine })
+        Ok(Ocr { engine, detector_input })
     }
 
     /// Load the models found by [`Models::find`].
@@ -114,19 +186,21 @@ impl Ocr {
         let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
         let source = ocrs::ImageSource::from_bytes(&rgb, (width, height)).map_err(|e| err(&e))?;
         let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
-        let found = self.engine.detect_words(&input).map_err(|e| err(&e))?;
-        let lines = self.engine.find_text_lines(&input, &found);
+        let found = self.detect_words(&rgb, width, height, &input)?;
+        let mut lines = self.engine.find_text_lines(&input, &found);
+        let before: Vec<Option<RectF>> = lines.iter_mut().map(|l| pad_line(l)).collect();
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
         use ocrs::TextItem;
         Ok(read
             .into_iter()
-            .flatten()
-            .map(|line| Line {
+            .zip(before)
+            .filter_map(|(line, before)| line.map(|l| (l, before)))
+            .map(|(line, before)| Line {
                 words: line
                     .words()
                     .map(|w| {
                         let r = w.bounding_rect();
-                        Word::new(w.to_string(), [r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32], "ocrs")
+                        Word::new(w.to_string(), clip([r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32], before), "ocrs")
                     })
                     .filter(|w| !w.text.trim().is_empty())
                     .collect(),
@@ -134,17 +208,71 @@ impl Ocr {
             .filter(|l| !l.words.is_empty())
             .collect())
     }
+
+    /// The words in a page, `rgb` (1 or 3 bytes per pixel) prepared as `page`. A page at least
+    /// twice the detector's input along an axis whose text is small once shrunk to that input
+    /// ([`crate::pitch`]) is detected in overlapping tiles ([`crate::tiles`]), each word kept by the
+    /// tile whose core holds its centre and moved back to page pixels.
+    fn detect_words(&self, rgb: &[u8], width: u32, height: u32, page: &ocrs::OcrInput) -> Result<Vec<RotatedRect>, OcrError> {
+        let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
+        let tiles = self.detector_input.map(|input| crate::tiles::tiles(width, height, input)).unwrap_or_default();
+        let area = (width as usize).checked_mul(height as usize).filter(|&a| a > 0);
+        let channels = area.and_then(|a| rgb.len().is_multiple_of(a).then(|| rgb.len() / a)).filter(|c| matches!(c, 1 | 3));
+        let (Some(channels), Some(input), true) = (channels, self.detector_input, tiles.len() > 1) else {
+            return self.engine.detect_words(page).map_err(|e| err(&e));
+        };
+        // Large print reads as well whole, at a quarter of the detection time.
+        if !crate::pitch::lines(rgb, width, height, channels, input).wants_tiles() {
+            return self.engine.detect_words(page).map_err(|e| err(&e));
+        }
+        let mut words = Vec::new();
+        for tile in &tiles {
+            let pixels = crate::tiles::crop(rgb, width, channels, tile.crop)
+                .ok_or_else(|| OcrError::Recognize("a detection tile lies outside the page".into()))?;
+            let source = ocrs::ImageSource::from_bytes(&pixels, (tile.width(), tile.height())).map_err(|e| err(&e))?;
+            let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
+            let (dx, dy) = (tile.crop[0] as f32, tile.crop[1] as f32);
+            for word in self.engine.detect_words(&input).map_err(|e| err(&e))? {
+                let centre = word.center();
+                let (x, y) = (centre.x + dx, centre.y + dy);
+                if tile.owns(x, y) {
+                    words.push(RotatedRect::new(rten_imageproc::PointF::from_yx(y, x), word.up_axis(), word.width(), word.height()));
+                }
+            }
+        }
+        Ok(words)
+    }
+}
+
+/// The detection model's input size, (width, height) pixels, if its input is an NCHW image of a
+/// fixed size.
+fn detector_input(model: &rten::Model) -> Option<(u32, u32)> {
+    let id = *model.input_ids().first()?;
+    let shape = model.node_info(id)?.shape()?;
+    match shape.as_slice() {
+        [_, _, rten::Dimension::Fixed(h), rten::Dimension::Fixed(w)] => Some((u32::try_from(*w).ok()?, u32::try_from(*h).ok()?)),
+        _ => None,
+    }
 }
 
 /// The ocrs engine as a [`Recognizer`] (the default engine).
 pub struct OcrsRecognizer {
     engine: Ocr,
+    /// Loaded from bytes ([`OcrsRecognizer::from_ocr`]), not from model files: it stays
+    /// available without them.
+    in_memory: bool,
 }
 
 impl OcrsRecognizer {
     /// Load the models from `models`.
     pub fn load(models: &Models) -> Result<OcrsRecognizer, OcrError> {
-        Ok(OcrsRecognizer { engine: Ocr::load(models)? })
+        Ok(OcrsRecognizer { engine: Ocr::load(models)?, in_memory: false })
+    }
+
+    /// A recogniser loaded some other way than from model files: the web build downloads the
+    /// models and loads them with [`Ocr::from_bytes`].
+    pub fn from_ocr(engine: Ocr) -> OcrsRecognizer {
+        OcrsRecognizer { engine, in_memory: true }
     }
 
     /// Load the models found by [`Models::find`].
@@ -159,7 +287,7 @@ impl Recognizer for OcrsRecognizer {
     }
 
     fn available(&self) -> bool {
-        Models::find().is_some()
+        self.in_memory || Models::find().is_some()
     }
 
     fn languages(&self) -> Vec<(String, String)> {
@@ -173,7 +301,38 @@ impl Recognizer for OcrsRecognizer {
 
 #[cfg(test)]
 mod tests {
+    use rten_imageproc::{PointF, Vec2};
+
     use super::*;
+
+    /// A found line is widened by fractions of its word height: every word above and below, the
+    /// first and the last word along the line; the box returned is the line's before.
+    #[test]
+    fn a_line_is_padded_by_its_word_height() {
+        let word = |l: f32, r: f32| RotatedRect::from_rect(RectF::from_tlbr(100.0, l, 140.0, r));
+        let mut line = vec![word(10.0, 90.0), word(100.0, 200.0), word(210.0, 260.0)];
+        let before = pad_line(&mut line).unwrap();
+        assert_eq!([before.left(), before.top(), before.right(), before.bottom()], [10.0, 100.0, 260.0, 140.0]);
+        let (across, along) = (2.0 * 0.12 * 40.0, 2.0 * 0.1 * 40.0);
+        assert!(line.iter().all(|r| (r.height() - (40.0 + across)).abs() < 1e-3));
+        assert!((line[0].width() - (80.0 + along)).abs() < 1e-3 && (line[2].width() - (50.0 + along)).abs() < 1e-3);
+        assert!((line[1].width() - 100.0).abs() < 1e-3, "a word inside the line keeps its width");
+        // A box on its side (up axis horizontal) keeps its height across the line and its width
+        // along it.
+        let mut side = vec![RotatedRect::new(PointF::from_yx(0.0, 0.0), Vec2::from_yx(0.0, 1.0), 40.0, 80.0)];
+        pad_line(&mut side).unwrap();
+        assert!((side[0].height() - (80.0 + 2.0 * 0.12 * 80.0)).abs() < 1e-3 && (side[0].width() - (40.0 + 2.0 * 0.1 * 80.0)).abs() < 1e-3);
+        assert!(pad_line(&mut []).is_none());
+    }
+
+    #[test]
+    fn recognised_words_are_clipped_to_the_line_found() {
+        let line = Some(RectF::from_tlbr(100.0, 10.0, 140.0, 260.0));
+        assert_eq!(clip([4.0, 94.0, 60.0, 146.0], line), [10.0, 100.0, 60.0, 140.0]);
+        // A word wholly in the padding keeps its own box rather than none.
+        assert_eq!(clip([262.0, 94.0, 270.0, 146.0], line), [262.0, 94.0, 270.0, 146.0]);
+        assert_eq!(clip([1.0, 2.0, 3.0, 4.0], None), [1.0, 2.0, 3.0, 4.0]);
+    }
 
     /// Raw dimensions are untrusted (they come from callers, ultimately from documents): zero
     /// sides, sides or pixel totals over the caps, and products that would overflow the naive

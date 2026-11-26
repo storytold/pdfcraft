@@ -1,9 +1,9 @@
 # pdfcraft-prc-render
 
-A headless CPU renderer for PRC 3D models read by `pdfcraft-prc`: placed meshes in world space, a fitted camera, a
+A headless CPU renderer for PRC 3D models read by `craft-prc`: placed meshes in world space, a fitted camera, a
 depth-buffered triangle fill and headlight shading, into a straight-RGBA image.
 
-- **Layer:** L3. Depends on `pdfcraft-prc` only.
+- **Layer:** L3. Depends on `craft-prc` only.
 - **Licence:** MIT OR Apache-2.0.
 - `#![forbid(unsafe_code)]`. Never panics on input: image size, triangle count and every index are checked, and
   damage returns `RenderError`.
@@ -15,7 +15,15 @@ assemble(&PrcFile) -> Result<Vec<WorldMesh>, RenderError>   // every placement's
 place(&TriangleMesh, &Matrix, colour, triangle_colours) -> WorldMesh
 Camera::fit(&Bounds, direction, up, perspective, aspect) / Camera::fit_meshes(&[WorldMesh], ...)
 render(&[WorldMesh], &Camera, &RenderOptions) -> Result<Image, RenderError>
+nav::Orbit::named(NamedView, perspective, Upright) / nav::Orbit::looking(direction, up, perspective)
+orbit.turn(yaw, pitch) / pan_by([right, up]) / zoom_at(&Bounds, reach, aspect, factor, [right, up]) / anchor_at(&Camera, point) / centre_on / refit
+orbit.camera(&Bounds, nav::reach(&[WorldMesh], &Bounds), aspect) -> Result<Camera, RenderError>
 ```
+
+- `nav` is a viewer's orbit control without the GUI: the fitted view holds the sphere round the model's centre that
+  holds every drawn vertex, so turning or reshaping the picture never changes the model's size. Once `anchor_at` picks a
+  model point the view turns about it, and the point keeps its place on the picture. Pitch stays 0.01 rad short of
+  the up axis, zoom within 0.05–50 of the fitted view, pan within 1,000 model radii; non-finite input is ignored.
 
 - With no product tree, each tessellated mesh is drawn where it lies, in the default colour.
 - A triangle's own colour wins over its mesh's, which wins over `RenderOptions::colour`.
