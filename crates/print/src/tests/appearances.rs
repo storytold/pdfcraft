@@ -986,14 +986,20 @@ fn no_rotate_keeps_appearance_matrix_and_shifted_inherited_page_geometry() {
 }
 
 /// Invalid `/Rotate` values normalize to zero while the eligible appearance remains upright.
+/// A real is truncated toward zero, as the renderer reads it, so `90.5` turns the page 90.
 #[test]
 fn malformed_page_rotation_keeps_no_rotate_appearance_upright() {
-    for rotation in [Object::Int(135), Object::Int(-45), Object::Real(90.5), Object::name("QuarterTurn")] {
+    for (rotation, turn, anchor) in [
+        (Object::Int(135), 0, (40, 50)),
+        (Object::Int(-45), 0, (40, 50)),
+        (Object::Real(90.5), 90, (50, 40)),
+        (Object::name("QuarterTurn"), 0, (40, 50)),
+    ] {
         let (doc, _, _) = no_rotate_fixture(rotation.clone(), [-20.0, 30.0], "Widget", 20);
-        assert_eq!(pdfcraft_model::pages(&doc)[0].rotation(&doc), 0);
+        assert_eq!(pdfcraft_model::pages(&doc)[0].rotation(&doc), turn);
         let before = saved(&doc);
         let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
-        assert_upright_corners(&printed, (40, 50), 1);
+        assert_upright_corners(&printed, anchor, 1);
         assert_eq!(saved(&doc), before, "malformed Rotate={rotation:?}");
     }
 }

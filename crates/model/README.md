@@ -13,6 +13,12 @@ L3/L4 crates need:
   counts as 0, as the renderer draws it.
   `view_matrix_for(rotation, rect)` is the same matrix for any rectangle, e.g. to draw a
   comment's picture upright inside its user-space `/Rect` on a turned page.
+- `rotate_value`, `shown_rotation` and `overrides_inherited`: `/Rotate` read as the renderer
+  reads it, at every node of the page tree: an integer, or a real truncated toward zero, that
+  fits in 32 bits. Any other value (a null, a name, a number past 32 bits) is no value, and the
+  node keeps the turn it inherits; the page walk replaces such a value of a page's own with the
+  inherited one, if any. Organize, flattening and the callers of `Page::rotation` (printing, new
+  comments, signing) read it this way, so each takes the turn the page is shown with.
 
 The page-tree walk keeps one cursor per ancestor and shares inherited attribute owners.
 Repeated child references are skipped before copying attributes, with first depth-first
