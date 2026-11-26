@@ -554,6 +554,68 @@ fn autotag_apply_tags_headings_by_size_across_pages() {
     assert_eq!(nesting["status"], "passed", "{check}");
 }
 
+/// #7065: Apply marks a running header and a numbered footer as pagination artifacts and lists
+/// them, and tags a body line that repeats mid-page like any other text.
+#[test]
+fn autotag_apply_marks_running_headers_and_footers_as_artifacts() {
+    let dir = workdir("autotag-running");
+    let page = |n: usize| {
+        format!(
+            "BT /FR 9 Tf 72 760 Td (Annual report) Tj ET BT /FR 11 Tf 72 640 Td (Body text on page {n} that runs long enough to set the body size) Tj ET \
+             BT /FR 11 Tf 72 400 Td (A body line repeated on every page) Tj ET BT /FR 9 Tf 300 30 Td (Page {n}) Tj ET"
+        )
+    };
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 612 792] /Resources << /Font << /FR 9 0 R >> >> >>".into(),
+    ];
+    objs.extend((6..9).map(|c| format!("<< /Type /Page /Parent 2 0 R /Contents {c} 0 R >>")));
+    objs.extend((1..4).map(|n| {
+        let content = page(n);
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len())
+    }));
+    objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into());
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("running.pdf"), bytes).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "running.pdf" }))["doc"].as_u64().unwrap();
+    let applied = ok(&mut a, "accessibility_autotag_apply", json!({ "doc": doc }));
+    let types: Vec<&str> = applied["tags"].as_array().unwrap().iter().map(|t| t["type"].as_str().unwrap()).collect();
+    assert_eq!(types, ["Document", "P", "P", "P", "P", "P", "P"], "only the body text is tagged: {applied}");
+    assert_eq!(applied["running_count"], 6);
+    let listed: Vec<(u64, &str, &str)> = applied["running_text"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["page"].as_u64().unwrap(), r["subtype"].as_str().unwrap(), r["text"].as_str().unwrap()))
+        .collect();
+    assert_eq!(listed[..2], [(1, "Header", "Annual report"), (1, "Footer", "Page 1")]);
+    assert_eq!(listed[5], (3, "Footer", "Page 3"));
+    assert!(applied["note"].as_str().unwrap().contains("6 text objects"), "{applied}");
+    let check = ok(&mut a, "accessibility_check", json!({ "doc": doc, "rules": ["tagged-content"] }));
+    let content = check["results"].as_array().unwrap().iter().find(|r| r["rule"] == "tagged-content").unwrap();
+    assert_eq!(content["status"], "passed", "{check}");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "tagged.pdf" }));
+    let reopened = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("tagged.pdf")).unwrap())).unwrap();
+    let first = pdfcraft_model::pages(&reopened).into_iter().next().unwrap();
+    let pdfcraft_cos::Object::Stream(stream) = &*reopened.resolve(first.dict.get(b"Contents").unwrap()) else { panic!("page content") };
+    let text = String::from_utf8(stream.decoded_strict().unwrap()).unwrap();
+    assert!(text.contains("/Artifact <</Type /Pagination/Subtype /Header>> BDC"), "{text}");
+    assert!(text.contains("/Artifact <</Type /Pagination/Subtype /Footer>> BDC"), "{text}");
+}
+
 #[test]
 fn autotag_form_fields_writes_reviewable_widget_tags() {
     let dir = workdir("autotag-form-fields");
@@ -1645,6 +1707,7 @@ fn command_list_reports_enablement_and_tools() {
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
     let list = ok(&mut a, "command_list", json!({ "doc": doc }));
     let find = |id: &str| list["commands"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap().clone();
+    assert_eq!(find("comment.list")["shortcut"], if cfg!(target_os = "macos") { json!(null) } else { json!("Ctrl+M") });
     assert_eq!(find("page.rotate")["tool"], "page_rotate");
     assert_eq!(find("page.rotate")["enabled"], true);
     assert_eq!(find("edit.undo")["enabled"], false);
@@ -5853,6 +5916,65 @@ fn redacting_through_tools() {
     assert!(matches!(a.call("redact_mark", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
 }
 
+#[test]
+fn redact_apply_refuses_unreadable_annotations_then_recovers_through_tools() {
+    for inline in [false, true] {
+        for rect in ["", "/Rect [10 140 /Bad 80 160]"] {
+            let temp = tempfile::tempdir().unwrap();
+            let dir = temp.path();
+            let note = format!("<< /Type /Annot /Subtype /Text /NM (problem-note) /Contents (PRIVATE-NOTE) {rect} >>");
+            let annots = if inline { note.clone() } else { "6 0 R".into() };
+            let page = format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 5 0 R \
+                 /Resources << /Font << /F1 4 0 R >> >> /Annots [{annots}] >>"
+            );
+            let content = "BT /F1 12 Tf 20 150 Td (SECRET) Tj ET BT /F1 12 Tf 20 50 Td (Public line) Tj ET";
+            let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+            let bytes = pdf_of(&[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                &page,
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+                &stream,
+                &note,
+            ]);
+            std::fs::write(dir.join("source.pdf"), bytes).unwrap();
+            let mut a = auto(dir);
+            let doc = ok(&mut a, "doc_open", json!({ "path": "source.pdf" }))["doc"].as_u64().unwrap();
+            assert_eq!(ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "SECRET" }))["marked"], 1);
+            ok(&mut a, "doc_save", json!({ "doc": doc, "path": "pending.pdf", "full": true }));
+            let state = |a: &Automation| {
+                let d = a.session().get(pdfcraft_engine::DocId(doc)).unwrap();
+                (d.bytes.clone(), d.dirty, d.edit_generation(), d.can_undo().map(str::to_owned), d.can_redo().map(str::to_owned))
+            };
+            let before = state(&a);
+            let pending = std::fs::read(dir.join("pending.pdf")).unwrap();
+            let comments = ok(&mut a, "comment_list", json!({ "doc": doc }));
+            for _ in 0..2 {
+                let failure = err(&mut a, "redact_apply", json!({ "doc": doc })).to_string();
+                assert!(failure.contains("annotation 1 on page 1") && failure.contains("nothing was changed"), "{failure}");
+                assert_eq!(state(&a), before, "refusal preserves working bytes, dirty state, generation and history");
+                assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc })), comments, "the note and pending mark stay");
+                assert_eq!(std::fs::read(dir.join("pending.pdf")).unwrap(), pending);
+                assert!(page_text(&mut a, doc)[0].contains("SECRET"), "refusal leaves the original page intact");
+            }
+            // The error's remedy is reachable through the ordinary comment tool, even without a
+            // usable rectangle. The original pending mark can then be applied and saved.
+            ok(&mut a, "comment_delete", json!({ "doc": doc, "id": "problem-note" }));
+            let applied = ok(&mut a, "redact_apply", json!({ "doc": doc }));
+            assert_eq!((applied["applied"].as_u64(), applied["marks_pending"].as_u64()), (Some(1), Some(0)));
+            ok(&mut a, "doc_save", json!({ "doc": doc, "path": "redacted.pdf", "full": true }));
+            let mut reader = auto(dir);
+            let reopened = ok(&mut reader, "doc_open", json!({ "path": "redacted.pdf" }))["doc"].as_u64().unwrap();
+            let text = page_text(&mut reader, reopened)[0].clone();
+            assert!(text.contains("Public line") && !text.contains("SECRET"), "{text}");
+            assert_eq!(ok(&mut reader, "comment_list", json!({ "doc": reopened }))["comments"], json!([]));
+            let saved = std::fs::read(dir.join("redacted.pdf")).unwrap();
+            assert!(!saved.windows(b"PRIVATE-NOTE".len()).any(|w| w == b"PRIVATE-NOTE"), "the removed note must not survive a full save");
+        }
+    }
+}
+
 /// #2539 review: `redact_apply` says where the removed text is still held that applying leaves as
 /// it is (a bookmark title and a note's text here), and changes neither.
 #[test]
@@ -7077,6 +7199,32 @@ fn tab_order_and_field_appearance_through_tools() {
         a.call("form_set_props", &json!({ "doc": doc, "field": "A", "appearance": { "style": "wavy" } })),
         Err(ToolError::InvalidArgs(_))
     ));
+}
+
+/// #7429: an import that took some values and had the form refuse another says which one in its own
+/// response (a CLI or MCP caller need not call `doc_info`); one the form refused whole still fails;
+/// one the form took whole carries an empty list.
+#[test]
+fn form_data_import_response_names_the_fields_the_form_refused() {
+    let dir = workdir("import-refused");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "form_add_field",
+        json!({ "doc": doc, "page": 1, "type": "combo", "rect": [20, 60, 180, 82], "name": "Choice", "options": ["A", "B"] }),
+    );
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, 20, 180, 42], "name": "Notes" }));
+    std::fs::write(dir.join("whole.xml"), "<fields><Notes>hello</Notes></fields>").unwrap();
+    std::fs::write(dir.join("mixed.xml"), "<fields><Choice>INVALID</Choice><Notes>again</Notes></fields>").unwrap();
+    std::fs::write(dir.join("refused.xml"), "<fields><Choice>INVALID</Choice></fields>").unwrap();
+    let r = ok(&mut a, "doc_import_data", json!({ "doc": doc, "path": "whole.xml" }));
+    assert_eq!(r["import_repairs"], json!([]), "{r}");
+    let r = ok(&mut a, "doc_import_data", json!({ "doc": doc, "path": "mixed.xml" }));
+    let repairs = r["import_repairs"].as_array().unwrap();
+    assert!(repairs.len() == 1 && repairs[0].as_str().unwrap().contains("\"Choice\"") && !repairs[0].as_str().unwrap().contains("Notes"), "{r}");
+    let e = err(&mut a, "doc_import_data", json!({ "doc": doc, "path": "refused.xml" }));
+    assert!(e.to_string().contains("nothing was imported") && e.to_string().contains("\"Choice\""), "{e}");
 }
 
 #[test]
@@ -10101,29 +10249,37 @@ BT /F1 11 Tf 20 20 Td (Total due: 150.00) Tj ET";
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "invoice.pdf" }))["doc"].as_u64().unwrap();
     ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "invoice.docx" }));
-    // Inspect the actual package emitted by the tool, not an intermediate page model.
-    let zip = std::fs::read(dir.join("invoice.docx")).unwrap();
-    let mut at = 0;
-    let mut xml = String::new();
-    while zip[at..].starts_with(b"PK\x03\x04") {
-        let size = u32::from_le_bytes(zip[at + 18..at + 22].try_into().unwrap()) as usize;
-        let len = u16::from_le_bytes(zip[at + 26..at + 28].try_into().unwrap()) as usize;
-        let data = at + 30 + len;
-        if &zip[at + 30..data] == b"word/document.xml" {
-            std::io::Read::read_to_string(&mut flate2::read::DeflateDecoder::new(&zip[data..data + size]), &mut xml).unwrap();
-            break;
-        }
-        at = data + size;
-    }
-    assert!(xml.contains("rotation:315.000"), "diagonal text survives extraction: {xml}");
-    assert!(xml.contains("z-index:-2"), "the large watermark stays behind the invoice");
-    assert!(!xml.contains("<wp:inline>") && !xml.contains("<w:tbl>"));
-    assert!(!xml.contains("w:val=\"single\""));
-    assert_eq!(xml.matches(">DRAFT</w:t>").count(), 1);
-    assert_eq!(xml.matches(">Total due: 150.00</w:t>").count(), 1);
-    assert_eq!(xml.matches("<w:sectPr>").count(), 1);
-    assert!(!xml.contains("w:type=\"page\""));
-    assert!(xml.contains("margin-left:20.000pt"), "invoice fields retain their left edge");
+    // Inspect the actual package emitted by the tool, read back as Word reads it.
+    use craft_wordmodel::InlineObject;
+    use craft_wordmodel::para::Wrap;
+    let word = craft_docx::read(&std::fs::read(dir.join("invoice.docx")).unwrap()).unwrap();
+    assert!(word.body.iter().all(|b| matches!(&**b, craft_wordmodel::Block::Para(_))), "no table");
+    let objects: Vec<&InlineObject> =
+        word.body.iter().filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p) } else { None }).flat_map(|p| &p.objects).collect();
+    let text_of = |o: &InlineObject| match o {
+        InlineObject::Shape { story: Some(id), .. } => word.parts.get(id).map(|p| {
+            p.blocks.iter().filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p.plain_text()) } else { None }).collect::<String>()
+        }),
+        _ => None,
+    };
+    let boxes: Vec<(String, &craft_wordmodel::para::Float)> = objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Shape { float, .. } => text_of(o).map(|t| (t, float)),
+            _ => None,
+        })
+        .collect();
+    let draft: Vec<_> = boxes.iter().filter(|(t, _)| t == "DRAFT").collect();
+    assert_eq!(draft.len(), 1, "{boxes:?}");
+    assert!((draft[0].1.rot - 315.0).abs() < 0.01, "diagonal text survives extraction: {}", draft[0].1.rot);
+    assert_eq!(draft[0].1.wrap, Wrap::BehindText, "the large watermark stays behind the invoice");
+    assert!(boxes.iter().filter(|(t, _)| t != "DRAFT").all(|(_, f)| f.z > draft[0].1.z));
+    assert!(!objects.iter().any(|o| matches!(o, InlineObject::Image { float, .. } if float.wrap == Wrap::Inline)));
+    assert_eq!(boxes.iter().filter(|(t, _)| t == "Total due: 150.00").count(), 1);
+    assert_eq!(word.sections().len(), 1);
+    assert!(!word.body.iter().any(|b| matches!(&**b, craft_wordmodel::Block::Para(p) if p.text.contains(craft_wordmodel::para::PAGE_BREAK))));
+    let description = boxes.iter().find(|(t, _)| t == "Description").expect("the Description field");
+    assert_eq!(description.1.x, 20.0, "invoice fields retain their left edge");
     let rendered = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
     assert!(rendered.iter().any(|c| matches!(c, Content::Png { .. })));
 }

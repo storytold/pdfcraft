@@ -42,6 +42,8 @@ pub struct Metrics {
     explicit_default: bool,
     /// The standard-14 face to measure with when the dictionary carries no `/Widths`.
     std14: Option<crate::Std14>,
+    /// [`Metrics::std14`] is the face `/BaseFont` names (or a common alias of it), not a guess.
+    std14_named: bool,
     /// Glyph units → text space (0.001, or `/FontMatrix[0]` for Type 3).
     pub scale: f64,
     /// Glyph box in text space per unit of font size.
@@ -75,6 +77,10 @@ pub struct Metrics {
     /// read that fails without one, such as an empty stream behind a filter nothing decodes,
     /// doesn't set it, with or without anything left.
     pub past_allowance: bool,
+    /// A codespace range of the embedded CMap was dropped (not one to four bytes, or past the range
+    /// limit): how the font's codes split into characters is then a guess, and a caller that must
+    /// know which text a string holds (redaction) refuses to rely on it.
+    pub codespaces_dropped: bool,
 }
 
 fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -838,18 +844,22 @@ pub fn base_font_name(doc: &Document, font: &Dict) -> String {
 /// Codespace ranges and CID mappings from an embedded CMap stream, at most
 /// [`MAX_CMAP_RANGES`] of each (every glyph searches them).
 #[allow(clippy::type_complexity)]
-fn parse_cmap(data: &[u8]) -> (Vec<(usize, Vec<u8>, Vec<u8>)>, Vec<(u32, u32, u32)>) {
+fn parse_cmap(data: &[u8]) -> (Vec<(usize, Vec<u8>, Vec<u8>)>, Vec<(u32, u32, u32)>, bool) {
     let (mut spaces, mut cids) = (Vec::new(), Vec::new());
+    let mut dropped = false;
+    let mut seen = HashSet::new();
     let mut toks = Lexer::new(data);
     while let Some(t) = toks.next() {
         match t {
             Tok::Word(b"begincodespacerange") => {
                 while let Some([lo, hi]) = entry(&mut toks, b"endcodespacerange") {
-                    if let (Tok::Hex(Some(lo)), Tok::Hex(Some(hi))) = (lo, hi)
-                        && lo.len() == hi.len()
-                        && spaces.len() < MAX_CMAP_RANGES
-                    {
-                        spaces.push((lo.len(), lo, hi));
+                    if let (Tok::Hex(Some(lo)), Tok::Hex(Some(hi))) = (lo, hi) {
+                        // A code is at most four bytes; a repeated range can never match first, so it only costs every glyph a comparison.
+                        if lo.len() != hi.len() || !(1..=4).contains(&lo.len()) || spaces.len() >= MAX_CMAP_RANGES {
+                            dropped = true;
+                        } else if seen.insert((lo.clone(), hi.clone())) {
+                            spaces.push((lo.len(), lo, hi));
+                        }
                     }
                 }
             }
@@ -875,7 +885,7 @@ fn parse_cmap(data: &[u8]) -> (Vec<(usize, Vec<u8>, Vec<u8>)>, Vec<(u32, u32, u3
         }
     }
     spaces.sort_by_key(|s| s.0);
-    (spaces, cids)
+    (spaces, cids, dropped)
 }
 
 impl Metrics {
@@ -891,6 +901,7 @@ impl Metrics {
             default: 500.0,
             explicit_default: false,
             std14: Some(crate::Std14::Helvetica),
+            std14_named: false,
             scale: 0.001,
             ascent: 0.9,
             descent: -0.25,
@@ -905,6 +916,7 @@ impl Metrics {
             explicit_reverse: (32..127u8).map(|c| (char::from(c), u32::from(c))).collect(),
             outlined_cids: Vec::new(),
             past_allowance: false,
+            codespaces_dropped: false,
         }
     }
 
@@ -935,7 +947,7 @@ impl Metrics {
         m.code_len = match &m.codes {
             Codes::One => 1,
             Codes::Two => 2,
-            Codes::Ranges(r) => r.last().map_or(2, |x| x.0),
+            Codes::Ranges(r) => r.last().map_or(2, |x| x.0.clamp(1, 4)),
         };
         m.unicode = unicode_map(doc, font, m.composite, &mut reads);
         if m.std14.is_some() {
@@ -977,7 +989,8 @@ impl Metrics {
                 && let Object::Stream(s) = &*e
                 && let Some(data) = reads.decode(s, MAX_CMAP_BYTES)
             {
-                let (spaces, cids) = parse_cmap(&data);
+                let (spaces, cids, dropped) = parse_cmap(&data);
+                m.codespaces_dropped = dropped;
                 if !spaces.is_empty() {
                     m.codes = Codes::Ranges(spaces);
                 }
@@ -1057,7 +1070,9 @@ impl Metrics {
                 let base = String::from_utf8_lossy(font.name(b"BaseFont").unwrap_or(b"")).into_owned();
                 // The real face, bold and italic included: the published metrics differ by style,
                 // so Times-Bold is not Times-Roman and neither is Helvetica scaled.
-                m.std14 = crate::Std14::from_base_font(&base).or(Some(crate::Std14::Helvetica));
+                let recognised = crate::Std14::recognise(&base);
+                m.std14_named = matches!(recognised, Some((_, crate::Std14Match::Alias)));
+                m.std14 = recognised.map(|(face, _)| face).or(Some(crate::Std14::Helvetica));
             }
         }
         if let Some(d) = descriptor {
@@ -1106,7 +1121,7 @@ impl Metrics {
         out
     }
 
-    fn cid(&self, code: u32) -> u32 {
+    pub(crate) fn cid(&self, code: u32) -> u32 {
         if self.cid_map.is_empty() {
             return code;
         }
@@ -1131,6 +1146,24 @@ impl Metrics {
                 w => w / 1000.0,
             },
             None => self.default * self.scale,
+        }
+    }
+
+    /// Whether [`Metrics::width`] of `code` is a width the font declares: a `/Widths` entry (or
+    /// the embedded program's advance where `/Widths` is absent), a `/W` entry or an explicit
+    /// `/DW`, or the published metrics of the standard-14 face `/BaseFont` names. It is not for a
+    /// `/MissingWidth`, the implied `/DW` of 1000, or a standard-14 face guessed from the name.
+    pub fn width_declared(&self, code: u32) -> bool {
+        if self.composite {
+            let cid = self.cid(code);
+            return self.explicit_default || self.cid_widths.contains_key(&cid) || self.cid_ranges.find(cid).is_some();
+        }
+        if code.checked_sub(self.first).and_then(|i| self.widths.get(i as usize)).is_some() {
+            return true;
+        }
+        match self.std14.filter(|_| self.std14_named) {
+            Some(f) => u8::try_from(self.std14_code(f, code)).is_ok_and(|c| f.width(c) != 0.0),
+            None => false,
         }
     }
 

@@ -41,6 +41,7 @@ pub(crate) use copy::{Copier, copy_object};
 use copy::{MAX_COPY_DEPTH, SKIP_ON_PAGE};
 use fields::{add_kid, field_and_widget, register_fields, resolve_field_conflicts, split_own_field};
 pub use fields::{combine_field_conflicts, field_name_conflicts};
+pub(crate) use fields::{listed_fields, share_fields_with_originals};
 
 /// How colliding fully-qualified field names are resolved when pages are imported.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -104,7 +105,9 @@ fn added_objects(dst: &Document, before: &HashSet<u32>) -> Vec<ObjRef> {
 /// under one new bookmark titled `title` (the file's name) at its first inserted page, as Combine
 /// Files does for each file. That bookmark goes among the top-level bookmarks where the pages went:
 /// before the first one that points after them. Bookmarks to pages left out stay behind, unless a
-/// bookmark below them leads to an inserted page; a file without bookmarks adds none.
+/// bookmark below them leads to an inserted page; a file without bookmarks adds none. Catalog
+/// attachments are merged with the destination's attachments, with duplicate name-tree keys
+/// renamed, as in Combine Files.
 pub fn insert_file_pages(
     dst: &mut Document,
     src: &Document,
@@ -123,6 +126,15 @@ pub fn insert_file_pages(
     {
         let after = at.min(crate::page_count(dst)?.saturating_sub(imported.pages.len())).saturating_add(imported.pages.len());
         insert_file_bookmark(dst, &Mark { title: title.to_string(), page: *first, outline }, after)?;
+    }
+    if !imported.pages.is_empty() {
+        let mut incoming = Vec::new();
+        carry::collect_attachments(dst, src, &mut incoming)?;
+        if !incoming.is_empty() {
+            let mut attachments = crate::attachments::entries(dst);
+            attachments.append(&mut incoming);
+            set_attachments(dst, attachments)?;
+        }
     }
     Ok(ImportOutcome { pages: imported.pages, renamed_fields: imported.renamed_fields })
 }
