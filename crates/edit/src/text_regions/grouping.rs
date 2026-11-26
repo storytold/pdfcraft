@@ -239,26 +239,25 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
     for (i, line) in lines.iter().enumerate() {
         let joins = rows.last().and_then(|r| r.last()).and_then(|i| lines.get(*i)).is_some_and(|prev| {
             let gap = line.frame_rect()[0] - prev.frame_rect()[2];
+            let rise = prev.frame_origin().1 - line.frame_origin().1;
+            let smaller = prev.size.min(line.size);
+            let larger = prev.size.max(line.size);
+            let smaller_rise = if prev.size < line.size { rise } else { -rise };
             // OCR words (invisible text over a scan) join only across a word space: a wider gap
             // is a table cell or a tab stop, which a rewrite would close up.
             let scanned = !mixed || (invisible(prev) == invisible(line) && (!invisible(line) || gap < prev.size.max(line.size) * 0.6));
             scanned
                 && (mixed || same_style(prev, line))
                 && same_plane(prev, line)
-                // A superscript or subscript run (a footnote marker, say) sits on the same visual
-                // row as the text around it, raised or lowered by `Ts` from the body baseline
-                // (#3252). That shift is typically up to half the body size, not the marker's own
-                // smaller size — but the wider tolerance only applies between a run and a
-                // distinctly smaller or larger one, with no horizontal overlap (`gap >= 0.0`):
-                // two equal-size runs can land within it too, at a baseline shift tight columns
-                // or compressed text (`Tz`) can produce between genuinely separate rows, and the
-                // original 20% tolerance is what keeps those apart.
-                && ((prev.frame_origin().1 - line.frame_origin().1).abs() < prev.size.min(line.size) * 0.2
-                    || (gap >= 0.0
-                        && prev.size.min(line.size) < prev.size.max(line.size) * 0.9
-                        && (prev.frame_origin().1 - line.frame_origin().1).abs() < prev.size.max(line.size) * 0.5))
-                && gap >= -prev.size.min(line.size) * 0.2
-                && gap < prev.size.max(line.size) * 1.5
+                // The wider baseline tolerance joins unlike sizes at an adjoining edge (#3252).
+                // A raised smaller run can overlap that edge by rounding its advance (#7190).
+                // Allow only 1% of its size, so overprinted text and truly stacked rows stay apart.
+                && (rise.abs() < smaller * 0.2
+                    || ((gap >= 0.0 || (gap >= -smaller * 0.01 && smaller_rise > 0.0))
+                        && smaller < larger * 0.9
+                        && rise.abs() < larger * 0.5))
+                && gap >= -smaller * 0.2
+                && gap < larger * 1.5
                 // Separate same-style text objects that merely touch or overlap, with no space
                 // between them, are separate labels (for example a paragraph dragged against
                 // another, #594). Style runs and words separated by a space or gap still join.
