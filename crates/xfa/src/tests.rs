@@ -3314,6 +3314,72 @@ fn a_cornered_box_cut_by_a_page_break_keeps_its_corners_on_each_page() {
     assert!((first[0].rect.h + last[0].rect.h - 12.0 * 72.0).abs() < 0.01, "the two parts make the whole box");
 }
 
+/// The boxes with corners that a `pad_in`-inch spacer followed by a 12-inch box with `border`
+/// leaves on the first two pages (the content area is 10 inches tall, so the box is cut where
+/// the area ends).
+fn cut_boxes(pad_in: f64, border: &str) -> (Vec<crate::layout::Cornered>, Vec<crate::layout::Cornered>) {
+    let body = format!(
+        r#"<subform name="body" layout="tb" w="7.5in"><draw name="pad" w="1in" h="{pad_in}in"/><subform name="tall" layout="position" w="7.5in" h="12in">{border}<draw name="note" x="0in" y="0in" w="2in" h="0.3in"><value><text>Note</text></value></draw></subform></subform>"#
+    );
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+    let boxes = |i: usize| form.pages.get(i).map(|p| cornered(p).into_iter().cloned().collect()).unwrap_or_default();
+    (boxes(0), boxes(1))
+}
+
+/// A corner larger than half the height of a part a page break leaves is cut to that part: no
+/// corner reaches past its part's height, the curve stays finite, and the part's other corners
+/// are square where it was cut.
+#[test]
+fn a_corner_larger_than_half_its_cut_part_stays_within_the_part() {
+    // The spacer leaves 0.4in (28.8pt) on the first page for a 36pt corner.
+    let (first, last) = cut_boxes(9.6, r#"<border><edge/><corner radius="0.5in" join="round"/></border>"#);
+    assert_eq!((first.len(), last.len()), (1, 1), "{first:?} {last:?}");
+    assert!((first[0].rect.h - 28.8).abs() < 0.01, "{:?}", first[0].rect);
+    for part in [&first[0], &last[0]] {
+        assert!(part.corners.iter().all(|c| c.radius.is_finite() && c.radius <= part.rect.h + 1e-9), "{part:?}");
+        let ops = crate::pdf::cornered(part, 792.0);
+        assert!(!ops.contains("NaN") && !ops.contains("inf"), "{ops}");
+    }
+    let h = first[0].rect.h;
+    assert!(first[0].corners.iter().zip([h, h, 0.0, 0.0]).all(|(c, want)| (c.radius - want).abs() < 1e-6), "cut to the part: {first:?}");
+    // The second page holds the middle of the box, open at both ends: square corners, no top or bottom edge.
+    assert_eq!(last[0].corners.map(|c| c.radius), [0.0; 4]);
+    assert_eq!(last[0].edges.map(|e| e.is_some()), [false, true, false, true]);
+}
+
+/// A box a page break would leave no height of a part for isn't cut: it moves whole to the next
+/// page, and no part of zero height is made. A box of no height at all, drawn directly, writes
+/// finite numbers and nothing past its own top.
+#[test]
+fn a_cornered_box_is_never_cut_into_a_part_of_no_height() {
+    use crate::layout::{CornerShape, Cornered, Pen};
+    let (first, last) = cut_boxes(10.0, r#"<border><edge/><corner radius="0.25in" join="round"/></border>"#);
+    assert!(first.is_empty(), "nothing of the box fits on the first page: {first:?}");
+    assert!(last.iter().all(|r| r.rect.h > 0.0), "{last:?}");
+    let pen = Some(Pen { width: 1.0, color: [0.0; 3], dashed: false });
+    let flat = Cornered {
+        rect: Rect::new(36.0, 36.0, 144.0, 0.0),
+        corners: [CornerShape { radius: 0.0, round: true, inverted: false, line: pen }; 4],
+        fill: Some([0.5; 3]),
+        edges: [pen; 4],
+    };
+    let ops = crate::pdf::cornered(&flat, 792.0);
+    assert!(!ops.contains("NaN") && !ops.contains("inf"), "{ops}");
+}
+
+/// A cut box with edges that differ keeps each edge's own width and presence on both parts: the
+/// edge across the cut is gone from each, and the others stay as they were.
+#[test]
+fn a_cut_box_keeps_the_differing_edges_of_its_border_on_each_part() {
+    // Top 3pt, right hidden, bottom 1pt, left 2pt (the default is 0.5pt).
+    let border = r#"<border><edge thickness="3pt"/><edge presence="hidden"/><edge thickness="1pt"/><edge thickness="2pt"/><corner radius="0.25in" join="round"/></border>"#;
+    let (first, last) = cut_boxes(5.0, border);
+    assert_eq!((first.len(), last.len()), (1, 1), "{first:?} {last:?}");
+    let widths = |r: &crate::layout::Cornered| r.edges.map(|e| e.map(|p| p.width));
+    assert_eq!(widths(&first[0]), [Some(3.0), None, None, Some(2.0)], "the bottom edge is open where it was cut");
+    assert_eq!(widths(&last[0]), [None, None, Some(1.0), Some(2.0)], "the top edge is open where it was cut");
+}
+
 /// A cornered box is written as its fill along the corners, then each edge between its corners,
 /// then each shown corner with its own line, the lines half their width inside the box: a round
 /// corner a quarter circle, a square one a right angle. An inverted square corner is a notch and
