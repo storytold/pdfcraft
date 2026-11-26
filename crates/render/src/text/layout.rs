@@ -207,11 +207,12 @@ fn has_thai(text: &str) -> bool {
 }
 
 /// Each legacy Thai presentation form (U+F700–U+F71A) a glyph reads as, written as the Thai character it
-/// stands for when the glyph drawn before or after it is Thai. Old Thai fonts map their alternate glyphs (a
-/// tone mark or above vowel moved left, ฐ and ญ without descenders) to these private-use code points, so
+/// stands for when the glyph itself, the one drawn before it or the one after it holds Thai. Old Thai fonts map
+/// their alternate glyphs (a tone mark or above vowel moved left, ฐ and ญ without descenders) to these
+/// private-use code points, so
 /// copied text kept them and Find could not match the word: "เป็น" read as "เป", U+F712, "น", and as a
 /// letter of its own, not a mark, the alternate was then sorted by x after the next letter. The same code
-/// points are icons in symbol fonts, which is why a Thai neighbour is required; glyphs are taken in content
+/// points are icons in symbol fonts, which is why Thai in or next to the glyph is required; glyphs are taken in content
 /// order, so a second alternate stacked on the first counts the first, once written as Thai, as its neighbour.
 pub(super) fn standard_thai_forms<G>(glyphs: &mut [G], glyph: fn(&mut G) -> &mut TextGlyph) {
     let legacy = |c: char| pdfcraft_fonts::pdf::legacy_thai_presentation_base(c);
@@ -220,9 +221,10 @@ pub(super) fn standard_thai_forms<G>(glyphs: &mut [G], glyph: fn(&mut G) -> &mut
         if !glyphs.get_mut(i).is_some_and(|g| glyph(g).text.chars().any(|c| legacy(c).is_some())) {
             continue;
         }
+        let own = thai_at(glyphs, i);
         let before = i.checked_sub(1).is_some_and(|p| thai_at(glyphs, p));
         let after = thai_at(glyphs, i + 1);
-        if (before || after)
+        if (own || before || after)
             && let Some(g) = glyphs.get_mut(i)
         {
             let g = glyph(g);

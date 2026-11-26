@@ -3493,6 +3493,10 @@ fn legacy_thai_presentation_forms_read_as_thai() {
     }
     let v = vec![g("a", 0.0, 10.0, 6.0), g("\u{F712}", 6.0, 10.0, 12.0), g("b", 12.0, 10.0, 18.0)];
     assert_eq!(layout(v).plain_text(), "a\u{F712}b");
+    // One glyph whose text holds Thai and a legacy form (a multi-character `ToUnicode` or `/ActualText`) is Thai
+    // context for itself, even between Latin letters.
+    let v = vec![g("a", 0.0, 10.0, 6.0), g("ป\u{F712}น", 6.0, 10.0, 18.0), g("b", 18.0, 10.0, 24.0)];
+    assert_eq!(layout(v).plain_text(), "aป็นb");
     // Through the page: Copy and Find read the page's glyphs, not `layout`.
     let page = extract_page(&one_glyph_per_show("เป\u{F712}น", 0.0, false), 0, &InterpreterSettings::default()).unwrap();
     assert_eq!(page.plain_text(), "เป็น");
