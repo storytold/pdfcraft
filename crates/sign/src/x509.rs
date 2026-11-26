@@ -496,6 +496,19 @@ impl Certificate {
         self.not_before <= t && t <= self.not_after
     }
 
+    /// Whether the certificate carries the extension `oid`, read from the signed `tbs` bytes.
+    /// An unreadable `tbs` counts as not carrying it.
+    pub fn has_extension(&self, oid: &str) -> bool {
+        let Ok(tbs) = Tlv::parse_all(&self.tbs) else { return false };
+        let Ok(fields) = tbs.children() else { return false };
+        fields
+            .iter()
+            .filter(|t| t.tag == tag::ctx(3))
+            .filter_map(|t| t.inner().ok()?.children().ok())
+            .flatten()
+            .any(|ext| ext.children().ok().and_then(|e| e.first().and_then(|o| o.oid().ok())).as_deref() == Some(oid))
+    }
+
     /// The display name Acrobat uses: the common name, else the organization, else the DN.
     pub fn display_name(&self) -> String {
         self.subject.display_name()

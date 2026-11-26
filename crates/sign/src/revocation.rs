@@ -15,6 +15,8 @@ pub(crate) const MAX_EVIDENCE: usize = 2 * 1024 * 1024;
 #[cfg(test)]
 const ID_PKIX_OCSP_BASIC: &str = "1.3.6.1.5.5.7.48.1.1";
 const EKU_OCSP_SIGNING: &str = "1.3.6.1.5.5.7.3.9";
+/// id-pkix-ocsp-nocheck: the delegated responder's own revocation is not to be checked.
+const OCSP_NOCHECK: &str = "1.3.6.1.5.5.7.48.1.5";
 
 /// What a piece of revocation evidence says about a certificate at a point in time.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -320,9 +322,16 @@ impl OcspResponse {
 
     /// Check `cert` (issued by `issuer`) at `at`. The responder must be the issuer itself, or
     /// a delegated responder with the OCSP-signing EKU whose certificate is issued by the
-    /// issuer; the response signature and CertID must match, and `at` must fall inside the
-    /// response window.
+    /// issuer and valid at `at`; the response signature and CertID must match, and `at` must
+    /// fall inside the response window.
     pub fn check(&self, cert: &Certificate, issuer: &Certificate, at: Time) -> RevocationStatus {
+        self.check_with_crls(cert, issuer, at, &[])
+    }
+
+    /// [`check`](Self::check), where a delegated responder must also be valid at `at` and not
+    /// revoked by any of `crls` (the CRLs that came with the response), unless it carries
+    /// id-pkix-ocsp-nocheck (RFC 6960 §4.2.2.2.1).
+    pub fn check_with_crls(&self, cert: &Certificate, issuer: &Certificate, at: Time, crls: &[CertificateList]) -> RevocationStatus {
         // Who signed the response? The issuer identified by responderID, or a delegated,
         // embedded responder identified the same way. Which of the two it is comes from that
         // choice, never from the embedded certificate's names, which anyone can copy.
@@ -349,6 +358,16 @@ impl OcspResponse {
                 return RevocationStatus::Unknown;
             }
             if !responder.extended_key_usage.as_ref().is_some_and(|e| e.iter().any(|o| o == EKU_OCSP_SIGNING)) {
+                return RevocationStatus::Unknown;
+            }
+            // Its certificate must be valid when the answer is used, and not revoked by the
+            // evidence beside it: an expired or revoked responder key proves nothing.
+            if !responder.valid_at(at) {
+                return RevocationStatus::Unknown;
+            }
+            if !responder.has_extension(OCSP_NOCHECK)
+                && crls.iter().any(|l| matches!(l.check(responder, issuer, at), RevocationStatus::Revoked { .. }))
+            {
                 return RevocationStatus::Unknown;
             }
         }

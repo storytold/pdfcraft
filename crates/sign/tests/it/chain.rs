@@ -362,3 +362,79 @@ fn an_issuer_with_an_unprocessed_critical_extension_does_not_vouch() {
     let pool = [i.cert.clone(), constrained_root.cert.clone()];
     assert_eq!(names(&build_chain(&l.cert, &pool, None)), ["Leaf", "Under Constrained Root", "Name Constrained Root"]);
 }
+
+// ── delegated OCSP responders (RFC 6960 §4.2.2.2) ──────────────────────────────────────────────
+
+use pdfcraft_sign::keys::DigestAlg;
+use pdfcraft_sign::revocation::{CertificateList, OcspResponse, RevocationStatus};
+
+fn day(month: u32) -> Time {
+    Time { year: 2026, month, day: 1, hour: 12, minute: 0, second: 0 }
+}
+
+/// An OCSP response saying `cert` (issued by `issuer`) was revoked in May, signed by the
+/// delegated `responder`, which is named by key hash and embedded.
+fn delegated_ocsp(cert: &Certificate, issuer: &Party, responder: &Party) -> OcspResponse {
+    let cert_id = der::seq(&[
+        &DigestAlg::Sha1.algorithm(),
+        &der::octets(&DigestAlg::Sha1.digest(&[&issuer.cert.subject.raw])),
+        &der::octets(&DigestAlg::Sha1.digest(&[&issuer.cert.public_key.key_bits()])),
+        &der::uint(&cert.serial),
+    ]);
+    let revoked = der::tlv(tag::ctx(1), &day(5).encode());
+    let single = der::seq(&[&cert_id, &revoked, &day(6).encode(), &der::tlv(tag::ctx(0), &day(7).encode())]);
+    let by_key = der::tlv(tag::ctx(2), &der::octets(&DigestAlg::Sha1.digest(&[&responder.cert.public_key.key_bits()])));
+    let tbs = der::seq(&[&by_key, &day(6).encode(), &der::seq(&[&single])]);
+    let alg = responder.key.signature_algorithm(DigestAlg::Sha256);
+    let sig = responder.key.sign(DigestAlg::Sha256, &tbs).unwrap();
+    let basic = der::seq(&[&tbs, &alg, &der::bit_string(&sig), &der::explicit(0, &der::seq(&[&responder.cert.raw]))]);
+    let resp =
+        der::seq(&[&der::tlv(tag::ENUMERATED, &[0]), &der::explicit(0, &der::seq(&[&der::oid("1.3.6.1.5.5.7.48.1.1"), &der::octets(&basic)]))]);
+    OcspResponse::parse(&resp).unwrap()
+}
+
+/// A CRL from `issuer` revoking `serial` in May, current through July.
+fn crl_revoking(issuer: &Party, serial: &[u8]) -> CertificateList {
+    let alg = issuer.key.signature_algorithm(DigestAlg::Sha256);
+    let entries = der::seq(&[&der::seq(&[&der::uint(serial), &day(5).encode()])]);
+    let tbs = der::seq(&[&der::int(1), &alg, &issuer.name.raw, &day(6).encode(), &day(7).encode(), &entries]);
+    let sig = issuer.key.sign(DigestAlg::Sha256, &tbs).unwrap();
+    CertificateList::parse(&der::seq(&[&tbs, &alg, &der::bit_string(&sig)])).unwrap()
+}
+
+/// Issue #7927: a delegated responder's word counts only while its own certificate is valid and
+/// not revoked by the CRLs beside it, unless it carries id-pkix-ocsp-nocheck.
+#[test]
+fn a_delegated_responder_must_be_valid_and_unrevoked() {
+    let ocsp_signing = extended_key_usage(&["1.3.6.1.5.5.7.3.9"]);
+    let nocheck = der::seq(&[&der::oid("1.3.6.1.5.5.7.48.1.5"), &der::octets(&der::null())]);
+    let r = root();
+    let signer = end_entity("Signer", &r);
+    let at = day(6);
+    let responder = |cn: &str, valid: (u32, u32), extra: &[Vec<u8>]| {
+        let mut exts = vec![key_usage(DIGITAL_SIGNATURE), ocsp_signing.clone()];
+        exts.extend_from_slice(extra);
+        issue(cn, Some(&r), valid, &exts)
+    };
+    let revoked = RevocationStatus::Revoked { at: day(5) };
+    let check = |resp: &Party, crls: &[CertificateList]| delegated_ocsp(&signer.cert, &r, resp).check_with_crls(&signer.cert, &r.cert, at, crls);
+
+    // Controls: a current delegate answers; one without the OCSP-signing purpose does not.
+    // (`issue` takes the serial from the name's length: the good and the revoked one differ.)
+    let good = responder("Good Responder", FOREVER, &[]);
+    assert_eq!(check(&good, &[]), revoked);
+    let no_eku = issue("Responder Without EKU", Some(&r), FOREVER, &[key_usage(DIGITAL_SIGNATURE)]);
+    assert_eq!(check(&no_eku, &[]), RevocationStatus::Unknown);
+
+    // Expired, and not yet valid, at the validation time.
+    assert_eq!(check(&responder("Expired Responder", (2020, 2025), &[]), &[]), RevocationStatus::Unknown);
+    assert_eq!(check(&responder("Future Responder", (2027, 2040), &[]), &[]), RevocationStatus::Unknown);
+
+    // Revoked by a CRL from the same evidence: untrusted, unless it says not to check it.
+    let revoked_responder = responder("Revoked Responder", FOREVER, &[]);
+    assert_eq!(check(&revoked_responder, &[crl_revoking(&r, &revoked_responder.cert.serial)]), RevocationStatus::Unknown);
+    let unchecked = responder("Unchecked Responder", FOREVER, &[nocheck]);
+    assert_eq!(check(&unchecked, &[crl_revoking(&r, &unchecked.cert.serial)]), revoked);
+    // A CRL that revokes someone else leaves the responder alone.
+    assert_eq!(check(&good, &[crl_revoking(&r, &revoked_responder.cert.serial)]), revoked);
+}

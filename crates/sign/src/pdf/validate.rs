@@ -510,6 +510,8 @@ fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Optio
     let mut revoked = None;
     let mut covered = false;
     let mut sources = Vec::new();
+    // Kept so that a delegated OCSP responder can be checked against the same CRLs.
+    let mut lists = Vec::new();
     let mut crls = DssEvidence::new(doc, &dss, b"CRLs");
     for r in crls.by_ref() {
         let Ok(list) = CertificateList::parse(&r) else { continue };
@@ -522,6 +524,7 @@ fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Optio
             RevocationStatus::Good => covered = true,
             RevocationStatus::Unknown => {}
         }
+        lists.push(list);
     }
     let mut cut = crls.cut;
     if revoked.is_none() {
@@ -529,7 +532,7 @@ fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Optio
         for r in ocsps.by_ref() {
             let Ok(resp) = OcspResponse::parse(&r) else { continue };
             sources.push("OCSP");
-            match resp.check(signer, issuer, at) {
+            match resp.check_with_crls(signer, issuer, at, &lists) {
                 RevocationStatus::Revoked { at } => {
                     revoked = Some(at);
                     break;
