@@ -215,7 +215,8 @@ fn dialog_body(ui: &mut egui::Ui, view: &PurviewView, selected: &mut String, jus
             ui.label(tl!("Microsoft sign-in and policy loading continue if you close this window."));
         }
         PurviewStatus::NotConfigured => {
-            ui.label(tl!("Microsoft account sign-in is not configured"));
+            ui.strong(tl!("Storytold's approved Microsoft Entra application client ID is missing"));
+            ui.label(tl!("This POC intentionally does not reuse Azure CLI credentials or a sample Microsoft client ID."));
         }
         PurviewStatus::SdkUnavailable => {
             ui.label(tl!("Protection SDK unavailable"));

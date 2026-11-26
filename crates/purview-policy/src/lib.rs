@@ -156,7 +156,7 @@ pub struct PurviewDocumentState {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PurviewError {
-    #[error("Microsoft Purview support is not configured")]
+    #[error("Microsoft Purview sign-in is not configured: this build has no approved Storytold Entra application client ID")]
     NotConfigured,
     #[error("the Microsoft Purview MIP SDK is unavailable")]
     SdkUnavailable,

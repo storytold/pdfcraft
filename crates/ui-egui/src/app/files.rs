@@ -919,6 +919,19 @@ impl PdfCraftApp {
     }
 
     pub(crate) fn start_purview_sign_in(&mut self, ctx: &egui::Context) {
+        match self.session.purview_status() {
+            pdfcraft_engine::PurviewStatus::NotConfigured => {
+                self.notify_tr(
+                    "This POC build cannot sign in until Storytold supplies its approved Microsoft Entra application client ID; Azure CLI is not a fallback.",
+                );
+                return;
+            }
+            pdfcraft_engine::PurviewStatus::SdkUnavailable => {
+                self.notify_tr("Microsoft Purview sign-in needs the official MIP SDK/helper package in this build.");
+                return;
+            }
+            _ => {}
+        }
         let reauthenticate = self.session.has_purview_protected_documents();
         if !reauthenticate && let Some(reason) = self.purview_account_change_reason() {
             self.notify_tr(reason);

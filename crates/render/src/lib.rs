@@ -63,8 +63,9 @@ mod open_error_tests {
 
     #[test]
     fn purview_unavailable_is_not_double_prefixed() {
-        let error = OpenError::PurviewUnavailable("Microsoft Purview support is not configured".into());
-        assert_eq!(error.to_string(), "Microsoft Purview support is not configured");
+        let message = "Microsoft Purview sign-in is not configured: this build has no approved Storytold Entra application client ID";
+        let error = OpenError::PurviewUnavailable(message.into());
+        assert_eq!(error.to_string(), message);
     }
 
     #[test]

@@ -138,7 +138,7 @@ impl Session {
                 Err(PurviewError::SignInRequired) => {
                     return Err(OpenError::NeedsPurviewSignIn);
                 }
-                Err(PurviewError::NotConfigured) => return Err(OpenError::PurviewUnavailable("Microsoft Purview support is not configured".into())),
+                Err(error @ PurviewError::NotConfigured) => return Err(OpenError::PurviewUnavailable(error.to_string())),
                 Err(PurviewError::SdkUnavailable) => {
                     return Err(OpenError::PurviewUnavailable("the Microsoft Purview MIP SDK is unavailable".into()));
                 }

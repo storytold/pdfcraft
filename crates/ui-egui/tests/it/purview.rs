@@ -312,6 +312,21 @@ fn signed_out_dialog_has_one_sign_in_action_and_no_email_field() {
 }
 
 #[test]
+fn missing_storytold_app_id_names_the_actual_sign_in_prerequisite() {
+    let provider = TestPurviewProvider::signed_out();
+    *provider.status.lock().unwrap() = PurviewStatus::NotConfigured;
+    let mut h = harness_closed(provider);
+    assert!(h.state_mut().execute("purview.sign_in"));
+    h.run_steps(1);
+    assert!(
+        h.state()
+            .toast
+            .as_ref()
+            .is_some_and(|(message, _)| message.contains("approved Microsoft Entra application client ID") && message.contains("Azure CLI"))
+    );
+}
+
+#[test]
 fn opening_a_pfile_automatically_opens_the_signed_out_sign_in_gate() {
     let h = harness_pfile(TestPurviewProvider::signed_out_for_pfile());
     h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Microsoft account");
