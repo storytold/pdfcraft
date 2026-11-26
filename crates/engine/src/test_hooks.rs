@@ -40,3 +40,17 @@ pub(crate) fn record_link_scan() {
         counts.set((markers, links + 1));
     });
 }
+
+thread_local! {
+    static FULL_REFRESHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A whole-document refresh (re-inspection) ran on this thread.
+pub(crate) fn record_full_refresh() {
+    FULL_REFRESHES.with(|n| n.set(n.get() + 1));
+}
+
+/// How many whole-document refreshes ran on this thread since the last call, and starts over.
+pub(crate) fn take_full_refreshes() -> usize {
+    FULL_REFRESHES.with(|n| n.replace(0))
+}

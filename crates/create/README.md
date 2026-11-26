@@ -19,19 +19,48 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
   for one point per pixel, or `ImageResolution::Embedded` for the same behavior as
   `from_images`. The largest page side is still capped at 14,400 points;
 - `from_text(text, …)`: plain text set in Helvetica, wrapped and paginated. Text Helvetica
-  can't draw is refused, naming the line and the character, never set as `?`.
+  can't draw is set in the bundled Inter face instead (Latin, Greek and Cyrillic letters), with
+  the same page, margins, wrapping and form feeds; text Inter can't draw either is refused,
+  naming the line and the character, never set as `?`.
 - `from_text_escaped(text, …)`: the same for reports PdfCraft generates from documents
-  (comment summaries, compare reports): such characters are written as `[U+XXXX]` and the first
-  line says so (`ESCAPED_NOTE`).
+  (comment summaries, compare reports): text Inter draws is set in it; otherwise the characters
+  Helvetica can't draw are written as `[U+XXXX]` and the first line says so (`ESCAPED_NOTE`).
 
 Every function returns a `pdfcraft_cos::Document`; the caller writes it.
 
+Office documents (`office.rs`) are the exception: PdfCraft doesn't read Word, Excel, PowerPoint,
+OpenDocument or RTF itself. `is_office(name, bytes)` recognises them (an `OFFICE_EXTENSIONS`
+name and an OLE, ZIP or RTF signature; `source_kind` reports `SourceKind::Office`), and
+`office_to_pdf(name, bytes)` returns PDF bytes made by an installed LibreOffice, run headless as
+a separate process: a private temporary folder (owner-only on Unix; the document is always
+`document.<ext>` there, never its own name), a fresh profile with macros disabled, untrusted
+links blocked and Writer and Calc set never to update linked content (sections, files, external
+data) on load, no console window on Windows, and a stop after `TIMEOUT` (120 s) or as soon as the
+output grows past 512 MB (the whole process tree is stopped, not only `soffice`). LibreOffice is
+found through `PDFCRAFT_SOFFICE`, the `PATH`, then the usual install folders (`libreoffice()`).
+A snap-installed LibreOffice is not among those folders: its private `/tmp` cannot see the work
+folder. Where `/snap/bin` is on the `PATH` it can still be found there, so point
+`PDFCRAFT_SOFFICE` at a non-snap install if conversions fail. It takes seconds, so callers keep it
+off the frame thread. On the web it returns an error.
+
+Impress has no setting for linked content, and the profile settings are LibreOffice's own:
+PdfCraft doesn't sandbox the process's network access. Converting test documents whose linked
+sections, pictures and external cell references point at a local listener made no connection,
+with or without the Writer and Calc settings (LibreOffice 26.8.1, Windows, 2026-10-26), so the settings are a
+second line of defence rather than a measured fix.
+
+`IMAGE_EXTENSIONS`, `TEXT_EXTENSIONS` and `OFFICE_EXTENSIONS` are what the app's file pickers
+offer, so detection and pickers agree.
+
 Image export and Save Image As apply each lossless image's Decode pair before converting its color components.
-JBIG2 images and masks (JBIG2 as their only filter) are decoded with `hayro-jbig2`, their `/JBIG2Globals` included,
-as `JBIG2Decode` gives them: black as 0. An image whose JBIG2 page has another width than the image, or more
-pixels than an exported image may have, or whose globals decode to more than 32 MiB (they are decoded before the
-page's size is known, so they have a limit of their own), is skipped; such a mask is left out and the image
-exported opaque, as JPX and CCITT masks are.
+JBIG2 images and masks are decoded through `pdfcraft_cos::ImageBudget` (`pdfcraft_filters::decode_jbig2_within`), behind
+other filters too, with the `/JBIG2Globals` of their own `/DecodeParms` entry, as `JBIG2Decode` gives them: black as 0. An image
+whose JBIG2 page isn't its size (PdfCraft's renderer draws the whole page into the image; the page is refused before it is decoded),
+or whose globals can't be read or decode to more than 32 MiB (they are decoded before the page's size is known, so they have a
+limit of their own), is skipped, and such a mask is left out and the image exported opaque, as JPX and CCITT masks are.
+Past what one export may decode, which its images share, filters, decoders and pixels alike (`ImageBudget`; a JPEG when it has to be
+decoded, as a mask, to apply one, or to undo a CMYK file's inversion, and not when it is written as it is), an image is skipped, and so is one whose mask is past it, which would otherwise come out showing what the mask hides. An export also stops at 2 GiB of files held, or twice the document if that
+is more, since they stay in memory until it ends.
 Indexed Decode values select palette entries after rounding and clipping. Color-key masks compare the original samples.
 Missing, null or malformed Decode arrays keep the default mapping.
 Soft-mask Decode intervals map samples to opacity before the mask is resized, including reversed ranges and indirect entries.
@@ -43,4 +72,4 @@ CCITT fax images (Group 3 and 4) are decoded for export through `pdfcraft_cos::D
 `ASCII85Decode` too. Byte-aligned Group 3 rows are read by their end-of-line codes, whether the fill starts each code on a byte or
 ends it on one, when the data starts with one (T.4 sends one before the first row), and on bytes otherwise, whatever `/EndOfLine`
 says; data that comes up short is reported. Data with codes but none before the first row is read on bytes, and is reported or,
-at `/K 0`, may come out wrong. JPEG 2000 and JBIG2 images are still reported, not exported.
+at `/K 0`, may come out wrong. JPEG 2000 images are still reported, not exported.
