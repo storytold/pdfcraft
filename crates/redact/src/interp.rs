@@ -837,10 +837,15 @@ impl Walk {
                     };
                     self.gs.soft_mask |=
                         state.get(b"SMask").map(|m| doc.resolve(m)).is_some_and(|m| !matches!(&*m, Object::Null) && m.as_name() != Some(b"None"));
-                    if let Some(font) = state.get(b"Font").map(|f| doc.resolve(f)) {
-                        let font = font.as_array().and_then(|a| a.first()).map(|f| doc.resolve(f));
+                    if let Some(entry) = state.get(b"Font").map(|f| doc.resolve(f)) {
+                        let font = entry.as_array().and_then(|a| a.first()).map(|f| doc.resolve(f));
                         let may = font.as_deref().and_then(Object::as_dict).is_none_or(|d| type3_may_select_pattern(doc, scope, d));
                         sets_type3 = Some(sets_type3.unwrap_or(false) || may);
+                        // Only `[font size]` with a number for the size sets a font here
+                        // (`extgstate_font`). Another reader may take less, or leave the font in
+                        // force: both count.
+                        let sets = entry.as_array().is_some_and(|a| a.len() == 2 && doc.resolve(&a[1]).as_f64().is_some());
+                        keeps_font |= !sets;
                     } else {
                         keeps_font = true;
                     }
