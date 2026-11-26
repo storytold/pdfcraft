@@ -3,18 +3,21 @@
 //!
 //! Local only: a pinned folder is read through the file system like any other path, never
 //! through a storage provider's API, and nothing about it leaves the machine. Folders are
-//! listed on a worker thread and at most every few seconds while Home shows, so a slow, huge or
+//! listed on the job queue and at most every few seconds while Home shows, so a slow, huge or
 //! offline synced folder never blocks the frame.
 
-use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
+
+use craft::host::PickRequest;
+use craft::host::queue::Priority;
+use craft::i18n::AgeStyle;
+use craft::ui::runtime::env::Env;
+use craft::ui::shell::{FolderListing as ShellListing, PinnedFile, PinnedFolder};
 
 use crate::PdfCraftApp;
 
 /// At most this many folders can be pinned.
 pub const MAX_PINNED: usize = 8;
-/// Home shows this many of a folder's newest PDFs until "Show more" is clicked.
-pub const SHOWN: usize = 8;
 /// A folder's listing keeps at most this many PDFs (its newest).
 pub const MAX_LISTED: usize = 100;
 /// Directory entries read per folder, so a huge folder can't stall the scan.
@@ -57,8 +60,6 @@ pub struct PinnedFolders {
     pub expanded: Vec<String>,
     /// Folders folded down to their heading (#5295); kept in settings.
     pub collapsed: Vec<String>,
-    /// A listing in progress: the worker fills the slot.
-    scan: Option<Arc<Mutex<Option<Vec<FolderListing>>>>>,
     /// When (egui time) the last listing started.
     last_scan: Option<f64>,
     /// The folders changed since the last listing started: list them on the next frame.
@@ -115,6 +116,24 @@ impl PinnedFolders {
             self.collapsed.push(folder.to_string());
         }
         true
+    }
+
+    /// Fold `folder` if it shows its files, open it if it is folded.
+    pub(crate) fn toggle_collapsed(&mut self, folder: &str) {
+        let collapsed = self.collapsed.iter().any(|f| f == folder);
+        self.set_collapsed(folder, !collapsed);
+    }
+
+    /// Show all of pinned `folder`'s files if it shows the first few, the first few if it shows all.
+    pub(crate) fn toggle_expanded(&mut self, folder: &str) {
+        if !self.folders.iter().any(|f| f == folder) {
+            return;
+        }
+        if self.expanded.iter().any(|f| f == folder) {
+            self.expanded.retain(|f| f != folder);
+        } else {
+            self.expanded.push(folder.to_string());
+        }
     }
 }
 
@@ -212,12 +231,10 @@ impl PdfCraftApp {
     /// File ▸ Pin folder to Home…: choose a folder whose newest PDFs Home lists.
     pub fn pin_folder_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Pin a folder to Home").to_string());
-            self.ask_one(crate::pickers::Ask::Folder(dialog), None, |app, dir| {
-                app.pin_folder(&dir.to_string_lossy());
-            });
-        }
+        self.pick_first(PickRequest::folder("pin-folder").title(tl!("Pin a folder to Home").to_string()), None, |app, _, dir| {
+            app.pin_folder(&dir.to_string_lossy());
+        });
+        // The web has no folder path to pin.
         #[cfg(target_arch = "wasm32")]
         self.notify_tr("Pinned folders need the desktop app");
     }
@@ -270,14 +287,34 @@ impl PdfCraftApp {
         }
     }
 
+    /// The pinned folders as the start screen lists them: named apart where two share a name,
+    /// with what the last listing found. `env` words the age of each file.
+    pub(crate) fn pinned_folders(&self, env: &Env) -> Vec<PinnedFolder> {
+        self.pinned
+            .folders
+            .iter()
+            .map(|folder| {
+                let base = folder_name(folder);
+                let shared = self.pinned.folders.iter().any(|f| f != folder && folder_name(f) == base);
+                let name = if shared { format!("{base} ({})", location(folder)) } else { base };
+                let listing = match self.pinned.listing(folder) {
+                    None => ShellListing::Pending,
+                    Some(l) if l.unavailable => ShellListing::Unavailable,
+                    Some(l) => ShellListing::Listed { files: l.files.iter().take(MAX_LISTED).map(|f| pinned_file(f, env)).collect(), total: l.total },
+                };
+                PinnedFolder::new(folder.as_str(), name)
+                    .listing(listing)
+                    .folded(self.pinned.collapsed.contains(folder))
+                    .expanded(self.pinned.expanded.contains(folder))
+            })
+            .collect()
+    }
+
     /// List the pinned folders again if the last listing is older than a few seconds or the
-    /// folders changed (called while Home shows; `now` is egui time). The listing runs on a
-    /// worker thread, inline in tests ([`PdfCraftApp::run_inline`]).
+    /// folders changed (called while Home shows; `now` is egui time). The listing runs on the
+    /// app's job queue; a job that delivers nothing is made up for by the next due listing.
     pub fn refresh_pinned(&mut self, now: f64) {
         self.poll_pinned();
-        if self.pinned.scan.is_some() {
-            return;
-        }
         if self.pinned.folders.is_empty() {
             self.pinned.listings.clear();
             return;
@@ -290,195 +327,36 @@ impl PdfCraftApp {
         self.pinned.stale = false;
         self.pinned.last_scan = Some(now);
         let folders = self.pinned.folders.clone();
-        let slot = Arc::new(Mutex::new(None));
-        let out = slot.clone();
-        let ctx = self.ctx.clone();
-        let work = move || {
-            let listings: Vec<FolderListing> = folders.iter().map(|f| list(f)).collect();
-            *out.lock().unwrap_or_else(PoisonError::into_inner) = Some(listings);
-            if let Some(ctx) = ctx {
-                ctx.request_repaint();
-            }
-        };
-        if self.run_inline {
-            work();
-        } else if std::thread::Builder::new().name("pdfcraft-folders".into()).spawn(work).is_err() {
-            // No worker: try again when the next listing is due.
-            return;
-        }
-        self.pinned.scan = Some(slot);
-        self.poll_pinned();
+        // PLAN: assumed field `pinned_jobs: JobQueue<(), Vec<FolderListing>>` on PdfCraftApp (pdf-hub-w1).
+        // A panicking listing delivers nothing; the next due listing makes up for it.
+        self.pinned_jobs.submit((), Priority::BACKGROUND, move |_| {
+            pdfcraft_engine::guard(|| folders.iter().map(|f| list(f)).collect::<Vec<FolderListing>>()).unwrap_or_default()
+        });
     }
 
-    /// Take a finished listing, if there is one.
+    /// Take the newest finished listing, if there is one.
     fn poll_pinned(&mut self) {
-        let Some(slot) = &self.pinned.scan else { return };
-        let done = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
-        match done {
-            Some(listings) => {
-                self.pinned.scan = None;
-                // A folder unpinned while it was being listed stays gone.
-                let folders = &self.pinned.folders;
-                self.pinned.listings = listings.into_iter().filter(|l| folders.contains(&l.folder)).collect();
-            }
-            // The worker ended without a result (it panicked): list again when due.
-            None if Arc::strong_count(slot) == 1 => self.pinned.scan = None,
-            None => {}
+        let mut latest = None;
+        while let Some(done) = self.pinned_jobs.try_recv() {
+            latest = Some(done.result);
+        }
+        if let Some(listings) = latest {
+            // A folder unpinned while it was being listed stays gone.
+            let folders = &self.pinned.folders;
+            self.pinned.listings = listings.into_iter().filter(|l| folders.contains(&l.folder)).collect();
         }
     }
 }
 
-/// The Home view's Folders section (desktop only: the web build has no folders to read).
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    use egui::{Align2, CornerRadius, Rect, Sense, vec2};
-
-    use crate::theme::{self, Tokens};
-    use crate::{icons, widgets};
-
-    let t = Tokens::get(ui.ctx());
-    app.refresh_pinned(ui.input(|i| i.time));
-    let mut pin = false;
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!("Folders")).font(theme::semibold(17.0)));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            pin = widgets::ghost_button(ui, "folder-plus", tl!("Pin a folder…")).clicked();
-        });
-    });
-    ui.add_space(4.0);
-    if app.pinned.folders.is_empty() {
-        ui.label(
-            egui::RichText::new(tl!("Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them."))
-                .color(t.text_muted),
-        );
-    }
-    let mut open = None;
-    let mut unpin = None;
-    let mut toggle = None;
-    let mut fold = None;
-    for folder in &app.pinned.folders {
-        let name = folder_name(folder);
-        // Buttons name their folder; two pinned folders of the same name add where each is.
-        let shared = app.pinned.folders.iter().any(|f| f != folder && folder_name(f) == name);
-        let named = if shared { format!("{name} ({})", location(folder)) } else { name.clone() };
-        let collapsed = app.pinned.collapsed.contains(folder);
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            let (chevron, tip, label) = if collapsed {
-                ("chevron-right", tl!("Expand"), tl!("Expand {folder}"))
-            } else {
-                ("chevron-down", tl!("Collapse"), tl!("Collapse {folder}"))
-            };
-            let resp = icons::button(ui, chevron, 22.0, false, tip);
-            // Every folder has one: say which folder it folds.
-            let label = crate::i18n::fmt(label, &[("folder", &named)]);
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-            if resp.clicked() {
-                fold = Some(folder.clone());
-            }
-            let (icon, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
-            icons::paint(ui, icon, "folder", 20.0, t.icon);
-            // Folder names and paths are file/path chrome: explicitly left to right, so an
-            // Arabic location keeps its `.pdf`/extension at the visual end.
-            widgets::label_ltr(ui, name.clone(), theme::semibold(14.0), t.text).on_hover_text(folder);
-            ui.add_space(4.0);
-            // Leave room for Unpin: a long location is cut short, never the button.
-            let room = (ui.available_width() - 110.0).max(0.0);
-            ui.scope(|ui| {
-                ui.set_max_width(room);
-                widgets::label_ltr(ui, location(folder), theme::regular(12.0), t.text_faint).on_hover_text(folder);
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let resp = widgets::ghost_button(ui, "x", tl!("Unpin"));
-                // Every folder has an Unpin button: say which one it is.
-                let label = crate::i18n::fmt(tl!("Unpin {folder}"), &[("folder", &named)]);
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-                if resp.clicked() {
-                    unpin = Some(folder.clone());
-                }
-            });
-        });
-        if collapsed {
-            continue;
-        }
-        let note = |ui: &mut egui::Ui, text: &str| {
-            ui.add_space(2.0);
-            ui.label(egui::RichText::new(text).color(t.text_muted));
-        };
-        let Some(listing) = app.pinned.listing(folder) else {
-            note(ui, tl!("Looking for PDFs…"));
-            continue;
-        };
-        if listing.unavailable {
-            note(ui, tl!("This folder isn't available right now. It may have moved, or its drive or cloud sync is offline."));
-            continue;
-        }
-        if listing.files.is_empty() {
-            note(ui, tl!("No PDFs in this folder yet"));
-            continue;
-        }
-        let expanded = app.pinned.expanded.contains(folder);
-        let shown = if expanded { listing.files.len() } else { listing.files.len().min(SHOWN) };
-        for f in listing.files.iter().take(shown) {
-            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &f.name));
-            if resp.hovered() {
-                ui.painter().rect_filled(rect, CornerRadius::same(8), t.hover);
-            }
-            icons::paint(
-                ui,
-                Rect::from_min_size(rect.min + vec2(32.0, 9.0), vec2(20.0, 20.0)),
-                "file-text",
-                18.0,
-                egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
-            );
-            let size = crate::panels::human_size(usize::try_from(f.size).unwrap_or(usize::MAX));
-            let when = f.modified.map(crate::combine_ui::ago).unwrap_or_default();
-            let detail = if when.is_empty() { size } else { format!("{when}  ·  {size}") };
-            let detail = ui.painter().text(rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, detail, theme::regular(12.0), t.text_muted);
-            let width = detail.left() - 16.0 - (rect.left() + 62.0);
-            widgets::row_text(ui, rect.min + vec2(62.0, 19.0), f.name.as_str(), theme::medium(13.0), t.text, width);
-            if resp.on_hover_text(&f.path).clicked() {
-                open = Some(f.path.clone());
-            }
-        }
-        let more = listing.files.len().saturating_sub(shown);
-        let capped = listing.total > listing.files.len();
-        if more > 0 || (expanded && (listing.files.len() > SHOWN || capped)) {
-            ui.horizontal(|ui| {
-                ui.add_space(30.0);
-                let label = if expanded { tl!("Show less").to_string() } else { crate::i18n::fmt(tl!("Show {n} more"), &[("n", &more.to_string())]) };
-                if (more > 0 || listing.files.len() > SHOWN) && ui.link(label).clicked() {
-                    toggle = Some(folder.clone());
-                }
-                if expanded && capped {
-                    let n = listing.files.len().to_string();
-                    let text = crate::i18n::fmt(tl!("The newest {n} of {total} PDFs"), &[("n", &n), ("total", &listing.total.to_string())]);
-                    ui.label(egui::RichText::new(text).color(t.text_faint));
-                }
-            });
-        }
-    }
-    if pin {
-        app.pin_folder_dialog();
-    }
-    if let Some(folder) = unpin {
-        app.unpin_folder(&folder);
-    }
-    if let Some(folder) = toggle {
-        if app.pinned.expanded.contains(&folder) {
-            app.pinned.expanded.retain(|f| *f != folder);
-        } else {
-            app.pinned.expanded.push(folder);
-        }
-    }
-    if let Some(folder) = fold {
-        let collapsed = app.pinned.collapsed.contains(&folder);
-        app.pinned.set_collapsed(&folder, !collapsed);
-    }
-    if let Some(path) = open {
-        app.open_recent(&path);
-    }
+/// `file` as a row of a pinned folder: its name, with its age and size under it.
+fn pinned_file(file: &FolderFile, env: &Env) -> PinnedFile {
+    let size = crate::panels::human_size(usize::try_from(file.size).unwrap_or(usize::MAX));
+    let modified = file.modified.and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d| d.as_secs());
+    let note = match modified {
+        Some(seconds) => format!("{} · {size}", env.relative_age(seconds, AgeStyle::Short)),
+        None => size,
+    };
+    PinnedFile::new(file.path.as_str(), file.name.as_str()).note(note)
 }
 
 #[cfg(test)]
