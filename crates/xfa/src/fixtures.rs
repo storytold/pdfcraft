@@ -66,6 +66,54 @@ pub fn template(rows: usize) -> String {
     t
 }
 
+/// A growable rich-text field followed by a section that starts on a new page.
+pub fn growable_text_template(scripted: bool) -> String {
+    let event = if scripted { r#"<event activity="initialize"><script contentType="application/x-javascript">0;</script></event>"# } else { "" };
+    format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">{event}
+ <pageSet><pageArea name="master"><occur max="-1"/>
+  <contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/>
+ </pageArea></pageSet>
+ <subform name="Page3" layout="tb">
+  <field name="ACTIVIDADES" w="540pt" minH="207.017mm"><ui><textEdit multiLine="1" allowRichText="1"/></ui>
+   <font typeface="Courier" size="8pt"/><value><exData contentType="text/html"/></value>
+  </field>
+ </subform>
+ <subform name="following" layout="tb"><breakBefore targetType="pageArea"/>
+  <draw name="end" w="500pt" h="20pt"><value><text>Following section</text></value></draw>
+ </subform>
+</subform></template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><Page3><ACTIVIDADES>Short</ACTIVIDADES></Page3></form></xfa:data></xfa:datasets>
+</xdp:xdp>"#
+    )
+}
+
+/// Three body pages sharing a page-master print button and its XFA click script.
+pub fn repeated_print_button_template() -> String {
+    let mut xml = String::from(
+        r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="master"><occur max="-1"/>
+  <contentArea x="36pt" y="72pt" w="540pt" h="648pt"/><medium short="612pt" long="792pt"/>
+  <field name="PrintButton1" x="36pt" y="24pt" w="100pt" h="25pt"><ui><button/></ui>
+   <caption><value><text>Print form</text></value></caption>
+   <event activity="click"><script contentType="application/x-javascript">xfa.host.print(1, "0", (xfa.host.numPages -1).toString(), 0, 0, 0, 0, 0);</script></event>
+  </field>
+ </pageArea></pageSet>
+"#,
+    );
+    for page in 1..=3 {
+        xml.push_str(&format!(
+            r#"<subform name="page{page}" layout="tb"><breakBefore targetType="pageArea"/>
+ <field name="note{page}" w="200pt" h="25pt"><ui><textEdit/></ui><value><text>Page {page}</text></value></field>
+</subform>"#
+        ));
+    }
+    xml.push_str("</subform></template>");
+    xml
+}
+
 /// [`template`] with a datasets packet holding `data` (the children of `xfa:data`).
 pub fn template_with_data(rows: usize, data: &str) -> String {
     let t = template(rows);
@@ -96,6 +144,82 @@ pub fn static_shell(data: &str) -> Vec<u8> {
     assemble(objs)
 }
 
+/// A static XFA form with one exclusion group `form1[0].page1[0].lang[0]` (items `1` English,
+/// `2` French) bound to the data by name, laid out as an AcroForm radio group whose `/Opt` holds
+/// the items and whose on states are the buttons' positions `/0` and `/1` (ISO 32000-2 Table 230),
+/// as public static forms write it. Its datasets hold `data` (the children of `xfa:data`).
+pub fn static_radio_shell(data: &str) -> Vec<u8> {
+    radio_shell(data, None)
+}
+
+/// [`static_radio_shell`] whose buttons also carry `/PCOn`, the item PdfCraft writes to the data
+/// for the selected button ahead of its `/Opt` entry.
+pub fn static_radio_shell_with_pcon(data: &str, pcon: [&str; 2]) -> Vec<u8> {
+    radio_shell(data, Some(pcon))
+}
+
+fn radio_shell(data: &str, pcon: Option<[&str; 2]>) -> Vec<u8> {
+    let pc = |i: usize| pcon.and_then(|p| p.get(i).map(|v| format!(" /PCOn ({v})"))).unwrap_or_default();
+    let xdp = format!(
+        "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"><subform name=\"page1\"><exclGroup name=\"lang\"><field name=\"en\"><ui><checkButton shape=\"round\"/></ui><items><integer>1</integer></items></field><field name=\"fr\"><ui><checkButton shape=\"round\"/></ui><items><integer>2</integer></items></field></exclGroup></subform></subform></template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets></xdp:xdp>"
+    );
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 5 0 R /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [9 0 R 10 0 R] >>".to_vec(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        b"<< /T (form1[0]) /Kids [7 0 R] >>".to_vec(),
+        b"<< /T (page1[0]) /Parent 6 0 R /Kids [8 0 R] >>".to_vec(),
+        b"<< /FT /Btn /Ff 49152 /T (lang[0]) /Parent 7 0 R /Opt [(1) (2)] /V /Off /Kids [9 0 R 10 0 R] >>".to_vec(),
+        format!("<< /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [72 700 84 712] /P 3 0 R /AS /Off /MK << /BC [0 0 0] >>{} /AP << /N << /0 11 0 R /Off 11 0 R >> >> >>", pc(0))
+            .into_bytes(),
+        format!("<< /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [144 700 156 712] /P 3 0 R /AS /Off /MK << /BC [0 0 0] >>{} /AP << /N << /1 11 0 R /Off 11 0 R >> >> >>", pc(1))
+            .into_bytes(),
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>\nstream\n\nendstream".to_vec(),
+    ];
+    assemble(objs)
+}
+
+/// A static XFA form of `n` text fields `form1[0].page1[0].f<i>[0]` on one page, whose values
+/// (`v<i>`) are only in its datasets, as when another viewer filled it in. The first field is
+/// read-only.
+pub fn static_shell_many(n: usize) -> Vec<u8> {
+    let data: String = (0..n).map(|i| format!("<f{i}>v{i}</f{i}>")).collect();
+    let xdp = format!(
+        "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"/></template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form1><page1>{data}</page1></form1></xfa:data></xfa:datasets></xdp:xdp>"
+    );
+    // Objects 1–7, then the widgets from 8.
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 8)).collect();
+    let kids = kids.join(" ");
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 5 0 R /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >> >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [{kids}] >>").into_bytes(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        b"<< /T (form1[0]) /Kids [7 0 R] >>".to_vec(),
+        format!("<< /T (page1[0]) /Parent 6 0 R /Kids [{kids}] >>").into_bytes(),
+    ];
+    for i in 0..n {
+        let y = 760 - (i % 50) * 14;
+        let x = 36 + (i / 50) * 110;
+        // The first field is read-only: its data value is not taken.
+        let flags = if i == 0 { " /Ff 1" } else { "" };
+        objs.push(
+            format!(
+                "<< /Type /Annot /Subtype /Widget /FT /Tx /T (f{i}[0]){flags} /Parent 7 0 R /Rect [{x} {y} {} {}] /P 3 0 R /DA (/Helv 9 Tf 0 g) >>",
+                x + 100,
+                y + 12
+            )
+            .into_bytes(),
+        );
+    }
+    assemble(objs)
+}
+
+/// A PDF file holding `objs` as objects 1, 2, … in order, with a cross-reference table and a
+/// trailer whose root is object 1.
 fn assemble(objs: Vec<Vec<u8>>) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -112,6 +236,147 @@ fn assemble(objs: Vec<Vec<u8>>) -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
+}
+
+/// A form with `layout:ready` scripts: the root subform reads the page count and turns field
+/// highlighting on (as forms do with `app.runtimeHighlight`), `stamp` takes a value, `seen` records the highlight its script
+/// reads after the root's, and `pageNo` numbers its page (left to the layout). `note` has a
+/// `form:ready` script, a different event.
+pub fn layout_ready_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <event activity="ready" ref="$layout"><script contentType="application/x-javascript">var pages = xfa.layout.pageCount(); if (!app.runtimeHighlight) { app.runtimeHighlight = true; }</script></event>
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="tb">
+  <field name="stamp" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = "laid out";</script></event></field>
+  <field name="seen" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = String(app.runtimeHighlight);</script></event></field>
+  <field name="pageNo" w="1in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.page(this);</script></event></field>
+  <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$form"><script contentType="application/x-javascript">this.rawValue = "form ready";</script></event></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
+/// A hidden subform `details` a script may show, holding a named field and three unnamed
+/// objects: a caption, an old caption the form keeps hidden, and a hidden subform. Unnamed
+/// objects have no SOM name of their own, so showing `details` must leave the hidden ones hidden.
+pub fn unnamed_hidden_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <subform name="details" layout="tb" presence="hidden">
+   <draw w="4in" h="0.3in"><value><text>Current caption</text></value></draw>
+   <draw w="4in" h="0.3in" presence="hidden"><value><text>Old caption</text></value></draw>
+   <subform layout="tb" presence="hidden"><draw w="4in" h="0.3in"><value><text>Old section</text></value></draw></subform>
+   <field name="note" w="4in" h="0.3in"><ui><textEdit/></ui></field>
+  </subform>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
+/// The Tab-order probe: fields placed out of document order (A), `next` links (B), a subform
+/// whose `first` link goes to a draw that links on (C), hidden, invisible, read-only and
+/// protected fields (D), and a protected `log` at the top. Another viewer tabs it `start A2 A3
+/// A4 A1 B1 B3 B2 B4 C3 D1 D4 D6 finish C1 C2`, then back to `start`.
+pub fn traversal_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form1" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.25in" y="0.25in" w="8in" h="10.5in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="position" w="8in" h="10in">
+  <field name="log" x="0in" y="0in" w="8in" h="1.1in" access="protected"><ui><textEdit multiLine="1"/></ui></field>
+  <field name="start" x="0in" y="1.3in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="1.85in" w="7.5in" h="0.3in"><value><text>Section A: no links (written A1 A2 A3 A4, placed A2 A3 / A4 A1)</text></value></draw>
+  <field name="A1" x="3in" y="2.65in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="A2" x="0in" y="2.2in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="A3" x="3in" y="2.2in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="A4" x="0in" y="2.65in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="3.2in" w="7.5in" h="0.3in"><value><text>Section B: next links B1 to B3, B3 to B2, B2 to B4</text></value></draw>
+  <field name="B1" x="0in" y="3.55in" w="1.5in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="B3[0]"/></traversal></field>
+  <field name="B2" x="2in" y="3.55in" w="1.5in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="B4[0]"/></traversal></field>
+  <field name="B3" x="4in" y="3.55in" w="1.5in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="B2[0]"/></traversal></field>
+  <field name="B4" x="6in" y="3.55in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="4.1in" w="7.5in" h="0.3in"><value><text>Section C: the subform's first link goes to a label, which links to C3</text></value></draw>
+  <subform name="C" x="0in" y="4.45in" w="8in" h="0.4in" layout="position"><traversal><traverse operation="first" ref="Clabel[0]"/></traversal>
+   <draw name="Clabel" x="0in" y="0in" w="0.6in" h="0.35in"><value><text>C:</text></value><traversal><traverse ref="C3[0]"/></traversal></draw>
+   <field name="C1" x="0.7in" y="0in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+   <field name="C2" x="2.9in" y="0in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+   <field name="C3" x="5.1in" y="0in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  </subform>
+  <draw x="0in" y="5.0in" w="7.5in" h="0.3in"><value><text>Section D: D2 hidden, D3 invisible, D4 read-only, D5 protected</text></value></draw>
+  <field name="D1" x="0in" y="5.35in" w="1.2in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="D2" x="1.35in" y="5.35in" w="1.2in" h="0.35in" presence="hidden"><ui><textEdit/></ui></field>
+  <field name="D3" x="2.7in" y="5.35in" w="1.2in" h="0.35in" presence="invisible"><ui><textEdit/></ui></field>
+  <field name="D4" x="4.05in" y="5.35in" w="1.2in" h="0.35in" access="readOnly"><ui><textEdit/></ui></field>
+  <field name="D5" x="5.4in" y="5.35in" w="1.2in" h="0.35in" access="protected"><ui><textEdit/></ui></field>
+  <field name="D6" x="6.75in" y="5.35in" w="1.2in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="finish" x="0in" y="6.0in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
+/// The second Tab-order probe: in each row, the first field links to an object between the
+/// second and third that links on to the fourth: a hidden subform (E), a hidden field (F), an
+/// invisible field (G) and a protected field (H). Another viewer tabs it `start E1 E2 E3 E4 F1
+/// F4 G1 G4 H1 H4 finish F2 F3 G2 G3 H2 H3`, then back to `start`.
+pub fn traversal_targets_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form1" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.25in" y="0.25in" w="8in" h="10.5in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="position" w="8in" h="10in">
+  <field name="start" x="0in" y="1.3in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="1.85in" w="7.5in" h="0.3in"><value><text>Section E: E1 links to ET, a hidden subform between E2 and E3, which links to E4</text></value></draw>
+  <field name="E1" x="0in" y="2.2in" w="1.3in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="ET[0]"/></traversal></field>
+  <field name="E2" x="1.6in" y="2.2in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <subform name="ET" x="3.0in" y="2.2in" w="1.3in" h="0.35in" layout="position" presence="hidden"><traversal><traverse ref="E4[0]"/></traversal>
+   <field name="ETin" x="0in" y="0in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  </subform>
+  <field name="E3" x="4.4in" y="2.2in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="E4" x="6.0in" y="2.2in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="2.75in" w="7.5in" h="0.3in"><value><text>Section F: F1 links to FT, a hidden field between F2 and F3, which links to F4</text></value></draw>
+  <field name="F1" x="0in" y="3.1in" w="1.3in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="FT[0]"/></traversal></field>
+  <field name="F2" x="1.6in" y="3.1in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="FT" x="3.0in" y="3.1in" w="1.3in" h="0.35in" presence="hidden"><ui><textEdit/></ui><traversal><traverse ref="F4[0]"/></traversal></field>
+  <field name="F3" x="4.4in" y="3.1in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="F4" x="6.0in" y="3.1in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="3.65in" w="7.5in" h="0.3in"><value><text>Section G: G1 links to GT, an invisible field between G2 and G3, which links to G4</text></value></draw>
+  <field name="G1" x="0in" y="4.0in" w="1.3in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="GT[0]"/></traversal></field>
+  <field name="G2" x="1.6in" y="4.0in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="GT" x="3.0in" y="4.0in" w="1.3in" h="0.35in" presence="invisible"><ui><textEdit/></ui><traversal><traverse ref="G4[0]"/></traversal></field>
+  <field name="G3" x="4.4in" y="4.0in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="G4" x="6.0in" y="4.0in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="4.55in" w="7.5in" h="0.3in"><value><text>Section H: H1 links to HT, a protected field between H2 and H3, which links to H4</text></value></draw>
+  <field name="H1" x="0in" y="4.9in" w="1.3in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="HT[0]"/></traversal></field>
+  <field name="H2" x="1.6in" y="4.9in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="HT" x="3.0in" y="4.9in" w="1.3in" h="0.35in" access="protected"><ui><textEdit/></ui><traversal><traverse ref="H4[0]"/></traversal></field>
+  <field name="H3" x="4.4in" y="4.9in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="H4" x="6.0in" y="4.9in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="finish" x="0in" y="5.5in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
 }
 
 /// A scripted form (JavaScript events): `qty` (initialised to 2, validated ≤ 100) × `price`
@@ -257,6 +522,68 @@ pub fn leave_template(data: &str) -> String {
     )
 }
 
+/// Two date fields shown as `MM/DD/YYYY`: `due` binds its value to the data as `YYYYMMDD`
+/// (`<bind><picture>`), `when` has no data picture, so its data holds ISO dates.
+pub fn bound_date_template(data: &str) -> String {
+    let datasets = if data.is_empty() {
+        String::new()
+    } else {
+        format!("<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets>")
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="tb">
+  <field name="due" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{{MM/DD/YYYY}}</picture></ui><value><date/></value><bind match="once"><picture>date{{YYYYMMDD}}</picture></bind></field>
+  <field name="when" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{{MM/DD/YYYY}}</picture></ui><value><date/></value></field>
+ </subform>
+</subform>
+</template>
+{datasets}
+</xdp:xdp>
+"##
+    )
+}
+
+/// Date fields shown as `MM/DD/YYYY` whose data pictures differ: two siblings both named
+/// `due`, the first bound `YYYYMMDD` and the second `DDMMYYYY`, and `month`, bound `YYYYMM`
+/// (a year and month, no day).
+pub fn sibling_date_template(data: &str) -> String {
+    let datasets = if data.is_empty() {
+        String::new()
+    } else {
+        format!("<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets>")
+    };
+    let field = |name: &str, bind: &str| {
+        format!(
+            r#"<field name="{name}" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{{MM/DD/YYYY}}</picture></ui><value><date/></value><bind match="once"><picture>date{{{bind}}}</picture></bind></field>"#
+        )
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="tb">
+  {}
+  {}
+  {}
+ </subform>
+</subform>
+</template>
+{datasets}
+</xdp:xdp>
+"##,
+        field("due", "YYYYMMDD"),
+        field("due", "DDMMYYYY"),
+        field("month", "YYYYMM")
+    )
+}
+
 /// A 2 × 2 RGBA PNG: red, green / blue, transparent.
 pub fn tiny_png() -> Vec<u8> {
     TINY_PNG.to_vec()
@@ -266,6 +593,62 @@ const TINY_PNG: &[u8] = b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x
 
 /// A 1 × 1 white GIF.
 pub const TINY_GIF: &[u8] = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;";
+
+/// A 2 × 1 BMP, red then blue: 24-bit, or 8-bit with a two-colour palette.
+pub fn tiny_bmp(palette: bool) -> Vec<u8> {
+    let (bpp, colours, pixels): (u16, &[u8], &[u8]) =
+        if palette { (8, &[0, 0, 255, 0, 255, 0, 0, 0], &[0, 1, 0, 0]) } else { (24, &[], &[0, 0, 255, 255, 0, 0, 0, 0]) };
+    let offset = 54 + colours.len() as u32;
+    let mut b = b"BM".to_vec();
+    b.extend_from_slice(&(offset + pixels.len() as u32).to_le_bytes());
+    b.extend_from_slice(&[0; 4]);
+    b.extend_from_slice(&offset.to_le_bytes());
+    for v in [40u32, 2, 1] {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&bpp.to_le_bytes());
+    for v in [0u32, pixels.len() as u32, 0, 0, (colours.len() / 4) as u32, 0] {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b.extend_from_slice(colours);
+    b.extend_from_slice(pixels);
+    b
+}
+
+/// A 1 × 1 little-endian RGB TIFF of colour `#123456`, uncompressed or LZW.
+pub fn tiny_tiff(lzw: bool) -> Vec<u8> {
+    // Clear, 0x12, 0x34, 0x56, end of information, as 9-bit codes, most significant bit first.
+    let strip: &[u8] = if lzw { &[0x80, 0x04, 0x86, 0x85, 0x68, 0x08] } else { &[0x12, 0x34, 0x56] };
+    // Header (8), the IFD (2 + 9 entries of 12 + 4), then BitsPerSample's three values (6).
+    let (bps_at, strip_at) = (122u32, 128u32);
+    let (short, long) = (3u16, 4u16);
+    let mut b = b"II*\0".to_vec();
+    b.extend_from_slice(&8u32.to_le_bytes());
+    b.extend_from_slice(&9u16.to_le_bytes());
+    for (tag, ty, count, value) in [
+        (256u16, short, 1u32, 1u32),
+        (257, short, 1, 1),
+        (258, short, 3, bps_at),
+        (259, short, 1, if lzw { 5 } else { 1 }),
+        (262, short, 1, 2),
+        (273, long, 1, strip_at),
+        (277, short, 1, 3),
+        (278, short, 1, 1),
+        (279, long, 1, strip.len() as u32),
+    ] {
+        b.extend_from_slice(&tag.to_le_bytes());
+        b.extend_from_slice(&ty.to_le_bytes());
+        b.extend_from_slice(&count.to_le_bytes());
+        b.extend_from_slice(&value.to_le_bytes());
+    }
+    b.extend_from_slice(&0u32.to_le_bytes());
+    for _ in 0..3 {
+        b.extend_from_slice(&8u16.to_le_bytes());
+    }
+    b.extend_from_slice(strip);
+    b
+}
 
 /// A form with the other field kinds: `country`, a drop-down whose shown names save as codes
 /// (`Canada`/`CA`, `France`/`FR`, `Japan`/`JP`; default `FR`); `langs`, a multi-select list
@@ -313,6 +696,152 @@ pub fn fields_template(data: &str) -> String {
     )
 }
 
+/// Date fields whose edit pictures list alternatives, as forms let a date be typed several ways
+/// (`date{YYYYMMDD}|date{YYMMDD}|…`); one with a single pattern; a text field; `code`, whose
+/// only alternative is a text clause; `short`, whose first pattern has a two-digit year; and
+/// `pick`, where two later patterns read some dates and only one gives a year the first keeps.
+pub fn date_alternatives_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="leave" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYYMMDD}|date{DDMMMYY}|date{YYMMDD}|date{YYYYMMD}|date{YY MM DD}</picture></ui><value><date/></value></field>
+ <field name="born" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYY-MM-DD}</picture></ui><value><date/></value></field>
+ <field name="name" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+ <field name="code" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYYMMDD}|text{YYMMDD}</picture></ui><value><date/></value></field>
+ <field name="short" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYMMDD}|date{YYYYMMDD}</picture></ui><value><date/></value></field>
+ <field name="pick" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYMMDD}|date{DDMMYYYY}|date{YYYYMMDD}</picture></ui><value><date/></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
+/// Date fields with each kind of picture: `display` a display picture only, `edit` an edit and a
+/// display picture, `either` an edit picture of two alternatives, `bare` none.
+pub fn date_pictures_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb" locale="en_US">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="display" w="2in" h="0.3in"><ui><dateTimeEdit/></ui><value><date/></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
+ <field name="edit" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{MM/DD/YYYY}</picture></ui><value><date/></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
+ <field name="either" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYYMMDD}|date{DDMMMYY}</picture></ui><value><date/></value><format><picture>date{YYYYMMDD}</picture></format></field>
+ <field name="bare" w="2in" h="0.3in"><ui><dateTimeEdit/></ui><value><date/></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
+/// Two signature boxes: `sign`, whose preSign script shows a notice, fills `when` and locks it, and
+/// whose postSign script fills `after`; and `plain`, with no signing scripts.
+pub fn signing_events_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb" w="7.5in">
+  <field name="when" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="after" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="sign" w="3in" h="1in"><ui><signature/></ui>
+   <event activity="preSign"><script contentType="application/x-javascript">xfa.host.messageBox("Signing notice"); when.rawValue = "signed"; when.access = "readOnly";</script></event>
+   <event activity="postSign"><script contentType="application/x-javascript">after.rawValue = "done";</script></event>
+  </field>
+  <field name="plain" w="3in" h="1in"><ui><signature/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
+/// A form of `sections` sections of `rows` rows, each row with a calculated total (half in
+/// JavaScript, half in FormCalc) and a section sum over its rows: 2 × sections × rows + sections
+/// calculate scripts, every one reading values the earlier ones settled.
+pub fn many_calculations_template(sections: usize, rows: usize) -> String {
+    let mut body = String::new();
+    for sct in 0..sections {
+        body.push_str(&format!("<subform name=\"s{sct}\" layout=\"tb\"><subform name=\"table\" layout=\"table\" columnWidths=\"1in 1in 1in\">"));
+        for r in 0..rows {
+            let calc = if (sct + r) % 2 == 0 {
+                "<script contentType=\"application/x-javascript\">qty.rawValue * price.rawValue</script>"
+            } else {
+                "<script>qty * price</script>"
+            };
+            body.push_str(&format!(
+                "<subform name=\"r{r}\" layout=\"row\"><field name=\"qty\" h=\"0.2in\"><ui><numericEdit/></ui><value><integer>{}</integer></value></field><field name=\"price\" h=\"0.2in\"><ui><numericEdit/></ui><value><integer>2</integer></value></field><field name=\"total\" h=\"0.2in\"><ui><numericEdit/></ui><calculate>{calc}</calculate></field></subform>",
+                r + 1
+            ));
+        }
+        body.push_str("</subform>");
+        let terms: Vec<String> = (0..rows).map(|r| format!("table.r{r}.total")).collect();
+        body.push_str(&format!(
+            "<field name=\"sum\" w=\"2in\" h=\"0.2in\"><ui><numericEdit/></ui><calculate><script>Sum({})</script></calculate></field></subform>",
+            terms.join(", ")
+        ));
+    }
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><occur max="-1"/><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ {body}
+</subform>
+</template>
+</xdp:xdp>
+"##
+    )
+}
+
+/// Shaped like a leave form's row of dates: `from`, a date field typed and shown as `YYYYMMDD`
+/// (its data keeps ISO dates), `days`, an invisible `minus1` one less than `days`, and `to`,
+/// which a calculation works out as `from` plus `minus1` days. As such forms do, it checks that
+/// `from`'s raw value is a whole ISO date, then does its date arithmetic on `formattedValue`.
+pub fn date_row_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form1" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="tb">
+  <field name="from" w="1.5in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYYMMDD}</picture></ui><value><date/></value><format><picture>date{YYYYMMDD}</picture></format></field>
+  <field name="days" w="1in" h="0.3in"><ui><numericEdit/></ui></field>
+  <field name="minus1" w="1in" h="0.3in" presence="invisible" access="readOnly"><ui><numericEdit/></ui><calculate><script contentType="application/x-javascript">this.rawValue = days.rawValue - 1;</script></calculate></field>
+  <field name="to" w="1.5in" h="0.3in" access="readOnly"><ui><textEdit/></ui><calculate><script contentType="application/x-javascript">
+if (form1.page.from.access == "open") {
+  if (form1.page.from.rawValue != null &amp;&amp; form1.page.from.rawValue != "" &amp;&amp; String(form1.page.from.rawValue).length == 10) {
+    form1.page.to.rawValue = AddDays(form1.page.from, form1.page.minus1.rawValue);
+  } else {
+    form1.page.to.rawValue = "";
+  }
+}
+function AddDays(dateObj, daysOffset) {
+  var shown = dateObj.formattedValue;
+  var date = new Date(shown.substr(0, 4), shown.substr(4, 2) - 1, shown.substr(6, 2), 0, 0, 0, 0);
+  date.setMilliseconds(daysOffset * 86400000);
+  var month = date.getMonth() + 1;
+  if (month &lt; 10) { month = "0" + month; }
+  var day = date.getDate();
+  if (day &lt; 10) { day = "0" + day; }
+  return String(date.getFullYear()) + String(month) + String(day);
+}
+</script></calculate></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
 /// A PDF shell around `xdp`: one placeholder page, `/NeedsRendering true`, no fields.
 pub fn shell(xdp: &str) -> Vec<u8> {
     let objs: Vec<Vec<u8>> = vec![
@@ -321,6 +850,173 @@ pub fn shell(xdp: &str) -> Vec<u8> {
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
         b"<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 700 Td (Please wait...) Tj ET\nendstream".to_vec(),
         format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+    ];
+    assemble(objs)
+}
+
+/// [`shell`] with usage rights: the catalog's `/Perms` holds a `/UR3` signature (a stand-in
+/// dictionary, nothing verifies it), beside `others` (`/DocMDP 6 0 R`, say: object 6 is a
+/// signature dictionary too). `indirect` puts `/Perms` in an object of its own.
+pub fn usage_rights_shell(xdp: &str, others: &str, indirect: bool) -> Vec<u8> {
+    let perms = format!("<< /UR3 6 0 R {others} >>");
+    let entry = if indirect { "7 0 R".to_string() } else { perms.clone() };
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA 5 0 R /Fields [] >> /Perms {entry} >>");
+    let mut objs: Vec<Vec<u8>> = vec![
+        catalog.into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        b"<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 700 Td (Please wait...) Tj ET\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        b"<< /Type /Sig /Reference [<< /Type /SigRef /TransformMethod /UR3 >>] >>".to_vec(),
+    ];
+    if indirect {
+        objs.push(perms.into_bytes());
+    }
+    assemble(objs)
+}
+
+/// A dynamic form with two signature boxes of which `sign` has been signed: the file holds the
+/// field a signing application leaves (named by its SOM path, its value a signature dictionary)
+/// and the picture drawn in the box, a solid blue rectangle.
+pub fn signed_shell() -> Vec<u8> {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="body" layout="tb" w="7.5in">
+  <field name="sign" w="3in" h="1in"><ui><signature/></ui></field>
+  <field name="other" w="3in" h="1in"><ui><signature/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let picture = "0 0 1 rg 0 0 100 40 re f";
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA 5 0 R /Fields [6 0 R] /SigFlags 3 >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        b"<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 700 Td (Please wait...) Tj ET\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        b"<< /T (form[0]) /Kids [7 0 R] >>".to_vec(),
+        b"<< /T (body[0]) /Parent 6 0 R /Kids [8 0 R] >>".to_vec(),
+        b"<< /T (sign[0]) /Parent 7 0 R /FT /Sig /V 9 0 R /Type /Annot /Subtype /Widget /Rect [0 0 0 0] /AP << /N 10 0 R >> >>".to_vec(),
+        b"<< /Type /Sig /Name (A Signer) >>".to_vec(),
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 100 40] /Length {} >>\nstream\n{picture}\nendstream", picture.len()).into_bytes(),
+    ];
+    assemble(objs)
+}
+
+/// A check box `kind` whose change script, once it is checked, opens the protected check box
+/// `leave` and shows the invisible field `details`, then fails on an object the form doesn't
+/// have (as scripts written for an earlier version of a form do).
+pub fn partly_failing_script_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="tb">
+  <field name="kind" w="0.3in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items><value><integer>0</integer></value>
+   <event activity="change"><script contentType="application/x-javascript">
+if (this.rawValue == "1") {
+  this.resolveNode("leave").access = "open";
+  this.resolveNode("details").presence = "visible";
+  this.resolveNode("noSuchField").rawValue = "0";
+}
+   </script></event>
+  </field>
+  <field name="leave" w="0.3in" h="0.3in" access="protected"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items><value><integer>0</integer></value></field>
+  <field name="details" w="2in" h="0.3in" presence="invisible"><ui><textEdit/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
+/// A form whose text field `probe` counts its enters in `enters` and its exits in `exits`, whose
+/// text field `quiet` only shows a message when it is left, and whose radio button `size.large`
+/// counts its enters in `picks` and its exits in `drops` (each button of a radio group is a field
+/// with scripts of its own), whose text field `hint` clears its "Type here" when it gains focus, and
+/// whose text field `relay` puts that "Type here" back in `hint` when it loses focus.
+pub fn focus_template() -> String {
+    let js = "application/x-javascript";
+    let count = |name: &str| format!(r#"<script contentType="{js}">{name}.rawValue = Number({name}.rawValue) + 1;</script>"#);
+    let counter = |name: &str| {
+        format!(r#"<field name="{name}" w="2in" h="0.3in" access="protected"><ui><textEdit/></ui><value><integer>0</integer></value></field>"#)
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <field name="probe" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="enter">{}</event><event activity="exit">{}</event></field>
+ <field name="quiet" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="exit"><script contentType="{js}">xfa.host.messageBox("left quiet");</script></event></field>
+ <exclGroup name="size" layout="lr-tb">
+  <field name="small" w="0.5in" h="0.25in"><ui><checkButton/></ui><items><text>S</text></items></field>
+  <field name="large" w="0.5in" h="0.25in"><ui><checkButton/></ui><items><text>L</text></items><event activity="enter">{}</event><event activity="exit">{}</event></field>
+ </exclGroup>
+ {}{}{}{}
+ <field name="hint" w="2in" h="0.3in"><ui><textEdit/></ui><value><text>Type here</text></value><event activity="enter"><script contentType="{js}">if (this.rawValue == "Type here") this.rawValue = "";</script></event></field>
+ <field name="relay" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="exit"><script contentType="{js}">hint.rawValue = "Type here";</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        count("enters"),
+        count("exits"),
+        count("picks"),
+        count("drops"),
+        counter("exits"),
+        counter("enters"),
+        counter("picks"),
+        counter("drops")
+    )
+}
+
+/// A form whose two draws link their pictures instead of embedding them: `.\logo.png`, which the
+/// PDF keeps in its `XFAImages` name tree (a [`tiny_png`], under a `Kids` node, as producers
+/// split the tree), and `.\missing.png`, which it doesn't (XFA 3.3 pp. 257–258).
+pub fn linked_image_shell() -> Vec<u8> {
+    linked_image_shell_with(b"<< /Kids [7 0 R] >>", br"<< /Limits [(.\\logo.png) (.\\logo.png)] /Names [(.\\logo.png) 8 0 R] >>")
+}
+
+/// [`linked_image_shell`] with its own name tree: `root` is object 6 (the tree the catalog names),
+/// `kid` object 7, and object 8 the PNG.
+pub fn linked_image_shell_with(root: &[u8], kid: &[u8]) -> Vec<u8> {
+    linked_image_shell_holding(root, kid, TINY_PNG)
+}
+
+/// [`linked_image_shell_with`], object 8 a stream holding `picture` (a [`tiny_png`] there).
+pub fn linked_image_shell_holding(root: &[u8], kid: &[u8], picture: &[u8]) -> Vec<u8> {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <draw name="logo" w="1in" h="1in"><value><image contentType="image/png" href=".\logo.png"/></value></draw>
+  <draw name="gone" w="1in" h="1in"><value><image contentType="image/png" href=".\missing.png"/></value></draw>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut png = format!("<< /Length {} >>\nstream\n", picture.len()).into_bytes();
+    png.extend_from_slice(picture);
+    png.extend_from_slice(b"\nendstream");
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA 5 0 R /Fields [] >> /Names << /XFAImages 6 0 R >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        b"<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 700 Td (Please wait...) Tj ET\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        root.to_vec(),
+        kid.to_vec(),
+        png,
     ];
     assemble(objs)
 }
