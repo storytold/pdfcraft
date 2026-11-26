@@ -902,7 +902,17 @@ fn german_preferences_and_search_keep_command_ids() {
     }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "de" }));
-    ok(&mut h, &c, "ui.click", json!({ "label": "Konvertieren" }));
+    h.run_steps(2);
+    // A pointer click at the widget's center, as a user clicks it.
+    fn click_center(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, widget: &Value) {
+        let rect = &widget["rect"];
+        let x = (rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap()) / 2.0;
+        let y = (rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap()) / 2.0;
+        ok(h, c, "ui.click", json!({ "x": x, "y": y }));
+        h.run_steps(2);
+    }
+    let tab = ok(&mut h, &c, "ui.inspect", json!({ "query": "Konvertieren", "role": "Tab" }));
+    click_center(&mut h, &c, &tab["widgets"][0]);
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Convert");
     ok(&mut h, &c, "ui.command", json!({ "id": "app.preferences" }));
     h.run_steps(2);
@@ -910,7 +920,7 @@ fn german_preferences_and_search_keep_command_ids() {
     assert!(prefs["count"].as_u64().unwrap() > 0, "{prefs}");
     let selector = ok(&mut h, &c, "ui.inspect", json!({ "query": "Deutsch" }));
     let combo = selector["widgets"].as_array().unwrap().iter().find(|w| w["role"] == "ComboBox").expect("language selector");
-    ok(&mut h, &c, "ui.click", json!({ "id": combo["id"] }));
+    click_center(&mut h, &c, combo);
     ok(&mut h, &c, "ui.click", json!({ "label": "English" }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "en");
     let selector = ok(&mut h, &c, "ui.inspect", json!({ "query": "English" }));
