@@ -39,8 +39,8 @@ the current choice and the other valid settings.
 The existing opt-in UI control channel uses the same preference:
 
 ```sh
-pdfcraft-cli ui --control /path/to/control.json set key=comment-tool-pinned value=true
-pdfcraft-cli ui --control /path/to/control.json state
+pdfcraft-cli ui --control 4242 --control-token-file /path/to/token set key=comment-tool-pinned value=true
+pdfcraft-cli ui --control 4242 --control-token-file /path/to/token state
 ```
 
 `ui.state.comment_tool_pinned` reports the boolean. `ui.set` accepts `true` or `false` and refuses
@@ -87,7 +87,7 @@ By default PdfCraft's own crates (`pdfcraft*`) log at `info` and everything else
 `RUST_LOG` replaces that with env_logger-style directives, for example `RUST_LOG=debug`,
 `RUST_LOG=warn,pdfcraft_render=trace` or `RUST_LOG=info,wgpu_core=warn`; a directive ending in `*`
 covers every target starting with it (`pdfcraft*=debug`). The logger is
-`apps/pdfcraft/src/logging.rs`. It never records the control-channel token or document passwords.
+`craft_platform::logs`. It never records the control-channel token or document passwords.
 
 ## GPU surface limits
 
@@ -169,3 +169,25 @@ Relative includes resolve beside the config that contains them. Included directo
 digit-prefixed `*.conf` files, in lexical order; backups and disabled files are ignored. The scan
 limits each config to 1 MiB, visits at most 256 config files/directories, and bounds include depth
 to 16 and directory entries to 32,768. Cyclic includes are skipped.
+
+## Fonts and attribution
+
+- `CRAFT_FONTS_DIR=<craft-fonts checkout> cargo build` makes `crates/fonts/build.rs` embed the
+  craft-fonts faces as `pdfcraft_fonts::CRAFT_FONTS`. Without it PdfCraft builds, tests and runs, but
+  has no Japanese face: Japanese UI text shows replacement boxes and writing Japanese into a PDF
+  returns an error. Release builds set it (`.github/workflows/release.yml`), and `ATTRIBUTION.toml`
+  lists it as a `[[build_input]]`. Code that uses `CRAFT_FONTS` works when it is empty.
+- The desktop app reads one font already installed on the machine at run time, as the last interface
+  fallback (`OnDemandFonts` with `SystemCandidates`, the craft font catalog). The page viewer can draw a CID font of an Adobe CJK
+  collection that a PDF does not embed with an installed face, on screen only
+  (`crates/render/src/system_font.rs`; `RenderConfig::system_fonts` is off by default and set by
+  `RenderConfig::on_screen`). Neither font is embedded, shipped, committed or copied, and nothing drawn
+  with them is saved or printed. `PDFCRAFT_SYSTEM_FONTS=0` turns both off; `cargo xtask screenshots`
+  sets it.
+- `cargo xtask assets` fails when an asset file has no `ATTRIBUTION.toml` entry, an entry's hash is
+  missing or wrong, a licence is not on the allowlist or its file is missing, or an image, icon or font
+  names Adobe as author, except a font under OFL-1.1 alone. The Adobe non-visual data allowed is the
+  closed list in `xtask/src/assets.rs` (`adobe_data = true`). `cargo xtask demo-pdf` fails if the PDF
+  embeds a font that is not an `ATTRIBUTION.toml` entry.
+- The ArtCraft name, wordmark and logos in `docs/brand/` are trademarks of the ArtCraft Team, not open
+  source (terms in `docs/brand/LICENSE-brand.txt`); they stay in PdfCraft, unmodified.
