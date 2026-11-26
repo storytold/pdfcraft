@@ -2,11 +2,11 @@ use super::common::{
     MAX_DEPTH, arr, check_form_xml_depth, csv, el_text, esc, hex, n, nums_of, parse_form_xml, parse_hex, quad_has_area, rect_strict, text_of,
     walk_xfdf,
 };
-use super::grammar::{
+use super::*;
+use craft_xfdf::grammar::{
     AnnotFormat, BorderStyle, CaretSymbol, SUBTYPES, format_flags, format_pairs, pairs, parse_flags, parse_format_attrs, rich_plain,
     rich_text_element, standalone, with_comment_nodes, write_format_attrs,
 };
-use super::*;
 
 // ── export ──────────────────────────────────────────────────────────────────────────────────
 
