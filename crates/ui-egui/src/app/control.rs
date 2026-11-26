@@ -94,11 +94,11 @@ impl PdfCraftApp {
             ("date-language", _) => self.session.set_date_language(Some(value).filter(|v| *v != "auto"))?,
             ("tool", _) => {
                 let g = pdfcraft_engine::catalog::group(value).ok_or_else(|| format!("unknown tool {value}"))?;
-                self.select_tool(ctx, g.id);
+                self.select_tool_panel(ctx, g.id);
             }
             ("left", _) => self.set_left_open(value != "closed"),
             ("home", _) => {
-                self.active = None;
+                self.deactivate_document();
                 // With no document open the expanded All tools view covers Home itself, so no
                 // other tab comes forward to put it away.
                 self.all_tools_full = false;

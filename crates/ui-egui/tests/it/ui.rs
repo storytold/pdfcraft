@@ -198,7 +198,7 @@ fn every_catalog_tool_is_listed_after_view_more() {
 
 #[test]
 fn expanded_all_tools_lists_every_tool_by_category_and_searches() {
-    let mut h = harness(|_| {});
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     h.get_by_label("Expand all tools").click();
     h.run_steps(3);
     assert!(h.state().all_tools_full);
@@ -236,6 +236,7 @@ fn expanded_all_tools_lists_every_tool_by_category_and_searches() {
     h.run_steps(3);
     assert!(!h.state().all_tools_full);
     assert_eq!(h.state().left, pdfcraft_ui_egui::LeftPanel::Tool("organize"));
+    assert!(h.state().views[0].organize);
     h.get_by_label("Back to all tools");
 }
 

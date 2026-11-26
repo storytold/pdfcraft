@@ -219,6 +219,42 @@ impl DocumentCopyJob {
     }
 }
 
+/// What to do once an open succeeds. The tool choice belongs only to the files from its picker.
+#[derive(Clone)]
+pub(crate) enum OpenThen {
+    Command(&'static str),
+    /// Each pending file or password prompt owns a reference. Success takes the group once.
+    /// A failed or cancelled file drops its reference, leaving the group for any siblings.
+    /// The last reference drops the choice if no file opened.
+    Tool(std::rc::Rc<std::cell::Cell<Option<&'static str>>>),
+}
+
+impl OpenThen {
+    pub(crate) fn tool(group: &'static str) -> Self {
+        Self::Tool(std::rc::Rc::new(std::cell::Cell::new(Some(group))))
+    }
+
+    pub(crate) fn activates(&self, activate: bool) -> bool {
+        match self {
+            Self::Command(_) => activate,
+            Self::Tool(group) => group.get().is_some(),
+        }
+    }
+
+    pub(crate) fn run(self, app: &mut crate::PdfCraftApp, ctx: &egui::Context) {
+        match self {
+            Self::Command(command) => {
+                app.execute(ctx, command);
+            }
+            Self::Tool(group) => {
+                if let Some(group) = group.take() {
+                    app.select_tool(ctx, group);
+                }
+            }
+        }
+    }
+}
+
 pub struct PasswordPrompt {
     pub name: String,
     pub path: Option<String>,
@@ -233,7 +269,9 @@ pub struct PasswordPrompt {
     pub(crate) recovered: Option<craft::platform::autosave::RecoveryEntry>,
     /// The tool that asked for this file (a tool chosen with no document open): it runs once
     /// the document is unlocked.
-    pub(crate) then: Option<&'static str>,
+    pub(crate) then: Option<OpenThen>,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) remaining_tool_files: Vec<(String, Vec<u8>)>,
     /// A link destination to apply after the linked PDF is unlocked.
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
     /// A launch-time display override, applied only after this PDF is unlocked.
@@ -250,7 +288,7 @@ pub(crate) struct OpenRequest {
     pub(crate) activate: bool,
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
     pub(crate) recovered: Option<craft::platform::autosave::RecoveryEntry>,
-    pub(crate) then: Option<&'static str>,
+    pub(crate) then: Option<OpenThen>,
     /// Where the open waits in the worker's queue: a file the user named goes before files
     /// reopened from the last session.
     pub(crate) priority: craft::host::queue::Priority,

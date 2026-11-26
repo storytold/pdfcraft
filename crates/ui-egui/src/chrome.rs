@@ -112,7 +112,7 @@ fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .show(ui, |ui, _| {
             let home = app.active.is_none() && !app.combine_showing();
             if IconButton::new(IconId::new(HOME_ICON)).label(tl!("Home")).selected(home).show(ui).clicked() {
-                app.active = None;
+                app.deactivate_document();
                 app.combine_tab.focused = false;
             }
             doc_tabs::strip(app, ui, Place::Main);
