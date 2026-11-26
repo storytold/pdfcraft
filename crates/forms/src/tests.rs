@@ -893,6 +893,24 @@ fn text_fields_get_new_appearances() {
     assert!(raw.windows(8).any(|x| x == b"(Z\xfcrich)"));
 }
 
+/// A script value written past the `/MaxLen` check (a static XFA form's result) is still drawn
+/// through the field's `/MaxLen`: a comb field keeps one cell per character, and a longer value
+/// shows its first ones in the cells it has.
+#[test]
+fn a_script_value_past_the_length_check_keeps_a_comb_fields_cells() {
+    for (ignore, value) in [(false, "12345"), (true, "12345"), (true, "1234567")] {
+        let mut doc = fixture();
+        let change = FieldChange { name: "zip".into(), value: Some(vec![value.into()]), ignore_max_len: ignore, ..Default::default() };
+        apply_script_changes(&mut doc, &[change], &mut NoScripts).unwrap();
+        let doc = reopen(&doc);
+        let all = fields(&doc);
+        assert_eq!(field(&all, "zip").value, [value]);
+        let zip = ap(&doc, &field(&all, "zip").widgets[0]);
+        assert_eq!(zip.matches(" Tj").count(), 5, "ignore_max_len={ignore}, {value}: one cell per character: {zip}");
+        assert!(zip.contains("(5) Tj") && !zip.contains("(6) Tj"), "{zip}");
+    }
+}
+
 /// Acrobat regenerates only the `/Tx BMC` block when it redraws a text field, so background and
 /// border must live inside it rather than immediately before it (#1613).
 fn marked_content_borders_field(appearance: &str, label: &str) {
