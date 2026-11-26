@@ -488,6 +488,7 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             purview_labels_job: None,
             purview_labels: Vec::new(),
+            purview_labels_error: None,
             purview_label_id: String::new(),
             purview_justification: String::new(),
             word_count_options: Default::default(),
