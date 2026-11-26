@@ -318,6 +318,8 @@ impl Session {
                 cx.xfa_ran_away |= run.ran_away;
                 cx.xfa_relaid |= run.relaid;
                 // The next edit of a batch reads the highlight this one's scripts set.
+                // The next XFA run of a batch starts from the page count this one left.
+                cx.pages = run.page_count;
                 let on = run.highlight;
                 cx.set_highlight(on);
                 if let Err(e) = ran {
@@ -362,6 +364,7 @@ impl Session {
                     // Layout replaces pages and widgets, even if the page count is unchanged.
                     // Undo/redo must rebuild these too instead of refreshing only field values.
                     scope = Scope::Full;
+                    rerun_layout_ready(&mut next, &mut cx);
                 }
             }
         }
@@ -583,7 +586,7 @@ impl Session {
             #[cfg(test)]
             check_refresh_panic();
             if !doc.signatures.is_empty() {
-                let mut signatures = shown_signatures(doc.shown_not_saved.as_ref(), &editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                let mut signatures = shown_signatures(doc.shown_not_saved.as_ref(), editor, &bytes, &doc.trust, &doc.sig_cache);
                 // The display copy is kept for a metadata edit, and so are its marks, unless the
                 // edit changed a verdict (a certification can forbid it): the page then draws the
                 // new one.
@@ -637,7 +640,7 @@ impl Session {
         let mut signatures = if doc.signatures.is_empty() {
             Vec::new()
         } else {
-            shown_signatures(doc.shown_not_saved.as_ref(), &editor.cos, &bytes, &doc.trust, &doc.sig_cache)
+            shown_signatures(doc.shown_not_saved.as_ref(), editor, &bytes, &doc.trust, &doc.sig_cache)
         };
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
@@ -706,7 +709,7 @@ impl Session {
         let mut signatures = if doc.signatures.is_empty() {
             Vec::new()
         } else {
-            shown_signatures(doc.shown_not_saved.as_ref(), &editor.cos, &bytes, &doc.trust, &doc.sig_cache)
+            shown_signatures(doc.shown_not_saved.as_ref(), editor, &bytes, &doc.trust, &doc.sig_cache)
         };
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
@@ -815,12 +818,44 @@ impl Session {
         if invalidate_links {
             doc.links = OnceLock::new();
         }
-        let mut signatures = shown_signatures(doc.shown_not_saved.as_ref(), &editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+        let mut signatures = shown_signatures(doc.shown_not_saved.as_ref(), editor, &bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
         Ok(())
+    }
+}
+
+/// After a new layout: the form's `layout:ready` scripts run again, reading its page count, as
+/// after a layout its scripts asked for. Not after a script of this edit ran away: the form's
+/// scripts turn off once it is done.
+fn rerun_layout_ready(next: &mut pdfcraft_cos::Document, cx: &mut EditCtx) {
+    if cx.xfa_ran_away {
+        return;
+    }
+    let Some(tpl) = cx.xfa.clone() else { return };
+    let highlight = cx.highlight();
+    let page_count = pdfcraft_organize::page_count(next).unwrap_or(cx.pages);
+    let mut run = xfa::XfaRun {
+        page_count,
+        out: &mut cx.xfa_out,
+        datasets: cx.xfa_datasets,
+        ran_away: false,
+        highlight,
+        time_scale: cx.xfa_time_scale,
+        keep_layout: cx.certification.is_some(),
+        relaid: false,
+    };
+    let ran = guard(|| xfa::on_layout(next, &tpl, &mut run)).unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
+    cx.xfa_datasets = run.datasets;
+    cx.xfa_ran_away |= run.ran_away;
+    cx.xfa_relaid |= run.relaid;
+    cx.pages = run.page_count;
+    let on = run.highlight;
+    cx.set_highlight(on);
+    if let Err(e) = ran {
+        cx.xfa_out.errors.push(e);
     }
 }
 
