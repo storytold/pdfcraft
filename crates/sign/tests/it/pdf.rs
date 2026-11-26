@@ -2392,6 +2392,22 @@ fn windows_store_enumeration_and_missing_identity() {
     assert!(pdfcraft_sign::windows::find("windows:no such signer").is_err());
 }
 
+/// A third-party KSP runs in process and may leave floating-point exceptions enabled on the
+/// thread that opens it (#7118). Listing identities must not carry that provider-owned state back
+/// to the caller: the UI renderer performs ordinary divisions after opening the Sign dialog.
+#[cfg(windows)]
+#[test]
+fn windows_store_enumeration_keeps_the_calling_threads_floating_point_state() {
+    let ordinary_float_operations = || {
+        let zero = std::hint::black_box(0.0_f32);
+        assert!((1.0 / zero).is_infinite());
+        assert!((zero / zero).is_nan());
+    };
+    ordinary_float_operations();
+    let _ = pdfcraft_sign::windows::list().unwrap();
+    ordinary_float_operations();
+}
+
 #[cfg(windows)]
 fn powershell(script: &str) -> std::process::Output {
     // Load the certificate provider explicitly in a profile-free Windows PowerShell child.

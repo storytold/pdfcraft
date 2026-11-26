@@ -111,6 +111,33 @@ struct Entries {
     unusable: Vec<Unusable>,
 }
 
+enum KeyProbe {
+    Usable,
+    Unusable(String),
+    Error(CngError),
+}
+
+/// Run the silent provider probe on a thread whose provider-owned state is discarded on exit.
+fn probe_thread<T: Send + 'static>(probe: impl FnOnce() -> T + Send + 'static) -> std::thread::Result<T> {
+    std::thread::spawn(probe).join()
+}
+
+/// Ask a certificate's key provider about the key away from the calling thread.
+///
+/// Third-party KSPs run inside PdfCraft. Some leave the thread's floating-point control state
+/// changed when `CryptAcquireCertificatePrivateKey` returns; the renderer can then fault on an
+/// otherwise ordinary floating-point division. Keeping the provider call on this short-lived
+/// thread also keeps that provider-owned state away from the UI and rendering thread.
+fn probe_key(context: &CertContext, want: StoreKey) -> KeyProbe {
+    let context = context.clone();
+    probe_thread(move || match context.acquire_key(true) {
+        Ok(key) => matches_key(&key, want).map_or_else(KeyProbe::Unusable, |()| KeyProbe::Usable),
+        Err(CngError::WindowsError(NTE_SILENT_CONTEXT | NTE_UI_REQUIRED)) => KeyProbe::Usable,
+        Err(e) => KeyProbe::Error(e),
+    })
+    .unwrap_or_else(|_| KeyProbe::Unusable("its key provider stopped unexpectedly while the private key was checked".to_string()))
+}
+
 fn entries() -> Result<Entries, SignError> {
     let store = CertStore::open(CertStoreType::CurrentUser, "My")
         .map_err(|e| SignError::Crypto(format!("the Windows Current User Personal store couldn't be opened: {}", describe(&e))))?;
@@ -139,18 +166,13 @@ fn entries() -> Result<Entries, SignError> {
             continue;
         };
         // Enumeration must not open permission or PIN dialogs. Signing may prompt later.
-        match context.acquire_key(true) {
-            Ok(key) => {
-                if let Err(reason) = matches_key(&key, want) {
-                    skip(certificate.display_name(), reason, false);
-                    continue;
-                }
-                // The silent handle was only for the checks above; `sign` acquires its own.
-                drop(key);
+        match probe_key(&context, want) {
+            KeyProbe::Usable => {}
+            KeyProbe::Unusable(reason) => {
+                skip(certificate.display_name(), reason, false);
+                continue;
             }
-            // The key opens only with a prompt (strong private key protection, a PIN): usable.
-            Err(CngError::WindowsError(NTE_SILENT_CONTEXT | NTE_UI_REQUIRED)) => {}
-            Err(e) => {
+            KeyProbe::Error(e) => {
                 let no_private_key = e == CngError::WindowsError(CRYPT_E_NO_KEY_PROPERTY);
                 let reason = if no_private_key {
                     "it has no private key in the store".to_string()
@@ -271,6 +293,14 @@ fn describe(e: &CngError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn silent_provider_probe_runs_on_another_thread() {
+        let caller = std::thread::current().id();
+        let worker = probe_thread(|| std::thread::current().id());
+        assert!(worker.is_ok());
+        assert_ne!(worker.ok(), Some(caller));
+    }
 
     #[test]
     fn errors_are_explained_with_their_code() {
