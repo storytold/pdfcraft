@@ -134,14 +134,67 @@ pub struct Corner {
     pub inverted: bool,
 }
 
+/// The lines a `<pattern>` fill draws over the fill's colour (its `type`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Hatch {
+    /// Horizontal and vertical lines: XFA's default.
+    #[default]
+    CrossHatch,
+    /// Both diagonals.
+    CrossDiagonal,
+    /// Diagonals from top left to bottom right (`\`).
+    DiagonalLeft,
+    /// Diagonals from bottom left to top right (`/`).
+    DiagonalRight,
+    Horizontal,
+    Vertical,
+}
+
+impl Hatch {
+    /// The `type` attribute: crossHatch when absent, as XFA defines it, and when it names no
+    /// pattern (a hatched fill rather than none, as the form asked for lines).
+    pub fn parse(s: Option<&str>) -> Hatch {
+        match s.map(str::trim) {
+            Some("crossDiagonal") => Hatch::CrossDiagonal,
+            Some("diagonalLeft") => Hatch::DiagonalLeft,
+            Some("diagonalRight") => Hatch::DiagonalRight,
+            Some("horizontal") => Hatch::Horizontal,
+            Some("vertical") => Hatch::Vertical,
+            _ => Hatch::CrossHatch,
+        }
+    }
+
+    /// The same lines a quarter turn later: horizontal and vertical swap, and so do the two
+    /// diagonals.
+    pub fn quarter_turned(self) -> Hatch {
+        match self {
+            Hatch::Horizontal => Hatch::Vertical,
+            Hatch::Vertical => Hatch::Horizontal,
+            Hatch::DiagonalLeft => Hatch::DiagonalRight,
+            Hatch::DiagonalRight => Hatch::DiagonalLeft,
+            other => other,
+        }
+    }
+}
+
+/// A `<fill>`'s `<pattern>`: lines of `color` (black unless the pattern gives one) drawn over
+/// the fill's own colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pattern {
+    pub hatch: Hatch,
+    pub color: Color,
+}
+
 /// A box border: four edges (top, right, bottom, left), four corners (top-left, top-right,
-/// bottom-right, bottom-left) and a fill.
+/// bottom-right, bottom-left) and a fill, which may carry a pattern drawn over its colour.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Border {
     pub presence: Presence,
     pub edges: [Edge; 4],
     pub corners: [Corner; 4],
     pub fill: Option<Color>,
+    /// The fill's pattern; drawn only with the fill.
+    pub pattern: Option<Pattern>,
 }
 
 impl Border {
@@ -154,6 +207,11 @@ impl Border {
 
     pub fn fill(&self) -> Option<Color> {
         if self.presence == Presence::Visible { self.fill } else { None }
+    }
+
+    /// The pattern drawn over the fill, when the fill is drawn.
+    pub fn pattern(&self) -> Option<Pattern> {
+        self.fill().and(self.pattern)
     }
 
     /// How far each corner (top-left, top-right, bottom-right, bottom-left) rounds a box `w` by

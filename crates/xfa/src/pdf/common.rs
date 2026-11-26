@@ -1,4 +1,4 @@
-use super::{Dict, Document, Family, Object, PdfString, Rect, Rounded, Stream};
+use super::{Dict, Document, Family, Hatch, Object, PdfString, Rect, Rounded, Stream};
 
 /// Width and height of a JPEG from its first frame header (SOF0–SOF15, not the DNL/JPG/DAC/DHT
 /// markers). `None` for anything else.
@@ -107,12 +107,51 @@ pub(super) fn all_faces() -> Vec<(&'static str, &'static str)> {
     out
 }
 
+/// The side of a hatch pattern's square cell, in points: each direction of line is drawn once
+/// per cell, so this is the distance between neighbouring lines.
+pub(super) const HATCH_CELL: f64 = 9.0;
+/// The width of a hatch pattern's lines, in points.
+pub(super) const HATCH_WIDTH: f64 = 0.0;
+
+/// The content of one [`HATCH_CELL`]-square cell of a tiling pattern drawing `hatch` in
+/// `color`. Lines run past the cell (the pattern's box clips them) and a diagonal is drawn in
+/// the neighbouring cells' places too, so the tiles join into unbroken lines.
+pub(super) fn hatch_cell(hatch: Hatch, color: [f64; 3]) -> String {
+    let s = HATCH_CELL;
+    let line = |a: (f64, f64), b: (f64, f64)| format!("{} {} m {} {} l ", n(a.0), n(a.1), n(b.0), n(b.1));
+    let level = || line((-1.0, s / 2.0), (s + 1.0, s / 2.0));
+    let upright = || line((s / 2.0, -1.0), (s / 2.0, s + 1.0));
+    // `/` rises left to right (PDF y is up); `\` falls.
+    let rising = || [-s, 0.0, s].map(|k| line((k - 1.0, -1.0), (k + s + 1.0, s + 1.0))).concat();
+    let falling = || [-s, 0.0, s].map(|k| line((k - 1.0, s + 1.0), (k + s + 1.0, -1.0))).concat();
+    let path = match hatch {
+        Hatch::CrossHatch => level() + &upright(),
+        Hatch::CrossDiagonal => rising() + &falling(),
+        Hatch::DiagonalLeft => falling(),
+        Hatch::DiagonalRight => rising(),
+        Hatch::Horizontal => level(),
+        Hatch::Vertical => upright(),
+    };
+    format!("{} RG {} w 0 J {path}S\n", rgb(color), n(HATCH_WIDTH))
+}
+
+/// The content that fills `path` (ending in a space) with the tiling pattern the page's
+/// resources name `name`, in a graphics state of its own.
+pub(super) fn hatched(name: &str, path: &str) -> String {
+    format!("q /Pattern cs /{name} scn {path}f Q\n")
+}
+
 /// The content that draws rounded box `r` on a page `page_h` tall: its fill along its curves,
-/// then its edge inside it. A side a page break cut has no edge.
-pub(crate) fn rounded(r: &Rounded, page_h: f64) -> String {
+/// its pattern's lines over the fill inside the same curves (the tiling pattern the page names
+/// `pattern`), then its edge inside it. A side a page break cut has no edge.
+pub(crate) fn rounded(r: &Rounded, page_h: f64, pattern: Option<&str>) -> String {
     let mut c = String::new();
     if let Some(color) = r.fill {
-        c.push_str(&format!("{} rg {}f\n", rgb(color), outline(r.rect, r.radii, r.inverted, (false, false), page_h)));
+        let path = outline(r.rect, r.radii, r.inverted, (false, false), page_h);
+        c.push_str(&format!("{} rg {path}f\n", rgb(color)));
+        if let Some(name) = pattern.filter(|_| r.pattern.is_some()) {
+            c.push_str(&hatched(name, &path));
+        }
     }
     if let Some((w, color, dashed)) = r.edge {
         // The edge's centre line, half its width inside the box, so the edge stays in: a corner
