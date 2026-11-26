@@ -658,7 +658,7 @@ impl Automation {
                 // Nobody sees a preview here: refuse what the script font would leave out.
                 if let Some(c) = pdfcraft_engine::script_missing(t) {
                     return Err(ToolError::InvalidArgs(format!(
-                        "the signature script font can't draw \"{}\" (U+{:04X}); type the {kind} in Latin, Cyrillic or Greek letters, or pass `path` to a PNG or JPEG image of it instead of `text`",
+                        "the signature script font can't draw \"{}\" (U+{:04X}); type the {kind} in Latin, Cyrillic or Greek letters, or pass `path` to a PNG, JPEG, TIFF, GIF, BMP or WebP image of it instead of `text`",
                         c.escape_debug(),
                         u32::from(c)
                     )));

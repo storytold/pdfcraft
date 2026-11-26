@@ -107,7 +107,7 @@ pub enum SignGraphic {
     Name,
     /// The saved Fill & Sign signature, as it is when signing.
     FillSign,
-    /// An imported PNG or JPEG.
+    /// An imported PNG, JPEG, TIFF, GIF, BMP or WebP image.
     Image(SignatureImage),
 }
 
@@ -577,7 +577,7 @@ impl PdfCraftApp {
 
     /// Sign as ▸ Choose image…: answered only into the signing dialog that asked.
     pub(crate) fn pick_sign_graphic_image(&mut self) {
-        let request = PickRequest::open(FilePurpose::SignGraphic.key()).filter(tl!("Image"), &["png", "jpg", "jpeg"]);
+        let request = PickRequest::open(FilePurpose::SignGraphic.key()).filter(tl!("Image"), &pdfcraft_engine::supported_extensions());
         self.pick_first(request, None, |app: &mut Self, _: &egui::Context, path: PathBuf| {
             if app.sign_draft.is_none() {
                 return;

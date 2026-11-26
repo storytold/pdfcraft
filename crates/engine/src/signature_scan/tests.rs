@@ -37,7 +37,8 @@ fn photos_keep_the_image_signature_limits() {
     assert!(matches!(SignaturePhoto::from_bytes(&vec![0; MAX_PHOTO_BYTES + 1]), Err(ScanError::Size)));
     assert!(SignaturePhoto::read(std::io::repeat(0)).is_err());
     assert!(matches!(SignaturePhoto::from_bytes(&png(&RgbImage::new(8193, 1))), Err(ScanError::Size)));
-    assert!(matches!(SignaturePhoto::from_bytes(b"GIF89a\x02\0\x02\0"), Err(ScanError::Format)));
+    // GIF is a supported format now, so a truncated one is a decode error, not a format error.
+    assert!(SignaturePhoto::from_bytes(b"GIF89a\x02\0\x02\0").is_err_and(|e| !matches!(e, ScanError::Format)));
     let [w, h] = SignaturePhoto::from_bytes(&png(&RgbImage::from_pixel(8000, 4000, image::Rgb([220, 220, 215])))).unwrap().size();
     assert!(w <= WORKING_MAX_SIDE && u64::from(w) * u64::from(h) <= MAX_OUTPUT_PIXELS, "{w} x {h}");
     assert!((f64::from(w) / f64::from(h) - 2.0).abs() < 0.01, "the aspect ratio is kept: {w} x {h}");
@@ -271,7 +272,8 @@ fn large_photos_are_downscaled_and_invalid_ones_rejected() {
     assert!((4000..=WORKING_MAX_SIDE).contains(&w) && (81..=82).contains(&h), "{w} x {h}");
     assert!(photo.thumbnail(512).width() <= 512);
     assert!(matches!(SignaturePhoto::from_bytes(b"not a photo"), Err(ScanError::Format)));
-    assert!(matches!(SignaturePhoto::from_bytes(b"GIF89a\x02\0\x02\0"), Err(ScanError::Format)));
+    // GIF is a supported format now, so a truncated one is a decode error, not a format error.
+    assert!(SignaturePhoto::from_bytes(b"GIF89a\x02\0\x02\0").is_err_and(|e| !matches!(e, ScanError::Format)));
     assert!(SignaturePhoto::from_bytes(b"\xff\xd8\xff\xe0truncated").is_err());
     assert!(matches!(SignaturePhoto::from_bytes(&vec![0; MAX_PHOTO_BYTES + 1]), Err(ScanError::Size)));
     assert!(SignaturePhoto::read(std::io::repeat(0)).is_err());

@@ -302,7 +302,8 @@ impl ScanTabState {
             if let Some(old) = self.pick.take() {
                 self.host.files().forget(old);
             }
-            let request = PickRequest::open("signature-photo").title(tl!("Choose a photo")).filter(tl!("Image"), &["png", "jpg", "jpeg"]);
+            let request =
+                PickRequest::open("signature-photo").title(tl!("Choose a photo")).filter(tl!("Image"), &pdfcraft_engine::supported_extensions());
             self.pick = Some(self.host.files().pick(request));
         }
         if let Some(turn) = turn

@@ -103,7 +103,7 @@ const MAX_SOURCE_PIXELS: u64 = 32 << 20;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignatureImageError {
-    #[error("Choose a PNG or JPEG image.")]
+    #[error("Choose a PNG, JPEG, TIFF, GIF, BMP or WebP image.")]
     Format,
     #[error("Choose an image smaller than 4 MiB and 32 megapixels (at most 8192 pixels per side).")]
     Size,
@@ -124,15 +124,30 @@ pub struct SignatureImage {
     size: [usize; 2],
 }
 
-/// Decode an imported PNG or JPEG within the source limits (file size, 32 megapixels, 8192 pixels
-/// per side, bounded allocation), upright per its EXIF orientation and scaled down to at most
-/// 4 megapixels and 4096 pixels per side. Shared by image signatures and scanned photos.
+/// The raster formats a signature image may be in: PNG (including APNG), JPEG, TIFF, GIF, BMP and
+/// WebP, each only if the image codecs in this build can decode it. HEIC would need
+/// craft-image-codecs' `heif` feature, which this build leaves off.
+pub fn is_supported_format(format: craft_image_codecs::Format) -> bool {
+    use craft_image_codecs::Format;
+    matches!(format, Format::Png | Format::Jpeg | Format::Tiff | Format::Gif | Format::Bmp | Format::WebP) && craft_image_codecs::caps(format).read
+}
+
+/// File extensions (lowercase, no dot) of every format a signature image may be in, for file pickers.
+pub fn supported_extensions() -> Vec<&'static str> {
+    use craft_image_codecs::Format;
+    Format::ALL.into_iter().filter(|f| is_supported_format(*f)).flat_map(|f| f.extensions().iter().copied()).collect()
+}
+
+/// Decode an imported image (any format [`is_supported_format`] accepts) within the
+/// source limits (file size, 32 megapixels, 8192 pixels per side, bounded allocation), upright per
+/// its EXIF orientation and scaled down to at most 4 megapixels and 4096 pixels per side. Shared
+/// by image signatures and scanned photos.
 pub(crate) fn decode_source(bytes: &[u8]) -> Result<DynamicImage, SignatureImageError> {
     if bytes.len() > MAX_SIGNATURE_IMAGE_BYTES {
         return Err(SignatureImageError::Size);
     }
     let format = craft_image_codecs::detect(bytes).ok_or(SignatureImageError::Format)?;
-    if !matches!(format, craft_image_codecs::Format::Png | craft_image_codecs::Format::Jpeg) {
+    if !is_supported_format(format) {
         return Err(SignatureImageError::Format);
     }
     let opts = craft_image_codecs::DecodeOptions {
@@ -148,11 +163,10 @@ pub(crate) fn decode_source(bytes: &[u8]) -> Result<DynamicImage, SignatureImage
         craft_image_codecs::CodecError::LimitExceeded(_) => SignatureImageError::Size,
         other => SignatureImageError::Decode(other.to_string()),
     })?;
-    let (dw, dh) = (decoded.width(), decoded.height());
+    let (dw, dh, raw) = (decoded.width(), decoded.height(), decoded.to_rgba8());
     if dw == 0 || dh == 0 || u64::from(dw) * u64::from(dh) > MAX_SOURCE_PIXELS {
         return Err(SignatureImageError::Size);
     }
-    let raw = decoded.to_rgba8();
     let mut image = DynamicImage::ImageRgba8(image::RgbaImage::from_raw(dw, dh, raw).ok_or(SignatureImageError::Size)?);
     let (w, h) = (f64::from(image.width()), f64::from(image.height()));
     let scale = (f64::from(MAX_SIDE) / w.max(h)).min((MAX_PIXELS as f64 / (w * h)).sqrt());
@@ -293,7 +307,39 @@ mod tests {
         assert!(matches!(SignatureImage::from_bytes(&png(8193, 1)), Err(SignatureImageError::Size)));
         assert!(matches!(SignatureImage::from_bytes(&png(8192, 4097)), Err(SignatureImageError::Size)));
         assert!(SignatureImage::read(std::io::repeat(0)).is_err());
-        assert!(matches!(SignatureImage::from_bytes(b"GIF89a\x02\0\x02\0"), Err(SignatureImageError::Format)));
+        // A truncated GIF is a supported format that fails to decode, not an unsupported one.
+        assert!(matches!(SignatureImage::from_bytes(b"GIF89a\x02\0\x02\0"), Err(SignatureImageError::Decode(_))));
+    }
+
+    #[test]
+    fn every_readable_format_is_offered_and_the_rest_are_not() {
+        let extensions = supported_extensions();
+        for ext in ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "webp"] {
+            assert!(extensions.contains(&ext), "{ext}");
+        }
+        for ext in ["heic", "avif", "jxl", "jp2", "tga", "ico", "pcx"] {
+            assert!(!extensions.contains(&ext), "{ext}");
+        }
+    }
+
+    #[test]
+    fn unlisted_formats_are_refused() {
+        use craft_image_codecs::{ChannelLayout, EncodeOptions, Format, Image};
+        let img = Image::from_u8(8, 8, ChannelLayout::Rgba, [40u8, 60, 80, 255].repeat(64)).unwrap();
+        let bytes = craft_image_codecs::encode(&img, Format::Qoi, &EncodeOptions::default()).unwrap();
+        assert!(matches!(SignatureImage::from_bytes(&bytes), Err(SignatureImageError::Format)));
+    }
+
+    #[test]
+    fn other_raster_formats_are_normalized_to_png() {
+        use craft_image_codecs::{ChannelLayout, EncodeOptions, Format, Image};
+        for format in [Format::Tiff, Format::WebP, Format::Gif, Format::Bmp] {
+            let img = Image::from_u8(40, 20, ChannelLayout::Rgba, [40u8, 60, 80, 255].repeat(800)).unwrap();
+            let bytes = craft_image_codecs::encode(&img, format, &EncodeOptions::default()).unwrap();
+            let image = SignatureImage::from_bytes(&bytes).unwrap_or_else(|e| panic!("{format:?}: {e}"));
+            assert_eq!(image.size(), [40, 20], "{format:?}");
+            assert!(image.bytes().starts_with(b"\x89PNG\r\n\x1a\n"), "{format:?}");
+        }
     }
 
     /// #1075: a 6025 x 2506 scan is scaled down to fit 4096 per side and 4 megapixels.

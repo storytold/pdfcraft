@@ -75,7 +75,7 @@ const TRIM_PADDING: usize = 8;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ScanError {
-    #[error("Choose a PNG or JPEG photo.")]
+    #[error("Choose a PNG, JPEG, TIFF, GIF, BMP or WebP photo.")]
     Format,
     #[error("Choose a photo smaller than 4 MiB and 32 megapixels (at most 8192 pixels per side).")]
     Size,

@@ -79,7 +79,7 @@ pub use links::{
 pub use live_scripts::{MAX_TIMER_RUNS, ScriptRun};
 pub use pdfcraft_edit::strip_subset_tag;
 pub use rich_copy::RichCopy;
-pub use signature_image::{ImageSignaturePreview, SignatureImage};
+pub use signature_image::{ImageSignaturePreview, SignatureImage, is_supported_format, supported_extensions};
 pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use stamp_preview::{CommentLayer, StampPreview};
 pub use text_preview::{TextEditPreview, UnmarkedPages};
