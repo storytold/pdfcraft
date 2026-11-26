@@ -4,7 +4,7 @@
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
-observed clean-room (`plan/acrobat/02-ui-ux.md`, local-only; `AGENTS.md` §2); nothing from Adobe's
+observed clean-room (`plan/acrobat/02-ui-ux.md`, local-only; clean-room.md); nothing from Adobe's
 interface is copied. Gaps ranked in [gaps.md](gaps.md).
 
 **UI/UX fidelity ≈ 55% ready** (estimated), **30–60 h** additional to the features total.

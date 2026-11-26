@@ -924,10 +924,20 @@ fn an_italic_word_stays_in_its_sentence() {
     );
     // The longest line is the slide's title; the sentence is one paragraph of the body.
     let pxml = part(&pptx(std::slice::from_ref(&p), "Opinion"), "ppt/slides/slide1.xml");
-    assert!(
-        pxml.contains("<a:p><a:r><a:rPr sz=\"1200\"></a:rPr><a:t>Before </a:t></a:r><a:r><a:rPr sz=\"1200\" i=\"1\"></a:rPr><a:t>Chevron </a:t></a:r><a:r><a:rPr sz=\"1200\"></a:rPr><a:t>after.</a:t></a:r></a:p>"),
-        "{pxml}"
-    );
+    let slide = craft_xml::parse(pxml.as_bytes()).expect("slide XML");
+    let paragraph = slide
+        .descendants()
+        .filter(|n| n.is("a:p"))
+        .find(|p| p.children("a:r").any(|r| r.child_text("a:t").as_deref() == Some("Before ")))
+        .expect("body paragraph");
+    let actual: Vec<_> = paragraph
+        .children("a:r")
+        .map(|r| {
+            let props = r.child("a:rPr").expect("run properties");
+            (r.child_text("a:t").expect("run text").into_owned(), props.attr_u32("sz"), props.flag("i", false))
+        })
+        .collect();
+    assert_eq!(actual, vec![("Before ".into(), Some(1200), false), ("Chevron ".into(), Some(1200), true), ("after.".into(), Some(1200), false)]);
 }
 
 /// #4158: the runs keep their order along the line whatever order the blocks come in, and the
@@ -1715,4 +1725,19 @@ fn word_keeps_line_breaks_and_tabs_inside_paragraphs_and_cells() {
         .map(|c| c.blocks.iter().filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p.plain_text()) } else { None }).collect())
         .collect();
     assert!(cells.contains(&"Meter\nnumber".to_string()) && cells.contains(&"kWh\tunit".to_string()), "{cells:?}");
+}
+
+#[test]
+fn checked_rtf_reports_omitted_pictures_once_per_page_without_dropping_text() {
+    let mut first = page();
+    first.images[0].rotation = f64::NAN;
+    first.images.push(first.images[0].clone());
+    let clean = page();
+    let mut third = first.clone();
+    third.blocks[0].text = "Surviving last-page text".into();
+    let pages = [first, clean, third];
+    let (output, omitted) = crate::rtf_with_title_checked(&pages, "Partial");
+    assert_eq!(omitted, [0, 2]);
+    assert!(output.contains("Surviving last-page text"));
+    assert_eq!(output, crate::rtf_with_title(&pages, "Partial"));
 }

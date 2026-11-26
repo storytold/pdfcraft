@@ -1,20 +1,19 @@
-//! Native document reads and preparation run away from the frame thread.
+//! Native document reads and preparation run on the host's job queue, away from the frame thread.
 
-use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::Arc;
 
-use crate::RecoveryStore;
+use craft::host::queue::{Cancel, JobQueue, QueueOptions, QueueOrder};
+use craft::host::{Host, Wake};
 use pdfcraft_engine::{OpenContext, PreparedDocument, SourceKind};
 use pdfcraft_render::OpenError;
 
-pub(crate) const MAX_QUEUED_OPENS: usize = 16;
-
+/// Where an open reads its bytes from.
 pub(crate) enum Input {
     Path(PathBuf),
     RemotePath(PathBuf),
-    Recovery(RecoveryStore, String),
+    /// The recovery store's copy, at the path its entry names.
+    Recovery(PathBuf),
     Bytes(Arc<Vec<u8>>),
 }
 
@@ -25,6 +24,9 @@ pub(crate) enum ResultKind {
     Prepared {
         bytes: Arc<Vec<u8>>,
         result: Box<Result<PreparedDocument, OpenError>>,
+        /// The named destination the open was asked to show and what the document's name tree says of it, looked
+        /// up here with the document so the tab opens at it (#3425).
+        named: Option<(String, Option<(usize, pdfcraft_render::DestView)>)>,
     },
     ReadFailed(String),
     RemoteFailed(String),
@@ -32,177 +34,39 @@ pub(crate) enum ResultKind {
     Failed(String),
 }
 
-pub(crate) struct ResultMessage {
-    pub token: u64,
-    pub kind: ResultKind,
+/// One open to prepare; its key on the queue is the open's token.
+pub(crate) struct Job {
+    pub context: OpenContext,
+    pub name: String,
+    pub path: Option<String>,
+    pub password: Option<zeroize::Zeroizing<String>>,
+    pub input: Input,
+    /// The named destination to look up once the document is prepared.
+    pub named: Option<String>,
 }
 
-struct Job {
-    token: u64,
-    context: OpenContext,
-    name: String,
-    path: Option<String>,
-    password: Option<zeroize::Zeroizing<String>>,
-    input: Input,
-    reply: Sender<ResultMessage>,
-    #[cfg(test)]
-    gate: Option<Arc<PrepareGate>>,
+/// The queue that prepares opens: one lane, oldest first, so files open in the order they were
+/// asked for.
+pub(crate) fn queue(host: &Host, wake: Wake) -> JobQueue<u64, ResultKind> {
+    JobQueue::new(host.jobs_shared().clone(), wake, QueueOptions { lanes: 1, name: "pdfcraft-open", order: QueueOrder::OldestFirst })
 }
 
-struct Queue {
-    jobs: VecDeque<Job>,
-    shutdown: bool,
-    repaint: Option<egui::Context>,
+/// Prepares `job`; a panic inside the engine becomes a failed open, since the queue delivers
+/// nothing for a panicked job.
+pub(crate) fn run(job: Job, cancel: &Cancel) -> ResultKind {
+    pdfcraft_engine::guard(|| prepare(job, cancel)).unwrap_or_else(|_| ResultKind::Failed("opening failed unexpectedly in the background".into()))
 }
 
-pub(crate) struct OpenWorker {
-    queue: Arc<(Mutex<Queue>, Condvar)>,
-    #[cfg(test)]
-    gate: Option<Arc<PrepareGate>>,
+/// The bytes of a recovery copy. Only a regular file is read: a FIFO planted in the recovery
+/// folder would block the worker forever, and a folder has nothing to read.
+pub(crate) fn read_recovery_copy(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    if !std::fs::symlink_metadata(path)?.file_type().is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "a recovery copy is a regular file"));
+    }
+    std::fs::read(path)
 }
 
-impl OpenWorker {
-    pub fn new(#[cfg(test)] gate: Option<Arc<PrepareGate>>) -> std::io::Result<Self> {
-        let queue = Arc::new((Mutex::new(Queue { jobs: VecDeque::new(), shutdown: false, repaint: None }), Condvar::new()));
-        let worker_queue = queue.clone();
-        std::thread::Builder::new().name("pdfcraft-open".into()).spawn(move || run(worker_queue))?;
-        Ok(Self {
-            queue,
-            #[cfg(test)]
-            gate,
-        })
-    }
-
-    pub fn set_context(&self, ctx: &egui::Context) {
-        let (lock, _) = &*self.queue;
-        let mut queue = lock.lock().unwrap_or_else(PoisonError::into_inner);
-        queue.repaint = Some(ctx.clone());
-    }
-
-    pub fn submit(
-        &self,
-        token: u64,
-        context: OpenContext,
-        name: String,
-        path: Option<String>,
-        password: Option<zeroize::Zeroizing<String>>,
-        input: Input,
-    ) -> Result<Receiver<ResultMessage>, String> {
-        let (job, receiver) = self.build_job(token, context, name, path, password, input);
-        self.enqueue(job, false)?;
-        Ok(receiver)
-    }
-
-    pub fn submit_priority(
-        &self,
-        token: u64,
-        context: OpenContext,
-        name: String,
-        path: Option<String>,
-        password: Option<zeroize::Zeroizing<String>>,
-        input: Input,
-    ) -> Result<Receiver<ResultMessage>, String> {
-        let (job, receiver) = self.build_job(token, context, name, path, password, input);
-        self.enqueue(job, true)?;
-        Ok(receiver)
-    }
-
-    fn build_job(
-        &self,
-        token: u64,
-        context: OpenContext,
-        name: String,
-        path: Option<String>,
-        password: Option<zeroize::Zeroizing<String>>,
-        input: Input,
-    ) -> (Job, Receiver<ResultMessage>) {
-        let (reply, receiver) = mpsc::channel();
-        (
-            Job {
-                token,
-                context,
-                name,
-                path,
-                password,
-                input,
-                reply,
-                #[cfg(test)]
-                gate: self.gate.clone(),
-            },
-            receiver,
-        )
-    }
-
-    fn enqueue(&self, job: Job, priority: bool) -> Result<(), String> {
-        let (lock, ready) = &*self.queue;
-        let mut queue = lock.lock().unwrap_or_else(PoisonError::into_inner);
-        if queue.shutdown {
-            return Err("the document-open worker has stopped".into());
-        }
-        if !priority && queue.jobs.len() >= MAX_QUEUED_OPENS {
-            return Err("too many documents are waiting to open".into());
-        }
-        if priority {
-            queue.jobs.push_front(job);
-        } else {
-            queue.jobs.push_back(job);
-        }
-        ready.notify_one();
-        Ok(())
-    }
-}
-
-impl Drop for OpenWorker {
-    fn drop(&mut self) {
-        let (lock, ready) = &*self.queue;
-        let mut queue = lock.lock().unwrap_or_else(PoisonError::into_inner);
-        queue.shutdown = true;
-        queue.jobs.clear();
-        queue.repaint = None;
-        ready.notify_one();
-    }
-}
-
-fn run(queue: Arc<(Mutex<Queue>, Condvar)>) {
-    loop {
-        let job = {
-            let (lock, ready) = &*queue;
-            let mut state = lock.lock().unwrap_or_else(PoisonError::into_inner);
-            while state.jobs.is_empty() && !state.shutdown {
-                state = ready.wait(state).unwrap_or_else(PoisonError::into_inner);
-            }
-            if state.shutdown {
-                return;
-            }
-            state.jobs.pop_front()
-        };
-        let Some(job) = job else { continue };
-        #[cfg(test)]
-        if let Some(gate) = &job.gate {
-            gate.pause_before_prepare();
-        }
-        let token = job.token;
-        let reply = job.reply.clone();
-        #[cfg(test)]
-        let gate = job.gate.clone();
-        let kind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prepare(job)))
-            .unwrap_or_else(|_| ResultKind::Failed("opening failed unexpectedly in the background worker".into()));
-        let _ = reply.send(ResultMessage { token, kind });
-        let repaint = {
-            let (lock, _) = &*queue;
-            lock.lock().unwrap_or_else(PoisonError::into_inner).repaint.clone()
-        };
-        if let Some(ctx) = repaint {
-            ctx.request_repaint();
-        }
-        #[cfg(test)]
-        if let Some(gate) = &gate {
-            let _ = gate.finished.send(());
-        }
-    }
-}
-
-fn prepare(job: Job) -> ResultKind {
+fn prepare(job: Job, cancel: &Cancel) -> ResultKind {
     let bytes = match &job.input {
         Input::Path(path) => match std::fs::read(path) {
             Ok(bytes) => Arc::new(bytes),
@@ -212,46 +76,30 @@ fn prepare(job: Job) -> ResultKind {
             Ok(bytes) => Arc::new(bytes),
             Err(error) => return ResultKind::RemoteFailed(error.to_string()),
         },
-        Input::Recovery(store, key) => match store.read(key) {
+        Input::Recovery(path) => match read_recovery_copy(path) {
             Ok(bytes) => Arc::new(bytes),
             Err(error) => return ResultKind::RecoveryFailed(error.to_string()),
         },
         Input::Bytes(bytes) => bytes.clone(),
     };
+    if cancel.is_cancelled() {
+        return ResultKind::Failed("the open was cancelled".into());
+    }
     match pdfcraft_engine::source_kind(&job.name, &bytes) {
         Some(SourceKind::Image | SourceKind::Text) => return ResultKind::Conversion(bytes),
         // LibreOffice takes seconds: it runs here, and the frame thread only opens the result.
         Some(SourceKind::Office) => return ResultKind::Converted(pdfcraft_engine::office_to_pdf(&job.name, &bytes).map_err(|e| e.to_string())),
         Some(SourceKind::Pdf) | None => {}
     }
-    let result = job.context.prepare_open(job.name, job.path, bytes.clone(), job.password.as_deref().map(String::as_str));
-    ResultKind::Prepared { bytes, result: Box::new(result) }
+    let password = job.password.as_deref().map(String::as_str);
+    let result = job.context.prepare_open(job.name, job.path, bytes.clone(), password);
+    let named = job
+        .named
+        .filter(|_| result.is_ok() && !cancel.is_cancelled())
+        .map(|name| (name.clone(), pdfcraft_render::named_destination(bytes.clone(), password, &name)));
+    ResultKind::Prepared { bytes, result: Box::new(result), named }
 }
 
 #[cfg(test)]
-pub(crate) struct PrepareGate {
-    pub started: Sender<()>,
-    release: Mutex<Receiver<()>>,
-    pub finished: Sender<()>,
-}
-
-#[cfg(test)]
-impl PrepareGate {
-    pub fn pause_before_prepare(&self) {
-        let _ = self.started.send(());
-        if let Ok(release) = self.release.lock() {
-            let _ = release.recv();
-        }
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn prepare_gate() -> (Arc<PrepareGate>, Receiver<()>, Sender<()>, Receiver<()>) {
-    let (started, started_rx) = mpsc::channel();
-    let (release_tx, release) = mpsc::channel();
-    let (finished, finished_rx) = mpsc::channel();
-    (Arc::new(PrepareGate { started, release: Mutex::new(release), finished }), started_rx, release_tx, finished_rx)
-}
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests;

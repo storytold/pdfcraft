@@ -328,7 +328,7 @@ impl FontText {
 
     /// The first character of `s` the encoding can't hold, which [`Self::encode`] writes as `?`
     /// (a reused simple font is only chosen when it holds them all): reported by
-    /// [`field_appearance_drawn`], so that `?` is never silent (AGENTS.md §4).
+    /// [`field_appearance_drawn`], so that `?` is never silent (app-agents.md rule 13).
     fn first_unencodable(&self, s: &str) -> Option<char> {
         match self {
             Self::WinAnsi => pdfcraft_fonts::first_undrawable(s),
