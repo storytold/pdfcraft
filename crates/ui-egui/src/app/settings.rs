@@ -640,7 +640,9 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
     // PLAN: assumed `hotbar::migrate_legacy(&Value) -> (Vec<String>, Option<String>)` (chrome-w18)
     // PLAN: `side_panels::migrate` (chrome-w13) takes no hotbar side, so the legacy docked side is not carried into the workspace
     let hotbar_tools = match root.get("hotbar") {
-        Some(legacy) if legacy.is_object() => Some(crate::hotbar::migrate_legacy(legacy).0),
+        Some(legacy) if legacy.get("tools").is_some_and(Value::is_array) => {
+            Some(crate::hotbar::migrate_legacy(legacy).0)
+        }
         _ => None,
     };
     let hotbar_hidden = root.get("hotbar").and_then(|hotbar| hotbar.get("hidden")).and_then(Value::as_bool);
