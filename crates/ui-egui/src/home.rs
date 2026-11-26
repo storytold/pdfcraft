@@ -26,7 +26,7 @@ use crate::{PdfCraftApp, brand, panels::human_size};
 
 pub mod folders_ui;
 
-const RECOMMENDED: [&str; 5] = ["organize", "comment", "form", "edit", "protect"];
+pub(crate) const RECOMMENDED: [&str; 5] = ["organize", "comment", "form", "edit", "protect"];
 
 /// What a section of the page asked for; the page runs it once the screen has been shown.
 enum Asked {

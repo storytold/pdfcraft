@@ -196,7 +196,7 @@ struct PendingOpen {
     activate: bool,
     after_open: Option<pdfcraft_render::RemoteDestination>,
     recovered: Option<craft::platform::autosave::RecoveryEntry>,
-    then: Option<&'static str>,
+    then: Option<state::OpenThen>,
     display_override: Option<(craft::pages::PageDisplay, bool)>,
     /// An answer taken from the queue and kept back for later (a password prompt waiting for an
     /// earlier file's password retry).

@@ -1070,3 +1070,120 @@ fn files_written_from_an_attachment_tab_stay_inside_the_chosen_folder() {
         std::fs::remove_dir_all(dir.0.join("a")).unwrap();
     }
 }
+
+fn choose_home_organize(h: &mut Rig) {
+    use egui::accesskit::Role;
+    h.get_by_role_and_label(Role::ListBox, "Recommended tools").get_by_role_and_label(Role::ListItem, "Organize pages").click();
+    h.steps(2);
+}
+
+#[test]
+fn home_document_tools_return_to_the_last_active_tab() {
+    use egui::accesskit::Role;
+    for (from_card, close_last) in [(true, false), (false, false), (true, true)] {
+        let mut h = harness(&[1, 2, 3]);
+        h.get_by_label("doc1.pdf").click();
+        h.steps(2);
+        let last = h.state().views[1].id;
+        assert_eq!(h.state().active_ids().unwrap().1, last);
+        let previous = h.state().views[2].id;
+        h.state_mut().move_tab(1, 0);
+        h.get_by_label("Home").click();
+        h.steps(2);
+        assert!(h.state().active.is_none());
+        if close_last {
+            h.state_mut().close_tab(0);
+            h.steps(2);
+        }
+        if from_card {
+            choose_home_organize(&mut h);
+        } else {
+            h.get_by_role_and_label(Role::List, "All tools").get_by_label("Organize pages").click();
+            h.steps(2);
+        }
+        let (view, id) = h.state().active_ids().expect("the tool returns to a document");
+        assert_eq!(id, if close_last { previous } else { last });
+        assert!(h.state().views[view].organize);
+    }
+}
+
+#[test]
+fn home_tool_picker_opens_its_tool_on_the_first_opened_file() {
+    let mut h = harness(&[]);
+    choose_home_organize(&mut h);
+    h.answer(Picked::Contents(vec![("one.pdf".into(), fixture(1)), ("two.pdf".into(), fixture(2))]));
+    settle(&mut h, "both files from the Home tool picker", |app| app.views.len() == 2);
+    let (view, id) = h.state().active_ids().expect("a chosen file is active");
+    assert_eq!(id, h.state().views[0].id, "later files must open in the background");
+    assert!(h.state().views[view].organize);
+    assert!(!h.state().views[1].organize);
+}
+
+#[test]
+fn home_tool_picker_keeps_its_tool_through_password_retry() {
+    let mut h = harness(&[]);
+    choose_home_organize(&mut h);
+    h.answer(Picked::Contents(vec![("locked.pdf".into(), encrypted_fixture())]));
+    settle(&mut h, "password for the tool's file", |app| app.password_prompt.is_some());
+    h.submit_password(Some("wrong-password".into()));
+    settle(&mut h, "password retry", |app| app.password_prompt.as_ref().is_some_and(|p| p.error.is_some()));
+    h.submit_password(Some("test-password".into()));
+    settle(&mut h, "tool after unlocking", |app| app.views.len() == 1);
+    assert!(h.state().views[0].organize);
+}
+
+#[test]
+fn home_tool_picker_drops_its_tool_on_cancel_or_failure() {
+    for (picked, locked, broken) in [
+        (Picked::Cancelled, false, false),
+        (Picked::Contents(vec![("broken.pdf".into(), b"not a PDF".to_vec())]), false, true),
+        (Picked::Contents(vec![("locked.pdf".into(), encrypted_fixture())]), true, false),
+    ] {
+        let mut h = harness(&[]);
+        choose_home_organize(&mut h);
+        h.answer(picked);
+        if locked {
+            settle(&mut h, "password for the tool's file", |app| app.password_prompt.is_some());
+            press(&mut h, "Cancel");
+            assert!(h.state().password_prompt.is_none());
+        }
+        if broken {
+            for _ in 0..5 {
+                h.steps(1);
+            }
+            assert!(support::shown_notice(&h).is_some_and(|notice| notice.contains("broken.pdf")));
+        }
+        assert!(h.state().views.is_empty());
+        assert!(h.execute("file.open"));
+        h.answer(Picked::Contents(vec![("unrelated.pdf".into(), fixture(1))]));
+        settle(&mut h, "unrelated open after the tool picker", |app| app.views.len() == 1);
+        assert!(!h.state().views[0].organize);
+    }
+}
+
+#[test]
+fn home_tool_picker_accepts_a_native_file_path() {
+    let dir = scratch("home-tool");
+    let path = dir.join("source.pdf");
+    std::fs::write(&path, fixture(1)).unwrap();
+    let mut h = harness(&[]);
+    choose_home_organize(&mut h);
+    h.answer(Picked::Paths(vec![path.clone()]));
+    settle(&mut h, "the document picked for the tool", |app| app.views.len() == 1);
+    let (view, id) = h.state().active_ids().expect("the native pick activates its document");
+    assert_eq!(h.state().session.get(id).unwrap().path.as_deref(), path.to_str());
+    assert!(h.state().views[view].organize);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn home_tool_picker_uses_the_first_file_that_opens_after_a_failure() {
+    let mut h = harness(&[]);
+    choose_home_organize(&mut h);
+    h.answer(Picked::Contents(vec![("broken.pdf".into(), b"not a PDF".to_vec()), ("usable.pdf".into(), fixture(1))]));
+    settle(&mut h, "the usable file opens", |app| app.views.len() == 1);
+    assert!(support::shown_notice(&h).is_some_and(|notice| notice.contains("broken.pdf")));
+    let (view, id) = h.state().active_ids().expect("the failed file does not take the tool from the next file");
+    assert_eq!(h.state().session.get(id).unwrap().name, "usable.pdf");
+    assert!(h.state().views[view].organize);
+}

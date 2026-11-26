@@ -1,6 +1,7 @@
 use super::{DocId, DocView, LeftPanel, Mode, PasswordPrompt, PdfCraftApp, RecentFile, RightPanel, UnlockPrompt, canvas, i18n};
 #[cfg(not(target_arch = "wasm32"))]
 use super::{OpenOutcome, OpenRequest, PendingOpen, open_worker};
+use crate::state::OpenThen;
 use craft::docpath::names::safe_file_name;
 #[cfg(not(target_arch = "wasm32"))]
 use craft::host::queue::Priority;
@@ -230,6 +231,7 @@ impl PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn finish_pending_open(&mut self, ctx: &egui::Context, pending: PendingOpen, kind: open_worker::ResultKind) {
+        let activate = pending.then.as_ref().map_or(pending.activate, |then| then.activates(pending.activate));
         match kind {
             open_worker::ResultKind::ReadFailed(reason) => {
                 self.notify_fmt("Couldn't read {name}: {e}", &[("name", &pending.name), ("e", &reason)]);
@@ -243,25 +245,18 @@ impl PdfCraftApp {
             open_worker::ResultKind::Failed(reason) => {
                 self.notify_fmt("Couldn't open {name}: {reason}", &[("name", &pending.name), ("reason", &reason)]);
             }
-            open_worker::ResultKind::Conversion(bytes) => match self.open_converted(&pending.name, &bytes) {
-                Some(Ok(())) => {
-                    if let Some(command) = pending.then {
-                        self.execute(ctx, command);
-                    }
-                }
-                Some(Err(error)) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
-                None => {}
-            },
-            open_worker::ResultKind::Converted(created) => match self.open_converted_pdf(&pending.name, created) {
-                Ok(()) => {
-                    if let Some(command) = pending.then {
-                        self.execute(ctx, command);
-                    }
-                }
-                Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
-            },
+            open_worker::ResultKind::Conversion(bytes) => {
+                let old_active = self.active;
+                let result = self.open_converted(&pending.name, &bytes);
+                self.finish_picked_conversion(ctx, pending, old_active, result, activate);
+            }
+            open_worker::ResultKind::Converted(created) => {
+                let old_active = self.active;
+                let result = self.open_converted_pdf(&pending.name, created);
+                self.finish_picked_conversion(ctx, pending, old_active, Some(result), activate);
+            }
             open_worker::ResultKind::Prepared { bytes, result, named } => match *result {
-                Ok(prepared) => match self.finish_open(ctx, &pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
+                Ok(prepared) => match self.finish_open(ctx, &pending.name, pending.path.clone(), bytes.len(), prepared, activate) {
                     Ok(id) => {
                         if let Some(path) = pending.path.as_deref() {
                             self.watch.known_as(id, std::path::Path::new(path), pending.stamp);
@@ -287,8 +282,8 @@ impl PdfCraftApp {
                         if let Some(meta) = &pending.recovered {
                             self.finish_recovery(meta);
                         }
-                        if let Some(command) = pending.then {
-                            self.execute(ctx, command);
+                        if let Some(then) = pending.then {
+                            then.run(self, ctx);
                         }
                     }
                     Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
@@ -311,6 +306,28 @@ impl PdfCraftApp {
                 }
                 Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error.to_string())]),
             },
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn finish_picked_conversion(
+        &mut self,
+        ctx: &egui::Context,
+        pending: PendingOpen,
+        old_active: Option<usize>,
+        result: Option<Result<(), String>>,
+        activate: bool,
+    ) {
+        if !activate && matches!(&pending.then, Some(OpenThen::Tool(_))) {
+            self.active = old_active;
+        }
+        if matches!(&result, Some(Ok(())))
+            && let Some(then) = pending.then
+        {
+            then.run(self, ctx);
+        }
+        if let Some(Err(error)) = result {
+            self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]);
         }
     }
 
@@ -345,6 +362,8 @@ impl PdfCraftApp {
                     activate,
                     recovered: None,
                     then: None,
+                    #[cfg(target_arch = "wasm32")]
+                    remaining_tool_files: Vec::new(),
                     after_open: None,
                     display_override: None,
                 });
@@ -722,6 +741,10 @@ impl PdfCraftApp {
             }
             #[cfg(not(target_arch = "wasm32"))]
             self.settle_launch_layout();
+            #[cfg(target_arch = "wasm32")]
+            if let Some(then) = p.then {
+                self.open_tool_contents(ctx, p.remaining_tool_files, then);
+            }
             return;
         };
         #[cfg(not(target_arch = "wasm32"))]
@@ -752,7 +775,8 @@ impl PdfCraftApp {
     #[cfg(target_arch = "wasm32")]
     fn retry_inline(&mut self, ctx: &egui::Context, mut p: PasswordPrompt, pw: zeroize::Zeroizing<String>) {
         let after_open = p.after_open.clone();
-        let opened = self.try_open(ctx, &p.name, p.path.take(), p.bytes.clone(), Some(&pw), p.activate);
+        let activate = p.then.as_ref().map_or(p.activate, |then| then.activates(p.activate));
+        let opened = self.try_open(ctx, &p.name, p.path.take(), p.bytes.clone(), Some(&pw), activate);
         drop(pw);
         match opened {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
@@ -766,8 +790,8 @@ impl PdfCraftApp {
                 {
                     (view.view.display, view.view.continuous) = (layout, continuous);
                 }
-                if let Some(command) = p.then {
-                    self.execute(ctx, command);
+                if let Some(then) = &p.then {
+                    then.clone().run(self, ctx);
                 }
             }
             // Wrong password: the new prompt is for the same bytes, so it keeps the snapshot
@@ -776,10 +800,15 @@ impl PdfCraftApp {
                 if let Some(prompt) = self.password_prompt.as_mut() {
                     prompt.recovered = p.recovered.take();
                     prompt.then = p.then;
+                    prompt.remaining_tool_files = p.remaining_tool_files;
                     prompt.after_open = after_open;
                     prompt.display_override = p.display_override;
                 }
+                return;
             }
+        }
+        if let Some(then) = p.then {
+            self.open_tool_contents(ctx, p.remaining_tool_files, then);
         }
     }
 
@@ -840,16 +869,21 @@ impl PdfCraftApp {
     /// the file opened, focused its tab, was handed to the background worker, or failed.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_path_then(&mut self, ctx: &egui::Context, path: &str, then: Option<&'static str>) -> OpenOutcome {
-        let outcome = self.open_path_request(path, then, None);
+        self.open_path_with_followup(ctx, path, then.map(OpenThen::Command))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_path_with_followup(&mut self, ctx: &egui::Context, path: &str, then: Option<OpenThen>) -> OpenOutcome {
+        let outcome = self.open_path_request(path, then.clone(), None);
         // A file that was open already is focused at once, and the tool it was opened for runs on it.
-        if let (OpenOutcome::Focused, Some(command)) = (&outcome, then) {
-            self.execute(ctx, command);
+        if let (OpenOutcome::Focused, Some(then)) = (&outcome, then) {
+            then.run(self, ctx);
         }
         outcome
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn open_path_request(&mut self, path: &str, then: Option<&'static str>, display_override: Option<(canvas::PageDisplay, bool)>) -> OpenOutcome {
+    fn open_path_request(&mut self, path: &str, then: Option<OpenThen>, display_override: Option<(canvas::PageDisplay, bool)>) -> OpenOutcome {
         // `manual.pdf#nameddest=Intro`, as a help system starts a PDF reader (#3425): the file,
         // shown at that destination once open. A path that names a file is never split.
         match pdfcraft_engine::open_parameters::split(path, |p| std::path::Path::new(p).is_file()) {
@@ -865,14 +899,16 @@ impl PdfCraftApp {
         &mut self,
         path: &str,
         after_open: Option<pdfcraft_render::RemoteDestination>,
-        then: Option<&'static str>,
+        then: Option<OpenThen>,
         display_override: Option<(canvas::PageDisplay, bool)>,
     ) -> OpenOutcome {
         // One file, one tab (#2166): a file that is open already comes to the front instead,
         // and the tool it was opened for runs on it. One still being opened is left to that.
         if let Some(i) = self.tab_showing(path) {
             self.startup_superseded = true;
-            self.active = Some(i);
+            if then.as_ref().is_none_or(|then| then.activates(true)) {
+                self.active = Some(i);
+            }
             if let Some((layout, continuous)) = display_override
                 && let Some(view) = self.views.get_mut(i)
             {
@@ -891,6 +927,9 @@ impl PdfCraftApp {
             // Asked for another place before it finished opening: it opens at the latest one.
             if after_open.is_some() {
                 pending.after_open = after_open;
+            }
+            if pending.then.is_none() && matches!(&then, Some(OpenThen::Tool(_))) {
+                pending.then = then;
             }
             return OpenOutcome::Pending;
         }
@@ -1020,8 +1059,62 @@ impl PdfCraftApp {
         });
     }
 
-    /// Opens what a picker answered and runs the command `then` on each opened document, as a tool
-    /// chosen from Home does once its file is ready.
+    pub(super) fn pick_document_for_tool(&mut self, group: &'static str) {
+        self.startup_superseded = true;
+        self.pick_file(Self::open_request(), None, move |app, ctx, picked| {
+            // The first view to open gets the tool and stays in front. Other files from this
+            // picker share the choice, so a failed file leaves it for any remaining files.
+            let then = OpenThen::tool(group);
+            match picked {
+                #[cfg(not(target_arch = "wasm32"))]
+                Picked::Paths(paths) => {
+                    for path in paths {
+                        app.open_path_with_followup(ctx, &path.to_string_lossy(), Some(then.clone()));
+                    }
+                }
+                Picked::Contents(files) => app.open_tool_contents(ctx, files, then),
+                _ => {}
+            }
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_tool_contents(&mut self, _: &egui::Context, files: Vec<(String, Vec<u8>)>, then: OpenThen) {
+        for (name, bytes) in files {
+            self.schedule_open(OpenRequest {
+                name,
+                path: None,
+                stamp: None,
+                input: open_worker::Input::Bytes(std::sync::Arc::new(bytes)),
+                password: None,
+                activate: true,
+                after_open: None,
+                recovered: None,
+                then: Some(then.clone()),
+                priority: Priority::NEAR,
+            });
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn open_tool_contents(&mut self, ctx: &egui::Context, files: Vec<(String, Vec<u8>)>, then: OpenThen) {
+        let mut files = files.into_iter();
+        while let Some((name, bytes)) = files.next() {
+            match self.open_bytes_with_focus(ctx, &name, None, bytes, then.activates(true)) {
+                Ok(()) => {
+                    if let Some(prompt) = self.password_prompt.as_mut() {
+                        prompt.then = Some(then);
+                        prompt.remaining_tool_files = files.collect();
+                        return;
+                    }
+                    then.clone().run(self, ctx);
+                }
+                Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]),
+            }
+        }
+    }
+
+    /// Opens what a picker answered and runs the command `then` on each opened document.
     pub fn open_picked_then(&mut self, ctx: &egui::Context, picked: Picked, then: &'static str) {
         self.startup_superseded = true;
         match picked {
@@ -1035,7 +1128,7 @@ impl PdfCraftApp {
                 for (name, bytes) in files {
                     match self.open_bytes(ctx, &name, None, bytes) {
                         Ok(()) => {
-                            self.execute(ctx, then);
+                            OpenThen::Command(then).run(self, ctx);
                         }
                         Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]),
                     }

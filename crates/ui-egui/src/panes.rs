@@ -175,6 +175,10 @@ impl PdfCraftApp {
             }
         }
         self.sync_views(ctx);
+        self.remember_active_view();
+    }
+
+    fn remember_active_view(&mut self) {
         if let Some(v) = self.active.and_then(|i| self.views.get_mut(i)) {
             self.panes.focus = v.pane.place;
             if v.pane.shown_seq != self.panes.top_seq || self.panes.top_seq == 0 {
@@ -182,6 +186,17 @@ impl PdfCraftApp {
                 v.pane.shown_seq = self.panes.top_seq;
             }
         }
+    }
+
+    pub(crate) fn deactivate_document(&mut self) {
+        self.remember_active_view();
+        self.active = None;
+    }
+
+    /// Tabs keep their last activation across Home and reordering. Among views that have
+    /// never been active, the most recently created view has the highest key.
+    pub(crate) fn last_document_view(&self) -> Option<usize> {
+        self.views.iter().enumerate().max_by_key(|(_, view)| (view.pane.shown_seq, view.pane.key)).map(|(index, _)| index)
     }
 
     /// A document changed through one of its views (an edit, Undo, a reload): its other view

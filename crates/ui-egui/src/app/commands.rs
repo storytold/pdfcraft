@@ -46,9 +46,21 @@ impl PdfCraftApp {
         self.set_left_open(true);
     }
 
-    /// Enter a tool from the catalogue, Home, palette or control channel. Organize is a
+    /// Enter a tool from the catalogue, Home or palette. Organize is a
     /// workspace, so opening its panel also opens the page grid (without toggling it off).
     pub(crate) fn select_tool(&mut self, ctx: &egui::Context, id: &'static str) {
+        if self.active.is_none() && !self.combine_showing() && crate::home::RECOMMENDED.contains(&id) {
+            let Some(index) = self.last_document_view() else {
+                self.pick_document_for_tool(id);
+                return;
+            };
+            self.active = Some(index);
+        }
+        self.select_tool_panel(ctx, id);
+    }
+
+    /// Set the panel without opening a file, as startup's `--tool` does before loading paths.
+    pub(super) fn select_tool_panel(&mut self, ctx: &egui::Context, id: &'static str) {
         // The tool's panel shows, not the expanded All tools view over it.
         self.all_tools_full = false;
         // Edit a PDF turns on Edit text & images at once, as the Edit tab does (`enter_mode`), so
