@@ -3,7 +3,6 @@
 //! the transport and the choice of evidence stay with the caller.
 
 use crate::der::Tlv;
-#[cfg(test)]
 use crate::der::tag;
 use crate::keys::{self, DigestAlg, PublicKey};
 use crate::x509::Certificate;
@@ -42,6 +41,66 @@ fn strip(b: &[u8]) -> &[u8] {
 
 fn valid_in_window(this: Time, next: Option<Time>, at: Time) -> bool {
     at >= this && next.is_none_or(|n| at <= n)
+}
+
+/// CRLReason `certificateHold` (RFC 5280 §5.3.1): a suspension that may be lifted.
+const REASON_CERTIFICATE_HOLD: u64 = 6;
+const EXT_REASON_CODE: &str = "2.5.29.21";
+
+fn bad_reason() -> SignError {
+    SignError::Malformed("revocation: the revoked entry cannot be read back".into())
+}
+
+/// Whether the CRL entry for `serial` in the signed `tbsCertList` may be a hold: its reason
+/// code is `certificateHold`, or the entry cannot be read back. The shared parser keeps no
+/// reason codes, so this walks the signed bytes again.
+fn crl_entry_may_be_hold(tbs: &[u8], serial: &[u8]) -> bool {
+    let reason = || -> Result<Option<u64>, SignError> {
+        let fields = Tlv::parse_all(tbs)?.children()?;
+        // version, signature, issuer, thisUpdate and nextUpdate come first; the list of revoked
+        // certificates is the first SEQUENCE after the times.
+        let Some(time) = fields.iter().position(|t| t.tag == tag::UTC_TIME || t.tag == tag::GENERALIZED_TIME) else { return Err(bad_reason()) };
+        let Some(list) = fields[time + 1..].iter().find(|t| t.tag == tag::SEQUENCE) else { return Err(bad_reason()) };
+        for entry in list.children()? {
+            let e = entry.children()?;
+            if e.first().is_none_or(|s| strip(s.uint_bytes()) != strip(serial)) {
+                continue;
+            }
+            let Some(extensions) = e.get(2) else { return Ok(None) };
+            for ext in extensions.children()? {
+                let x = ext.children()?;
+                if x.first().map(|o| o.oid()).transpose()?.as_deref() == Some(EXT_REASON_CODE) {
+                    let value = x.last().ok_or_else(bad_reason)?.octets("reasonCode")?;
+                    return Ok(Some(Tlv::parse_all(&value)?.enumerated()?));
+                }
+            }
+            return Ok(None);
+        }
+        Err(bad_reason())
+    };
+    reason().map_or(true, |r| r == Some(REASON_CERTIFICATE_HOLD))
+}
+
+/// Whether the revoked status of SingleResponse number `index` in the signed `ResponseData`
+/// may be a hold: its `revocationReason` is `certificateHold`, or it cannot be read back.
+fn ocsp_revocation_may_be_hold(tbs: &[u8], index: usize) -> bool {
+    let reason = || -> Result<Option<u64>, SignError> {
+        let fields = Tlv::parse_all(tbs)?.children()?;
+        // [0] version, responderID and producedAt come first; the responses are the SEQUENCE
+        // after the time.
+        let Some(time) = fields.iter().position(|t| t.tag == tag::UTC_TIME || t.tag == tag::GENERALIZED_TIME) else { return Err(bad_reason()) };
+        let Some(list) = fields.get(time + 1) else { return Err(bad_reason()) };
+        let Some(single) = list.children()?.into_iter().nth(index) else { return Err(bad_reason()) };
+        let s = single.children()?;
+        let Some(info) = s.get(1).filter(|t| t.tag == tag::ctx(1)) else { return Ok(None) };
+        // RevokedInfo ::= SEQUENCE { revocationTime, revocationReason [0] EXPLICIT CRLReason OPTIONAL },
+        // carried under the IMPLICIT [1] tag.
+        match info.children()?.get(1) {
+            Some(r) if r.tag == tag::ctx(0) => Ok(Some(r.inner()?.enumerated()?)),
+            _ => Ok(None),
+        }
+    };
+    reason().map_or(true, |r| r == Some(REASON_CERTIFICATE_HOLD))
 }
 
 /// Verify `signature` over the raw `signed` bytes with `key`, where the signature's algorithm
@@ -123,7 +182,8 @@ impl CertificateList {
     /// Check `cert` against this CRL at `at`. The CRL must be issued by `cert`'s issuer, its
     /// signature must verify with the issuer's key. An entry dated at or before `at` revokes
     /// whatever the CRL's own window: a list issued later, as long-term validation evidence
-    /// is, still proves the revocation. Otherwise `at` must fall inside its window.
+    /// is, still proves the revocation, unless the entry is a `certificateHold`, which may since
+    /// be lifted. Otherwise `at` must fall inside its window.
     pub fn check(&self, cert: &Certificate, issuer: &Certificate, at: Time) -> RevocationStatus {
         if self.issuer_raw != issuer.subject.raw || issuer.subject.raw != cert.issuer.raw {
             return RevocationStatus::Unknown;
@@ -134,6 +194,7 @@ impl CertificateList {
         let entry = self.revoked.iter().find(|(serial, _)| strip(serial) == strip(&cert.serial));
         if let Some((_, t)) = entry
             && *t <= at
+            && !crl_entry_may_be_hold(&self.tbs, &cert.serial)
         {
             return RevocationStatus::Revoked { at: *t };
         }
@@ -329,7 +390,8 @@ impl OcspResponse {
     /// Check `cert` (issued by `issuer`) at `at`. The responder must be the issuer itself, or
     /// a delegated responder with the OCSP-signing EKU whose certificate is issued by the
     /// issuer; the response signature and CertID must match. A revoked status dated at or
-    /// before `at` revokes whatever the response's window; otherwise `at` must fall inside it.
+    /// before `at` and not a `certificateHold` revokes whatever the response's window; otherwise
+    /// `at` must fall inside it.
     pub fn check(&self, cert: &Certificate, issuer: &Certificate, at: Time) -> RevocationStatus {
         // Who signed the response? The issuer identified by responderID, or a delegated,
         // embedded responder identified the same way. Which of the two it is comes from that
@@ -364,16 +426,17 @@ impl OcspResponse {
             return RevocationStatus::Unknown;
         }
         // Find the SingleResponse for this certificate: the CertID hashes must recompute.
-        let single = self.responses.iter().find(|r| {
+        let index = self.responses.iter().position(|r| {
             let name_hash = r.cert_id.hash_alg.digest(&[&cert.issuer.raw]);
             let key_hash = r.cert_id.hash_alg.digest(&[&issuer.public_key.key_bits()]);
             name_hash == r.cert_id.issuer_name_hash && key_hash == r.cert_id.issuer_key_hash && strip(&r.cert_id.serial) == strip(&cert.serial)
         });
-        let Some(single) = single else { return RevocationStatus::Unknown };
+        let Some((index, single)) = index.and_then(|i| Some((i, self.responses.get(i)?))) else { return RevocationStatus::Unknown };
         // A response produced after `at`, as long-term validation evidence is, still proves a
-        // revocation it dates at or before `at`.
+        // revocation it dates at or before `at`, unless it is a hold, which may since be lifted.
         if let CertStatus::Revoked(t) = single.status
             && t <= at
+            && !ocsp_revocation_may_be_hold(&self.tbs, index)
         {
             return RevocationStatus::Revoked { at: t };
         }
