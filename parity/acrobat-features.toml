@@ -7841,11 +7841,11 @@ title = "Optimize page content streams"
 area = "K"
 tier = "P2"
 milestone = "M11"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_optimize"]
+evidence = ["crates/optimize/tests/optimize.rs::content_streams_are_compacted_losslessly", "crates/optimize/tests/optimize.rs::content_streams_it_cannot_be_sure_of_are_left_as_they_are", "crates/optimize/tests/optimize.rs::page_content_pieces_are_left_whole_when_one_cannot_be_read", "crates/automation/tests/it/automation.rs::content_streams_are_compacted_through_tools"]
+notes = "doc_optimize's optimize_content (off by default) writes page contents, form XObjects and tiling patterns again, losslessly: white space and comments go, numbers take their shortest exact form, and empty q/Q pairs, identity cm and settings repeating the value in force are removed; a stream is kept only when it reads back as the same operators (operands by value) and is smaller. Streams with an inline image, an unknown operator, unreadable bytes, a reference operand, or a filter other than Flate, LZW, ASCII85, ASCIIHex or run-length are left as they are, as are all the pieces of a page's contents when one can't be read. Not yet: a toggle in the optimizer dialog; inline images; Type 3 glyph procedures; reusing repeated content as shared forms."
 
 [[feature]]
 id = "optimize.audit-space"

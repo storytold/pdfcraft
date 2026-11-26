@@ -8878,6 +8878,59 @@ fn lzw_streams_are_stored_with_flate_through_tools() {
     assert_eq!(filters("kept.pdf"), (Some(Object::name("LZWDecode")), ops));
 }
 
+#[test]
+fn content_streams_are_compacted_through_tools() {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_full};
+    let dir = workdir("optimize-content");
+    let ops = "q   Q   0.50 0.250 0.0 rg   72.0 72.0 200.00 100.00 re   f   2.0 w   2.0 w   72 300 m   400 500 l   S
+"
+    .repeat(30);
+    let mut doc = Document::new_empty();
+    let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+    let content = doc.add(Object::Stream(Stream::flate(Dict::new(), ops.as_bytes())));
+    let page = doc.add(Object::Dict(Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Page")),
+        (b"Parent".to_vec(), Object::Ref(pages)),
+        (b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()])),
+        (b"Contents".to_vec(), Object::Ref(content)),
+    ])));
+    doc.update_dict(pages, |d| {
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        d.set(b"Count".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+    std::fs::write(dir.join("content.pdf"), write_full(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "content.pdf" }))["doc"].as_u64().unwrap();
+    let drawn = |name: &str| {
+        let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(name)).unwrap())).unwrap();
+        let catalog = saved.get(saved.root().unwrap()).as_dict().cloned().unwrap();
+        let pages = saved.get(catalog.reference(b"Pages").unwrap()).as_dict().cloned().unwrap();
+        let page = saved.get(pages.get(b"Kids").and_then(|k| k.as_array()?.first()?.as_ref()).unwrap()).as_dict().cloned().unwrap();
+        match &*saved.get(page.reference(b"Contents").unwrap()) {
+            // Only numbers and operators: split at white space, they are the tokens.
+            Object::Stream(s) => {
+                let data = s.decoded_strict().unwrap();
+                let tokens: Vec<String> =
+                    data.split(u8::is_ascii_whitespace).filter(|t| !t.is_empty()).map(|t| String::from_utf8_lossy(t).into_owned()).collect();
+                tokens
+                    .windows(5)
+                    .filter(|w| w[4] == "re" || w[4] == "l")
+                    .map(|w| w.iter().map(|t| t.parse::<f64>().unwrap_or(f64::NAN).to_string()).collect::<Vec<_>>())
+                    .collect::<Vec<_>>()
+            }
+            _ => panic!("the page content is not a stream"),
+        }
+    };
+    let off = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "kept.pdf" }));
+    assert_eq!(off["content_streams"].as_u64(), Some(0), "off by default: {off}");
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "compact.pdf", "optimize_content": true }));
+    assert_eq!(r["content_streams"].as_u64(), Some(1), "{r}");
+    assert!(r["content_ops_removed"].as_u64() > Some(0), "{r}");
+    assert!(r["content_bytes_after"].as_u64() < r["content_bytes_before"].as_u64(), "{r}");
+    assert_eq!(drawn("compact.pdf"), drawn("kept.pdf"), "the page draws the same");
+}
+
 /// A one-page PDF drawing a 1-bit scan of text (glyph strokes with ragged edges, as a scanner
 /// leaves them) of 1000 × 400 samples, stored with Flate.
 fn scanned_page() -> Vec<u8> {

@@ -22,6 +22,8 @@
 //! - **Clean up:** drop images and forms that pages list but never draw (such as a deleted
 //!   image); Flate-compress streams that have no filter; remove a redundant outer ASCII85 or
 //!   ASCIIHex layer from streams that have one; store LZW-compressed streams with Flate instead.
+//! - **Compact content streams** (off by default): page contents, forms and tiling patterns
+//!   written again without what draws nothing, losslessly (see [`content`]).
 //! - **Discard embedded search index** (off by default): the search indexes stored in the
 //!   catalog's `/PieceInfo` (see [`Settings::discard_search_index`]).
 //!
@@ -37,6 +39,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod audit;
+mod content;
 mod external_refs;
 mod form_actions;
 pub mod fragments;
@@ -229,6 +232,10 @@ pub struct Settings {
     pub object_streams: bool,
     /// Clean Up: decode LZW-compressed streams and store them with Flate instead.
     pub lzw_to_flate: bool,
+    /// Clean Up: write page contents, form XObjects and tiling patterns again without what draws
+    /// nothing (white space, comments, empty `q Q` pairs, identity `cm`s, settings repeating the
+    /// value in force) and with numbers in their shortest exact form ([`content`]). Off by default.
+    pub optimize_content: bool,
     /// Clean Up: remove links (and bookmark destinations) that point nowhere.
     pub remove_invalid_links: bool,
     /// Clean Up: remove named destinations nothing refers to.
@@ -266,6 +273,7 @@ impl Default for Settings {
             flate_unencoded: true,
             object_streams: true,
             lzw_to_flate: true,
+            optimize_content: false,
             remove_invalid_links: true,
             remove_unreferenced_dests: true,
             discard_external_refs: false,
@@ -336,6 +344,12 @@ pub struct Report {
     pub streams_compressed: usize,
     /// Streams whose LZW compression was replaced with Flate (Clean Up).
     pub lzw_streams: usize,
+    /// Content streams written smaller by [`Settings::optimize_content`], the operators they lost,
+    /// and their decoded bytes before and after.
+    pub content_streams: usize,
+    pub content_ops_removed: usize,
+    pub content_bytes_before: usize,
+    pub content_bytes_after: usize,
     /// Links removed and bookmarks whose destination was cleared (Clean Up).
     pub invalid_links: usize,
     pub invalid_bookmarks: usize,
@@ -468,6 +482,7 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
     if settings.remove_unreferenced_dests {
         report.unreferenced_dests = links::remove_unreferenced_dests(doc)?;
     }
+    content::run(doc, &pages, settings, &mut report, progress, &mut budget)?;
     // Before the unencoded-stream pass, which would otherwise take the ASCII layer off an
     // `[/ASCII85Decode /LZWDecode]` stream first and count it twice.
     if settings.lzw_to_flate {
