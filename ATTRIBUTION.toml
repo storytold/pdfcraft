@@ -1614,7 +1614,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "assets/app-icon/LICENSE-document.txt"
 kind = "icon"
 usage = "Master artwork for the Windows PDF file type icon; rendered by packaging/icons.sh, without fonts or external images"
-sha256 = "d7f481f7af9a5284f16f5c84f09750515d9fa7b174394620e7c4ca35f59e2486"
+sha256 = "87bce656fea51787172fe1c192fa7ab05499f69428e497c892b6acf7f929dd41"
 
 [[asset]]
 path = "assets/app-icon/pdfcraft-document.ico"

@@ -1,6 +1,8 @@
 <!-- PdfCraft PDF document icon (master vector).
-     Composition adapted from the icon redesigns by JustCallMeAD (storytold/pdfcraft#308);
-     geometry drawn in CorelDRAW 2026 and kept as exported. The ArtCraft mark is a brand
+     Composition adapted from the icon redesigns by JustCallMeAD (storytold/pdfcraft#308):
+     the PDF lettering is resized and set in the app's Ink (#0B0B0C), the flat red became the
+     app's PdfCraft red (#B70228) in a gradient, and the fold is filled instead of hollow.
+     Geometry drawn in CorelDRAW 2026 and kept as exported. The ArtCraft mark is a brand
      mark of the PdfCraft project, used as a mark and not licensed for reuse (LICENSE-document.txt).
      No fonts or external images. Every PNG and the .ico are rendered from this file by
      packaging/icons.sh. -->
