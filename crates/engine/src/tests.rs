@@ -9133,7 +9133,7 @@ fn xfa_check_box_and_radio_button_clicks_run_their_click_scripts() {
     assert_eq!(log(&s), "change 1;click 1;", "change, then click, each seeing the new value");
     let out = s.take_js_output(id);
     assert_eq!(out.alerts, [crate::js::Message::plain("Agreed")]);
-    assert!(out.requests.iter().any(|r| matches!(r, pdfcraft_js::Request::Focus(n) if n == "note")), "a click may move the focus: {out:?}");
+    assert!(out.requests.iter().any(|r| matches!(r, pdfcraft_js::Request::FocusField { name, .. } if name == "note")), "a click may move the focus: {out:?}");
     s.apply(id, Edit::SetFieldValue { name: "agree".into(), value: FieldValue::Check(false) }).unwrap();
     assert_eq!(log(&s), "change 1;click 1;change 0;click 0;", "turning it off is a click too");
     // One undo step takes back the click and what its scripts did.
