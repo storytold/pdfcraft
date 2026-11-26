@@ -8,21 +8,44 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use pdfcraft_cos::Document;
 
 mod alt;
+mod autotag;
+mod autotag_fields;
+mod autotag_roles;
 mod content;
 mod headings;
+mod layout_table;
 mod report;
 mod structure;
 mod tags;
 
-pub use alt::{AltError, Figure, figures, mark_decorative, set_alt};
+#[cfg(test)]
+thread_local! {
+    /// Marked-content stack entries read to decide which marks enclose an operator, for the tests
+    /// that keep that constant per operator.
+    static MARK_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Page content passes made to find figure bounds.
+    static BOUNDS_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts `n` marked-content stack reads (tests only).
+#[inline]
+fn count_mark_reads(_n: usize) {
+    #[cfg(test)]
+    MARK_READS.with(|c| c.set(c.get().saturating_add(_n)));
+}
+
+pub use alt::{AltError, ArtifactError, Figure, figures, mark_decorative, mark_tag_artifact, set_alt};
+pub use autotag::{AutoTagError, AutoTagResult, autotag_text};
+pub use autotag_fields::tag_form_fields;
 pub use headings::{Heading, headings};
+pub use layout_table::{LayoutTableError, layout_table_to_blocks};
 pub use report::{REPORT_WORDS, report_html};
-pub use tags::{TagError, TagInfo, TagProperty, set_tag_property, tags};
+pub use tags::{TagContentItem, TagError, TagInfo, TagPlacement, TagProperty, move_tag, set_tag_property, tag_content, tags};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Category {
@@ -426,6 +449,8 @@ pub struct Finding {
     pub page: Option<usize>,
     /// Indirect structure element that caused the finding, when one is available.
     pub object: Option<pdfcraft_cos::ObjRef>,
+    /// Bounds in PDF user space when the affected content can be located safely.
+    pub bbox: Option<[f64; 4]>,
     pub message: String,
     /// The English sentence with a hole, such as `{p}` or `{what}`, where each value went.
     pub pattern: &'static str,
@@ -436,13 +461,13 @@ pub struct Finding {
 impl Finding {
     /// A finding whose sentence says the same thing however the document is put together.
     pub fn plain(page: Option<usize>, sentence: &'static str) -> Self {
-        Finding { page, object: None, message: sentence.to_owned(), pattern: sentence, values: Vec::new() }
+        Finding { page, object: None, bbox: None, message: sentence.to_owned(), pattern: sentence, values: Vec::new() }
     }
 
     /// A finding built from a wording and what goes in its holes. The English `message` is filled
     /// in here, so it and `pattern` can never drift apart.
     pub fn worded(page: Option<usize>, pattern: &'static str, values: Vec<(&'static str, String)>) -> Self {
-        Finding { page, object: None, message: say(pattern, &values), pattern, values }
+        Finding { page, object: None, bbox: None, message: say(pattern, &values), pattern, values }
     }
 
     /// A finding that says where the problem is and, in `{what}`, what is wrong, each worded
@@ -454,7 +479,7 @@ impl Finding {
     pub fn nested(page: Option<usize>, pattern: &'static str, what: &'static str, mut values: Vec<(&'static str, String)>) -> Self {
         let message = say(&pattern.replace("{what}", what), &values);
         values.push(("{what}", what.to_owned()));
-        Finding { page, object: None, message, pattern, values }
+        Finding { page, object: None, bbox: None, message, pattern, values }
     }
 
     /// This finding as one sentence, said in the language `words` translates into.
@@ -616,6 +641,7 @@ pub fn check(doc: &Document, options: &Options) -> Report {
     let tagged = structure::has_struct_tree(doc);
     let scan = content::Scan::run(doc, &pages, &page_list);
     let mut tree_rules = structure::run(doc, &pages, &options.rules);
+    let mut figure_bounds: Option<HashMap<pdfcraft_cos::ObjRef, (usize, [f64; 4])>> = None;
     let mut results = Vec::with_capacity(32);
     for rule in Rule::ALL {
         if !options.rules.contains(&rule) {
@@ -640,6 +666,36 @@ pub fn check(doc: &Document, options: &Options) -> Report {
             }
             _ => tree_rules.remove(&rule).unwrap_or_default(),
         };
+        if rule.category() == Category::AlternateText && findings.iter().any(|f| f.object.is_some()) {
+            let bounds = figure_bounds.get_or_insert_with(|| {
+                figures(doc)
+                    .into_iter()
+                    .filter_map(|figure| {
+                        let (page, bbox) = (figure.page?, figure.bbox?);
+                        (bbox.iter().all(|v| v.is_finite()) && bbox[0] < bbox[2] && bbox[1] < bbox[3]).then_some((figure.obj, (page, bbox)))
+                    })
+                    .collect()
+            });
+            for finding in &mut findings {
+                if let Some((page, bbox)) = finding.object.and_then(|obj| bounds.get(&obj))
+                    && finding.page == Some(*page)
+                {
+                    finding.bbox = Some(*bbox);
+                }
+            }
+        }
+        // A page read only in part may hold what the scan didn't find: text that makes the
+        // document more than images, untagged content, or a font without Unicode mappings.
+        let unsure = !scan.incomplete.is_empty()
+            && match rule {
+                Rule::ImageOnly => !scan.has_text,
+                Rule::TaggedContent | Rule::CharacterEncoding => findings.is_empty(),
+                _ => false,
+            };
+        if unsure {
+            results.push(RuleResult { rule, status: Status::Manual, findings: Vec::new() });
+            continue;
+        }
         if total > MAX_FINDINGS {
             let more = total - MAX_FINDINGS;
             findings.truncate(MAX_FINDINGS);

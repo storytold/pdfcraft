@@ -6,7 +6,8 @@
 //! Files that aren't clean DER still open: trailing whitespace, PEM armour or a bare
 //! base64 body (#159).
 //! Writing uses PBES2 AES-256-CBC with PBKDF2-HMAC-SHA-256 and an HMAC-SHA-256 MAC, OpenSSL 3's
-//! defaults.
+//! algorithms, at [`WRITE_ROUNDS`] rather than OpenSSL's 2048. Opening stops at a fixed amount
+//! of key-derivation work, whatever the file asks for.
 //!
 //! The envelope is read as BER, not DER: Windows writes `.p12` files with indefinite lengths and
 //! the AuthenticatedSafe split into OCTET STRING segments, and nothing in the envelope is signed
@@ -19,6 +20,7 @@ use base64::Engine as _;
 use cbc::cipher::block_padding::Pkcs7;
 use cbc::cipher::{BlockModeDecrypt, BlockModeEncrypt, InnerIvInit, KeyIvInit};
 use hmac::Mac;
+use zeroize::Zeroizing;
 
 use crate::SignError;
 use crate::der::{self, Tlv, tag};
@@ -48,6 +50,42 @@ const PBE_SHA_2DES: &str = "1.2.840.113549.1.12.1.4";
 const PBE_SHA_RC2_128: &str = "1.2.840.113549.1.12.1.5";
 const PBE_SHA_RC2_40: &str = "1.2.840.113549.1.12.1.6";
 
+/// Key-derivation rounds for new files: OWASP's figure for PBKDF2-HMAC-SHA-256. The MAC uses the
+/// same count, because checking it alone tells whether a guessed password is right (#1847).
+pub const WRITE_ROUNDS: u32 = 600_000;
+
+/// The shortest password a new digital ID may have (NIST SP 800-63B). Opening an existing file
+/// takes any password, so nobody is locked out of an ID made before this minimum.
+pub const MIN_PASSWORD_CHARS: usize = 8;
+
+/// The most key-derivation work one [`open`] does, in hash blocks summed over every derivation
+/// in the file. The file names its own iteration counts, so without a budget a crafted file
+/// hangs the caller on the password check (#1847). A file written by [`write`] needs about
+/// 2 million; real files from other tools need far less.
+const OPEN_BUDGET: u64 = 10_000_000;
+
+/// What is left of [`OPEN_BUDGET`] while one file is opened.
+struct Budget(u64);
+
+impl Budget {
+    /// Spend `rounds` iterations to derive `len` bytes with `alg`, and return them as the `u32`
+    /// the derivation takes, or refuse the file if the budget runs out.
+    fn spend(&mut self, alg: DigestAlg, rounds: u64, len: usize) -> Result<u32, SignError> {
+        // Every derivation hashes at least once, and repeats the rounds for each output block.
+        let blocks = len.div_ceil(alg.digest(&[]).len().max(1)).max(1) as u64;
+        let cost = rounds.max(1).saturating_mul(blocks);
+        match (self.0.checked_sub(cost), u32::try_from(rounds)) {
+            (Some(left), Ok(rounds)) => {
+                self.0 = left;
+                Ok(rounds)
+            }
+            _ => {
+                Err(SignError::Unsupported(format!("PKCS #12 files that need more than {OPEN_BUDGET} rounds of key derivation ({rounds} asked for)")))
+            }
+        }
+    }
+}
+
 /// What a digital ID file holds: the signing key, its certificate and any others (issuers).
 #[derive(Debug)]
 pub struct DigitalId {
@@ -63,14 +101,14 @@ fn bad(what: &str) -> SignError {
 }
 
 /// The password as a BMPString with its terminating NUL (RFC 7292 Appendix B.1).
-fn bmp(password: &str) -> Vec<u8> {
-    let mut v: Vec<u8> = password.encode_utf16().flat_map(u16::to_be_bytes).collect();
+fn bmp(password: &str) -> Zeroizing<Vec<u8>> {
+    let mut v = Zeroizing::new(password.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>());
     v.extend([0, 0]);
     v
 }
 
 /// The PKCS #12 key derivation function (RFC 7292 Appendix B.2).
-fn pkcs12_kdf(alg: DigestAlg, password: &[u8], salt: &[u8], id: u8, iterations: u32, n: usize) -> Vec<u8> {
+fn pkcs12_kdf(alg: DigestAlg, password: &[u8], salt: &[u8], id: u8, iterations: u32, n: usize) -> Zeroizing<Vec<u8>> {
     // Callers only pass the SHA-1/SHA-2 digests PKCS #12 files use (`open` restricts the MAC digest).
     let (u, v) = match alg {
         DigestAlg::Sha1 => (20, 64),
@@ -78,25 +116,25 @@ fn pkcs12_kdf(alg: DigestAlg, password: &[u8], salt: &[u8], id: u8, iterations: 
         DigestAlg::Sha256 => (32, 64),
         DigestAlg::Sha384 => (48, 128),
         DigestAlg::Sha512 => (64, 128),
-        _ => return Vec::new(),
+        _ => return Zeroizing::new(Vec::new()),
     };
     let _ = u;
-    let fill = |s: &[u8]| -> Vec<u8> {
+    let fill = |s: &[u8]| -> Zeroizing<Vec<u8>> {
         if s.is_empty() {
-            return Vec::new();
+            return Zeroizing::new(Vec::new());
         }
         let len = v * s.len().div_ceil(v);
-        s.iter().cycle().take(len).copied().collect()
+        Zeroizing::new(s.iter().cycle().take(len).copied().collect())
     };
     let d = vec![id; v];
-    let mut i: Vec<u8> = [fill(salt), fill(password)].concat();
-    let mut out = Vec::with_capacity(n);
+    let mut i = Zeroizing::new([fill(salt).as_slice(), fill(password).as_slice()].concat());
+    let mut out = Zeroizing::new(Vec::with_capacity(n));
     while out.len() < n {
-        let mut a = alg.digest(&[&d, &i]);
+        let mut a = Zeroizing::new(alg.digest(&[&d, &i]));
         for _ in 1..iterations.max(1) {
-            a = alg.digest(&[&a]);
+            a = Zeroizing::new(alg.digest(&[&a]));
         }
-        let b: Vec<u8> = a.iter().cycle().take(v).copied().collect();
+        let b = Zeroizing::new(a.iter().cycle().take(v).copied().collect::<Vec<u8>>());
         for chunk in i.chunks_mut(v) {
             // chunk = (chunk + b + 1) mod 2^(8v)
             let mut carry = 1u16;
@@ -132,7 +170,7 @@ impl Cipher {
         }
     }
 
-    fn decrypt(self, key: &[u8], iv: &[u8], ct: &[u8]) -> Result<Vec<u8>, SignError> {
+    fn decrypt(self, key: &[u8], iv: &[u8], ct: &[u8]) -> Result<Zeroizing<Vec<u8>>, SignError> {
         let wrong = || SignError::WrongPassword;
         let r = match self {
             Cipher::Aes128 => cbc::Decryptor::<aes::Aes128>::new_from_slices(key, iv).map_err(|_| wrong())?.decrypt_padded_vec::<Pkcs7>(ct),
@@ -144,7 +182,7 @@ impl Cipher {
                 cbc::Decryptor::<rc2::Rc2>::inner_iv_slice_init(c, iv).map_err(|_| wrong())?.decrypt_padded_vec::<Pkcs7>(ct)
             }
         };
-        r.map_err(|_| wrong())
+        r.map(Zeroizing::new).map_err(|_| wrong())
     }
 }
 
@@ -168,8 +206,8 @@ fn hmac(alg: DigestAlg, key: &[u8], data: &[u8]) -> Result<Vec<u8>, SignError> {
     }
 }
 
-fn pbkdf2(prf: DigestAlg, password: &[u8], salt: &[u8], rounds: u32, len: usize) -> Result<Vec<u8>, SignError> {
-    let mut out = vec![0u8; len];
+fn pbkdf2(prf: DigestAlg, password: &[u8], salt: &[u8], rounds: u32, len: usize) -> Result<Zeroizing<Vec<u8>>, SignError> {
+    let mut out = Zeroizing::new(vec![0u8; len]);
     match prf {
         DigestAlg::Sha1 => pbkdf2::pbkdf2_hmac::<sha1::Sha1>(password, salt, rounds, &mut out),
         DigestAlg::Sha224 => pbkdf2::pbkdf2_hmac::<sha2::Sha224>(password, salt, rounds, &mut out),
@@ -182,7 +220,7 @@ fn pbkdf2(prf: DigestAlg, password: &[u8], salt: &[u8], rounds: u32, len: usize)
 }
 
 /// Decrypt `ct` with the password-based scheme `alg` (an AlgorithmIdentifier).
-fn pbe_decrypt(alg: &Tlv<'_>, password: &str, ct: &[u8]) -> Result<Vec<u8>, SignError> {
+fn pbe_decrypt(alg: &Tlv<'_>, password: &str, ct: &[u8], budget: &mut Budget) -> Result<Zeroizing<Vec<u8>>, SignError> {
     let parts = alg.children()?;
     let o = parts.first().ok_or_else(|| bad("algorithm"))?.oid()?;
     let params = parts.get(1).ok_or_else(|| bad("algorithm parameters"))?;
@@ -196,7 +234,7 @@ fn pbe_decrypt(alg: &Tlv<'_>, password: &str, ct: &[u8]) -> Result<Vec<u8>, Sign
             }
             let kp = kdf.get(1).ok_or_else(|| bad("PBKDF2 parameters"))?.children()?;
             let salt = kp.first().ok_or_else(|| bad("salt"))?.octets("salt")?;
-            let rounds = kp.get(1).ok_or_else(|| bad("iterations"))?.u64()? as u32;
+            let rounds = kp.get(1).ok_or_else(|| bad("iterations"))?.u64()?;
             let prf = match kp
                 .iter()
                 .skip(2)
@@ -222,13 +260,14 @@ fn pbe_decrypt(alg: &Tlv<'_>, password: &str, ct: &[u8]) -> Result<Vec<u8>, Sign
                 other => return Err(SignError::Unsupported(format!("PBES2 cipher {}", other.unwrap_or("?")))),
             };
             let iv = sc.get(1).ok_or_else(|| bad("IV"))?.octets("IV")?;
+            let rounds = budget.spend(prf, rounds, cipher.key_len())?;
             let key = pbkdf2(prf, password.as_bytes(), &salt, rounds, cipher.key_len())?;
             cipher.decrypt(&key, &iv, ct)
         }
         PBE_SHA_3DES | PBE_SHA_2DES | PBE_SHA_RC2_128 | PBE_SHA_RC2_40 => {
             let p = params.children()?;
             let salt = p.first().ok_or_else(|| bad("salt"))?.octets("salt")?;
-            let rounds = p.get(1).ok_or_else(|| bad("iterations"))?.u64()? as u32;
+            let rounds = p.get(1).ok_or_else(|| bad("iterations"))?.u64()?;
             let (cipher, key_len, iv_len) = match o.as_str() {
                 PBE_SHA_3DES => (Cipher::TripleDes, 24, 8),
                 PBE_SHA_2DES => (Cipher::TripleDes, 16, 8),
@@ -236,11 +275,13 @@ fn pbe_decrypt(alg: &Tlv<'_>, password: &str, ct: &[u8]) -> Result<Vec<u8>, Sign
                 _ => (Cipher::Rc2(40), 5, 8),
             };
             let pw = bmp(password);
+            // Two derivations from the same count: the key, then the IV.
+            let rounds = budget.spend(DigestAlg::Sha1, rounds, key_len)?;
+            budget.spend(DigestAlg::Sha1, u64::from(rounds), iv_len)?;
             let mut key = pkcs12_kdf(DigestAlg::Sha1, &pw, &salt, 1, rounds, key_len);
             if key.len() == 16 && matches!(cipher, Cipher::TripleDes) {
                 // Two-key 3DES: K1 K2 K1.
-                let k1 = key[..8].to_vec();
-                key.extend(k1);
+                key.extend_from_within(..8);
             }
             let iv = pkcs12_kdf(DigestAlg::Sha1, &pw, &salt, 2, rounds, iv_len);
             cipher.decrypt(&key, &iv, ct)
@@ -256,11 +297,11 @@ struct Bag {
 }
 
 enum BagKind {
-    Key(Vec<u8>),
+    Key(Zeroizing<Vec<u8>>),
     Cert(Vec<u8>),
 }
 
-fn bags(safe_contents: &[u8], password: &str, out: &mut Vec<Bag>) -> Result<(), SignError> {
+fn bags(safe_contents: &[u8], password: &str, out: &mut Vec<Bag>, budget: &mut Budget) -> Result<(), SignError> {
     for bag in Tlv::parse_all_ber(safe_contents)?.children()? {
         let f = bag.children()?;
         let Some(id) = f.first().and_then(|o| o.oid().ok()) else { continue };
@@ -278,11 +319,11 @@ fn bags(safe_contents: &[u8], password: &str, out: &mut Vec<Bag>) -> Result<(), 
             }
         }
         let kind = match id.as_str() {
-            KEY_BAG => BagKind::Key(value.raw.to_vec()),
+            KEY_BAG => BagKind::Key(Zeroizing::new(value.raw.to_vec())),
             SHROUDED_KEY_BAG => {
                 let p = value.children()?;
                 let [alg, data] = p.as_slice() else { return Err(bad("EncryptedPrivateKeyInfo")) };
-                BagKind::Key(pbe_decrypt(alg, password, &data.octets("encrypted private key")?)?)
+                BagKind::Key(pbe_decrypt(alg, password, &data.octets("encrypted private key")?, budget)?)
             }
             CERT_BAG => {
                 let p = value.children()?;
@@ -355,6 +396,7 @@ pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, SignError> {
         return Err(SignError::Unsupported("public-key protected PKCS #12 files".into()));
     }
     let content = auth_safe.get(1).ok_or_else(|| bad("authSafe content"))?.inner()?.octets("authSafe")?;
+    let mut budget = Budget(OPEN_BUDGET);
     // The MAC proves the password before anything is decrypted. It covers the contents of that
     // OCTET STRING — the segments joined, if the file is segmented, which is what wrote them.
     if let Some(mac) = pfx.get(2) {
@@ -367,8 +409,9 @@ pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, SignError> {
             .ok_or_else(|| SignError::Unsupported(format!("MAC digest {alg_oid}")))?;
         let expected = digest_info.get(1).ok_or_else(|| bad("MAC"))?.octets("MAC")?;
         let salt = m.get(1).ok_or_else(|| bad("MAC salt"))?.octets("MAC salt")?;
-        let iterations = m.get(2).map(|i| i.u64()).transpose()?.unwrap_or(1) as u32;
+        let iterations = m.get(2).map(|i| i.u64()).transpose()?.unwrap_or(1);
         let key_len = alg.digest(&[]).len();
+        let iterations = budget.spend(alg, iterations, key_len)?;
         let key = pkcs12_kdf(alg, &bmp(password), &salt, 3, iterations, key_len);
         if hmac(alg, &key, &content)? != *expected {
             return Err(SignError::WrongPassword);
@@ -380,7 +423,7 @@ pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, SignError> {
         let kind = p.first().ok_or_else(|| bad("ContentInfo"))?.oid()?;
         let body = p.get(1).ok_or_else(|| bad("ContentInfo content"))?.inner()?;
         match kind.as_str() {
-            DATA => bags(&body.octets("SafeContents")?, password, &mut all)?,
+            DATA => bags(&body.octets("SafeContents")?, password, &mut all, &mut budget)?,
             ENCRYPTED_DATA => {
                 let ed = body.children()?;
                 let eci = ed.get(1).ok_or_else(|| bad("EncryptedContentInfo"))?.children()?;
@@ -397,8 +440,8 @@ pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, SignError> {
                     }
                     _ => return Err(bad("encryptedContent")),
                 };
-                let plain = pbe_decrypt(alg, password, &ct)?;
-                bags(&plain, password, &mut all)?;
+                let plain = pbe_decrypt(alg, password, &ct, &mut budget)?;
+                bags(&plain, password, &mut all, &mut budget)?;
             }
             _ => {}
         }
@@ -441,16 +484,15 @@ fn random(n: usize) -> Result<Vec<u8>, SignError> {
 
 /// Write a digital ID as a `.p12` protected by `password`.
 pub fn write(id: &DigitalId, password: &str) -> Result<Vec<u8>, SignError> {
-    const ITER: u32 = 2048;
     let encrypt = |plain: &[u8]| -> Result<Vec<u8>, SignError> {
         let (salt, iv) = (random(16)?, random(16)?);
-        let key = pbkdf2(DigestAlg::Sha256, password.as_bytes(), &salt, ITER, 32)?;
+        let key = pbkdf2(DigestAlg::Sha256, password.as_bytes(), &salt, WRITE_ROUNDS, 32)?;
         let ct = cbc::Encryptor::<aes::Aes256>::new_from_slices(&key, &iv)
             .map_err(|_| SignError::Crypto("AES".into()))?
             .encrypt_padded_vec::<Pkcs7>(plain);
         let kdf = der::seq(&[
             &der::oid(PBKDF2),
-            &der::seq(&[&der::octets(&salt), &der::int(ITER as u64), &der::seq(&[&der::oid(HMAC_SHA256), &der::null()])]),
+            &der::seq(&[&der::octets(&salt), &der::int(WRITE_ROUNDS as u64), &der::seq(&[&der::oid(HMAC_SHA256), &der::null()])]),
         ]);
         let alg = der::seq(&[&der::oid(PBES2), &der::seq(&[&kdf, &der::seq(&[&der::oid(AES256_CBC), &der::octets(&iv)])])]);
         Ok(der::seq(&[&alg, &der::octets(&ct)]))
@@ -480,8 +522,43 @@ pub fn write(id: &DigitalId, password: &str) -> Result<Vec<u8>, SignError> {
     let ci_key = der::seq(&[&der::oid(DATA), &der::explicit(0, &der::octets(&der::seq(&[&key_bag])))]);
     let auth_safe = der::seq(&[&ci_certs, &ci_key]);
     let salt = random(16)?;
-    let mac_key = pkcs12_kdf(DigestAlg::Sha256, &bmp(password), &salt, 3, ITER, 32);
+    let mac_key = pkcs12_kdf(DigestAlg::Sha256, &bmp(password), &salt, 3, WRITE_ROUNDS, 32);
     let mac = hmac(DigestAlg::Sha256, &mac_key, &auth_safe)?;
-    let mac_data = der::seq(&[&der::seq(&[&DigestAlg::Sha256.algorithm(), &der::octets(&mac)]), &der::octets(&salt), &der::int(ITER as u64)]);
+    let mac_data = der::seq(&[&der::seq(&[&DigestAlg::Sha256.algorithm(), &der::octets(&mac)]), &der::octets(&salt), &der::int(WRITE_ROUNDS as u64)]);
     Ok(der::seq(&[&der::int(3), &der::seq(&[&der::oid(DATA), &der::explicit(0, &der::octets(&auth_safe))]), &mac_data]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_budget_covers_every_derivation_in_a_file() {
+        let mut budget = Budget(OPEN_BUDGET);
+        // What a file from `write` needs: the MAC and two PBKDF2 derivations.
+        for _ in 0..3 {
+            assert_eq!(budget.spend(DigestAlg::Sha256, WRITE_ROUNDS.into(), 32).ok(), Some(WRITE_ROUNDS));
+        }
+        // Six million rounds fit once, but not twice.
+        assert!(budget.spend(DigestAlg::Sha256, 6_000_000, 32).is_ok());
+        assert!(budget.spend(DigestAlg::Sha256, 6_000_000, 32).is_err());
+        // Each output block repeats the rounds: 24 bytes of SHA-1 are two blocks.
+        let mut budget = Budget(OPEN_BUDGET);
+        assert!(budget.spend(DigestAlg::Sha1, 6_000_000, 24).is_err());
+        // Zero rounds still hashes once.
+        assert_eq!(budget.spend(DigestAlg::Sha1, 0, 20).ok(), Some(0));
+        assert_eq!(budget.0, OPEN_BUDGET - 1);
+    }
+
+    #[test]
+    fn key_and_kdf_buffers_are_zeroizing() {
+        let key = PrivateKey::generate_p256().unwrap();
+        let _: &Zeroizing<Vec<u8>> = &key.pkcs8;
+        let pw: Zeroizing<Vec<u8>> = bmp("secret12");
+        assert_eq!(&*pw, &[0, b's', 0, b'e', 0, b'c', 0, b'r', 0, b'e', 0, b't', 0, b'1', 0, b'2', 0, 0]);
+        let kdf: Zeroizing<Vec<u8>> = pkcs12_kdf(DigestAlg::Sha256, &pw, &[1, 2, 3, 4], 1, 1, 32);
+        assert_eq!(kdf.len(), 32);
+        let derived: Zeroizing<Vec<u8>> = pbkdf2(DigestAlg::Sha256, b"secret12", &[1, 2, 3, 4], 1, 32).unwrap();
+        assert_eq!(derived.len(), 32);
+    }
 }

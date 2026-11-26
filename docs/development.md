@@ -12,11 +12,14 @@ cargo build --profile low-disk -p pdfcraft-cli
 cargo test --profile low-disk -p pdfcraft-cos --lib
 ```
 
-The profile inherits the normal development settings, including debug assertions and overflow
-checks. It uses line-table-only debug information for workspace code, which keeps file and line
-numbers in backtraces but omits local-variable and parameter details, and it disables incremental
-compilation for this profile only. Ordinary `cargo build`, `cargo test`, and release builds keep
-their existing profiles.
+The profile inherits the normal development settings, including debug assertions, overflow
+checks and line-table-only debug information, and disables incremental compilation for this
+profile only. Ordinary `cargo build` and `cargo test` keep incremental compilation.
+
+The development profile itself keeps only line tables for workspace code and no debug information
+for dependencies. Backtraces show file and line numbers but no local variables or parameters; for
+full debug information in workspace code (for a debugger), build with
+`CARGO_PROFILE_DEV_DEBUG=true`.
 
 Cargo stores custom-profile artifacts separately under `target/low-disk`. Switching between the
 normal and low-disk profiles can therefore leave both sets of artifacts on disk. To remove only
@@ -24,6 +27,24 @@ the low-disk artifacts, run `cargo clean --profile low-disk`.
 
 Building PdfCraft requires Rust 1.95 or later: the UI crate and its `egui` and `craft-ui`
 dependencies need it, and the workspace `rust-version` states the same minimum.
+
+## Annotation tool pin
+
+The annotation quick bar's **Keep tool selected** pin is a shared preference, stored as the
+boolean `comment_tool_pinned`. It survives application restarts, including when switched off.
+Startup uses Select; the remembered pin applies when an annotation tool is picked. Older settings
+without the key keep the default one-shot behavior. Non-boolean values are ignored, preserving
+the current choice and the other valid settings.
+
+The existing opt-in UI control channel uses the same preference:
+
+```sh
+pdfcraft-cli ui --control 4242 --control-token-file /path/to/token set key=comment-tool-pinned value=true
+pdfcraft-cli ui --control 4242 --control-token-file /path/to/token state
+```
+
+`ui.state.comment_tool_pinned` reports the boolean. `ui.set` accepts `true` or `false` and refuses
+other values before changing the preference. This changes interface settings only.
 
 ## Interface appearance
 
@@ -50,7 +71,7 @@ do not contact a desktop session bus. Page and document colours retain their exi
 ## Logs
 
 The desktop app writes its `log` records to standard error and to `logs/pdfcraft.log` in its
-settings folder, next to `app.ron`: Linux and FreeBSD `~/.local/share/pdfcraft/logs/` (or
+data folder: Linux and FreeBSD `~/.local/share/pdfcraft/logs/` (or
 `$XDG_DATA_HOME/pdfcraft/logs/`), macOS `~/Library/Application Support/PdfCraft/logs/`, Windows
 `%APPDATA%\PdfCraft\data\logs\`. In portable mode (a `portable.txt` file next to the executable, as
 the Windows portable zip ships) the settings folder is `PdfCraftData\` beside the executable, and
@@ -66,7 +87,7 @@ By default PdfCraft's own crates (`pdfcraft*`) log at `info` and everything else
 `RUST_LOG` replaces that with env_logger-style directives, for example `RUST_LOG=debug`,
 `RUST_LOG=warn,pdfcraft_render=trace` or `RUST_LOG=info,wgpu_core=warn`; a directive ending in `*`
 covers every target starting with it (`pdfcraft*=debug`). The logger is
-`apps/pdfcraft/src/logging.rs`. It never records the control-channel token or document passwords.
+`craft_platform::logs`. It never records the control-channel token or document passwords.
 
 ## GPU surface limits
 
@@ -105,15 +126,68 @@ reach this retry instead of the uncaptured-error panic handler. This does not fi
 driver's shader compilation, and explicit `PDFCRAFT_RENDERER=wgpu` still disables the retry.
 `PDFCRAFT_RENDERER` skips it or chooses OpenGL from the start.
 
+## Preferences
+
+Linux and FreeBSD store `app.ron` in `$XDG_CONFIG_HOME/pdfcraft/`, or
+`~/.config/pdfcraft/` when that variable is unset, empty or relative. This follows the
+[XDG Base Directory Specification](https://specifications.freedesktop.org/basedir/latest/).
+On first launch after upgrading, existing `app.ron` preferences are copied from the old
+data folder without replacing an existing configuration file. The old copy is retained;
+logs, crash recovery and digital IDs stay in their data locations. If migration fails,
+the app logs the failure and continues using the original preferences folder.
+The existing PrintCraft-to-PdfCraft migration runs first. macOS, Windows and portable
+copies retain their current preferences locations.
+
 ## Environment variables
 
 | Variable | Effect |
 |---|---|
 | `RUST_LOG` | Log levels for standard error and the log file (see [Logs](#logs)) |
 | `RUST_BACKTRACE` | `1` adds a backtrace to the report of an internal error |
-| `XDG_DATA_HOME` | Linux/FreeBSD: base of the settings folder (`pdfcraft/`), the log folder and crash recovery |
+| `XDG_CONFIG_HOME` | Linux/FreeBSD: absolute configuration base for `pdfcraft/app.ron`; defaults to `~/.config` |
+| `XDG_DATA_HOME` | Linux/FreeBSD: base of the log folder and crash recovery; previous preferences are migrated from here |
 | `WGPU_POWER_PREF` | GPU choice; by default PdfCraft draws on the GPU the Wayland compositor draws with (it says so through linux-dmabuf feedback), else the GPU that drives the primary display (Windows) or the built-in panel (Linux), else the low-power (integrated) GPU. The log says which one was chosen |
 | `WGPU_BACKEND` | Graphics backend; by default Windows uses Direct3D 12, falling back to OpenGL |
+| `WGPU_DX12_PRESENTATION_SYSTEM` | Windows, Direct3D 12: `hwnd` presents through a swap chain on the window itself, which Windows stretches while the window is resized (#2738); unset or `visual`, PdfCraft presents through a DirectComposition visual |
+| `WGPU_VALIDATION_INDIRECT_CALL` | `1` turns wgpu's check of indirect draw arguments back on. PdfCraft draws nothing indirectly and turns it off, since the compute shader the check needs fails to compile on some drivers (Metal on an Intel Iris Pro), which lost the device at start-up |
 | `PDFCRAFT_RENDERER` | `gl` starts with OpenGL (glow) and never loads wgpu; `wgpu` reports a wgpu failure instead of retrying with OpenGL; unset, wgpu is retried with OpenGL when it can't start (see [Renderer fallback](#renderer-fallback)) |
+| `PDFCRAFT_TITLEBAR` | Linux: `app` draws PdfCraft's own title bar (window buttons in the tab strip, in the order of GNOME's `button-layout`, and resize edges); `system` keeps the frame winit or the desktop draws; unset, PdfCraft draws its own when the Wayland compositor draws no frames (GNOME), and leaves it to the desktop otherwise (KDE, Sway, Hyprland, X11). Where PdfCraft draws it, Preferences ▸ Use system title bar switches back to winit's frame without a restart; `system` also hides that option |
+| `PDFCRAFT_BUILD_LABEL` | Build time: a label for a local or patched build (letters, digits, inner dots), shown after the version in `--version`, About and the log (`0.7.1 (titlebar)`). `packaging/linux/package.sh` also puts it in the file names and the .rpm/.deb release (`1.titlebar`), which upgrades over the release of the same version |
 | `CRAFT_FONTS_DIR` | Build time: a [craft-fonts](https://github.com/storytold/craft-fonts) checkout to embed (Japanese fonts) |
-| `PDFCRAFT_SYSTEM_FONTS` | `0` stops the desktop app from using an installed font for characters its embedded fonts lack (`cargo xtask screenshots` sets it) |
+| `PDFCRAFT_SYSTEM_FONTS` | `0` disables installed-font fallback for both interface text and non-embedded CJK page text in the desktop viewer, Combine thumbnails and accessibility figure previews (`cargo xtask screenshots` sets it). Document fallback is display-only: exports, printing, OCR and automation retain the bundled-font path. |
+| `FONTCONFIG_FILE` | On Linux/Unix, the Fontconfig configuration file used to discover installed UI fallback fonts (default: `/etc/fonts/fonts.conf`); relative filenames are resolved under `FONTCONFIG_PATH` |
+| `FONTCONFIG_PATH` | Directory for a relative `FONTCONFIG_FILE` (default: `/etc/fonts`; the first entry of a search path is used) |
+
+On Linux/Unix, the UI's existing fallback filenames are also searched in Fontconfig's configured
+directories and their subdirectories. This finds fonts in Nix store paths and user font directories
+without invoking `fc-match` or linking libfontconfig. The scan is cached and bounded; missing or
+malformed configuration leaves the ordinary `/usr/share/fonts` and `/usr/local/share/fonts`
+candidates available. Font size and glyph-coverage checks still apply. This only reads installed
+fonts for the interface; it does not embed them into PDFs or packages.
+
+Relative includes resolve beside the config that contains them. Included directories load only
+digit-prefixed `*.conf` files, in lexical order; backups and disabled files are ignored. The scan
+limits each config to 1 MiB, visits at most 256 config files/directories, and bounds include depth
+to 16 and directory entries to 32,768. Cyclic includes are skipped.
+
+## Fonts and attribution
+
+- `CRAFT_FONTS_DIR=<craft-fonts checkout> cargo build` makes `crates/fonts/build.rs` embed the
+  craft-fonts faces as `pdfcraft_fonts::CRAFT_FONTS`. Without it PdfCraft builds, tests and runs, but
+  has no Japanese face: Japanese UI text shows replacement boxes and writing Japanese into a PDF
+  returns an error. Release builds set it (`.github/workflows/release.yml`), and `ATTRIBUTION.toml`
+  lists it as a `[[build_input]]`. Code that uses `CRAFT_FONTS` works when it is empty.
+- The desktop app reads one font already installed on the machine at run time, as the last interface
+  fallback (`OnDemandFonts` with `SystemCandidates`, the craft font catalog). The page viewer can draw a CID font of an Adobe CJK
+  collection that a PDF does not embed with an installed face, on screen only
+  (`crates/render/src/system_font.rs`; `RenderConfig::system_fonts` is off by default and set by
+  `RenderConfig::on_screen`). Neither font is embedded, shipped, committed or copied, and nothing drawn
+  with them is saved or printed. `PDFCRAFT_SYSTEM_FONTS=0` turns both off; `cargo xtask screenshots`
+  sets it.
+- `cargo xtask assets` fails when an asset file has no `ATTRIBUTION.toml` entry, an entry's hash is
+  missing or wrong, a licence is not on the allowlist or its file is missing, or an image, icon or font
+  names Adobe as author, except a font under OFL-1.1 alone. The Adobe non-visual data allowed is the
+  closed list in `xtask/src/assets.rs` (`adobe_data = true`). `cargo xtask demo-pdf` fails if the PDF
+  embeds a font that is not an `ATTRIBUTION.toml` entry.
+- The ArtCraft name, wordmark and logos in `docs/brand/` are trademarks of the ArtCraft Team, not open
+  source (terms in `docs/brand/LICENSE-brand.txt`); they stay in PdfCraft, unmodified.

@@ -1,16 +1,32 @@
 //! Shared command/inspection/preview entry points, using the existing confined tool path.
 use serde_json::{Value, json};
 
-use crate::{Args, Automation, Content, Result, ToolError, encode_png, failed, info, tools};
+use crate::{Args, Automation, Content, Result, ToolError, failed, info, rendered_content, tools};
+use pdfcraft_engine::commands;
 use pdfcraft_render::{RenderRequest, RequestKind};
 
 /// The most steps one `command_batch` runs.
 pub(crate) const MAX_BATCH_STEPS: usize = 1000;
 
+/// Why `id` has no tool to run: a tool name passed as a command id, an id the registry doesn't
+/// know, or a real command that nothing automates yet. They need different fixes from the caller.
+fn no_tool_for(id: &str) -> ToolError {
+    if commands::command(id).is_some() {
+        return failed(format!("command {id:?} has no headless tool; see command_list"));
+    }
+    match tools::find(id) {
+        Some(def) => match def.command {
+            Some(command) => failed(format!("{id:?} is a tool, not a command id; use the command id {command:?}, or call the tool directly")),
+            None => failed(format!("{id:?} is a tool, not a command id; call it directly (command ids are in command_list)")),
+        },
+        None => failed(format!("unknown command id {id:?}; see command_list")),
+    }
+}
+
 impl Automation {
     pub(crate) fn command_run(&mut self, args: &Args) -> Result<Vec<Content>> {
         let id = args.str("id")?;
-        let tool = tools::tool_for_command(id).ok_or_else(|| failed(format!("command {id:?} has no headless tool; see command_list")))?;
+        let tool = tools::tool_for_command(id).ok_or_else(|| no_tool_for(id))?;
         let def = tools::find(tool).ok_or_else(|| failed("command tool is unavailable"))?;
         let mut params = match args.get("params") {
             None | Some(Value::Null) => serde_json::Map::new(),
@@ -92,7 +108,8 @@ impl Automation {
         Ok(json!({"documents":self.session.docs().iter().map(info).collect::<Vec<_>>()}))
     }
 
-    pub(crate) fn render_preview(&mut self, args: &Args) -> Result<Content> {
+    /// A bounded PNG of the page, with its render warnings after it as `page_render` gives them.
+    pub(crate) fn render_preview(&mut self, args: &Args) -> Result<Vec<Content>> {
         let id = if args.opt_int("doc")?.is_some() {
             self.doc(args)?.id
         } else {
@@ -118,7 +135,6 @@ impl Automation {
         if let Some(error) = out.error {
             return Err(failed(error));
         }
-        let data = encode_png(out.width, out.height, &out.rgba)?;
-        Ok(Content::Png { data, width: out.width, height: out.height })
+        rendered_content(&out, page)
     }
 }

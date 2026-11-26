@@ -48,6 +48,10 @@ pub fn report_html(report: &Report, file_name: &str, date: &str, lang: &str, wor
     // `REPORT_WORDS` can be read off this file.
     h.push_str(&if report.count(Status::Failed) > 0 {
         esc(&words("The checker found problems which may prevent the document from being fully accessible."))
+    } else if report.count(Status::Manual) > 0 {
+        format!("{}: {}", esc(&words(Status::Manual.label())), report.count(Status::Manual))
+    } else if report.count(Status::Skipped) > 0 {
+        format!("{}: {}", esc(&words(Status::Skipped.label())), report.count(Status::Skipped))
     } else {
         esc(&words("The checker found no problems in this document."))
     });

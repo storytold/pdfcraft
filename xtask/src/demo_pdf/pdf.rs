@@ -75,20 +75,11 @@ impl Stamp {
     }
 
     pub fn from_unix(secs: i64) -> Self {
-        let days = secs.div_euclid(86_400);
-        let rem = secs.rem_euclid(86_400);
+        let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
         let (h, mi, s) = (rem / 3600, rem % 3600 / 60, rem % 60);
-        // Civil-from-days (Howard Hinnant's algorithm).
-        let z = days + 719_468;
-        let era = z.div_euclid(146_097);
-        let doe = z - era * 146_097;
-        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        let mp = (5 * doy + 2) / 153;
-        let d = doy - (153 * mp + 2) / 5 + 1;
-        let m = if mp < 10 { mp + 3 } else { mp - 9 };
-        let y = yoe + era * 400 + i64::from(m <= 2);
-        Stamp { unix: secs, pdf: format!("D:{y:04}{m:02}{d:02}{h:02}{mi:02}{s:02}Z"), iso: format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z") }
+        let (y, m, d) = pdfcraft_cos::civil_from_days(days);
+        // `{y:04}` rather than `%Y`, which writes a `+` before years past 9999.
+        Stamp { unix: secs, pdf: pdfcraft_cos::pdf_date(secs), iso: format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z") }
     }
 
     /// The same moment shifted by `minutes` (used to order threaded replies).
@@ -429,6 +420,14 @@ mod tests {
         assert_eq!(s.iso, "2026-09-21T14:13:20Z");
         assert_eq!(s.plus_minutes(0).pdf, s.pdf);
         assert_eq!(s.plus_minutes(60 * 24).iso, "2026-09-22T14:13:20Z");
+        // Years past 9999 keep the plain zero-padded year (no `+`).
+        assert_eq!(Stamp::from_unix(253_402_300_800).iso, "10000-01-01T00:00:00Z");
+        assert_eq!(Stamp::from_unix(253_402_300_800).pdf, "D:100000101000000Z");
+        // Past chrono's ±262143-year range the proleptic Gregorian date is kept, not the epoch.
+        // Pinned to the old hand-rolled output (no year clamp — a negative year keeps its sign).
+        assert_eq!(Stamp::from_unix(10_000_000_000_000).iso, "318857-05-20T17:46:40Z");
+        assert_eq!(Stamp::from_unix(10_000_000_000_000).pdf, "D:3188570520174640Z");
+        assert_eq!(Stamp::from_unix(-10_000_000_000_000).iso, "-314918-08-13T06:13:20Z");
     }
 
     #[test]
