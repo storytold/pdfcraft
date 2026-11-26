@@ -7681,27 +7681,30 @@ fn calculated_formatting_stops_callbacks_and_draws_remaining_values() {
 
 #[test]
 fn deferred_redraw_uses_the_last_value_written_in_the_batch() {
-    for show_first in [false, true] {
-        for formatted in [false, true] {
-            let mut doc = fixture();
-            set_field_script(&mut doc, "name", "format", Some("format")).unwrap();
-            let f = fields(&doc).into_iter().find(|f| f.name == "name").unwrap();
-            doc.update_dict(f.widgets[0].obj, |d| d.set(b"F".to_vec(), Object::Int(2))).unwrap();
-            let show = FieldChange { name: "name".into(), object: Some(f.obj), display: Some(0), ..Default::default() };
-            let write = FieldChange { name: "name".into(), object: Some(f.obj), value: Some(vec!["7".into()]), formatted, ..Default::default() };
-            let changes = if show_first { vec![show, write] } else { vec![write, show] };
-            struct Format;
-            impl Scripts for Format {
-                fn run(&mut self, event: FieldEvent, _: &str, f: &Field, value: &str, _: &[Field], _: &Document) -> ScriptResult {
-                    assert_eq!(event, FieldEvent::Format);
-                    assert_eq!(f.value, ["7"]);
-                    assert_eq!(value, "7", "Format must receive the final stored value");
-                    ScriptResult { rc: true, value: format!("${value}"), value_set: false, changes: vec![], message: None }
+    for value in ["7", ""] {
+        for show_first in [false, true] {
+            for formatted in [false, true] {
+                let mut doc = fixture();
+                set_field_script(&mut doc, "name", "format", Some("format")).unwrap();
+                let f = fields(&doc).into_iter().find(|f| f.name == "name").unwrap();
+                doc.update_dict(f.widgets[0].obj, |d| d.set(b"F".to_vec(), Object::Int(2))).unwrap();
+                let show = FieldChange { name: "name".into(), object: Some(f.obj), display: Some(0), ..Default::default() };
+                let write =
+                    FieldChange { name: "name".into(), object: Some(f.obj), value: Some(vec![value.into()]), formatted, ..Default::default() };
+                let changes = if show_first { vec![show, write] } else { vec![write, show] };
+                struct Format<'a>(&'a str);
+                impl Scripts for Format<'_> {
+                    fn run(&mut self, event: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field], _: &Document) -> ScriptResult {
+                        assert_eq!(event, FieldEvent::Format);
+                        assert_eq!(value, self.0, "Format must receive the final stored value");
+                        ScriptResult { rc: true, value: format!("${value}"), value_set: false, changes: vec![], message: None }
+                    }
                 }
+                scripting::apply_changes(&mut doc, &changes, "", None, &mut Format(value)).unwrap();
+                let expected: Vec<_> = (!value.is_empty()).then_some(value).into_iter().collect();
+                assert_eq!(field(&fields(&doc), "name").value, expected);
+                assert!(ap(&doc, &f.widgets[0]).contains(&format!("${value}")));
             }
-            scripting::apply_changes(&mut doc, &changes, "", None, &mut Format).unwrap();
-            assert_eq!(field(&fields(&doc), "name").value, ["7"]);
-            assert!(ap(&doc, &f.widgets[0]).contains("$7"));
         }
     }
 }

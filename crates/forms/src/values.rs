@@ -527,10 +527,12 @@ pub(crate) fn redraw_calculated_values(doc: &mut Document, pending: &[ObjRef], s
     for obj in pending {
         let Some(f) = all.iter().find(|f| f.obj == *obj) else { continue };
         // A later change in the batch may have overwritten the value that queued this redraw.
-        let values = &f.value;
+        // An empty text write may remove /V, but Format still receives an empty string.
+        let empty_text = [String::new()];
+        let values = if f.kind == FieldKind::Text && f.value.is_empty() { &empty_text[..] } else { f.value.as_slice() };
         let mut no_scripts = NoScripts;
         let formatting: &mut dyn Scripts = if scripts.stopped() { &mut no_scripts } else { scripts };
-        let shown = match (values.as_slice(), &f.actions.scripts.format) {
+        let shown = match (values, &f.actions.scripts.format) {
             ([one], Some(js)) if matches!(f.kind, FieldKind::Text | FieldKind::Combo) => {
                 Some(formatting.run(FieldEvent::Format, js, f, one, &all, doc).value)
             }
