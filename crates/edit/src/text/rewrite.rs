@@ -456,9 +456,12 @@ fn paragraph_gaps(
 /// where the scan put it, a title-block cell at the page's corner as often as not, and is never
 /// wrapped: it grows along its line, past the page's edge if it must, as the last changed word of
 /// an upright one already does (#8475). A page's own text grows to its margin and wraps there
-/// (#2578). A phrase set flush right or centred keeps its box: an endless width would move it.
-fn grows_unbounded(block: &TextBlock, style: &BlockStyle) -> bool {
-    block.invisible && matches!(style.align, None | Some(crate::added::Align::Left))
+/// (#2578). A phrase set flush right or centred keeps its box, whether that alignment was asked for
+/// or is the one its text takes on its own (a lone row on the page's centre, right-to-left text):
+/// such a line is placed from the far end of its width, and an endless one would move it off the
+/// page. `align` is the alignment the paragraph is laid out with.
+fn grows_unbounded(block: &TextBlock, align: Option<crate::added::Align>) -> bool {
+    block.invisible && matches!(align, None | Some(crate::added::Align::Left))
 }
 
 /// Where a paragraph sits on its page, for choosing the width it is laid out in.
@@ -1165,11 +1168,11 @@ pub(crate) fn rewrite_block_from(
     // Turned text is left alone: its centre lives along its own baseline, not in page space.
     let crop = p.crop(doc);
     let centred = upright && !rtl && style.width.is_none() && style.align.is_none() && is_centred(&b, &lines, (crop[0] + crop[2]) / 2.0, first.size);
-    let unbounded = grows_unbounded(&b, style);
+    let align = if centred { Some(crate::added::Align::Center) } else { style.align.or(rtl.then_some(crate::added::Align::Right)) };
+    let unbounded = grows_unbounded(&b, align);
     let geometry =
         ParaGeometry { rect: b.rect, frame, crop, upright, k, size, dx, single_line: members.len() == 1, anchored_right, centred, unbounded };
     let width = geometry.width(style.width)?;
-    let align = if centred { Some(crate::added::Align::Center) } else { style.align.or(rtl.then_some(crate::added::Align::Right)) };
     // Where a right-aligned line ends, from the paragraph's left edge (user space).
     let right_edge = if anchored_right { (b.rect[2] - b.rect[0]).max(0.0) } else { width };
     let movement = drawn_movement(emit.ctm, dx, dy)?;

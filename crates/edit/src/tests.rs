@@ -9201,6 +9201,36 @@ fn a_turned_invisible_row_grows_along_its_baseline_instead_of_wrapping() {
     assert!(lines.len() > 1, "{lines:?}");
 }
 
+/// #8475: the endless width is for a phrase that grows from its left edge. One that is centred, or
+/// right-aligned, without being asked (a lone row on the page's centre; right-to-left text) is placed
+/// from the far end of its width, and an endless one would put it thousands of points off the page.
+/// It keeps its box and wraps, as a page's own text does.
+#[test]
+fn a_recognised_phrase_centred_or_right_to_left_on_its_own_keeps_its_box() {
+    // "TITLE" in Helvetica 12 is 32.7 pt wide: from x = 284 it sits on the page's centre, 300.
+    let mut doc = text_page("BT /F1 12 Tf 3 Tr 284 700 Td (TITLE) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("TITLE OF THE DRAWING"), &text::BlockStyle::default()).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.len() > 1, "wrapped in its box: {lines:?}");
+    for l in &lines {
+        assert!(l.rect[0] >= 0.0 && l.rect[2] <= 600.0, "on the page: {:?}", l.rect);
+        // Centred in its box, or from its left edge when wider than the box, never moved right.
+        assert!(l.rect[0] >= 283.5 && l.rect[0] <= 300.0, "in its box: {:?}", l.rect);
+    }
+
+    // Hebrew recognised as two runs on one row (OCR sizes each word from its own box, so a size
+    // apart): right-aligned, but not anchored at its right edge as a lone run is.
+    let mut doc = hebrew_page("BT /F1 12 Tf 3 Tr 300 700 Td (EDCBA) Tj ET BT /F1 11 Tf 3 Tr 333 700 Td (HDGF) Tj ET");
+    let block = text::text_blocks(&doc, 0).unwrap().swap_remove(0);
+    assert_eq!(block.lines.len(), 2, "{block:?}");
+    text::rewrite_block(&mut doc, 0, 0, Some("שלום בדיוק שלום בדיוק שלום"), &text::BlockStyle::default()).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.len() > 1, "wrapped in its box: {lines:?}");
+    for l in &lines {
+        assert!(l.rect[2] <= block.rect[2] + 0.5, "ends at its old right edge, on the page: {:?} vs {:?}", l.rect, block.rect);
+    }
+}
+
 /// #2578: a single turned row grows along its baseline only up to the page's 36 pt margin and wraps
 /// onto further rows from there, instead of running off the page.
 #[test]
