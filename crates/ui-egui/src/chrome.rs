@@ -127,15 +127,18 @@ fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
     if app.views.is_empty() {
         app.reading_bg.picker_open = false;
+        app.reading_bg.picker_opener = None;
+        app.reading_bg.picker_focus_pending = false;
     }
 
     if app.reading_bg.picker_open {
+        let allow_esc = !app.modal_open() && !app.palette_open;
         let reading_bg = &mut app.reading_bg;
         let mut open = reading_bg.picker_open;
         let opener_id = reading_bg.picker_opener;
         let focus_first = std::mem::take(&mut reading_bg.picker_focus_pending);
         let win_id = egui::Id::unique("reading-bg-tint-window");
-        let close_on_esc = ui.ctx().input(|i| i.key_pressed(egui::Key::Escape));
+        let close_on_esc = allow_esc && ui.ctx().input(|i| i.key_pressed(egui::Key::Escape));
         if close_on_esc {
             open = false;
         } else {
@@ -168,17 +171,29 @@ fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         (tl!("Dark Grey"), Color32::from_rgb(0x1E, 0x1E, 0x1E)),
                         (tl!("Pure Black"), Color32::BLACK),
                     ];
-                    let accent = Env::of(ui).tokens.color.accent.solid;
+                    let env = Env::of(ui);
+                    let accent = env.tokens.color.accent.solid;
+                    let border = env.tokens.color.line.border;
                     let accent_c32 = Color32::from_rgba_unmultiplied(accent.0[0], accent.0[1], accent.0[2], accent.0[3]);
+                    let border_c32 = Color32::from_rgba_unmultiplied(border.0[0], border.0[1], border.0[2], border.0[3]);
                     ui.horizontal(|ui| {
                         for (name, color) in presets {
                             let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
                             let is_selected = reading_bg.color == color;
-                            let stroke = if is_selected { Stroke::new(2.0, accent_c32) } else { Stroke::new(1.0, Color32::from_gray(100)) };
+                            let stroke = if is_selected { Stroke::new(2.0, accent_c32) } else { Stroke::new(1.0, border_c32) };
                             ui.painter().rect(rect, CornerRadius::same(4), color, stroke, egui::StrokeKind::Inside);
+                            if resp.has_focus() {
+                                ui.painter().rect_stroke(
+                                    rect.expand(2.0),
+                                    CornerRadius::same(6),
+                                    Stroke::new(2.0, accent_c32),
+                                    egui::StrokeKind::Outside,
+                                );
+                            }
                             let name_str = name.to_string();
                             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, is_selected, name_str.clone()));
-                            if resp.on_hover_text(name).clicked() {
+                            let key_activate = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
+                            if resp.on_hover_text(name).clicked() || key_activate {
                                 reading_bg.color = color;
                                 if reading_bg.mode == PageBackground::Default {
                                     reading_bg.mode = PageBackground::Dark;
@@ -227,5 +242,71 @@ mod page_position_tests {
         assert_eq!(page_position(2, 180, ""), "180");
         assert_eq!(page_position(0, 0, "i"), "0");
         assert_eq!(page_position(usize::MAX, 3, "x"), "3");
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod reading_bg_tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable as _;
+
+    use super::*;
+
+    fn one_page_pdf() -> Vec<u8> {
+        let stream = "BT /F1 18 Tf 20 150 Td (Reading Bg) Tj ET";
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>".to_string(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{stream}\nendstream", stream.len()),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    #[test]
+    fn tint_window_opens_via_keyboard_activates_swatch_and_restores_focus() {
+        let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_eframe(|cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            let mut app = PdfCraftApp::for_unit_tests();
+            let _ = app.set_option(&cc.egui_ctx, "language", "en");
+            app.open_bytes(&cc.egui_ctx, "bg.pdf", None, one_page_pdf()).expect("open fixture");
+            app
+        });
+        h.run_steps(4);
+
+        h.get_by_label("Eye strain tint settings").focus();
+        h.run_steps(2);
+        let opener_id = h.ctx.memory(|m| m.focused()).expect("tint settings button should hold focus");
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+
+        assert!(h.state().reading_bg.picker_open, "Enter on focused tint settings button should open the window");
+        assert_eq!(h.state().reading_bg.picker_opener, Some(opener_id), "opener id must point to tint settings button");
+        assert_ne!(h.ctx.memory(|m| m.focused()), Some(opener_id), "focus should move into the Page Background & Tint window");
+
+        h.get_by_label("Warm Sepia").focus();
+        h.run_steps(2);
+        h.key_press(egui::Key::Space);
+        h.run_steps(2);
+        assert_eq!(h.state().reading_bg.color, Color32::from_rgb(250, 240, 215));
+        assert_ne!(h.state().reading_bg.mode, PageBackground::Default);
+
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(!h.state().reading_bg.picker_open, "Escape should close Page Background & Tint");
+        assert_eq!(h.ctx.memory(|m| m.focused()), Some(opener_id), "Escape should restore focus to the tint settings opener button");
     }
 }

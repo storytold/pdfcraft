@@ -108,6 +108,7 @@ const PICKERS: &[&str] = &[
     "ocr.recognize_batch",
     "form.merge_data",
     "export.docx",
+    "export.xlsx",
     "export.pptx",
     "export.html",
     "export.rtf",

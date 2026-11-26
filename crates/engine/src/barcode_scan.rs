@@ -287,7 +287,7 @@ fn match_code128_pattern(runs: &[usize]) -> Option<usize> {
     let mut best_idx = None;
     let mut best_dist = f32::MAX;
 
-    for (idx, pat) in CODE128_PATTERNS.iter().enumerate() {
+    for (idx, pat) in CODE128_PATTERNS.iter().take(106).enumerate() {
         let mut dist = 0.0f32;
         for i in 0..6 {
             let actual_frac = runs.get(i).copied().unwrap_or(0) as f32 / total_f;
@@ -321,6 +321,22 @@ fn is_code128_stop(runs: &[usize]) -> bool {
     dist < 0.35
 }
 
+fn has_code128_end_boundary(runs: &[(bool, usize)], stop_start_idx: usize, stop_runs: &[usize]) -> bool {
+    let after_idx = stop_start_idx + 7;
+    let Some(&(is_dark, trailing_len)) = runs.get(after_idx) else {
+        // Scanline ends right at the terminating dark bar of STOP (e.g., tightly cropped raster).
+        return true;
+    };
+    if is_dark {
+        return false;
+    }
+    let stop_total: usize = stop_runs.iter().sum();
+    let module_px = (stop_total as f32) / 13.0;
+    // Every space inside a Code 128 data/checksum symbol is at most 4 modules wide.
+    // Require a trailing quiet zone wider than any internal space (>= 5.5 modules) before committing STOP.
+    (trailing_len as f32) >= module_px * 5.5
+}
+
 /// Attempt to decode a full Code 128 barcode starting from `start_run_idx` in `runs`.
 fn try_decode_code128(runs: &[(bool, usize)], start_run_idx: usize) -> Option<(String, usize, usize)> {
     if start_run_idx + 18 >= runs.len() {
@@ -346,14 +362,15 @@ fn try_decode_code128(runs: &[(bool, usize)], start_run_idx: usize) -> Option<(S
     let mut symbols = vec![start_code];
 
     while current_idx < runs.len() {
-        // Check for 7-element Stop pattern, only committing if symbols + checksum validate;
-        // a tentative stop match whose checksum/payload fails must still try decoding as a data symbol.
+        // Check for 7-element Stop pattern, only committing if end boundary + checksum validate;
+        // a tentative stop match whose trailing boundary or checksum fails must still try decoding as a data symbol.
         if current_idx + 7 <= runs.len() {
-            let mut stop_runs = Vec::with_capacity(7);
-            for i in 0..7 {
-                stop_runs.push(runs.get(current_idx + i)?.1);
+            let mut stop_runs = [0usize; 7];
+            for (i, slot) in stop_runs.iter_mut().enumerate() {
+                *slot = runs.get(current_idx + i)?.1;
             }
             if is_code128_stop(&stop_runs)
+                && has_code128_end_boundary(runs, current_idx, &stop_runs)
                 && let Some(text) = try_finalize_code128_stop(start_code, &symbols)
             {
                 return Some((text, start_run_idx, current_idx + 7));
@@ -555,9 +572,70 @@ fn try_decode_code39(runs: &[(bool, usize)], start_run_idx: usize) -> Option<(St
 // 1D Barcode Line Scanning & Extent Detection
 // -------------------------------------------------------------------------------------------------
 
-fn scan_1d_barcodes(binary: &BinaryImage, codes: &mut Vec<ScannedCode>, page: usize) {
-    let w = binary.width;
+fn collect_scanline_runs(binary: &BinaryImage, y: usize) -> Vec<(bool, usize)> {
+    let mut runs = Vec::with_capacity(128);
+    let mut current_dark = binary.is_dark(0, y);
+    let mut current_len = 0usize;
+    for x in 0..binary.width {
+        let dark = binary.is_dark(x, y);
+        if dark == current_dark {
+            current_len = current_len.saturating_add(1);
+        } else {
+            runs.push((current_dark, current_len));
+            current_dark = dark;
+            current_len = 1;
+        }
+    }
+    runs.push((current_dark, current_len));
+    runs
+}
+
+fn detect_scanline_1d(runs: &[(bool, usize)]) -> Option<(CodeKind, String, usize, usize)> {
+    if runs.len() < 25 {
+        return None;
+    }
+    let limit = runs.len().saturating_sub(20);
+    for r_idx in 0..limit {
+        if let Some((text, start_idx, end_idx)) = try_decode_code128(runs, r_idx) {
+            return Some((CodeKind::Code128, text, start_idx, end_idx));
+        }
+    }
+    for r_idx in 0..limit {
+        if let Some((text, start_idx, end_idx)) = try_decode_code39(runs, r_idx) {
+            return Some((CodeKind::Code39, text, start_idx, end_idx));
+        }
+    }
+    None
+}
+
+fn trace_1d_vertical_bounds(binary: &BinaryImage, y: usize, start_px: usize, bar_width: usize) -> (usize, usize) {
     let h = binary.height;
+    let mid_x = start_px + bar_width / 2;
+    let mid_dark = binary.is_dark(mid_x, y);
+    let mut top_y = y;
+    while top_y > 0 {
+        if binary.is_dark(mid_x, top_y) != mid_dark && !binary.is_dark(start_px + 2, top_y) {
+            break;
+        }
+        top_y = top_y.saturating_sub(1);
+    }
+
+    let mut bot_y = y;
+    while bot_y < h.saturating_sub(1) {
+        if binary.is_dark(mid_x, bot_y) != mid_dark && !binary.is_dark(start_px + 2, bot_y) {
+            break;
+        }
+        bot_y = bot_y.saturating_add(1);
+    }
+
+    let bar_h = (bot_y - top_y).max(12);
+    let top_y = top_y.saturating_sub(2);
+    let bot_y = (top_y + bar_h + 4).min(h);
+    (top_y, bot_y)
+}
+
+fn scan_1d_barcodes(binary: &BinaryImage, codes: &mut Vec<ScannedCode>, page: usize) {
+    let (w, h) = (binary.width, binary.height);
     if w < 50 || h < 20 {
         return;
     }
@@ -566,92 +644,33 @@ fn scan_1d_barcodes(binary: &BinaryImage, codes: &mut Vec<ScannedCode>, page: us
     let mut y = step;
 
     while y < h.saturating_sub(step) {
-        // Collect runs on scanline y
-        let mut runs = Vec::with_capacity(128);
-        let mut current_dark = binary.is_dark(0, y);
-        let mut current_len = 0usize;
+        let runs = collect_scanline_runs(binary, y);
+        let Some((kind, text, start_idx, end_idx)) = detect_scanline_1d(&runs) else {
+            y = y.saturating_add(step);
+            continue;
+        };
 
-        for x in 0..w {
-            let dark = binary.is_dark(x, y);
-            if dark == current_dark {
-                current_len = current_len.saturating_add(1);
-            } else {
-                runs.push((current_dark, current_len));
-                current_dark = dark;
-                current_len = 1;
-            }
-        }
-        runs.push((current_dark, current_len));
+        let start_px: usize = runs.iter().take(start_idx).map(|r| r.1).sum();
+        let bar_width: usize = runs.iter().skip(start_idx).take(end_idx - start_idx).map(|r| r.1).sum();
+        let end_px = (start_px + bar_width).min(w);
+        let (top_y, bot_y) = trace_1d_vertical_bounds(binary, y, start_px, bar_width);
 
-        if runs.len() >= 25 {
-            // Check for Code 128
-            let mut detected = None;
-            for r_idx in 0..runs.len().saturating_sub(20) {
-                if let Some((text, start_idx, end_idx)) = try_decode_code128(&runs, r_idx) {
-                    detected = Some((CodeKind::Code128, text, start_idx, end_idx));
-                    break;
-                }
-            }
-
-            // Fallback: Check for Code 39
-            if detected.is_none() {
-                for r_idx in 0..runs.len().saturating_sub(20) {
-                    if let Some((text, start_idx, end_idx)) = try_decode_code39(&runs, r_idx) {
-                        detected = Some((CodeKind::Code39, text, start_idx, end_idx));
-                        break;
-                    }
-                }
-            }
-
-            if let Some((kind, text, start_idx, end_idx)) = detected {
-                // Calculate horizontal pixel boundaries
-                let start_px: usize = runs.iter().take(start_idx).map(|r| r.1).sum();
-                let bar_width: usize = runs.iter().skip(start_idx).take(end_idx - start_idx).map(|r| r.1).sum();
-                let end_px = (start_px + bar_width).min(w);
-
-                // Trace vertical extent of the barcode bars
-                let mid_x = start_px + bar_width / 2;
-                let mut top_y = y;
-                while top_y > 0 {
-                    if binary.is_dark(mid_x, top_y) != binary.is_dark(mid_x, y) && !binary.is_dark(start_px + 2, top_y) {
-                        break;
-                    }
-                    top_y = top_y.saturating_sub(1);
-                }
-
-                let mut bot_y = y;
-                while bot_y < h.saturating_sub(1) {
-                    if binary.is_dark(mid_x, bot_y) != binary.is_dark(mid_x, y) && !binary.is_dark(start_px + 2, bot_y) {
-                        break;
-                    }
-                    bot_y = bot_y.saturating_add(1);
-                }
-
-                let bar_h = (bot_y - top_y).max(12);
-                let top_y = top_y.saturating_sub(2);
-                let bot_y = (top_y + bar_h + 4).min(h);
-
-                // Avoid duplicate codes already found in this region
-                let already_found = codes.iter().any(|c| c.text == text && (c.rect[1] as usize).abs_diff(top_y) < 30);
-                if !already_found {
-                    codes.push(ScannedCode {
-                        id: codes.len(),
-                        page,
-                        kind,
-                        text,
-                        rect: [start_px as f64, top_y as f64, end_px as f64, bot_y as f64],
-                        pixel_size: [(end_px - start_px) as u32, (bot_y - top_y) as u32],
-                        image_index: None,
-                    });
-                }
-
-                // Advance y past this barcode's vertical footprint
-                y = bot_y.saturating_add(step);
-                continue;
-            }
+        // Avoid duplicate codes already found in this region
+        let already_found = codes.iter().any(|c| c.text == text && (c.rect[1] as usize).abs_diff(top_y) < 30);
+        if !already_found {
+            codes.push(ScannedCode {
+                id: codes.len(),
+                page,
+                kind,
+                text,
+                rect: [start_px as f64, top_y as f64, end_px as f64, bot_y as f64],
+                pixel_size: [(end_px - start_px) as u32, (bot_y - top_y) as u32],
+                image_index: None,
+            });
         }
 
-        y = y.saturating_add(step);
+        // Advance y past this barcode's vertical footprint
+        y = bot_y.saturating_add(step);
     }
 }
 
@@ -942,6 +961,122 @@ fn refine_1d_horizontal(gray: &GrayImage, width: usize, height: usize, min_x: &m
 // Document Integration & Pixel-Perfect Replacement
 // -------------------------------------------------------------------------------------------------
 
+const MAX_EMBEDDED_SCAN_PIXELS: usize = 32_000_000;
+
+fn fits_scan_budget(w: u32, h: u32, total_scanned_pixels: usize, max_pixels: usize) -> Option<usize> {
+    if w == 0 || h == 0 {
+        return None;
+    }
+    (w as usize).checked_mul(h as usize).and_then(|p| total_scanned_pixels.checked_add(p)).filter(|&t| t <= max_pixels)
+}
+
+fn map_embedded_code_to_page(code: &mut ScannedCode, img: &pdfcraft_edit::PageImage, size: (u32, u32), idx: usize, crop: [f32; 4]) -> bool {
+    let (w, h) = size;
+    let code_area = ((code.rect[2] - code.rect[0]) * (code.rect[3] - code.rect[1])).abs();
+    let img_area = (w as f64) * (h as f64);
+    code.image_index = if img_area > 0.0 && (code_area / img_area) > 0.9 { Some(idx) } else { None };
+
+    let [ma, mb, mc, md, me, mf] = img.matrix;
+    let apply = |u: f64, v: f64| -> (f64, f64) { (ma * u + mc * v + me, mb * u + md * v + mf) };
+    let w_f = w as f64;
+    let h_f = h as f64;
+    let u0 = (code.rect[0] / w_f).clamp(0.0, 1.0);
+    let u1 = (code.rect[2] / w_f).clamp(0.0, 1.0);
+    let v0 = ((h_f - code.rect[3]) / h_f).clamp(0.0, 1.0);
+    let v1 = ((h_f - code.rect[1]) / h_f).clamp(0.0, 1.0);
+
+    let corners = [apply(u0, v0), apply(u1, v0), apply(u1, v1), apply(u0, v1)];
+    let sub_min_x = corners.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+    let sub_min_y = corners.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+    let sub_max_x = corners.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+    let sub_max_y = corners.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+
+    code.rect = [
+        sub_min_x.clamp(crop[0] as f64, crop[2] as f64),
+        sub_min_y.clamp(crop[1] as f64, crop[3] as f64),
+        sub_max_x.clamp(crop[0] as f64, crop[2] as f64),
+        sub_max_y.clamp(crop[1] as f64, crop[3] as f64),
+    ];
+    (code.rect[2] - code.rect[0]) > 0.5 && (code.rect[3] - code.rect[1]) > 0.5
+}
+
+fn map_rendered_code_rect(code: &mut ScannedCode, page_info: Option<&pdfcraft_render::PageInfo>, page_h: f32, effective_scale: f32, crop: [f32; 4]) {
+    let vx0 = (code.rect[0] as f32) / effective_scale;
+    let vy0 = (code.rect[1] as f32) / effective_scale;
+    let vx1 = (code.rect[2] as f32) / effective_scale;
+    let vy1 = (code.rect[3] as f32) / effective_scale;
+
+    let (min_x, min_y, max_x, max_y) = if let Some(info) = page_info {
+        let corners = [info.view_to_user(vx0, vy0), info.view_to_user(vx1, vy0), info.view_to_user(vx1, vy1), info.view_to_user(vx0, vy1)];
+        (
+            corners.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min),
+            corners.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min),
+            corners.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max),
+            corners.iter().map(|p| p[1]).fold(f32::NEG_INFINITY, f32::max),
+        )
+    } else {
+        (vx0, page_h - vy1, vx1, page_h - vy0)
+    };
+
+    code.rect = [
+        min_x.clamp(crop[0], crop[2]) as f64,
+        min_y.clamp(crop[1], crop[3]) as f64,
+        max_x.clamp(crop[0], crop[2]) as f64,
+        max_y.clamp(crop[1], crop[3]) as f64,
+    ];
+}
+
+fn is_code_visible_in_render(code: &ScannedCode, info: &pdfcraft_render::PageInfo, effective_scale: f32, rw: usize, rh: usize, rgba: &[u8]) -> bool {
+    let p0 = info.user_to_view(code.rect[0] as f32, code.rect[3] as f32);
+    let p1 = info.user_to_view(code.rect[2] as f32, code.rect[1] as f32);
+    let rx0 = ((p0[0].min(p1[0]) * effective_scale).round() as usize).clamp(0, rw);
+    let rx1 = ((p0[0].max(p1[0]) * effective_scale).round() as usize).clamp(0, rw);
+    let ry0 = ((p0[1].min(p1[1]) * effective_scale).round() as usize).clamp(0, rh);
+    let ry1 = ((p0[1].max(p1[1]) * effective_scale).round() as usize).clamp(0, rh);
+
+    if rx1 <= rx0.saturating_add(5) || ry1 <= ry0.saturating_add(5) {
+        return true;
+    }
+
+    let mut dark_count = 0usize;
+    let total_samples = 30usize;
+    for sy in 0..total_samples {
+        let y = ry0 + (sy * (ry1 - ry0)) / total_samples;
+        for sx in 0..total_samples {
+            let x = rx0 + (sx * (rx1 - rx0)) / total_samples;
+            let idx = (y * rw + x) * 4;
+            if let Some(slice) = rgba.get(idx..idx + 3)
+                && (slice[0] < 180 || slice[1] < 180 || slice[2] < 180)
+            {
+                dark_count = dark_count.saturating_add(1);
+            }
+        }
+    }
+    dark_count > (total_samples * total_samples) / 50
+}
+
+fn deduplicate_scanned_codes(scanned: Vec<ScannedCode>) -> Vec<ScannedCode> {
+    let mut unique: Vec<ScannedCode> = Vec::new();
+    for c in scanned {
+        let is_dup = unique.iter().any(|u| {
+            if u.text == c.text {
+                let overlap_x = (u.rect[0].max(c.rect[0])) <= (u.rect[2].min(c.rect[2]) + 20.0);
+                let overlap_y = (u.rect[1].max(c.rect[1])) <= (u.rect[3].min(c.rect[3]) + 20.0);
+                overlap_x && overlap_y
+            } else {
+                false
+            }
+        });
+        if !is_dup {
+            unique.push(c);
+        }
+    }
+    for (idx, c) in unique.iter_mut().enumerate() {
+        c.id = idx;
+    }
+    unique
+}
+
 impl Document {
     /// Scan a page for all embedded QR codes and barcodes, returning their positions and text.
     ///
@@ -951,209 +1086,128 @@ impl Document {
         crate::guard(|| self.scan_page_codes_inner(page)).unwrap_or_default()
     }
 
-    fn scan_page_codes_inner(&self, page: usize) -> Vec<ScannedCode> {
+    fn embedded_image_header_dims(&self, img: &pdfcraft_edit::PageImage) -> Option<(u32, u32)> {
+        if !img.is_form {
+            return (img.width > 0 && img.height > 0).then_some((img.width, img.height));
+        }
+        let obj = img.object?;
+        let cos = &self.editor.as_ref()?.cos;
+        let pic = crate::copy_image::picture_in_form(cos, obj)?;
+        let pdfcraft_cos::Object::Stream(s) = &*cos.get(pic) else {
+            return None;
+        };
+        let w = u32::try_from(s.dict.int(b"Width")?).ok()?;
+        let h = u32::try_from(s.dict.int(b"Height")?).ok()?;
+        (w > 0 && h > 0).then_some((w, h))
+    }
+
+    fn decode_embedded_image_for_scan(
+        &self,
+        page: usize,
+        idx: usize,
+        img: &pdfcraft_edit::PageImage,
+        total_scanned_pixels: &mut usize,
+    ) -> Option<(u32, u32, Vec<u8>)> {
+        if let Some((hw, hh)) = self.embedded_image_header_dims(img) {
+            fits_scan_budget(hw, hh, *total_scanned_pixels, MAX_EMBEDDED_SCAN_PIXELS)?;
+        }
+        let (_, bytes) = self.page_image_copy_file(page, idx).ok()?;
+        // Probe image header dimensions before allocating/decoding large raster buffers.
+        if let Ok((pw, ph)) = craft_image_codecs::probe_size(&bytes) {
+            fits_scan_budget(pw, ph, *total_scanned_pixels, MAX_EMBEDDED_SCAN_PIXELS)?;
+        }
+        let remaining = MAX_EMBEDDED_SCAN_PIXELS.saturating_sub(*total_scanned_pixels) as u64;
+        let opts = craft_image_codecs::DecodeOptions {
+            limits: craft_image_codecs::Limits { max_pixels: remaining, max_alloc: remaining.saturating_mul(4), ..Default::default() },
+            ..Default::default()
+        };
+        let decoded = craft_image_codecs::decode_with(&bytes, &opts).ok()?;
+        let (w, h) = (decoded.width(), decoded.height());
+        *total_scanned_pixels = fits_scan_budget(w, h, *total_scanned_pixels, MAX_EMBEDDED_SCAN_PIXELS)?;
+        Some((w, h, decoded.to_rgba8()))
+    }
+
+    fn scan_embedded_page_images(&self, page: usize, crop: [f32; 4]) -> Vec<ScannedCode> {
         let mut scanned = Vec::new();
-
-        let page_info = self.info.pages.get(page);
-        let [cx0, cy0, cx1, cy1] = page_info.map(|p| p.crop).unwrap_or([0.0, 0.0, 612.0, 792.0]);
-        let crop_min_x = cx0.min(cx1);
-        let crop_max_x = cx0.max(cx1);
-        let crop_min_y = cy0.min(cy1);
-        let crop_max_y = cy0.max(cy1);
-
-        // Pass 1: Scan individual embedded image XObjects with caching and bounded pixel budget
         let images = self.page_images(page);
         let mut cached_image_scans: std::collections::HashMap<String, (u32, u32, Vec<ScannedCode>)> = std::collections::HashMap::new();
         let mut total_scanned_pixels = 0usize;
-        const MAX_EMBEDDED_SCAN_PIXELS: usize = 32_000_000;
 
         for (idx, img) in images.iter().enumerate() {
-            let cache_key = img.object.map(|o| format!("{:?}", o)).unwrap_or_else(|| img.name.clone());
+            let cache_key = img.object.map(|o| format!("{o:?}")).unwrap_or_else(|| img.name.clone());
             let (w, h, img_codes) = if let Some((cw, ch, codes)) = cached_image_scans.get(&cache_key) {
                 (*cw, *ch, codes.clone())
             } else if total_scanned_pixels < MAX_EMBEDDED_SCAN_PIXELS {
-                if let Ok((w, h, rgba)) = self.page_image_rgba(page, idx) {
-                    if w == 0 || h == 0 {
-                        continue;
-                    }
-                    let Some(next_total) = (w as usize)
-                        .checked_mul(h as usize)
-                        .and_then(|p| total_scanned_pixels.checked_add(p))
-                        .filter(|&t| t <= MAX_EMBEDDED_SCAN_PIXELS)
-                    else {
-                        continue;
-                    };
-                    total_scanned_pixels = next_total;
-                    let codes = scan_rgba_buffer(w as usize, h as usize, &rgba, page);
-                    cached_image_scans.insert(cache_key, (w, h, codes.clone()));
-                    (w, h, codes)
-                } else {
+                let Some((w, h, rgba)) = self.decode_embedded_image_for_scan(page, idx, img, &mut total_scanned_pixels) else {
                     continue;
-                }
+                };
+                let codes = scan_rgba_buffer(w as usize, h as usize, &rgba, page);
+                cached_image_scans.insert(cache_key, (w, h, codes.clone()));
+                (w, h, codes)
             } else {
                 continue;
             };
 
             for mut code in img_codes {
                 code.id = scanned.len();
-                let code_area = ((code.rect[2] - code.rect[0]) * (code.rect[3] - code.rect[1])).abs();
-                let img_area = (w as f64) * (h as f64);
-                code.image_index = if img_area > 0.0 && (code_area / img_area) > 0.9 { Some(idx) } else { None };
-
-                let [ma, mb, mc, md, me, mf] = img.matrix;
-                let apply = |u: f64, v: f64| -> (f64, f64) { (ma * u + mc * v + me, mb * u + md * v + mf) };
-                let w_f = w as f64;
-                let h_f = h as f64;
-                let u0 = (code.rect[0] / w_f).clamp(0.0, 1.0);
-                let u1 = (code.rect[2] / w_f).clamp(0.0, 1.0);
-                let v0 = ((h_f - code.rect[3]) / h_f).clamp(0.0, 1.0);
-                let v1 = ((h_f - code.rect[1]) / h_f).clamp(0.0, 1.0);
-
-                let corners = [apply(u0, v0), apply(u1, v0), apply(u1, v1), apply(u0, v1)];
-                let sub_min_x = corners.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
-                let sub_min_y = corners.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
-                let sub_max_x = corners.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
-                let sub_max_y = corners.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
-
-                code.rect = [
-                    sub_min_x.clamp(crop_min_x as f64, crop_max_x as f64),
-                    sub_min_y.clamp(crop_min_y as f64, crop_max_y as f64),
-                    sub_max_x.clamp(crop_min_x as f64, crop_max_x as f64),
-                    sub_max_y.clamp(crop_min_y as f64, crop_max_y as f64),
-                ];
-                let w = code.rect[2] - code.rect[0];
-                let h = code.rect[3] - code.rect[1];
-                if w > 0.5 && h > 0.5 {
+                if map_embedded_code_to_page(&mut code, img, (w, h), idx, crop) {
                     scanned.push(code);
                 }
             }
         }
+        scanned
+    }
 
-        // Pass 2: Render the page buffer at crisp integer 2.0x scale (144 DPI)
-        // to detect vector barcodes with exact pixel alignment and zero fractional blur.
+    fn scan_rendered_page_codes(&self, page: usize, page_info: Option<&pdfcraft_render::PageInfo>, crop: [f32; 4], scanned: &mut Vec<ScannedCode>) {
         let (page_w, page_h) = page_info.map(|p| (p.width, p.height)).unwrap_or((612.0, 792.0));
         const MAX_PIXELS: f32 = 16_000_000.0;
         let max_scale = (MAX_PIXELS / (page_w * page_h).max(1.0)).sqrt();
-
-        // Reuse single renderer across scales
         let mut renderer = pdfcraft_render::PageRenderer::new(self.display.clone(), self.config.clone());
 
         for scale in [2.0f32, 1.0f32] {
             let effective_scale = scale.min(max_scale);
             let rendered = renderer.render(pdfcraft_render::RenderRequest { page, scale: effective_scale, ..Default::default() });
+            if rendered.error.is_some() || rendered.width == 0 || rendered.height == 0 || rendered.rgba.is_empty() {
+                continue;
+            }
+            let (rw, rh) = (rendered.width as usize, rendered.height as usize);
+            let buffer_codes = scan_rgba_buffer(rw, rh, &rendered.rgba, page);
+            let mut found_any = false;
+            for mut code in buffer_codes {
+                map_rendered_code_rect(&mut code, page_info, page_h, effective_scale, crop);
+                let mut matched_image_index = None;
+                scanned.retain(|c| {
+                    let same_symbol = c.text == code.text;
+                    let overlap_x = (c.rect[0].max(code.rect[0])) <= (c.rect[2].min(code.rect[2]) + 15.0);
+                    let overlap_y = (c.rect[1].max(code.rect[1])) <= (c.rect[3].min(code.rect[3]) + 15.0);
+                    let matches = same_symbol && overlap_x && overlap_y;
+                    if matches && c.image_index.is_some() {
+                        matched_image_index = c.image_index;
+                    }
+                    !matches
+                });
+                code.id = scanned.len();
+                code.image_index = matched_image_index;
+                scanned.push(code);
+                found_any = true;
+            }
 
-            if rendered.error.is_none() && rendered.width > 0 && rendered.height > 0 && !rendered.rgba.is_empty() {
-                let rw = rendered.width as usize;
-                let rh = rendered.height as usize;
-                let buffer_codes = scan_rgba_buffer(rw, rh, &rendered.rgba, page);
-
-                let mut found_any = false;
-                for mut code in buffer_codes {
-                    // Map rendered pixel coordinates (view space: Y=0 at top) to PDF user-space points (Y=0 at bottom)
-                    // using PageInfo::view_to_user to account for crop box and page rotation
-                    let vx0 = (code.rect[0] as f32) / effective_scale;
-                    let vy0 = (code.rect[1] as f32) / effective_scale;
-                    let vx1 = (code.rect[2] as f32) / effective_scale;
-                    let vy1 = (code.rect[3] as f32) / effective_scale;
-
-                    let (mut min_x, mut min_y, mut max_x, mut max_y) = if let Some(info) = page_info {
-                        let corners =
-                            [info.view_to_user(vx0, vy0), info.view_to_user(vx1, vy0), info.view_to_user(vx1, vy1), info.view_to_user(vx0, vy1)];
-                        (
-                            corners.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min),
-                            corners.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min),
-                            corners.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max),
-                            corners.iter().map(|p| p[1]).fold(f32::NEG_INFINITY, f32::max),
-                        )
-                    } else {
-                        (vx0, page_h - vy1, vx1, page_h - vy0)
-                    };
-
-                    min_x = min_x.clamp(crop_min_x, crop_max_x);
-                    min_y = min_y.clamp(crop_min_y, crop_max_y);
-                    max_x = max_x.clamp(crop_min_x, crop_max_x);
-                    max_y = max_y.clamp(crop_min_y, crop_max_y);
-
-                    code.rect = [min_x as f64, min_y as f64, max_x as f64, max_y as f64];
-
-                    // If this visible rendered code overlaps a code from Pass 1,
-                    // preserve the embedded detection's image_index and let the visible rendered code take precedence
-                    let mut matched_image_index = None;
-                    scanned.retain(|c| {
-                        let same_symbol = c.text == code.text;
-                        let overlap_x = (c.rect[0].max(code.rect[0])) <= (c.rect[2].min(code.rect[2]) + 15.0);
-                        let overlap_y = (c.rect[1].max(code.rect[1])) <= (c.rect[3].min(code.rect[3]) + 15.0);
-                        let matches = same_symbol && overlap_x && overlap_y;
-                        if matches && c.image_index.is_some() {
-                            matched_image_index = c.image_index;
-                        }
-                        !matches
-                    });
-
-                    code.id = scanned.len();
-                    code.image_index = matched_image_index;
-                    scanned.push(code);
-                    found_any = true;
-                }
-
-                if let Some(info) = page_info {
-                    scanned.retain(|c| {
-                        let p0 = info.user_to_view(c.rect[0] as f32, c.rect[3] as f32);
-                        let p1 = info.user_to_view(c.rect[2] as f32, c.rect[1] as f32);
-                        let rx0 = ((p0[0].min(p1[0]) * effective_scale).round() as usize).clamp(0, rw);
-                        let rx1 = ((p0[0].max(p1[0]) * effective_scale).round() as usize).clamp(0, rw);
-                        let ry0 = ((p0[1].min(p1[1]) * effective_scale).round() as usize).clamp(0, rh);
-                        let ry1 = ((p0[1].max(p1[1]) * effective_scale).round() as usize).clamp(0, rh);
-
-                        if rx1 > rx0.saturating_add(5) && ry1 > ry0.saturating_add(5) {
-                            let mut dark_count = 0usize;
-                            let total_samples = 30usize;
-                            for sy in 0..total_samples {
-                                let y = ry0 + (sy * (ry1 - ry0)) / total_samples;
-                                for sx in 0..total_samples {
-                                    let x = rx0 + (sx * (rx1 - rx0)) / total_samples;
-                                    let idx = (y * rw + x) * 4;
-                                    if let Some(slice) = rendered.rgba.get(idx..idx + 3)
-                                        && (slice[0] < 180 || slice[1] < 180 || slice[2] < 180)
-                                    {
-                                        dark_count = dark_count.saturating_add(1);
-                                    }
-                                }
-                            }
-                            dark_count > (total_samples * total_samples) / 50
-                        } else {
-                            true
-                        }
-                    });
-                }
-
-                if found_any {
-                    break;
-                }
+            if let Some(info) = page_info {
+                scanned.retain(|c| is_code_visible_in_render(c, info, effective_scale, rw, rh, &rendered.rgba));
+            }
+            if found_any {
+                break;
             }
         }
+    }
 
-        // Deduplicate any overlapping detections with identical payload
-        let mut unique: Vec<ScannedCode> = Vec::new();
-        for c in scanned {
-            let is_dup = unique.iter().any(|u| {
-                if u.text == c.text {
-                    let overlap_x = (u.rect[0].max(c.rect[0])) <= (u.rect[2].min(c.rect[2]) + 20.0);
-                    let overlap_y = (u.rect[1].max(c.rect[1])) <= (u.rect[3].min(c.rect[3]) + 20.0);
-                    overlap_x && overlap_y
-                } else {
-                    false
-                }
-            });
-            if !is_dup {
-                unique.push(c);
-            }
-        }
-        for (idx, c) in unique.iter_mut().enumerate() {
-            c.id = idx;
-        }
-
-        unique
+    fn scan_page_codes_inner(&self, page: usize) -> Vec<ScannedCode> {
+        let page_info = self.info.pages.get(page);
+        let [cx0, cy0, cx1, cy1] = page_info.map(|p| p.crop).unwrap_or([0.0, 0.0, 612.0, 792.0]);
+        let crop = [cx0.min(cx1), cy0.min(cy1), cx0.max(cx1), cy0.max(cy1)];
+        let mut scanned = self.scan_embedded_page_images(page, crop);
+        self.scan_rendered_page_codes(page, page_info, crop, &mut scanned);
+        deduplicate_scanned_codes(scanned)
     }
 
     /// Generate a solid white PNG raster at the specified dimensions for whiteout edits.
@@ -1254,6 +1308,32 @@ impl Document {
     }
 }
 
+fn probe_finder_radius(gray: &[u8], dims: [usize; 2], center: [isize; 2], dir: [isize; 2], thresh: u8, max_probe: isize) -> Option<f32> {
+    let [width, height] = dims;
+    let [cx, cy] = center;
+    let [dx, dy] = dir;
+    // Walk dark center (1.5m) -> light ring (1m) -> dark outer border (1m) -> light outside
+    let mut stage = 0u8;
+    let mut last_dark_step = 0isize;
+    for step in 1..=max_probe {
+        let ux = usize::try_from(cx + dx * step).ok()?;
+        let uy = usize::try_from(cy + dy * step).ok()?;
+        let val = if ux < width && uy < height { gray.get(uy * width + ux).copied()? } else { return None };
+        let is_dark = val <= thresh;
+        match stage {
+            0 if !is_dark => stage = 1,
+            1 if is_dark => {
+                stage = 2;
+                last_dark_step = step;
+            }
+            2 if is_dark => last_dark_step = step,
+            2 if !is_dark => return (last_dark_step >= 3).then_some(last_dark_step as f32 + 0.5),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Expand QR finder-pattern center bounds (`[min_x, min_y, max_x, max_y]`) to include the full
 /// outer finder band (3.5 modules).
 fn refine_qr_bounds(gray: &[u8], dims: [usize; 2], points: &[rxing::Point], pad: f32, bounds: &mut [f32; 4]) {
@@ -1261,41 +1341,18 @@ fn refine_qr_bounds(gray: &[u8], dims: [usize; 2], points: &[rxing::Point], pad:
     if points.is_empty() || width == 0 || height == 0 {
         return;
     }
-    let pixel = |x: isize, y: isize| -> Option<u8> {
-        let ux = usize::try_from(x).ok()?;
-        let uy = usize::try_from(y).ok()?;
-        if ux < width && uy < height { gray.get(uy * width + ux).copied() } else { None }
-    };
 
     let mut finder_radii = Vec::new();
     let max_probe = (width.max(height) / 2).max(16) as isize;
     for pt in points.iter().take(3) {
         let cx = (pt.x - pad).round() as isize;
         let cy = (pt.y - pad).round() as isize;
-        let Some(center_val) = pixel(cx, cy) else { continue };
-        let thresh = center_val.saturating_add(40).min(180);
+        let (Ok(ux), Ok(uy)) = (usize::try_from(cx), usize::try_from(cy)) else { continue };
+        let Some(&center_val) = (ux < width && uy < height).then(|| gray.get(uy * width + ux)).flatten() else { continue };
+        let thresh = center_val.saturating_add(64).min(170);
         for &(dx, dy) in &[(1isize, 0isize), (-1, 0), (0, 1), (0, -1)] {
-            // Walk dark center (1.5m) -> light ring (1m) -> dark outer border (1m) -> light outside
-            let mut stage = 0u8;
-            let mut last_dark_step = 0isize;
-            for step in 1..=max_probe {
-                let Some(val) = pixel(cx + dx * step, cy + dy * step) else { break };
-                let is_dark = val <= thresh;
-                match stage {
-                    0 if !is_dark => stage = 1,
-                    1 if is_dark => {
-                        stage = 2;
-                        last_dark_step = step;
-                    }
-                    2 if is_dark => last_dark_step = step,
-                    2 if !is_dark => {
-                        if last_dark_step >= 3 {
-                            finder_radii.push(last_dark_step as f32 + 0.5);
-                        }
-                        break;
-                    }
-                    _ => {}
-                }
+            if let Some(radius) = probe_finder_radius(gray, dims, [cx, cy], [dx, dy], thresh, max_probe) {
+                finder_radii.push(radius);
             }
         }
     }
@@ -1398,6 +1455,155 @@ mod tests {
         }
         let decoded = try_decode_code128(&runs, 0).expect("must decode Code 128 past tentative stop false match");
         assert_eq!(decoded.0, "23");
+    }
+
+    #[test]
+    fn test_code128_tentative_stop_valid_prefix_checksum_requires_end_boundary() {
+        // Sequence: Start B (104), 33 ('A'), 34 ('B'), 18 ('2'), 19 ('3'), 26 (checksum), STOP -> "AB23".
+        // At sym 18, [18] + first bar of [19] resembles STOP AND sym 34 satisfies the prefix checksum for "A",
+        // so without end-boundary validation the decoder would stop early and return "A".
+        let pattern_to_runs = |pat: [u8; 6], out: &mut Vec<(bool, usize)>| {
+            for (i, w) in pat.iter().enumerate() {
+                out.push((i % 2 == 0, usize::from(*w) * 2));
+            }
+        };
+        let mut runs = Vec::new();
+        pattern_to_runs(CODE128_PATTERNS[104], &mut runs);
+        pattern_to_runs(CODE128_PATTERNS[33], &mut runs);
+        pattern_to_runs(CODE128_PATTERNS[34], &mut runs);
+        pattern_to_runs(CODE128_PATTERNS[18], &mut runs);
+        pattern_to_runs(CODE128_PATTERNS[19], &mut runs);
+        pattern_to_runs(CODE128_PATTERNS[26], &mut runs);
+        for (i, w) in CODE128_STOP.iter().enumerate() {
+            runs.push((i % 2 == 0, usize::from(*w) * 2));
+        }
+        let decoded = try_decode_code128(&runs, 0).expect("must decode full AB23 sequence");
+        assert_eq!(decoded.0, "AB23");
+        assert_eq!(decoded.2, runs.len());
+
+        // With trailing 10-module quiet zone followed by unrelated page content, full sequence still decodes.
+        let mut with_quiet = runs.clone();
+        with_quiet.push((false, 20));
+        with_quiet.push((true, 6));
+        let decoded_q = try_decode_code128(&with_quiet, 0).expect("must decode AB23 with trailing quiet zone");
+        assert_eq!(decoded_q.0, "AB23");
+        assert_eq!(decoded_q.2, runs.len());
+
+        // A truncated sequence ending right after the 2-module internal space of sym 19 must not accept "A".
+        let mut truncated = Vec::new();
+        pattern_to_runs(CODE128_PATTERNS[104], &mut truncated);
+        pattern_to_runs(CODE128_PATTERNS[33], &mut truncated);
+        pattern_to_runs(CODE128_PATTERNS[34], &mut truncated);
+        pattern_to_runs(CODE128_PATTERNS[18], &mut truncated);
+        truncated.push((true, 4));
+        truncated.push((false, 4));
+        assert!(try_decode_code128(&truncated, 0).is_none());
+    }
+
+    #[test]
+    fn test_qr_code_version2_covers_outer_finder_band() {
+        let payload = "HTTPS://EXAMPLE.COM/VERIFICATION-V2-PAYLOAD";
+        let matrix = QrCode::encode_text(payload).expect("encode v2+ qr");
+        assert!(matrix.size >= 25, "expected Version 2+ QR code, got {} modules", matrix.size);
+        let module_px = 5u32;
+        let quiet = 4u32;
+        let png_bytes = matrix.to_png_bytes(module_px, quiet).expect("to png");
+        let img = craft_image_codecs::decode(&png_bytes).expect("read png");
+        let rgba_img = img.convert(craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::U8);
+        let scanned = scan_rgba_buffer(img.width() as usize, img.height() as usize, rgba_img.data(), 0);
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(scanned[0].text, payload);
+        let start = (quiet * module_px) as f64;
+        let end = ((quiet as usize + matrix.size) * module_px as usize) as f64;
+        assert!(scanned[0].rect[0] <= start + 2.0 && scanned[0].rect[1] <= start + 2.0, "got {:?}", scanned[0].rect);
+        assert!(scanned[0].rect[2] >= end - 2.0 && scanned[0].rect[3] >= end - 2.0, "got {:?}", scanned[0].rect);
+    }
+
+    #[test]
+    fn test_scan_page_codes_checks_image_budget_before_decode() {
+        assert_eq!(fits_scan_budget(8000, 8000, 0, MAX_EMBEDDED_SCAN_PIXELS), None);
+        assert_eq!(fits_scan_budget(4000, 4000, 20_000_000, MAX_EMBEDDED_SCAN_PIXELS), None);
+        assert_eq!(fits_scan_budget(1000, 1000, 0, MAX_EMBEDDED_SCAN_PIXELS), Some(1_000_000));
+
+        // Page with an oversized 8000x8000 JPEG header (would be 256MB RGBA if decoded) plus a small valid QR image.
+        let qr = QrCode::encode_text("OK-BUDGET").expect("encode qr");
+        let qr_png = qr.to_png_bytes(4, 2).expect("qr png");
+        let qr_img = craft_image_codecs::decode(&qr_png).expect("decode qr png");
+        let (qw, qh) = (qr_img.width(), qr_img.height());
+        let qr_rgb: Vec<u8> = qr_img.to_rgba8().chunks_exact(4).flat_map(|px| [px[0], px[1], px[2]]).collect();
+
+        // Minimal JPEG SOI + SOF0 header claiming 8000x8000 (3 components), never decoded.
+        let oversized_jpeg: Vec<u8> = vec![
+            0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x1F, 0x40, 0x1F, 0x40, 0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xFF, 0xD9,
+        ];
+        assert_eq!(craft_image_codecs::probe_size(&oversized_jpeg).ok(), Some((8000, 8000)));
+
+        let mut cos = pdfcraft_cos::Document::new_empty();
+        let pages = cos.get(cos.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        // Case A: PDF header reports 8000x8000 (skipped before image_file/decode).
+        let mut big_dict = pdfcraft_cos::Dict::new();
+        big_dict.set(b"Type".to_vec(), pdfcraft_cos::Object::name("XObject"));
+        big_dict.set(b"Subtype".to_vec(), pdfcraft_cos::Object::name("Image"));
+        big_dict.set(b"Width".to_vec(), pdfcraft_cos::Object::Int(8000));
+        big_dict.set(b"Height".to_vec(), pdfcraft_cos::Object::Int(8000));
+        big_dict.set(b"ColorSpace".to_vec(), pdfcraft_cos::Object::name("DeviceRGB"));
+        big_dict.set(b"BitsPerComponent".to_vec(), pdfcraft_cos::Object::Int(8));
+        big_dict.set(b"Filter".to_vec(), pdfcraft_cos::Object::name("DCTDecode"));
+        let big_ref = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::from_raw(big_dict, oversized_jpeg.clone())));
+
+        // Case B: PDF header under-reports 1x1, while JPEG SOF0 header probes as 8000x8000 (skipped by probe_size before decode).
+        let mut lying_dict = pdfcraft_cos::Dict::new();
+        lying_dict.set(b"Type".to_vec(), pdfcraft_cos::Object::name("XObject"));
+        lying_dict.set(b"Subtype".to_vec(), pdfcraft_cos::Object::name("Image"));
+        lying_dict.set(b"Width".to_vec(), pdfcraft_cos::Object::Int(1));
+        lying_dict.set(b"Height".to_vec(), pdfcraft_cos::Object::Int(1));
+        lying_dict.set(b"ColorSpace".to_vec(), pdfcraft_cos::Object::name("DeviceRGB"));
+        lying_dict.set(b"BitsPerComponent".to_vec(), pdfcraft_cos::Object::Int(8));
+        lying_dict.set(b"Filter".to_vec(), pdfcraft_cos::Object::name("DCTDecode"));
+        let lying_ref = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::from_raw(lying_dict, oversized_jpeg)));
+
+        let mut small_dict = pdfcraft_cos::Dict::new();
+        small_dict.set(b"Type".to_vec(), pdfcraft_cos::Object::name("XObject"));
+        small_dict.set(b"Subtype".to_vec(), pdfcraft_cos::Object::name("Image"));
+        small_dict.set(b"Width".to_vec(), pdfcraft_cos::Object::Int(i64::from(qw)));
+        small_dict.set(b"Height".to_vec(), pdfcraft_cos::Object::Int(i64::from(qh)));
+        small_dict.set(b"ColorSpace".to_vec(), pdfcraft_cos::Object::name("DeviceRGB"));
+        small_dict.set(b"BitsPerComponent".to_vec(), pdfcraft_cos::Object::Int(8));
+        let small_ref = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::from_raw(small_dict, qr_rgb)));
+
+        let mut xobjects = pdfcraft_cos::Dict::new();
+        xobjects.set(b"ImBig".to_vec(), pdfcraft_cos::Object::Ref(big_ref));
+        xobjects.set(b"ImLying".to_vec(), pdfcraft_cos::Object::Ref(lying_ref));
+        xobjects.set(b"ImSmall".to_vec(), pdfcraft_cos::Object::Ref(small_ref));
+        let mut res = pdfcraft_cos::Dict::new();
+        res.set(b"XObject".to_vec(), pdfcraft_cos::Object::Dict(xobjects));
+        let content_ref = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::from_raw(
+            pdfcraft_cos::Dict::new(),
+            b"q 100 0 0 100 50 50 cm /ImBig Do Q q 100 0 0 100 50 200 cm /ImLying Do Q q 100 0 0 100 200 200 cm /ImSmall Do Q".to_vec(),
+        )));
+        let mut page = pdfcraft_cos::Dict::new();
+        page.set(b"Type".to_vec(), pdfcraft_cos::Object::name("Page"));
+        page.set(b"Parent".to_vec(), pdfcraft_cos::Object::Ref(pages));
+        page.set(b"MediaBox".to_vec(), pdfcraft_cos::Object::Array(vec![0.into(), 0.into(), 400.into(), 400.into()]));
+        page.set(b"Resources".to_vec(), pdfcraft_cos::Object::Dict(res));
+        page.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(content_ref));
+        let page_ref = cos.add(page);
+        cos.update_dict(pages, |d| {
+            d.set(b"Kids".to_vec(), pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Ref(page_ref)]));
+            d.set(b"Count".to_vec(), pdfcraft_cos::Object::Int(1));
+        })
+        .unwrap();
+        let bytes = pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap();
+        let mut session = crate::Session::new();
+        let id = session.open("oversized.pdf".into(), None, std::sync::Arc::new(bytes), None).unwrap();
+        let doc = session.get(id).unwrap();
+        let imgs = doc.page_images(0);
+        let mut budget_used = 0usize;
+        assert!(doc.decode_embedded_image_for_scan(0, 0, &imgs[0], &mut budget_used).is_none());
+        assert!(doc.decode_embedded_image_for_scan(0, 1, &imgs[1], &mut budget_used).is_none());
+        assert_eq!(budget_used, 0);
+        let codes = doc.scan_page_codes(0);
+        assert!(codes.iter().any(|c| c.text == "OK-BUDGET"), "expected valid small QR despite oversized neighbors: {codes:?}");
     }
 
     #[test]

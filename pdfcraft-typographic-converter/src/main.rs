@@ -5,7 +5,7 @@ use pdf_typographic_converter::{
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Instant;
 
@@ -29,6 +29,14 @@ impl OutputFormat {
     }
 }
 
+struct CliArgs {
+    input_file: PathBuf,
+    custom_pdfium_path: Option<PathBuf>,
+    output_dir: PathBuf,
+    output_format: OutputFormat,
+    debug_json: bool,
+}
+
 fn print_usage(program_name: &str) {
     eprintln!("Usage: {} <INPUT_PDF> [OPTIONS]", program_name);
     eprintln!();
@@ -45,11 +53,22 @@ fn print_usage(program_name: &str) {
     eprintln!("  -h, --help               Print help information");
 }
 
-fn main() {
-    let start_time = Instant::now();
-    let args: Vec<String> = env::args().collect();
-    let program_name = args.first().map(String::as_str).unwrap_or("pdf-typographic-converter");
+fn parse_format_value(fmt_str: &str) -> OutputFormat {
+    OutputFormat::from_str(fmt_str).unwrap_or_else(|| {
+        eprintln!("Error: Invalid format '{}'. Supported values are: docx, xlsx, pptx, all.", fmt_str);
+        process::exit(1);
+    })
+}
 
+fn take_next_arg<'a>(args: &'a [String], index: &mut usize, flag_name: &str) -> &'a str {
+    *index += 1;
+    args.get(*index).map(String::as_str).unwrap_or_else(|| {
+        eprintln!("Error: {flag_name} requires an argument.");
+        process::exit(1);
+    })
+}
+
+fn parse_args(args: &[String], program_name: &str) -> CliArgs {
     if args.len() < 2 {
         print_usage(program_name);
         process::exit(1);
@@ -63,111 +82,127 @@ fn main() {
 
     let mut i = 1;
     while i < args.len() {
-        match args[i].as_str() {
-            "-h" | "--help" => {
-                print_usage(program_name);
-                process::exit(0);
-            }
-            "--debug-json" => {
-                debug_json = true;
-            }
-            "--format" => {
-                i += 1;
-                if i < args.len() {
-                    match OutputFormat::from_str(&args[i]) {
-                        Some(fmt) => output_format = fmt,
-                        None => {
-                            eprintln!("Error: Invalid format '{}'. Supported values are: docx, xlsx, pptx, all.", args[i]);
-                            process::exit(1);
-                        }
-                    }
-                } else {
-                    eprintln!("Error: --format requires an argument (docx, xlsx, pptx, all).");
-                    process::exit(1);
-                }
-            }
-            arg if arg.starts_with("--format=") => {
-                let fmt_str = &arg["--format=".len()..];
-                match OutputFormat::from_str(fmt_str) {
-                    Some(fmt) => output_format = fmt,
-                    None => {
-                        eprintln!("Error: Invalid format '{}'. Supported values are: docx, xlsx, pptx, all.", fmt_str);
-                        process::exit(1);
-                    }
-                }
-            }
-            "--out" => {
-                i += 1;
-                if i < args.len() {
-                    output_dir = PathBuf::from(&args[i]);
-                } else {
-                    eprintln!("Error: --out requires a directory path argument.");
-                    process::exit(1);
-                }
-            }
-            arg if arg.starts_with("--out=") => {
-                let dir_str = &arg["--out=".len()..];
-                output_dir = PathBuf::from(dir_str);
-            }
-            "--pdfium-path" => {
-                i += 1;
-                if i < args.len() {
-                    custom_pdfium_path = Some(PathBuf::from(&args[i]));
-                } else {
-                    eprintln!("Error: --pdfium-path requires a path argument.");
-                    process::exit(1);
-                }
-            }
-            arg if arg.starts_with("--pdfium-path=") => {
-                let path_str = &arg["--pdfium-path=".len()..];
-                custom_pdfium_path = Some(PathBuf::from(path_str));
-            }
-            arg if arg.starts_with('-') => {
-                eprintln!("Error: Unknown option '{}'.", arg);
-                print_usage(program_name);
-                process::exit(1);
-            }
-            arg => {
-                if let Some(existing) = &pdf_path {
-                    eprintln!("Error: Multiple file paths specified ('{}' and '{}').", existing.display(), arg);
-                    process::exit(1);
-                } else {
-                    pdf_path = Some(PathBuf::from(arg));
-                }
-            }
+        let arg = args[i].as_str();
+        if matches!(arg, "-h" | "--help") {
+            print_usage(program_name);
+            process::exit(0);
+        } else if arg == "--debug-json" {
+            debug_json = true;
+        } else if arg == "--format" {
+            output_format = parse_format_value(take_next_arg(args, &mut i, "--format"));
+        } else if let Some(fmt_str) = arg.strip_prefix("--format=") {
+            output_format = parse_format_value(fmt_str);
+        } else if arg == "--out" {
+            output_dir = PathBuf::from(take_next_arg(args, &mut i, "--out"));
+        } else if let Some(dir_str) = arg.strip_prefix("--out=") {
+            output_dir = PathBuf::from(dir_str);
+        } else if arg == "--pdfium-path" {
+            custom_pdfium_path = Some(PathBuf::from(take_next_arg(args, &mut i, "--pdfium-path")));
+        } else if let Some(path_str) = arg.strip_prefix("--pdfium-path=") {
+            custom_pdfium_path = Some(PathBuf::from(path_str));
+        } else if arg.starts_with('-') {
+            eprintln!("Error: Unknown option '{}'.", arg);
+            print_usage(program_name);
+            process::exit(1);
+        } else if let Some(existing) = &pdf_path {
+            eprintln!("Error: Multiple file paths specified ('{}' and '{}').", existing.display(), arg);
+            process::exit(1);
+        } else {
+            pdf_path = Some(PathBuf::from(arg));
         }
         i += 1;
     }
 
-    let input_file = match pdf_path {
-        Some(path) => path,
-        None => {
-            eprintln!("Error: Missing input PDF file path.");
-            print_usage(program_name);
-            process::exit(1);
-        }
-    };
+    let input_file = pdf_path.unwrap_or_else(|| {
+        eprintln!("Error: Missing input PDF file path.");
+        print_usage(program_name);
+        process::exit(1);
+    });
 
-    if !input_file.exists() {
-        eprintln!("Error: File not found: '{}'", input_file.display());
+    CliArgs { input_file, custom_pdfium_path, output_dir, output_format, debug_json }
+}
+
+fn emit_format(
+    enabled: bool,
+    path: PathBuf,
+    label: &str,
+    layout: &layout::DocumentLayout,
+    exporter: fn(&layout::DocumentLayout, &Path) -> anyhow::Result<()>,
+    generated_files: &mut Vec<PathBuf>,
+) {
+    if !enabled {
+        return;
+    }
+    if let Err(err) = exporter(layout, &path) {
+        eprintln!("Error exporting {label}: {err:#}");
+        process::exit(1);
+    }
+    generated_files.push(path);
+}
+
+fn emit_outputs(layout: &layout::DocumentLayout, cli: &CliArgs, file_stem: &str) -> Vec<PathBuf> {
+    let mut generated_files = Vec::new();
+
+    if cli.debug_json {
+        let debug_path = cli.output_dir.join(format!("{file_stem}_layout_debug.json"));
+        if let Ok(json_str) = serde_json::to_string_pretty(layout) {
+            let _ = fs::write(&debug_path, &json_str);
+            generated_files.push(debug_path);
+        }
+    }
+
+    emit_format(
+        matches!(cli.output_format, OutputFormat::Docx | OutputFormat::All),
+        cli.output_dir.join(format!("{file_stem}.docx")),
+        "DOCX",
+        layout,
+        export_docx,
+        &mut generated_files,
+    );
+    emit_format(
+        matches!(cli.output_format, OutputFormat::Xlsx | OutputFormat::All),
+        cli.output_dir.join(format!("{file_stem}.xlsx")),
+        "XLSX",
+        layout,
+        export_xlsx,
+        &mut generated_files,
+    );
+    emit_format(
+        matches!(cli.output_format, OutputFormat::Pptx | OutputFormat::All),
+        cli.output_dir.join(format!("{file_stem}.pptx")),
+        "PPTX",
+        layout,
+        export_pptx,
+        &mut generated_files,
+    );
+
+    generated_files
+}
+
+fn main() {
+    let start_time = Instant::now();
+    let args: Vec<String> = env::args().collect();
+    let program_name = args.first().map(String::as_str).unwrap_or("pdf-typographic-converter");
+    let cli = parse_args(&args, program_name);
+
+    if !cli.input_file.exists() {
+        eprintln!("Error: File not found: '{}'", cli.input_file.display());
         process::exit(1);
     }
 
-    // Ensure output directory exists
-    if !output_dir.exists() {
-        if let Err(err) = fs::create_dir_all(&output_dir) {
-            eprintln!("Error: Failed to create output directory '{}': {:#}", output_dir.display(), err);
+    if !cli.output_dir.exists() {
+        if let Err(err) = fs::create_dir_all(&cli.output_dir) {
+            eprintln!("Error: Failed to create output directory '{}': {:#}", cli.output_dir.display(), err);
             process::exit(1);
         }
     }
 
-    let file_stem = input_file.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "document".to_string());
+    let file_stem = cli.input_file.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "document".to_string());
 
-    println!("Converting: {}", input_file.display());
+    println!("Converting: {}", cli.input_file.display());
 
-    // 1. Initialize PDFium
     let t_init = Instant::now();
-    let pdfium = match extract::init_pdfium_with_path(custom_pdfium_path.as_deref()) {
+    let pdfium = match extract::init_pdfium_with_path(cli.custom_pdfium_path.as_deref()) {
         Ok(instance) => instance,
         Err(err) => {
             eprintln!("Error initializing PDFium: {:#}", err);
@@ -175,84 +210,38 @@ fn main() {
         }
     };
 
-    // 2. Extract page data (glyphs + images) grouped by page
-    let page_data = match extract::extract_pages_full_with_pdfium(&pdfium, &input_file) {
+    let page_data = match extract::extract_pages_full_with_pdfium(&pdfium, &cli.input_file) {
         Ok(pages) => pages,
         Err(err) => {
-            eprintln!("Error extracting page data from '{}': {:#}", input_file.display(), err);
+            eprintln!("Error extracting page data from '{}': {:#}", cli.input_file.display(), err);
             process::exit(1);
         }
     };
     let extract_duration = t_init.elapsed();
     println!("  -> Extracted raw page data in {:.2?}", extract_duration);
 
-    // 3. Build document layout
     let total_skipped_images: usize = page_data.iter().map(|p| p.skipped_images).sum();
     if total_skipped_images > 0 {
         eprintln!("Warning: skipped {total_skipped_images} image(s) exceeding the 128 MiB per-page image extraction budget.");
     }
-    let layout_duration = Instant::now();
-    let _ = layout_duration;
     let t_layout = Instant::now();
     let layout = layout::build_layout(page_data);
     let layout_duration = t_layout.elapsed();
     println!("  -> Built typographic layout in {:.2?}", layout_duration);
 
-    // Calculate layout statistics
     let total_pages = layout.pages.len();
     let total_lines: usize = layout.pages.iter().map(|p| p.lines.len()).sum();
     let total_runs: usize = layout.pages.iter().flat_map(|p| &p.lines).map(|l| l.runs.len()).sum();
-
     let total_superscripts: usize =
         layout.pages.iter().flat_map(|p| &p.lines).flat_map(|l| &l.runs).filter(|r| r.script == ScriptType::Superscript).count();
-
     let total_subscripts: usize =
         layout.pages.iter().flat_map(|p| &p.lines).flat_map(|l| &l.runs).filter(|r| r.script == ScriptType::Subscript).count();
 
-    // 4. Emit requested formats
     let t_emit = Instant::now();
-    let mut generated_files = Vec::new();
-
-    // Save layout_debug.json only when requested
-    if debug_json {
-        let debug_path = output_dir.join(format!("{file_stem}_layout_debug.json"));
-        if let Ok(json_str) = serde_json::to_string_pretty(&layout) {
-            let _ = fs::write(&debug_path, &json_str);
-            generated_files.push(debug_path);
-        }
-    }
-
-    if output_format == OutputFormat::Docx || output_format == OutputFormat::All {
-        let docx_path = output_dir.join(format!("{}.docx", file_stem));
-        if let Err(err) = export_docx(&layout, &docx_path) {
-            eprintln!("Error exporting DOCX: {:#}", err);
-            process::exit(1);
-        }
-        generated_files.push(docx_path);
-    }
-
-    if output_format == OutputFormat::Xlsx || output_format == OutputFormat::All {
-        let xlsx_path = output_dir.join(format!("{}.xlsx", file_stem));
-        if let Err(err) = export_xlsx(&layout, &xlsx_path) {
-            eprintln!("Error exporting XLSX: {:#}", err);
-            process::exit(1);
-        }
-        generated_files.push(xlsx_path);
-    }
-
-    if output_format == OutputFormat::Pptx || output_format == OutputFormat::All {
-        let pptx_path = output_dir.join(format!("{}.pptx", file_stem));
-        if let Err(err) = export_pptx(&layout, &pptx_path) {
-            eprintln!("Error exporting PPTX: {:#}", err);
-            process::exit(1);
-        }
-        generated_files.push(pptx_path);
-    }
-
+    let generated_files = emit_outputs(&layout, &cli, &file_stem);
     let emit_duration = t_emit.elapsed();
     let total_duration = start_time.elapsed();
 
-    // 5. Print summary
     println!();
     println!("=== Conversion Summary ===");
     println!("Total Pages:          {}", total_pages);

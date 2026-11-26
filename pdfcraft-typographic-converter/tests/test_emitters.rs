@@ -117,6 +117,8 @@ fn test_export_docx() {
     assert!(xml_content.contains("Tabbed Column"), "DOCX should contain 'Tabbed Column'");
     assert!(xml_content.contains("superscript"), "DOCX should contain superscript vertical alignment");
     assert!(xml_content.contains("subscript"), "DOCX should contain subscript vertical alignment");
+    assert!(xml_content.contains("hAnsi=\"Helvetica-Bold\""), "DOCX should set w:hAnsi font");
+    assert!(xml_content.contains("cs=\"Helvetica-Bold\""), "DOCX should set w:cs font");
 
     let _ = fs::remove_file(&docx_path);
 }

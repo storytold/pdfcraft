@@ -240,12 +240,11 @@ impl crate::Document {
     /// `images` no picture is prepared.
     pub(crate) fn export_pages_checked(&self, images: bool, image_budget: usize) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
         let Some(editor) = self.editor.as_ref() else { return (Vec::new(), Vec::new()) };
-        self.export_pages_within_split(images, image_budget, &mut pdfcraft_cos::ImageBudget::new(&editor.cos), false)
+        self.export_pages_within(images, image_budget, &mut pdfcraft_cos::ImageBudget::new(&editor.cos))
     }
 
     /// [`Self::export_pages_checked`], its pictures decoded within `image_work`, which is shared
     /// by the whole export: a picture past it is left out like one past `image_budget`.
-    #[allow(dead_code)]
     pub(crate) fn export_pages_within(
         &self,
         images: bool,

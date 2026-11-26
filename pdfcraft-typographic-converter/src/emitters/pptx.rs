@@ -1,5 +1,6 @@
-use crate::layout::{DocumentLayout, ScriptType};
+use crate::layout::{DocumentLayout, PageImage, PageLayout, ScriptType, TextLine};
 use anyhow::{Context, Result};
+use std::fmt::Write as _;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -33,20 +34,12 @@ fn escape_xml(s: &str) -> String {
     out
 }
 
-/// Exports a `DocumentLayout` to a Microsoft PowerPoint presentation (.pptx).
-pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
-    let file = File::create(output_path).with_context(|| format!("Failed to create PPTX output file at {}", output_path.display()))?;
-
-    let mut zip = ZipWriter::new(file);
-    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-
-    let num_slides = doc.pages.len().max(1);
-
+fn write_package_metadata(zip: &mut ZipWriter<File>, options: SimpleFileOptions, num_slides: usize) -> Result<()> {
     // 1. [Content_Types].xml
     let mut content_types = String::from(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-officedocument.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Default Extension="png" ContentType="image/png"/>
   <Default Extension="jpeg" ContentType="image/jpeg"/>
@@ -57,16 +50,13 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
   <Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
 "#,
     );
-
     for i in 1..=num_slides {
-        content_types.push_str(&format!(
-            r#"  <Override PartName="/ppt/slides/slide{}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>
-"#,
-            i
-        ));
+        let _ = writeln!(
+            content_types,
+            r#"  <Override PartName="/ppt/slides/slide{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>"#
+        );
     }
     content_types.push_str("</Types>");
-
     zip.start_file("[Content_Types].xml", options)?;
     zip.write_all(content_types.as_bytes())?;
 
@@ -75,7 +65,6 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
 </Relationships>"#;
-
     zip.start_file("_rels/.rels", options)?;
     zip.write_all(root_rels.as_bytes())?;
 
@@ -86,20 +75,19 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
   <Relationship Id="rIdMaster1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>
 "#,
     );
-
     for i in 1..=num_slides {
-        pres_rels.push_str(&format!(
-            r#"  <Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide{}.xml"/>
-"#,
-            i, i
-        ));
+        let _ = writeln!(
+            pres_rels,
+            r#"  <Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide{i}.xml"/>"#
+        );
     }
     pres_rels.push_str("</Relationships>");
-
     zip.start_file("ppt/_rels/presentation.xml.rels", options)?;
     zip.write_all(pres_rels.as_bytes())?;
+    Ok(())
+}
 
-    // Minimal Slide Master, Layout, and Theme
+fn write_theme_and_masters(zip: &mut ZipWriter<File>, options: SimpleFileOptions) -> Result<()> {
     let theme_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme">
   <a:themeElements>
@@ -213,93 +201,45 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
 </Relationships>"#;
     zip.start_file("ppt/slideLayouts/_rels/slideLayout1.xml.rels", options)?;
     zip.write_all(slide_layout_rels.as_bytes())?;
+    Ok(())
+}
 
-    // Determine presentation dimensions in EMUs (1 pt = 12700 EMUs), accommodating every page
-    let max_width = doc.pages.iter().map(|p| p.width as f64).fold(0.0, f64::max);
-    let max_height = doc.pages.iter().map(|p| p.height as f64).fold(0.0, f64::max);
-    let width_emu = if max_width > 0.0 { (max_width * 12700.0).round() as i64 } else { 9144000 };
-    let height_emu = if max_height > 0.0 { (max_height * 12700.0).round() as i64 } else { 6858000 };
-
-    // 4. ppt/presentation.xml
+fn write_presentation_xml(zip: &mut ZipWriter<File>, options: SimpleFileOptions, num_slides: usize, width_emu: i64, height_emu: i64) -> Result<()> {
     let mut pres_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:sldMasterIdLst>
     <p:sldMasterId id="2147483648" r:id="rIdMaster1"/>
   </p:sldMasterIdLst>
   <p:sldIdLst>
-"#.to_string();
+"#
+    .to_string();
 
     for i in 1..=num_slides {
-        pres_xml.push_str(&format!(
-            r#"    <p:sldId id="{}" r:id="rId{}"/>
-"#,
-            255 + i,
-            i
-        ));
+        let _ = writeln!(pres_xml, r#"    <p:sldId id="{}" r:id="rId{}"/>"#, 255 + i, i);
     }
 
-    pres_xml.push_str(&format!(
+    let _ = write!(
+        pres_xml,
         r#"  </p:sldIdLst>
-  <p:sldSz cx="{}" cy="{}"/>
+  <p:sldSz cx="{width_emu}" cy="{height_emu}"/>
   <p:notesSz cx="6858000" cy="9144000"/>
-</p:presentation>"#,
-        width_emu, height_emu
-    ));
+</p:presentation>"#
+    );
 
     zip.start_file("ppt/presentation.xml", options)?;
     zip.write_all(pres_xml.as_bytes())?;
+    Ok(())
+}
 
-    // 5. ppt/slides/slide{N}.xml
-    let pages_to_emit: Vec<_> = if doc.pages.is_empty() {
-        // Fallback for empty document layout: emit a single blank slide
-        vec![crate::layout::PageLayout { page_index: 0, width: 792.0, height: 612.0, lines: Vec::new(), images: Vec::new() }]
-    } else {
-        doc.pages.clone()
-    };
+fn append_text_box(slide_xml: &mut String, shape_id: usize, line: &TextLine, scale: f64, max_height: f64) {
+    let x = (line.bounds.0 as f64 * scale * 12700.0).round() as i64;
+    let y = ((max_height - line.bounds.3 as f64 * scale) * 12700.0).round() as i64;
+    let cx = ((line.bounds.2 - line.bounds.0) as f64 * scale * 12700.0).max(100000.0).round() as i64;
+    let cy = ((line.bounds.3 - line.bounds.1) as f64 * scale * 12700.0).max(100000.0).round() as i64;
 
-    for (page_idx, page) in pages_to_emit.iter().enumerate() {
-        let slide_num = page_idx + 1;
-        let slide_path = format!("ppt/slides/slide{}.xml", slide_num);
-
-        let scale = if page.width > 0.0 && page.height > 0.0 && max_width > 0.0 && max_height > 0.0 {
-            (max_width / page.width as f64).min(max_height / page.height as f64)
-        } else {
-            1.0
-        };
-
-        let mut slide_xml = String::from(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-  <p:cSld>
-    <p:spTree>
-      <p:nvGrpSpPr>
-        <p:cNvPr id="1" name=""/>
-        <p:cNvGrpSpPr/>
-        <p:nvPr/>
-      </p:nvGrpSpPr>
-      <p:grpSpPr>
-        <a:xfrm>
-          <a:off x="0" y="0"/>
-          <a:ext cx="0" cy="0"/>
-          <a:chOff x="0" y="0"/>
-          <a:chExt cx="0" cy="0"/>
-        </a:xfrm>
-      </p:grpSpPr>
-"#,
-        );
-
-        for (line_idx, line) in page.lines.iter().enumerate() {
-            let shape_id = line_idx + 2;
-
-            // Coordinates in EMUs fitted to slide dimensions
-            let x = (line.bounds.0 as f64 * scale * 12700.0).round() as i64;
-            // Flip PDF bottom-up Y-axis to top-down
-            let y = ((max_height - line.bounds.3 as f64 * scale) * 12700.0).round() as i64;
-            let cx = ((line.bounds.2 - line.bounds.0) as f64 * scale * 12700.0).max(100000.0).round() as i64;
-            let cy = ((line.bounds.3 - line.bounds.1) as f64 * scale * 12700.0).max(100000.0).round() as i64;
-
-            slide_xml.push_str(&format!(
-                r#"      <p:sp>
+    let _ = write!(
+        slide_xml,
+        r#"      <p:sp>
         <p:nvSpPr>
           <p:cNvPr id="{shape_id}" name="TextBox {shape_id}"/>
           <p:cNvSpPr txBox="1"/>
@@ -322,84 +262,59 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
           <a:lstStyle/>
           <a:p>
 "#
-            ));
+    );
 
-            for run in &line.runs {
-                let sz = (((run.font_size as f64 * scale) * 100.0).round() as i32).clamp(100, 400000);
-                let b_attr = if run.is_bold { r#" b="1""# } else { "" };
-                let i_attr = if run.is_italic { r#" i="1""# } else { "" };
-                let baseline_attr = match run.script {
-                    ScriptType::Superscript => r#" baseline="30000""#,
-                    ScriptType::Subscript => r#" baseline="-25000""#,
-                    ScriptType::Normal => "",
-                };
+    for run in &line.runs {
+        let sz = (((run.font_size as f64 * scale) * 100.0).round() as i32).clamp(100, 400000);
+        let b_attr = if run.is_bold { r#" b="1""# } else { "" };
+        let i_attr = if run.is_italic { r#" i="1""# } else { "" };
+        let baseline_attr = match run.script {
+            ScriptType::Superscript => r#" baseline="30000""#,
+            ScriptType::Subscript => r#" baseline="-25000""#,
+            ScriptType::Normal => "",
+        };
 
-                let escaped_font = escape_xml(&run.font_name);
-                let escaped_text = escape_xml(&run.text);
-                let text_content = if run.has_leading_tab { format!("\t{}", escaped_text) } else { escaped_text };
+        let escaped_font = escape_xml(&run.font_name);
+        let escaped_text = escape_xml(&run.text);
+        let text_content = if run.has_leading_tab { format!("\t{escaped_text}") } else { escaped_text };
 
-                slide_xml.push_str(&format!(
-                    r#"            <a:r>
+        let _ = write!(
+            slide_xml,
+            r#"            <a:r>
               <a:rPr sz="{sz}"{b_attr}{i_attr}{baseline_attr}>
                 <a:latin typeface="{escaped_font}"/>
               </a:rPr>
               <a:t>{text_content}</a:t>
             </a:r>
 "#
-                ));
-            }
+        );
+    }
 
-            if line.runs.is_empty() {
-                slide_xml.push_str("            <a:endParaRPr/>\n");
-            }
+    if line.runs.is_empty() {
+        slide_xml.push_str("            <a:endParaRPr/>\n");
+    }
 
-            slide_xml.push_str(
-                r#"          </a:p>
+    slide_xml.push_str(
+        r#"          </a:p>
         </p:txBody>
       </p:sp>
 "#,
-            );
-        }
+    );
+}
 
-        // Slide relationships file (referencing slideLayout1 and any embedded images)
-        let rels_path = format!("ppt/slides/_rels/slide{}.xml.rels", slide_num);
-        let mut rels_xml = String::from(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rIdLayout1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
-"#,
-        );
+fn append_image_shape(slide_xml: &mut String, shape_id: usize, img_num: usize, img: &PageImage, scale: f64, max_height: f64) {
+    let min_x = img.bounds.0.min(img.bounds.2);
+    let max_x = img.bounds.0.max(img.bounds.2);
+    let min_y = img.bounds.1.min(img.bounds.3);
+    let max_y = img.bounds.1.max(img.bounds.3);
+    let x = (min_x as f64 * scale * 12700.0).round() as i64;
+    let y = ((max_height - max_y as f64 * scale) * 12700.0).round() as i64;
+    let cx = ((max_x - min_x) as f64 * scale * 12700.0).max(100000.0).round() as i64;
+    let cy = ((max_y - min_y) as f64 * scale * 12700.0).max(100000.0).round() as i64;
 
-        // Emit images (including barcodes and QR codes)
-        for (img_idx, img) in page.images.iter().enumerate() {
-            let is_jpeg = img.bytes.starts_with(&[0xFF, 0xD8]);
-            let ext = if is_jpeg { "jpeg" } else { "png" };
-            let img_filename = format!("image_{}_{}.{}", slide_num, img_idx + 1, ext);
-            let media_path = format!("ppt/media/{}", img_filename);
-
-            // Write image bytes to archive
-            zip.start_file(&media_path, options)?;
-            zip.write_all(&img.bytes)?;
-
-            rels_xml.push_str(&format!(
-                r#"  <Relationship Id="rIdImg{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/{}"/>
-"#,
-                img_idx + 1,
-                img_filename
-            ));
-
-            let shape_id = page.lines.len() + 2 + img_idx;
-            let min_x = img.bounds.0.min(img.bounds.2);
-            let max_x = img.bounds.0.max(img.bounds.2);
-            let min_y = img.bounds.1.min(img.bounds.3);
-            let max_y = img.bounds.1.max(img.bounds.3);
-            let x = (min_x as f64 * scale * 12700.0).round() as i64;
-            let y = ((max_height - max_y as f64 * scale) * 12700.0).round() as i64;
-            let cx = ((max_x - min_x) as f64 * scale * 12700.0).max(100000.0).round() as i64;
-            let cy = ((max_y - min_y) as f64 * scale * 12700.0).max(100000.0).round() as i64;
-
-            slide_xml.push_str(&format!(
-                r#"      <p:pic>
+    let _ = write!(
+        slide_xml,
+        r#"      <p:pic>
     <p:nvPicPr>
       <p:cNvPr id="{shape_id}" name="Picture {shape_id}"/>
       <p:cNvPicPr>
@@ -408,7 +323,7 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
       <p:nvPr/>
     </p:nvPicPr>
     <p:blipFill>
-      <a:blip r:embed="rIdImg{}"/>
+      <a:blip r:embed="rIdImg{img_num}"/>
       <a:stretch>
         <a:fillRect/>
       </a:stretch>
@@ -423,23 +338,118 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
       </a:prstGeom>
     </p:spPr>
   </p:pic>
+"#
+    );
+}
+
+fn write_slide(
+    zip: &mut ZipWriter<File>,
+    options: SimpleFileOptions,
+    slide_num: usize,
+    page: &PageLayout,
+    max_width: f64,
+    max_height: f64,
+) -> Result<()> {
+    let scale = if page.width > 0.0 && page.height > 0.0 && max_width > 0.0 && max_height > 0.0 {
+        (max_width / page.width as f64).min(max_height / page.height as f64)
+    } else {
+        1.0
+    };
+
+    let mut slide_xml = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld>
+    <p:spTree>
+      <p:nvGrpSpPr>
+        <p:cNvPr id="1" name=""/>
+        <p:cNvGrpSpPr/>
+        <p:nvPr/>
+      </p:nvGrpSpPr>
+      <p:grpSpPr>
+        <a:xfrm>
+          <a:off x="0" y="0"/>
+          <a:ext cx="0" cy="0"/>
+          <a:chOff x="0" y="0"/>
+          <a:chExt cx="0" cy="0"/>
+        </a:xfrm>
+      </p:grpSpPr>
 "#,
-                img_idx + 1
-            ));
-        }
+    );
 
-        rels_xml.push_str("</Relationships>");
-        zip.start_file(rels_path, options)?;
-        zip.write_all(rels_xml.as_bytes())?;
+    for (line_idx, line) in page.lines.iter().enumerate() {
+        append_text_box(&mut slide_xml, line_idx + 2, line, scale, max_height);
+    }
 
-        slide_xml.push_str(
-            r#"    </p:spTree>
-  </p:cSld>
-</p:sld>"#,
+    let mut rels_xml = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdLayout1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+"#,
+    );
+
+    for (img_idx, img) in page.images.iter().enumerate() {
+        let img_num = img_idx + 1;
+        let ext = if img.bytes.starts_with(&[0xFF, 0xD8]) { "jpeg" } else { "png" };
+        let img_filename = format!("image_{slide_num}_{img_num}.{ext}");
+        let media_path = format!("ppt/media/{img_filename}");
+
+        zip.start_file(&media_path, options)?;
+        zip.write_all(&img.bytes)?;
+
+        let _ = writeln!(
+            rels_xml,
+            r#"  <Relationship Id="rIdImg{img_num}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/{img_filename}"/>"#
         );
 
-        zip.start_file(slide_path, options)?;
-        zip.write_all(slide_xml.as_bytes())?;
+        let shape_id = page.lines.len() + 2 + img_idx;
+        append_image_shape(&mut slide_xml, shape_id, img_num, img, scale, max_height);
+    }
+
+    rels_xml.push_str("</Relationships>");
+    zip.start_file(format!("ppt/slides/_rels/slide{slide_num}.xml.rels"), options)?;
+    zip.write_all(rels_xml.as_bytes())?;
+
+    slide_xml.push_str(
+        r#"    </p:spTree>
+  </p:cSld>
+</p:sld>"#,
+    );
+    zip.start_file(format!("ppt/slides/slide{slide_num}.xml"), options)?;
+    zip.write_all(slide_xml.as_bytes())?;
+    Ok(())
+}
+
+/// Exports a `DocumentLayout` to a Microsoft PowerPoint presentation (.pptx).
+pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
+    let file = File::create(output_path).with_context(|| format!("Failed to create PPTX output file at {}", output_path.display()))?;
+
+    let mut zip = ZipWriter::new(file);
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    let num_slides = doc.pages.len().max(1);
+    write_package_metadata(&mut zip, options, num_slides)?;
+    write_theme_and_masters(&mut zip, options)?;
+
+    // Determine presentation dimensions in EMUs (1 pt = 12700 EMUs), accommodating every page
+    let max_width = doc.pages.iter().map(|p| p.width as f64).fold(0.0, f64::max);
+    let max_height = doc.pages.iter().map(|p| p.height as f64).fold(0.0, f64::max);
+    let width_emu = if max_width > 0.0 { (max_width * 12700.0).round() as i64 } else { 9144000 };
+    let height_emu = if max_height > 0.0 { (max_height * 12700.0).round() as i64 } else { 6858000 };
+
+    write_presentation_xml(&mut zip, options, num_slides, width_emu, height_emu)?;
+
+    // 5. ppt/slides/slide{N}.xml (borrow doc.pages without cloning)
+    let fallback_page;
+    let pages_to_emit: &[PageLayout] = if doc.pages.is_empty() {
+        fallback_page = [PageLayout { page_index: 0, width: 792.0, height: 612.0, lines: Vec::new(), images: Vec::new() }];
+        &fallback_page
+    } else {
+        &doc.pages
+    };
+
+    for (page_idx, page) in pages_to_emit.iter().enumerate() {
+        write_slide(&mut zip, options, page_idx + 1, page, max_width, max_height)?;
     }
 
     zip.finish().with_context(|| format!("Failed to finalize PPTX zip archive at {}", output_path.display()))?;

@@ -1,8 +1,13 @@
 use crate::layout::{ExtractedPageData, PageImage};
 use anyhow::{Context, Result};
-use pdfium_render::prelude::*;
+use pdfium_render::prelude::{
+    PdfDocument, PdfFontWeight, PdfPageObject, PdfPageObjectCommon, PdfPageObjectsCommon, PdfPageText, PdfPageTextChar, PdfPageTextObject, Pdfium,
+};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+/// Tuple of `(page_index, width, height, glyphs)` returned by page extraction helpers.
+pub type PageGlyphs = (usize, f32, f32, Vec<RawGlyph>);
 
 /// Extracted typographic information for an individual character/glyph.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -17,60 +22,46 @@ pub struct RawGlyph {
     pub origin_y: f32,
 }
 
-/// Initialize PDFium, supporting binding via a local dynamic library or system PDFium.
+fn bind_explicit_pdfium_path(path: &Path, source: &str) -> Result<Pdfium> {
+    if !path.is_file() {
+        anyhow::bail!("PDFium dynamic library from {source} does not exist or is not a file: {}", path.display());
+    }
+    let bindings = Pdfium::bind_to_library(path)
+        .map_err(|err| anyhow::anyhow!("Failed to bind PDFium dynamic library from {source} ({}): {err}", path.display()))?;
+    Ok(Pdfium::new(bindings))
+}
+
+/// Initialize PDFium using an explicit path, environment override, or system library.
 ///
-/// If a `custom_path` or the `PDFIUM_PATH` environment variable is provided,
-/// it will attempt to load the library from that path first.
-/// Otherwise, it looks for the platform library in common local locations,
-/// and falls back to binding to the system library.
+/// Resolution order (never probes the current working directory):
+/// 1. Explicit `custom_path` passed by the caller (`--pdfium-path`)
+/// 2. `PDFIUM_DYNAMIC_LIB_PATH` environment variable (falling back to `PDFIUM_PATH`)
+/// 3. Standard system library loading (`Pdfium::bind_to_system_library`)
 pub fn init_pdfium_with_path(custom_path: Option<&Path>) -> Result<Pdfium> {
     // 1. Explicit path passed by caller
     if let Some(path) = custom_path {
-        if path.exists() {
-            if let Ok(bindings) = Pdfium::bind_to_library(path) {
-                return Ok(Pdfium::new(bindings));
+        return bind_explicit_pdfium_path(path, "--pdfium-path");
+    }
+
+    // 2. Explicit environment variable override
+    for var_name in ["PDFIUM_DYNAMIC_LIB_PATH", "PDFIUM_PATH"] {
+        if let Ok(env_path) = std::env::var(var_name) {
+            let trimmed = env_path.trim();
+            if !trimmed.is_empty() {
+                return bind_explicit_pdfium_path(Path::new(trimmed), var_name);
             }
         }
     }
 
-    // 2. Check PDFIUM_PATH environment variable
-    if let Ok(env_path) = std::env::var("PDFIUM_PATH") {
-        let p = Path::new(&env_path);
-        if p.exists() {
-            if let Ok(bindings) = Pdfium::bind_to_library(p) {
-                return Ok(Pdfium::new(bindings));
-            }
-        }
-    }
-
-    // 3. Check candidate paths next to executable
-    let lib_name = Pdfium::pdfium_platform_library_name();
-    let mut candidate_paths: Vec<PathBuf> = Vec::new();
-
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            candidate_paths.push(exe_dir.join(&lib_name));
-            candidate_paths.push(exe_dir.join("lib").join(&lib_name));
-        }
-    }
-
-    for path in candidate_paths {
-        if path.exists() {
-            if let Ok(bindings) = Pdfium::bind_to_library(&path) {
-                return Ok(Pdfium::new(bindings));
-            }
-        }
-    }
-
-    // 4. Try binding to the system-installed library
+    // 3. Standard system library loading
     if let Ok(bindings) = Pdfium::bind_to_system_library() {
         return Ok(Pdfium::new(bindings));
     }
 
+    let lib_name = Pdfium::pdfium_platform_library_name();
     anyhow::bail!(
-        "Failed to initialize PDFium: could not bind via local dynamic library ({:?}) \
-        or system PDFium. Please ensure the dynamic library is in the current directory, \
-        in PATH, or set the PDFIUM_PATH environment variable.",
+        "Failed to initialize PDFium: could not bind system PDFium ({:?}). \
+        Set PDFIUM_DYNAMIC_LIB_PATH or pass --pdfium-path.",
         lib_name
     )
 }
@@ -86,7 +77,6 @@ pub fn extract_glyphs<P: AsRef<Path>>(pdf_path: P) -> Result<Vec<RawGlyph>> {
     extract_glyphs_with_pdfium(&pdfium, pdf_path)
 }
 
-/// Extracts glyphs grouped by page from a PDF file located at `pdf_path`.
 /// Extracts full page data (glyphs + embedded images like barcodes/QRs) grouped by page.
 pub fn extract_pages_full<P: AsRef<Path>>(pdf_path: P) -> Result<Vec<ExtractedPageData>> {
     let pdfium = init_pdfium()?;
@@ -95,8 +85,7 @@ pub fn extract_pages_full<P: AsRef<Path>>(pdf_path: P) -> Result<Vec<ExtractedPa
 
 /// Extracts glyphs grouped by page from a PDF file located at `pdf_path`.
 /// Returns `Vec<(page_index, width, height, Vec<RawGlyph>)>`.
-#[allow(clippy::type_complexity)]
-pub fn extract_pages<P: AsRef<Path>>(pdf_path: P) -> Result<Vec<(usize, f32, f32, Vec<RawGlyph>)>> {
+pub fn extract_pages<P: AsRef<Path>>(pdf_path: P) -> Result<Vec<PageGlyphs>> {
     let pdfium = init_pdfium()?;
     extract_pages_with_pdfium(&pdfium, pdf_path)
 }
@@ -109,8 +98,7 @@ pub fn extract_glyphs_with_pdfium<P: AsRef<Path>>(pdfium: &Pdfium, pdf_path: P) 
 
 /// Extracts glyphs grouped by page using an existing `Pdfium` instance.
 /// Returns `Vec<(page_index, width, height, Vec<RawGlyph>)>`.
-#[allow(clippy::type_complexity)]
-pub fn extract_pages_with_pdfium<P: AsRef<Path>>(pdfium: &Pdfium, pdf_path: P) -> Result<Vec<(usize, f32, f32, Vec<RawGlyph>)>> {
+pub fn extract_pages_with_pdfium<P: AsRef<Path>>(pdfium: &Pdfium, pdf_path: P) -> Result<Vec<PageGlyphs>> {
     let pages = extract_pages_full_with_pdfium(pdfium, pdf_path)?;
     Ok(pages.into_iter().map(|p| (p.page_index, p.width, p.height, p.glyphs)).collect())
 }
@@ -122,88 +110,120 @@ fn is_xml_valid_char(c: char) -> bool {
     )
 }
 
+const MAX_FORM_VISITS: usize = 1_000;
+const MAX_PAGE_IMAGE_BYTES: usize = 128 * 1024 * 1024;
+
 #[derive(Default)]
-struct ExtractionBudget {
+struct PageExtractAcc {
+    glyphs: Vec<RawGlyph>,
+    images: Vec<PageImage>,
+    found_text_object: bool,
     form_visits: usize,
     image_bytes: usize,
     skipped_images: usize,
 }
 
-fn extract_object_content(
-    object: &pdfium_render::prelude::PdfPageObject<'_>,
-    text_page_opt: Option<&pdfium_render::prelude::PdfPageText<'_>>,
-    document: &pdfium_render::prelude::PdfDocument<'_>,
-    page_glyphs: &mut Vec<RawGlyph>,
-    page_images: &mut Vec<PageImage>,
-    found_text_object: &mut bool,
-    budget: &mut ExtractionBudget,
-) -> Result<()> {
-    if let Some(text_object) = object.as_text_object() {
-        *found_text_object = true;
-        if let Some(text_page) = text_page_opt {
-            if let Ok(chars) = text_page.chars_for_object(text_object) {
-                for ch in chars.iter() {
-                    let glyph = extract_single_glyph(&ch, Some(text_object));
-                    if is_xml_valid_char(glyph.char_code) {
-                        page_glyphs.push(glyph);
-                    }
-                }
-            }
+fn extract_text_object(text_object: &PdfPageTextObject<'_>, text_page_opt: Option<&PdfPageText<'_>>, acc: &mut PageExtractAcc) {
+    acc.found_text_object = true;
+    let Some(text_page) = text_page_opt else {
+        return;
+    };
+    let Ok(chars) = text_page.chars_for_object(text_object) else {
+        return;
+    };
+    for ch in chars.iter() {
+        let glyph = extract_single_glyph(&ch, Some(text_object));
+        if is_xml_valid_char(glyph.char_code) {
+            acc.glyphs.push(glyph);
         }
-    } else if let Some(image_object) = object.as_image_object() {
-        let raw_data = image_object.get_raw_image_data().unwrap_or_default();
-        let (left, top, right, bottom) = match object.bounds() {
-            Ok(quad) => {
-                let r = quad.to_rect();
-                (r.left().value, r.top().value, r.right().value, r.bottom().value)
-            }
-            Err(_) => (0.0, 0.0, 0.0, 0.0),
-        };
-        let width_pt = (right - left).abs();
-        let height_pt = (top - bottom).abs();
+    }
+}
 
-        let mut bytes = raw_data;
-        let is_png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
-        let is_jpeg = bytes.starts_with(&[0xFF, 0xD8, 0xFF]);
+fn extract_image_object(object: &PdfPageObject<'_>, document: &PdfDocument<'_>, acc: &mut PageExtractAcc) {
+    let Some(image_object) = object.as_image_object() else {
+        return;
+    };
+    let (left, top, right, bottom) = match object.bounds() {
+        Ok(quad) => {
+            let r = quad.to_rect();
+            (r.left().value, r.top().value, r.right().value, r.bottom().value)
+        }
+        Err(_) => (0.0, 0.0, 0.0, 0.0),
+    };
+    let width_pt = (right - left).abs();
+    let height_pt = (top - bottom).abs();
 
-        if !is_png && !is_jpeg {
-            if let Ok(bitmap) = image_object.get_processed_bitmap(document) {
+    let mut bytes = image_object.get_raw_image_data().unwrap_or_default();
+    let is_png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
+    let is_jpeg = bytes.starts_with(&[0xFF, 0xD8, 0xFF]);
+
+    if !is_png && !is_jpeg {
+        bytes = image_object
+            .get_processed_bitmap(document)
+            .ok()
+            .and_then(|bitmap| {
                 let w = bitmap.width() as u32;
                 let h = bitmap.height() as u32;
                 if w > 0 && h > 0 {
-                    let rgba = bitmap.as_rgba_bytes();
-                    if let Ok(png_data) = encode_png_exact(w, h, &rgba) {
-                        bytes = png_data;
-                    } else {
-                        bytes.clear();
-                    }
+                    encode_png_exact(w, h, &bitmap.as_rgba_bytes()).ok()
                 } else {
-                    bytes.clear();
+                    None
                 }
-            } else {
-                bytes.clear();
-            }
-        }
+            })
+            .unwrap_or_default();
+    }
 
-        if !bytes.is_empty() {
-            let next_total = budget.image_bytes.saturating_add(bytes.len());
-            if next_total <= 128 * 1024 * 1024 {
-                budget.image_bytes = next_total;
-                page_images.push(PageImage { bytes, bounds: (left, top, right, bottom), width_pt, height_pt });
-            } else {
-                budget.skipped_images = budget.skipped_images.saturating_add(1);
-            }
-        }
+    if bytes.is_empty() {
+        return;
+    }
+
+    let next_total = acc.image_bytes.saturating_add(bytes.len());
+    if next_total <= MAX_PAGE_IMAGE_BYTES {
+        acc.image_bytes = next_total;
+        acc.images.push(PageImage { bytes, bounds: (left, top, right, bottom), width_pt, height_pt });
+    } else {
+        acc.skipped_images = acc.skipped_images.saturating_add(1);
+    }
+}
+
+fn extract_object_content(
+    object: &PdfPageObject<'_>,
+    text_page_opt: Option<&PdfPageText<'_>>,
+    document: &PdfDocument<'_>,
+    acc: &mut PageExtractAcc,
+) -> Result<()> {
+    if let Some(text_object) = object.as_text_object() {
+        extract_text_object(text_object, text_page_opt, acc);
+    } else if object.as_image_object().is_some() {
+        extract_image_object(object, document, acc);
     } else if let Some(form_object) = object.as_x_object_form_object() {
-        budget.form_visits = budget.form_visits.saturating_add(1);
-        if budget.form_visits > 1_000 {
-            anyhow::bail!("Exceeded maximum nested form XObject visit limit (1000) while extracting page");
+        acc.form_visits = acc.form_visits.saturating_add(1);
+        if acc.form_visits > MAX_FORM_VISITS {
+            anyhow::bail!("Exceeded maximum nested form XObject visit limit ({MAX_FORM_VISITS}) while extracting page");
         }
         for child in form_object.iter() {
-            extract_object_content(&child, text_page_opt, document, page_glyphs, page_images, found_text_object, budget)?;
+            extract_object_content(&child, text_page_opt, document, acc)?;
         }
     }
     Ok(())
+}
+
+fn extract_fallback_text_page(text_page_opt: Option<&PdfPageText<'_>>, acc: &mut PageExtractAcc) {
+    if acc.found_text_object && !acc.glyphs.is_empty() {
+        return;
+    }
+    let Some(text_page) = text_page_opt else {
+        return;
+    };
+    if text_page.is_empty() {
+        return;
+    }
+    for ch in text_page.chars().iter() {
+        let glyph = extract_single_glyph(&ch, None);
+        if is_xml_valid_char(glyph.char_code) {
+            acc.glyphs.push(glyph);
+        }
+    }
 }
 
 /// Extracts full page data (glyphs + images) grouped by page using an existing `Pdfium` instance.
@@ -217,54 +237,27 @@ pub fn extract_pages_full_with_pdfium<P: AsRef<Path>>(pdfium: &Pdfium, pdf_path:
 
     let mut pages_result = Vec::new();
 
-    // Iterate across all pages
     for (page_index, page) in document.pages().iter().enumerate() {
         let width = page.width().value;
         let height = page.height().value;
-
         let page_objects = page.objects();
-        let mut page_glyphs = Vec::new();
-        let mut page_images = Vec::new();
-        let mut found_text_object = false;
-
-        // Extract text and image objects on this page
         let text_page_opt = page.text().ok();
+        let mut acc = PageExtractAcc::default();
 
-        let mut budget = ExtractionBudget::default();
         for object in page_objects.iter() {
-            extract_object_content(
-                &object,
-                text_page_opt.as_ref(),
-                &document,
-                &mut page_glyphs,
-                &mut page_images,
-                &mut found_text_object,
-                &mut budget,
-            )?;
+            extract_object_content(&object, text_page_opt.as_ref(), &document, &mut acc)?;
         }
 
-        // Fallback: If no text objects were found on the page, or if text objects
-        // yielded no glyphs while text_page has characters, extract them directly from text_page.
-        if !found_text_object || page_glyphs.is_empty() {
-            if let Some(ref text_page) = text_page_opt {
-                if !text_page.is_empty() {
-                    for ch in text_page.chars().iter() {
-                        let glyph = extract_single_glyph(&ch, None);
-                        if is_xml_valid_char(glyph.char_code) {
-                            page_glyphs.push(glyph);
-                        }
-                    }
-                }
-            }
-        }
+        // Fallback when page has characters in text_page without accessible text objects.
+        extract_fallback_text_page(text_page_opt.as_ref(), &mut acc);
 
         pages_result.push(ExtractedPageData {
             page_index,
             width,
             height,
-            glyphs: page_glyphs,
-            images: page_images,
-            skipped_images: budget.skipped_images,
+            glyphs: acc.glyphs,
+            images: acc.images,
+            skipped_images: acc.skipped_images,
         });
     }
 
@@ -285,60 +278,23 @@ fn encode_png_exact(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, Str
 
 /// Extracts all required typographic attributes for a single character glyph.
 fn extract_single_glyph(ch: &PdfPageTextChar, text_object: Option<&PdfPageTextObject>) -> RawGlyph {
-    // 1. Character code
     let char_code = ch.unicode_char().unwrap_or_else(|| char::from_u32(ch.unicode_value()).unwrap_or('\0'));
-
-    // 2. Font name (with fallback to parent text object and default)
-    let mut font_name = ch.font_name();
-    if font_name.is_empty() {
-        if let Some(obj) = text_object {
-            let name = obj.font().name();
-            if !name.is_empty() {
-                font_name = name;
-            }
-        }
-    }
-    if font_name.is_empty() {
-        font_name = "Unknown".to_string();
-    }
-
-    // 3. Font size
-    let mut font_size = ch.scaled_font_size().value;
-    if font_size <= 0.0 {
-        font_size = ch.unscaled_font_size().value;
-    }
-    if font_size <= 0.0 {
-        if let Some(obj) = text_object {
-            font_size = obj.scaled_font_size().value;
-            if font_size <= 0.0 {
-                font_size = obj.unscaled_font_size().value;
-            }
-        }
-    }
-    if font_size < 0.0 {
-        font_size = 0.0;
-    }
-
-    // 4. Bold determination
+    let font_name = resolve_font_name(ch, text_object);
+    let font_size = resolve_font_size(ch, text_object);
     let is_bold = determine_is_bold(ch, text_object, &font_name);
-
-    // 5. Italic determination
     let is_italic = determine_is_italic(ch, text_object, &font_name);
 
-    // 6. Bounds: (left, top, right, bottom)
     let bounds = ch
         .tight_bounds()
         .or_else(|_| ch.loose_bounds())
         .map(|rect| (rect.left().value, rect.top().value, rect.right().value, rect.bottom().value))
         .unwrap_or_else(|_| {
-            if let Some(obj) = text_object {
-                obj.bounds().map(|r| (r.left().value, r.top().value, r.right().value, r.bottom().value)).unwrap_or((0.0, 0.0, 0.0, 0.0))
-            } else {
-                (0.0, 0.0, 0.0, 0.0)
-            }
+            text_object
+                .and_then(|obj| obj.bounds().ok())
+                .map(|r| (r.left().value, r.top().value, r.right().value, r.bottom().value))
+                .unwrap_or((0.0, 0.0, 0.0, 0.0))
         });
 
-    // 7. Origin X and Origin Y
     let (origin_x, origin_y) = match ch.origin() {
         Ok((ox, oy)) => (ox.value, oy.value),
         Err(_) => {
@@ -351,39 +307,58 @@ fn extract_single_glyph(ch: &PdfPageTextChar, text_object: Option<&PdfPageTextOb
     RawGlyph { char_code, font_name, font_size, is_bold, is_italic, bounds, origin_x, origin_y }
 }
 
+fn resolve_font_name(ch: &PdfPageTextChar, text_object: Option<&PdfPageTextObject>) -> String {
+    let name = ch.font_name();
+    if !name.is_empty() {
+        return name;
+    }
+    if let Some(obj) = text_object {
+        let obj_name = obj.font().name();
+        if !obj_name.is_empty() {
+            return obj_name;
+        }
+    }
+    "Unknown".to_string()
+}
+
+fn resolve_font_size(ch: &PdfPageTextChar, text_object: Option<&PdfPageTextObject>) -> f32 {
+    let mut font_size = ch.scaled_font_size().value;
+    if font_size <= 0.0 {
+        font_size = ch.unscaled_font_size().value;
+    }
+    if font_size <= 0.0 {
+        if let Some(obj) = text_object {
+            font_size = obj.scaled_font_size().value;
+            if font_size <= 0.0 {
+                font_size = obj.unscaled_font_size().value;
+            }
+        }
+    }
+    font_size.max(0.0)
+}
+
+fn weight_is_bold(weight: PdfFontWeight) -> bool {
+    match weight {
+        PdfFontWeight::Weight600 | PdfFontWeight::Weight700Bold | PdfFontWeight::Weight800 | PdfFontWeight::Weight900 => true,
+        PdfFontWeight::Custom(w) => w >= 600,
+        _ => false,
+    }
+}
+
 /// Determines whether a glyph has a bold typeface using character properties,
 /// font descriptor flags, font weight, parent text object, and font name heuristics.
 fn determine_is_bold(ch: &PdfPageTextChar, text_object: Option<&PdfPageTextObject>, font_name: &str) -> bool {
-    // Check character font weight
-    if let Some(weight) = ch.font_weight() {
-        match weight {
-            PdfFontWeight::Weight600 | PdfFontWeight::Weight700Bold | PdfFontWeight::Weight800 | PdfFontWeight::Weight900 => return true,
-            PdfFontWeight::Custom(w) if w >= 600 => return true,
-            _ => {}
-        }
-    }
-
-    // Check bold reenforced flag on character
-    if ch.font_is_bold_reenforced() {
+    if ch.font_weight().is_some_and(weight_is_bold) || ch.font_is_bold_reenforced() {
         return true;
     }
 
-    // Check parent text object font descriptor if available
     if let Some(obj) = text_object {
         let font = obj.font();
-        if let Ok(weight) = font.weight() {
-            match weight {
-                PdfFontWeight::Weight600 | PdfFontWeight::Weight700Bold | PdfFontWeight::Weight800 | PdfFontWeight::Weight900 => return true,
-                PdfFontWeight::Custom(w) if w >= 600 => return true,
-                _ => {}
-            }
-        }
-        if font.is_bold_reenforced() {
+        if font.weight().is_ok_and(weight_is_bold) || font.is_bold_reenforced() {
             return true;
         }
     }
 
-    // Fallback: check font family / name for bold tokens
     let lower_name = font_name.to_lowercase();
     lower_name.contains("bold")
         || lower_name.contains("black")
@@ -395,25 +370,49 @@ fn determine_is_bold(ch: &PdfPageTextChar, text_object: Option<&PdfPageTextObjec
 /// Determines whether a glyph has an italic/slanted typeface using character properties,
 /// font flags, parent text object font angles, and font name heuristics.
 fn determine_is_italic(ch: &PdfPageTextChar, text_object: Option<&PdfPageTextObject>, font_name: &str) -> bool {
-    // Check character italic flag
     if ch.font_is_italic() {
         return true;
     }
 
-    // Check parent text object font descriptor if available
     if let Some(obj) = text_object {
         let font = obj.font();
-        if font.is_italic() {
+        if font.is_italic() || font.italic_angle().is_ok_and(|angle| angle != 0) {
             return true;
-        }
-        if let Ok(angle) = font.italic_angle() {
-            if angle != 0 {
-                return true;
-            }
         }
     }
 
-    // Fallback: check font name for italic/oblique tokens
     let lower_name = font_name.to_lowercase();
     lower_name.contains("italic") || lower_name.contains("oblique")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_missing_pdfium_path_fails_without_fallback() {
+        let missing = Path::new("definitely_missing_pdfium_library_for_test.dll");
+        let err = init_pdfium_with_path(Some(missing)).unwrap_err().to_string();
+        assert!(err.contains("--pdfium-path"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn xml_valid_char_filters_forbidden_controls() {
+        assert!(is_xml_valid_char('A'));
+        assert!(is_xml_valid_char('\t'));
+        assert!(is_xml_valid_char('\n'));
+        assert!(!is_xml_valid_char('\0'));
+        assert!(!is_xml_valid_char('\u{0008}'));
+    }
+
+    #[test]
+    fn encode_png_exact_roundtrips_rgba_dimensions() {
+        let rgba = [255, 0, 0, 255, 0, 255, 0, 255];
+        let encoded = encode_png_exact(2, 1, &rgba).expect("PNG encoding should succeed");
+        assert!(encoded.starts_with(&[0x89, b'P', b'N', b'G']));
+        let decoder = png::Decoder::new(encoded.as_slice());
+        let reader = decoder.read_info().expect("encoded PNG should decode");
+        assert_eq!(reader.info().width, 2);
+        assert_eq!(reader.info().height, 1);
+    }
 }

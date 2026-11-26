@@ -289,11 +289,14 @@ fn centred_text(cx: &craft::ui::primitives::ContentPainterCx<'_>, at: egui::Pos2
 fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     use crate::format_text_ui::{Target, panel};
     let can_modify = app.active_ids().and_then(|(_, id)| app.session.get(id)).is_some_and(|d| d.allows_modification());
-    if can_modify && let Some((i, _)) = app.active_ids() {
+    if can_modify && let Some((i, doc_id)) = app.active_ids() {
         craft::ui::choice::Checkbox::new(Bind::bound(&mut app.views[i].session.vector_edit_mode))
             .label(tl!("Edit vector lines & borders").to_string())
             .show(ui);
         ui.add_space(4.0);
+        if let Some(doc) = app.session.get(doc_id) {
+            crate::canvas::sync_vector_line_selection(&mut app.views[i].session, doc);
+        }
         crate::editing::line_properties_panel(ui, &mut app.views[i].session);
     }
     // Editing a paragraph of existing text: its formatting, applied as it changes.
@@ -409,10 +412,9 @@ impl PdfCraftApp {
 
     /// Apply the open paragraph's formatting as one change; the paragraph stays open.
     pub(crate) fn apply_line_format(&mut self, ctx: &egui::Context, index: usize, mut ed: crate::edit_text_ui::LineEditor) {
-        if let Some(doc) = self.session.get(self.views[index].id)
-            && let Some(p) = doc.info.pages.get(ed.page)
-        {
-            ed.rotation = p.rotation as i32;
+        if let Some(doc) = self.session.get(self.views[index].id) {
+            let xf = self.views[index].page_xform(ed.page);
+            ed.refresh_measured_h(ctx, doc, xf.as_ref());
         }
         let reflow = self.views[index].session.reflow_paragraphs;
         let page_blocks = if reflow { self.session.get(self.views[index].id).map(|d| d.text_blocks(ed.page)) } else { None };

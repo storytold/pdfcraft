@@ -14931,6 +14931,53 @@ fn vector_line_list_and_edit_roundtrip_and_mcp() {
 }
 
 #[test]
+fn vector_line_edit_combined_shrink_keeps_target_and_rejects_collapse() {
+    use pdfcraft_cos::{Dict, Object, SaveOptions, Stream, write_full};
+
+    let dir = workdir("vector-lines-shrink");
+    let mut cos = pdfcraft_cos::Document::new_empty();
+    let pages = cos.get(cos.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+    let stream_ref = cos.add(Object::Stream(Stream::from_raw(Dict::new(), b"10 20 m 100 20 l S\n10 60 m 100 60 l S\n".to_vec())));
+    let mut page = Dict::new();
+    page.set(b"Type".to_vec(), Object::name("Page"));
+    page.set(b"Parent".to_vec(), Object::Ref(pages));
+    page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 200.into(), 300.into()]));
+    page.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(stream_ref)]));
+    let page_ref = cos.add(page);
+    cos.update_dict(pages, |d| {
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page_ref)]));
+        d.set(b"Count".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+    std::fs::write(dir.join("two_lines.pdf"), write_full(&cos, &SaveOptions::default()).unwrap()).unwrap();
+
+    let mut a = auto(&dir);
+    let doc_id = ok(&mut a, "doc_open", json!({"path": "two_lines.pdf"}))["doc"].as_u64().unwrap();
+
+    // Shrinking line 1 to <= 0.0001 pt together with stroke properties must fail atomically without mutating line 1 or line 2.
+    let collapsed = a.call("line_edit", &json!({"doc": doc_id, "page": 1, "line": 1, "end": [10.00005, 280.0], "color": "red", "width": 4.0}));
+    assert!(collapsed.is_err(), "shrinking line <= 0.0001 pt must be rejected: {collapsed:?}");
+
+    let after_reject = ok(&mut a, "line_list", json!({"doc": doc_id, "page": 1}));
+    assert_eq!(after_reject["count"], 2);
+    assert_eq!(after_reject["lines"][0]["end"], json!([100.0, 280.0]));
+    assert!((after_reject["lines"][0]["thickness"].as_f64().unwrap() - 1.0).abs() < 1e-4);
+    assert_eq!(after_reject["lines"][0]["color"], json!([0.0, 0.0, 0.0]));
+    assert!((after_reject["lines"][1]["thickness"].as_f64().unwrap() - 1.0).abs() < 1e-4);
+    assert_eq!(after_reject["lines"][1]["color"], json!([0.0, 0.0, 0.0]));
+
+    // A valid combined shrink (> 0.0001 pt) and property update must apply only to line 1, leaving line 2 untouched.
+    ok(&mut a, "line_edit", json!({"doc": doc_id, "page": 1, "line": 1, "end": [10.05, 280.0], "color": "red", "width": 4.0}));
+    let after_ok = ok(&mut a, "line_list", json!({"doc": doc_id, "page": 1}));
+    assert_eq!(after_ok["count"], 2);
+    assert_eq!(after_ok["lines"][0]["end"], json!([10.05, 280.0]));
+    assert!((after_ok["lines"][0]["thickness"].as_f64().unwrap() - 4.0).abs() < 1e-4);
+    assert_ne!(after_ok["lines"][0]["color"], json!([0.0, 0.0, 0.0]));
+    assert!((after_ok["lines"][1]["thickness"].as_f64().unwrap() - 1.0).abs() < 1e-4);
+    assert_eq!(after_ok["lines"][1]["color"], json!([0.0, 0.0, 0.0]));
+}
+
+#[test]
 fn page_add_qr_rejects_non_numeric_rect_elements() {
     let dir = workdir("qr-bad-rect");
     let mut a = auto(&dir);

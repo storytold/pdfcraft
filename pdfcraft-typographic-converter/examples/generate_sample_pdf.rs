@@ -1,5 +1,5 @@
 use pdf_typographic_converter::extract::init_pdfium;
-use pdfium_render::prelude::*;
+use pdfium_render::prelude::{PdfPageObjectsCommon, PdfPagePaperSize, PdfPoints};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pdfium = init_pdfium()?;

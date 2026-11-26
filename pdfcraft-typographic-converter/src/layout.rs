@@ -115,7 +115,14 @@ where
     DocumentLayout { pages }
 }
 
+fn is_arabic_digit_or_numeric_sep(c: char) -> bool {
+    matches!(c, '\u{0660}'..='\u{0669}' | '\u{06F0}'..='\u{06F9}' | '\u{066B}' | '\u{066C}')
+}
+
 fn is_rtl_char(c: char) -> bool {
+    if is_arabic_digit_or_numeric_sep(c) {
+        return false;
+    }
     matches!(
         c,
         '\u{0590}'..='\u{05FF}'
@@ -129,22 +136,32 @@ fn is_rtl_char(c: char) -> bool {
 }
 
 fn is_neutral_char(c: char) -> bool {
-    c.is_whitespace() || matches!(c, '.' | ',' | '-' | '—' | ':' | ';' | '!' | '?' | '(' | ')' | '[' | ']' | '…')
+    c.is_whitespace() || matches!(c, '.' | ',' | '-' | '—' | ':' | ';' | '!' | '?' | '(' | ')' | '[' | ']' | '…' | '\u{066B}' | '\u{066C}')
 }
 
-/// Clusters glyphs on a single page into structured lines and runs.
-fn build_page_lines(glyphs: Vec<RawGlyph>) -> Vec<TextLine> {
-    if glyphs.is_empty() {
-        return Vec::new();
-    }
+fn normalized_x_bounds(g: &RawGlyph) -> (f32, f32) {
+    (g.bounds.0.min(g.bounds.2), g.bounds.0.max(g.bounds.2))
+}
 
-    // 1. Line Clustering:
-    // Sort glyphs by origin_y descending (top-to-bottom in PDF coordinate space).
+fn cmp_ltr(a: &RawGlyph, b: &RawGlyph) -> std::cmp::Ordering {
+    a.origin_x
+        .partial_cmp(&b.origin_x)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| a.bounds.0.partial_cmp(&b.bounds.0).unwrap_or(std::cmp::Ordering::Equal))
+}
+
+fn cmp_rtl(a: &RawGlyph, b: &RawGlyph) -> std::cmp::Ordering {
+    b.origin_x
+        .partial_cmp(&a.origin_x)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| b.bounds.0.partial_cmp(&a.bounds.0).unwrap_or(std::cmp::Ordering::Equal))
+}
+
+fn cluster_lines(glyphs: Vec<RawGlyph>) -> Vec<Vec<RawGlyph>> {
+    // Sort top-to-bottom in PDF coordinate space, then cluster within 2.0 pt of the cluster anchor.
     let mut sorted_by_y = glyphs;
     sorted_by_y.sort_by(|a, b| b.origin_y.partial_cmp(&a.origin_y).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Cluster glyphs into the same line if |cluster_baseline - glyph.origin_y| <= 2.0 pt.
-    // Validate against the first glyph's origin_y to avoid chaining drift across lines.
     let mut line_clusters: Vec<Vec<RawGlyph>> = Vec::new();
     for glyph in sorted_by_y {
         if let Some(current_cluster) = line_clusters.last_mut() {
@@ -156,99 +173,123 @@ fn build_page_lines(glyphs: Vec<RawGlyph>) -> Vec<TextLine> {
         }
         line_clusters.push(vec![glyph]);
     }
+    line_clusters
+}
 
-    // 2. Process each line cluster
-    let mut lines = Vec::with_capacity(line_clusters.len());
-    for cluster in line_clusters {
-        if cluster.is_empty() {
-            continue;
+fn order_line_glyphs(mut cluster: Vec<RawGlyph>) -> Vec<(bool, RawGlyph)> {
+    // Sort visually left-to-right first so baseline Y jitter cannot interleave LTR/RTL runs.
+    cluster.sort_by(cmp_ltr);
+
+    let has_rtl = cluster.iter().any(|g| is_rtl_char(g.char_code));
+    let has_ltr = cluster.iter().any(|g| !is_rtl_char(g.char_code) && !is_neutral_char(g.char_code));
+
+    if has_rtl && !has_ltr {
+        cluster.sort_by(cmp_rtl);
+        return cluster.into_iter().map(|g| (true, g)).collect();
+    }
+    if !has_rtl {
+        return cluster.into_iter().map(|g| (false, g)).collect();
+    }
+
+    // Track whether the next non-neutral glyph in visual order is RTL so trailing boundary spaces
+    // between RTL and LTR/digit runs are not moved to the opposite side when sorting RTL glyphs.
+    let mut next_strong_is_rtl = vec![false; cluster.len()];
+    let mut trailing_rtl = false;
+    for (idx, g) in cluster.iter().enumerate().rev() {
+        next_strong_is_rtl[idx] = trailing_rtl;
+        if is_rtl_char(g.char_code) {
+            trailing_rtl = true;
+        } else if !is_neutral_char(g.char_code) {
+            trailing_rtl = false;
         }
+    }
 
-        // Calculate baseline Y and reference baseline size (median font size)
-        let origin_ys: Vec<f32> = cluster.iter().map(|g| g.origin_y).collect();
-        let font_sizes: Vec<f32> = cluster.iter().map(|g| g.font_size).collect();
-
-        let baseline_y = calculate_median(&origin_ys);
-        let baseline_size = calculate_median(&font_sizes);
-
-        // Partition cluster into directional segments to preserve Hebrew/RTL logical order across spaces
-        let mut segments: Vec<(bool, Vec<RawGlyph>)> = Vec::new();
-        let mut current_direction = false;
-        for g in cluster {
-            let is_rtl = if is_rtl_char(g.char_code) {
-                current_direction = true;
-                true
-            } else if is_neutral_char(g.char_code) {
-                current_direction
-            } else {
-                current_direction = false;
-                false
-            };
-            if let Some(last_seg) = segments.last_mut() {
-                if last_seg.0 == is_rtl {
-                    last_seg.1.push(g);
-                    continue;
-                }
-            }
+    let mut segments: Vec<(bool, Vec<RawGlyph>)> = Vec::new();
+    let mut current_direction = false;
+    for (idx, g) in cluster.into_iter().enumerate() {
+        let is_rtl = if is_rtl_char(g.char_code) {
+            current_direction = true;
+            true
+        } else if is_neutral_char(g.char_code) {
+            current_direction = current_direction && next_strong_is_rtl[idx];
+            current_direction
+        } else {
+            current_direction = false;
+            false
+        };
+        if let Some(last_seg) = segments.last_mut().filter(|seg| seg.0 == is_rtl) {
+            last_seg.1.push(g);
+        } else {
             segments.push((is_rtl, vec![g]));
         }
-
-        for (is_rtl, seg_glyphs) in &mut segments {
-            if *is_rtl {
-                seg_glyphs.sort_by(|a, b| b.origin_x.partial_cmp(&a.origin_x).unwrap_or(std::cmp::Ordering::Equal));
-            } else {
-                seg_glyphs.sort_by(|a, b| {
-                    a.origin_x
-                        .partial_cmp(&b.origin_x)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                        .then_with(|| a.bounds.0.partial_cmp(&b.bounds.0).unwrap_or(std::cmp::Ordering::Equal))
-                });
-            }
-        }
-
-        segments.sort_by(|(_, a), (_, b)| {
-            let min_a = a.iter().map(|g| g.bounds.0.min(g.origin_x)).fold(f32::INFINITY, f32::min);
-            let min_b = b.iter().map(|g| g.bounds.0.min(g.origin_x)).fold(f32::INFINITY, f32::min);
-            min_a.partial_cmp(&min_b).unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        let mut line_glyphs = Vec::new();
-        for (_, seg_glyphs) in segments {
-            line_glyphs.extend(seg_glyphs);
-        }
-
-        // Determine script type for each glyph
-        let glyph_scripts: Vec<ScriptType> = line_glyphs
-            .iter()
-            .map(|g| {
-                let ratio = if baseline_size > 0.0 { g.font_size / baseline_size } else { 1.0 };
-                if ratio < 0.78 && g.origin_y > baseline_y + 1.0 {
-                    ScriptType::Superscript
-                } else if ratio < 0.78 && g.origin_y < baseline_y - 0.5 {
-                    ScriptType::Subscript
-                } else {
-                    ScriptType::Normal
-                }
-            })
-            .collect();
-
-        // 3. Script & Style Run Grouping with Word Gaps & Tab Detection
-        let runs = build_line_runs(&line_glyphs, &glyph_scripts);
-        if runs.is_empty() {
-            continue;
-        }
-
-        // Calculate line bounding box enclosing all runs
-        let line_min_x = runs.iter().map(|r| r.bounds.0).fold(f32::INFINITY, f32::min);
-        let line_min_y = runs.iter().map(|r| r.bounds.1).fold(f32::INFINITY, f32::min);
-        let line_max_x = runs.iter().map(|r| r.bounds.2).fold(f32::NEG_INFINITY, f32::max);
-        let line_max_y = runs.iter().map(|r| r.bounds.3).fold(f32::NEG_INFINITY, f32::max);
-
-        let line_bounds = (line_min_x, line_min_y, line_max_x, line_max_y);
-        let line_height = if line_max_y > line_min_y { (line_max_y - line_min_y).max(baseline_size) } else { baseline_size };
-
-        lines.push(TextLine { baseline_y, runs, line_height, bounds: line_bounds });
     }
+
+    for (is_rtl, seg_glyphs) in &mut segments {
+        if *is_rtl {
+            seg_glyphs.sort_by(cmp_rtl);
+        } else {
+            seg_glyphs.sort_by(cmp_ltr);
+        }
+    }
+
+    segments.sort_by(|(_, a), (_, b)| {
+        let min_a = a.iter().map(|g| g.bounds.0.min(g.origin_x)).fold(f32::INFINITY, f32::min);
+        let min_b = b.iter().map(|g| g.bounds.0.min(g.origin_x)).fold(f32::INFINITY, f32::min);
+        min_a.partial_cmp(&min_b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    segments.into_iter().flat_map(|(is_rtl, seg)| seg.into_iter().map(move |g| (is_rtl, g))).collect()
+}
+
+fn classify_glyph_scripts(glyphs: &[(bool, RawGlyph)], baseline_y: f32, baseline_size: f32) -> Vec<ScriptType> {
+    glyphs
+        .iter()
+        .map(|(_, g)| {
+            let ratio = if baseline_size > 0.0 { g.font_size / baseline_size } else { 1.0 };
+            if ratio < 0.78 && g.origin_y > baseline_y + 1.0 {
+                ScriptType::Superscript
+            } else if ratio < 0.78 && g.origin_y < baseline_y - 0.5 {
+                ScriptType::Subscript
+            } else {
+                ScriptType::Normal
+            }
+        })
+        .collect()
+}
+
+fn build_text_line(cluster: Vec<RawGlyph>) -> Option<TextLine> {
+    if cluster.is_empty() {
+        return None;
+    }
+
+    let origin_ys: Vec<f32> = cluster.iter().map(|g| g.origin_y).collect();
+    let font_sizes: Vec<f32> = cluster.iter().map(|g| g.font_size).collect();
+    let baseline_y = calculate_median(&origin_ys);
+    let baseline_size = calculate_median(&font_sizes);
+
+    let line_glyphs = order_line_glyphs(cluster);
+    let glyph_scripts = classify_glyph_scripts(&line_glyphs, baseline_y, baseline_size);
+    let runs = build_line_runs(&line_glyphs, &glyph_scripts);
+    if runs.is_empty() {
+        return None;
+    }
+
+    let line_min_x = runs.iter().map(|r| r.bounds.0).fold(f32::INFINITY, f32::min);
+    let line_min_y = runs.iter().map(|r| r.bounds.1).fold(f32::INFINITY, f32::min);
+    let line_max_x = runs.iter().map(|r| r.bounds.2).fold(f32::NEG_INFINITY, f32::max);
+    let line_max_y = runs.iter().map(|r| r.bounds.3).fold(f32::NEG_INFINITY, f32::max);
+    let line_height = if line_max_y > line_min_y { (line_max_y - line_min_y).max(baseline_size) } else { baseline_size };
+
+    Some(TextLine { baseline_y, runs, line_height, bounds: (line_min_x, line_min_y, line_max_x, line_max_y) })
+}
+
+/// Clusters glyphs on a single page into structured lines and runs.
+fn build_page_lines(glyphs: Vec<RawGlyph>) -> Vec<TextLine> {
+    if glyphs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines: Vec<TextLine> = cluster_lines(glyphs).into_iter().filter_map(build_text_line).collect();
 
     // Sort lines top-to-bottom (descending by baseline Y, tie-breaking left-to-right)
     lines.sort_by(|a, b| {
@@ -261,194 +302,139 @@ fn build_page_lines(glyphs: Vec<RawGlyph>) -> Vec<TextLine> {
     lines
 }
 
-/// Flushes accumulated run properties into a finalized `TextRun`.
-#[allow(clippy::too_many_arguments)]
-fn flush_run(
-    runs: &mut Vec<TextRun>,
+struct RunBuilder {
     text: String,
-    font_name: &str,
+    bounds: Vec<(f32, f32, f32, f32)>,
+    gaps: Vec<f32>,
+    has_leading_tab: bool,
+    font_name: String,
     font_size: f32,
     is_bold: bool,
     is_italic: bool,
     script: ScriptType,
-    has_leading_tab: bool,
-    inter_char_gaps: Vec<f32>,
-    glyph_bounds: Vec<(f32, f32, f32, f32)>,
-) {
-    if text.is_empty() && glyph_bounds.is_empty() {
-        return;
+}
+
+impl RunBuilder {
+    fn new(first: &RawGlyph, script: ScriptType) -> Self {
+        Self {
+            text: String::new(),
+            bounds: Vec::new(),
+            gaps: Vec::new(),
+            has_leading_tab: false,
+            font_name: first.font_name.clone(),
+            font_size: first.font_size,
+            is_bold: first.is_bold,
+            is_italic: first.is_italic,
+            script,
+        }
     }
 
-    let tracking_delta = if inter_char_gaps.is_empty() { 0.0 } else { inter_char_gaps.iter().sum::<f32>() / inter_char_gaps.len() as f32 };
+    fn matches_style(&self, g: &RawGlyph, script: ScriptType) -> bool {
+        g.font_name == self.font_name
+            && (g.font_size - self.font_size).abs() <= 0.01
+            && g.is_bold == self.is_bold
+            && g.is_italic == self.is_italic
+            && script == self.script
+    }
 
-    let bounds = if glyph_bounds.is_empty() {
-        (0.0, 0.0, 0.0, 0.0)
+    fn push_glyph(&mut self, g: &RawGlyph) {
+        if g.char_code != '\0' && (g.char_code != ' ' || !self.text.ends_with(' ')) {
+            self.text.push(g.char_code);
+        }
+        let (min_x, max_x) = normalized_x_bounds(g);
+        let min_y = g.bounds.1.min(g.bounds.3);
+        let max_y = g.bounds.1.max(g.bounds.3);
+        self.bounds.push((min_x, min_y, max_x, max_y));
+    }
+
+    fn flush_into(&mut self, runs: &mut Vec<TextRun>) {
+        if self.text.is_empty() && self.bounds.is_empty() {
+            return;
+        }
+        let tracking_delta = if self.gaps.is_empty() { 0.0 } else { self.gaps.iter().sum::<f32>() / self.gaps.len() as f32 };
+        let bounds = if self.bounds.is_empty() {
+            (0.0, 0.0, 0.0, 0.0)
+        } else {
+            let min_x = self.bounds.iter().map(|b| b.0).fold(f32::INFINITY, f32::min);
+            let min_y = self.bounds.iter().map(|b| b.1).fold(f32::INFINITY, f32::min);
+            let max_x = self.bounds.iter().map(|b| b.2).fold(f32::NEG_INFINITY, f32::max);
+            let max_y = self.bounds.iter().map(|b| b.3).fold(f32::NEG_INFINITY, f32::max);
+            (min_x, min_y, max_x, max_y)
+        };
+        runs.push(TextRun {
+            text: std::mem::take(&mut self.text),
+            font_name: self.font_name.clone(),
+            font_size: self.font_size,
+            is_bold: self.is_bold,
+            is_italic: self.is_italic,
+            script: self.script,
+            has_leading_tab: self.has_leading_tab,
+            tracking_delta,
+            bounds,
+        });
+        self.gaps.clear();
+        self.bounds.clear();
+    }
+
+    fn flush_and_reset(&mut self, runs: &mut Vec<TextRun>, next_g: &RawGlyph, next_script: ScriptType, next_leading_tab: bool) {
+        self.flush_into(runs);
+        self.has_leading_tab = next_leading_tab;
+        self.font_name = next_g.font_name.clone();
+        self.font_size = next_g.font_size;
+        self.is_bold = next_g.is_bold;
+        self.is_italic = next_g.is_italic;
+        self.script = next_script;
+    }
+}
+
+fn reading_gap(curr_rtl: bool, curr: &RawGlyph, next_rtl: bool, next: &RawGlyph) -> f32 {
+    let (curr_min_x, curr_max_x) = normalized_x_bounds(curr);
+    let (next_min_x, next_max_x) = normalized_x_bounds(next);
+    if curr_rtl != next_rtl {
+        if curr.char_code == ' ' || next.char_code == ' ' {
+            0.0
+        } else {
+            next_min_x - curr_max_x
+        }
+    } else if curr_rtl {
+        curr_min_x - next_max_x
     } else {
-        let min_x = glyph_bounds.iter().map(|b| b.0).fold(f32::INFINITY, f32::min);
-        let min_y = glyph_bounds.iter().map(|b| b.1).fold(f32::INFINITY, f32::min);
-        let max_x = glyph_bounds.iter().map(|b| b.2).fold(f32::NEG_INFINITY, f32::max);
-        let max_y = glyph_bounds.iter().map(|b| b.3).fold(f32::NEG_INFINITY, f32::max);
-        (min_x, min_y, max_x, max_y)
-    };
-
-    runs.push(TextRun { text, font_name: font_name.to_string(), font_size, is_bold, is_italic, script, has_leading_tab, tracking_delta, bounds });
+        next_min_x - curr_max_x
+    }
 }
 
 /// Groups sorted line glyphs into `TextRun`s based on style changes, word spaces, and tabs.
-fn build_line_runs(glyphs: &[RawGlyph], scripts: &[ScriptType]) -> Vec<TextRun> {
+fn build_line_runs(glyphs: &[(bool, RawGlyph)], scripts: &[ScriptType]) -> Vec<TextRun> {
     let mut runs: Vec<TextRun> = Vec::new();
-    if glyphs.is_empty() {
+    let Some((_, first_glyph)) = glyphs.first() else {
         return runs;
-    }
+    };
+    let mut builder = RunBuilder::new(first_glyph, scripts[0]);
 
-    let mut current_text = String::new();
-    let mut current_bounds: Vec<(f32, f32, f32, f32)> = Vec::new();
-    let mut current_gaps: Vec<f32> = Vec::new();
-    let mut has_leading_tab = false;
+    for (i, (curr_rtl, g)) in glyphs.iter().enumerate() {
+        builder.push_glyph(g);
 
-    let mut run_font_name = glyphs[0].font_name.clone();
-    let mut run_font_size = glyphs[0].font_size;
-    let mut run_is_bold = glyphs[0].is_bold;
-    let mut run_is_italic = glyphs[0].is_italic;
-    let mut run_script = scripts[0];
+        let Some((next_rtl, next_g)) = glyphs.get(i + 1) else {
+            builder.flush_into(&mut runs);
+            break;
+        };
+        let next_script = scripts[i + 1];
+        let gap = reading_gap(*curr_rtl, g, *next_rtl, next_g);
+        let style_changed = !builder.matches_style(next_g, next_script);
 
-    for i in 0..glyphs.len() {
-        let g = &glyphs[i];
-
-        // Append character, preventing duplicate spaces
-        if g.char_code != '\0' && (g.char_code != ' ' || !current_text.ends_with(' ')) {
-            current_text.push(g.char_code);
-        }
-
-        // Store glyph bounding box normalized as (min_x, min_y, max_x, max_y)
-        let min_x = g.bounds.0.min(g.bounds.2);
-        let max_x = g.bounds.0.max(g.bounds.2);
-        let min_y = g.bounds.1.min(g.bounds.3);
-        let max_y = g.bounds.1.max(g.bounds.3);
-        current_bounds.push((min_x, min_y, max_x, max_y));
-
-        if i + 1 < glyphs.len() {
-            let next_g = &glyphs[i + 1];
-            let next_script = scripts[i + 1];
-
-            // Gap in reading direction: LTR is next_left - current_right; RTL is current_left - next_right
-            let is_rtl = is_rtl_char(g.char_code) || is_rtl_char(next_g.char_code);
-            let gap = if is_rtl { min_x - next_g.bounds.0.max(next_g.bounds.2) } else { next_g.bounds.0.min(next_g.bounds.2) - max_x };
-
-            let style_changed = next_g.font_name != run_font_name
-                || (next_g.font_size - run_font_size).abs() > 0.01
-                || next_g.is_bold != run_is_bold
-                || next_g.is_italic != run_is_italic
-                || next_script != run_script;
-
-            if gap >= g.font_size * 1.5 {
-                // Tab stop: flush current run and mark has_leading_tab on next run
-                flush_run(
-                    &mut runs,
-                    std::mem::take(&mut current_text),
-                    &run_font_name,
-                    run_font_size,
-                    run_is_bold,
-                    run_is_italic,
-                    run_script,
-                    has_leading_tab,
-                    std::mem::take(&mut current_gaps),
-                    std::mem::take(&mut current_bounds),
-                );
-                has_leading_tab = true;
-                run_font_name = next_g.font_name.clone();
-                run_font_size = next_g.font_size;
-                run_is_bold = next_g.is_bold;
-                run_is_italic = next_g.is_italic;
-                run_script = next_script;
-            } else if gap >= g.font_size * 0.22 {
-                // Word space: append space to run
-                if !current_text.ends_with(' ') {
-                    current_text.push(' ');
-                }
-                if style_changed {
-                    flush_run(
-                        &mut runs,
-                        std::mem::take(&mut current_text),
-                        &run_font_name,
-                        run_font_size,
-                        run_is_bold,
-                        run_is_italic,
-                        run_script,
-                        has_leading_tab,
-                        std::mem::take(&mut current_gaps),
-                        std::mem::take(&mut current_bounds),
-                    );
-                    has_leading_tab = false;
-                    run_font_name = next_g.font_name.clone();
-                    run_font_size = next_g.font_size;
-                    run_is_bold = next_g.is_bold;
-                    run_is_italic = next_g.is_italic;
-                    run_script = next_script;
-                }
-            } else if gap < -1.0 {
-                // Overlapping accents / kerning adjustments: preserve glyph without spurious spaces
-                if style_changed {
-                    flush_run(
-                        &mut runs,
-                        std::mem::take(&mut current_text),
-                        &run_font_name,
-                        run_font_size,
-                        run_is_bold,
-                        run_is_italic,
-                        run_script,
-                        has_leading_tab,
-                        std::mem::take(&mut current_gaps),
-                        std::mem::take(&mut current_bounds),
-                    );
-                    has_leading_tab = false;
-                    run_font_name = next_g.font_name.clone();
-                    run_font_size = next_g.font_size;
-                    run_is_bold = next_g.is_bold;
-                    run_is_italic = next_g.is_italic;
-                    run_script = next_script;
-                } else {
-                    current_gaps.push(gap);
-                }
-            } else {
-                // Normal character spacing (-1.0 <= gap < font_size * 0.22)
-                if style_changed {
-                    flush_run(
-                        &mut runs,
-                        std::mem::take(&mut current_text),
-                        &run_font_name,
-                        run_font_size,
-                        run_is_bold,
-                        run_is_italic,
-                        run_script,
-                        has_leading_tab,
-                        std::mem::take(&mut current_gaps),
-                        std::mem::take(&mut current_bounds),
-                    );
-                    has_leading_tab = false;
-                    run_font_name = next_g.font_name.clone();
-                    run_font_size = next_g.font_size;
-                    run_is_bold = next_g.is_bold;
-                    run_is_italic = next_g.is_italic;
-                    run_script = next_script;
-                } else {
-                    current_gaps.push(gap);
-                }
+        if gap >= g.font_size * 1.5 {
+            builder.flush_and_reset(&mut runs, next_g, next_script, true);
+        } else if gap >= g.font_size * 0.22 {
+            if !builder.text.ends_with(' ') {
+                builder.text.push(' ');
             }
+            if style_changed {
+                builder.flush_and_reset(&mut runs, next_g, next_script, false);
+            }
+        } else if style_changed {
+            builder.flush_and_reset(&mut runs, next_g, next_script, false);
         } else {
-            // End of line: flush final run
-            flush_run(
-                &mut runs,
-                std::mem::take(&mut current_text),
-                &run_font_name,
-                run_font_size,
-                run_is_bold,
-                run_is_italic,
-                run_script,
-                has_leading_tab,
-                std::mem::take(&mut current_gaps),
-                std::mem::take(&mut current_bounds),
-            );
+            builder.gaps.push(gap);
         }
     }
 
@@ -459,29 +445,84 @@ fn build_line_runs(glyphs: &[RawGlyph], scripts: &[ScriptType]) -> Vec<TextRun> 
 mod tests {
     use super::*;
 
-    #[test]
-    fn rtl_segment_sorts_by_descending_origin_x_across_jittered_y() {
-        let glyph = |ch: char, x: f32, y: f32| RawGlyph {
+    fn test_glyph(ch: char, font: &str, x: f32, y: f32) -> RawGlyph {
+        RawGlyph {
             char_code: ch,
-            font_name: "David".into(),
+            font_name: font.into(),
             font_size: 12.0,
             is_bold: false,
             is_italic: false,
             bounds: (x, y, x + 8.0, y + 10.0),
             origin_x: x,
             origin_y: y,
-        };
+        }
+    }
+
+    #[test]
+    fn rtl_segment_sorts_by_descending_origin_x_across_jittered_y() {
         // Same baseline cluster (within 2pt) where y-sorting places 'ל' (y=501) before 'ש' (y=500).
         let page = ExtractedPageData {
             page_index: 0,
             width: 400.0,
             height: 600.0,
-            glyphs: vec![glyph('ש', 80.0, 500.0), glyph('ל', 70.0, 501.0), glyph('ו', 60.0, 500.0), glyph('ם', 50.0, 500.0)],
+            glyphs: vec![
+                test_glyph('ש', "David", 80.0, 500.0),
+                test_glyph('ל', "David", 70.0, 501.0),
+                test_glyph('ו', "David", 60.0, 500.0),
+                test_glyph('ם', "David", 50.0, 500.0),
+            ],
             images: Vec::new(),
             skipped_images: 0,
         };
         let layout = build_layout(vec![page]);
         let text: String = layout.pages[0].lines[0].runs.iter().map(|r| r.text.as_str()).collect();
         assert_eq!(text, "שלום");
+    }
+
+    #[test]
+    fn arabic_indic_and_extended_digits_stay_ltr_order() {
+        let page = ExtractedPageData {
+            page_index: 0,
+            width: 400.0,
+            height: 600.0,
+            glyphs: vec![
+                test_glyph('٣', "Arial", 66.0, 500.0),
+                test_glyph('١', "Arial", 50.0, 500.5),
+                test_glyph('٢', "Arial", 58.0, 500.0),
+                test_glyph(' ', "Arial", 75.0, 500.0),
+                test_glyph('۹', "Arial", 98.0, 500.0),
+                test_glyph('۰', "Arial", 82.0, 500.0),
+                test_glyph('۵', "Arial", 90.0, 501.0),
+            ],
+            images: Vec::new(),
+            skipped_images: 0,
+        };
+        let layout = build_layout(vec![page]);
+        let text: String = layout.pages[0].lines[0].runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(text, "١٢٣ ۰۵۹");
+    }
+
+    #[test]
+    fn mixed_arabic_letters_and_arabic_indic_digits_preserve_respective_orders() {
+        // Arabic word "عدد" on the left (x=50..74) followed by space and LTR digits "١٢٣" (x=88..112).
+        let page = ExtractedPageData {
+            page_index: 0,
+            width: 400.0,
+            height: 600.0,
+            glyphs: vec![
+                test_glyph('ع', "Arial", 70.0, 500.0),
+                test_glyph('د', "Arial", 60.0, 500.0),
+                test_glyph('د', "Arial", 50.0, 500.0),
+                test_glyph(' ', "Arial", 80.0, 500.0),
+                test_glyph('٣', "Arial", 104.0, 500.0),
+                test_glyph('١', "Arial", 88.0, 500.2),
+                test_glyph('٢', "Arial", 96.0, 500.0),
+            ],
+            images: Vec::new(),
+            skipped_images: 0,
+        };
+        let layout = build_layout(vec![page]);
+        let text: String = layout.pages[0].lines[0].runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(text, "عدد ١٢٣");
     }
 }

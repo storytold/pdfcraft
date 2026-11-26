@@ -42,7 +42,7 @@ pub use image::{CropMode, ImageAction, ImageSelection};
 pub(crate) use image::{PictureMenu, delete_picture, picture_context, picture_controls, picture_menu, picture_parts, picture_press, user_to_screen};
 pub(crate) use layout::editor_font;
 #[cfg(test)]
-use layout::{DARK_EDITOR_FILL, contrast, editor_fill, editor_job};
+use layout::{DARK_EDITOR_FILL, contrast, editor_fill};
 use layout::{color32, editor_galley, look_of, source_look};
 
 /// What an edit box shows text for: a page paragraph, or text added in this session.
@@ -819,9 +819,8 @@ fn open_by_click(session: &mut PageSession, doc: &pdfcraft_engine::Document, pag
         let applied = session.line_editor.take().and_then(|mut old| {
             let style = old.style();
             if old.text != old.original || style != pdfcraft_engine::BlockStyle::default() {
-                if let Some(p) = doc.info.pages.get(old.page) {
-                    old.rotation = p.rotation as i32;
-                }
+                let old_xf = session.page_xform(old.page, geo);
+                old.rotation = effective_rotation(&doc.info, old.page, old_xf.as_ref());
                 session.applied_editor = Some(old.clone());
                 let reflow = session.reflow_paragraphs;
                 let old_blocks = if reflow { if old.page == page { Some(blocks.as_slice()) } else { None } } else { None };
@@ -856,8 +855,10 @@ fn open_editor(session: &mut PageSession, doc: &pdfcraft_engine::Document, page:
     session.image_selection = None;
     let source_lines = doc.text_lines(page);
     let text = l.editor_text.clone();
-    // Screen pixels per point, from the box's width.
-    let scale = (b.width() - 4.0) / ((l.rect[2] - l.rect[0]).max(1.0) as f32);
+    let rot = effective_rotation(&doc.info, page, Some(&xf));
+    let user_w = user_span_for_screen_w(rot, l.rect.map(|v| v as f32)).max(1.0);
+    // Screen pixels per point, from the box's rotated width.
+    let scale = (b.width() - 4.0) / user_w;
     // How far the editor box may grow: a single-line paragraph's rewrite grows to the
     // page's right edge, a multi-line paragraph rewraps to its own width.
     let right = xf.rect.right().min(geo.viewport.right()) - 6.0;
@@ -872,7 +873,7 @@ fn open_editor(session: &mut PageSession, doc: &pdfcraft_engine::Document, page:
         text: text.clone(),
         original: text,
         rect: b,
-        rotation: doc.info.pages.get(page).map(|p| p.rotation as i32).unwrap_or(0),
+        rotation: rot,
         source_rect: l.rect.map(|v| v as f32),
         multiline: l.rows.len() > 1,
         source: Some((l.clone(), source_lines)),
@@ -1294,11 +1295,9 @@ fn editor_session(
     // Reproject the source box every frame. The page may have been zoomed, scrolled or rotated
     // while the format panel was open.
     ed.rect = xf.user_rect(info, ed.page, ed.source_rect);
-    if let Some(p) = info.pages.get(ed.page) {
-        ed.rotation = p.rotation as i32;
-    }
+    ed.rotation = effective_rotation(info, ed.page, Some(&xf));
     ed.max_width = ed.rect.width();
-    let scale = (ed.rect.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(0.01)).max(0.01);
+    let scale = (ed.rect.width() / user_span_for_screen_w(ed.rotation, ed.source_rect).max(0.01)).max(0.01);
     ed.size = (ed.look.size as f32 * scale).clamp(1.0, 300.0);
     let text_color = color32(ed.look.color);
     // A one-row draft grows toward the page's right edge.
@@ -1332,6 +1331,7 @@ fn editor_session(
         (output, host.galley())
     };
     ed.selection = Some(selection);
+    ed.measured_h = galley.rect.height();
     if ed.has_changes() {
         ParagraphText::new(origin, Arc::clone(&galley), text_color).show_at(ui, page_clip);
     }
@@ -1348,9 +1348,7 @@ fn editor_session(
         }
         Some(_) => {
             let mut ed = session.line_editor.take()?;
-            if let Some(p) = doc.info.pages.get(ed.page) {
-                ed.rotation = p.rotation as i32;
-            }
+            ed.rotation = effective_rotation(&doc.info, ed.page, Some(&xf));
             session.applied_editor = Some(ed.clone());
             let reflow = session.reflow_paragraphs;
             let blocks = if reflow { Some(doc.text_blocks(ed.page)) } else { None };
@@ -1398,10 +1396,43 @@ fn is_block_in_flow(rot: i32, ed_source: [f32; 4], b_rect: [f64; 4]) -> bool {
     overlaps && !page_wide
 }
 
-/// The edit a closed paragraph editor applies, or `None` when nothing in it changed.
-#[allow(dead_code)]
-pub(crate) fn finished_edit(ed: LineEditor) -> Option<Edit> {
-    finished_edit_with_reflow(ed, false, None)
+/// Effective clockwise display rotation in degrees, combining the page `/Rotate` and canvas view rotation.
+pub(crate) fn effective_rotation(info: &DocInfo, page: usize, xf: Option<&PageXform>) -> i32 {
+    let page_rot = info.pages.get(page).map_or(0, |p| i32::from(p.rotation));
+    let view_rot = xf.map_or(0, |x| i32::from(x.rot));
+    (page_rot + view_rot).rem_euclid(360)
+}
+
+fn user_span_for_screen_w(rot: i32, r: [f32; 4]) -> f32 {
+    if rot.rem_euclid(360) / 90 % 2 == 1 { (r[3] - r[1]).abs() } else { (r[2] - r[0]).abs() }
+}
+
+impl LineEditor {
+    /// Recomputes `rotation`, `rect`, `size`, and wrapped `measured_h` from the live draft text and zoom scale.
+    pub(crate) fn refresh_measured_h(&mut self, ctx: &egui::Context, doc: &pdfcraft_engine::Document, xf: Option<&PageXform>) {
+        self.rotation = effective_rotation(&doc.info, self.page, xf);
+        let room_limit = if let Some(xf) = xf {
+            self.rect = xf.user_rect(&doc.info, self.page, self.source_rect);
+            self.max_width = self.rect.width();
+            Some(xf.rect.right() - self.rect.left())
+        } else {
+            None
+        };
+        let scale = (self.rect.width() / user_span_for_screen_w(self.rotation, self.source_rect).max(0.01)).max(0.01);
+        self.size = (self.look.size as f32 * scale).clamp(1.0, 300.0);
+        let faces = BTreeMap::new();
+        let single_run = self.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
+        let width = if !self.multiline && single_run && !self.text.contains('\n') && self.has_changes() {
+            let room = room_limit.map_or_else(|| self.max_width.max(self.rect.width()), |r| (r - 36.0 * scale).max(self.rect.width()));
+            let job = layout::editor_job(ctx, self, &faces, &self.text, scale, f32::INFINITY);
+            let natural = ctx.fonts_mut(|f| f.layout_job(job)).size().x;
+            natural.max(self.size * 0.4).min(room)
+        } else {
+            self.rect.width().max(1.0)
+        };
+        let galley = layout::editor_galley(ctx, self, &faces, &self.text, scale, width);
+        self.measured_h = galley.rect.height();
+    }
 }
 
 /// The edit a closed paragraph editor applies with optional paragraph reflow.
@@ -2180,5 +2211,138 @@ mod tests {
             }
             assert!(matches!(edits[1], Edit::EditTextBlock { .. }));
         }
+    }
+
+    #[test]
+    fn effective_rotation_composes_page_and_view_rotations() {
+        let info = DocInfo {
+            pages: vec![
+                pdfcraft_render::PageInfo { width: 595.0, height: 842.0, label: String::new(), crop: [0.0, 0.0, 595.0, 842.0], rotation: 90 },
+                pdfcraft_render::PageInfo { width: 595.0, height: 842.0, label: String::new(), crop: [0.0, 0.0, 595.0, 842.0], rotation: 270 },
+            ],
+            ..Default::default()
+        };
+        let xf_90 = PageXform { rect: Rect::from_min_max(Pos2::ZERO, pos2(842.0, 595.0)), pw: 842.0, ph: 595.0, rot: 90 };
+        let xf_180 = PageXform { rect: Rect::from_min_max(Pos2::ZERO, pos2(595.0, 842.0)), pw: 595.0, ph: 842.0, rot: 180 };
+        assert_eq!(effective_rotation(&info, 0, Some(&xf_90)), 180);
+        assert_eq!(effective_rotation(&info, 1, Some(&xf_180)), 90);
+        assert_eq!(effective_rotation(&info, 0, None), 90);
+    }
+
+    #[test]
+    fn reflow_recalculates_measured_h_from_live_draft_and_zoom() {
+        let (app, mut ed) = preview_app();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let page = doc.info.pages[0];
+        let ctx = egui::Context::default();
+        // Force a narrow box and wrapped multi-line draft text.
+        ed.source_rect = [50.0, 700.0, 130.0, 720.0];
+        ed.text = "Wrapped draft line that grows taller than the original single row".into();
+        ed.original = "Original".into();
+        let xf_1x = PageXform { rect: Rect::from_min_max(Pos2::ZERO, pos2(page.width, page.height)), pw: page.width, ph: page.height, rot: 0 };
+        let xf_2x =
+            PageXform { rect: Rect::from_min_max(Pos2::ZERO, pos2(page.width * 2.0, page.height * 2.0)), pw: page.width, ph: page.height, rot: 0 };
+
+        ed.refresh_measured_h(&ctx, doc, Some(&xf_1x));
+        let h_1x = ed.measured_h;
+        assert!(h_1x > ed.rect.height(), "expected wrapped draft height {h_1x} > box height {}", ed.rect.height());
+        let mut b1 = ed.source.as_ref().map(|(b, _)| b.clone()).unwrap_or_else(|| doc.text_blocks(0).remove(0));
+        b1.rect = [50.0, 700.0, 130.0, 720.0];
+        let mut below = b1.clone();
+        below.rect = [50.0, 620.0, 130.0, 660.0];
+        let blocks = vec![b1, below];
+        let edit_1x = finished_edit_with_reflow(ed.clone(), true, Some(&blocks));
+
+        ed.refresh_measured_h(&ctx, doc, Some(&xf_2x));
+        let h_2x = ed.measured_h;
+        assert!(h_2x > h_1x * 1.5, "expected 2x zoom measured height {h_2x} to scale with zoom from {h_1x}");
+        let edit_2x = finished_edit_with_reflow(ed, true, Some(&blocks));
+
+        let dy1 = match edit_1x {
+            Some(Edit::Batch { edits, .. }) => match &edits[0] {
+                Edit::MoveObjects { offset, .. } => offset[1],
+                other => panic!("expected MoveObjects, got {other:?}"),
+            },
+            other => panic!("expected Batch at 1x, got {other:?}"),
+        };
+        let dy2 = match edit_2x {
+            Some(Edit::Batch { edits, .. }) => match &edits[0] {
+                Edit::MoveObjects { offset, .. } => offset[1],
+                other => panic!("expected MoveObjects, got {other:?}"),
+            },
+            other => panic!("expected Batch at 2x, got {other:?}"),
+        };
+        assert!((dy1 - dy2).abs() < 3.0, "zoom should yield matching user-space reflow delta: 1x={dy1}, 2x={dy2}");
+    }
+
+    #[test]
+    fn production_completion_recalculates_measured_h_on_draft_and_zoom_change() {
+        let mut app = crate::PdfCraftApp::for_unit_tests();
+        let ctx = egui::Context::default();
+        let stream = b"BT /F1 12 Tf 50 700 Td (Short) Tj ET\nBT /F1 12 Tf 50 640 Td (Below paragraph) Tj ET\n";
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 595 842] >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>".to_string(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{}\nendstream", stream.len(), String::from_utf8_lossy(stream)),
+        ];
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+
+        app.open_bytes(&ctx, "reflow.pdf", None, pdf).unwrap();
+        let id = app.views[0].id;
+        let doc = app.session.get(id).unwrap();
+        let page_info = doc.info.pages[0];
+        let blocks = doc.text_blocks(0);
+        let below_y_before = blocks.iter().find(|b| b.text.contains("Below")).unwrap().rect[1];
+        let top_block = blocks[0].clone();
+        let source_lines = doc.text_lines(0);
+        let top_rect = top_block.rect.map(|v| v as f32);
+
+        // Open editor at 1x, then zoom to 2x and wrap into multi-line draft without running another frame.
+        let zoom_rect = Rect::from_min_size(Pos2::ZERO, vec2(page_info.width * 2.0, page_info.height * 2.0));
+        app.views[0].session.placed = vec![PlacedPage::new(0, zoom_rect, 2.0, (0.0, page_info.height * 2.0))];
+        app.views[0].session.reflow_paragraphs = true;
+
+        let (_, mut ed) = preview_app();
+        ed.page = 0;
+        ed.block = 0;
+        ed.source_rect = top_rect;
+        ed.rect = Rect::from_min_size(pos2(50.0, 130.0), vec2(60.0, 12.0));
+        ed.measured_h = 12.0;
+        ed.original = top_block.text.clone();
+        ed.text = "Line one\nLine two\nLine three\nLine four".into();
+        ed.multiline = true;
+        ed.source = Some((top_block.clone(), source_lines.clone()));
+        ed.look = look_of(&top_block);
+        ed.look0 = ed.look.clone();
+
+        // First verify unchanged text + style color change gives zero delta at 2x zoom.
+        let mut color_only = ed.clone();
+        color_only.text = top_block.text.clone();
+        color_only.multiline = false;
+        color_only.look.color = [1.0, 0.0, 0.0, 1.0];
+        color_only.rect = Rect::NOTHING;
+        color_only.measured_h = 0.0;
+        let color_edit = crate::editing::finish_line_editor_edit(&ctx, doc, &app.views[0], &mut color_only);
+        assert!(matches!(color_edit, Some(Edit::EditTextBlock { .. })), "unchanged text must not reflow");
+
+        // Now complete wrapped draft at 2x zoom through production close_text_editors.
+        app.views[0].session.line_editor = Some(ed);
+        assert!(app.close_text_editors(&ctx, 0, id));
+        let updated_blocks = app.session.get(id).unwrap().text_blocks(0);
+        let below_y_after = updated_blocks.iter().find(|b| b.text.contains("Below")).unwrap().rect[1];
+        assert!(below_y_after < below_y_before - 5.0, "below paragraph should reflow down: {below_y_before} -> {below_y_after}");
     }
 }

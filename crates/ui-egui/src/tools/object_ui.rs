@@ -36,6 +36,8 @@ pub(crate) struct ObjectSelection {
     marquee_mods: Mods,
     /// Axis locked during a Shift-constrained object drag: `Some(true)` locks horizontal, `Some(false)` vertical.
     shift_axis: Option<bool>,
+    /// Page and press origin where `modified_press` claimed `Down`, so Shift changes mid-drag never steal `Release`.
+    modified_down: Option<(usize, Pos2)>,
 }
 
 impl ObjectSelection {
@@ -103,6 +105,7 @@ impl ObjectSelection {
         self.pending = None;
         self.select_paragraph = None;
         self.shift_axis = None;
+        self.modified_down = None;
     }
 
     /// Select paragraph `block` of `page` as an object at the next `prepare`, as Acrobat does
@@ -272,14 +275,21 @@ pub(crate) fn modified_press_at(session: &mut PageSession, doc: &Document, info:
 pub(crate) fn modified_press(session: &mut PageSession, doc: &Document, info: &DocInfo, press: &PagePress, geo: PageGeometry<'_>) -> bool {
     let Some(xf) = session.page_xform(press.page, geo) else { return false };
     match press.phase {
-        PressPhase::Down { start, .. } => modified_press_at(session, doc, info, press.page, &xf, start.origin),
-        // The rest of a press its Down took is the toggle's too: its release is no click on what lies under it
-        // (a click on added text would open it for typing).
-        _ => press.phase.start().is_some_and(|start| match modified_target(session, doc, press.page, &xf, start.origin) {
-            ModifiedTarget::None => false,
-            ModifiedTarget::Refused(_) => true,
-            ModifiedTarget::Objects(objects) => object_at(&xf, info, press.page, &objects, start.origin).is_some(),
-        }),
+        PressPhase::Down { start, .. } => {
+            let claimed = modified_press_at(session, doc, info, press.page, &xf, start.origin);
+            session.objects.modified_down = claimed.then_some((press.page, start.origin));
+            claimed
+        }
+        // Only claim non-Down phases of a press whose Down actually belonged to modified_press,
+        // so holding Shift on release after a normal drag does not swallow Release and skip the move.
+        PressPhase::Release { .. } | PressPhase::Cancel { .. } => {
+            let claimed = press.phase.start().is_some_and(|start| session.objects.modified_down == Some((press.page, start.origin)));
+            if claimed {
+                session.objects.modified_down = None;
+            }
+            claimed
+        }
+        _ => press.phase.start().is_some_and(|start| session.objects.modified_down == Some((press.page, start.origin))),
     }
 }
 
@@ -427,8 +437,16 @@ pub(crate) fn object_controls(
         });
         let offset = match active_drag {
             Some((mut delta, true)) => {
-                let lock = session.objects.shift_axis.get_or_insert_with(|| delta.x.abs() >= delta.y.abs());
-                if *lock {
+                // Only lock the constraint axis once pointer displacement clears micro-jitter,
+                // avoiding permanent horizontal lock on an initial zero-delta DragStart frame.
+                let horiz = if let Some(lock) = session.objects.shift_axis {
+                    lock
+                } else if delta.x.abs() > 2.0 || delta.y.abs() > 2.0 {
+                    *session.objects.shift_axis.insert(delta.x.abs() >= delta.y.abs())
+                } else {
+                    delta.x.abs() >= delta.y.abs()
+                };
+                if horiz {
                     delta.y = 0.0;
                 } else {
                     delta.x = 0.0;
@@ -439,7 +457,17 @@ pub(crate) fn object_controls(
                 session.objects.shift_axis = None;
                 delta
             }
-            None => Vec2::ZERO,
+            None => {
+                // Keep shift_axis only while Release is queued this frame so objects_press can consume it;
+                // clear on idle or Cancel frames so a prior drag never leaves stale axis lock behind.
+                let releasing = presses.iter().any(|p| {
+                    p.page == page && matches!(p.owner, Owner::Objects { .. } | Owner::Frame { .. }) && matches!(p.phase, PressPhase::Release { .. })
+                });
+                if !releasing {
+                    session.objects.shift_axis = None;
+                }
+                Vec2::ZERO
+            }
         };
         let s = &session.objects;
         let rects: Vec<Rect> = s.selected.iter().map(|o| screen(&xf, info, page, o)).collect();
@@ -518,6 +546,7 @@ pub(crate) fn objects_press(session: &mut PageSession, doc: &Document, _info: &D
             None
         }
         PressPhase::Release { start, mut pos, .. } => {
+            session.objects.modified_down = None;
             let locked_axis = if press.mods.shift {
                 session.objects.shift_axis.take()
             } else {
@@ -545,6 +574,11 @@ pub(crate) fn objects_press(session: &mut PageSession, doc: &Document, _info: &D
                     None
                 }
             }
+        }
+        PressPhase::Cancel { .. } => {
+            session.objects.shift_axis = None;
+            session.objects.modified_down = None;
+            None
         }
         _ => None,
     }

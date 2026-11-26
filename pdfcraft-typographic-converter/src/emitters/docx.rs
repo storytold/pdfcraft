@@ -9,6 +9,55 @@ enum PageItem<'a> {
     Image(&'a PageImage),
 }
 
+fn build_line_paragraph(line: &TextLine) -> Paragraph {
+    let mut paragraph = Paragraph::new();
+
+    for run in &line.runs {
+        let mut r = Run::new();
+
+        if run.has_leading_tab {
+            r = r.add_tab();
+        }
+
+        r = r.add_text(&run.text);
+        r = r.fonts(RunFonts::new().ascii(&run.font_name).hi_ansi(&run.font_name).cs(&run.font_name));
+
+        let half_points = (run.font_size * 2.0).round() as usize;
+        r = r.size(half_points);
+
+        if run.is_bold {
+            r = r.bold();
+        }
+        if run.is_italic {
+            r = r.italic();
+        }
+
+        if run.script == ScriptType::Superscript {
+            r.run_property = r.run_property.vert_align(VertAlignType::SuperScript);
+        } else if run.script == ScriptType::Subscript {
+            r.run_property = r.run_property.vert_align(VertAlignType::SubScript);
+        }
+
+        paragraph = paragraph.add_run(r);
+    }
+
+    paragraph
+}
+
+fn build_image_paragraph(img: &PageImage) -> Option<Paragraph> {
+    if img.bytes.is_empty() {
+        return None;
+    }
+    let min_x = img.bounds.0.min(img.bounds.2);
+    let max_x = img.bounds.0.max(img.bounds.2);
+    let min_y = img.bounds.1.min(img.bounds.3);
+    let max_y = img.bounds.1.max(img.bounds.3);
+    let w_emu = ((max_x - min_x) * 12700.0).round().max(1.0) as u32;
+    let h_emu = ((max_y - min_y) * 12700.0).round().max(1.0) as u32;
+    let pic = Pic::new(&img.bytes).size(w_emu, h_emu);
+    Some(Paragraph::new().add_run(Run::new().add_image(pic)))
+}
+
 /// Exports a `DocumentLayout` to a Microsoft Word (.docx) document.
 pub fn export_docx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
     let mut docx = Docx::new();
@@ -46,58 +95,10 @@ pub fn export_docx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
 
         for (_, item) in items {
             match item {
-                PageItem::Line(line) => {
-                    let mut paragraph = Paragraph::new();
-
-                    for run in &line.runs {
-                        let mut r = Run::new();
-
-                        // If run has leading tab, prepend a tab
-                        if run.has_leading_tab {
-                            r = r.add_tab();
-                        }
-
-                        // Add text content
-                        r = r.add_text(&run.text);
-
-                        // Set font family
-                        r = r.fonts(RunFonts::new().ascii(&run.font_name));
-
-                        // Set font size in half-points
-                        let half_points = (run.font_size * 2.0).round() as usize;
-                        r = r.size(half_points);
-
-                        // Bold and Italic styling
-                        if run.is_bold {
-                            r = r.bold();
-                        }
-                        if run.is_italic {
-                            r = r.italic();
-                        }
-
-                        // Superscript / Subscript vertical alignment
-                        if run.script == ScriptType::Superscript {
-                            r.run_property = r.run_property.vert_align(VertAlignType::SuperScript);
-                        } else if run.script == ScriptType::Subscript {
-                            r.run_property = r.run_property.vert_align(VertAlignType::SubScript);
-                        }
-
-                        paragraph = paragraph.add_run(r);
-                    }
-
-                    page_paragraphs.push(paragraph);
-                }
+                PageItem::Line(line) => page_paragraphs.push(build_line_paragraph(line)),
                 PageItem::Image(img) => {
-                    if !img.bytes.is_empty() {
-                        let min_x = img.bounds.0.min(img.bounds.2);
-                        let max_x = img.bounds.0.max(img.bounds.2);
-                        let min_y = img.bounds.1.min(img.bounds.3);
-                        let max_y = img.bounds.1.max(img.bounds.3);
-                        let w_emu = ((max_x - min_x) * 12700.0).round().max(1.0) as u32;
-                        let h_emu = ((max_y - min_y) * 12700.0).round().max(1.0) as u32;
-                        let pic = Pic::new(&img.bytes).size(w_emu, h_emu);
-                        let paragraph = Paragraph::new().add_run(Run::new().add_image(pic));
-                        page_paragraphs.push(paragraph);
+                    if let Some(p) = build_image_paragraph(img) {
+                        page_paragraphs.push(p);
                     }
                 }
             }

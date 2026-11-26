@@ -97,14 +97,13 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
     }
     if bg_btn.response.secondary_clicked() {
         app.reading_bg.toggle_picker(bg_btn.response.id);
+        ui.ctx().request_repaint();
     }
-    if IconButton::new(IconId::new("sliders-horizontal"))
-        .label(tl!("Eye strain tint settings"))
-        .selected(app.reading_bg.picker_open)
-        .show(ui)
-        .clicked()
-    {
-        app.reading_bg.toggle_picker(bg_btn.response.id);
+    let tint_btn =
+        IconButton::new(IconId::new("sliders-horizontal")).label(tl!("Eye strain tint settings")).selected(app.reading_bg.picker_open).show(ui);
+    if tint_btn.clicked() {
+        app.reading_bg.toggle_picker(tint_btn.response.id);
+        ui.ctx().request_repaint();
     }
 
     // The rows' marks come from the commands' checked state (the catalog), not from here.

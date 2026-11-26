@@ -6,10 +6,16 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use craft::ui::contract::{Bind, Entry, Show as _};
+use craft::behavior::IconId;
+use craft::theme::TypeRole;
+use craft::theme::variant::Variant;
+use craft::ui::buttons::{Button, IconButton};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, clicked};
+use craft::ui::display::{Shade, Text};
 use craft::ui::pickers::Select;
+use craft::ui::runtime::env::Env;
 use egui::{Color32, CornerRadius, Margin, Pos2, Rect, Stroke, pos2, vec2};
-use pdfcraft_engine::barcode_scan::ScannedCode;
+use pdfcraft_engine::barcode_scan::{CodeKind, ScannedCode};
 use pdfcraft_engine::{Document, Edit};
 use pdfcraft_render::DocInfo;
 use std::collections::BTreeMap;
@@ -17,8 +23,35 @@ use std::sync::Arc;
 
 use crate::canvas::DocView;
 
-fn hud_font(size: f32) -> egui::FontId {
-    egui::FontId::proportional(size)
+struct HudPalette {
+    card_bg: Color32,
+    item_bg: Color32,
+    code_bg: Color32,
+    border: Color32,
+    accent: Color32,
+    good: Color32,
+    warn: Color32,
+    shadow: Color32,
+}
+
+impl HudPalette {
+    fn from_ui(ui: &egui::Ui) -> Self {
+        let to_c32 = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+        let colors = &Env::of(ui).tokens.color;
+        let card_bg = to_c32(colors.surface.raised.0);
+        let item_bg = to_c32(colors.surface.canvas.0);
+        let dark = card_bg.r() < 128;
+        Self {
+            card_bg,
+            item_bg,
+            code_bg: if dark { card_bg } else { item_bg },
+            border: to_c32(colors.line.border.0),
+            accent: to_c32(colors.accent.solid.0),
+            good: to_c32(colors.status.good.solid.0),
+            warn: to_c32(colors.status.warn.solid.0),
+            shadow: Color32::from_black_alpha(if dark { 140 } else { 36 }),
+        }
+    }
 }
 
 /// Persistent HUD state for barcode / QR detection and interactive editing.
@@ -307,36 +340,38 @@ fn render_floating_menu(
                 (code_rect.top() - 34.0).max(viewport.top() + 10.0)
             },
         );
+        let palette = HudPalette::from_ui(ui);
         egui::Area::new(egui::Id::unique(("barcode-context-menu", view_id, state.active_index)))
             .order(egui::Order::Foreground)
             .fixed_pos(menu_pos)
             .show(ui.ctx(), |ui| {
                 egui::Frame::NONE
-                    .fill(Color32::from_rgb(0x1B, 0x1D, 0x26))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(0x3B, 0x82, 0xF6)))
+                    .fill(palette.card_bg)
+                    .stroke(Stroke::new(1.0, palette.accent))
                     .corner_radius(CornerRadius::same(6))
-                    .shadow(egui::Shadow { offset: [0, 4], blur: 10, spread: 0, color: Color32::from_black_alpha(160) })
+                    .shadow(egui::Shadow { offset: [0, 4], blur: 10, spread: 0, color: palette.shadow })
                     .inner_margin(Margin::symmetric(6, 4))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
                             if can_modify
-                                && ui
-                                    .add(egui::Button::new(
-                                        egui::RichText::new("🗑 Delete").font(hud_font(11.0)).color(Color32::from_rgb(0xEF, 0x44, 0x44)),
-                                    ))
-                                    .on_hover_text("Delete barcode and whiteout region")
-                                    .clicked()
+                                && clicked(
+                                    &Button::new(tl!("Delete"))
+                                        .icon(IconId::new("trash-2"))
+                                        .variant(Variant::GHOST)
+                                        .tooltip(tl!("Delete barcode and whiteout region"))
+                                        .show(ui),
+                                )
                             {
                                 delete_code = Some(active.clone());
                             }
-                            if ui
-                                .add(egui::Button::new(
-                                    egui::RichText::new("⬇ Download").font(hud_font(11.0)).color(Color32::from_rgb(0x60, 0xA5, 0xFA)),
-                                ))
-                                .on_hover_text("Export barcode PNG to Downloads folder")
-                                .clicked()
-                            {
+                            if clicked(
+                                &Button::new(tl!("Download"))
+                                    .icon(IconId::new("file-down"))
+                                    .variant(Variant::GHOST)
+                                    .tooltip(tl!("Export barcode PNG to Downloads folder"))
+                                    .show(ui),
+                            ) {
                                 download_code = Some(active.clone());
                             }
                         });
@@ -353,7 +388,10 @@ impl BarcodeScannerHud {
         let codes = state.codes_for_page(page).unwrap_or(state.scanned_codes.as_slice());
         let active_key = state.active_code().map(|c| (c.page, c.id, c.rect));
         let painter = ui.painter().with_clip_rect(clip);
-        let accent = Color32::from_rgb(0x3B, 0x82, 0xF6);
+        let accent = {
+            let c = Env::of(ui).tokens.color.accent.solid.0;
+            Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
+        };
         for code in codes.iter().filter(|c| c.page == page) {
             let rect = xf.user_rect(info, page, code.rect.map(|v| v as f32));
             if !rect.is_positive() {
@@ -428,38 +466,42 @@ impl BarcodeScannerHud {
         let Some(target_page) = next_page else {
             return;
         };
-        if cfg!(target_arch = "wasm32") {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = ctx;
             // No threads on the web: scan here rather than never.
             let codes = doc.scan_page_codes(target_page);
             view.session.barcode_hud.page_codes.insert(target_page, codes.clone());
             if target_page == current_page {
                 Self::apply_scan(view, target_page, codes, now);
             }
-            return;
         }
-        let (bytes, password, name) = (doc.bytes.clone(), doc.password.clone(), doc.name.clone());
-        let (tx, rx) = std::sync::mpsc::channel();
-        let repaint = ctx.cloned();
-        let spawned = std::thread::Builder::new().name("barcode-scan".into()).spawn(move || {
-            // A scan-only session: the interface's own session cannot be moved to a worker.
-            let mut session = pdfcraft_engine::Session::new();
-            let codes = match session.open(name, None, bytes, password.as_deref()) {
-                Ok(id) => session.get(id).map(|d| d.scan_page_codes(target_page)).unwrap_or_default(),
-                Err(_) => Vec::new(),
-            };
-            let _ = tx.send(codes);
-            if let Some(ctx) = repaint {
-                ctx.request_repaint();
-            }
-        });
-        match spawned {
-            Ok(_) => view.session.barcode_scan = Some((view.id.0, target_page, generation, rx)),
-            // No thread could be started: fall back to scanning this frame.
-            Err(_) => {
-                let codes = doc.scan_page_codes(target_page);
-                view.session.barcode_hud.page_codes.insert(target_page, codes.clone());
-                if target_page == current_page {
-                    Self::apply_scan(view, target_page, codes, now);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (bytes, password, name) = (doc.bytes.clone(), doc.password.clone(), doc.name.clone());
+            let (tx, rx) = std::sync::mpsc::channel();
+            let repaint = ctx.cloned();
+            let spawned = std::thread::Builder::new().name("barcode-scan".into()).spawn(move || {
+                // A scan-only session: the interface's own session cannot be moved to a worker.
+                let mut session = pdfcraft_engine::Session::new();
+                let codes = match session.open(name, None, bytes, password.as_deref()) {
+                    Ok(id) => session.get(id).map(|d| d.scan_page_codes(target_page)).unwrap_or_default(),
+                    Err(_) => Vec::new(),
+                };
+                let _ = tx.send(codes);
+                if let Some(ctx) = repaint {
+                    ctx.request_repaint();
+                }
+            });
+            match spawned {
+                Ok(_) => view.session.barcode_scan = Some((view.id.0, target_page, generation, rx)),
+                // No thread could be started: fall back to scanning this frame.
+                Err(_) => {
+                    let codes = doc.scan_page_codes(target_page);
+                    view.session.barcode_hud.page_codes.insert(target_page, codes.clone());
+                    if target_page == current_page {
+                        Self::apply_scan(view, target_page, codes, now);
+                    }
                 }
             }
         }
@@ -473,11 +515,14 @@ impl BarcodeScannerHud {
         view.session.barcode_hud.update_codes_conditional(codes, open);
         view.session.barcode_hud.panel_open = panel_open;
         if open {
-            if count > 0 {
-                view.session.barcode_hud.show_toast(format!("Detected {count} code(s) on page {}", page + 1), now);
+            let msg = if count > 0 {
+                let template =
+                    crate::i18n::trn(crate::i18n::current(), count as u64, "Detected {n} code on page {page}", "Detected {n} codes on page {page}");
+                crate::i18n::fmt(&template, &[("page", &(page + 1).to_string())])
             } else {
-                view.session.barcode_hud.show_toast(format!("No codes on page {}", page + 1), now);
-            }
+                crate::i18n::fmt(tl!("No codes on page {page}"), &[("page", &(page + 1).to_string())])
+            };
+            view.session.barcode_hud.show_toast(msg, now);
         }
     }
 
@@ -490,6 +535,7 @@ impl BarcodeScannerHud {
         }
 
         let current_page = view.session.barcode_hud.active_code().map_or(view.view.current, |c| c.page);
+        let view_page = view.view.current;
         let total_pages = info.pages.len();
         let viewport = view.viewport_rect();
         let view_id = view.id.0;
@@ -497,364 +543,45 @@ impl BarcodeScannerHud {
         let page_xf = view.page_xform(current_page);
 
         let state = &mut view.session.barcode_hud;
-        let total_codes = state.scanned_codes.len();
+        let mut actions = HudActions::default();
 
-        // 2. Keyboard arrow navigation when viewing (not editing text)
-        let mut step_prev = false;
-        let mut step_next = false;
         if state.edit_buffer.is_none() && !ui.ctx().egui_wants_keyboard_input() {
-            if ui.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
-                step_prev = true;
-            }
-            if ui.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
-                step_next = true;
-            }
+            actions.step_prev = ui.input(|i| i.key_pressed(egui::Key::ArrowLeft));
+            actions.step_next = ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
         }
 
-        let mut pending_edit = None;
-        let mut close_hud = false;
-        let mut trigger_rescan = false;
-        let mut copy_text = None;
-        let mut start_edit = false;
-        let mut apply_code = None;
-        let mut cancel_edit = false;
-        let mut trigger_generate = false;
-
-        // Floating context menu near focused barcode with 🗑 Delete and ⬇ Download
         let anchor = FloatingMenuAnchor { current_page, page_xf: page_xf.as_ref(), viewport, view_id };
-        let (mut delete_code, download_code) = render_floating_menu(ui, state, anchor, info, can_modify);
-
-        // Modern Dark Aesthetics
-        let card_bg = Color32::from_rgb(0x13, 0x14, 0x1A);
-        let border_stroke = Stroke::new(1.0, Color32::from_rgb(0x28, 0x2C, 0x3B));
-        let item_card_bg = Color32::from_rgb(0x1B, 0x1D, 0x26);
-        let item_card_stroke = Stroke::new(1.0, Color32::from_rgb(0x28, 0x2C, 0x3B));
-        let text_primary = Color32::from_rgb(0xF8, 0xFA, 0xFC);
-        let text_muted = Color32::from_rgb(0x94, 0xA3, 0xB8);
-        let accent_blue = Color32::from_rgb(0x3B, 0x82, 0xF6);
-        let emerald_green = Color32::from_rgb(0x10, 0xB9, 0x81);
-
-        // Fixed compact panel at top-right of canvas viewport
-        let hud_w = 330.0;
-        let hud_pos = Pos2::new((viewport.right() - hud_w - 18.0).max(viewport.left() + 18.0), viewport.top() + 18.0);
+        let (menu_delete, download_code) = render_floating_menu(ui, state, anchor, info, can_modify);
+        if menu_delete.is_some() {
+            actions.delete_code = menu_delete;
+        }
 
         if state.panel_open {
-            egui::Window::new("QR & Barcodes")
-                .id(egui::Id::unique(("barcode-scanner-hud-window", view_id)))
-                .order(egui::Order::Foreground)
-                .default_pos(hud_pos)
-                .default_width(hud_w)
-                .resizable(true)
-                .collapsible(false)
-                .title_bar(false)
-                .frame(egui::Frame::NONE)
-                .show(ui.ctx(), |ui| {
-                    egui::Frame::NONE
-                        .fill(card_bg)
-                        .stroke(border_stroke)
-                        .corner_radius(CornerRadius::same(12))
-                        .shadow(egui::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(170) })
-                        .inner_margin(Margin::symmetric(14, 12))
-                        .show(ui, |ui| {
-                            ui.set_width((hud_w - 28.0).max(ui.available_width()));
-
-                            // Header: Badge + Title + Close button
-                            ui.horizontal(|ui| {
-                                let (icon_r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
-                                ui.painter().rect_stroke(
-                                    icon_r.shrink(1.0),
-                                    CornerRadius::same(3),
-                                    Stroke::new(1.5, accent_blue),
-                                    egui::StrokeKind::Inside,
-                                );
-                                ui.painter().rect_filled(icon_r.shrink(5.0), CornerRadius::same(1), accent_blue);
-                                ui.label(egui::RichText::new("QR & Barcodes").font(hud_font(13.5)).color(text_primary));
-
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.small_button("✕").on_hover_text("Close HUD").clicked() {
-                                        close_hud = true;
-                                    }
-                                });
-                            });
-
-                            ui.add_space(8.0);
-
-                            // Section 1: Page Tracker & Multi-Code Navigation Bar
-                            egui::Frame::NONE
-                                .fill(item_card_bg)
-                                .stroke(item_card_stroke)
-                                .corner_radius(CornerRadius::same(8))
-                                .inner_margin(Margin::symmetric(10, 8))
-                                .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        let hud_page = state.active_code().map_or(current_page, |c| c.page);
-                                        ui.label(
-                                            egui::RichText::new(format!("Page {} of {}", hud_page + 1, total_pages))
-                                                .font(hud_font(11.5))
-                                                .color(text_muted),
-                                        );
-                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            if ui.small_button("⟳").on_hover_text("Rescan visible pages").clicked() {
-                                                trigger_rescan = true;
-                                            }
-                                            ui.label(egui::RichText::new("● AUTO").font(hud_font(9.5)).color(emerald_green));
-                                        });
-                                    });
-
-                                    ui.add_space(6.0);
-
-                                    if total_codes > 0 {
-                                        ui.horizontal(|ui| {
-                                            let prev_btn = ui
-                                                .add_sized([26.0, 22.0], egui::Button::new("◀"))
-                                                .on_hover_text("Previous barcode/QR code (Left Arrow)");
-                                            if prev_btn.clicked() {
-                                                step_prev = true;
-                                            }
-
-                                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                                ui.painter().rect_filled(
-                                                    Rect::from_min_size(ui.cursor().min, vec2(136.0, 22.0)),
-                                                    CornerRadius::same(5),
-                                                    Color32::from_rgb(0x13, 0x14, 0x1A),
-                                                );
-                                                ui.add_space(8.0);
-                                                ui.label(
-                                                    egui::RichText::new(format!("Code {} of {}", state.active_index + 1, total_codes))
-                                                        .font(hud_font(12.0))
-                                                        .color(accent_blue),
-                                                );
-                                            });
-
-                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                let next_btn = ui
-                                                    .add_sized([26.0, 22.0], egui::Button::new("▶"))
-                                                    .on_hover_text("Next barcode/QR code (Right Arrow)");
-                                                if next_btn.clicked() {
-                                                    step_next = true;
-                                                }
-                                            });
-                                        });
-                                    } else {
-                                        ui.label(egui::RichText::new("No barcodes or QR codes on this page").font(hud_font(11.0)).color(text_muted));
-                                    }
-                                });
-
-                            // Section 2: Active Code Details Card (Data of ONE code at a time)
-                            if let Some(active) = state.active_code().cloned() {
-                                ui.add_space(8.0);
-                                egui::Frame::NONE
-                                    .fill(item_card_bg)
-                                    .stroke(item_card_stroke)
-                                    .corner_radius(CornerRadius::same(8))
-                                    .inner_margin(Margin::symmetric(10, 8))
-                                    .show(ui, |ui| {
-                                        // Symbology + Dimensions
-                                        ui.horizontal(|ui| {
-                                            ui.label(egui::RichText::new("●").color(accent_blue).font(hud_font(11.0)));
-                                            ui.label(egui::RichText::new(active.kind.label()).font(hud_font(12.0)).color(text_primary));
-                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                ui.label(
-                                                    egui::RichText::new(format!("{}×{}px • 100%", active.pixel_size[0], active.pixel_size[1]))
-                                                        .font(hud_font(10.0))
-                                                        .color(Color32::from_rgb(0x38, 0xBD, 0xF8)),
-                                                );
-                                            });
-                                        });
-
-                                        ui.add_space(6.0);
-
-                                        // Payload View or Edit Mode
-                                        if let Some(buf) = &mut state.edit_buffer {
-                                            ui.label(egui::RichText::new("EDIT PAYLOAD & SYMBOLOGY").font(hud_font(9.5)).color(text_muted));
-                                            ui.add_space(3.0);
-                                            ui.add(egui::TextEdit::multiline(buf).desired_width(ui.available_width()).desired_rows(3));
-                                            ui.add_space(4.0);
-
-                                            // Symbology Dropdown
-                                            let mut selected_kind = state.reembed_kind.unwrap_or(active.kind);
-                                            let kind_entries = [
-                                                Entry::new(pdfcraft_engine::barcode_scan::CodeKind::QrCode, tl!("QR Code")),
-                                                Entry::new(pdfcraft_engine::barcode_scan::CodeKind::Code39, tl!("Code 39 Barcode (139)")),
-                                                Entry::new(pdfcraft_engine::barcode_scan::CodeKind::Code128, tl!("Code 128 Barcode")),
-                                                Entry::new(pdfcraft_engine::barcode_scan::CodeKind::Ean13, tl!("EAN-13 Barcode")),
-                                            ];
-                                            Select::new(tl!("Format"), Bind::bound(&mut selected_kind), &kind_entries).show(ui);
-                                            state.reembed_kind = Some(selected_kind);
-
-                                            ui.add_space(8.0);
-                                            ui.horizontal(|ui| {
-                                                let can_apply = can_modify && !buf.trim().is_empty();
-                                                if ui.add_enabled(can_apply, egui::Button::new("⚡ Re-embed")).clicked() {
-                                                    apply_code = Some((active.clone(), buf.clone(), selected_kind));
-                                                }
-                                                if ui.button("Cancel").clicked() {
-                                                    cancel_edit = true;
-                                                }
-                                            });
-                                        } else {
-                                            // Monospace text container
-                                            egui::Frame::NONE
-                                                .fill(Color32::from_rgb(0x0C, 0x0D, 0x12))
-                                                .stroke(Stroke::new(1.0, Color32::from_rgb(0x22, 0x25, 0x30)))
-                                                .corner_radius(CornerRadius::same(6))
-                                                .inner_margin(Margin::symmetric(8, 6))
-                                                .show(ui, |ui| {
-                                                    ui.horizontal_wrapped(|ui| {
-                                                        ui.label(
-                                                            egui::RichText::new(&active.text).font(hud_font(12.0)).monospace().color(text_primary),
-                                                        );
-                                                    });
-                                                });
-
-                                            ui.add_space(6.0);
-                                            ui.horizontal(|ui| {
-                                                if ui.button("📋 Copy").on_hover_text("Copy payload to clipboard").clicked() {
-                                                    copy_text = Some(active.text.clone());
-                                                }
-                                                if can_modify && ui.button("✏ Edit Payload").on_hover_text("Edit and re-embed code").clicked() {
-                                                    start_edit = true;
-                                                }
-                                                let is_vector = active.image_index.is_none();
-                                                let del_tip = if is_vector {
-                                                    "Cover code with whiteout overlay (underlying vector graphics remain in document)"
-                                                } else {
-                                                    "Whiteout and remove code from page"
-                                                };
-                                                if can_modify && ui.button("🗑 Delete Code").on_hover_text(del_tip).clicked() {
-                                                    delete_code = Some(active.clone());
-                                                }
-                                            });
-                                            if active.image_index.is_none() {
-                                                ui.add_space(2.0);
-                                                ui.label(
-                                                    egui::RichText::new("⚠ Vector code: changes cover original graphics with an overlay.")
-                                                        .font(hud_font(10.0))
-                                                        .color(Color32::from_rgb(0xF5, 0x9E, 0x0B)),
-                                                );
-                                            }
-                                        }
-                                    });
-                            }
-
-                            // Section 3: Prominent "Embed QR / Barcode" Section (Always visible)
-                            ui.add_space(8.0);
-                            ui.separator();
-                            ui.add_space(4.0);
-                            ui.label(egui::RichText::new("Generate & Embed Code on Page").font(hud_font(12.0)).color(text_primary));
-                            ui.add_space(4.0);
-                            ui.horizontal_wrapped(|ui| {
-                                ui.selectable_value(&mut state.generate_kind, pdfcraft_engine::barcode_scan::CodeKind::QrCode, "QR Code");
-                                ui.selectable_value(&mut state.generate_kind, pdfcraft_engine::barcode_scan::CodeKind::Code128, "Code 128 Barcode");
-                                ui.selectable_value(&mut state.generate_kind, pdfcraft_engine::barcode_scan::CodeKind::Code39, "Code 39");
-                                ui.selectable_value(&mut state.generate_kind, pdfcraft_engine::barcode_scan::CodeKind::Ean13, "EAN-13");
-                            });
-                            ui.add_space(4.0);
-                            let hint = match state.generate_kind {
-                                pdfcraft_engine::barcode_scan::CodeKind::QrCode => "QR payload (URL, text)...",
-                                pdfcraft_engine::barcode_scan::CodeKind::Code39 => "Code 39 payload (e.g. CODE39)...",
-                                pdfcraft_engine::barcode_scan::CodeKind::Code128 => "Code 128 barcode payload (e.g. 12345678)...",
-                                pdfcraft_engine::barcode_scan::CodeKind::Ean13 => "12 or 13 digits (e.g. 590123412345)...",
-                                _ => "Enter code payload...",
-                            };
-                            ui.add(
-                                egui::TextEdit::multiline(&mut state.qr_input).desired_width(ui.available_width()).desired_rows(2).hint_text(hint),
-                            );
-                            ui.add_space(6.0);
-                            let can_gen = can_modify && !state.qr_input.trim().is_empty();
-                            let btn_label = match state.generate_kind {
-                                pdfcraft_engine::barcode_scan::CodeKind::QrCode => "⚡ Embed QR Code on Page".to_string(),
-                                _ => format!("⚡ Embed {} on Page", state.generate_kind.label()),
-                            };
-                            if ui.add_enabled(can_gen, egui::Button::new(btn_label)).clicked() {
-                                trigger_generate = true;
-                            }
-
-                            // Feedback Toast
-                            if let Some((msg, expiry)) = &state.toast
-                                && *expiry > now
-                            {
-                                ui.add_space(6.0);
-                                ui.label(egui::RichText::new(msg).font(hud_font(11.0)).color(emerald_green));
-                            }
-                        });
-                });
+            let palette = HudPalette::from_ui(ui);
+            let render_cx = HudRenderCx { view_id, viewport, current_page, total_pages, can_modify, palette: &palette, now };
+            render_hud_window(ui, state, &render_cx, &mut actions);
         }
 
-        if trigger_rescan {
+        if actions.trigger_rescan {
             state.target_rect = state.active_code().map(|c| c.rect);
             state.page_codes.clear();
             // The background scan picks this up next frame (see auto_scan_on_page_change).
             state.last_scanned_page = None;
-            state.show_toast("Rescanning…".into(), now);
+            state.show_toast(tl!("Rescanning…").to_string(), now);
         }
-        if cancel_edit {
+        if actions.cancel_edit {
             state.edit_buffer = None;
             state.reembed_kind = None;
         }
-        if start_edit && let Some((text, kind)) = state.active_code().map(|c| (c.text.clone(), c.kind)) {
+        if actions.start_edit
+            && let Some((text, kind)) = state.active_code().map(|c| (c.text.clone(), c.kind))
+        {
             state.edit_buffer = Some(text);
             state.reembed_kind = Some(kind);
         }
-        if let Some((active, buf, kind)) = apply_code {
-            let target_page = active.page;
-            let (whiteout_rect, new_image_rect, pw, ph) = safe_rect_and_pixels(active.rect, active.pixel_size, kind, Some(&active.text), Some(&buf));
-            let (edit_whiteout, edit_image) =
-                (display_rect(whiteout_rect, Some(info), target_page), display_rect(new_image_rect, Some(info), target_page));
 
-            match Document::generate_replacement_code(kind, &buf, pw, ph) {
-                Ok(png_bytes) => {
-                    let whole_image_idx =
-                        active.image_index.filter(|i| doc.page_images(target_page).get(*i).is_some_and(|im| code_is_whole_image(&active, im.rect)));
-                    if let Some(image_idx) = whole_image_idx {
-                        // Replace the embedded raster image directly so no old payload remains underneath.
-                        pending_edit = Some(Edit::EditPageImage {
-                            page: target_page,
-                            index: image_idx,
-                            change: pdfcraft_engine::ImageEdit::Replace { name: "UpdatedCode.png".into(), bytes: Arc::new(png_bytes) },
-                        });
-                    } else {
-                        // Two-step overlay: first whiteout the old code, then place new code over active.rect
-                        let whiteout_bytes = Document::generate_whiteout(pw, ph).unwrap_or_default();
-                        let edits = if !whiteout_bytes.is_empty() {
-                            vec![
-                                Edit::AddImage {
-                                    page: target_page,
-                                    rect: Some(edit_whiteout),
-                                    name: "Whiteout.png".into(),
-                                    bytes: Arc::new(whiteout_bytes),
-                                },
-                                Edit::AddImage {
-                                    page: target_page,
-                                    rect: Some(edit_image),
-                                    name: "UpdatedCode.png".into(),
-                                    bytes: Arc::new(png_bytes),
-                                },
-                            ]
-                        } else {
-                            vec![Edit::AddImage {
-                                page: target_page,
-                                rect: Some(edit_image),
-                                name: "UpdatedCode.png".into(),
-                                bytes: Arc::new(png_bytes),
-                            }]
-                        };
-
-                        pending_edit = Some(Edit::Batch { label: "Replace code".into(), edits });
-                    }
-                    state.target_rect = Some(new_image_rect);
-                    state.page_codes.remove(&target_page);
-                    state.last_scanned_page = None;
-                    state.edit_buffer = None;
-                    state.reembed_kind = None;
-                    state.show_toast(format!("Replaced at 100% dimensions ({}×{}px)!", pw, ph), now);
-                }
-                Err(e) => {
-                    state.show_toast(format!("Replacement failed: {e}"), now);
-                }
-            }
-        }
-        if let Some(active) = delete_code {
+        let mut pending_edit = actions.apply_code.and_then(|(active, buf, kind)| apply_code_replacement(state, doc, info, active, buf, kind, now));
+        if let Some(active) = actions.delete_code {
             let target_page = active.page;
             if let Some(edit) = handle_barcode_delete(state, active, target_page, doc, info, now) {
                 pending_edit = Some(edit);
@@ -863,50 +590,23 @@ impl BarcodeScannerHud {
         if let Some(active) = download_code {
             handle_barcode_download(state, &active, now);
         }
-        if let Some(text) = copy_text {
+        if let Some(text) = actions.copy_text {
             ui.ctx().copy_text(text);
-            state.show_toast("Copied payload to clipboard!".into(), now);
+            state.show_toast(tl!("Copied payload to clipboard!").to_string(), now);
         }
-        if step_prev {
+        if actions.step_prev {
             state.prev_code();
         }
-        if step_next {
+        if actions.step_next {
             state.next_code();
         }
-        if close_hud {
+        if actions.close_hud {
             state.panel_open = false;
         }
-
-        if trigger_generate {
-            let text = state.qr_input.trim();
-            let kind = state.generate_kind;
-            let (pw, ph, rect_w, rect_h) = match kind {
-                pdfcraft_engine::barcode_scan::CodeKind::QrCode => (240, 240, 144.0, 144.0),
-                _ => (360, 120, 216.0, 72.0),
-            };
-            match Document::generate_replacement_code(kind, text, pw, ph) {
-                Ok(png_bytes) => {
-                    let (page_w, page_h) = info.pages.get(current_page).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
-                    let x = (page_w - rect_w) * 0.5;
-                    let y = (page_h - rect_h) * 0.5;
-                    let rect = [x, y, x + rect_w, y + rect_h];
-                    let filename = match kind {
-                        pdfcraft_engine::barcode_scan::CodeKind::QrCode => "QRCode.png",
-                        pdfcraft_engine::barcode_scan::CodeKind::Code39 => "Code39.png",
-                        pdfcraft_engine::barcode_scan::CodeKind::Code128 => "Code128.png",
-                        pdfcraft_engine::barcode_scan::CodeKind::Ean13 => "EAN13.png",
-                        _ => "Barcode.png",
-                    };
-
-                    pending_edit = Some(Edit::AddImage { page: current_page, rect: Some(rect), name: filename.into(), bytes: Arc::new(png_bytes) });
-                    state.page_codes.remove(&current_page);
-                    state.last_scanned_page = None;
-                    state.show_toast(format!("{} placed on page!", kind.label()), now);
-                }
-                Err(e) => {
-                    state.show_toast(format!("Generation error: {e}"), now);
-                }
-            }
+        if actions.trigger_generate
+            && let Some(edit) = generate_new_code(state, info, view_page, now)
+        {
+            pending_edit = Some(edit);
         }
 
         pending_edit
@@ -915,6 +615,359 @@ impl BarcodeScannerHud {
     /// Legacy compatibility stub for `show_panel` (functionality unified into `show`).
     pub fn show_panel(_ui: &mut egui::Ui, _view: &mut DocView, _doc: &Document, _info: &DocInfo, _can_modify: bool) -> Option<Edit> {
         None
+    }
+}
+
+#[derive(Default)]
+struct HudActions {
+    close_hud: bool,
+    trigger_rescan: bool,
+    step_prev: bool,
+    step_next: bool,
+    copy_text: Option<String>,
+    start_edit: bool,
+    apply_code: Option<(ScannedCode, String, CodeKind)>,
+    cancel_edit: bool,
+    delete_code: Option<ScannedCode>,
+    trigger_generate: bool,
+}
+
+struct HudRenderCx<'a> {
+    view_id: u64,
+    viewport: Rect,
+    current_page: usize,
+    total_pages: usize,
+    can_modify: bool,
+    palette: &'a HudPalette,
+    now: f64,
+}
+
+fn render_hud_window(ui: &mut egui::Ui, state: &mut BarcodeHudState, cx: &HudRenderCx<'_>, actions: &mut HudActions) {
+    let hud_w = 330.0;
+    let hud_pos = Pos2::new((cx.viewport.right() - hud_w - 18.0).max(cx.viewport.left() + 18.0), cx.viewport.top() + 18.0);
+    egui::Window::new(tl!("QR & Barcodes"))
+        .id(egui::Id::unique(("barcode-scanner-hud-window", cx.view_id)))
+        .order(egui::Order::Foreground)
+        .default_pos(hud_pos)
+        .default_width(hud_w)
+        .resizable(true)
+        .collapsible(false)
+        .title_bar(false)
+        .frame(egui::Frame::NONE)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::NONE
+                .fill(cx.palette.card_bg)
+                .stroke(Stroke::new(1.0, cx.palette.border))
+                .corner_radius(CornerRadius::same(12))
+                .shadow(egui::Shadow { offset: [0, 8], blur: 24, spread: 0, color: cx.palette.shadow })
+                .inner_margin(Margin::symmetric(14, 12))
+                .show(ui, |ui| {
+                    ui.set_width((hud_w - 28.0).max(ui.available_width()));
+                    render_hud_header(ui, cx.palette, actions);
+                    ui.add_space(8.0);
+                    render_page_tracker(ui, state, cx.current_page, cx.total_pages, cx.palette, actions);
+                    if let Some(active) = state.active_code().cloned() {
+                        ui.add_space(8.0);
+                        render_active_code_card(ui, state, &active, cx.can_modify, cx.palette, actions);
+                    }
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    render_generate_section(ui, state, cx.can_modify, cx.palette, cx.now, actions);
+                });
+        });
+}
+
+fn render_hud_header(ui: &mut egui::Ui, palette: &HudPalette, actions: &mut HudActions) {
+    ui.horizontal(|ui| {
+        let (icon_r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
+        ui.painter().rect_stroke(icon_r.shrink(1.0), CornerRadius::same(3), Stroke::new(1.5, palette.accent), egui::StrokeKind::Inside);
+        ui.painter().rect_filled(icon_r.shrink(5.0), CornerRadius::same(1), palette.accent);
+        Text::new(tl!("QR & Barcodes")).role(TypeRole::Heading).show(ui);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if IconButton::new(IconId::new("close")).label(tl!("Close QR & Barcodes")).show(ui).clicked() {
+                actions.close_hud = true;
+            }
+        });
+    });
+}
+
+fn render_page_tracker(
+    ui: &mut egui::Ui,
+    state: &BarcodeHudState,
+    current_page: usize,
+    total_pages: usize,
+    palette: &HudPalette,
+    actions: &mut HudActions,
+) {
+    let total_codes = state.scanned_codes.len();
+    egui::Frame::NONE
+        .fill(palette.item_bg)
+        .stroke(Stroke::new(1.0, palette.border))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let hud_page = state.active_code().map_or(current_page, |c| c.page);
+                let page_label = crate::i18n::fmt(tl!("Page {p} of {n}"), &[("p", &(hud_page + 1).to_string()), ("n", &total_pages.to_string())]);
+                Text::new(page_label).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if IconButton::new(IconId::new("file-scan")).label(tl!("Rescan visible pages")).show(ui).clicked() {
+                        actions.trigger_rescan = true;
+                    }
+                    ui.colored_label(palette.good, egui::RichText::new(tl!("Auto")).small());
+                });
+            });
+            ui.add_space(6.0);
+            if total_codes > 0 {
+                ui.horizontal(|ui| {
+                    if IconButton::new(IconId::new("chevron-left")).label(tl!("Previous barcode or QR code")).show(ui).clicked() {
+                        actions.step_prev = true;
+                    }
+                    let count_label =
+                        crate::i18n::fmt(tl!("Code {i} of {n}"), &[("i", &(state.active_index + 1).to_string()), ("n", &total_codes.to_string())]);
+                    ui.add_space(6.0);
+                    ui.colored_label(palette.accent, count_label);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if IconButton::new(IconId::new("chevron-right")).label(tl!("Next barcode or QR code")).show(ui).clicked() {
+                            actions.step_next = true;
+                        }
+                    });
+                });
+            } else {
+                Text::new(tl!("No barcodes or QR codes on this page")).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+            }
+        });
+}
+
+fn render_active_code_card(
+    ui: &mut egui::Ui,
+    state: &mut BarcodeHudState,
+    active: &ScannedCode,
+    can_modify: bool,
+    palette: &HudPalette,
+    actions: &mut HudActions,
+) {
+    egui::Frame::NONE
+        .fill(palette.item_bg)
+        .stroke(Stroke::new(1.0, palette.border))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let (dot_r, _) = ui.allocate_exact_size(vec2(8.0, 14.0), egui::Sense::hover());
+                ui.painter().circle_filled(dot_r.center(), 3.0, palette.accent);
+                Text::new(tl!(active.kind.label())).role(TypeRole::Label).show(ui);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let dims = crate::i18n::fmt(
+                        tl!("{w}×{h}px • 100%"),
+                        &[("w", &active.pixel_size[0].to_string()), ("h", &active.pixel_size[1].to_string())],
+                    );
+                    Text::new(dims).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+                });
+            });
+            ui.add_space(6.0);
+            if let Some(buf) = &mut state.edit_buffer {
+                Text::new(tl!("Edit payload and symbology")).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+                ui.add_space(3.0);
+                ui.add(egui::TextEdit::multiline(buf).desired_width(ui.available_width()).desired_rows(3));
+                ui.add_space(4.0);
+                let mut selected_kind = state.reembed_kind.unwrap_or(active.kind);
+                let kind_entries = [
+                    Entry::new(CodeKind::QrCode, tl!("QR Code")),
+                    Entry::new(CodeKind::Code39, tl!("Code 39 Barcode")),
+                    Entry::new(CodeKind::Code128, tl!("Code 128 Barcode")),
+                    Entry::new(CodeKind::Ean13, tl!("EAN-13 Barcode")),
+                ];
+                Select::new(tl!("Format"), Bind::bound(&mut selected_kind), &kind_entries).show(ui);
+                state.reembed_kind = Some(selected_kind);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let can_apply = can_modify && !buf.trim().is_empty();
+                    if ui.add_enabled_ui(can_apply, |ui| clicked(&Button::new(tl!("Re-embed")).variant(Variant::PRIMARY).show(ui))).inner {
+                        actions.apply_code = Some((active.clone(), buf.clone(), selected_kind));
+                    }
+                    if clicked(&Button::new(tl!("Cancel")).variant(Variant::GHOST).show(ui)) {
+                        actions.cancel_edit = true;
+                    }
+                });
+            } else {
+                egui::Frame::NONE
+                    .fill(palette.code_bg)
+                    .stroke(Stroke::new(1.0, palette.border))
+                    .corner_radius(CornerRadius::same(6))
+                    .inner_margin(Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(egui::RichText::new(&active.text).monospace());
+                        });
+                    });
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    if clicked(
+                        &Button::new(tl!("Copy"))
+                            .icon(IconId::new("copy"))
+                            .variant(Variant::SECONDARY)
+                            .tooltip(tl!("Copy payload to clipboard"))
+                            .show(ui),
+                    ) {
+                        actions.copy_text = Some(active.text.clone());
+                    }
+                    if can_modify
+                        && clicked(
+                            &Button::new(tl!("Edit Payload"))
+                                .icon(IconId::new("file-pen-line"))
+                                .variant(Variant::SECONDARY)
+                                .tooltip(tl!("Edit and re-embed code"))
+                                .show(ui),
+                        )
+                    {
+                        actions.start_edit = true;
+                    }
+                    let del_tip = if active.image_index.is_none() {
+                        tl!("Cover code with whiteout overlay (underlying vector graphics remain in document)")
+                    } else {
+                        tl!("Whiteout and remove code from page")
+                    };
+                    if can_modify
+                        && clicked(
+                            &Button::new(tl!("Delete Code")).icon(IconId::new("trash-2")).variant(Variant::SECONDARY).tooltip(del_tip).show(ui),
+                        )
+                    {
+                        actions.delete_code = Some(active.clone());
+                    }
+                });
+                if active.image_index.is_none() {
+                    ui.add_space(2.0);
+                    ui.colored_label(palette.warn, tl!("Vector code: changes cover original graphics with an overlay."));
+                }
+            }
+        });
+}
+
+fn render_generate_section(
+    ui: &mut egui::Ui,
+    state: &mut BarcodeHudState,
+    can_modify: bool,
+    palette: &HudPalette,
+    now: f64,
+    actions: &mut HudActions,
+) {
+    Text::new(tl!("Generate & embed code on page")).role(TypeRole::Label).show(ui);
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.selectable_value(&mut state.generate_kind, CodeKind::QrCode, tl!("QR Code"));
+        ui.selectable_value(&mut state.generate_kind, CodeKind::Code128, tl!("Code 128 Barcode"));
+        ui.selectable_value(&mut state.generate_kind, CodeKind::Code39, tl!("Code 39"));
+        ui.selectable_value(&mut state.generate_kind, CodeKind::Ean13, tl!("EAN-13"));
+    });
+    ui.add_space(4.0);
+    let hint = match state.generate_kind {
+        CodeKind::QrCode => tl!("QR payload (URL, text)…"),
+        CodeKind::Code39 => tl!("Code 39 payload (e.g. CODE39)…"),
+        CodeKind::Code128 => tl!("Code 128 barcode payload (e.g. 12345678)…"),
+        CodeKind::Ean13 => tl!("12 or 13 digits (e.g. 590123412345)…"),
+        _ => tl!("Enter code payload…"),
+    };
+    ui.add(egui::TextEdit::multiline(&mut state.qr_input).desired_width(ui.available_width()).desired_rows(2).hint_text(hint));
+    ui.add_space(6.0);
+    let can_gen = can_modify && !state.qr_input.trim().is_empty();
+    let btn_label = match state.generate_kind {
+        CodeKind::QrCode => tl!("Embed QR code on page").to_string(),
+        _ => crate::i18n::fmt(tl!("Embed {kind} on page"), &[("kind", tl!(state.generate_kind.label()))]),
+    };
+    if ui.add_enabled_ui(can_gen, |ui| clicked(&Button::new(btn_label).variant(Variant::PRIMARY).show(ui))).inner {
+        actions.trigger_generate = true;
+    }
+    if let Some((msg, expiry)) = &state.toast
+        && *expiry > now
+    {
+        ui.add_space(6.0);
+        ui.colored_label(palette.good, msg);
+    }
+}
+
+fn apply_code_replacement(
+    state: &mut BarcodeHudState,
+    doc: &Document,
+    info: &DocInfo,
+    active: ScannedCode,
+    buf: String,
+    kind: CodeKind,
+    now: f64,
+) -> Option<Edit> {
+    let target_page = active.page;
+    let (whiteout_rect, new_image_rect, pw, ph) = safe_rect_and_pixels(active.rect, active.pixel_size, kind, Some(&active.text), Some(&buf));
+    let (edit_whiteout, edit_image) = (display_rect(whiteout_rect, Some(info), target_page), display_rect(new_image_rect, Some(info), target_page));
+
+    match Document::generate_replacement_code(kind, &buf, pw, ph) {
+        Ok(png_bytes) => {
+            let whole_image_idx =
+                active.image_index.filter(|i| doc.page_images(target_page).get(*i).is_some_and(|im| code_is_whole_image(&active, im.rect)));
+            let pending = if let Some(image_idx) = whole_image_idx {
+                // Replace the embedded raster image directly so no old payload remains underneath.
+                Edit::EditPageImage {
+                    page: target_page,
+                    index: image_idx,
+                    change: pdfcraft_engine::ImageEdit::Replace { name: "UpdatedCode.png".into(), bytes: Arc::new(png_bytes) },
+                }
+            } else {
+                let whiteout_bytes = Document::generate_whiteout(pw, ph).unwrap_or_default();
+                let edits = if !whiteout_bytes.is_empty() {
+                    vec![
+                        Edit::AddImage { page: target_page, rect: Some(edit_whiteout), name: "Whiteout.png".into(), bytes: Arc::new(whiteout_bytes) },
+                        Edit::AddImage { page: target_page, rect: Some(edit_image), name: "UpdatedCode.png".into(), bytes: Arc::new(png_bytes) },
+                    ]
+                } else {
+                    vec![Edit::AddImage { page: target_page, rect: Some(edit_image), name: "UpdatedCode.png".into(), bytes: Arc::new(png_bytes) }]
+                };
+                Edit::Batch { label: "Replace code".into(), edits }
+            };
+            state.target_rect = Some(new_image_rect);
+            state.page_codes.remove(&target_page);
+            state.last_scanned_page = None;
+            state.edit_buffer = None;
+            state.reembed_kind = None;
+            let msg = crate::i18n::fmt(tl!("Replaced at 100% dimensions ({w}×{h}px)!"), &[("w", &pw.to_string()), ("h", &ph.to_string())]);
+            state.show_toast(msg, now);
+            Some(pending)
+        }
+        Err(e) => {
+            state.show_toast(crate::i18n::fmt(tl!("Replacement failed: {error}"), &[("error", &e.to_string())]), now);
+            None
+        }
+    }
+}
+
+fn generate_new_code(state: &mut BarcodeHudState, info: &DocInfo, target_page: usize, now: f64) -> Option<Edit> {
+    let text = state.qr_input.trim();
+    let kind = state.generate_kind;
+    let (pw, ph, rect_w, rect_h) = match kind {
+        CodeKind::QrCode => (240, 240, 144.0, 144.0),
+        _ => (360, 120, 216.0, 72.0),
+    };
+    match Document::generate_replacement_code(kind, text, pw, ph) {
+        Ok(png_bytes) => {
+            let (page_w, page_h) = info.pages.get(target_page).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
+            let x = (page_w - rect_w) * 0.5;
+            let y = (page_h - rect_h) * 0.5;
+            let rect = [x, y, x + rect_w, y + rect_h];
+            let filename = match kind {
+                CodeKind::QrCode => "QRCode.png",
+                CodeKind::Code39 => "Code39.png",
+                CodeKind::Code128 => "Code128.png",
+                CodeKind::Ean13 => "EAN13.png",
+                _ => "Barcode.png",
+            };
+            state.page_codes.remove(&target_page);
+            state.last_scanned_page = None;
+            state.show_toast(crate::i18n::fmt(tl!("{kind} placed on page!"), &[("kind", tl!(kind.label()))]), now);
+            Some(Edit::AddImage { page: target_page, rect: Some(rect), name: filename.into(), bytes: Arc::new(png_bytes) })
+        }
+        Err(e) => {
+            state.show_toast(crate::i18n::fmt(tl!("Generation error: {error}"), &[("error", &e.to_string())]), now);
+            None
+        }
     }
 }
 
@@ -939,18 +992,18 @@ fn handle_barcode_delete(
     let whole_image_idx = active.image_index.filter(|i| doc.page_images(target_page).get(*i).is_some_and(|im| code_is_whole_image(&active, im.rect)));
 
     if let Some(image_idx) = whole_image_idx {
-        state.show_toast("Image code deleted from page!".into(), now);
+        state.show_toast(tl!("Image code deleted from page!").to_string(), now);
         Some(Edit::EditPageImage { page: target_page, index: image_idx, change: pdfcraft_engine::ImageEdit::Delete })
     } else {
         let (whiteout_rect, _, pw, ph) = safe_rect_and_pixels(active.rect, active.pixel_size, active.kind, Some(&active.text), None);
         let edit_whiteout = display_rect(whiteout_rect, Some(info), target_page);
         match Document::generate_whiteout(pw, ph) {
             Ok(whiteout_png) => {
-                state.show_toast("Vector code covered with whiteout (original vector data preserved)".into(), now);
+                state.show_toast(tl!("Vector code covered with whiteout (original vector data preserved)").to_string(), now);
                 Some(Edit::AddImage { page: target_page, rect: Some(edit_whiteout), name: "Whiteout.png".into(), bytes: Arc::new(whiteout_png) })
             }
             Err(e) => {
-                state.show_toast(format!("Delete failed: {e}"), now);
+                state.show_toast(crate::i18n::fmt(tl!("Delete failed: {error}"), &[("error", &e.to_string())]), now);
                 None
             }
         }
@@ -960,7 +1013,7 @@ fn handle_barcode_delete(
 fn handle_barcode_download(state: &mut BarcodeHudState, active: &ScannedCode, now: f64) {
     let (_, _, pw, ph) = safe_rect_and_pixels(active.rect, active.pixel_size, active.kind, Some(&active.text), None);
     let pw = pw.max(128);
-    let ph = if active.kind == pdfcraft_engine::barcode_scan::CodeKind::QrCode { pw } else { ph.max(48) };
+    let ph = if active.kind == CodeKind::QrCode { pw } else { ph.max(48) };
     match Document::generate_replacement_code(active.kind, &active.text, pw, ph) {
         Ok(png_bytes) => {
             let kind_name = format!("{:?}", active.kind).to_ascii_lowercase();
@@ -981,9 +1034,9 @@ fn handle_barcode_download(state: &mut BarcodeHudState, active: &ScannedCode, no
                     match std::fs::OpenOptions::new().write(true).create_new(true).open(&dest) {
                         Ok(mut file) => {
                             if let Err(e) = file.write_all(&png_bytes) {
-                                state.show_toast(format!("Download failed: {e}"), now);
+                                state.show_toast(crate::i18n::fmt(tl!("Download failed: {error}"), &[("error", &e.to_string())]), now);
                             } else {
-                                state.show_toast(format!("Saved to Downloads: {filename}"), now);
+                                state.show_toast(crate::i18n::fmt(tl!("Saved to Downloads: {filename}"), &[("filename", &filename)]), now);
                             }
                             saved = true;
                             break;
@@ -992,19 +1045,19 @@ fn handle_barcode_download(state: &mut BarcodeHudState, active: &ScannedCode, no
                             n = n.saturating_add(1);
                         }
                         Err(e) => {
-                            state.show_toast(format!("Download failed: {e}"), now);
+                            state.show_toast(crate::i18n::fmt(tl!("Download failed: {error}"), &[("error", &e.to_string())]), now);
                             saved = true;
                             break;
                         }
                     }
                 }
                 if !saved {
-                    state.show_toast("Download failed: could not create unique file".into(), now);
+                    state.show_toast(tl!("Download failed: could not create unique file").to_string(), now);
                 }
             }
         }
         Err(e) => {
-            state.show_toast(format!("Download failed: {e}"), now);
+            state.show_toast(crate::i18n::fmt(tl!("Download failed: {error}"), &[("error", &e.to_string())]), now);
         }
     }
 }
@@ -1112,5 +1165,18 @@ mod tests {
         assert!(img_rect[2] > 110.0, "right must expand to accommodate 5th digit");
         assert!(pw > 100, "pixel width must scale to keep module thickness");
         assert!(w_rect[2] >= img_rect[2], "whiteout must cover expanded right edge");
+    }
+
+    #[test]
+    fn generate_new_code_targets_requested_view_page() {
+        let mut state = BarcodeHudState { qr_input: "https://example.com".into(), generate_kind: CodeKind::QrCode, ..Default::default() };
+        state.page_codes.insert(1, Vec::new());
+        let info = DocInfo::default();
+        let edit = generate_new_code(&mut state, &info, 1, 5.0).expect("QR edit");
+        match edit {
+            Edit::AddImage { page, .. } => assert_eq!(page, 1),
+            other => panic!("unexpected edit: {other:?}"),
+        }
+        assert!(!state.page_codes.contains_key(&1));
     }
 }

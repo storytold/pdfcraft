@@ -2251,7 +2251,7 @@ status = "partial"
 commands = ["edit.edit_text"]
 tools = ["line_list", "line_edit"]
 evidence = ["crates/edit/src/objects.rs::test_vector_line_round_trip_edit_and_properties", "crates/edit/src/objects.rs::test_stroked_rectangle_edges_and_endpoint_edit", "crates/automation/tests/it/automation.rs::vector_line_list_and_edit_roundtrip_and_mcp"]
-notes = "Interactive UI and automation tools (line_list, line_edit) for stroked straight line segments and stroked rectangle edges: select, move endpoints (with optional perpendicular grid extension), resize rectangle edges without crossing/collapse, and update stroke colour, width (0.5–20 pt) and dash pattern, undoable and surviving save/reopen. Missing: arbitrary curves/fills, deleting standalone vector strokes, and compound path editing."
+notes = "Interactive UI and automation tools (line_list, line_edit) for stroked straight line segments (select, move endpoints with optional perpendicular grid extension, and update stroke colour, width 0.5–20 pt and dash pattern) and stroked rectangle (re) edges (geometry-only edge resizing without crossing or collapse; stroke style changes on individual rectangle edges are refused), undoable and surviving save/reopen. Missing: per-edge rectangle stroke styling, arbitrary curves/fills, deleting standalone vector strokes, and compound path editing."
 
 [[feature]]
 id = "edit.edit-object-tool"

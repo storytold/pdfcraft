@@ -146,10 +146,9 @@ impl PdfCraftApp {
             && let Some(view) = self.views.get_mut(i)
             && let Some(mut ed) = view.session.line_editor.take()
         {
-            if let Some(doc) = self.session.get(view.id)
-                && let Some(p) = doc.info.pages.get(ed.page)
-            {
-                ed.rotation = p.rotation as i32;
+            if let Some(doc) = self.session.get(view.id) {
+                let xf = view.page_xform(ed.page);
+                ed.refresh_measured_h(ctx, doc, xf.as_ref());
             }
             let reflow = view.session.reflow_paragraphs;
             let blocks = if reflow { self.session.get(view.id).map(|d| d.text_blocks(ed.page)) } else { None };

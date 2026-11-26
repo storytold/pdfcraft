@@ -514,56 +514,33 @@ impl Automation {
         let target_idx = usize::try_from(k.checked_sub(1).unwrap_or(-1)).map_err(|_| bad("line must be >= 1"))?;
         let lines = self.doc(a)?.editable_lines(page).map_err(failed)?;
         let current = lines
-            .get(target_idx)
+            .iter()
+            .find(|l| l.index == target_idx)
             .ok_or_else(|| bad(format!("line {k} is out of range: page {} has {} editable line(s)", page + 1, lines.len())))?
             .clone();
         let target = ObjectTarget { kind: ObjectKind::VectorLine, index: current.index };
 
-        let parse_view_pt = |key: &str| -> Result<Option<[f64; 2]>> {
-            let Some(v) = a.get(key) else { return Ok(None) };
-            let arr = v.as_array().ok_or_else(|| bad(format!("{key} must be [x, y]")))?;
-            if arr.len() != 2 {
-                return Err(bad(format!("{key} must be [x, y]")));
-            }
-            let x = arr.first().and_then(Value::as_f64).ok_or_else(|| bad(format!("{key} must contain numbers")))?;
-            let y = arr.get(1).and_then(Value::as_f64).ok_or_else(|| bad(format!("{key} must contain numbers")))?;
-            if !x.is_finite() || !y.is_finite() {
-                return Err(bad(format!("{key} coordinates must be finite")));
-            }
-            Ok(Some([x, y]))
-        };
-
-        let start_view = parse_view_pt("start")?;
-        let end_view = parse_view_pt("end")?;
+        let start_view = parse_line_view_pt(a, "start")?;
+        let end_view = parse_line_view_pt(a, "end")?;
         let color = a.opt_str("color")?.map(parse_color).transpose()?;
         let width = a.opt_num("width")?;
-        let dash = match a.get("dash") {
-            None => None,
-            Some(v) => {
-                let arr = v.as_array().ok_or_else(|| bad("dash must be an array of numbers"))?;
-                let parsed = arr.iter().map(Value::as_f64).collect::<Option<Vec<f64>>>().ok_or_else(|| bad("dash must contain numbers"))?;
-                Some(parsed)
-            }
-        };
+        let dash = parse_line_dash(a)?;
 
         if start_view.is_none() && end_view.is_none() && color.is_none() && width.is_none() && dash.is_none() {
             return Err(bad("specify at least one of start, end, color, width or dash"));
         }
 
         let mut edits = Vec::new();
+        // Apply stroke properties before moving endpoints so a rejected or near-threshold shrink never shifts target.index.
+        if color.is_some() || width.is_some() || dash.is_some() {
+            edits.push(Edit::SetLineProperties { page, target, color, width, dash });
+        }
         if start_view.is_some() || end_view.is_some() {
             let doc = self.doc(a)?;
             let info = doc.info.pages.get(page).ok_or_else(|| bad("the page no longer exists"))?;
-            let to_user = |pt: [f64; 2]| {
-                let u = info.view_to_user(pt[0] as f32, pt[1] as f32);
-                [f64::from(u[0]), f64::from(u[1])]
-            };
-            let new_start = start_view.map(to_user).unwrap_or(current.start);
-            let new_end = end_view.map(to_user).unwrap_or(current.end);
+            let new_start = start_view.map(|pt| info.view_to_user_f64(pt[0], pt[1])).unwrap_or(current.start);
+            let new_end = end_view.map(|pt| info.view_to_user_f64(pt[0], pt[1])).unwrap_or(current.end);
             edits.push(Edit::UpdateLineEndpoints { page, target, new_start, new_end });
-        }
-        if color.is_some() || width.is_some() || dash.is_some() {
-            edits.push(Edit::SetLineProperties { page, target, color, width, dash });
         }
         let edit = if edits.len() == 1 {
             edits.into_iter().next().ok_or_else(|| failed("missing line edit"))?
@@ -575,4 +552,25 @@ impl Automation {
         out["line"] = json!(k);
         Ok(out)
     }
+}
+
+fn parse_line_view_pt(a: &Args, key: &str) -> Result<Option<[f64; 2]>> {
+    let Some(v) = a.get(key) else { return Ok(None) };
+    let arr = v.as_array().ok_or_else(|| bad(format!("{key} must be [x, y]")))?;
+    if arr.len() != 2 {
+        return Err(bad(format!("{key} must be [x, y]")));
+    }
+    let x = arr.first().and_then(Value::as_f64).ok_or_else(|| bad(format!("{key} must contain numbers")))?;
+    let y = arr.get(1).and_then(Value::as_f64).ok_or_else(|| bad(format!("{key} must contain numbers")))?;
+    if !x.is_finite() || !y.is_finite() {
+        return Err(bad(format!("{key} coordinates must be finite")));
+    }
+    Ok(Some([x, y]))
+}
+
+fn parse_line_dash(a: &Args) -> Result<Option<Vec<f64>>> {
+    let Some(v) = a.get("dash") else { return Ok(None) };
+    let arr = v.as_array().ok_or_else(|| bad("dash must be an array of numbers"))?;
+    let parsed = arr.iter().map(Value::as_f64).collect::<Option<Vec<f64>>>().ok_or_else(|| bad("dash must contain numbers"))?;
+    Ok(Some(parsed))
 }

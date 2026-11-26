@@ -28,9 +28,8 @@ A high-fidelity Rust binary and library that converts PDF documents into structu
   - Gracefully processes empty pages and pages with missing or partial font descriptors without crashing or panicking.
   - Formatted JSON output via `serde` and `serde_json`.
 - **Flexible PDFium Initialization**:
-  - Automatically checks local directories for `pdfium.dll` (Windows) / `libpdfium.so` (Linux) / `libpdfium.dylib` (macOS).
-  - Supports `--pdfium-path <PATH>` CLI parameter and the `PDFIUM_PATH` environment variable.
-  - Falls back to system PDFium if available in PATH.
+  - Supports `--pdfium-path <PATH>` CLI parameter and the `PDFIUM_DYNAMIC_LIB_PATH` environment variable (with `PDFIUM_PATH` fallback).
+  - Falls back to standard system PDFium library loading (`Pdfium::bind_to_system_library`).
 
 ## Installation & Build
 
@@ -52,6 +51,9 @@ cargo run -- <input_pdf> --format pptx
 # Specify custom output directory
 cargo run -- <input_pdf> --out ./output_directory
 
+# Emit layout debug JSON (<stem>_layout_debug.json)
+cargo run -- <input_pdf> --debug-json
+
 # Specify custom PDFium library path
 cargo run -- <input_pdf> --pdfium-path /path/to/pdfium.dll
 ```
@@ -60,7 +62,7 @@ cargo run -- <input_pdf> --pdfium-path /path/to/pdfium.dll
 
 ```text
 Converting: sample.pdf
-  -> Extracted raw glyphs in 18.01ms
+  -> Extracted raw page data in 18.01ms
   -> Built typographic layout in 209.50µs
 
 === Conversion Summary ===
@@ -76,7 +78,7 @@ Generated Files:
   - ./sample.docx
   - ./sample.xlsx
   - ./sample.pptx
-  - ./layout_debug.json
+  - ./sample_layout_debug.json   # included when --debug-json is passed
 ```
 
 ## Running Tests

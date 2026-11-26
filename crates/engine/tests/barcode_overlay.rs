@@ -14,7 +14,7 @@ fn test_barcode_overlay_exact_dimensions() {
 
     // 1. Synthetic PDF page with a 100x100 point square at [50.0, 50.0, 150.0, 150.0]
     let rect = [50.0, 50.0, 150.0, 150.0];
-    let code = ScannedCode { id: 0, page: 0, kind: CodeKind::Code128, text: "EXACT100".into(), rect, pixel_size: [100, 100], image_index: None };
+    let code = ScannedCode { id: 0, page: 0, kind: CodeKind::Code128, text: "EXACT".into(), rect, pixel_size: [100, 100], image_index: None };
 
     // 2. Generate replacement barcode image matching exact dimensions
     let orig_w = (code.rect[2] - code.rect[0]).abs().round() as u32;
@@ -77,7 +77,7 @@ fn test_barcode_overlay_off_center_y_placement() {
     // Off-center user-space rectangle near the top of the page (y=[250, 350] on height=400).
     // In rendered top-down pixels (height=400), black pixels must land in y=[50, 150], not [250, 350].
     let rect = [20.0, 250.0, 140.0, 350.0];
-    let png_bytes = Document::generate_replacement_code(CodeKind::Code128, "ASYMMETRIC", 120, 100).expect("generate code");
+    let png_bytes = Document::generate_replacement_code(CodeKind::Code128, "OFFCTR", 120, 100).expect("generate code");
 
     session
         .apply(id, Edit::AddImage { page: 0, rect: Some(rect), name: "OffCenter.png".into(), bytes: Arc::new(png_bytes) })

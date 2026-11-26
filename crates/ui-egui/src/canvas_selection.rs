@@ -18,12 +18,21 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, Fit, PageXform};
 
-/// Primary selection accent color (Acrobat-style blue).
-pub const ACCENT_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
+fn to_c32(c: [u8; 4]) -> Color32 {
+    Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
+}
 
-/// Hover accent (amber) — shown when the pointer is over an element but it
-/// is not selected. ACCENT_BLUE is used for the selected state.
-pub const ACCENT_YELLOW: Color32 = Color32::from_rgb(0xF5, 0xA6, 0x23);
+fn selection_accent(ui: &egui::Ui) -> Color32 {
+    to_c32(Env::of(ui).tokens.color.accent.solid.0)
+}
+
+fn hover_accent(ui: &egui::Ui) -> Color32 {
+    to_c32(Env::of(ui).tokens.color.status.warn.solid.0)
+}
+
+fn handle_fill(ui: &egui::Ui) -> Color32 {
+    to_c32(Env::of(ui).tokens.color.surface.raised.0)
+}
 
 /// The kind of selectable canvas element.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,12 +101,7 @@ impl SelectableElement {
         if !r.contains(pos) {
             return false;
         }
-        if let Some(ref line) = self.line {
-            let stroke_radius = ((line.thickness as f32) / 2.0).max(1.0);
-            hit_test_line(pos, line, xf, info, padding + stroke_radius)
-        } else {
-            true
-        }
+        if let Some(ref line) = self.line { hit_test_line(pos, line, xf, info, padding) } else { true }
     }
 }
 
@@ -293,6 +297,20 @@ impl SelectionState {
     }
 }
 
+/// Target page and coordinate transform for selection overlay rendering.
+pub struct LineOverlayTarget<'a> {
+    pub page: usize,
+    pub xf: &'a PageXform,
+    pub info: &'a DocInfo,
+}
+
+/// Page vector lines and drag tracking state for connected perpendicular-line updates.
+pub struct LineOverlayLines<'a> {
+    pub page_lines: &'a [LineSegment],
+    pub extend_perpendicular: bool,
+    pub line_drag: &'a mut Option<(SelectionHandle, [f64; 2], [f64; 2])>,
+}
+
 /// Core selection and layout engine for canvas elements.
 pub struct SelectionLayoutEngine;
 
@@ -335,39 +353,43 @@ impl SelectionLayoutEngine {
         line_editor: Option<&mut crate::edit_text_ui::LineEditor>,
     ) -> Option<Edit> {
         let mut no_drag = None;
-        Self::paint_selection_overlay_with_lines(ui, painter, page, xf, info, state, line_editor, &[], false, &mut no_drag)
+        Self::paint_selection_overlay_with_lines(
+            ui,
+            painter,
+            LineOverlayTarget { page, xf, info },
+            state,
+            line_editor,
+            LineOverlayLines { page_lines: &[], extend_perpendicular: false, line_drag: &mut no_drag },
+        )
     }
 
     /// Render selection overlays with access to page vector lines and perpendicular-grid extension state.
-    #[allow(clippy::too_many_arguments)]
     pub fn paint_selection_overlay_with_lines(
         ui: &egui::Ui,
         painter: &egui::Painter,
-        page: usize,
-        xf: &PageXform,
-        info: &DocInfo,
+        target: LineOverlayTarget<'_>,
         state: &mut SelectionState,
         mut line_editor: Option<&mut crate::edit_text_ui::LineEditor>,
-        page_lines: &[LineSegment],
-        extend_perpendicular: bool,
-        line_drag: &mut Option<(SelectionHandle, [f64; 2], [f64; 2])>,
+        lines: LineOverlayLines<'_>,
     ) -> Option<Edit> {
+        let LineOverlayTarget { page, xf, info } = target;
         if page >= info.pages.len() {
             return None;
         }
+        let accent = selection_accent(ui);
         // Paint subtle hover outline if hovered element is distinct from selected.
         if let Some(hovered) = &state.hovered {
             let is_selected = state.selected.as_ref().is_some_and(|s| s.page == hovered.page && s.kind == hovered.kind && s.index == hovered.index);
             if !is_selected && hovered.page == page {
                 let rect = hovered.screen_rect(xf, info).expand(2.0);
-                painter.rect_stroke(rect, CornerRadius::same(2), Stroke::new(1.0, ACCENT_BLUE.gamma_multiply(0.4)), egui::StrokeKind::Outside);
+                painter.rect_stroke(rect, CornerRadius::same(2), Stroke::new(1.0, accent.gamma_multiply(0.4)), egui::StrokeKind::Outside);
             }
         }
 
         // Paint multi-selected elements if any.
         for el in state.multi_selected.iter().filter(|el| el.page == page) {
             let rect = el.screen_rect(xf, info).expand(2.0);
-            painter.rect_stroke(rect, CornerRadius::same(2), Stroke::new(1.25, ACCENT_BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
+            painter.rect_stroke(rect, CornerRadius::same(2), Stroke::new(1.25, accent.gamma_multiply(0.7)), egui::StrokeKind::Outside);
         }
 
         let mut pending_edit = None;
@@ -378,7 +400,7 @@ impl SelectionLayoutEngine {
                 return None;
             }
             if sel.kind == SelectableKind::VectorLine {
-                return handle_vector_line_overlay(ui, painter, page, xf, info, sel, page_lines, extend_perpendicular, line_drag);
+                return handle_vector_line_overlay(ui, painter, LineOverlayTarget { page, xf, info }, sel, lines);
             }
             let unpadded_rect = sel.screen_rect(xf, info);
             let rect = unpadded_rect.expand(2.0);
@@ -458,14 +480,15 @@ impl SelectionLayoutEngine {
             };
 
             // Solid selection border
-            painter.rect_stroke(active_rect, CornerRadius::same(2), Stroke::new(1.5, ACCENT_BLUE), egui::StrokeKind::Outside);
+            painter.rect_stroke(active_rect, CornerRadius::same(2), Stroke::new(1.5, accent), egui::StrokeKind::Outside);
             // Light background tint
-            painter.rect_filled(active_rect, CornerRadius::same(2), ACCENT_BLUE.gamma_multiply(0.04));
+            painter.rect_filled(active_rect, CornerRadius::same(2), accent.gamma_multiply(0.04));
 
             // Handles (corners and edge midpoints)
             if has_resize_handles {
+                let fill = handle_fill(ui);
                 for (_, h_rect) in SelectionHandle::handle_rects(active_rect, handle_size) {
-                    painter.rect(h_rect, CornerRadius::same(1), Color32::WHITE, Stroke::new(1.0, ACCENT_BLUE), egui::StrokeKind::Middle);
+                    painter.rect(h_rect, CornerRadius::same(1), fill, Stroke::new(1.0, accent), egui::StrokeKind::Middle);
                 }
             }
 
@@ -517,21 +540,18 @@ impl SelectionLayoutEngine {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn handle_vector_line_overlay(
     ui: &egui::Ui,
     painter: &egui::Painter,
-    page: usize,
-    xf: &PageXform,
-    info: &DocInfo,
+    target: LineOverlayTarget<'_>,
     sel: &mut SelectableElement,
-    page_lines: &[LineSegment],
-    extend_perpendicular: bool,
-    line_drag: &mut Option<(SelectionHandle, [f64; 2], [f64; 2])>,
+    lines: LineOverlayLines<'_>,
 ) -> Option<Edit> {
+    let LineOverlayTarget { page, xf, info } = target;
+    let LineOverlayLines { page_lines, extend_perpendicular, line_drag } = lines;
     let line = sel.line.as_mut()?;
-    paint_line_highlight(painter, line, LineHighlightState::Selected, xf, info);
-    paint_line_endpoint_handles(painter, line, xf, info, 7.0);
+    paint_line_highlight(ui, painter, line, LineHighlightState::Selected, xf, info);
+    paint_line_endpoint_handles(ui, painter, line, xf, info, 7.0);
 
     for (handle_idx, (handle, h_rect)) in line_endpoint_handles(line, xf, info, 7.0).into_iter().enumerate() {
         let handle_id = ui.scope_id().with(("line_handle", sel.index, handle_idx));
@@ -542,21 +562,45 @@ fn handle_vector_line_overlay(
         if resp.drag_started() {
             *line_drag = Some((handle, line.start, line.end));
         }
-        if resp.dragged()
-            && let Some(curr_pos) = ui.input(|i| i.pointer.interact_pos())
-        {
-            let user_pt = screen_to_user_point(xf, info, page, curr_pos);
-            match handle {
-                SelectionHandle::LineStart => line.start = user_pt,
-                SelectionHandle::LineEnd => line.end = user_pt,
-                _ => {}
+        if resp.dragged() {
+            if let (Some((_, orig_start, orig_end)), Some(press_origin), Some(curr_pos)) =
+                (*line_drag, ui.input(|i| i.pointer.press_origin()), ui.input(|i| i.pointer.interact_pos()))
+            {
+                let p0 = screen_to_user_point(xf, info, page, press_origin);
+                let p1 = screen_to_user_point(xf, info, page, curr_pos);
+                let (dux, duy) = (p1[0] - p0[0], p1[1] - p0[1]);
+                match handle {
+                    SelectionHandle::LineStart => line.start = [orig_start[0] + dux, orig_start[1] + duy],
+                    SelectionHandle::LineEnd => line.end = [orig_end[0] + dux, orig_end[1] + duy],
+                    _ => {}
+                }
+            } else if resp.drag_delta() != egui::Vec2::ZERO {
+                let endpoint = match handle {
+                    SelectionHandle::LineStart => line.start,
+                    SelectionHandle::LineEnd => line.end,
+                    _ => continue,
+                };
+                let shifted = project_user_point(xf, info, page, endpoint) + resp.drag_delta();
+                let user_pt = screen_to_user_point(xf, info, page, shifted);
+                match handle {
+                    SelectionHandle::LineStart => line.start = user_pt,
+                    SelectionHandle::LineEnd => line.end = user_pt,
+                    _ => {}
+                }
             }
             sel.user_rect = line.bbox();
             if extend_perpendicular && let Some((_, orig_start, orig_end)) = *line_drag {
                 for upd in compute_connected_perpendicular_line_updates(page_lines, line.index, orig_start, orig_end, line.start, line.end) {
-                    let preview =
-                        LineSegment { page, index: upd.index, start: upd.new_start, end: upd.new_end, thickness: line.thickness, stroke_color: None };
-                    paint_line_highlight(painter, &preview, LineHighlightState::Hover, xf, info);
+                    let preview = LineSegment {
+                        page,
+                        index: upd.index,
+                        start: upd.new_start,
+                        end: upd.new_end,
+                        thickness: line.thickness,
+                        stroke_color: None,
+                        rect_op: None,
+                    };
+                    paint_line_highlight(ui, painter, &preview, LineHighlightState::Hover, xf, info);
                 }
             }
         }
@@ -594,37 +638,38 @@ pub enum ZoomNavAction {
     None,
 }
 
+/// Inputs to [`ZoomNavigationEngine::evaluate_navigation_step`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ZoomNavStep {
+    pub key: Key,
+    pub fit: Fit,
+    pub continuous: bool,
+    pub single_edges: Option<(usize, bool, bool)>,
+    pub current_page: usize,
+    pub speed_factor: f32,
+}
+
 /// Zoom-aware navigation engine for intelligent arrow-key stepping and panning.
 pub struct ZoomNavigationEngine;
 
 impl ZoomNavigationEngine {
     /// Evaluate navigation inputs based on zoom level and page fit conditions.
     ///
-    /// - In `Fit::Page` or single-page mode where the entire page fits within the viewport,
+    /// - When the whole page fits (`fit == Fit::Page` or both top/bottom edges visible),
     ///   `ArrowUp`/`ArrowDown` steps whole pages immediately without dead scroll resistance.
     /// - When zoomed in (`zoom > 1.0` or page height exceeds viewport), `ArrowUp`/`ArrowDown`
     ///   smoothly pans by line increments, stepping to the adjacent page when boundary is reached.
-    #[allow(clippy::too_many_arguments)]
-    pub fn evaluate_navigation_step(
-        key: Key,
-        fit: Fit,
-        continuous: bool,
-        _zoom: f32,
-        single_edges: Option<(usize, bool, bool)>,
-        current_page: usize,
-        speed_factor: f32,
-        _viewport_h: f32,
-    ) -> ZoomNavAction {
-        let forward = match key {
+    pub fn evaluate_navigation_step(step: ZoomNavStep) -> ZoomNavAction {
+        let forward = match step.key {
             Key::ArrowDown | Key::PageDown => true,
             Key::ArrowUp | Key::PageUp => false,
             _ => return ZoomNavAction::None,
         };
 
-        let is_page_step = matches!(key, Key::PageDown | Key::PageUp);
-        let base_line_step = 40.0 * speed_factor.max(0.2);
+        let is_page_step = matches!(step.key, Key::PageDown | Key::PageUp);
+        let base_line_step = 40.0 * step.speed_factor.max(0.2);
 
-        if continuous {
+        if step.continuous {
             if is_page_step {
                 ZoomNavAction::ScrollScreen { forward }
             } else {
@@ -632,19 +677,19 @@ impl ZoomNavigationEngine {
                 ZoomNavAction::ScrollLine { delta_points: delta }
             }
         } else {
-            let entire_page_fits = fit == Fit::Page || single_edges.is_some_and(|(p, top, bottom)| p == current_page && top && bottom);
+            let entire_page_fits = step.fit == Fit::Page || step.single_edges.is_some_and(|(p, top, bottom)| p == step.current_page && top && bottom);
 
             if entire_page_fits {
                 ZoomNavAction::StepPage { forward, target_fraction: if forward { 0.0 } else { 1.0 } }
             } else if is_page_step {
-                let at_boundary = single_edges.is_some_and(|(p, top, bottom)| p == current_page && if forward { bottom } else { top });
+                let at_boundary = step.single_edges.is_some_and(|(p, top, bottom)| p == step.current_page && if forward { bottom } else { top });
                 if at_boundary {
                     ZoomNavAction::StepPage { forward, target_fraction: if forward { 0.0 } else { 1.0 } }
                 } else {
                     ZoomNavAction::ScrollScreen { forward }
                 }
             } else {
-                let at_boundary = single_edges.is_some_and(|(p, top, bottom)| p == current_page && if forward { bottom } else { top });
+                let at_boundary = step.single_edges.is_some_and(|(p, top, bottom)| p == step.current_page && if forward { bottom } else { top });
                 if at_boundary {
                     ZoomNavAction::StepPage { forward, target_fraction: if forward { 0.0 } else { 1.0 } }
                 } else {
@@ -814,12 +859,12 @@ impl FloatingContextMenu {
 
                             // 2. Stroke Width (Thickness)
                             let cur_w = view.session.line_properties.width;
-                            if IconButton::new(IconId::new("minus")).label(tl!("Thinner").to_string()).show(ui).clicked() {
-                                action = Some(FloatingMenuAction::SetStrokeWidth((cur_w - 0.5).max(0.5)));
+                            if IconButton::new(IconId::new("minus")).label(tl!("Thinner").to_string()).enabled(cur_w > 0.5).show(ui).clicked() {
+                                action = Some(FloatingMenuAction::SetStrokeWidth((cur_w - 0.5).clamp(0.5, 20.0)));
                             }
                             Text::new(format!("{cur_w:.1}pt")).role(TypeRole::Caption).show(ui);
-                            if IconButton::new(IconId::new("plus")).label(tl!("Thicker").to_string()).show(ui).clicked() {
-                                action = Some(FloatingMenuAction::SetStrokeWidth((cur_w + 0.5).min(20.0)));
+                            if IconButton::new(IconId::new("plus")).label(tl!("Thicker").to_string()).enabled(cur_w < 20.0).show(ui).clicked() {
+                                action = Some(FloatingMenuAction::SetStrokeWidth((cur_w + 0.5).clamp(0.5, 20.0)));
                             }
 
                             ui.separator();
@@ -858,8 +903,8 @@ impl FloatingContextMenu {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     let mac = crate::commands::mac_shortcuts(ui.ctx());
                     let shortcut = |key: &'static str| pdfcraft_engine::commands::Shortcut::cmd(key).label(mac);
-                    let cut_tip = format!("Cut ({})", shortcut("X"));
-                    let copy_tip = format!("Copy ({})", shortcut("C"));
+                    let cut_tip = crate::i18n::fmt(tl!("Cut ({shortcut})"), &[("shortcut", &shortcut("X"))]);
+                    let copy_tip = crate::i18n::fmt(tl!("Copy ({shortcut})"), &[("shortcut", &shortcut("C"))]);
                     ui.horizontal(|ui| {
                         if !is_line_editor {
                             // Cut (Ctrl+X)
@@ -943,25 +988,28 @@ pub enum LineHighlightState {
 
 impl LineHighlightState {
     /// Colour used for this state.
-    pub fn color(self) -> Color32 {
+    pub fn color(self, ui: &egui::Ui) -> Color32 {
         match self {
-            Self::Hover => ACCENT_YELLOW,
-            Self::Selected => ACCENT_BLUE,
+            Self::Hover => hover_accent(ui),
+            Self::Selected => selection_accent(ui),
         }
     }
 }
 
 /// Hit-test a single line segment against a screen-space position.
 ///
-/// `tolerance` is the pick radius in screen pixels, typically 4–6.
+/// `tolerance` is the pick radius in screen pixels (typically 4–6); half of the
+/// line's projected stroke width is included automatically.
 pub fn hit_test_line(pos: Pos2, line: &LineSegment, xf: &PageXform, info: &DocInfo, tolerance: f32) -> bool {
     let s = project_user_point(xf, info, line.page, line.start);
     let e = project_user_point(xf, info, line.page, line.end);
+    let half_stroke = (line.thickness as f32 * xf.zoom() * 0.5).max(0.5);
+    let effective_tolerance = tolerance + half_stroke;
     let vx = e.x - s.x;
     let vy = e.y - s.y;
     let len = vx.hypot(vy);
     if len <= f32::EPSILON || !len.is_finite() {
-        return (pos.x - s.x).hypot(pos.y - s.y) <= tolerance;
+        return (pos.x - s.x).hypot(pos.y - s.y) <= effective_tolerance;
     }
     let ux = vx / len;
     let uy = vy / len;
@@ -969,16 +1017,16 @@ pub fn hit_test_line(pos: Pos2, line: &LineSegment, xf: &PageXform, info: &DocIn
     let t = (proj / len).clamp(0.0, 1.0);
     let px = s.x + t * vx;
     let py = s.y + t * vy;
-    (pos.x - px).hypot(pos.y - py) <= tolerance
+    (pos.x - px).hypot(pos.y - py) <= effective_tolerance
 }
 
 /// Paint a highlight over a line segment. Does nothing if the segment is
 /// offscreen or degenerate.
-pub fn paint_line_highlight(painter: &egui::Painter, line: &LineSegment, state: LineHighlightState, xf: &PageXform, info: &DocInfo) {
+pub fn paint_line_highlight(ui: &egui::Ui, painter: &egui::Painter, line: &LineSegment, state: LineHighlightState, xf: &PageXform, info: &DocInfo) {
     let s = project_user_point(xf, info, line.page, line.start);
     let e = project_user_point(xf, info, line.page, line.end);
     let width = (line.thickness as f32).clamp(1.5, 6.0);
-    painter.line_segment([s, e], Stroke::new(width, state.color()));
+    painter.line_segment([s, e], Stroke::new(width, state.color(ui)));
 }
 
 pub fn project_user_point(xf: &PageXform, info: &DocInfo, page: usize, p: [f64; 2]) -> Pos2 {
@@ -1015,9 +1063,18 @@ pub fn hit_test_line_endpoint(line: &pdfcraft_engine::LineSegment, pos: Pos2, xf
 }
 
 /// Paint endpoint handles for a selected vector line.
-pub fn paint_line_endpoint_handles(painter: &egui::Painter, line: &pdfcraft_engine::LineSegment, xf: &PageXform, info: &DocInfo, size: f32) {
+pub fn paint_line_endpoint_handles(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    line: &pdfcraft_engine::LineSegment,
+    xf: &PageXform,
+    info: &DocInfo,
+    size: f32,
+) {
+    let fill = handle_fill(ui);
+    let accent = selection_accent(ui);
     for (_, rect) in line_endpoint_handles(line, xf, info, size) {
-        painter.rect(rect, CornerRadius::same(1), Color32::WHITE, Stroke::new(1.0, ACCENT_BLUE), egui::StrokeKind::Middle);
+        painter.rect(rect, CornerRadius::same(1), fill, Stroke::new(1.0, accent), egui::StrokeKind::Middle);
     }
 }
 
@@ -1089,73 +1146,47 @@ pub fn compute_connected_perpendicular_line_updates(
         dx * dx + dy * dy <= tol * tol
     };
 
+    let dragged_rect_op = lines.iter().find(|l| l.index == dragged_index).and_then(|l| l.rect_op);
     for line in lines {
         if line.index == dragged_index {
+            continue;
+        }
+        // Edges decomposed from the same PDF `re` operator share one rectangle;
+        // exclude sibling edges from perpendicular grid updates when dragging one edge.
+        if dragged_rect_op.is_some() && line.rect_op == dragged_rect_op {
             continue;
         }
 
         let l_dx = (line.end[0] - line.start[0]).abs();
         let l_dy = (line.end[1] - line.start[1]).abs();
+        let is_perp = (is_horizontal && l_dy > l_dx) || (is_vertical && l_dx > l_dy);
+        if !is_perp {
+            continue;
+        }
 
-        if is_horizontal {
-            // Dragged line is predominantly horizontal. Perpendicular lines are vertical.
-            if l_dy > l_dx {
-                let mut modified = false;
-                let mut updated_start = line.start;
-                let mut updated_end = line.end;
-
-                if within_segment_tolerance(line.start) {
-                    let (_, dy) = displacement_at(line.start);
-                    updated_start[1] += dy;
+        let mut modified = false;
+        let mut updated_start = line.start;
+        let mut updated_end = line.end;
+        for pt in [&mut updated_start, &mut updated_end] {
+            if within_segment_tolerance(*pt) {
+                let (dx, dy) = displacement_at(*pt);
+                if dx.abs() > 1e-6 || dy.abs() > 1e-6 {
+                    pt[0] += dx;
+                    pt[1] += dy;
                     modified = true;
-                }
-                if within_segment_tolerance(line.end) {
-                    let (_, dy) = displacement_at(line.end);
-                    updated_end[1] += dy;
-                    modified = true;
-                }
-
-                if modified {
-                    let len = (updated_start[0] - updated_end[0]).hypot(updated_start[1] - updated_end[1]);
-                    if len > 0.5 {
-                        updates.push(LineUpdate {
-                            index: line.index,
-                            target: pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: line.index },
-                            new_start: updated_start,
-                            new_end: updated_end,
-                        });
-                    }
                 }
             }
-        } else if is_vertical {
-            // Dragged line is predominantly vertical. Perpendicular lines are horizontal.
-            if l_dx > l_dy {
-                let mut modified = false;
-                let mut updated_start = line.start;
-                let mut updated_end = line.end;
+        }
 
-                if within_segment_tolerance(line.start) {
-                    let (dx, _) = displacement_at(line.start);
-                    updated_start[0] += dx;
-                    modified = true;
-                }
-                if within_segment_tolerance(line.end) {
-                    let (dx, _) = displacement_at(line.end);
-                    updated_end[0] += dx;
-                    modified = true;
-                }
-
-                if modified {
-                    let len = (updated_start[0] - updated_end[0]).hypot(updated_start[1] - updated_end[1]);
-                    if len > 0.5 {
-                        updates.push(LineUpdate {
-                            index: line.index,
-                            target: pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: line.index },
-                            new_start: updated_start,
-                            new_end: updated_end,
-                        });
-                    }
-                }
+        if modified {
+            let len = (updated_start[0] - updated_end[0]).hypot(updated_start[1] - updated_end[1]);
+            if len > 0.5 {
+                updates.push(LineUpdate {
+                    index: line.index,
+                    target: pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: line.index },
+                    new_start: updated_start,
+                    new_end: updated_end,
+                });
             }
         }
     }
@@ -1214,22 +1245,49 @@ mod tests {
 
     #[test]
     fn test_zoom_nav_action_fit_page() {
-        let action = ZoomNavigationEngine::evaluate_navigation_step(Key::ArrowDown, Fit::Page, false, 1.0, Some((0, true, true)), 0, 1.0, 800.0);
+        let action = ZoomNavigationEngine::evaluate_navigation_step(ZoomNavStep {
+            key: Key::ArrowDown,
+            fit: Fit::Page,
+            continuous: false,
+            single_edges: Some((0, true, true)),
+            current_page: 0,
+            speed_factor: 1.0,
+        });
         assert_eq!(action, ZoomNavAction::StepPage { forward: true, target_fraction: 0.0 });
 
-        let action_up = ZoomNavigationEngine::evaluate_navigation_step(Key::ArrowUp, Fit::Page, false, 1.0, Some((1, true, true)), 1, 1.0, 800.0);
+        let action_up = ZoomNavigationEngine::evaluate_navigation_step(ZoomNavStep {
+            key: Key::ArrowUp,
+            fit: Fit::Page,
+            continuous: false,
+            single_edges: Some((1, true, true)),
+            current_page: 1,
+            speed_factor: 1.0,
+        });
         assert_eq!(action_up, ZoomNavAction::StepPage { forward: false, target_fraction: 1.0 });
     }
 
     #[test]
     fn test_zoom_nav_action_zoomed_in() {
         // Zoomed in: single_edges top/bottom false
-        let action = ZoomNavigationEngine::evaluate_navigation_step(Key::ArrowDown, Fit::None, false, 2.0, Some((0, true, false)), 0, 1.0, 600.0);
+        let action = ZoomNavigationEngine::evaluate_navigation_step(ZoomNavStep {
+            key: Key::ArrowDown,
+            fit: Fit::None,
+            continuous: false,
+            single_edges: Some((0, true, false)),
+            current_page: 0,
+            speed_factor: 1.0,
+        });
         assert_eq!(action, ZoomNavAction::ScrollLine { delta_points: 40.0 });
 
         // Zoomed in at bottom boundary
-        let action_boundary =
-            ZoomNavigationEngine::evaluate_navigation_step(Key::ArrowDown, Fit::None, false, 2.0, Some((0, false, true)), 0, 1.0, 600.0);
+        let action_boundary = ZoomNavigationEngine::evaluate_navigation_step(ZoomNavStep {
+            key: Key::ArrowDown,
+            fit: Fit::None,
+            continuous: false,
+            single_edges: Some((0, false, true)),
+            current_page: 0,
+            speed_factor: 1.0,
+        });
         assert_eq!(action_boundary, ZoomNavAction::StepPage { forward: true, target_fraction: 0.0 });
     }
 
@@ -1298,13 +1356,14 @@ mod tests {
     #[test]
     fn test_connected_perpendicular_lines_grid_adjustment() {
         // Vertical column line at x = 100
-        let col = LineSegment { page: 0, index: 0, start: [100.0, 50.0], end: [100.0, 150.0], thickness: 1.0, stroke_color: None };
+        let col = LineSegment { page: 0, index: 0, start: [100.0, 50.0], end: [100.0, 150.0], thickness: 1.0, stroke_color: None, rect_op: None };
         // Horizontal row line touching col from left: end at (100, 80)
-        let row_left = LineSegment { page: 0, index: 1, start: [50.0, 80.0], end: [100.0, 80.0], thickness: 1.0, stroke_color: None };
+        let row_left = LineSegment { page: 0, index: 1, start: [50.0, 80.0], end: [100.0, 80.0], thickness: 1.0, stroke_color: None, rect_op: None };
         // Horizontal row line touching col from right: start at (100, 80)
-        let row_right = LineSegment { page: 0, index: 2, start: [100.0, 80.0], end: [180.0, 80.0], thickness: 1.0, stroke_color: None };
+        let row_right =
+            LineSegment { page: 0, index: 2, start: [100.0, 80.0], end: [180.0, 80.0], thickness: 1.0, stroke_color: None, rect_op: None };
         // An unrelated line far away
-        let row_far = LineSegment { page: 0, index: 3, start: [20.0, 20.0], end: [40.0, 20.0], thickness: 1.0, stroke_color: None };
+        let row_far = LineSegment { page: 0, index: 3, start: [20.0, 20.0], end: [40.0, 20.0], thickness: 1.0, stroke_color: None, rect_op: None };
 
         let lines = vec![col.clone(), row_left, row_right, row_far];
 
@@ -1327,7 +1386,7 @@ mod tests {
 
     #[test]
     fn test_selectable_element_vector_line_and_bbox() {
-        let seg = LineSegment { page: 1, index: 4, start: [10.0, 50.0], end: [110.0, 50.0], thickness: 2.0, stroke_color: None };
+        let seg = LineSegment { page: 1, index: 4, start: [10.0, 50.0], end: [110.0, 50.0], thickness: 2.0, stroke_color: None, rect_op: None };
         let el = SelectableElement::new_line_vector(1, seg);
         assert_eq!(el.page, 1);
         assert_eq!(el.kind, SelectableKind::VectorLine);
@@ -1338,11 +1397,13 @@ mod tests {
     #[test]
     fn test_connected_perpendicular_lines_uses_segment_distance_not_midpoint() {
         // Sloped horizontal-ish segment (0, 0) -> (100, 20): midpoint y_ref is 10.
-        let dragged = LineSegment { page: 0, index: 0, start: [0.0, 0.0], end: [100.0, 20.0], thickness: 1.0, stroke_color: None };
+        let dragged = LineSegment { page: 0, index: 0, start: [0.0, 0.0], end: [100.0, 20.0], thickness: 1.0, stroke_color: None, rect_op: None };
         // Vertical line touching at (0, 0): must be detected and updated.
-        let touches_start = LineSegment { page: 0, index: 1, start: [0.0, -30.0], end: [0.0, 0.0], thickness: 1.0, stroke_color: None };
+        let touches_start =
+            LineSegment { page: 0, index: 1, start: [0.0, -30.0], end: [0.0, 0.0], thickness: 1.0, stroke_color: None, rect_op: None };
         // Vertical line ending at (0, 10): ~9.8pt away from segment (0,0)->(100,20), must NOT match.
-        let near_midpoint_y = LineSegment { page: 0, index: 2, start: [0.0, 10.0], end: [0.0, 50.0], thickness: 1.0, stroke_color: None };
+        let near_midpoint_y =
+            LineSegment { page: 0, index: 2, start: [0.0, 10.0], end: [0.0, 50.0], thickness: 1.0, stroke_color: None, rect_op: None };
         let updates = compute_connected_perpendicular_line_updates(
             &[dragged, touches_start, near_midpoint_y],
             0,
@@ -1354,5 +1415,47 @@ mod tests {
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].index, 1);
         assert_eq!(updates[0].new_end, [0.0, 10.0]);
+    }
+
+    #[test]
+    fn hit_test_line_includes_projected_stroke_width() {
+        let info = DocInfo {
+            pages: vec![pdfcraft_render::PageInfo { width: 595.0, height: 842.0, label: String::new(), crop: [0.0, 0.0, 595.0, 842.0], rotation: 0 }],
+            ..Default::default()
+        };
+        let xf = PageXform { rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(1190.0, 1684.0)), pw: 595.0, ph: 842.0, rot: 0 };
+        // At 2.0x zoom, a 12pt stroke has half-width = 12 * 2 * 0.5 = 12 screen px.
+        let thick_line =
+            LineSegment { page: 0, index: 0, start: [100.0, 100.0], end: [200.0, 100.0], thickness: 12.0, stroke_color: None, rect_op: None };
+        let center = project_user_point(&xf, &info, 0, [150.0, 100.0]);
+        // 13px away: outside base 4px tolerance alone, inside 4 + 12 = 16px effective tolerance.
+        assert!(hit_test_line(Pos2::new(center.x, center.y + 13.0), &thick_line, &xf, &info, 4.0));
+        assert!(!hit_test_line(Pos2::new(center.x, center.y + 18.0), &thick_line, &xf, &info, 4.0));
+    }
+
+    #[test]
+    fn endpoint_extension_moves_independently_stroked_neighbor_by_full_delta() {
+        // Vertical line dragged downward/right from its end endpoint (100, 100) -> (110, 130).
+        let dragged =
+            LineSegment { page: 0, index: 0, start: [100.0, 200.0], end: [100.0, 100.0], thickness: 1.0, stroke_color: None, rect_op: None };
+        // Horizontal neighbor touching the moved endpoint (100, 100).
+        let moved_neighbor =
+            LineSegment { page: 0, index: 1, start: [100.0, 100.0], end: [200.0, 100.0], thickness: 1.0, stroke_color: None, rect_op: None };
+        // Horizontal neighbor touching the stationary endpoint (100, 200) must stay untouched.
+        let fixed_neighbor =
+            LineSegment { page: 0, index: 2, start: [100.0, 200.0], end: [200.0, 200.0], thickness: 1.0, stroke_color: None, rect_op: None };
+
+        let updates = compute_connected_perpendicular_line_updates(
+            &[dragged, moved_neighbor, fixed_neighbor],
+            0,
+            [100.0, 200.0],
+            [100.0, 100.0],
+            [100.0, 200.0],
+            [110.0, 130.0],
+        );
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].index, 1);
+        assert_eq!(updates[0].new_start, [110.0, 130.0]);
+        assert_eq!(updates[0].new_end, [200.0, 100.0]);
     }
 }
