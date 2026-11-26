@@ -1,21 +1,39 @@
 //! Remove Signature (Acrobat: Clear Signature): the dialog that lists the document's signatures
 //! and saves a copy without the one chosen.
 
+use std::borrow::Cow;
+use std::path::{Path, PathBuf};
+
+use craft::behavior::{DisplayOrder, ItemSource, Selection, SelectionChange};
+use craft::host::PickRequest;
+use craft::theme::variant::Tone;
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, CollectionEvent, SelectMode, Show, ShowCollection as _};
+use craft::ui::display::Text;
+use craft::ui::list::{List, ListRow};
+use craft::ui::notices::Notice;
+use craft::ui::patterns::form_dialogs::{FormButtons, FormDialog};
 use pdfcraft_engine::DocId;
 use pdfcraft_engine::clear_signature::{Effect as RemoveEffect, Kind as RemoveKind, Removable, Target as RemoveTarget};
 
-use super::dialog::title;
-use super::{Align, Layout, PdfCraftApp, SignatureStatus, Tokens, sign, signature_status_style, theme, widgets};
+use super::{PdfCraftApp, SignatureStatus, sign};
+use crate::FilePurpose;
 
 /// Remove Signature (Acrobat: Clear Signature): the document's signatures that can be listed,
 /// the one chosen, and whether its field stays. Nothing changes until a new file is chosen.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RemoveSigDraft {
     pub doc: DocId,
     pub items: Vec<Removable>,
     pub selected: Option<usize>,
     /// Keep an empty signature field to sign again, instead of removing the field.
     pub keep_field: bool,
+}
+
+impl Default for RemoveSigDraft {
+    fn default() -> Self {
+        RemoveSigDraft { doc: DocId(0), items: Vec::new(), selected: None, keep_field: false }
+    }
 }
 
 impl RemoveSigDraft {
@@ -38,6 +56,71 @@ fn said(wording: (&'static str, String)) -> String {
     crate::i18n::fmt(tl!(wording.0), &[("names", &wording.1)])
 }
 
+/// A row's first line: what kind of signature, and who signed it.
+fn head(r: &Removable) -> String {
+    let mut head = kind_label(r);
+    match (r.signer.as_deref(), &r.kind) {
+        (Some(signer), _) => head.push_str(&format!(" — {signer}")),
+        (None, RemoveKind::Visual { .. }) => {}
+        (None, _) => head.push_str(&format!(" — {}", tl!("unknown signer"))),
+    }
+    head
+}
+
+/// A row's second line: its field, page, date and validation, then why it can't be removed.
+fn details(r: &Removable) -> String {
+    let mut sub = Vec::new();
+    if let Some(f) = &r.field {
+        sub.push(crate::i18n::fmt(tl!("Field: {field}"), &[("field", f)]));
+    }
+    if let Some(p) = r.page {
+        sub.push(crate::i18n::fmt(tl!("Page {p}"), &[("p", &(p + 1).to_string())]));
+    }
+    if let Some(date) = &r.date {
+        sub.push(sign::pdf::display_date(date));
+    }
+    if let Some(status) = r.status {
+        sub.push(
+            match status {
+                SignatureStatus::Valid => tl!("validated: valid"),
+                SignatureStatus::Unknown => tl!("validated: validity unknown"),
+                SignatureStatus::Invalid => tl!("validated: invalid"),
+            }
+            .to_string(),
+        );
+    }
+    let mut text = sub.join(" · ");
+    if let Some(b) = &r.blocked {
+        text.push('\n');
+        text.push_str(&said(b.wording()));
+    }
+    text
+}
+
+/// The listed signatures as the rows of a list keyed by position; one that can't be removed
+/// cannot take the lead.
+struct Rows<'a>(&'a [Removable]);
+
+impl DisplayOrder<usize> for Rows<'_> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn key(&self, at: usize) -> usize {
+        at
+    }
+
+    fn enabled(&self, at: usize) -> bool {
+        self.0.get(at).is_some_and(|r| r.blocked.is_none())
+    }
+
+    fn text(&self, at: usize) -> Option<Cow<'_, str>> {
+        self.0.get(at).map(|r| Cow::Owned(head(r)))
+    }
+}
+
+impl ItemSource<usize> for Rows<'_> {}
+
 impl PdfCraftApp {
     /// Open Remove Signature for the active document, with `field` chosen when given.
     pub fn start_remove_signature(&mut self, field: Option<&str>) {
@@ -48,7 +131,6 @@ impl PdfCraftApp {
                     .and_then(|f| items.iter().position(|r| r.field.as_deref() == Some(f)))
                     .or_else(|| items.iter().position(|r| r.blocked.is_none()));
                 self.remove_sig = Some(RemoveSigDraft { doc: id, items, selected, keep_field: false });
-                self.dialog = Some(crate::Dialog::RemoveSignature);
             }
             Err(e) => self.notify_error(e),
         }
@@ -60,44 +142,23 @@ impl PdfCraftApp {
         let Some(draft) = self.remove_sig.take() else { return };
         let Some(chosen) = draft.chosen().cloned() else { return };
         let Some(doc) = self.session.get(draft.doc) else { return };
-        let stem = std::path::Path::new(&doc.name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
-        let keep_field = draft.keep_field;
-        let id = draft.doc;
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // Tests and scripts choose the destination ahead, as for Save As.
-            if let Some(dest) = self.save_override.clone() {
-                self.remove_signature_to(id, &chosen, keep_field, &dest);
-                return;
-            }
-            let name = crate::i18n::fmt(tl!("{name}_unsigned.pdf"), &[("name", &stem)]);
-            let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
-            self.ask_one(crate::pickers::Ask::Save(dialog), Some(id), move |app, dest| {
-                app.remove_signature_to(id, &chosen, keep_field, &dest.to_string_lossy());
-            });
+        let stem = Path::new(&doc.name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
+        let folder = doc.path.clone();
+        let (id, keep_field) = (draft.doc, draft.keep_field);
+        let name = crate::i18n::fmt(tl!("{name}_unsigned.pdf"), &[("name", &stem)]);
+        let mut request = PickRequest::save(FilePurpose::SignedCopy.key()).file_name(name).filter("PDF", &["pdf"]);
+        if let Some(parent) = folder.as_deref().and_then(|p| Path::new(p).parent()) {
+            request = request.default_directory(parent);
         }
-        // The browser saves by downloading, with nowhere to choose first: remove, then download,
-        // and undo the removal if the download fails.
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = stem;
-            let mark = match self.apply_removal(id, &chosen, keep_field) {
-                Ok(mark) => mark,
-                Err(e) => {
-                    self.notify_fmt("The signature was not removed: {e}", &[("e", &e)]);
-                    return;
-                }
-            };
-            let saved = self.views.iter().position(|v| v.id == id).is_some_and(|index| self.save_view(index, crate::SaveTarget::As));
-            if !saved {
-                self.undo_back_to(id, mark);
-            }
-        }
+        let target = self.pick_target(Some(id));
+        self.pick_first(request, target, move |app: &mut Self, ctx: &egui::Context, dest: PathBuf| {
+            app.remove_signature_to(ctx, id, &chosen, keep_field, &dest);
+        });
     }
 
     /// Remove `chosen` from document `id` (undoable) and check that it is gone; if it isn't,
     /// undo it again. Returns the edit position before the removal, for [`Self::undo_back_to`].
-    fn apply_removal(&mut self, id: DocId, chosen: &Removable, keep_field: bool) -> Result<u64, String> {
+    fn apply_removal(&mut self, ctx: &egui::Context, id: DocId, chosen: &Removable, keep_field: bool) -> Result<u64, String> {
         let visuals =
             |app: &Self| app.session.removable_signatures(id).map(|l| l.iter().filter(|r| matches!(r.kind, RemoveKind::Visual { .. })).count());
         let before = visuals(self).map_err(|e| e.to_string())?;
@@ -114,10 +175,10 @@ impl PdfCraftApp {
             }
             _ => visuals(self).is_ok_and(|n| n < before),
         };
-        self.refresh_view_of(id);
+        self.refresh_view_of(ctx, id);
         if !gone {
             let _ = self.session.undo(id);
-            self.refresh_view_of(id);
+            self.refresh_view_of(ctx, id);
             return Err(tl!("it was still in the document afterwards, so the change was undone").to_string());
         }
         Ok(mark)
@@ -126,38 +187,38 @@ impl PdfCraftApp {
     /// Undo edits back to edit position `mark`, noted before the removal: the removal, and
     /// whatever saving added after it (flattening Fill & Sign marks, when that preference is
     /// on), and never an edit the user made before it.
-    fn undo_back_to(&mut self, id: DocId, mark: u64) {
+    fn undo_back_to(&mut self, ctx: &egui::Context, id: DocId, mark: u64) {
         while self.session.get(id).and_then(|doc| doc.edit_position()).is_some_and(|p| p > mark) {
             if self.session.undo(id).is_err() {
                 break;
             }
         }
-        self.refresh_view_of(id);
+        self.refresh_view_of(ctx, id);
     }
 
     /// Remove `chosen` and save the document to `dest`, a file other than its own. When the
     /// save fails the removal is undone, so the document is as it was and nothing is claimed.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn remove_signature_to(&mut self, id: DocId, chosen: &Removable, keep_field: bool, dest: &str) {
+    pub(crate) fn remove_signature_to(&mut self, ctx: &egui::Context, id: DocId, chosen: &Removable, keep_field: bool, dest: &Path) {
         let Some(doc) = self.session.get(id) else { return };
-        if doc.path.as_deref().is_some_and(|p| crate::same_file(p, dest)) {
+        let dest_text = dest.to_string_lossy().into_owned();
+        if doc.path.as_deref().is_some_and(|p| crate::same_file(p, &dest_text)) {
             self.notify_tr("Choose another file: the original is kept as it is, and the version without the signature is saved next to it.");
             return;
         }
-        let mark = match self.apply_removal(id, chosen, keep_field) {
+        let mark = match self.apply_removal(ctx, id, chosen, keep_field) {
             Ok(mark) => mark,
             Err(e) => {
                 self.notify_fmt("The signature was not removed: {e}", &[("e", &e)]);
                 return;
             }
         };
-        if !self.save_doc_to(id, dest, crate::SaveTarget::As) {
+        if !self.save_doc_to(ctx, id, dest, crate::SaveTarget::As) {
             // The save said why; the document goes back to how it was.
-            self.undo_back_to(id, mark);
+            self.undo_back_to(ctx, id, mark);
             return;
         }
         let Some(doc) = self.session.get(id) else { return };
-        let file = std::path::Path::new(dest).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dest.to_string());
+        let file = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(dest_text);
         let what = match (&chosen.target, keep_field) {
             (RemoveTarget::Annotation { page, .. }, _) => {
                 crate::i18n::fmt(tl!("Removed the visual signature on page {p}"), &[("p", &(page + 1).to_string())])
@@ -180,102 +241,79 @@ impl PdfCraftApp {
     }
 }
 
-/// The Remove Signature dialog. Returns `true` when it closes.
-pub(crate) fn remove_dialog(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
-    let dirty = app.remove_sig.as_ref().and_then(|d| app.session.get(d.doc)).is_some_and(|d| d.dirty);
-    let Some(d) = app.remove_sig.as_mut() else { return true };
-    title(ui, tl!("Remove Signature"));
-    if d.items.is_empty() {
-        ui.label(tl!("This document has no signature that can be removed."));
-        ui.add_space(6.0);
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(tl!(
-                    "A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own."
-                ))
-                .color(t.text_muted),
-            )
-            .wrap(),
-        );
-        ui.add_space(12.0);
-        let mut close = false;
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| close = widgets::pill_button(ui, tl!("Close"), true).clicked());
-        return close;
+/// A line of explanatory text.
+fn caption(text: impl Into<String>) -> impl Show {
+    Text::new(text.into())
+}
+
+/// Shows Remove Signature while its draft is open, and carries out Remove and Save As.
+pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    let Some(draft) = app.remove_sig.as_ref() else { return };
+    let dirty = app.session.get(draft.doc).is_some_and(|d| d.dirty);
+    // With nothing that can be removed there is nothing to accept: the dialog only explains, with Close.
+    let any = draft.items.iter().any(|r| r.blocked.is_none());
+    let mut open = true;
+    let out = {
+        let Some(d) = app.remove_sig.as_mut() else { return };
+        let can_go = d.chosen().is_some();
+        let dialog = FormDialog::new(tl!("Remove Signature"), Bind::bound(d)).opened(Bind::bound(&mut open)).accept_stays_open(true);
+        let dialog = if any { dialog.ok_label(tl!("Remove and Save As…")).ok_enabled(can_go) } else { dialog.buttons(FormButtons::Close) };
+        dialog.show(ui, |ui, _, d| {
+            body(ui, d, dirty);
+            d.chosen().is_some()
+        })
+    };
+    if out.closed.is_some() || !open {
+        app.remove_sig = None;
+        return;
     }
-    ui.label(tl!("Choose the signature to remove:"));
-    ui.add_space(4.0);
-    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-        for (i, r) in d.items.iter().enumerate() {
-            let mut head = kind_label(r);
-            match (r.signer.as_deref(), &r.kind) {
-                (Some(signer), _) => head.push_str(&format!(" — {signer}")),
-                (None, RemoveKind::Visual { .. }) => {}
-                (None, _) => head.push_str(&format!(" — {}", tl!("unknown signer"))),
+    if any && out.picked == Some(0) {
+        app.confirm_remove_signature();
+    }
+}
+
+/// The dialog's body: the signatures to choose from, and what removing the chosen one does.
+fn body(ui: &mut egui::Ui, d: &mut RemoveSigDraft, dirty: bool) {
+    if d.items.is_empty() {
+        caption(tl!("This document has no signature that can be removed.")).show(ui);
+        caption(tl!(
+            "A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own."
+        ))
+        .show(ui);
+        return;
+    }
+    caption(tl!("Choose the signature to remove:")).show(ui);
+    let items = d.items.clone();
+    let source = Rows(&items);
+    let mut selection = d.selected.map_or_else(Selection::default, Selection::single);
+    let out = List::<usize>::new(tl!("Signatures"))
+        .select(SelectMode::Single)
+        .natural_height(true)
+        .selection(Bind::bound(&mut selection))
+        .show_items(ui, &source, &mut |_, icx| match items.get(icx.at) {
+            Some(r) => ListRow::new(head(r)).below(caption(details(r)), |_| {}),
+            None => ListRow::new(String::new()),
+        });
+    for event in out.events {
+        match event {
+            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+                d.selected = keys.last().copied().filter(|&i| items.get(i).is_some_and(|r| r.blocked.is_none()));
             }
-            let mut sub = Vec::new();
-            if let Some(f) = &r.field {
-                sub.push(crate::i18n::fmt(tl!("Field: {field}"), &[("field", f)]));
-            }
-            if let Some(p) = r.page {
-                sub.push(crate::i18n::fmt(tl!("Page {p}"), &[("p", &(p + 1).to_string())]));
-            }
-            if let Some(date) = &r.date {
-                sub.push(sign::pdf::display_date(date));
-            }
-            if let Some(status) = r.status {
-                sub.push(
-                    match status {
-                        SignatureStatus::Valid => tl!("validated: valid"),
-                        SignatureStatus::Unknown => tl!("validated: validity unknown"),
-                        SignatureStatus::Invalid => tl!("validated: invalid"),
-                    }
-                    .to_string(),
-                );
-            }
-            let enabled = r.blocked.is_none();
-            ui.add_enabled_ui(enabled, |ui| {
-                if ui.add(widgets::radio(d.selected == Some(i), egui::RichText::new(head).font(theme::semibold(12.5)))).clicked() {
-                    d.selected = Some(i);
-                }
-            });
-            ui.indent(("remove-sig-row", i), |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(sub.join(" · ")).font(theme::regular(11.5)).color(t.text_muted)).wrap());
-                if let Some(b) = &r.blocked {
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(said(b.wording()))
-                                .font(theme::regular(11.5))
-                                .color(signature_status_style(SignatureStatus::Invalid).1),
-                        )
-                        .wrap(),
-                    );
-                }
-            });
-            ui.add_space(4.0);
+            CollectionEvent::Selection(SelectionChange::Toggle(key)) => d.selected = (d.selected != Some(key)).then_some(key),
+            CollectionEvent::Selection(SelectionChange::Clear) => d.selected = None,
+            _ => {}
         }
-    });
+    }
     let Some(chosen) = d.chosen().cloned() else {
         // Nothing chosen yet: a blocked one was asked for (from its row in the Signatures panel),
         // or none can be removed at all.
         let any = d.items.iter().any(|r| r.blocked.is_none());
-        ui.add_space(8.0);
-        let text = if any { tl!("Choose a signature that can be removed.") } else { tl!("None of these signatures can be removed.") };
-        ui.label(egui::RichText::new(text).color(t.text_muted));
-        ui.add_space(12.0);
-        let mut close = false;
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            close = widgets::pill_button(ui, if any { tl!("Cancel") } else { tl!("Close") }, !any).clicked();
-        });
-        if close {
-            app.remove_sig = None;
-        }
-        return close;
+        caption(if any { tl!("Choose a signature that can be removed.") } else { tl!("None of these signatures can be removed.") }).show(ui);
+        return;
     };
-    ui.add_space(8.0);
     let digital = matches!(chosen.target, RemoveTarget::Field(_));
     if digital {
-        ui.add(widgets::checkbox(&mut d.keep_field, tl!("Keep an empty signature field to sign again")));
-        ui.add_space(6.0);
+        Checkbox::new(Bind::bound(&mut d.keep_field)).label(tl!("Keep an empty signature field to sign again")).show(ui);
     }
     let others = chosen.effects.iter().any(|e| matches!(e, RemoveEffect::OtherSignatures(_)));
     let warning = match (digital, others) {
@@ -289,34 +327,12 @@ pub(crate) fn remove_dialog(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens
             tl!("This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.")
         }
     };
-    ui.add(egui::Label::new(egui::RichText::new(warning).font(theme::semibold(12.0))).wrap());
+    Notice::new(Tone::Warn, warning.to_owned()).show(ui);
     for e in &chosen.effects {
-        ui.add(egui::Label::new(egui::RichText::new(format!("• {}", said(e.wording()))).font(theme::regular(11.5)).color(t.text_muted)).wrap());
+        caption(format!("• {}", said(e.wording()))).show(ui);
     }
     if dirty {
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(format!("• {}", tl!("Unsaved changes to this document are saved in the new file too.")))
-                    .font(theme::regular(11.5))
-                    .color(t.text_muted),
-            )
-            .wrap(),
-        );
+        caption(format!("• {}", tl!("Unsaved changes to this document are saved in the new file too."))).show(ui);
     }
-    ui.add_space(4.0);
-    ui.add(egui::Label::new(egui::RichText::new(tl!("You choose where the new version is saved. Continue?")).font(theme::regular(12.0))).wrap());
-    ui.add_space(12.0);
-    let (mut go, mut close) = (false, false);
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        go = widgets::pill_button(ui, tl!("Remove and Save As…"), true).clicked();
-        close = widgets::pill_button(ui, tl!("Cancel"), false).clicked();
-    });
-    if go {
-        app.confirm_remove_signature();
-        return true;
-    }
-    if close {
-        app.remove_sig = None;
-    }
-    close
+    caption(tl!("You choose where the new version is saved. Continue?")).show(ui);
 }

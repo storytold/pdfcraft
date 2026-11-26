@@ -856,7 +856,7 @@ Newest first: the date, what moved, and the new overall estimate.
   - Community links: Discord button in the title bar, plus Home, About, Help menu, CLI and README.
   - Overall ≈ 10%.
 - **2026-10-01 (session 6):**
-  - UI control channel: agents can inspect the widget tree, click, type, press keys, run commands and take screenshots of the running app. Off unless the app is started with `--control`; loopback only, token-authenticated.
+  - UI control channel: agents can inspect the widget tree, click, type, press keys, run commands and take screenshots of the running app. Off unless the app is started with `--control <PORT>`; loopback only, token-authenticated.
   - Combine and insert store identical fonts, images and other resources once. 40 copies of the showcase: 130 MB → 3.9 MB, 3× faster, pixel-identical.
   - Full saves use compressed object streams (showcase 3.4 → 2.8 MB; the 40× combine is now 2.3 MB). Fixed opening encrypted files whose catalog is compressed, and a crash on looped page trees.
   - Fuzzing (`cargo xtask fuzz`, nightly in CI): about 150,000 mutated files tried. Seven crash and hang bugs found and fixed, each with a regression test: two in our code, five in the temporary renderer.
