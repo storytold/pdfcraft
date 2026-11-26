@@ -1408,6 +1408,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
         parts_out.hovered.as_ref().map(|(owner, _)| owner),
     )
     .show_at(ui, body.rect);
+    let move_background = signature_drag::reserve_move_background(ui, &session.comments, body.pages, body.rect);
     let view_picked = session.picked_image;
     let kept = session.area_pick.filter(|_| !session.box_drag.is_active());
     for (page, xf, page_tabs) in &tabs {
@@ -1460,8 +1461,8 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
     if cx.tool == QuickTool::Link {
         crate::link_ui::link_outlines(ui, body, &session.links, cx.doc.links(), cx.info);
     }
-    // The comment being dragged, drawn from its own layers where it goes, over the page that still shows it where it
-    // was. A page whose picture is of this revision has the released move: its layer settles.
+    // The comment is drawn where it goes. A Typewriter's ready background tile also covers its old
+    // position. A page whose picture is of this revision has the released move: its layer settles.
     {
         let ctx = ui.ctx().clone();
         let movable = matches!(cx.tool, QuickTool::Select | QuickTool::Fill(_)) && !cx.comments_hidden;
@@ -1485,16 +1486,24 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
                 session.text_background.page_received(placed.page);
             }
         }
-        let stale = drag.moving_page().is_some_and(loading);
-        drag.prepare_move(&ctx, cx.doc, &session.comments, session.pending_edit.as_ref(), stale, cx.render_scale);
+        drag.prepare_move(&ctx, cx.doc, &session.comments, session.pending_edit.as_ref(), body.pages, cx.render_scale);
         let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
         for placed in body.pages {
             let size = cx.sizes.get(placed.page).copied().unwrap_or_default();
             let xf = PageXform::of(placed, cx.rotation, size);
             let pcx =
                 comments::PageCx { page: placed.page, xf: &xf, info: cx.info, prefs: cx.prefs, allowed: cx.allowed, hidden: cx.comments_hidden };
-            signature_drag::DragLayer::new(&session.signature_drag, &pcx, &map, cx.tool, &session.comments, session.pending_edit.as_ref())
-                .show_at(ui, body.rect);
+            let background_slot = move_background.filter(|(page, _)| *page == placed.page).map(|(_, slot)| slot);
+            signature_drag::DragLayer::new(
+                &session.signature_drag,
+                &pcx,
+                &map,
+                cx.tool,
+                &session.comments,
+                session.pending_edit.as_ref(),
+                background_slot,
+            )
+            .show_at(ui, body.rect);
         }
     }
     if !cx.comments_hidden {

@@ -419,6 +419,9 @@ impl PdfCraftApp {
                     }
                 }
                 if let Some(view) = self.views.get_mut(i) {
+                    if view.session.signature_drag.cancel_typewriter_move(ctx) {
+                        view.cancel_pointer_gestures(ctx);
+                    }
                     view.session.comments.history_stepped();
                 }
                 if label == (Edit::ApplyRedactions { pages: None }).label() {

@@ -3346,53 +3346,169 @@ fn a_moved_comment_is_drawn_where_it_goes_before_release() {
     }
 }
 
-/// Fill & Sign's typed text (a Typewriter FreeText) is drawn where it goes while it is dragged
-/// too, not only its frame (#4619).
+/// Fill & Sign's typed text (a Typewriter FreeText) follows the pointer before release (#4619)
+/// and is hidden at its old position while the preview is visible (#5531).
 #[test]
 fn moved_fill_and_sign_text_is_drawn_where_it_goes_before_release() {
+    check_typewriter_drag(false);
+}
+
+#[test]
+fn a_turned_typewriter_drag_keeps_the_page_under_its_old_position_aligned() {
+    check_typewriter_drag(true);
+}
+
+fn check_typewriter_drag(turned: bool) {
+    use egui::{Event, Key, Modifiers, PointerButton};
+    use support::input::one_frame;
+
+    fn pixels_in(img: &image::RgbaImage, r: egui::Rect) -> impl Iterator<Item = &image::Rgba<u8>> {
+        (r.top() as u32..r.bottom() as u32).flat_map(move |y| (r.left() as u32..r.right() as u32).map(move |x| img.get_pixel(x, y)))
+    }
+
     let _gpu = crate::gpu();
-    let mut h = harness(|_| {});
-    h.execute("sign.fill.text");
-    click_pt(&mut h, (40.0, 150.0));
-    h.event(egui::Event::Text("WWWWWW".into()));
-    h.run_steps(1);
-    click(&mut h, pos2(350.0, 850.0)); // Outside the field: Enter now inserts a line break.
-    h.run_steps(3);
+    let mut h = harness_with_bytes(support::fixtures::pdf_pages(1), |_| {});
+    h.set_render_cursor(false);
+    h.set_option("zoom", if turned { "175" } else { "220" }).unwrap();
+    let ctx = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(
+        &ctx,
+        pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            // Cross two edges of the old text box, so an off-grid tile can leave a seam.
+            shape: pdfcraft_engine::Shape::Rectangle { rect: [32.0, 106.0, 60.0, 137.0] },
+            style: pdfcraft_engine::Style { color: [1.0, 0.0, 0.0], fill: Some([1.0, 0.0, 0.0]), ..Default::default() },
+            contents: String::new(),
+            author: "Tester".into(),
+        })
+    ));
+    assert!(h.execute("sign.fill.text"));
+    crate::support::settle(&mut h);
+    // Both positions are below the fixture's own page text.
+    click_pt(&mut h, (40.0, 120.0));
+    one_frame(&mut h, [Event::Text("WWWWWW".into())]);
+    // Commit outside the page so the Fill & Sign tool does not also open another editor.
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    click(&mut h, pos2(page.left() - 20.0, page.center().y));
     let a = comments(&h).into_iter().find(|a| a.contents.as_deref() == Some("WWWWWW")).expect("the typed text");
     assert!(a.fill_sign && a.subtype == "FreeText", "{a:?}");
-    h.state_mut().quick_tool = QuickTool::Select;
+    let [x0, y0, x1, y1] = a.rect;
+    // The field's left edge crosses the old text box, leaving the drag start at its centre free.
+    let edge = x0 + (x1 - x0) * 0.75;
+    assert!(h.state_mut().apply_edit(
+        &ctx,
+        pdfcraft_engine::Edit::AddField {
+            page: 0,
+            rect: [edge, y0 - 6.0, x1 + 18.0, y1 + 6.0].map(f64::from),
+            kind: pdfcraft_engine::NewField::Text { multiline: false },
+            name: Some("overlapping_field".into()),
+        },
+    ));
+    h.set_option("fields", "on").unwrap();
+    assert!(h.execute("view.select_tool"));
     h.state_mut().views[0].session.comments.clear_selection();
+    if turned {
+        assert!(h.execute("view.rotate.cw"));
+    }
     crate::support::settle(&mut h);
-    let (x, y) = ((a.rect[0] + a.rect[2]) / 2.0, (a.rect[1] + a.rect[3]) / 2.0);
-    let (dx, dy) = (120.0, -60.0);
-    let (from, to) = (at(&h, x, y), at(&h, x + dx, y + dy));
-    // Ink in the left of the box where it goes, inside its frame and away from the pointer, which
-    // is drawn over the page.
-    let goes = egui::Rect::from_two_pos(at(&h, a.rect[0] + dx, a.rect[1] + dy), at(&h, a.rect[2] + dx, a.rect[3] + dy)).shrink(3.0);
-    let inked = |pixels: &image::RgbaImage| {
-        (goes.left() as u32..(to.x - 12.0) as u32)
-            .any(|px| (goes.top() as u32..goes.bottom() as u32).any(|py| pixels.get_pixel(px, py).0[..3].iter().all(|c| *c < 100)))
-    };
-    h.hover_at(from);
-    h.run_steps(1);
-    h.drag_at(from);
-    h.run_steps(1);
-    for k in 1..=4 {
-        h.hover_at(from + (to - from) * (k as f32 / 4.0));
-        h.run_steps(1);
+    let view = &h.state().views[0];
+    let id = view.id;
+    let doc = h.state().session.get(id).unwrap();
+    let generation = doc.edit_generation();
+    let xf = view.page_xform(0).expect("page visible");
+    let original = xf.user_rect(&doc.info, 0, a.rect);
+    let highlight = xf.user_rect(&doc.info, 0, [edge - 1.5, y0 + 3.0, edge + 1.5, y1 - 3.0]);
+    let destination = xf.user_rect(&doc.info, 0, [x0 + 120.0, y0 - 60.0, x1 + 120.0, y1 - 60.0]);
+    let (from, to) = (original.center(), destination.center());
+    let was = original.shrink(3.0);
+    let goes = was.translate(to - from);
+    let ink = |img: &image::RgbaImage, r| pixels_in(img, r).filter(|px| px.0[..3].iter().all(|c| *c < 100)).count();
+    let red = |img: &image::RgbaImage| pixels_in(img, was).filter(|px| px[0] > 200 && px[1] < 80 && px[2] < 80).count();
+    let blue_edge =
+        |img: &image::RgbaImage| pixels_in(img, highlight).filter(|p| p[2] > p[0].saturating_add(30) && p[2] > p[1].saturating_add(15)).count();
+    let before = h.render().unwrap();
+    let highlighted = blue_edge(&before);
+    assert!(original.contains_rect(highlight) && highlighted > 0, "a field highlight crosses the old text box");
+    let source_ink = ink(&before, was);
+    if let Ok(path) = std::env::var("PDFCRAFT_5531_SHOT") {
+        before.save(format!("{path}.before.png")).unwrap();
     }
-    let mut shown = false;
-    for _ in 0..100 {
-        h.run_steps(2);
-        if inked(&h.render().unwrap()) {
-            shown = true;
-            break;
+    let destination_ink = ink(&before, goes);
+    assert!(source_ink > 0 && destination_ink == 0, "only the original position has ink before dragging: {source_ink}, {destination_ink}");
+    assert!(red(&before) > 0, "the other annotation overlaps the original text");
+
+    let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    let hold = |h: &mut Harness<'static, PdfCraftApp>| {
+        let generation = h.state().session.get(id).unwrap().edit_generation();
+        one_frame(h, [Event::PointerMoved(from)]);
+        one_frame(h, [button(from, true)]);
+        for k in 1..=4 {
+            one_frame(h, [Event::PointerMoved(from + (to - from) * (k as f32 / 4.0))]);
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    assert!(shown, "the typed text is drawn under the pointer before release");
-    h.drop_at(to);
-    h.run_steps(3);
+        let mut held = None;
+        let cleared = support::step_until(h, |h| {
+            let pixels = h.render().unwrap();
+            let ready = ink(&pixels, goes) > 0 && ink(&pixels, was) == 0;
+            held = Some(pixels);
+            ready
+        });
+        let held = held.unwrap();
+        if let Ok(path) = std::env::var("PDFCRAFT_5531_SHOT") {
+            held.save(path).unwrap();
+        }
+        assert!(ink(&held, goes) > 0, "the typed text follows the held pointer");
+        assert!(cleared, "old position still holds {} ink pixels during the drag", ink(&held, was));
+        assert!(red(&held) >= red(&before), "the overlapping annotation is still drawn under the old position");
+        assert!(
+            blue_edge(&held) > highlighted / 2,
+            "the field highlight still paints over the old-position tile: {} → {}",
+            highlighted,
+            blue_edge(&held),
+        );
+        assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation, "dragging does not edit the PDF");
+        held
+    };
+    hold(&mut h);
+    one_frame(&mut h, [Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    let escape = h.render().unwrap();
+    assert!(
+        ink(&escape, was) > source_ink / 2 && ink(&escape, goes) == 0,
+        "Escape while held restores the original, got old and destination ink {} and {}",
+        ink(&escape, was),
+        ink(&escape, goes),
+    );
+    one_frame(&mut h, [button(to, false)]);
+    h.run_steps(2);
+    let cancelled = h.render().unwrap();
+    assert!(ink(&cancelled, was) > source_ink / 2 && ink(&cancelled, goes) == 0, "release after Escape keeps the original");
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation);
+
+    let held = hold(&mut h);
+    one_frame(&mut h, [button(to, false)]);
+    crate::support::settle(&mut h);
+    let applied = h.render().unwrap();
+    assert!(ink(&applied, was) == 0 && ink(&applied, goes) > 0, "after release only the destination has ink");
+    let area = original.expand(5.0);
+    let changed = pixels_in(&held, area)
+        .zip(pixels_in(&applied, area))
+        .filter(|(a, b)| a.0[..3].iter().zip(&b.0[..3]).any(|(x, y)| x.abs_diff(*y) > 16))
+        .count();
+    assert!(changed * 10 < source_ink, "the old region differs from the same area after move at {changed} pixels");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Move comment"));
+
+    h.undo();
+    crate::support::settle(&mut h);
+    let undone = h.render().unwrap();
+    assert!(ink(&undone, was) > source_ink / 2 && ink(&undone, goes) == 0, "Undo restores the original without a stale tile");
+
+    hold(&mut h);
+    h.redo();
+    let redone_generation = h.state().session.get(id).unwrap().edit_generation();
+    one_frame(&mut h, [button(to, false)]);
+    crate::support::settle(&mut h);
+    let redone = h.render().unwrap();
+    assert!(ink(&redone, was) == 0 && ink(&redone, goes) > 0, "a history step during the drag leaves only the committed move");
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), redone_generation, "a released drag cannot edit a new history state");
 }
 
 /// A comment kept upright on a turned page (NoRotate on a /Rotate 90 page) is drawn where it goes
