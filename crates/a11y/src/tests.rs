@@ -5,7 +5,7 @@ use pdfcraft_cos::{Document, Object};
 use super::*;
 
 /// A PDF from object bodies (object n = bodies[n - 1]) and extra trailer entries.
-fn pdf(bodies: &[String], trailer: &str) -> Document {
+pub(crate) fn pdf(bodies: &[String], trailer: &str) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, b) in bodies.iter().enumerate() {
@@ -21,7 +21,7 @@ fn pdf(bodies: &[String], trailer: &str) -> Document {
     Document::open(Arc::new(out)).unwrap()
 }
 
-fn stream(data: &str) -> String {
+pub(crate) fn stream(data: &str) -> String {
     format!("<< /Length {} >>\nstream\n{data}\nendstream", data.len())
 }
 
@@ -50,7 +50,7 @@ fn autotag_text_writes_marked_content_and_parent_tree_across_pages() {
         "",
     );
     let result = autotag_text(&mut doc).unwrap();
-    assert_eq!(result, AutoTagResult { pages: 2, paragraphs: 2, headings: 1 });
+    assert_eq!(result, AutoTagResult { pages: 2, paragraphs: 2, headings: 1, headers: 0, footers: 0 });
     let catalog = doc.get(doc.root().unwrap());
     let root = catalog.as_dict().unwrap().reference(b"StructTreeRoot").unwrap();
     let tree = doc.get(root);
@@ -83,6 +83,194 @@ fn autotag_text_writes_marked_content_and_parent_tree_across_pages() {
     assert_eq!(status(&check(&reopened, &Options::default()), Rule::TaggedContent), Status::Passed);
 }
 
+/// Three pages with a running header, a numbered footer and a body line repeated mid-page
+/// (#7065): the header and footer become pagination artifacts without MCIDs, the rest is tagged.
+fn running_text_pdf() -> Document {
+    let page = |n: usize| {
+        stream(&format!(
+            "BT /F1 9 Tf 72 760 Td (Annual report) Tj ET BT /F1 12 Tf 72 640 Td (Body text on page {n} that is long enough to set the body size) Tj ET \
+             BT /F1 12 Tf 72 400 Td (A body line repeated on every page) Tj ET BT /F1 9 Tf 300 30 Td (Page {n}) Tj ET"
+        ))
+    };
+    let leaf = |contents: usize| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R >>");
+    pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> >>".into(),
+            leaf(6),
+            leaf(7),
+            leaf(8),
+            page(1),
+            page(2),
+            page(3),
+            FONT.into(),
+        ],
+        "",
+    )
+}
+
+#[test]
+fn autotag_text_marks_running_headers_and_footers_as_pagination_artifacts() {
+    let mut doc = running_text_pdf();
+    let found = running_text(&doc).unwrap();
+    let listed: Vec<(usize, &str, &str)> = found.iter().map(|r| (r.page, r.subtype, r.text.as_str())).collect();
+    assert_eq!(
+        listed,
+        [
+            (0, "Header", "Annual report"),
+            (0, "Footer", "Page 1"),
+            (1, "Header", "Annual report"),
+            (1, "Footer", "Page 2"),
+            (2, "Header", "Annual report"),
+            (2, "Footer", "Page 3")
+        ]
+    );
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!(result, AutoTagResult { pages: 3, paragraphs: 6, headings: 0, headers: 3, footers: 3 });
+    for page in pdfcraft_model::pages(&doc) {
+        let content = doc.resolve(page.dict.get(b"Contents").unwrap());
+        let Object::Stream(stream) = &*content else { panic!("marked page content") };
+        let text = String::from_utf8(stream.decoded_strict().unwrap()).unwrap();
+        // Each BDC in order: the artifact subtype, or the tag and its MCID.
+        let marks: Vec<String> = pdfcraft_content::parse(text.as_bytes())
+            .ops
+            .iter()
+            .filter(|op| op.op == b"BDC")
+            .map(|op| {
+                let d = op.operands.get(1).and_then(Object::as_dict).unwrap();
+                match op.name(0).unwrap() {
+                    b"Artifact" => {
+                        assert_eq!(d.name(b"Type"), Some(&b"Pagination"[..]));
+                        assert!(!d.contains(b"MCID"), "an artifact has no MCID");
+                        String::from_utf8(d.name(b"Subtype").unwrap().to_vec()).unwrap()
+                    }
+                    tag => format!("{} {}", String::from_utf8_lossy(tag), d.get(b"MCID").and_then(Object::as_int).unwrap()),
+                }
+            })
+            .collect();
+        assert_eq!(marks, ["Header", "P 0", "P 1", "Footer"], "{text}");
+    }
+    let kinds: Vec<String> = tags(&doc).iter().map(|t| t.kind.clone()).collect();
+    assert_eq!(kinds, ["Document", "P", "P", "P", "P", "P", "P"]);
+    assert_eq!(status(&check(&doc, &Options::default()), Rule::TaggedContent), Status::Passed);
+}
+
+/// Roles are assigned over the tagged text only: a running header before a heading does not
+/// shift the heading's role onto the next object.
+#[test]
+fn autotag_text_assigns_roles_past_running_headers() {
+    let body = "BT /F1 12 Tf 72 640 Td (Body text that is long enough to set the body size of the document) Tj ET";
+    let page = |extra: &str| stream(&format!("BT /F1 9 Tf 72 760 Td (Annual report) Tj ET {extra} {body}"));
+    let leaf = |contents: usize| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R >>");
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+            leaf(5),
+            leaf(6),
+            page("BT /F1 18 Tf 72 700 Td (Introduction) Tj ET"),
+            page(""),
+            FONT.into(),
+        ],
+        "",
+    );
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!((result.headers, result.headings, result.paragraphs), (2, 1, 2));
+    let kinds: Vec<String> = tags(&doc).iter().map(|t| t.kind.clone()).collect();
+    assert_eq!(kinds, ["Document", "H1", "P", "P"]);
+}
+
+/// A page whose only text is running text has nothing in the parent tree and gets no
+/// `StructParents`; the next tagged page takes the next key.
+#[test]
+fn autotag_text_gives_a_page_of_running_text_alone_no_struct_parents() {
+    let header = "BT /F1 9 Tf 72 760 Td (Annual report) Tj ET";
+    let leaf = |contents: usize| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R >>");
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+            leaf(5),
+            leaf(6),
+            stream(header),
+            stream(&format!("{header} BT /F1 12 Tf 72 640 Td (Body) Tj ET")),
+            FONT.into(),
+        ],
+        "",
+    );
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1, headings: 0, headers: 2, footers: 0 });
+    let keys: Vec<Option<i64>> = pdfcraft_model::pages(&doc).iter().map(|p| p.dict.get(b"StructParents").and_then(Object::as_int)).collect();
+    assert_eq!(keys, [None, Some(0)]);
+    assert_eq!(status(&check(&doc, &Options::default()), Rule::TaggedContent), Status::Passed);
+}
+
+/// A body line turned to run down from the top of each page starts in the header band but does
+/// not lie inside it: it is not running text.
+#[test]
+fn autotag_text_leaves_turned_text_that_runs_out_of_the_band_tagged() {
+    let body = "BT /F1 12 Tf 0 -1 1 0 72 760 Tm (A body line set turned so that it runs down the page) Tj ET";
+    let leaf = |contents: usize| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R >>");
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+            leaf(5),
+            leaf(6),
+            stream(body),
+            stream(body),
+            FONT.into(),
+        ],
+        "",
+    );
+    assert_eq!(running_text(&doc).unwrap(), []);
+}
+
+/// Turned body text whose negative character spacing brings each line's advance back to zero
+/// still has glyphs running down the page from the header band: it is not running text.
+#[test]
+fn autotag_text_leaves_turned_text_pulled_back_by_negative_spacing_tagged() {
+    // A is 12 units wide and advances 6 at Tc -6; B is 0 wide and advances -6. Thirty of each
+    // end where they began, but the A glyphs reach 186 units down from y 760.
+    let body = format!("BT /F1 12 Tf -6 Tc 0 -1 1 0 72 760 Tm ({}{}) Tj ET", "A".repeat(30), "B".repeat(30));
+    let font = "<< /Type /Font /Subtype /Type1 /BaseFont /HouseFont /FirstChar 65 /LastChar 66 /Widths [1000 0] >>";
+    let leaf = |contents: usize| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R >>");
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+            leaf(5),
+            leaf(6),
+            stream(&body),
+            stream(&body),
+            font.into(),
+        ],
+        "",
+    );
+    assert_eq!(running_text(&doc).unwrap(), []);
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!((result.headers, result.footers, result.paragraphs), (0, 0, 2));
+}
+
+#[test]
+fn autotag_text_leaves_a_single_page_header_tagged() {
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+            stream(
+                "BT /F1 9 Tf 72 760 Td (Annual report) Tj ET BT /F1 12 Tf 72 640 Td (Body text long enough to set the body size) Tj ET BT /F1 9 Tf 300 30 Td (1) Tj ET",
+            ),
+            FONT.into(),
+        ],
+        "",
+    );
+    assert_eq!(running_text(&doc).unwrap(), []);
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!((result.headers, result.footers, result.paragraphs), (0, 0, 3));
+}
+
 /// Page content behind a predictor whose `/DecodeParms` are given by reference is read through
 /// them: autotagging writes the text back as it was, marked, not with the predictor's tag bytes in
 /// it (a `\0` every eight bytes, which split `24` into `2 4`).
@@ -108,7 +296,7 @@ fn autotag_text_reads_content_with_parameters_given_by_reference() {
     let mut predicted = pdfcraft_cos::Stream::flate(Dict::new(), &rows);
     predicted.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
     doc.set(ObjRef::new(4, 0), predicted);
-    assert_eq!(autotag_text(&mut doc).unwrap(), AutoTagResult { pages: 1, paragraphs: 1, headings: 0 });
+    assert_eq!(autotag_text(&mut doc).unwrap(), AutoTagResult { pages: 1, paragraphs: 1, headings: 0, headers: 0, footers: 0 });
     let page = &pdfcraft_model::pages(&doc)[0];
     let written = doc.resolve(page.dict.get(b"Contents").unwrap());
     let Object::Stream(written) = &*written else { panic!("page content") };
@@ -161,7 +349,7 @@ fn autotag_text_marks_vector_graphics_and_images_as_artifacts() {
         "",
     );
     let result = autotag_text(&mut doc).unwrap();
-    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1, headings: 0 });
+    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1, headings: 0, headers: 0, footers: 0 });
     let report = check(&doc, &Options { rules: [Rule::TaggedPdf, Rule::TaggedContent].into(), pages: None });
     assert_eq!(status(&report, Rule::TaggedPdf), Status::Passed);
     assert_eq!(status(&report, Rule::TaggedContent), Status::Passed);
@@ -1680,8 +1868,97 @@ fn headings_naming_one_large_string_stop_decoding_it_at_the_allowance() {
         format!("({})", "a".repeat(512 << 10)),
     ];
     objects.extend((0..count).map(|_| "<< /S /H1 /P 6 0 R /Pg 3 0 R /ActualText 7 0 R >>".to_string()));
-    let found = headings(&pdf(&objects, ""));
+    let (found, cut) = headings_with_truncation(&pdf(&objects, ""));
     assert!(!found.is_empty() && found.len() < count, "{}", found.len());
+    assert!(cut, "headings whose title the allowance turned away were dropped unreported");
+}
+
+/// A title source too large for the allowance is passed over for the next one, and the heading
+/// it names is kept and not reported as missing.
+#[test]
+fn a_title_too_large_for_the_allowance_falls_back_without_truncation() {
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".to_string(),
+        stream("BT ET"),
+        "<< /Type /StructTreeRoot /K 6 0 R >>".to_string(),
+        "<< /S /Document /P 5 0 R /K [8 0 R] >>".to_string(),
+        format!("({})", "a".repeat((32 << 20) / 3 + 1)),
+        "<< /S /H1 /P 6 0 R /Pg 3 0 R /ActualText 7 0 R /Alt (Short) >>".to_string(),
+    ];
+    let (found, cut) = headings_with_truncation(&pdf(&objects, ""));
+    let titles: Vec<String> = found.into_iter().map(|h| h.title).collect();
+    assert_eq!((titles, cut), (vec!["Short".to_string()], false));
+}
+
+/// A tree of `count` H1 elements, each with its text and page.
+fn many_headings(count: usize) -> Vec<String> {
+    let kids: String = (0..count).map(|i| format!("{} 0 R ", i + 7)).collect();
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".to_string(),
+        stream("BT ET"),
+        "<< /Type /StructTreeRoot /K 6 0 R >>".to_string(),
+        format!("<< /S /Document /P 5 0 R /K [{kids}] >>"),
+    ];
+    objects.extend((0..count).map(|_| "<< /S /H1 /P 6 0 R /Pg 3 0 R /ActualText (Head) >>".to_string()));
+    objects
+}
+
+#[test]
+fn headings_past_the_cap_are_reported() {
+    let (at_cap, cut) = headings_with_truncation(&pdf(&many_headings(MAX_HEADINGS), ""));
+    assert_eq!((at_cap.len(), cut), (MAX_HEADINGS, false));
+    let (over, cut) = headings_with_truncation(&pdf(&many_headings(MAX_HEADINGS + 1), ""));
+    assert_eq!((over.len(), cut), (MAX_HEADINGS, true), "a heading past the cap was dropped unreported");
+}
+
+#[test]
+fn a_heading_nested_past_the_depth_limit_is_reported() {
+    let mut objs = headings_doc();
+    let (found, cut) = headings_with_truncation(&pdf(&objs, ""));
+    assert!(!found.is_empty() && !cut);
+    // Element 17 opens a chain of 300 sections, each holding the next, around one H1.
+    let first = objs.len() + 1;
+    objs[9] = format!("<< /S /Document /K [12 0 R {first} 0 R] >>");
+    objs.extend((1..=300).map(|i| format!("<< /S /Sect /K {} 0 R >>", first + i)));
+    objs.push("<< /S /H1 /Pg 3 0 R /ActualText (Deep) >>".into());
+    let (found, cut) = headings_with_truncation(&pdf(&objs, ""));
+    assert!(found.iter().all(|h| h.title != "Deep") && cut, "a heading too deep to reach was dropped unreported");
+}
+
+/// A branch too deep to walk is skipped, not the end of the walk: a heading after it is found.
+#[test]
+fn a_heading_after_a_branch_past_the_depth_limit_is_found() {
+    let mut objs = headings_doc();
+    let first = objs.len() + 1;
+    objs[9] = format!("<< /S /Document /K [{first} 0 R 12 0 R] >>");
+    objs.extend((1..=300).map(|i| format!("<< /S /Sect /K {} 0 R >>", first + i)));
+    objs.push("<< /S /H1 /Pg 3 0 R /ActualText (Deep) >>".into());
+    let (found, cut) = headings_with_truncation(&pdf(&objs, ""));
+    let titles: Vec<&str> = found.iter().map(|h| h.title.as_str()).collect();
+    assert_eq!((titles, cut), (vec!["Chapter One"], true), "the deep branch stopped the walk");
+}
+
+/// An H1 `sects + 1` elements down whose title is only its marked content.
+fn heading_under_sections(sects: usize) -> (Vec<Heading>, bool) {
+    let mut objs = headings_doc();
+    let first = objs.len() + 1;
+    objs[9] = format!("<< /S /Document /K {first} 0 R >>");
+    objs.extend((1..=sects).map(|i| format!("<< /S /Sect /K {} 0 R >>", first + i)));
+    objs.push("<< /S /H1 /Pg 3 0 R /K 0 >>".into());
+    headings_with_truncation(&pdf(&objs, ""))
+}
+
+/// Marked content past the depth limit is reported too: the H1 whose title it holds is lost.
+#[test]
+fn marked_content_past_the_depth_limit_is_reported() {
+    let (found, cut) = heading_under_sections(254);
+    assert_eq!((found.iter().map(|h| h.title.as_str()).collect::<Vec<_>>(), cut), (vec!["Chapter One"], false));
+    let (found, cut) = heading_under_sections(255);
+    assert!(found.is_empty() && cut, "a heading whose text was too deep was dropped unreported");
 }
 
 #[test]

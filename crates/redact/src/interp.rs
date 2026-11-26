@@ -158,7 +158,7 @@ pub(crate) struct Output {
     /// rewrite would drop the bytes but keep the strings. A redaction must not trust it.
     pub unparsed: bool,
     pub tag_changes: Vec<(ObjRef, ObjRef, HashSet<i64>, HashSet<i64>)>,
-    pub error: Option<CosError>,
+    pub error: Option<RedactError>,
 }
 
 pub(crate) struct Scope<'a> {
@@ -342,7 +342,9 @@ fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
 /// predefined CMap name ending in `-V` (Identity-V and the like), or an embedded CMap stream
 /// whose `/WMode` is 1 (ISO 32000-2 §9.7.5).
 fn is_vertical(doc: &Document, font: &Dict) -> bool {
-    if font.name(b"Subtype") != Some(b"Type0".as_slice()) {
+    // `/Subtype` may be written by reference (#6750).
+    let subtype = font.get(b"Subtype").map(|s| doc.resolve(s));
+    if subtype.as_deref().and_then(Object::as_name) != Some(b"Type0".as_slice()) {
         return false;
     }
     match font.get(b"Encoding").map(|e| doc.resolve(e)).as_deref() {
@@ -1106,6 +1108,57 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
     (out, removed)
 }
 
+/// The content of form `s` (named `name`, object `r`) for [`xobject`], or what `xobject` returns
+/// for a form it can't read: Apply refuses the page once the page's budget is spent and drops a
+/// form that won't decode; the scans count a form past the budget, and the hidden-information
+/// scans one that won't decode as well.
+fn form_data(doc: &Document, scope: &mut Scope<'_>, s: &Stream, name: &[u8], r: ObjRef, out: &mut Output) -> Result<Vec<u8>, Option<Option<Op>>> {
+    // Strict, like page content: a Form read only in part counts as undecodable. With its
+    // `/DecodeParms` given by reference too, as the cleanups after the walk read it: read
+    // without them, it looks empty and is left as it was, drawing whatever lies under a mark.
+    let refused = scope.budget.refused();
+    let entered = scope.budget.enter_form();
+    let data = if entered {
+        scope.budget.decode_strict(doc, s)
+    } else {
+        Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
+    };
+    match data {
+        Ok(d) => Ok(d),
+        // Past the page's budget nothing more is read: apply refuses the page, and
+        // verification counts the form as content that may remain.
+        Err(e) if scope.budget.exhausted() => {
+            if scope.mode == Mode::Apply {
+                // The budget spent says nothing of this form: it went past what the page
+                // may read only where it was refused for that; one that doesn't decode
+                // says why.
+                let past = !entered || scope.budget.refused() > refused;
+                out.error = Some(if past { RedactError::past_allowance(e) } else { e.into() });
+            } else if scope.everywhere() {
+                scope.layer_blocks += 1;
+            } else {
+                out.residue += 1;
+            }
+            Err(None)
+        }
+        Err(_) if scope.mode == Mode::Apply => {
+            scope.report.forms_removed += 1;
+            scope.removed_cut = true;
+            out.replaced.push(name.to_vec());
+            out.doomed.push(r);
+            Err(Some(None))
+        }
+        Err(_) => {
+            // Apply drops an undecodable Form while sanitizing. Count it during Verify
+            // so a zero-count preflight cannot leave its potentially hidden bytes behind.
+            if scope.everywhere() {
+                scope.layer_blocks += 1;
+            }
+            Err(None)
+        }
+    }
+}
+
 /// `Do`: `None` = leave the operator alone; `Some(None)` = drop it; `Some(Some(op))` = replace it.
 fn xobject(
     doc: &mut Document,
@@ -1120,7 +1173,10 @@ fn xobject(
     let r = xobjects.get(&name)?.as_ref()?;
     let obj = doc.get(r);
     let Object::Stream(s) = &*obj else { return None };
-    match s.dict.name(b"Subtype") {
+    // `/Subtype` may be written by reference, and the renderer follows it: an image named that way
+    // is still drawn, so it must still be redacted (#6750).
+    let subtype = s.dict.get(b"Subtype").map(|t| doc.resolve(t));
+    match subtype.as_deref().and_then(Object::as_name) {
         _ if s.dict.get(b"OC").is_some_and(|oc| scope.xobject_layer_hidden(doc, r, oc)) => {
             // Verify mode must count hidden XObjects too: scan uses that count to decide
             // whether the HiddenLayers pass is necessary.
@@ -1172,16 +1228,14 @@ fn xobject(
                 // the form is walked as it stands.
                 Err(()) if scope.everywhere() && scope.hidden_text.is_none() => Matrix::IDENTITY,
                 // Otherwise where the form draws, and so whether it reaches a mark or leaves the
-                // page, can't be told. Apply refuses the page, and the scans count it, as for a
-                // form past the page's budget below.
+                // page, can't be told. Apply refuses the page, and the scans count it, as
+                // `form_data` does for a form past the page's budget.
                 Err(()) => {
                     if scope.mode == Mode::Apply {
-                        out.error = Some(CosError::Syntax {
-                            offset: 0,
-                            detail:
-                                "a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told"
-                                    .into(),
-                        });
+                        out.error = Some(RedactError::Refused(
+                            "a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told"
+                                .into(),
+                        ));
                     } else if scope.everywhere() {
                         scope.layer_blocks += 1;
                     } else {
@@ -1202,8 +1256,8 @@ fn xobject(
                 return None;
             }
             // Too deep: this form cannot be read, so it goes (Apply) or the page is left alone
-            // (Verify), as a form that will not decode does. The page's decode budget below is what
-            // keeps a fan-out or a cycle from costing 2^50 walks.
+            // (Verify), as a form that will not decode does. The page's decode budget, which
+            // `form_data` reads within, is what keeps a fan-out or a cycle from costing 2^50 walks.
             if scope.depth >= MAX_DEPTH {
                 if scope.mode == Mode::Verify {
                     // Sanitization removes a Form it cannot enter, so the verification scan
@@ -1220,43 +1274,9 @@ fn xobject(
                 out.doomed.push(r);
                 return Some(None);
             }
-            // Strict, like page content: a Form read only in part counts as undecodable. With its
-            // `/DecodeParms` given by reference too, as the cleanups after the walk read it: read
-            // without them, it looks empty and is left as it was, drawing whatever lies under a mark.
-            let data = if scope.budget.enter_form() {
-                scope.budget.decode_strict(doc, s)
-            } else {
-                Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
-            };
-            let data = match data {
+            let data = match form_data(doc, scope, s, &name, r, out) {
                 Ok(d) => d,
-                // Past the page's budget nothing more is read: apply refuses the page, and
-                // verification counts the form as content that may remain.
-                Err(e) if scope.budget.exhausted() => {
-                    if scope.mode == Mode::Apply {
-                        out.error = Some(e);
-                    } else if scope.everywhere() {
-                        scope.layer_blocks += 1;
-                    } else {
-                        out.residue += 1;
-                    }
-                    return None;
-                }
-                Err(_) if scope.mode == Mode::Apply => {
-                    scope.report.forms_removed += 1;
-                    scope.removed_cut = true;
-                    out.replaced.push(name);
-                    out.doomed.push(r);
-                    return Some(None);
-                }
-                Err(_) => {
-                    // Apply drops an undecodable Form while sanitizing. Count it during Verify
-                    // so a zero-count preflight cannot leave its potentially hidden bytes behind.
-                    if scope.everywhere() {
-                        scope.layer_blocks += 1;
-                    }
-                    return None;
-                }
+                Err(leave_or_drop) => return leave_or_drop,
             };
             let own = s.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned());
             let res = own.clone().unwrap_or_else(|| resources.clone());
@@ -1349,7 +1369,33 @@ fn xobject(
             scope.report.forms_rewritten += 1;
             Some(Some(Op::new("Do", vec![Object::Name(n)])))
         }
-        _ => None,
+        // No `/Subtype`, or one the redactor does not read: what it draws is unknown, so a
+        // placement under a mark fails closed. Apply removes it, as it does a form it cannot read,
+        // and verification counts it as what may remain. Its place is the unit square an image
+        // fills or, when it has a `/BBox`, the box a form would draw in: either one under a mark
+        // counts. Both are read as the proof reads a form's, entries by reference included; a
+        // `/Matrix` or `/BBox` that is present but malformed leaves its place unknown, so it counts
+        // as under a mark rather than as outside every one.
+        _ => {
+            let unit = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
+            let framed = match (crate::verify::matrix_of(doc, &s.dict), crate::verify::bbox_of(doc, &s.dict)) {
+                (Ok(m), Ok(bbox)) => bbox.is_some_and(|b| scope.hits(m.then(&gs.ctm).bbox(b))),
+                _ => true,
+            };
+            if !scope.hits(unit) && !framed {
+                return None;
+            }
+            if scope.mode == Mode::Verify {
+                out.residue += 1;
+                return None;
+            }
+            scope.report.forms_removed += 1;
+            // Any text it held was never read, so the metadata check can't know what went with it.
+            scope.removed_cut = true;
+            out.replaced.push(name);
+            out.doomed.push(r);
+            Some(None)
+        }
     }
 }
 

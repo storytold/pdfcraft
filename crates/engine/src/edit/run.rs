@@ -15,6 +15,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::ReversePages { .. }
         | Edit::InsertBlankPage { .. }
         | Edit::DuplicatePages { .. }
+        | Edit::SpawnTemplate { .. }
+        | Edit::SetTemplateHidden { .. }
         | Edit::ReplacePages { .. }
         | Edit::SetPageBox { .. }
         | Edit::SetTransition { .. }
@@ -196,6 +198,30 @@ fn note_skipped(doc: &mut pdfcraft_cos::Document, report: &pdfcraft_xfdf::Report
     ));
 }
 
+/// Up to the first five of `names`, quoted and joined, then how many more there are.
+fn listed_names(names: &[String]) -> String {
+    let shown: Vec<String> = names.iter().take(5).map(|n| format!("\"{}\"", skipped_text(n))).collect();
+    match names.len().saturating_sub(shown.len()) {
+        0 => shown.join(", "),
+        more => format!("{}; and {more} more", shown.join(", ")),
+    }
+}
+
+/// What a form-data import took from a file that also gave values the form refused (a value its
+/// field can't hold, such as an option it doesn't list): the repair log names the fields, so a
+/// partial import is said, not slipped in.
+fn note_rejected(doc: &mut pdfcraft_cos::Document, report: &pdfcraft_xfdf::Report) {
+    if report.rejected.is_empty() {
+        return;
+    }
+    let count = report.rejected.len();
+    doc.note_repair(format!(
+        "imported form data without the value{} the form refused for {}",
+        if count == 1 { "" } else { "s" },
+        listed_names(&report.rejected)
+    ));
+}
+
 /// At most this many characters of one skipped comment's description in the repair log.
 const SKIPPED_CHARS: usize = 200;
 
@@ -234,6 +260,8 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_unchanged: bool,
     /// What the XFA scripts' time limits are multiplied by ([`Session::with_xfa_time_scale`]).
     pub(crate) xfa_time_scale: u32,
+    /// The form's scripts or new data laid it out again: its pages and widgets were replaced.
+    pub(crate) xfa_relaid: bool,
     /// The edit took the XFA out of the form: what went with it, for the document's warnings.
     pub(crate) xfa_removed: Vec<String>,
     /// Pages in the document, for `xfa.layout.pageCount()`.
@@ -305,6 +333,7 @@ impl EditCtx {
             xfa_ran_away: false,
             xfa_unchanged: false,
             xfa_time_scale: 1,
+            xfa_relaid: false,
             xfa_removed: Vec::new(),
             pages: 0,
             highlight: false,
@@ -546,6 +575,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
             pdfcraft_organize::duplicate_pages(doc, pages, *at)?
         }
+        Edit::SpawnTemplate { name, at, rename } => {
+            pdfcraft_organize::spawn_template(doc, name, *at, *rename)?;
+        }
+        Edit::SetTemplateHidden { name, hidden } => pdfcraft_organize::set_template_hidden(doc, name, *hidden)?,
         Edit::ReplacePages { pages, name, bytes, src_pages } => {
             let src = crate::sources::open_source_into(name, bytes, doc)?;
             pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
@@ -579,11 +612,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::import_outline(doc, parent, *index, bookmarks, *replace)?;
         }
         Edit::BookmarksFromStructure => {
-            let entries: Vec<_> = pdfcraft_a11y::headings(doc)
-                .into_iter()
-                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj, top: None })
-                .collect();
-            pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
+            pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &crate::suggest_outline::structure_entries(doc).0)?;
         }
         Edit::BookmarksFromTextStyles { levels } => {
             if levels.is_empty() {
@@ -765,6 +794,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 ran_away: false,
                 highlight,
                 time_scale: cx.xfa_time_scale,
+                relaid: false,
             };
             let ran = if matches!(activity.as_str(), "enter" | "exit") {
                 xfa::on_focus(doc, &tpl, som, activity, &mut run).map(|changes| changes.is_empty())
@@ -773,10 +803,14 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             };
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;
+            // The next XFA run of a batch starts from the page count this one left.
+            cx.pages = run.page_count;
+            cx.xfa_relaid |= run.relaid;
             // The next edit of a batch reads the highlight this one's scripts set.
             let on = run.highlight;
             cx.set_highlight(on);
-            cx.xfa_unchanged = ran.map_err(EditError::Invalid)?;
+            // A form laid out again changed, whatever its scripts counted.
+            cx.xfa_unchanged = ran.map_err(EditError::Invalid)? && !cx.xfa_relaid;
         }
         Edit::SetFieldImage { name, image } | Edit::SetFieldImageTarget { name, image, .. } => {
             let object = match edit {
@@ -1063,7 +1097,14 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     let mut data = doc.clone();
                     match pdfcraft_xfdf::import(&mut data, bytes) {
                         Ok(report) => {
+                            // The importer hands back what the form refused. When that is all the
+                            // file gave, nothing was imported: say so, and leave the document
+                            // (and its Undo and Redo) as it was.
+                            if report.fields == 0 && report.comments == 0 && !report.rejected.is_empty() {
+                                return Err(pdfcraft_xfdf::DataError::Refused(listed_names(&report.rejected)).into());
+                            }
                             note_skipped(&mut data, &report);
+                            note_rejected(&mut data, &report);
                             *doc = data;
                         }
                         Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {
