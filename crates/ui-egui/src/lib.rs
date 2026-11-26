@@ -510,6 +510,9 @@ pub struct PdfCraftApp {
     pub screen_mode: craft::ui::shell::ScreenMode,
     /// Reports unsaved work, or an open OCR review, to the embedding page (web, see [`HostDirtyFn`]).
     pub host_dirty: Option<HostDirtyFn>,
+    /// Requests from the operating system, polled at the start of every frame's logic (macOS Apple
+    /// events: files opened from the Finder, Open With or the Dock, and quit).
+    pub os_events: Option<Box<dyn Fn()>>,
     /// The "save changes?" questions of a closing tab or a quit, asked one document at a time.
     pub(crate) close_guard: Option<craft::quit::CloseGuard<DocId>>,
     /// The open `UnsavedChangesDialog` belonging to `close_guard`, kept across a frame panic.

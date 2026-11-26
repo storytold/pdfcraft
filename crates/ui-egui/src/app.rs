@@ -399,6 +399,7 @@ impl PdfCraftApp {
             unlock_prompt: None,
             screen_mode: Default::default(),
             host_dirty: None,
+            os_events: None,
             close_guard: None,
             close_guard_dialog: None,
             props_session: None,
@@ -741,6 +742,10 @@ impl PdfCraftApp {
     fn logic_unguarded(&mut self, ctx: &egui::Context) {
         #[cfg(test)]
         self.injected_panic(crate::frame_guard::FramePart::Logic);
+        // Files the operating system asked to open reach the intake before this frame opens it.
+        if let Some(poll) = &self.os_events {
+            poll();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_script_dialog(ctx);
         // Notices raised outside `ui` (opened files, the control channel) translate too.
