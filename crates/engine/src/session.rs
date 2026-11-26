@@ -133,6 +133,14 @@ impl Session {
         self.purview.as_ref().ok_or(crate::PurviewError::SdkUnavailable)?.labels()
     }
 
+    /// Capture a label read for a background worker without exposing account-changing operations.
+    pub fn purview_labels_job(
+        &self,
+    ) -> Result<impl FnOnce() -> Result<Vec<crate::PurviewLabel>, crate::PurviewError> + Send + 'static, crate::PurviewError> {
+        let provider = self.purview.clone().ok_or(crate::PurviewError::SdkUnavailable)?;
+        Ok(move || provider.labels())
+    }
+
     pub fn purview_apply_label(&mut self, id: DocId, label_id: &str, justification: Option<&str>) -> Result<(), EditError> {
         let document = self.get(id).ok_or(EditError::NoDocument)?;
         check_purview_label_mutation(document)?;

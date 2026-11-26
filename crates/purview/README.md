@@ -14,6 +14,11 @@ are verified, while optimization, digital signing and label/protection changes o
 until protection can be retained and tested against a live tenant.
 A configured default label is not applied automatically; a required label must be selected and
 applied before saving.
+The POC does not renew access tokens or reauthenticate the same account while a protected
+document is open. An expired token can prevent protected save and recovery; unsaved work remains
+at risk. Use synthetic documents only until safe renewal and rights revalidation are verified.
+Without the SDK, the fallback cannot reliably detect label-only metadata, especially in
+compressed PDF streams; do not rely on an ordinary build to preserve or enforce those labels.
 Typed PDF and XFA password-field values remain session-only: label operations stage a sanitized
 copy and saves restore those values only in memory. A sanitized label operation may rewrite the
 working PDF to avoid retaining password values in earlier revisions.
@@ -43,6 +48,9 @@ existing workspace platform helper.
 The adapter checks that the protection and policy token responses identify the same Microsoft
 account before pairing them. A missing or mismatched account stops sign-in, and a failed attempt
 to add an account leaves an existing signed-in account available.
+Label refresh runs outside the UI thread, reports SDK failures rather than treating them as an
+empty policy, and discards a previous account's labels before loading the new account's policy.
+PDFs requested during sign-in wait until the account change finishes before they are inspected.
 
 The native adapter stays at the platform layer, including Windows owner-only staging; the
 engine depends only on the lower-layer policy contract. Frontends install the adapter.

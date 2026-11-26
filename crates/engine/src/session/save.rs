@@ -346,70 +346,52 @@ impl Session {
             doc.config.hide_comments = old.config.hide_comments;
             doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         }
-        // Caches keyed by the edit generation (edit lines, images, measurements) must see a new
-        // one; there is nothing new to autosave.
+        // Caches keyed by the edit generation (edit lines, images, measurements) must see a new one.
         doc.generation = generation + 1;
-        doc.snapshot_generation = doc.generation;
         // `open` pushed the new version last, so the old one is still at `old`.
         *self.docs.get_mut(old).ok_or_else(|| OpenError::Invalid("the document is not open".into()))? = doc;
         Ok(())
     }
 
-    /// Whether a changed document still needs a recovery snapshot. This does not consume it.
-    pub fn has_pending_autosave(&self) -> bool {
-        self.docs.iter().any(|d| d.dirty && d.generation != d.snapshot_generation)
+    /// Every open document with its edit generation and whether it has unsaved changes: what the
+    /// autosave timer decides from. The timer, not the session, tracks what was already written.
+    pub fn autosave_docs(&self) -> impl Iterator<Item = (DocId, u64, bool)> + '_ {
+        self.docs.iter().map(|d| (d.id, d.generation, d.dirty))
     }
 
-    /// Documents with unsaved changes made since the last call: their current working file,
-    /// for crash recovery. Encrypted documents stay encrypted in the snapshot.
-    pub fn autosave_snapshots(&mut self) -> Vec<RecoverySnapshot> {
-        let mut out = Vec::new();
-        for d in &mut self.docs {
-            if d.dirty && d.generation != d.snapshot_generation {
-                // The working bytes hold typed Password-field values (#3926, #3944): a recovery file
-                // is written from a copy without them, and none is written if that copy fails.
-                let mut bytes =
-                    match d.editor.as_ref().filter(|e| pdfcraft_forms::has_password_values(&e.cos) || pdfcraft_xfa::has_password_values(&e.cos)) {
-                        Some(e) => match writable(&e.cos)
-                            .and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string())))
-                        {
-                            Ok(b) => Arc::new(b),
-                            Err(_) => continue,
-                        },
-                        None => d.bytes.clone(),
-                    };
-                let mut protected = false;
-                if let Some(purview) = d.purview.as_ref().filter(|state| state.document.protected) {
-                    let output = match republish_verified(purview, &d.name, &bytes) {
-                        Ok(output) => output,
-                        Err(error) => {
-                            log::warn!("protected recovery snapshot for {:?} could not be published: {error}", d.id);
-                            continue;
-                        }
-                    };
-                    bytes = output;
-                    protected = true;
+    /// The recovery snapshot of document `id`: its current working file, encrypted documents
+    /// staying encrypted. `None` for a clean or unknown document. Nothing is marked as written.
+    pub fn recovery_snapshot(&self, id: DocId) -> Option<RecoverySnapshot> {
+        let d = self.get(id).filter(|d| d.dirty)?;
+        // The working bytes hold typed Password-field values (#3926, #3944): a recovery file
+        // is written from a copy without them, and none is written if that copy fails.
+        let mut bytes = match d.editor.as_ref().filter(|e| pdfcraft_forms::has_password_values(&e.cos) || pdfcraft_xfa::has_password_values(&e.cos)) {
+            Some(e) => {
+                match writable(&e.cos).and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))) {
+                    Ok(b) => Arc::new(b),
+                    Err(_) => return None,
                 }
-                d.snapshot_generation = d.generation;
-                out.push(RecoverySnapshot {
-                    doc: d.id,
-                    name: d.name.clone(),
-                    path: d.path.clone(),
-                    bytes,
-                    encrypted: protected || d.info.encrypted || d.editor.as_ref().is_some_and(|e| e.cos.security().is_some()),
-                });
             }
+            None => d.bytes.clone(),
+        };
+        let mut protected = false;
+        if let Some(purview) = d.purview.as_ref().filter(|state| state.document.protected) {
+            bytes = match republish_verified(purview, &d.name, &bytes) {
+                Ok(output) => output,
+                Err(error) => {
+                    log::warn!("protected recovery snapshot for {:?} could not be published: {error}", d.id);
+                    return None;
+                }
+            };
+            protected = true;
         }
-        out
-    }
-
-    /// The snapshot [`Self::autosave_snapshots`] handed out for `id` could not be stored: the
-    /// document is due again, so the next autosave tries it again.
-    pub fn autosave_failed(&mut self, id: DocId) {
-        if let Some(d) = self.docs.iter_mut().find(|d| d.id == id) {
-            // Any generation but the current one leaves it due.
-            d.snapshot_generation = d.generation.wrapping_sub(1);
-        }
+        Some(RecoverySnapshot {
+            doc: d.id,
+            name: d.name.clone(),
+            path: d.path.clone(),
+            bytes,
+            encrypted: protected || d.info.encrypted || d.editor.as_ref().is_some_and(|e| e.cos.security().is_some()),
+        })
     }
 
     /// Mark a document opened from a recovery file: it has unsaved changes and belongs at
@@ -422,7 +404,6 @@ impl Session {
                 e.unsaved_file = true;
             }
             d.generation += 1;
-            d.snapshot_generation = d.generation; // its bytes are already in the recovery store
         }
     }
 

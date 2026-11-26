@@ -409,7 +409,7 @@ static void handle_open(const std::vector<std::string>& fields) {
 
 static void handle_labels(const std::vector<std::string>& fields) {
     if (fields.size() < 6) {
-        std::cout << "END\n";
+        std::cout << "DENIED\tinvalid labels request\n";
         return;
     }
     try {

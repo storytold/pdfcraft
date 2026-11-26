@@ -25,4 +25,4 @@ thiserror = { workspace = true, optional = true }
 webbrowser = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
-pdfcraft-platform = { workspace = true }
+craft-platform = { workspace = true }

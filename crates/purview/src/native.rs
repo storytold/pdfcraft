@@ -71,6 +71,56 @@ fn escape_tsv(field: &str) -> String {
     field.replace('\\', "\\\\").replace('\t', "\\t").replace('\n', "\\n")
 }
 
+fn parse_labels(response: &str) -> Result<Vec<PurviewLabel>, PurviewError> {
+    let invalid = || PurviewError::Native("the Microsoft Purview helper returned an invalid label response".into());
+    let mut labels = Vec::new();
+    let mut ended = false;
+    for record in response.lines() {
+        if ended {
+            return Err(invalid());
+        }
+        if record == "END" {
+            ended = true;
+            continue;
+        }
+        if record == "SIGNIN" {
+            return Err(PurviewError::SignInRequired);
+        }
+        if record == "NO_ACCESS" {
+            return Err(PurviewError::NoAccess);
+        }
+        if let Some(message) = record.strip_prefix("DENIED\t") {
+            let message = unescape(message);
+            return Err(PurviewError::Native(if message.trim().is_empty() {
+                "the Microsoft Purview helper could not load sensitivity labels".into()
+            } else {
+                message
+            }));
+        }
+        let fields: Vec<_> = record.strip_prefix("LABEL\t").ok_or_else(invalid)?.split('\t').collect();
+        if fields.len() < 9 || fields[0].is_empty() {
+            return Err(invalid());
+        }
+        let flag = |value| match value {
+            "0" => Ok(false),
+            "1" => Ok(true),
+            _ => Err(invalid()),
+        };
+        labels.push(PurviewLabel {
+            id: unescape(fields[0]),
+            name: unescape(fields[1]),
+            description: unescape(fields[2]),
+            tooltip: unescape(fields[3]),
+            color: (!fields[4].is_empty()).then(|| unescape(fields[4])),
+            parent_id: (!fields[5].is_empty() && fields[5] != "-").then(|| unescape(fields[5])),
+            sensitivity: fields[6].parse().map_err(|_| invalid())?,
+            active: flag(fields[7])?,
+            protection: flag(fields[8])?,
+        });
+    }
+    if ended { Ok(labels) } else { Err(invalid()) }
+}
+
 pub(crate) fn looks_like_mip_protection(name: &str, bytes: &[u8]) -> bool {
     let name = name.to_ascii_lowercase();
     if name.ends_with(".pfile") || name.ends_with(".ppdf") || name.ends_with(".irm") {
@@ -198,9 +248,9 @@ impl NativePurviewProvider {
         }
         #[cfg(windows)]
         {
-            let sid = pdfcraft_platform::owner_only::current_user_sid()
+            let sid = craft_platform::owner_only::current_user_sid()
                 .map_err(|e| PurviewError::Native(format!("couldn't identify the private Microsoft Purview staging owner: {e}")))?;
-            pdfcraft_platform::owner_only::create_private_dir(&dir, &sid)
+            craft_platform::owner_only::create_private_dir(&dir, &sid)
                 .map_err(|e| PurviewError::Native(format!("couldn't create private Microsoft Purview staging: {e}")))?;
         }
         #[cfg(not(any(unix, windows)))]
@@ -229,9 +279,9 @@ impl NativePurviewProvider {
         file.write_all(bytes.as_slice()).map_err(|e| PurviewError::Native(format!("couldn't stage the document for Microsoft Purview: {e}")))?;
         #[cfg(windows)]
         {
-            let sid = pdfcraft_platform::owner_only::current_user_sid()
+            let sid = craft_platform::owner_only::current_user_sid()
                 .map_err(|e| PurviewError::Native(format!("couldn't identify the staged Microsoft Purview file owner: {e}")))?;
-            pdfcraft_platform::owner_only::restrict_to_owner(&path, &sid)
+            craft_platform::owner_only::restrict_to_owner(&path, &sid)
                 .map_err(|e| PurviewError::Native(format!("couldn't restrict the staged Microsoft Purview file: {e}")))?;
         }
         Ok(path)
@@ -332,7 +382,10 @@ impl NativePurviewProvider {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
     }
 
-    fn parse_open(&self, line: &str) -> Result<Option<PurviewOpen>, PurviewError> {
+    fn parse_open(&self, line: &str, working: &std::path::Path) -> Result<Option<PurviewOpen>, PurviewError> {
+        if line.contains('\n') {
+            return Err(PurviewError::Native("the Microsoft Purview helper returned multiple document results".into()));
+        }
         if line == "NONE" {
             return Ok(None);
         }
@@ -342,29 +395,34 @@ impl NativePurviewProvider {
         if line == "NO_ACCESS" {
             return Err(PurviewError::NoAccess);
         }
-        if let Some((control, _)) = line.split_once('\t') {
-            match control {
-                "NONE" => return Ok(None),
-                "SIGNIN" => return Err(PurviewError::SignInRequired),
-                "NO_ACCESS" => return Err(PurviewError::NoAccess),
-                "DENIED" => {
-                    let message = line.strip_prefix("DENIED\t").unwrap_or("");
-                    let message = message.split_once('\t').map(|(message, _)| message).unwrap_or(message);
-                    return Err(PurviewError::Native(unescape(message)));
-                }
-                _ => {}
-            }
+        if line == "JUSTIFICATION" {
+            return Err(PurviewError::JustificationRequired);
+        }
+        if line == "EXPORT_REQUIRED" {
+            return Err(PurviewError::ExportRequired);
         }
         if let Some(message) = line.strip_prefix("DENIED\t") {
             return Err(PurviewError::Native(unescape(message)));
         }
         if let Some(fields_line) = line.strip_prefix("OK\t") {
             let fields: Vec<&str> = fields_line.split('\t').collect();
-            if fields.len() < 25 {
+            if fields.len() < 26 {
                 return Err(PurviewError::Native("the Microsoft Purview helper returned an incomplete result".into()));
             }
+            if fields.get(26).is_some_and(|path| std::path::Path::new(&unescape(path)) != working) {
+                return Err(PurviewError::Native("the Microsoft Purview helper returned an unexpected output path".into()));
+            }
             let handle = 1_u64;
-            let protected = fields[0] == "PROTECTED";
+            let protected = match fields[0] {
+                "PROTECTED" => true,
+                "NONE" => false,
+                _ => return Err(PurviewError::Native("the Microsoft Purview helper returned an invalid protection status".into())),
+            };
+            let flag = |index: usize| match fields[index] {
+                "0" => Ok(false),
+                "1" => Ok(true),
+                _ => Err(PurviewError::Native("the Microsoft Purview helper returned an invalid permission".into())),
+            };
             let label = if fields[1].is_empty() {
                 None
             } else {
@@ -381,29 +439,28 @@ impl NativePurviewProvider {
                 })
             };
             let rights = PurviewRights {
-                owner: fields[6] == "1",
-                view: fields[7] == "1",
-                edit: fields[8] == "1",
-                save: fields[9] == "1",
-                comment: fields[10] == "1",
-                extract: fields[11] == "1",
-                export: fields[12] == "1",
-                print: fields[13] == "1",
-                forward: fields[14] == "1",
-                reply: fields[15] == "1",
-                reply_all: fields[16] == "1",
-                view_rights: fields[17] == "1",
-                change_rights: fields[18] == "1",
-                object_model: fields[19] == "1",
-                document_edit: fields[20] == "1",
+                owner: flag(6)?,
+                view: flag(7)?,
+                edit: flag(8)?,
+                save: flag(9)?,
+                comment: flag(10)?,
+                extract: flag(11)?,
+                export: flag(12)?,
+                print: flag(13)?,
+                forward: flag(14)?,
+                reply: flag(15)?,
+                reply_all: flag(16)?,
+                view_rights: flag(17)?,
+                change_rights: flag(18)?,
+                object_model: flag(19)?,
+                document_edit: flag(20)?,
             };
             let owner = if fields[21].is_empty() { None } else { Some(unescape(fields[21])) };
             let content_id = if fields[22].is_empty() { None } else { Some(unescape(fields[22])) };
-            let labeling_required = fields[23] == "1";
+            let labeling_required = flag(23)?;
             let default_label_id = if fields[24].is_empty() { None } else { Some(unescape(fields[24])) };
-            let downgrade_justification_required = fields.get(25).is_some_and(|value| *value == "1");
-            let output_path = fields.get(26).copied().unwrap_or("");
-            let working = self.read_delete(std::path::Path::new(output_path))?;
+            let downgrade_justification_required = flag(25)?;
+            let working = self.read_delete(working)?;
             return Ok(Some(PurviewOpen {
                 handle,
                 original: Arc::new(Vec::new()),
@@ -423,13 +480,12 @@ impl NativePurviewProvider {
         Err(PurviewError::Native("the Microsoft Purview helper returned an unexpected result".into()))
     }
 
-    fn parse_mutation(&self, line: &str, output: &std::path::Path, missing: &str) -> Result<PurviewOpen, PurviewError> {
+    fn parse_mutation(&self, line: &str, output: &std::path::Path, working: &std::path::Path, missing: &str) -> Result<PurviewOpen, PurviewError> {
         if !line.starts_with("OK\t") {
-            return self.parse_open(line)?.ok_or_else(|| PurviewError::Native(missing.to_owned()));
+            return self.parse_open(line, working)?.ok_or_else(|| PurviewError::Native(missing.to_owned()));
         }
         let original = self.read_limited(output)?;
-        let mut opened =
-            self.parse_open(&format!("{line}\t{}", output.to_string_lossy()))?.ok_or_else(|| PurviewError::Native(missing.to_owned()))?;
+        let mut opened = self.parse_open(line, working)?.ok_or_else(|| PurviewError::Native(missing.to_owned()))?;
         opened.original = original;
         Ok(opened)
     }
@@ -623,7 +679,7 @@ impl PurviewProvider for NativePurviewProvider {
         if line == "NONE" {
             return Ok(None);
         }
-        let mut opened = self.parse_open(&format!("{line}\t{}", output.to_string_lossy()))?;
+        let mut opened = self.parse_open(&line, &output)?;
         if let Some(opened) = opened.as_mut() {
             opened.original = bytes.clone();
         }
@@ -647,33 +703,7 @@ impl PurviewProvider for NativePurviewProvider {
             escape_tsv(&sync_token),
             escape_tsv(&cache.to_string_lossy())
         );
-        let line = self.run_helper(&request)?;
-        if line == "SIGNIN" {
-            return Err(PurviewError::SignInRequired);
-        }
-        let mut labels = Vec::new();
-        for record in line.split('\n') {
-            if record.is_empty() || record == "END" {
-                continue;
-            }
-            if let Some(fields_line) = record.strip_prefix("LABEL\t") {
-                let fields: Vec<&str> = fields_line.split('\t').collect();
-                if fields.len() >= 8 {
-                    labels.push(PurviewLabel {
-                        id: unescape(fields[0]),
-                        name: unescape(fields[1]),
-                        description: unescape(fields[2]),
-                        tooltip: unescape(fields[3]),
-                        color: if fields[4].is_empty() { None } else { Some(unescape(fields[4])) },
-                        parent_id: if fields[5].is_empty() { None } else { Some(unescape(fields[5])) },
-                        sensitivity: fields[6].parse().unwrap_or(0),
-                        active: fields[7] == "1",
-                        protection: fields.get(8).is_some_and(|value| *value == "1"),
-                    });
-                }
-            }
-        }
-        Ok(labels)
+        parse_labels(&self.run_helper(&request)?)
     }
 
     fn apply_label(
@@ -693,7 +723,7 @@ impl PurviewProvider for NativePurviewProvider {
         let output = self.temp_path("pdf")?;
         let _input_audit = input.with_suffix(".audit");
         let _output_audit = output.with_suffix(".audit");
-        let _working = output.with_suffix(".working");
+        let working = output.with_suffix(".working");
         let cache = self.staging_dir()?;
         let request = format!(
             "apply-label\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -711,7 +741,7 @@ impl PurviewProvider for NativePurviewProvider {
         if line.starts_with("JUSTIFICATION") {
             return Err(PurviewError::JustificationRequired);
         }
-        self.parse_mutation(&line, &output, "the label operation produced no protected document")
+        self.parse_mutation(&line, &output, &working, "the label operation produced no protected document")
     }
 
     fn remove_label(
@@ -746,7 +776,7 @@ impl PurviewProvider for NativePurviewProvider {
         if line == "JUSTIFICATION" {
             return Err(PurviewError::JustificationRequired);
         }
-        self.parse_mutation(&line, &output, "the label operation produced no document")
+        self.parse_mutation(&line, &output, &output, "the label operation produced no document")
     }
 
     fn remove_protection(&self, handle: u64, original: &Arc<Vec<u8>>, working_bytes: &Arc<Vec<u8>>) -> Result<PurviewOpen, PurviewError> {
@@ -774,7 +804,7 @@ impl PurviewProvider for NativePurviewProvider {
         if line == "EXPORT_REQUIRED" {
             return Err(PurviewError::ExportRequired);
         }
-        self.parse_mutation(&line, &output, "the protection operation produced no document")
+        self.parse_mutation(&line, &output, &output, "the protection operation produced no document")
     }
 
     fn republish(&self, handle: u64, original: &Arc<Vec<u8>>, working_bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, PurviewError> {
@@ -828,6 +858,28 @@ impl Drop for NativePurviewProvider {
 #[cfg(test)]
 mod native_tests {
     use super::*;
+
+    #[test]
+    fn label_response_surfaces_failures_and_rejects_incomplete_results() {
+        assert!(parse_labels("END").unwrap().is_empty());
+        assert!(matches!(parse_labels("SIGNIN"), Err(PurviewError::SignInRequired)));
+        assert!(matches!(parse_labels("NO_ACCESS"), Err(PurviewError::NoAccess)));
+        assert!(matches!(parse_labels("DENIED\tpolicy unavailable"), Err(PurviewError::Native(message)) if message == "policy unavailable"));
+        for response in ["", "unexpected\nEND", "LABEL\tid\tname\nEND", "LABEL\tid\tname\t\t\t\t-\t2\t1\t1", "END\nDENIED\tfailure"] {
+            assert!(parse_labels(response).is_err(), "{response:?} must not look like an empty policy");
+        }
+    }
+
+    #[test]
+    fn label_response_preserves_policy_and_parent_information() {
+        let labels =
+            parse_labels("LABEL\tparent\tParent\t\t\t\t-\t2\t1\t0\nLABEL\tchild\tChild\tDescription\t\t#123456\tparent\t3\t1\t1\nEND").unwrap();
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0].parent_id, None);
+        assert_eq!(labels[1].parent_id.as_deref(), Some("parent"));
+        assert!(labels[1].protection);
+        assert_eq!(labels[1].sensitivity, 3);
+    }
 
     #[test]
     fn installed_helper_takes_precedence_over_a_stale_build_path() {
@@ -925,7 +977,7 @@ mod native_tests {
             fields.extend((0..15).map(|_| "0".to_owned()));
             fields.extend(["owner", "content", "0", "", "0"].map(str::to_owned));
             fields.push(working.to_string_lossy().into_owned());
-            let result = provider.parse_mutation(&format!("OK\t{}", fields.join("\t")), &output, "missing output").unwrap();
+            let result = provider.parse_mutation(&format!("OK\t{}", fields.join("\t")), &output, &working, "missing output").unwrap();
             assert_eq!(result.original.as_slice(), b"synthetic protected output");
             assert_eq!(result.bytes.as_slice(), b"synthetic working pdf");
             (output.to_path_buf(), working.to_path_buf())
@@ -935,11 +987,35 @@ mod native_tests {
     }
 
     #[test]
-    fn parse_open_accepts_control_results_with_the_output_suffix() {
+    fn parse_open_accepts_control_results_without_a_staged_file() {
         let provider = NativePurviewProvider::new(Some("e16b2bcd-0a3c-414a-8255-0bcc5f6a7246"));
-        assert_eq!(provider.parse_open("NONE\t/tmp/output.pdf").unwrap(), None);
-        assert!(matches!(provider.parse_open("SIGNIN\t/tmp/output.pdf"), Err(PurviewError::SignInRequired)));
-        assert!(matches!(provider.parse_open("NO_ACCESS\t/tmp/output.pdf"), Err(PurviewError::NoAccess)));
+        let output = std::path::Path::new("/unused/output.pdf");
+        assert_eq!(provider.parse_open("NONE", output).unwrap(), None);
+        assert!(matches!(provider.parse_open("SIGNIN", output), Err(PurviewError::SignInRequired)));
+        assert!(matches!(provider.parse_open("NO_ACCESS", output), Err(PurviewError::NoAccess)));
+        assert!(matches!(provider.parse_open("JUSTIFICATION", output), Err(PurviewError::JustificationRequired)));
+        assert!(matches!(provider.parse_open("EXPORT_REQUIRED", output), Err(PurviewError::ExportRequired)));
+    }
+
+    #[test]
+    fn mutation_rejects_a_reported_output_outside_its_staging_path() {
+        let provider = NativePurviewProvider::new(Some("e16b2bcd-0a3c-414a-8255-0bcc5f6a7246"));
+        let output = provider.temp_path("pdf").unwrap();
+        let working = output.with_suffix(".working");
+        let other = provider.temp_path("pdf").unwrap();
+        std::fs::write(&output, b"protected").unwrap();
+        std::fs::write(&working, b"working").unwrap();
+        std::fs::write(&other, b"untouched").unwrap();
+        let mut fields = vec!["PROTECTED".to_owned(), "label".into(), "Label".into(), String::new(), String::new(), String::new()];
+        fields.extend((0..15).map(|_| "0".to_owned()));
+        fields.extend(["owner", "content", "0", "", "0"].map(str::to_owned));
+        fields.push(escape_tsv(&other.to_string_lossy()));
+        assert!(provider.parse_mutation(&format!("OK\t{}", fields.join("\t")), &output, &working, "missing output").is_err());
+        assert_eq!(std::fs::read(&other).unwrap(), b"untouched");
+        assert_eq!(std::fs::read(&working).unwrap(), b"working");
+        fields[0] = "UNKNOWN".into();
+        fields.pop();
+        assert!(provider.parse_open(&format!("OK\t{}", fields.join("\t")), &working).is_err());
     }
 
     #[test]

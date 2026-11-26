@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_purview::{PurviewAccount, PurviewDocument, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights, PurviewStatus};
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp, PropsTab};
+use pdfcraft_ui_egui::PdfCraftApp;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -26,6 +26,11 @@ struct TestPurviewProvider {
     inspect_document: Option<PurviewDocument>,
     inspect_sign_in_required: bool,
     sign_in_gate: Option<Arc<SignInGate>>,
+    labels_gate: Option<Arc<SignInGate>>,
+    labels_fail: bool,
+    labels: Vec<PurviewLabel>,
+    inspect_calls: Option<Arc<std::sync::atomic::AtomicUsize>>,
+    deny_open: bool,
 }
 
 impl TestPurviewProvider {
@@ -37,6 +42,11 @@ impl TestPurviewProvider {
             inspect_document: None,
             inspect_sign_in_required: false,
             sign_in_gate: None,
+            labels_gate: None,
+            labels_fail: false,
+            labels: Vec::new(),
+            inspect_calls: None,
+            deny_open: false,
         }
     }
 
@@ -48,6 +58,11 @@ impl TestPurviewProvider {
             inspect_document: None,
             inspect_sign_in_required: true,
             sign_in_gate: None,
+            labels_gate: None,
+            labels_fail: false,
+            labels: Vec::new(),
+            inspect_calls: None,
+            deny_open: false,
         }
     }
 
@@ -59,6 +74,11 @@ impl TestPurviewProvider {
             inspect_document: None,
             inspect_sign_in_required: false,
             sign_in_gate: None,
+            labels_gate: None,
+            labels_fail: false,
+            labels: Vec::new(),
+            inspect_calls: None,
+            deny_open: false,
         }
     }
 
@@ -70,6 +90,11 @@ impl TestPurviewProvider {
             inspect_document: Some(document),
             inspect_sign_in_required: false,
             sign_in_gate: None,
+            labels_gate: None,
+            labels_fail: false,
+            labels: Vec::new(),
+            inspect_calls: None,
+            deny_open: false,
         }
     }
 }
@@ -111,13 +136,24 @@ impl PurviewProvider for TestPurviewProvider {
     }
 
     fn sign_out(&self) -> Result<(), PurviewError> {
-        *self.status.lock().unwrap_or_else(|poison| poison.into_inner()) = PurviewStatus::SignedOut;
-        *self.active.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
-        self.accounts.lock().unwrap_or_else(|poison| poison.into_inner()).clear();
+        let mut active = self.active.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut accounts = self.accounts.lock().unwrap_or_else(|poison| poison.into_inner());
+        if let Some(account) = active.as_ref() {
+            accounts.retain(|candidate| candidate.id != account.id);
+        }
+        *active = accounts.first().cloned();
+        *self.status.lock().unwrap_or_else(|poison| poison.into_inner()) =
+            if active.is_some() { PurviewStatus::Ready } else { PurviewStatus::SignedOut };
         Ok(())
     }
 
     fn inspect(&self, _name: &str, bytes: &Arc<Vec<u8>>) -> Result<Option<PurviewOpen>, PurviewError> {
+        if let Some(calls) = &self.inspect_calls {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        if self.deny_open {
+            return Err(PurviewError::NoAccess);
+        }
         if self.inspect_sign_in_required {
             if self.status() != PurviewStatus::Ready {
                 return Err(PurviewError::SignInRequired);
@@ -133,7 +169,11 @@ impl PurviewProvider for TestPurviewProvider {
     }
 
     fn labels(&self) -> Result<Vec<PurviewLabel>, PurviewError> {
-        Ok(Vec::new())
+        if let Some(gate) = &self.labels_gate {
+            gate.started.send(()).unwrap();
+            gate.release.lock().unwrap().recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        }
+        if self.labels_fail { Err(PurviewError::Native("test label service unavailable".into())) } else { Ok(self.labels.clone()) }
     }
 
     fn apply_label(
@@ -169,12 +209,13 @@ impl PurviewProvider for TestPurviewProvider {
 }
 
 fn harness(provider: TestPurviewProvider) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::support::inline_app();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
         app.session.set_purview_provider(Arc::new(provider));
-        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.dialog = Some(Dialog::Purview);
+        app.open_bytes(&cc.egui_ctx, "doc.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.set_option(&cc.egui_ctx, "dialog", "purview").unwrap();
         app
     });
     h.run_steps(4);
@@ -182,10 +223,11 @@ fn harness(provider: TestPurviewProvider) -> Harness<'static, PdfCraftApp> {
 }
 
 fn harness_closed(provider: TestPurviewProvider) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::support::inline_app();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+        app.open_bytes(&cc.egui_ctx, "doc.pdf", None, FIXTURE.to_vec()).unwrap();
         app.session.set_purview_provider(Arc::new(provider));
         app
     });
@@ -194,12 +236,13 @@ fn harness_closed(provider: TestPurviewProvider) -> Harness<'static, PdfCraftApp
 }
 
 fn harness_security(provider: TestPurviewProvider) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::support::inline_app();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+        app.open_bytes(&cc.egui_ctx, "doc.pdf", None, FIXTURE.to_vec()).unwrap();
         app.session.set_purview_provider(Arc::new(provider));
-        app.dialog = Some(Dialog::Properties(PropsTab::Security));
+        app.set_option(&cc.egui_ctx, "dialog", "security").unwrap();
         app
     });
     h.run_steps(4);
@@ -207,12 +250,13 @@ fn harness_security(provider: TestPurviewProvider) -> Harness<'static, PdfCraftA
 }
 
 fn harness_security_with_document(provider: TestPurviewProvider) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::support::inline_app();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
         app.session.set_purview_provider(Arc::new(provider));
-        app.open_bytes("protected.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.dialog = Some(Dialog::Properties(PropsTab::Security));
+        app.open_bytes(&cc.egui_ctx, "protected.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.set_option(&cc.egui_ctx, "dialog", "security").unwrap();
         app
     });
     h.run_steps(4);
@@ -220,12 +264,13 @@ fn harness_security_with_document(provider: TestPurviewProvider) -> Harness<'sta
 }
 
 fn harness_with_document(provider: TestPurviewProvider) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::support::inline_app();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
         app.session.set_purview_provider(Arc::new(provider));
-        app.open_bytes("protected.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.dialog = Some(Dialog::Purview);
+        app.open_bytes(&cc.egui_ctx, "protected.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.set_option(&cc.egui_ctx, "dialog", "purview").unwrap();
         app
     });
     h.run_steps(4);
@@ -233,11 +278,13 @@ fn harness_with_document(provider: TestPurviewProvider) -> Harness<'static, PdfC
 }
 
 fn harness_pfile(provider: TestPurviewProvider) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::support::inline_app();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
         app.session.set_purview_provider(Arc::new(provider));
         app.open_bytes(
+            &cc.egui_ctx,
             "protected.pfile",
             None,
             b"%PDF-1.7\n/EncryptedPayload\n/Subtype /MicrosoftIRMServices\nMicrosoftIRMServices Protected PDF".to_vec(),
@@ -252,7 +299,7 @@ fn harness_pfile(provider: TestPurviewProvider) -> Harness<'static, PdfCraftApp>
 #[test]
 fn signed_out_dialog_has_one_sign_in_action_and_no_email_field() {
     let h = harness(TestPurviewProvider::signed_out());
-    h.get_by_label("Microsoft account");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Microsoft account");
     h.get_by_label("Sign in");
     assert!(h.query_by(|node| node.label().as_deref() == Some("Sign out")).is_none());
     assert!(h.query_by(|node| node.label().as_deref() == Some("Microsoft 365 account")).is_none());
@@ -266,10 +313,72 @@ fn signed_out_dialog_has_one_sign_in_action_and_no_email_field() {
 #[test]
 fn opening_a_pfile_automatically_opens_the_signed_out_sign_in_gate() {
     let h = harness_pfile(TestPurviewProvider::signed_out_for_pfile());
-    h.get_by_label("Microsoft account");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Microsoft account");
     h.get_by_label("Sign in");
     assert!(h.query_by(|node| node.label().as_deref() == Some("Sensitivity labels")).is_none());
     assert!(h.query_by(|node| node.label().as_deref() == Some("Document capabilities")).is_none());
+}
+
+#[test]
+fn denied_open_shows_a_retry_without_actions_for_the_previous_document() {
+    let account = PurviewAccount { id: "ada".into(), display_name: "Ada".into(), email: "ada@example.com".into(), principal_name: String::new() };
+    let mut provider = TestPurviewProvider::signed_in(account.clone(), vec![account]);
+    provider.deny_open = true;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    provider.inspect_calls = Some(calls.clone());
+    let mut h = harness_closed(provider);
+    h.state_mut().purview_label_id = "previous-label".into();
+    let ctx = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx, "protected.pfile", None, b"MicrosoftIRMServices Protected PDF".to_vec()).unwrap();
+    h.run_steps(3);
+    h.get_by_label("protected.pfile");
+    h.get_by_label("Retry opening");
+    assert!(h.query_by_label("Sensitivity labels").is_none());
+    assert!(h.query_by_label("Apply label").is_none());
+    assert!(h.query_by_label("Remove label").is_none());
+    h.get_by_label("Retry opening").click();
+    for _ in 0..200 {
+        h.run_steps(1);
+        if calls.load(std::sync::atomic::Ordering::SeqCst) >= 2
+            && h.state().purview_signin_prompt.as_ref().is_some_and(|prompt| prompt.error.is_some())
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(calls.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+    assert!(h.state().purview_signin_prompt.as_ref().is_some_and(|prompt| prompt.error.is_some()));
+    assert_eq!(h.state().session.docs().len(), 1);
+}
+
+#[test]
+fn opening_a_protected_file_keeps_its_prompt_when_the_account_dialog_is_already_open() {
+    let mut h = harness_closed(TestPurviewProvider::signed_out_for_pfile());
+    let ctx = h.ctx.clone();
+    assert!(h.state_mut().execute(&ctx, "purview.apply_label"));
+    h.run_steps(3);
+    h.state_mut().open_bytes(&ctx, "protected.pfile", None, b"MicrosoftIRMServices Protected PDF".to_vec()).unwrap();
+    h.run_steps(3);
+    assert!(h.state().purview_signin_prompt.is_some());
+    h.get_by_label("Sign in");
+}
+
+#[test]
+fn a_second_protected_open_waits_for_the_first_sign_in_prompt() {
+    let mut h = harness_pfile(TestPurviewProvider::signed_out_for_pfile());
+    let ctx = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx, "second.pfile", None, b"MicrosoftIRMServices Protected PDF".to_vec()).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().purview_signin_prompt.as_ref().map(|prompt| prompt.name.as_str()), Some("protected.pfile"));
+    h.key_press(egui::Key::Escape);
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.state().purview_signin_prompt.as_ref().is_some_and(|prompt| prompt.name == "second.pfile") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().purview_signin_prompt.as_ref().map(|prompt| prompt.name.as_str()), Some("second.pfile"));
 }
 
 #[test]
@@ -298,6 +407,37 @@ fn microsoft_sign_in_does_not_block_the_ui() {
 }
 
 #[test]
+fn protected_open_waits_for_an_in_progress_account_change() {
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let account = PurviewAccount { id: "ada".into(), display_name: "Ada".into(), email: "ada@example.com".into(), principal_name: String::new() };
+    let document = PurviewDocument { protected: true, rights: PurviewRights { view: true, ..Default::default() }, ..Default::default() };
+    let mut provider = TestPurviewProvider::signed_in_with_document(account.clone(), vec![account], document);
+    provider.sign_in_gate = Some(Arc::new(SignInGate { started: started_tx, release: Mutex::new(release_rx) }));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    provider.inspect_calls = Some(calls.clone());
+    let mut h = harness_closed(provider);
+    let ctx = h.ctx.clone();
+    assert!(h.state_mut().execute(&ctx, "purview.sign_in"));
+    started_rx.recv_timeout(std::time::Duration::from_secs(2)).expect("sign-in worker started");
+    h.state_mut().open_bytes(&ctx, "protected.pdf", None, FIXTURE.to_vec()).unwrap();
+    h.run_steps(3);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(h.state().session.docs().len(), 1);
+
+    release_tx.send(()).unwrap();
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.state().session.docs().len() == 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(h.state().session.docs().len(), 2);
+}
+
+#[test]
 fn successful_sign_in_retries_the_held_file_without_an_extra_close() {
     let mut h = harness_pfile(TestPurviewProvider::signed_out_for_pfile());
     h.get_by_label("Sign in").click();
@@ -309,8 +449,37 @@ fn successful_sign_in_retries_the_held_file_without_an_extra_close() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert!(h.state().purview_signin_prompt.is_none());
-    assert!(h.state().dialog.is_none());
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Microsoft account")).is_none());
     assert_eq!(h.state().session.docs().len(), 1);
+}
+
+#[test]
+fn held_file_opens_while_label_policy_is_still_loading() {
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let mut provider = TestPurviewProvider::signed_out_for_pfile();
+    provider.labels_gate = Some(Arc::new(SignInGate { started: started_tx, release: Mutex::new(release_rx) }));
+    let mut h = harness_pfile(provider);
+    h.get_by_label("Sign in").click();
+    let mut labels_started = false;
+    for _ in 0..200 {
+        h.run_steps(1);
+        if started_rx.try_recv().is_ok() {
+            labels_started = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(labels_started, "label worker started");
+    for _ in 0..200 {
+        h.run_steps(1);
+        if !h.state().session.docs().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().session.docs().len(), 1);
+    release_tx.send(()).unwrap();
 }
 
 #[test]
@@ -319,18 +488,31 @@ fn escape_dismisses_the_pending_purview_sign_in() {
     assert!(h.state().purview_signin_prompt.is_some());
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
-    assert!(h.state().dialog.is_none());
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Microsoft account")).is_none());
     assert!(h.state().purview_signin_prompt.is_none());
 }
 
 #[test]
 fn protect_menu_mip_entry_opens_signed_out_account_gate() {
     let mut h = harness_closed(TestPurviewProvider::signed_out());
-    assert!(h.state_mut().execute("purview.apply_label"));
+    let ctx = h.ctx.clone();
+    assert!(h.state_mut().execute(&ctx, "purview.apply_label"));
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(Dialog::Purview));
-    h.get_by_label("Microsoft account");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Microsoft account");
     h.get_by_label("Sign in");
+}
+
+#[test]
+fn opening_a_fresh_label_dialog_does_not_reuse_an_old_selection_or_reason() {
+    let account = PurviewAccount { id: "ada".into(), display_name: "Ada".into(), email: "ada@example.com".into(), principal_name: String::new() };
+    let mut h = harness_closed(TestPurviewProvider::signed_in(account.clone(), vec![account]));
+    h.state_mut().purview_label_id = "old-label".into();
+    h.state_mut().purview_justification = "old document reason".into();
+    let ctx = h.ctx.clone();
+    assert!(h.state_mut().execute(&ctx, "purview.apply_label"));
+    h.run_steps(3);
+    assert!(h.state().purview_label_id.is_empty());
+    assert!(h.state().purview_justification.is_empty());
 }
 
 #[test]
@@ -363,8 +545,54 @@ fn security_properties_do_not_claim_a_protected_document_is_unrestricted() {
     let document = PurviewDocument { protected: true, rights: PurviewRights { view: true, ..Default::default() }, ..Default::default() };
     let h = harness_security_with_document(TestPurviewProvider::signed_in_with_document(account.clone(), vec![account], document));
     h.get_by_label("Managed by Microsoft Purview");
+    assert!(
+        h.query_all_by(|node| { node.value().as_deref() == Some("Changing labels or protection on protected documents is not available yet.") })
+            .next()
+            .is_some()
+    );
     assert!(h.query_by(|node| node.label().as_deref() == Some("None — everything is allowed")).is_none());
     assert!(h.query_by(|node| node.label().as_deref() == Some("No security")).is_none());
+}
+
+#[test]
+fn security_properties_report_distinct_protected_capabilities() {
+    let account = PurviewAccount { id: "ada".into(), display_name: "Ada".into(), email: "ada@example.com".into(), principal_name: String::new() };
+    let document = PurviewDocument {
+        protected: true,
+        rights: PurviewRights { view: true, save: true, change_rights: true, ..Default::default() },
+        ..Default::default()
+    };
+    let h = harness_security_with_document(TestPurviewProvider::signed_in_with_document(account.clone(), vec![account], document));
+    for (name, expected) in [("MIP edit", "Not allowed"), ("MIP save", "Allowed"), ("MIP export", "Not allowed"), ("MIP change security", "Allowed")]
+    {
+        assert!(
+            h.query_all_by(|node| node.label().as_deref() == Some(name) && node.value().as_deref() == Some(expected)).next().is_some(),
+            "{name} should be {expected}"
+        );
+    }
+}
+
+#[test]
+fn label_only_security_properties_do_not_report_irm_restrictions() {
+    let account = PurviewAccount { id: "ada".into(), display_name: "Ada".into(), email: "ada@example.com".into(), principal_name: String::new() };
+    let label = PurviewLabel {
+        id: "label".into(),
+        name: "Internal".into(),
+        description: String::new(),
+        tooltip: String::new(),
+        color: None,
+        parent_id: None,
+        sensitivity: 0,
+        active: true,
+        protection: false,
+    };
+    let document = PurviewDocument { label: Some(label), rights: PurviewRights { view: true, ..Default::default() }, ..Default::default() };
+    let h = harness_security_with_document(TestPurviewProvider::signed_in_with_document(account.clone(), vec![account], document));
+    h.get_by_label("Change sensitivity label / Microsoft Purview…");
+    assert!(h.query_by_label("MIP edit").is_none());
+    assert!(h.query_by_label("MIP save").is_none());
+    assert!(h.query_by_label("MIP print").is_none());
+    assert!(h.query_by_label("MIP copy/extract").is_none());
 }
 
 #[test]
@@ -423,6 +651,120 @@ fn two_signed_in_accounts_have_an_account_picker() {
     h.run_steps(3);
     h.get_by_label("Grace Hopper");
     h.get_by_label("grace@example.com");
+}
+
+#[test]
+fn switching_accounts_discards_old_labels_when_refresh_fails() {
+    let ada = PurviewAccount { id: "ada".into(), display_name: "Ada".into(), email: "ada@example.com".into(), principal_name: String::new() };
+    let grace = PurviewAccount { id: "grace".into(), display_name: "Grace".into(), email: "grace@example.com".into(), principal_name: String::new() };
+    let mut provider = TestPurviewProvider::signed_in(ada.clone(), vec![ada, grace]);
+    provider.labels_fail = true;
+    let mut h = harness(provider);
+    h.state_mut().purview_labels = vec![PurviewLabel {
+        id: "old-label".into(),
+        name: "Old account label".into(),
+        description: String::new(),
+        tooltip: String::new(),
+        color: None,
+        parent_id: None,
+        sensitivity: 0,
+        active: true,
+        protection: false,
+    }];
+    h.run_steps(3);
+    h.get_by_label("Old account label - Label only").click();
+    h.run_steps(2);
+    assert_eq!(h.state().purview_label_id, "old-label");
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Microsoft account").click();
+    h.run_steps(2);
+    h.get_by_label("Grace - grace@example.com").click();
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.query_by_label("test label service unavailable").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(h.state().purview_labels.is_empty());
+    assert!(h.state().purview_label_id.is_empty());
+    assert!(h.query_by_label("Old account label - Label only").is_none());
+    assert!(h.query_by_label("No sensitivity labels are available to this account or tenant policy.").is_none());
+    h.get_by_label("test label service unavailable");
+}
+
+#[test]
+fn signing_out_loads_the_remaining_accounts_labels() {
+    let ada = PurviewAccount { id: "ada".into(), display_name: "Ada".into(), email: "ada@example.com".into(), principal_name: String::new() };
+    let grace = PurviewAccount { id: "grace".into(), display_name: "Grace".into(), email: "grace@example.com".into(), principal_name: String::new() };
+    let label = |id: &str, name: &str| PurviewLabel {
+        id: id.into(),
+        name: name.into(),
+        description: String::new(),
+        tooltip: String::new(),
+        color: None,
+        parent_id: None,
+        sensitivity: 0,
+        active: true,
+        protection: false,
+    };
+    let mut provider = TestPurviewProvider::signed_in(ada.clone(), vec![ada, grace]);
+    provider.labels = vec![label("grace-label", "Grace label")];
+    let mut h = harness(provider);
+    h.state_mut().purview_labels = vec![label("ada-label", "Ada label")];
+    h.run_steps(3);
+    let reason = "Justification (required for policy downgrades or removals)";
+    h.get_by(|node| {
+        node.label().as_deref() == Some(reason) && matches!(node.role(), egui::accesskit::Role::TextInput | egui::accesskit::Role::MultilineTextInput)
+    })
+    .click();
+    h.run_steps(1);
+    h.get_by(|node| {
+        node.label().as_deref() == Some(reason) && matches!(node.role(), egui::accesskit::Role::TextInput | egui::accesskit::Role::MultilineTextInput)
+    })
+    .type_text("old account reason");
+    h.run_steps(2);
+    assert_eq!(h.state().purview_justification, "old account reason");
+    h.get_by_label("Sign out").click();
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.query_by_label("Grace label - Label only").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.get_by_label("Grace");
+    h.get_by_label("Grace label - Label only");
+    assert!(h.query_by_label("Ada label - Label only").is_none());
+    assert!(h.state().purview_justification.is_empty());
+}
+
+#[test]
+fn refreshing_labels_does_not_block_the_dialog_or_allow_account_changes() {
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let account = PurviewAccount { id: "ada".into(), display_name: "Ada".into(), email: "ada@example.com".into(), principal_name: String::new() };
+    let mut provider = TestPurviewProvider::signed_in(account.clone(), vec![account]);
+    provider.labels_gate = Some(Arc::new(SignInGate { started: started_tx, release: Mutex::new(release_rx) }));
+    let mut h = harness(provider);
+    h.get_by_label("Refresh labels").click();
+    h.run_steps(1);
+    started_rx.recv_timeout(std::time::Duration::from_secs(2)).expect("label worker started");
+    h.run_steps(2);
+    h.get_by_label("Loading sensitivity labels…");
+    h.get_by_label("Close");
+    assert!(h.query_by_label("Sign out").is_none());
+    assert!(h.query_by_label("Add account").is_none());
+
+    release_tx.send(()).unwrap();
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.query_by_label("No sensitivity labels are available to this account or tenant policy.").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.get_by_label("No sensitivity labels are available to this account or tenant policy.");
+    h.get_by_label("Sign out");
 }
 
 #[test]
@@ -563,7 +905,12 @@ fn protected_label_actions_are_unavailable_even_with_owner_rights() {
     assert!(h.query_by(|node| node.label().as_deref() == Some("Remove label")).is_none());
     assert!(h.query_by(|node| node.label().as_deref() == Some("Remove protection")).is_none());
 
-    let label_only = PurviewDocument { protected: false, default_label_id: Some("other-default".into()), ..document };
+    let label_only = PurviewDocument {
+        protected: false,
+        rights: PurviewRights { view: true, ..Default::default() },
+        default_label_id: Some("other-default".into()),
+        ..document
+    };
     let h = harness_with_document(TestPurviewProvider::signed_in_with_document(ada.clone(), vec![ada], label_only));
     h.get_by_label("Remove label");
     h.get_by_label("Add account");
@@ -583,23 +930,25 @@ fn protected_pages_cannot_be_copied_or_combined_without_export_right() {
     let document =
         PurviewDocument { protected: true, rights: PurviewRights { view: true, extract: true, ..Default::default() }, ..Default::default() };
     let mut h = harness_with_document(TestPurviewProvider::signed_in_with_document(ada.clone(), vec![ada.clone()], document.clone()));
-    h.state_mut().dialog = None;
-    h.state_mut().copy_pages(false);
+    let ctx = h.ctx.clone();
+    h.state_mut().set_option(&ctx, "dialog", "none").unwrap();
+    h.state_mut().copy_pages(&ctx, false);
     assert!(h.state().page_clipboard.is_none());
-    h.state_mut().open_bytes("another.pdf", None, FIXTURE.to_vec()).unwrap();
-    h.state_mut().execute("page.combine");
+    h.state_mut().open_bytes(&ctx, "another.pdf", None, FIXTURE.to_vec()).unwrap();
+    h.state_mut().execute(&ctx, "page.combine");
     h.run_steps(3);
     h.get_by_label("Add open documents").click();
     h.run_steps(2);
     h.get_by_label("All open documents").click();
     h.run_steps(3);
     assert!(h.state().combine_parts_shown().is_empty());
-    assert!(h.state().toast.as_ref().is_some_and(|(message, _)| message.contains("exporting unprotected content")));
+    assert!(crate::support::shown_notice(&h).is_some_and(|message| message.contains("exporting unprotected content")));
 
     let allowed = PurviewDocument { rights: PurviewRights { export: true, ..document.rights }, ..document };
     let mut h = harness_with_document(TestPurviewProvider::signed_in_with_document(ada.clone(), vec![ada], allowed));
-    h.state_mut().dialog = None;
-    h.state_mut().copy_pages(false);
+    let ctx = h.ctx.clone();
+    h.state_mut().set_option(&ctx, "dialog", "none").unwrap();
+    h.state_mut().copy_pages(&ctx, false);
     assert!(h.state().page_clipboard.is_some());
 }
 
@@ -631,7 +980,9 @@ fn protected_attachments_cannot_open_as_unprotected_documents_without_export_rig
         )
         .unwrap();
     assert_eq!(h.state().session.get(id).unwrap().info.attachments.len(), 1);
-    h.state_mut().attachment_action(id, 0, true);
+    let ctx = h.ctx.clone();
+    h.state_mut().attachment_action(&ctx, id, 0, true);
+    h.run_steps(2);
     assert_eq!(h.state().session.docs().len(), 1);
-    assert!(h.state().toast.as_ref().is_some_and(|(message, _)| message.contains("exporting unprotected content")));
+    assert!(crate::support::shown_notice(&h).is_some_and(|message| message.contains("exporting unprotected content")));
 }
