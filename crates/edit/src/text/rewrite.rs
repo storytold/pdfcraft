@@ -1199,8 +1199,8 @@ pub(crate) fn rewrite_block_from(
         k,
     };
     // A turned single line grows along its baseline; so does a recognised phrase that is one row,
-    // whatever its words were read as, like an upright one (#8475).
-    let width = if !upright && style.width.is_none() && (members.len() == 1 || (b.invisible && b.rows.len() == 1)) {
+    // whatever its words were read as, like an upright one (#8475), unless it keeps its box.
+    let width = if !upright && style.width.is_none() && (members.len() == 1 || (unbounded && b.rows.len() == 1)) {
         turned_line_width(first, crop, [dx, dy], width, &text, &advance, unbounded)
     } else {
         width

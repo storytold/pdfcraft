@@ -673,7 +673,15 @@ fn page_font_metrics(
     (fonts, metrics)
 }
 
-fn paragraph_geometry(doc: &Document, page: &pdfcraft_model::Page, block: &TextBlock, style: &BlockStyle) -> Result<(f64, f64, f64), EditError> {
+/// `centred`: the block is a title on the page's centre ([`is_centred`]), laid out centred unless an
+/// alignment is asked for.
+fn paragraph_geometry(
+    doc: &Document,
+    page: &pdfcraft_model::Page,
+    block: &TextBlock,
+    style: &BlockStyle,
+    centred: bool,
+) -> Result<(f64, f64, f64), EditError> {
     if [style.size, style.line_spacing, style.paragraph_spacing, style.char_spacing, style.scale, style.width]
         .iter()
         .flatten()
@@ -687,9 +695,9 @@ fn paragraph_geometry(doc: &Document, page: &pdfcraft_model::Page, block: &TextB
         return Err(EditError::Invalid("the paragraph's position and width must be finite".into()));
     }
     // A recognised phrase is never wrapped: it grows along its line, past the page's edge if it
-    // must, as its changed words do on an upright page (#8475). One set flush right or centred
-    // keeps its box, as a page's own single line does, growing to the margin.
-    let natural = if block.invisible && matches!(style.align, None | Some(crate::added::Align::Left)) {
+    // must, as its changed words do on an upright page (#8475). One flush right or centred, asked
+    // for or on its own, keeps its box, as a page's own single line does, growing to the margin.
+    let natural = if block.invisible && !centred && matches!(style.align, None | Some(crate::added::Align::Left)) {
         14_400.0
     } else if block.invisible || block.rows.len() == 1 {
         (page.crop(doc)[2] - 36.0 - (block.rect[0] + dx)).max(block.rect[2] - block.rect[0])
@@ -1870,6 +1878,10 @@ pub(crate) fn rewrite_styled_block(
     max_glyphs: usize,
 ) -> Result<LineEdit, EditError> {
     let first = block.lines.first().and_then(|i| lines.get(*i)).ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
+    let p = page_dict(doc, page)?;
+    // A title on the page's centre, judged from the page's own lines (#2581).
+    let crop = p.crop(doc);
+    let centered = is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
     let draft = replacement_text(block, text)?;
     if has_no_effective_style_change(block, draft, style) {
         return Ok(LineEdit { substituted: None });
@@ -1882,10 +1894,9 @@ pub(crate) fn rewrite_styled_block(
     let styled_spans = styled.spans;
     let underlines = styled.underlines;
     let overrides = styled.overrides;
-    let p = page_dict(doc, page)?;
     let mut res = p.dict.get(b"Resources").and_then(|resource| doc.resolve(resource).as_dict().cloned()).unwrap_or_default();
     let (mut fonts, mut metrics) = page_font_metrics(doc, &res, block, lines);
-    let (dx, dy, width) = paragraph_geometry(doc, &p, block, style)?;
+    let (dx, dy, width) = paragraph_geometry(doc, &p, block, style, centered)?;
     let prepared = CharacterPreparation {
         doc,
         first,
@@ -2020,8 +2031,6 @@ pub(crate) fn rewrite_styled_block(
     // that marker, so it is omitted and geometry groups those rows as before.
     let marked = kept.iter().all(|row| !*row);
     push_whole_paragraph_marker(&mut block_ops, marked, "BMC");
-    let crop = p.crop(doc);
-    let centered = is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
     let source_leading = block
         .rows
         .windows(2)
