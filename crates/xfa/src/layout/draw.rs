@@ -479,14 +479,17 @@ impl Layouter<'_> {
         let base = clean_name(base);
         // The template's own name, while no other field has it.
         if !fallback && self.taken.insert(base.clone()) {
+            self.page_taken.push(base.clone());
             return base;
         }
         loop {
+            self.page_names.entry(base.clone()).or_insert_with(|| self.names.get(&base).copied());
             let n = self.names.entry(base.clone()).or_insert(0);
             *n = n.saturating_add(1);
             let candidate = if *n == 1 { base.clone() } else { format!("{base}_{n}") };
             let reserved = (fallback || *n > 1) && self.template_names.contains(&candidate);
             if !reserved && self.taken.insert(candidate.clone()) {
+                self.page_taken.push(candidate.clone());
                 return candidate;
             }
         }

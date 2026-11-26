@@ -2,16 +2,29 @@
 //! marks, the line weight, whether to widen the page to make room, and the pages. The marks are
 //! a removable page mark (Remove printer marks takes them off; adding again replaces them).
 
+use craft::pages::PageRange;
+use craft::pages::ui::{PageRangeChoices, PageRangeOptions};
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Props as _, Show as _};
+use craft::ui::dialog::dialog_id;
+use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
+use craft::ui::runtime::env::Label;
 use pdfcraft_engine::{Edit, PrinterMarks};
 
-use crate::pageboxes::Range;
-use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use crate::PdfCraftApp;
+use crate::pageboxes::unit_kind;
+use crate::units::Unit;
+
+/// The dialog's key.
+const KEY: &str = "prepress.marks";
+
+/// The keys of the five mark rows, which "All marks" sets together.
+const MARKS: [&str; 5] = ["trim", "bleed", "registration", "color_bars", "page_info"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrinterMarksDraft {
     pub settings: PrinterMarks,
-    pub range: Range,
+    pub range: PageRange,
     /// Widen the page when the marks would fall outside it (`settings.make_room`).
     pub make_room: bool,
     pub room: f64,
@@ -19,7 +32,7 @@ pub struct PrinterMarksDraft {
 
 impl Default for PrinterMarksDraft {
     fn default() -> Self {
-        Self { settings: PrinterMarks::default(), range: Range::All, make_room: true, room: 36.0 }
+        Self { settings: PrinterMarks::default(), range: PageRange::default(), make_room: true, room: 36.0 }
     }
 }
 
@@ -43,14 +56,8 @@ impl PrinterMarksDraft {
         s.trim || s.bleed || s.registration || s.color_bars || s.page_info
     }
 
-    /// The edit for `count` pages with `current` on screen, labelled with the file's name and
-    /// today's date.
-    pub fn edit(&self, current: usize, count: usize, label: &str, date: &str) -> Edit {
-        let pages = match self.range {
-            Range::All => (0..count).collect(),
-            Range::Current => vec![current.min(count.saturating_sub(1))],
-            Range::Pages(a, b) => (a.max(1) - 1..b.min(count)).collect(),
-        };
+    /// The edit for `pages`, labelled with the file's name and today's date.
+    pub fn edit(&self, pages: Vec<usize>, label: &str, date: &str) -> Edit {
         let settings = PrinterMarks {
             make_room: self.make_room.then_some(self.room.max(0.0)),
             label: label.to_string(),
@@ -59,93 +66,124 @@ impl PrinterMarksDraft {
         };
         Edit::AddPrinterMarks { pages, settings, replace: true }
     }
+
+    /// Takes the dialog's values; the room is shown in a unit of `per_point` units per point.
+    fn read(&mut self, f: &DialogFields, per_point: f64) {
+        let s = &mut self.settings;
+        s.trim = f.bool("trim").unwrap_or(s.trim);
+        s.bleed = f.bool("bleed").unwrap_or(s.bleed);
+        s.registration = f.bool("registration").unwrap_or(s.registration);
+        s.color_bars = f.bool("color_bars").unwrap_or(s.color_bars);
+        s.page_info = f.bool("page_info").unwrap_or(s.page_info);
+        s.line_weight = f.number("line_weight").unwrap_or(s.line_weight);
+        self.make_room = f.bool("make_room").unwrap_or(self.make_room);
+        if let Some(room) = f.number("room") {
+            self.room = room / per_point;
+        }
+        if let Some(range) = PageRangeOptions::value(f, "range") {
+            self.range = range;
+        }
+    }
+
+    /// Puts the values into the dialog's rows; the inverse of [`Self::read`].
+    fn write(&self, f: &mut DialogFields, per_point: f64) {
+        let s = &self.settings;
+        f.set("trim", s.trim);
+        f.set("bleed", s.bleed);
+        f.set("registration", s.registration);
+        f.set("color_bars", s.color_bars);
+        f.set("page_info", s.page_info);
+        f.set("line_weight", s.line_weight);
+        f.set("make_room", self.make_room);
+        f.set("room", self.room * per_point);
+        f.set("range", PageRangeOptions::field_value(&self.range));
+    }
 }
 
-/// The dialog: (add, cancel).
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
-    let Some((i, id)) = app.active_ids() else { return (false, true) };
-    let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
-    let current = app.views[i].current;
-    let d = &mut app.printer_marks_draft;
-    ui.label(egui::RichText::new(tl!("Add printer marks")).font(theme::semibold(18.0)));
-    ui.add_space(8.0);
-    widgets::section_title(ui, tl!("Marks"));
-    let mut all = d.all();
-    if ui.add(widgets::checkbox(&mut all, tl!("All marks"))).changed() {
-        d.set_all(all);
-    }
-    ui.horizontal(|ui| {
-        ui.add(widgets::checkbox(&mut d.settings.trim, tl!("Trim marks")));
-        ui.add(widgets::checkbox(&mut d.settings.bleed, tl!("Bleed marks")));
-        ui.add(widgets::checkbox(&mut d.settings.registration, tl!("Registration marks")));
-    });
-    ui.horizontal(|ui| {
-        ui.add(widgets::checkbox(&mut d.settings.color_bars, tl!("Colour bars")));
-        ui.add(widgets::checkbox(&mut d.settings.page_info, tl!("Page information")));
-    });
-    ui.horizontal(|ui| {
-        let weight_label = ui.label(tl!("Line weight"));
-        let weights = [(0.25, "0.25 pt"), (0.5, "0.50 pt"), (1.0, "1.00 pt")];
-        let shown = weights.iter().find(|(w, _)| (*w - d.settings.line_weight).abs() < 1e-6).map_or("0.25 pt", |(_, l)| l);
-        let combo = craft_ui::ComboBox::from_id_salt("marks-weight").selected_text(shown).width(100.0).show_ui(ui, |ui| {
-            for (w, l) in weights {
-                ui.selectable_value(&mut d.settings.line_weight, w, l);
+/// The rows of the dialog for a document of `count` pages with `current` on screen.
+fn params(count: usize, current: usize, unit: Unit) -> Vec<Param> {
+    let k = unit.per_point();
+    let marks = [
+        ("trim", tl!("Trim marks")),
+        ("bleed", tl!("Bleed marks")),
+        ("registration", tl!("Registration marks")),
+        ("color_bars", tl!("Colour bars")),
+        ("page_info", tl!("Page information")),
+    ];
+    let mut rows = vec![
+        Param::custom("all", "", move |ui, fields, _| {
+            let mut d = PrinterMarksDraft::default();
+            d.read(fields, k);
+            let out = Checkbox::new(Bind::given(d.all())).label(tl!("All marks")).show(ui);
+            if let Some(&on) = out.events.landed() {
+                d.set_all(on);
+                d.write(fields, k);
             }
-        });
-        combo.response.labelled_by(weight_label.id);
-    });
-    widgets::section_title(ui, tl!("Page"));
-    ui.horizontal(|ui| {
-        ui.add(widgets::checkbox(&mut d.make_room, tl!("Widen the page to make room")));
-        ui.add_enabled_ui(d.make_room, |ui| {
-            let room_label = ui.label(tl!("Room on each side"));
-            ui.add(egui::DragValue::new(&mut d.room).range(0.0..=PrinterMarks::MAX_ROOM).suffix(" pt")).labelled_by(room_label.id);
-        });
-    });
-    ui.label(egui::RichText::new(tl!("The trim box is kept where it is, so the printed page cuts the same.")).small().color(t.text_muted));
-    widgets::section_title(ui, tl!("Pages"));
-    ui.horizontal(|ui| {
-        widgets::radio_value(ui, &mut d.range, Range::All, tl!("All"));
-        widgets::radio_value(ui, &mut d.range, Range::Current, crate::i18n::fmt(tl!("Current page ({n})"), &[("n", &(current + 1).to_string())]));
-        let (mut a, mut b) = match d.range {
-            Range::Pages(a, b) => (a, b),
-            _ => (1, count.max(1)),
-        };
-        let on = matches!(d.range, Range::Pages(..));
-        if ui.add(widgets::radio(on, tl!("From"))).clicked() {
-            d.range = Range::Pages(a, b);
-        }
-        let ra = ui.add(egui::DragValue::new(&mut a).range(1..=count.max(1)));
-        ui.label(tl!("to"));
-        let rb = ui.add(egui::DragValue::new(&mut b).range(1..=count.max(1)));
-        if ra.changed() || rb.changed() {
-            d.range = Range::Pages(a.min(b), b.max(a));
-        }
-    });
-    ui.add_space(12.0);
-    let (mut go, mut cancel) = (false, false);
-    let ready = d.any() && count > 0;
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("Add"), true)).inner.clicked() {
-            go = true;
-        }
-        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-            cancel = true;
-        }
-    });
-    (go, cancel)
+            out.response
+        })
+        .companions(MARKS)
+        .full_width(),
+    ];
+    // Production sets the marks three to a line, then two: Trim, Bleed and Registration, then Colour bars and Page
+    // information.
+    rows.extend(marks.iter().enumerate().map(|(at, (key, label))| {
+        let row = Param::new(*key, *label, ParamKind::bool(true));
+        if matches!(at, 1 | 2 | 4) { row.beside_previous() } else { row }
+    }));
+    rows.push(Param::number("line_weight", tl!("Line weight"), 0.25, 0.25, 2).bounds(Some(0.1), Some(4.0)).unit(unit_kind(Unit::Points)));
+    rows.push(Param::new("make_room", tl!("Widen the page to make room"), ParamKind::bool(true)));
+    rows.push(
+        Param::number("room", tl!("Room on each side"), 36.0 * k, 1.0 * k, 2)
+            .bounds(Some(0.0), Some(PrinterMarks::MAX_ROOM * k))
+            .unit(unit_kind(unit))
+            .enabled_when("make_room", true)
+            .beside_previous(),
+    );
+    rows.push(Param::read_only_text("trim_note", "", tl!("The trim box is kept where it is, so the printed page cuts the same.")).full_width());
+    rows.push(PageRangeOptions::param("range", tl!("Pages"), count, current, PageRangeChoices::CurrentFromTo));
+    rows
 }
 
 impl PdfCraftApp {
+    /// Opens Add Printer Marks over the active document.
+    pub(crate) fn open_printer_marks(&mut self, ctx: &egui::Context) {
+        let Some((i, id)) = self.active_ids() else { return };
+        let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
+        let current = self.views[i].current();
+        let unit = self.units;
+        let mut fields = DialogFields::new();
+        self.printer_marks_draft.write(&mut fields, unit.per_point());
+        let dialog = HostedParamDialog::new(ctx, KEY, fields, move |fields| {
+            let mut d = PrinterMarksDraft::default();
+            d.read(fields, unit.per_point());
+            let ready = d.any() && !d.range.pages(count, current, &[]).is_empty();
+            ParamDialog::new(KEY, tl!("Add printer marks"), params(count, current, unit))
+                .values(Bind::bound(fields))
+                .ok_label(Label::from(tl!("Add")))
+                .ok_enabled(ready)
+        });
+        crate::dialogs::host::open(self, dialog);
+    }
+
+    /// Adds the marks when the dialog was answered with OK.
+    pub(crate) fn printer_marks_pass(&mut self, ctx: &egui::Context) {
+        let Some(answer) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
+        let Some(result) = answer.ok() else { return };
+        let per_point = self.units.per_point();
+        self.printer_marks_draft.read(&result.fields, per_point);
+        self.add_printer_marks(ctx);
+    }
+
     /// Add: the marks on the chosen pages, labelled with the file's name and today's date.
-    pub(crate) fn add_printer_marks(&mut self) {
+    pub(crate) fn add_printer_marks(&mut self, ctx: &egui::Context) {
         let Some((i, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let (count, label) = (doc.info.pages.len(), doc.name.clone());
         let (y, m, d) = self.session.today();
         let date = format!("{y:04}-{m:02}-{d:02}");
-        let edit = self.printer_marks_draft.edit(self.views[i].current, count, &label, &date);
-        if self.apply_edit(edit) {
+        let pages = self.printer_marks_draft.range.pages(count, self.views[i].current(), &[]);
+        let edit = self.printer_marks_draft.edit(pages, &label, &date);
+        if self.apply_edit(ctx, edit) {
             self.notify_tr("Printer marks added");
         }
     }

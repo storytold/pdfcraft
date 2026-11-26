@@ -380,27 +380,33 @@ fn order(fmt: &str) -> Vec<Part> {
 }
 
 /// Parse typed text against a date/time format (AFDate_KeystrokeEx's leniency: any
-/// separators, month names, two-digit years). `None` when it isn't a valid date.
+/// separators, month names, two-digit years, read as 1950 to 2049). `None` when it isn't a
+/// valid date.
 pub fn parse_date(text: &str, fmt: &str) -> Option<DateTime> {
-    parse_date_with(text, fmt, None).map(|(dt, _)| dt)
+    parse_date_split(text, fmt, 50)
 }
 
-/// [`parse_date`], where a date typed with its day and month but without the year that follows
-/// them in `fmt` takes `year` (`None`: it isn't a date). The flag says whether it did.
-fn parse_date_with(text: &str, fmt: &str, year: Option<i32>) -> Option<(DateTime, bool)> {
+/// [`parse_date`] with a two-digit year below `century_split` read as 20xx and the rest as 19xx.
+pub(super) fn parse_date_split(text: &str, fmt: &str, century_split: i32) -> Option<DateTime> {
+    parse_date_with(text, fmt, None, century_split).map(|(dt, _)| dt)
+}
+
+/// [`parse_date_split`], where a date typed with its day and month but without the year that
+/// follows them in `fmt` takes `year` (`None`: it isn't a date). The flag says whether it did.
+fn parse_date_with(text: &str, fmt: &str, year: Option<i32>, century_split: i32) -> Option<(DateTime, bool)> {
     let names = date_names();
     let lists: [&[&str]; 4] = [&names.months, &names.months_short, &names.days, &names.days_short];
     // Weekdays are shown, not typed (see `order`): where the format has one but none was typed, a
     // name the language shares between a weekday and a month (Italian "mar") is the month, as
     // the names are read again with no weekday expected (#5303).
-    read_date(&english_names(text, fmt, lists), fmt, &names, year).or_else(|| {
+    read_date(&english_names(text, fmt, lists), fmt, &names, year, century_split).or_else(|| {
         let no_weekday = fmt.replace("dddd", " ").replace("ddd", " ");
-        (no_weekday != fmt).then(|| read_date(&english_names(text, &no_weekday, lists), fmt, &names, year)).flatten()
+        (no_weekday != fmt).then(|| read_date(&english_names(text, &no_weekday, lists), fmt, &names, year, century_split)).flatten()
     })
 }
 
 /// [`parse_date_with`] of `english`, typed text whose month and weekday names are English.
-fn read_date(english: &str, fmt: &str, names: &DateNames, year: Option<i32>) -> Option<(DateTime, bool)> {
+fn read_date(english: &str, fmt: &str, names: &DateNames, year: Option<i32>, century_split: i32) -> Option<(DateTime, bool)> {
     let t = english.trim();
     if t.is_empty() {
         return None;
@@ -541,7 +547,7 @@ fn read_date(english: &str, fmt: &str, names: &DateNames, year: Option<i32>) -> 
                     }
                     _ => {
                         let y = i32::try_from(take(&mut nums, &mut tail)?).ok()?;
-                        if y < 100 { if y < 50 { 2000 + y } else { 1900 + y } } else { y }
+                        if y < 100 { if y < century_split { 2000 + y } else { 1900 + y } } else { y }
                     }
                 };
                 have_y = true;
@@ -771,7 +777,7 @@ pub fn keystroke(f: &Format, field: &str, value: &str) -> Result<String, String>
         Format::Date(fmt) | Format::Time(fmt) => {
             let refused = || format!("Invalid date/time: please ensure that the date/time exists. Field [ {field} ] should match format {fmt}");
             let completed =
-                CURRENT_YEAR.with(std::cell::Cell::get).and_then(|year| parse_date_with(value, fmt, Some(year))).filter(|(_, filled)| *filled);
+                CURRENT_YEAR.with(std::cell::Cell::get).and_then(|year| parse_date_with(value, fmt, Some(year), 50)).filter(|(_, filled)| *filled);
             match completed {
                 Some((dt, _)) => {
                     let written = format_date_in(dt, fmt, &date_names());
@@ -781,7 +787,7 @@ pub fn keystroke(f: &Format, field: &str, value: &str) -> Result<String, String>
                 // leap year (2000) takes it. Refused, not read again as a date with a year,
                 // which would take the time's hour for the year ("2/29 00:15").
                 None if CURRENT_YEAR.with(std::cell::Cell::get).is_some()
-                    && parse_date_with(value, fmt, Some(2000)).is_some_and(|(_, filled)| filled) =>
+                    && parse_date_with(value, fmt, Some(2000), 50).is_some_and(|(_, filled)| filled) =>
                 {
                     Err(refused())
                 }
