@@ -1484,111 +1484,113 @@ fn a_booklet_decides_two_sided_itself() {
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
 }
 
-#[test]
-fn eco_mode_enables_grayscale_and_duplex_and_persists() {
-    use craft::print::ui::Duplex as UiDuplex;
-    use pdfcraft_engine::print::spool::Duplex;
+/// The draft's Eco mode, grayscale and two-sided choices, in that order.
+fn draft_eco(h: &Rig) -> (bool, bool, Option<spool::Duplex>) {
+    let d = &h.state().print_draft;
+    (d.eco_mode, d.grayscale, d.duplex)
+}
+
+/// The hosted dialog's grayscale and two-sided settings.
+fn hosted_eco(h: &Rig) -> (bool, Option<craft::print::ui::Duplex>) {
+    let s = &h.hosted().state().settings;
+    (s.grayscale, s.duplex)
+}
+
+/// A Print dialog for one listed printer, opened and settled.
+fn eco_dialog() -> Rig {
     let mut h = harness();
     list_printers(&mut h, &["Office"]);
     h.open();
     h.settle();
+    h
+}
 
-    // Initial state: eco_mode is false, grayscale is false, duplex is None.
-    assert!(!h.state().print_draft.eco_mode);
-    assert!(!h.state().print_draft.grayscale);
-    assert_eq!(h.state().print_draft.duplex, None);
-    assert!(!h.hosted().state().settings.grayscale);
-    assert_eq!(h.hosted().state().settings.duplex, None);
-
-    // Click Eco mode checkbox in the dialog.
-    h.get_by_role_and_label(Role::CheckBox, "Eco mode (Grayscale, two-sided)").click();
+/// Clicks a checkbox in the dialog by its label and lets the dialog take the change.
+fn click_check(h: &mut Rig, label: &str) {
+    h.get_by_role_and_label(Role::CheckBox, label).click();
     h.run_steps(2);
+}
 
-    assert!(h.state().print_draft.eco_mode);
-    assert!(h.state().print_draft.grayscale);
-    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
-    assert!(h.hosted().state().settings.grayscale);
-    assert_eq!(h.hosted().state().settings.duplex, Some(UiDuplex::LongEdge));
+const ECO_LABEL: &str = "Eco mode (Grayscale, two-sided)";
+
+/// Ticking Eco mode turns on grayscale and long-edge two-sided printing, and all three survive a
+/// save and restart (#4843).
+#[test]
+fn eco_mode_enables_grayscale_and_duplex_and_persists() {
+    use craft::print::ui::Duplex as UiDuplex;
+    use spool::Duplex;
+    let mut h = eco_dialog();
+    assert_eq!(draft_eco(&h), (false, false, None), "everything starts off");
+    assert_eq!(hosted_eco(&h), (false, None));
+
+    click_check(&mut h, ECO_LABEL);
+    assert_eq!(draft_eco(&h), (true, true, Some(Duplex::LongEdge)));
+    assert_eq!(hosted_eco(&h), (true, Some(UiDuplex::LongEdge)));
     assert_eq!(h.listed()["eco_mode"], json!(true));
 
-    // Persist and verify settings snapshot and JSON serialization.
     let snapshot = h.state().settings_snapshot();
     assert_eq!(snapshot.print.eco_mode, Some(true));
     let saved = saved_json(h.state());
     let json: serde_json::Value = serde_json::from_str(&saved).unwrap();
     assert_eq!(json["print"]["eco_mode"], true);
 
-    // Restore into a fresh app and restarted dialog and verify settings are applied.
     let mut app = crate::control::new_app();
     restore(&mut app, &saved);
-    assert!(app.print_draft.eco_mode);
-    assert!(app.print_draft.grayscale);
-    assert_eq!(app.print_draft.duplex, Some(Duplex::LongEdge));
+    assert_eq!((app.print_draft.eco_mode, app.print_draft.grayscale, app.print_draft.duplex), (true, true, Some(Duplex::LongEdge)));
 
     let mut restarted = harness_restarted(snapshot);
     list_printers(&mut restarted, &["Office"]);
     restarted.open();
     restarted.settle();
-    assert!(restarted.state().print_draft.eco_mode);
-    assert!(restarted.state().print_draft.grayscale);
-    assert_eq!(restarted.state().print_draft.duplex, Some(Duplex::LongEdge));
-    assert!(restarted.hosted().state().settings.grayscale);
-    assert_eq!(restarted.hosted().state().settings.duplex, Some(UiDuplex::LongEdge));
+    assert_eq!(draft_eco(&restarted), (true, true, Some(Duplex::LongEdge)), "the restarted dialog restores Eco mode");
+    assert_eq!(hosted_eco(&restarted), (true, Some(UiDuplex::LongEdge)));
     assert_eq!(restarted.listed()["eco_mode"], json!(true));
+}
 
-    // In the dialog, unticking grayscale unsets eco_mode.
-    h.get_by_role_and_label(Role::CheckBox, "Print in grayscale").click();
-    h.run_steps(2);
-    assert!(!h.state().print_draft.grayscale);
-    assert!(!h.state().print_draft.eco_mode);
+/// In the dialog, Eco mode follows grayscale and two-sided: changing either away from the preset
+/// clears it, choosing the preset's values again sets it, and unticking it resets both (#4843).
+#[test]
+fn eco_mode_follows_grayscale_and_two_sided_in_the_dialog() {
+    use craft::print::ui::Duplex as UiDuplex;
+    use spool::Duplex;
+    let mut h = eco_dialog();
+    click_check(&mut h, ECO_LABEL);
+
+    click_check(&mut h, "Print in grayscale");
+    assert_eq!(draft_eco(&h), (false, false, Some(Duplex::LongEdge)), "unticking grayscale clears Eco mode");
     assert_eq!(h.listed()["eco_mode"], json!(false));
 
-    // Clicking Eco mode again re-enables both.
-    h.get_by_role_and_label(Role::CheckBox, "Eco mode (Grayscale, two-sided)").click();
-    h.run_steps(2);
-    assert!(h.state().print_draft.eco_mode);
-    assert!(h.state().print_draft.grayscale);
-    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
-    assert!(h.hosted().state().settings.grayscale);
-    assert_eq!(h.hosted().state().settings.duplex, Some(UiDuplex::LongEdge));
+    click_check(&mut h, ECO_LABEL);
+    assert_eq!(draft_eco(&h), (true, true, Some(Duplex::LongEdge)), "ticking Eco mode again sets both");
+    assert_eq!(hosted_eco(&h), (true, Some(UiDuplex::LongEdge)));
 
-    // Changing Two-sided away from Long edge unsets eco_mode while keeping grayscale.
     h.set("duplex", json!("off"));
-    assert!(!h.state().print_draft.eco_mode);
-    assert!(h.state().print_draft.grayscale);
-    assert_eq!(h.state().print_draft.duplex, Some(Duplex::Off));
+    assert_eq!(draft_eco(&h), (false, true, Some(Duplex::Off)), "one-sided clears Eco mode and keeps grayscale");
     assert_eq!(h.listed()["eco_mode"], json!(false));
 
-    // Selecting Long edge again re-synchronizes eco_mode back to true.
     h.set("duplex", json!("long_edge"));
-    assert!(h.state().print_draft.eco_mode);
-    assert!(h.state().print_draft.grayscale);
-    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
+    assert_eq!(draft_eco(&h), (true, true, Some(Duplex::LongEdge)), "long edge with grayscale is Eco mode again");
     assert_eq!(h.listed()["eco_mode"], json!(true));
 
-    // Unticking Eco mode resets grayscale and duplex.
-    h.get_by_role_and_label(Role::CheckBox, "Eco mode (Grayscale, two-sided)").click();
-    h.run_steps(2);
-    assert!(!h.state().print_draft.eco_mode);
-    assert!(!h.state().print_draft.grayscale);
-    assert_eq!(h.state().print_draft.duplex, None);
-    assert!(!h.hosted().state().settings.grayscale);
-    assert_eq!(h.hosted().state().settings.duplex, None);
+    click_check(&mut h, ECO_LABEL);
+    assert_eq!(draft_eco(&h), (false, false, None), "unticking Eco mode resets grayscale and two-sided");
+    assert_eq!(hosted_eco(&h), (false, None));
     assert_eq!(h.listed()["eco_mode"], json!(false));
+}
 
-    // Driving Eco mode and grayscale through automation keeps them in step too.
+/// Driving Eco mode and grayscale through automation keeps them in step as the dialog does (#4843).
+#[test]
+fn eco_mode_and_grayscale_stay_in_step_through_automation() {
+    use spool::Duplex;
+    let mut h = eco_dialog();
     h.set("eco_mode", json!(true));
-    assert!(h.state().print_draft.eco_mode);
-    assert!(h.state().print_draft.grayscale);
-    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
+    assert_eq!(draft_eco(&h), (true, true, Some(Duplex::LongEdge)));
     h.set("grayscale", json!(false));
-    assert!(!h.state().print_draft.eco_mode);
+    assert!(!h.state().print_draft.eco_mode, "grayscale off clears Eco mode");
     h.set("grayscale", json!(true));
-    assert!(h.state().print_draft.eco_mode);
+    assert!(h.state().print_draft.eco_mode, "grayscale back on with long edge sets it");
     h.set("eco_mode", json!(false));
-    assert!(!h.state().print_draft.eco_mode);
-    assert!(!h.state().print_draft.grayscale);
-    assert_eq!(h.state().print_draft.duplex, None);
+    assert_eq!(draft_eco(&h), (false, false, None));
 }
 
 /// Leaving Eco mode on restore keeps the grayscale and duplex choices that were saved explicitly (#4843).
