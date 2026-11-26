@@ -1432,6 +1432,19 @@ fn a_tall_narrow_glyph_redrawn_a_little_higher_is_dropped() {
     assert_eq!(text.matches('|').count(), 1, "{text}");
 }
 
+/// #3173: a glyph followed by its superscript is inside a run, so a later run starting at its place is not its redraw.
+#[test]
+fn a_glyph_followed_by_its_superscript_is_not_a_run_end() {
+    let mut v = vec![em_box("H", 10.0, 10.0, 16.0, 20.0), em_box("2", 16.0, 16.0, 19.0, 22.0)];
+    for k in 0..50 {
+        word(&mut v, "xx", 100.0, 40.0 + 14.0 * k as f32, 6.0);
+    }
+    v.push(em_box("H", 10.0, 10.0, 16.0, 20.0));
+    v.push(em_box("O", 16.0, 10.0, 22.0, 20.0));
+    let text = layout(v).plain_text();
+    assert_eq!(text.matches('H').count(), 2, "{text}");
+}
+
 /// #3173: a glyph kept in a cell does not hide the earlier glyph there that the redraw matches.
 #[test]
 fn a_redraw_is_matched_against_earlier_glyphs_of_the_same_cell() {

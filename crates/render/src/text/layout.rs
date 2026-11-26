@@ -225,10 +225,15 @@ fn glyphs_without_redraws(glyphs: &[TextGlyph]) -> Vec<bool> {
     // land in equal cells whatever the glyph sizes. `older[k]` links each kept glyph to the previous one with the same
     // key, so the earlier candidates are checked newest first, up to `REDRAW_CANDIDATES`, as the runs are below.
     let mut keep = vec![true; glyphs.len()];
+    // `q` continues the run of `p` as `arrange` joins glyphs into a segment: a sub- or superscript right next to
+    // its glyph may sit off the line by up to half the taller one's height.
     let follows = |p: usize, q: usize| {
         let (a, b) = (&glyphs[p].rect, &glyphs[q].rect);
-        let ph = (a[3] - a[1]).max(0.1).min((b[3] - b[1]).max(0.1));
-        ((a[1] + a[3]) / 2.0 - (b[1] + b[3]) / 2.0).abs() < ph * 0.5 && b[0] - a[2] < ph * 3.0 && b[0] > a[0] - ph * 2.0
+        let (ha, hb) = ((a[3] - a[1]).max(0.1), (b[3] - b[1]).max(0.1));
+        let ph = ha.min(hb);
+        let gap = b[0] - a[2];
+        let centre_limit = if gap.abs() < ph { ha.max(hb) * 0.5 } else { ph * 0.5 };
+        ((a[1] + a[3]) / 2.0 - (b[1] + b[3]) / 2.0).abs() < centre_limit && gap < ph * 3.0 && b[0] > a[0] - ph * 2.0
     };
     let mut heights: Vec<f32> = glyphs.iter().map(|g| (g.rect[3] - g.rect[1]).max(0.1)).collect();
     let cell = match heights.len() {
