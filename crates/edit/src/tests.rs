@@ -852,6 +852,33 @@ endstream"
     assert!(!page_list(&doc).is_empty());
 }
 
+/// A field `/Fields` does not list, whose `/Kids` holds a hidden widget left on the page and, a
+/// malformed sibling, the page-tree root. The widget's tree is adopted, and pruning it stops at
+/// the `/Pages` node, which is not a field (ISO 32000-2 §7.7.3.2, Table 30; §12.7.4.1, Table 226):
+/// flattening every page leaves the page in the page tree.
+#[test]
+fn flattening_an_adopted_field_keeps_a_page_tree_listed_in_its_kids() {
+    let o = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [] >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [6 0 R] >>".into(),
+        stream("", " "),
+        "<< /T (form1) /Kids [6 0 R 2 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (hidden) /Parent 5 0 R /Rect [10 90 150 120] /F 32 /AP << /N 7 0 R >> >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>
+stream
+
+endstream"
+            .into(),
+    ];
+    let mut doc = build(&o.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 0, "the hidden widget is not drawn");
+    let doc = reopen(&doc);
+    let kids = doc.get(pdfcraft_cos::ObjRef::new(2, 0)).as_dict().unwrap().get(b"Kids").cloned().unwrap();
+    assert_eq!(kids, Object::Array(vec![Object::Ref(pdfcraft_cos::ObjRef::new(3, 0))]), "the page left the page tree");
+    assert_eq!(page_list(&doc).len(), 1);
+}
+
 /// #2670: flattening form fields drops removed fields from `/AcroForm /CO` (calculation order)
 /// and removes `/CO` once empty, and drops `/SigFlags` once no signature fields remain.
 #[test]

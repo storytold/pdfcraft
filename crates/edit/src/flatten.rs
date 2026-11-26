@@ -679,6 +679,11 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
         }
         known.insert(r, (true, None));
         let Some(d) = doc.get(r).as_dict().cloned() else { return (true, false) };
+        // A page-tree node in a field's /Kids (a malformed file) is not a field (ISO 32000-2
+        // §7.7.3.2, Table 30): it is left as it is, and its pages are not pruned as widgets.
+        if matches!(d.name(b"Type"), Some(b"Pages" | b"Page")) {
+            return (true, false);
+        }
         let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) else {
             let survives = on_page.is_none_or(|p| p.contains(&r));
             known.insert(r, (survives, None));
