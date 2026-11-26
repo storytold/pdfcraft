@@ -96,6 +96,8 @@ impl Session {
             editor.saved = bytes;
             editor.saved_keys = keys;
             editor.unsaved_file = false;
+            // The saved file holds what opening appended: from now on it is the file.
+            editor.as_opened = None;
         }
         if let Some(p) = path {
             doc.name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
@@ -275,7 +277,7 @@ impl Session {
             return;
         }
         let Some(editor) = doc.editor.as_mut() else { return };
-        let mut signatures = shown_signatures(doc.shown_not_saved.as_ref(), &editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache);
+        let mut signatures = shown_signatures(doc.shown_not_saved.as_ref(), editor, &doc.bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &doc.bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));

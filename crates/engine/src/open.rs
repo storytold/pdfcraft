@@ -6,7 +6,7 @@ use pdfcraft_cos::{SaveOptions, write_incremental};
 use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 
 use crate::document::{ShownNotSaved, ShownOnly};
-use crate::history::{Editor, Keys, TextBlocksCache};
+use crate::history::{AsOpened, Editor, Keys, TextBlocksCache};
 use crate::{
     AppearanceCache, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard,
     info_fields, js, note_warnings, print_preview_layers, recovered_render_password, render_threads, same_pages, shown_signatures, xfa, xfa_layout,
@@ -40,6 +40,8 @@ struct DocumentOpenData<'a> {
     xfa: Option<XfaLayout>,
     /// The form was reconciled with its XFA packets for display only ([`Document::shown_not_saved`]).
     shown_not_saved: Option<ShownOnly>,
+    /// The file as read, when opening appended revisions to it ([`crate::history::AsOpened`]).
+    as_opened: Option<AsOpened>,
 }
 
 impl OpenContext {
@@ -180,6 +182,11 @@ impl Session {
                     "This form's certification allows no changes: {what}, but it can't be changed or saved, which would write that into the signed file"
                 ));
             }
+        };
+        // The file as read, for its signatures: opening an XFA form may append revisions below.
+        let as_read = match (&info.xfa, &cos) {
+            (Some(_), Ok(Ok(c))) => Some(AsOpened { cos: c.clone(), bytes: bytes.clone() }),
+            _ => None,
         };
         let (bytes, info, cos, xfa) = match (info.xfa, cos) {
             (Some(pdfcraft_render::Xfa::Dynamic), Ok(Ok(cos))) if pdfcraft_xfa::existing_layout(&cos).is_none() => {
@@ -331,9 +338,10 @@ impl Session {
         };
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
+        let as_opened = as_read.filter(|o| !Arc::ptr_eq(&o.bytes, &bytes));
         let mut document = Self::build_document(
             context,
-            DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa, shown_not_saved },
+            DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa, shown_not_saved, as_opened },
         );
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
@@ -348,7 +356,7 @@ impl Session {
 
     /// The last step of opening: build the document record and register it.
     fn build_document(context: &OpenContext, data: DocumentOpenData<'_>) -> Document {
-        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa, shown_not_saved } = data;
+        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa, shown_not_saved, as_opened } = data;
         let mut config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
@@ -366,6 +374,7 @@ impl Session {
                         appearances: AppearanceCache::default(),
                         field_appearances: pdfcraft_forms::FieldAppearanceCache::default(),
                         text_blocks: TextBlocksCache::default(),
+                        as_opened,
                     }),
                     None,
                 )
@@ -375,7 +384,13 @@ impl Session {
         };
         let sig_cache = Arc::new(pdfcraft_sign::DigestCache::default());
         let mut signatures =
-            editor.as_ref().map(|e| shown_signatures(shown_not_saved.as_ref(), &e.cos, &bytes, &context.trust, &sig_cache)).unwrap_or_default();
+            editor.as_ref().map(|e| shown_signatures(shown_not_saved.as_ref(), e, &bytes, &context.trust, &sig_cache)).unwrap_or_default();
+        // Only a signed file needs keeping as it was read.
+        if !signatures.iter().any(|s| s.signed)
+            && let Some(e) = editor.as_mut()
+        {
+            e.as_opened = None;
+        }
         // The inspection reads only `/Info`; a file stating its title or author only in XMP still
         // shows them (#2373).
         if let Some(e) = &editor {

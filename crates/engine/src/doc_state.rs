@@ -116,20 +116,35 @@ pub(crate) fn signatures_of(
     pdfcraft_sign::pdf::list_cached(cos, bytes, trust, cache)
 }
 
-/// [`signatures_of`] the document shown as `cos` (its file `bytes`), or of the signed file when
-/// what is shown was reconciled with its XFA packets for display only
+/// Validate the signature fields of `editor`'s working state (written as `bytes`). While that
+/// state is still the file as opened plus only what opening appended, the file as read is
+/// validated instead: PdfCraft's own open-time revisions are not changes made since signing.
+pub(crate) fn editor_signatures(
+    editor: &crate::history::Editor,
+    bytes: &[u8],
+    trust: &TrustStore,
+    cache: &pdfcraft_sign::DigestCache,
+) -> Vec<SignatureInfo> {
+    match &editor.as_opened {
+        Some(o) if !editor.cos.is_modified() && Arc::ptr_eq(editor.cos.bytes(), &editor.saved) => signatures_of(&o.cos, &o.bytes, trust, cache),
+        _ => signatures_of(&editor.cos, bytes, trust, cache),
+    }
+}
+
+/// [`editor_signatures`] of the document `editor` shows (its file `bytes`), or of the signed file
+/// when what is shown was reconciled with its XFA packets for display only
 /// ([`crate::Document::shown_not_saved`]): nothing of that is in the file, so the signatures are
 /// as signed.
 pub(crate) fn shown_signatures(
     shown: Option<&crate::document::ShownOnly>,
-    cos: &pdfcraft_cos::Document,
+    editor: &crate::history::Editor,
     bytes: &[u8],
     trust: &TrustStore,
     cache: &pdfcraft_sign::DigestCache,
 ) -> Vec<SignatureInfo> {
     match shown {
         Some(s) => signatures_of(&s.signed, s.signed.bytes(), trust, cache),
-        None => signatures_of(cos, bytes, trust, cache),
+        None => editor_signatures(editor, bytes, trust, cache),
     }
 }
 
