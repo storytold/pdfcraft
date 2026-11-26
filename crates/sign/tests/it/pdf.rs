@@ -260,6 +260,165 @@ fn signing_an_existing_field_and_counter_signing() {
     ));
 }
 
+/// The signature dictionary (the value of the signed field) in `doc`.
+fn signature_dict(doc: &Document) -> ObjRef {
+    doc.object_numbers()
+        .into_iter()
+        .map(|num| ObjRef { num, generation: doc.generation(num) })
+        .find(|r| doc.get(*r).as_dict().is_some_and(|d| d.name(b"Type") == Some(b"Sig") && d.contains(b"ByteRange")))
+        .expect("a signature dictionary")
+}
+
+/// Add a signature field named "Forged" on the page, with `value` as its `/V`, listed in the form
+/// (first when `first`, else last).
+fn add_forged_signature_field(doc: &mut Document, value: Object, first: bool) {
+    let mut widget = Dict::new();
+    for (k, v) in [
+        ("Type", Object::name("Annot")),
+        ("Subtype", Object::name("Widget")),
+        ("FT", Object::name("Sig")),
+        ("T", Object::String(PdfString::text("Forged"))),
+        ("Rect", Object::Array(vec![Object::Int(0); 4])),
+        ("P", Object::Ref(ObjRef { num: 3, generation: 0 })),
+        ("V", value),
+    ] {
+        widget.set(k.as_bytes().to_vec(), v);
+    }
+    let widget = doc.add(Object::Dict(widget));
+    doc.update_dict(ObjRef { num: 3, generation: 0 }, |p| {
+        if let Some(Object::Array(a)) = p.get_mut(b"Annots") {
+            a.push(Object::Ref(widget));
+        }
+    })
+    .unwrap();
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        if let Some(Object::Dict(af)) = c.get_mut(b"AcroForm")
+            && let Some(Object::Array(fields)) = af.get_mut(b"Fields")
+        {
+            fields.insert(if first { 0 } else { fields.len() }, Object::Ref(widget));
+        }
+    })
+    .unwrap();
+}
+
+/// The forged field in `forged` is not a valid signature, and the signer's own one still is.
+fn assert_only_the_signers_field_is_valid(forged: &[u8], trust: &TrustStore, what: &str) {
+    let sigs = signatures(&open(forged), forged, trust);
+    let copy = sigs.iter().find(|s| s.field == "Forged").expect("the forged field is listed");
+    assert_ne!(copy.status, Status::Valid, "{what} validated: {:?} {:?} {:?}", copy.reason, copy.modification, copy.details);
+    // The signer's own signature stays valid: adding a signature field is a permitted change.
+    let own = sigs.iter().find(|s| s.field == "Signature1").expect("the signed field is listed");
+    assert_eq!(own.status, Status::Valid, "{:?} {:?}", own.modification, own.details);
+}
+
+#[test]
+fn a_field_reusing_the_signers_dictionary_listed_first_does_not_decide_the_signers_verdict() {
+    // A field added since signing whose /V is the signer's own dictionary, first in /Fields (as
+    // `fields_sharing_a_signature_value_are_listed_with_one_verdict`, but listed first): it is
+    // judged before the signer's own field, which must not take its verdict from it.
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let forged = edit_after(&signed, |doc| {
+        let original = signature_dict(doc);
+        add_forged_signature_field(doc, Object::Ref(original), true);
+    });
+    assert_eq!(signatures(&open(&forged), &forged, &trust).first().map(|s| s.field.as_str()), Some("Forged"), "listed first");
+    assert_only_the_signers_field_is_valid(&forged, &trust, "the reused signature");
+}
+
+#[test]
+fn a_signed_field_renamed_through_its_parent_is_not_the_signed_one() {
+    // "Sigs.A": the parent (object 6) names the field "Sigs", the kid (object 7) "A" and holds the
+    // widget. After signing, a later revision renames the parent. The kid and its value are
+    // unchanged, but the signature would now show under a name the signer never signed.
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [7 0 R] >>",
+        b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /FT /Sig /T (Sigs) /Kids [7 0 R] >>",
+        b"<< /Type /Annot /Subtype /Widget /T (A) /Parent 6 0 R /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
+    ];
+    let base = write_pdf(&objs);
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&base), &id, &SignOptions { field: Some("Sigs.A".into()), ..opts() }).unwrap();
+    let s = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!((s.field.as_str(), s.status), ("Sigs.A", Status::Valid), "untouched");
+    let renamed = edit_after(&signed, |doc| {
+        doc.update_dict(ObjRef { num: 6, generation: 0 }, |p| p.set(b"T".to_vec(), PdfString::text("Witness"))).unwrap();
+    });
+    let s = signatures(&open(&renamed), &renamed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_ne!(s.status, Status::Valid, "the signature validated as {:?}: {:?} {:?}", s.field, s.modification, s.details);
+}
+
+#[test]
+fn a_field_reusing_a_field_held_document_timestamp_is_not_a_second_timestamp() {
+    // "Timestamp_1" holds a document timestamp. A later field whose /V names the same timestamp
+    // dictionary has a token that checks out, but the field was never timestamped.
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let trust = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let stamped = fixture_timestamped_in_a_field(&tsa);
+    let forged = edit_after(&stamped, |doc| {
+        let held = doc
+            .object_numbers()
+            .into_iter()
+            .map(|num| ObjRef { num, generation: doc.generation(num) })
+            .find(|r| doc.get(*r).as_dict().is_some_and(|d| d.name(b"Type") == Some(b"DocTimeStamp")))
+            .expect("the timestamp dictionary");
+        add_forged_signature_field(doc, Object::Ref(held), false);
+    });
+    let sigs = signatures(&open(&forged), &forged, &trust);
+    let copy = sigs.iter().find(|s| s.field == "Forged").expect("the forged field is listed");
+    assert_eq!(copy.status, Status::Invalid, "the reused timestamp validated: {:?} {:?}", copy.modification, copy.details);
+    assert!(copy.doc_timestamp, "the reused value is still shown as a timestamp");
+    let own = sigs.iter().find(|s| s.field == "Timestamp_1").expect("the timestamp field is listed");
+    assert_eq!(own.status, Status::Valid, "{:?} {:?}", own.modification, own.details);
+}
+
+#[test]
+fn a_signed_field_respelled_by_a_later_save_is_still_the_signed_one() {
+    // A later save writes the signed field and its signature dictionary out again, the field's
+    // name and the signing date now in hexadecimal. They say what they said when signed, so the
+    // signature is still the signer's own.
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let doc = open(&signed);
+    let value = signature_dict(&doc);
+    let field = doc
+        .object_numbers()
+        .into_iter()
+        .map(|num| ObjRef { num, generation: doc.generation(num) })
+        .find(|r| doc.get(*r).as_dict().is_some_and(|d| d.get(b"V") == Some(&Object::Ref(value))))
+        .expect("the signed field");
+    let respelled = edit_after(&signed, |doc| {
+        for (r, key) in [(field, b"T".as_slice()), (value, b"M".as_slice())] {
+            doc.update_dict(r, |d| {
+                if let Some(Object::String(s)) = d.get(key).cloned() {
+                    d.set(key.to_vec(), Object::String(PdfString { bytes: s.bytes, hex: true }));
+                }
+            })
+            .unwrap();
+        }
+    });
+    for r in [field, value] {
+        assert_ne!(*open(&respelled).get(r), *doc.get(r), "object {} is written differently", r.num);
+    }
+    let sigs = signatures(&open(&respelled), &respelled, &trust);
+    let own = sigs.iter().find(|s| s.field == "Signature1").expect("the signed field is listed");
+    assert!(
+        own.status == Status::Valid && !matches!(own.modification, Modification::Disallowed(_)),
+        "a respelled signed field is no longer the signed one: {:?} {:?} {:?}",
+        own.status,
+        own.modification,
+        own.details
+    );
+}
+
 /// A page whose /Annots is an object of its own: signing and commenting update that array in
 /// place, not the page. A second signature is a signature change for the first, as with an
 /// inline /Annots, and a comment is still a comment (refused under a form-fill certification).
@@ -3774,8 +3933,9 @@ fn certify_level_one_forbids_adding_signature_fields_or_counter_signing() {
     assert_eq!(first_p2.status, Status::Valid, "{:?}", first_p2.modification);
 }
 
-/// Fields that name one signature value are listed each, under their own name, with the verdict
-/// the value earned once.
+/// Fields that name one signature value are listed each, under their own name. A field added since
+/// signing that names the signed value was never signed: it is refused, and the signed field keeps
+/// the verdict the value earned.
 #[test]
 fn fields_sharing_a_signature_value_are_listed_with_one_verdict() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
@@ -3803,7 +3963,8 @@ fn fields_sharing_a_signature_value_are_listed_with_one_verdict() {
     let list = signatures(&open(&shared), &shared, &trust);
     let (a, b) = (list.iter().find(|s| s.field == "Approval").unwrap(), list.iter().find(|s| s.field == "Twin").unwrap());
     assert!(a.signed && b.signed);
-    assert_eq!((a.status, &a.modification, &a.signer, a.signed_len), (b.status, &b.modification, &b.signer, b.signed_len));
+    assert_eq!((a.status, &a.signer), (Status::Valid, &Some("Test Signer RSA".to_string())), "{:?} {:?}", a.modification, a.details);
+    assert_eq!((b.status, &b.signer), (Status::Invalid, &None), "the twin added since signing: {:?} {:?}", b.modification, b.details);
 }
 
 #[test]

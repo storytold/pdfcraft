@@ -87,7 +87,7 @@ fn set_certification(doc: &Document, v: &Dict, info: &mut SignatureInfo) {
 }
 
 /// Whether `covered` spans the entire file (ignoring trailing whitespace and NUL padding).
-fn whole_file(bytes: &[u8], covered: usize) -> bool {
+pub(super) fn whole_file(bytes: &[u8], covered: usize) -> bool {
     covered == bytes.len() || bytes.get(covered..).is_some_and(|rest| rest.iter().all(|b| b.is_ascii_whitespace() || *b == 0))
 }
 
