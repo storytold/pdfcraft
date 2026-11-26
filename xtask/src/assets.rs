@@ -1,4 +1,4 @@
-//! `cargo xtask assets`: enforce the asset policy (AGENTS.md §1).
+//! `cargo xtask assets`: enforce the asset policy (clean-room.md and licences.md).
 //!
 //! `ATTRIBUTION.toml` lists every asset: committed or vendored files (`[[asset]]`), files that
 //! Cargo dependencies compile into PdfCraft (`[[bundled]]`), and files xtask downloads at build
@@ -6,7 +6,7 @@
 //! - an asset-like file in the repository has no entry, or its SHA-256 is missing or differs;
 //! - a licence is not on the allowlist, or a declared licence file is missing;
 //! - an icon, image or font names Adobe as author or source, or an `adobe_data` entry is not on
-//!   the closed list approved in AGENTS.md §1.1;
+//!   the closed list approved in clean-room.md;
 //! - a `[[bundled]]` crate version is not the one in Cargo.lock;
 //! - `ATTRIBUTION.md` is out of date (`--write` regenerates it).
 
@@ -19,7 +19,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-/// Licences allowed by AGENTS.md §1.2 (SPDX identifiers).
+/// Licences allowed by licences.md (SPDX identifiers).
 pub const ALLOWED_LICENCES: &[&str] = &[
     "ISC",
     "MIT",
@@ -36,10 +36,10 @@ pub const ALLOWED_LICENCES: &[&str] = &[
     "LicenseRef-Public-Domain",
 ];
 
-/// The closed list of Adobe-authored, non-visual technical data (AGENTS.md §1.1): (crate, path).
+/// The closed list of Adobe-authored, non-visual technical data (clean-room.md): (crate, path).
 /// Storyteller's own brand marks (the ArtCraft name and logos): shipped in the app and docs, but
 /// not licensed for reuse by forks. Allowed only for `kind = "logo"` entries under `docs/brand/`
-/// (AGENTS.md §1.2).
+/// (licences.md).
 pub const BRAND_LICENCE: &str = "LicenseRef-Storyteller-Trademark";
 
 pub const ADOBE_DATA_ALLOWED: &[(&str, &str)] = &[("hayro-cmap", "assets/cmaps.brotli"), ("hayro-interpret", "src/font/generated/metrics.rs")];
@@ -48,7 +48,7 @@ pub const ADOBE_DATA_ALLOWED: &[(&str, &str)] = &[("hayro-cmap", "assets/cmaps.b
 /// technical data we hold ourselves rather than through a dependency. Each still needs an
 /// `[[asset]]` entry with `adobe_data = true`, so its SHA-256 is checked and any change to the
 /// table has to be re-attested deliberately.
-pub const ADOBE_DATA_FILES: &[&str] = &["crates/fonts/src/std14_metrics.rs", "vendor/hayro-cmap/assets/cmaps.brotli"];
+pub const ADOBE_DATA_FILES: &[&str] = &[];
 
 /// File extensions that count as assets wherever they appear in the repository.
 const ASSET_EXTENSIONS: &[&str] = &[
@@ -230,10 +230,10 @@ fn mentions_adobe(s: &str) -> bool {
 pub fn check(root: &Path, m: &Manifest, repo_files: &[String], lock: &BTreeSet<(String, String)>) -> Vec<String> {
     let mut problems = Vec::new();
     let mut seen = BTreeSet::new();
-    // Kinds that may never come from Adobe (AGENTS.md §1.1): visual design, and UI translations
+    // Kinds that may never come from Adobe (clean-room.md): visual design, and UI translations
     // (which must be clean-room, never taken from a product's string tables).
     let visual = |kind: &str| matches!(kind, "icon" | "image" | "font" | "logo" | "cursor" | "video" | "translation");
-    // Typefaces under the SIL Open Font License are allowed whoever designed them (AGENTS.md §1.1).
+    // Typefaces under the SIL Open Font License are allowed whoever designed them (clean-room.md).
     let ofl_font =
         |kind: &str, licence: &str| kind == "font" && licence_ids(licence).next().is_some() && licence_ids(licence).all(|id| id == "OFL-1.1");
     let licence_ok = |what: &str, licence: &str, problems: &mut Vec<String>| {
@@ -523,7 +523,8 @@ mod tests {
 
     #[test]
     fn unlisted_asset_is_rejected() {
-        let p = check(&root(), &Manifest::default(), &["assets/icons/x.svg".into()], &lock(&[]));
+        // A file that is in the tree (the port took the old `x.svg` out with the chrome icons).
+        let p = check(&root(), &Manifest::default(), &["assets/icons/accessibility.svg".into()], &lock(&[]));
         assert!(p.iter().any(|p| p.contains("no ATTRIBUTION.toml entry")), "{p:?}");
     }
 
@@ -558,7 +559,7 @@ mod tests {
 
     #[test]
     fn changed_file_fails_hash_check() {
-        let mut a = asset("assets/icons/x.svg", "Lucide", "icon", "ISC");
+        let mut a = asset("assets/icons/accessibility.svg", "Lucide", "icon", "ISC");
         a.sha256 = Some("0".repeat(64));
         let p = check(&root(), &Manifest { asset: vec![a], ..Default::default() }, &[], &lock(&[]));
         assert!(p.iter().any(|p| p.contains("SHA-256 does not match")), "{p:?}");
@@ -594,23 +595,21 @@ mod tests {
     #[test]
     fn first_party_adobe_data_only_on_the_closed_list() {
         let l = lock(&[]);
-        // The generated standard-14 table is on the list, as `kind = "data"`.
-        let mut ok = asset("crates/fonts/src/std14_metrics.rs", "Adobe (Core14 AFM metrics); tables by the PdfCraft contributors", "data", "MIT");
-        ok.adobe_data = true;
-        let m = Manifest { asset: vec![ok], ..Default::default() };
-        assert!(check(&root(), &m, &[], &l).is_empty(), "{:?}", check(&root(), &m, &[], &l));
+        assert!(ADOBE_DATA_FILES.is_empty());
 
-        // Any other first-party file claiming it is refused.
+        // Any first-party file claiming adobe_data is refused now that the closed list is empty.
         let mut sneaky = asset("Cargo.toml", "Adobe", "data", "MIT");
         sneaky.adobe_data = true;
         let m = Manifest { asset: vec![sneaky], ..Default::default() };
         assert!(check(&root(), &m, &[], &l).iter().any(|p| p.contains("closed list")));
 
-        // Even on the list, it may only be data — never a typeface.
-        let mut wrong_kind = asset("crates/fonts/src/std14_metrics.rs", "Adobe", "font", "MIT");
+        // A visual asset from Adobe is also forbidden.
+        let mut wrong_kind = asset("Cargo.toml", "Adobe", "font", "MIT");
         wrong_kind.adobe_data = true;
         let m = Manifest { asset: vec![wrong_kind], ..Default::default() };
-        assert!(!check(&root(), &m, &[], &l).is_empty());
+        let problems = check(&root(), &m, &[], &l);
+        assert!(problems.iter().any(|p| p.contains("forbidden")));
+        assert!(problems.iter().any(|p| p.contains("closed list")));
     }
 
     #[test]

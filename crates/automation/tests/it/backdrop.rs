@@ -66,12 +66,9 @@ fn ok(a: &mut Automation, tool: &str, args: Value) -> Value {
 fn blank_spot(a: &mut Automation, doc: u64, page: u64) -> [u8; 3] {
     let rendered = a.call("page_render", &json!({ "doc": doc, "page": page, "dpi": 72 })).unwrap();
     let Content::Png { data, width, .. } = &rendered[0] else { panic!("expected a PNG") };
-    let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
-    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
-    let info = reader.next_frame(&mut pixels).unwrap();
-    let channels = info.color_type.samples();
-    let at = (10 * *width as usize + 180) * channels;
-    [pixels[at], pixels[at + 1], pixels[at + 2]]
+    let rgba = craft_image_codecs::decode(data).unwrap().to_rgba8();
+    let at = (10 * *width as usize + 180) * 4;
+    [rgba[at], rgba[at + 1], rgba[at + 2]]
 }
 
 const RED: [u8; 3] = [255, 0, 0];

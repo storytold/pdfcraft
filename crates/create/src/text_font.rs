@@ -10,7 +10,7 @@ use pdfcraft_fonts::{helvetica_width, literal, win_ansi};
 use crate::CreateError;
 
 /// The bundled face, Regular.
-fn face() -> Option<&'static pdfcraft_fonts::CraftFont> {
+fn face() -> Option<&'static pdfcraft_fonts::EmbeddedFace> {
     pdfcraft_fonts::document_latin_fonts(false).into_iter().next()
 }
 

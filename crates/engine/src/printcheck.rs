@@ -256,15 +256,18 @@ fn page_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> Vec<PageBoxes
             let row = boxes.get(i).copied().unwrap_or([[0.0; 4]; 5]);
             let trim = row[3];
             let bleed = row[2];
+            // The boxes are in user space; a `/UserUnit` page counts each unit as that many points.
+            let u = page.user_unit(doc);
+            let (pt_mm, rect_mm) = (|points: f64| mm(points * u), |rect: [f64; 4]| wh_mm(rect).map(|v| v * u));
             PageBoxes {
                 page: (i + 1) as u32,
-                media_mm: wh_mm(row[0]),
-                crop_mm: wh_mm(row[1]),
-                trim_mm: wh_mm(trim),
-                bleed_mm: wh_mm(bleed),
+                media_mm: rect_mm(row[0]),
+                crop_mm: rect_mm(row[1]),
+                trim_mm: rect_mm(trim),
+                bleed_mm: rect_mm(bleed),
                 trim_set: page.dict.contains(b"TrimBox"),
                 bleed_set: page.dict.contains(b"BleedBox"),
-                bleed_margin_mm: [mm(trim[0] - bleed[0]), mm(trim[1] - bleed[1]), mm(bleed[2] - trim[2]), mm(bleed[3] - trim[3])],
+                bleed_margin_mm: [pt_mm(trim[0] - bleed[0]), pt_mm(trim[1] - bleed[1]), pt_mm(bleed[2] - trim[2]), pt_mm(bleed[3] - trim[3])],
             }
         })
         .collect()
@@ -431,6 +434,22 @@ mod tests {
         assert_eq!(report.resolution_unknown, 0);
         assert!(report.text().contains("50 ppi"));
         assert!(report.text().contains("verification only"));
+    }
+
+    #[test]
+    fn box_sizes_and_bleed_follow_the_pages_user_unit() {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 600, 600);
+        let p = page(&mut doc, "Im", img, "q 72 0 0 72 36 36 cm /Im Do Q");
+        doc.update_dict(p, |d| {
+            d.set(b"UserUnit".to_vec(), Object::Int(2));
+            d.set(b"TrimBox".to_vec(), Object::Array(vec![1.into(), 1.into(), 611.into(), 791.into()]));
+        })
+        .unwrap();
+        let page = &inspect(&doc).pages[0];
+        // 612 x 792 user units of 2 points each.
+        assert!((page.media_mm[0] - 612.0 * 2.0 * 25.4 / 72.0).abs() < 1e-9, "{:?}", page.media_mm);
+        assert!((page.bleed_margin_mm[0] - 2.0 * 25.4 / 72.0).abs() < 1e-9, "{:?}", page.bleed_margin_mm);
     }
 
     #[test]
