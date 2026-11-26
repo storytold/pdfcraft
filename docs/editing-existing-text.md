@@ -166,9 +166,9 @@ On a scanned page, recognised text (Scan & OCR) is an invisible layer over the p
 text groups it into phrases: words joined by a word space, with a table cell, a tab stop and each
 scanned line kept apart. Applying an edit draws the new text visibly in the scan's ink colour (or
 the one chosen) and first covers the old words with the paper colour sampled around them. Each
-word keeps its position and width, and a longer phrase grows rightwards rather than wrapping, to
-the page's edge if need be (a title-block cell sits in the corner); on a page stored turned, the
-phrase grows along its line the same way.
+word keeps its position and width, and a longer phrase grows rightwards rather than wrapping, past
+the page's edge if it must (a title-block cell sits in the corner; a phrase set flush right or
+centred keeps its box instead); on a page stored turned, the phrase grows along its line the same way.
 OCR sizes each word from its own box, so a phrase's words can come out several points apart: the
 editor and the rewrite set the whole phrase in one size, the median of its words' sizes.
 A text edit covers and redraws only the words it changes: the rest of the line stays the scan, and
