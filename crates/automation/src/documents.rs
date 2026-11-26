@@ -154,7 +154,7 @@ impl Automation {
         self.purview_status()
     }
 
-    pub(crate) fn purview_sign_in(&self, a: &Args) -> Result<Value> {
+    pub(crate) fn purview_sign_in(&mut self, a: &Args) -> Result<Value> {
         let username = a.opt_str("username")?;
         self.session.purview_sign_in(username).map_err(|error| failed(error.to_string()))?;
         self.purview_status()
