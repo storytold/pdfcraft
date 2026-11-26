@@ -5,11 +5,11 @@ use std::sync::{Arc, OnceLock};
 use pdfcraft_cos::{SaveOptions, write_incremental};
 use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 
-use crate::history::{Editor, Keys, TextBlocksCache};
+use crate::history::{AsOpened, Editor, Keys, TextBlocksCache};
 use crate::{
-    AppearanceCache, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard,
-    info_fields, js, note_warnings, print_preview_layers, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout,
-    xfa_values_from_datasets,
+    AppearanceCache, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config,
+    editor_signatures, guard, info_fields, js, note_warnings, print_preview_layers, recovered_render_password, render_threads, same_pages, xfa,
+    xfa_layout, xfa_values_from_datasets,
 };
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -37,6 +37,8 @@ struct DocumentOpenData<'a> {
     render_password: Option<String>,
     password: Option<&'a str>,
     xfa: Option<XfaLayout>,
+    /// The file as read, when opening appended revisions to it ([`crate::history::AsOpened`]).
+    as_opened: Option<AsOpened>,
 }
 
 impl OpenContext {
@@ -152,6 +154,11 @@ impl Session {
             }
             Ok((new_bytes, new_info, new_cos))
         };
+        // The file as read, for its signatures: opening an XFA form may append revisions below.
+        let as_read = match (&info.xfa, &cos) {
+            (Some(_), Ok(Ok(c))) => Some(AsOpened { cos: c.clone(), bytes: bytes.clone() }),
+            _ => None,
+        };
         let (bytes, info, cos, xfa) = match (info.xfa, cos) {
             (Some(pdfcraft_render::Xfa::Dynamic), Ok(Ok(cos))) if pdfcraft_xfa::existing_layout(&cos).is_none() => {
                 let mut work = cos.clone();
@@ -225,6 +232,7 @@ impl Session {
                             ran_away: false,
                             highlight: context.highlight,
                             time_scale: context.xfa_time_scale,
+                            relaid: false,
                         };
                         let changes = xfa::on_open(&mut work, &tpl, &mut run);
                         if run.ran_away {
@@ -285,8 +293,9 @@ impl Session {
         };
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
+        let as_opened = as_read.filter(|o| !Arc::ptr_eq(&o.bytes, &bytes));
         let mut document =
-            Self::build_document(context, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa });
+            Self::build_document(context, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa, as_opened });
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -300,7 +309,7 @@ impl Session {
 
     /// The last step of opening: build the document record and register it.
     fn build_document(context: &OpenContext, data: DocumentOpenData<'_>) -> Document {
-        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
+        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa, as_opened } = data;
         let mut config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
@@ -318,6 +327,7 @@ impl Session {
                         appearances: AppearanceCache::default(),
                         field_appearances: pdfcraft_forms::FieldAppearanceCache::default(),
                         text_blocks: TextBlocksCache::default(),
+                        as_opened,
                     }),
                     None,
                 )
@@ -326,7 +336,13 @@ impl Session {
             Err(_) => (None, Some("the document structure could not be read for editing".into())),
         };
         let sig_cache = Arc::new(pdfcraft_sign::DigestCache::default());
-        let mut signatures = editor.as_ref().map(|e| signatures_of(&e.cos, &bytes, &context.trust, &sig_cache)).unwrap_or_default();
+        let mut signatures = editor.as_ref().map(|e| editor_signatures(e, &bytes, &context.trust, &sig_cache)).unwrap_or_default();
+        // Only a signed file needs keeping as it was read.
+        if !signatures.iter().any(|s| s.signed)
+            && let Some(e) = editor.as_mut()
+        {
+            e.as_opened = None;
+        }
         // The inspection reads only `/Info`; a file stating its title or author only in XMP still
         // shows them (#2373).
         if let Some(e) = &editor {
@@ -370,7 +386,6 @@ impl Session {
             password: render_password,
             dirty: false,
             generation: 0,
-            snapshot_generation: 0,
             read_only_reason,
             form: Arc::new(form),
             marker_scan: OnceLock::new(),
