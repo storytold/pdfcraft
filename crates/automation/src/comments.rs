@@ -1,4 +1,4 @@
-//! Comment tools: list, add, reply, set status, edit and delete (execution plan M5, AGENTS.md §3).
+//! Comment tools: list, add, reply, set status, edit and delete (execution plan M5, app-agents.md rule 14).
 //!
 //! Geometry follows the automation convention: points from the top-left of the displayed page,
 //! y down. It is converted to PDF user space (crop box, `/Rotate`) here.
