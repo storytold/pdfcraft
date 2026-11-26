@@ -45,16 +45,25 @@ fn valid_in_window(this: Time, next: Option<Time>, at: Time) -> bool {
 
 /// CRLReason `certificateHold` (RFC 5280 §5.3.1): a suspension that may be lifted.
 const REASON_CERTIFICATE_HOLD: u64 = 6;
+/// CRLReason `removeFromCRL`: a delta CRL entry that lifts a hold or removes an entry, not a
+/// revocation.
+const REASON_REMOVE_FROM_CRL: u64 = 8;
 const EXT_REASON_CODE: &str = "2.5.29.21";
 
 fn bad_reason() -> SignError {
     SignError::Malformed("revocation: the revoked entry cannot be read back".into())
 }
 
-/// Whether the CRL entry for `serial` in the signed `tbsCertList` may be a hold: its reason
-/// code is `certificateHold`, or the entry cannot be read back. The shared parser keeps no
-/// reason codes, so this walks the signed bytes again.
-fn crl_entry_may_be_hold(tbs: &[u8], serial: &[u8]) -> bool {
+/// Whether a revocation whose reason was read back as `reason` may not be permanent: it is a
+/// hold, a removal, or it could not be read.
+fn not_permanent(reason: Result<Option<u64>, SignError>) -> bool {
+    reason.map_or(true, |r| matches!(r, Some(REASON_CERTIFICATE_HOLD | REASON_REMOVE_FROM_CRL)))
+}
+
+/// Whether the CRL entry for `serial` in the signed `tbsCertList` may not be a permanent
+/// revocation (see [`not_permanent`]). The shared parser keeps no reason codes, so this walks
+/// the signed bytes again.
+fn crl_entry_may_be_lifted(tbs: &[u8], serial: &[u8]) -> bool {
     let reason = || -> Result<Option<u64>, SignError> {
         let fields = Tlv::parse_all(tbs)?.children()?;
         // version, signature, issuer, thisUpdate and nextUpdate come first; the list of revoked
@@ -78,12 +87,12 @@ fn crl_entry_may_be_hold(tbs: &[u8], serial: &[u8]) -> bool {
         }
         Err(bad_reason())
     };
-    reason().map_or(true, |r| r == Some(REASON_CERTIFICATE_HOLD))
+    not_permanent(reason())
 }
 
 /// Whether the revoked status of SingleResponse number `index` in the signed `ResponseData`
-/// may be a hold: its `revocationReason` is `certificateHold`, or it cannot be read back.
-fn ocsp_revocation_may_be_hold(tbs: &[u8], index: usize) -> bool {
+/// may not be a permanent revocation (see [`not_permanent`]).
+fn ocsp_revocation_may_be_lifted(tbs: &[u8], index: usize) -> bool {
     let reason = || -> Result<Option<u64>, SignError> {
         let fields = Tlv::parse_all(tbs)?.children()?;
         // [0] version, responderID and producedAt come first; the responses are the SEQUENCE
@@ -94,13 +103,15 @@ fn ocsp_revocation_may_be_hold(tbs: &[u8], index: usize) -> bool {
         let s = single.children()?;
         let Some(info) = s.get(1).filter(|t| t.tag == tag::ctx(1)) else { return Ok(None) };
         // RevokedInfo ::= SEQUENCE { revocationTime, revocationReason [0] EXPLICIT CRLReason OPTIONAL },
-        // carried under the IMPLICIT [1] tag.
-        match info.children()?.get(1) {
-            Some(r) if r.tag == tag::ctx(0) => Ok(Some(r.inner()?.enumerated()?)),
-            _ => Ok(None),
+        // carried under the IMPLICIT [1] tag. Anything after the time other than that one
+        // field cannot be read.
+        match info.children()?.as_slice() {
+            [_] => Ok(None),
+            [_, r] if r.tag == tag::ctx(0) => Ok(Some(r.inner()?.enumerated()?)),
+            _ => Err(bad_reason()),
         }
     };
-    reason().map_or(true, |r| r == Some(REASON_CERTIFICATE_HOLD))
+    not_permanent(reason())
 }
 
 /// Verify `signature` over the raw `signed` bytes with `key`, where the signature's algorithm
@@ -182,8 +193,8 @@ impl CertificateList {
     /// Check `cert` against this CRL at `at`. The CRL must be issued by `cert`'s issuer, its
     /// signature must verify with the issuer's key. An entry dated at or before `at` revokes
     /// whatever the CRL's own window: a list issued later, as long-term validation evidence
-    /// is, still proves the revocation, unless the entry is a `certificateHold`, which may since
-    /// be lifted. Otherwise `at` must fall inside its window.
+    /// is, still proves the revocation, unless the entry is a `certificateHold` or a
+    /// `removeFromCRL`, neither of which is permanent. Otherwise `at` must fall inside its window.
     pub fn check(&self, cert: &Certificate, issuer: &Certificate, at: Time) -> RevocationStatus {
         if self.issuer_raw != issuer.subject.raw || issuer.subject.raw != cert.issuer.raw {
             return RevocationStatus::Unknown;
@@ -194,7 +205,7 @@ impl CertificateList {
         let entry = self.revoked.iter().find(|(serial, _)| strip(serial) == strip(&cert.serial));
         if let Some((_, t)) = entry
             && *t <= at
-            && !crl_entry_may_be_hold(&self.tbs, &cert.serial)
+            && !crl_entry_may_be_lifted(&self.tbs, &cert.serial)
         {
             return RevocationStatus::Revoked { at: *t };
         }
@@ -433,10 +444,11 @@ impl OcspResponse {
         });
         let Some((index, single)) = index.and_then(|i| Some((i, self.responses.get(i)?))) else { return RevocationStatus::Unknown };
         // A response produced after `at`, as long-term validation evidence is, still proves a
-        // revocation it dates at or before `at`, unless it is a hold, which may since be lifted.
+        // revocation it dates at or before `at`, unless it is a hold or a removal, neither of
+        // which is permanent.
         if let CertStatus::Revoked(t) = single.status
             && t <= at
-            && !ocsp_revocation_may_be_hold(&self.tbs, index)
+            && !ocsp_revocation_may_be_lifted(&self.tbs, index)
         {
             return RevocationStatus::Revoked { at: t };
         }

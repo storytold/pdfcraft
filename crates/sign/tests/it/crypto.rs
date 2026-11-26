@@ -452,8 +452,9 @@ fn later_evidence_still_proves_an_earlier_revocation() {
     assert_eq!(check_ocsp(RevocationStatus::Good), RevocationStatus::Unknown);
 }
 
-/// A hold (CRLReason certificateHold) may be lifted, so later evidence of one proves nothing
-/// about the validation time; a permanent reason still revokes.
+/// A hold (CRLReason certificateHold) may be lifted and a removeFromCRL entry lifts one, so
+/// later evidence of either proves nothing about the validation time; neither does a reason
+/// that cannot be read. A permanent reason still revokes.
 #[test]
 fn later_evidence_of_a_hold_proves_nothing() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
@@ -462,18 +463,23 @@ fn later_evidence_of_a_hold_proves_nothing() {
     let (this, next) =
         (Time { year: 2026, month: 7, day: 1, hour: 0, minute: 0, second: 0 }, Time { year: 2026, month: 8, day: 1, hour: 0, minute: 0, second: 0 });
     let before = Time { year: 2026, month: 6, day: 1, hour: 8, minute: 0, second: 0 };
-    let (key_compromise, hold) = (1, 6);
+    let (key_compromise, hold, remove) = (1, 6, 8);
     let check_crl = |reason| {
         let entry = crl_entry_with_reason(&issuer.serial, before, reason);
         CertificateList::parse(&crl_with_entry(&id, Some(entry), this, next)).unwrap().check(issuer, issuer, at)
     };
     assert_eq!(check_crl(key_compromise), RevocationStatus::Revoked { at: before });
     assert_eq!(check_crl(hold), RevocationStatus::Unknown);
-    let check_ocsp = |reason| {
-        OcspResponse::parse(&ocsp_with_status(&id, &ocsp_revoked_with_reason(before, reason), this, next)).unwrap().check(issuer, issuer, at)
-    };
-    assert_eq!(check_ocsp(key_compromise), RevocationStatus::Revoked { at: before });
-    assert_eq!(check_ocsp(hold), RevocationStatus::Unknown);
+    assert_eq!(check_crl(remove), RevocationStatus::Unknown);
+    let check_ocsp = |status: &[u8]| OcspResponse::parse(&ocsp_with_status(&id, status, this, next)).unwrap().check(issuer, issuer, at);
+    assert_eq!(check_ocsp(&ocsp_revoked_with_reason(before, key_compromise)), RevocationStatus::Revoked { at: before });
+    assert_eq!(check_ocsp(&ocsp_revoked_with_reason(before, hold)), RevocationStatus::Unknown);
+    assert_eq!(check_ocsp(&ocsp_revoked_with_reason(before, remove)), RevocationStatus::Unknown);
+    // A hold under the wrong tag ([1] instead of [0]) is unreadable, not absent.
+    let mistagged = der::tlv(tag::ctx(1), &[before.encode(), der::explicit(1, &der::tlv(tag::ENUMERATED, &[hold]))].concat());
+    assert_eq!(check_ocsp(&mistagged), RevocationStatus::Unknown);
+    // With no reason at all, the revocation stands.
+    assert_eq!(check_ocsp(&der::tlv(tag::ctx(1), &before.encode())), RevocationStatus::Revoked { at: before });
 }
 
 /// Issue #159: `.p12` files that aren't clean DER still open — trailing
