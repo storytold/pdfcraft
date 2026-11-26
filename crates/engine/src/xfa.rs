@@ -643,6 +643,29 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
     }
 
+    /// Run validate script `ev` on `value`: one that answers false, or fails, shows its message
+    /// (else one naming field `name`) unless the value is empty; the value stays, as another
+    /// viewer marks the field invalid rather than reverting it.
+    fn validate(&mut self, ev: &ScriptEvent, name: &str, value: &str) -> Result<(), String> {
+        let Some(o) = self.run(ev, value)? else { return Ok(()) };
+        if (o.result_bool == Some(false) || o.error.is_some()) && !value.trim().is_empty() {
+            self.alert(crate::js::Message::plain(ev.message.clone().unwrap_or_else(|| format!("{name}: the value is not valid"))));
+        }
+        Ok(())
+    }
+
+    /// Every validate script of the form, in document order, each on its field's value
+    /// ([`Runner::validate`]): on opening, after the calculations, another viewer validates every
+    /// field that has a script, and only one with a value that fails says so.
+    fn validates(&mut self) -> Result<(), String> {
+        for ev in self.events_named("validate") {
+            let name = self.by_som().get(&ev.som).cloned().unwrap_or_else(|| ev.som.clone());
+            let value = self.fields().get(&name).map(|f| f.value.join("\n")).unwrap_or_default();
+            self.validate(&ev, &name, &value)?;
+        }
+        Ok(())
+    }
+
     /// Show message `m`, up to [`MAX_ALERTS_PER_EVENT`] for one event; the rest are counted.
     fn alert(&mut self, m: crate::js::Message) {
         if self.run.out.alerts.len() < MAX_ALERTS_PER_EVENT {
@@ -1304,9 +1327,10 @@ pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mu
     for ev in &initialize {
         r.run(ev, "")?;
     }
-    // The calculations, before form:ready (XFA 3.3 fires the form ready event once they have run;
-    // another viewer runs them there too).
+    // The calculations and then the validations, before form:ready (XFA 3.3 fires the form
+    // ready event once they have run; another viewer runs them there too).
     r.calculates()?;
+    r.validates()?;
     let calculated = r.field_changes.clone();
     // `ready` without `ref="$layout"` is form:ready: in the reverse of initialize's order, the
     // root first and the objects inside it last to first, as another viewer runs it.
@@ -1400,10 +1424,7 @@ pub(crate) fn on_changes(
             exited.push(som.clone());
         }
         for ev in r.events_of(&som, "validate") {
-            let Some(o) = r.run(&ev, &value)? else { continue };
-            if (o.result_bool == Some(false) || o.error.is_some()) && !value.trim().is_empty() {
-                r.alert(crate::js::Message::plain(ev.message.clone().unwrap_or_else(|| format!("{name}: the value is not valid"))));
-            }
+            r.validate(&ev, name, &value)?;
         }
     }
     r.calculates()?;

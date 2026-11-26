@@ -12811,6 +12811,35 @@ fn calculations_run_before_form_ready_which_runs_in_reverse() {
     assert_eq!(log.matches("calc calculate").count(), 1, "{log}");
 }
 
+/// On opening, every field's validate script runs, in document order, after the calculations and
+/// before form:ready, as another viewer runs them on a synthetic form: a field whose value fails
+/// shows its own message, an empty one that fails shows nothing, and one that passes says
+/// nothing.
+#[test]
+fn validate_scripts_run_on_opening_after_the_calculations() {
+    let js = |what: &str| {
+        format!(r#"var l = xfa.form.form.log; l.rawValue = (l.rawValue == null || l.rawValue == "" ? "" : l.rawValue + "|") + "{what}";"#)
+    };
+    let field = |name: &str, value: &str, valid: &str, extra: &str| {
+        let v = if value.is_empty() { String::new() } else { format!("<value><text>{value}</text></value>") };
+        format!(
+            r#"<field name="{name}" w="2in" h="0.3in"><ui><textEdit/></ui>{v}{extra}<validate scriptTest="error"><message><text name="scriptTest">{name}: its own message</text></message><script contentType="application/x-javascript">{} {valid};</script></validate></field>"#,
+            js(&format!("{name} validate"))
+        )
+    };
+    let calc = format!(r#"<calculate><script contentType="application/x-javascript">{} 42;</script></calculate>"#, js("calc calculate"));
+    let fields =
+        [field("passes", "x", "true", ""), field("fails", "x", "false", ""), field("emptyFails", "", "false", ""), field("calc", "", "true", &calc)]
+            .concat();
+    let xdp = pdfcraft_xfa::fixtures::ready_events_template().replace(r#" <field name="grow""#, &format!(" {fields}\n <field name=\"grow\""));
+    let mut s = Session::new();
+    let id = s.open("validate.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&xdp)), None).expect("opens");
+    let log = s.get(id).unwrap().form.iter().find(|f| f.name == "log").map(|f| f.value.join("")).unwrap_or_default();
+    let validated = "calc calculate|passes validate|fails validate|emptyFails validate|calc validate|root form:ready";
+    assert!(log.contains(validated), "{log}");
+    assert_eq!(s.take_js_output(id).alerts, [crate::js::Message::plain("fails: its own message")], "only the failing field with a value says so");
+}
+
 /// An edit's two script runtimes share one field highlight: a change an XFA script makes reaches
 /// the field scripts' runner, and one the field scripts make is what the next XFA script reads.
 #[test]
