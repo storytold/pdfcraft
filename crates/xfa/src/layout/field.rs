@@ -126,8 +126,10 @@ impl Layouter<'_> {
         if f.access == Access::NonInteractive && f.ui != Ui::Button {
             // Shown as text, not as a field, but still bound to the data: the data's value wins
             // over the template's default, and a date shows in the field's pattern as its widget
-            // would show it. An image field's data is the picture already drawn above, not text.
-            let data_value = (f.ui != Ui::ImageEdit)
+            // would show it, and a list shows the label of the item its saved value names. Other
+            // kinds keep the template's value: an image field's data is the picture drawn above,
+            // and a password's data must not be drawn in the clear.
+            let data_value = matches!(f.ui, Ui::TextEdit | Ui::NumericEdit | Ui::DateTimeEdit | Ui::ChoiceList)
                 .then(|| self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som_path()))))
                 .flatten()
                 .filter(|t| !t.trim().is_empty())
@@ -135,6 +137,12 @@ impl Layouter<'_> {
                     Ui::DateTimeEdit => {
                         Value::Text(iso_to_pattern(&data_to_iso(v.trim(), data_date_letters(f).as_deref()), &date_pattern(f.picture.as_deref())))
                     }
+                    Ui::ChoiceList => Value::Text(
+                        v.lines()
+                            .map(|one| f.item_values.iter().position(|s| s == one.trim()).and_then(|i| f.items.get(i)).map_or(one, String::as_str))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    ),
                     _ => Value::Text(v.to_string()),
                 });
             let value = data_value.as_ref().unwrap_or(&f.value);
