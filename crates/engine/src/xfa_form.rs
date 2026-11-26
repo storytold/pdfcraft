@@ -243,11 +243,15 @@ pub(crate) fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut E
             ran_away: false,
             highlight,
             time_scale: cx.xfa_time_scale,
+            relaid: false,
         };
         let r = guard(|| xfa::on_data_replaced(doc, &tpl, calculate, &mut run))
             .unwrap_or_else(|m| Err(format!("laying the form out again failed unexpectedly ({m})")));
         cx.xfa_datasets = run.datasets;
         cx.xfa_ran_away |= run.ran_away;
+        // The next XFA run of a batch starts from the page count this one left.
+        cx.pages = run.page_count;
+        cx.xfa_relaid |= run.relaid;
         // The next edit of a batch reads the highlight this one's scripts set.
         let on = run.highlight;
         cx.set_highlight(on);
