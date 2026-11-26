@@ -1040,7 +1040,7 @@ pub fn tools() -> Vec<ToolDef> {
                         "type": "object",
                         "description": "Exactly one of image, text or strokes.",
                         "properties": {
-                            "image": { "type": "string", "description": "A PNG or JPEG file." },
+                            "image": { "type": "string", "description": "A PNG, JPEG, TIFF, GIF, BMP or WebP file." },
                             "text": { "type": "string", "description": "Typed in the script font." },
                             "strokes": { "type": "array", "items": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } } },
                         },
