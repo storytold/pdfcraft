@@ -804,7 +804,15 @@ pub(crate) fn picture_menu(ui: &mut egui::Ui, session: &mut PageSession, menu: &
         session.image_selection = None;
         session.pending_edit = edit(E::Ungroup);
     }
-    if item(ui, raster, tl!("Replace image")) {
+    // A raster image, or grouped artwork that wraps one picture (its frame and clip are kept).
+    let mut replace = MenuItem::new(tl!("Replace image").to_string()).enabled(img.replaceable);
+    if img.is_form {
+        replace = replace.tooltip(
+            craft::ui::contract::TooltipSpec::new(tl!("Replaces the picture inside this group. Its frame and crop stay."))
+                .disabled_text(tl!("This group holds no single picture to replace. Ungroup it to replace a picture inside.")),
+        );
+    }
+    if replace.show(ui).ran {
         action = Some(ImageAction::Replace(page, hit));
     }
     if item(ui, raster, tl!("Save Image As…")) {
