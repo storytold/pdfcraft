@@ -403,7 +403,12 @@ fn widest_glyph(w: &Word) -> f64 {
 /// The left margin of a paragraph's lines and where its first line starts from them, for a
 /// hanging indent of `hang` (the negative textIndent, as far as the box allows): the first line
 /// never starts left of the box, so the other lines move in to make room.
+/// Without a negative textIndent the margins are as given (a negative marginLeft still moves
+/// every line left) and the first line's indent is the textIndent, at least 0.
 fn indents(para: &Para, hang: f64) -> (f64, f64) {
+    if para.text_indent >= 0.0 || para.text_indent.is_nan() {
+        return (para.margin_left, para.text_indent.max(0.0));
+    }
     let margin_left = para.margin_left.max(hang);
     (margin_left, para.text_indent.max(-margin_left))
 }

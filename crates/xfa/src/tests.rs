@@ -528,6 +528,11 @@ fn a_negative_text_indent_hangs_the_first_line_and_indents_the_rest() {
     // A positive indent still moves only the first line in.
     let starts = line_starts(text, 58.0, r#"textIndent="10pt""#);
     assert!((starts[0] - 10.0).abs() < 1e-6 && starts[1..].iter().all(|x| x.abs() < 1e-6), "{starts:?}");
+    // Without a negative indent a negative left margin moves every line left, as before.
+    let starts = line_starts(text, 58.0, r#"marginLeft="-6pt""#);
+    assert!(starts.iter().all(|x| (x + 6.0).abs() < 1e-6), "{starts:?}");
+    let starts = line_starts(text, 58.0, r#"marginLeft="-6pt" textIndent="10pt""#);
+    assert!((starts[0] - 4.0).abs() < 1e-6 && starts[1..].iter().all(|x| (x + 6.0).abs() < 1e-6), "{starts:?}");
 }
 
 /// A hang wider than its box is bounded by it: every line still starts and ends inside the box,
