@@ -178,8 +178,12 @@ fn compact(s: &Stream, budget: &mut ImageBudget) -> Outcome {
 }
 
 /// Every operator of `data`, unless some bytes can't be read for certain ([`Outcome::Unreadable`])
-/// or there are more than `max` operators or operands ([`Outcome::Kept`]).
+/// or there are more than `max` operators or operands ([`Outcome::Kept`]). The parser holds
+/// operands until their operator comes, so the tokens are counted before anything is read.
 fn read_all(data: &[u8], max: usize) -> Result<Vec<Op>, Outcome> {
+    if !tokens_at_most(data, max.saturating_mul(2)) {
+        return Err(Outcome::Kept);
+    }
     let mut reader = read(data);
     let mut ops = Vec::new();
     let mut operands = 0usize;
@@ -194,6 +198,24 @@ fn read_all(data: &[u8], max: usize) -> Result<Vec<Op>, Outcome> {
         return Err(Outcome::Unreadable);
     }
     Ok(ops)
+}
+
+/// Whether `data` has at most `limit` tokens, counting each run of regular characters and each
+/// delimiter as one. That overcounts (inside strings, and `<<` as two), never undercounts.
+fn tokens_at_most(data: &[u8], limit: usize) -> bool {
+    let mut count = 0usize;
+    let mut prev_regular = false;
+    for &b in data {
+        let regular = is_regular(b);
+        if is_delim(b) || (regular && !prev_regular) {
+            count = count.saturating_add(1);
+            if count > limit {
+                return false;
+            }
+        }
+        prev_regular = regular;
+    }
+    true
 }
 
 /// The filters of `s`, when its data is in the file, only general-purpose filters with direct
@@ -586,6 +608,9 @@ mod tests {
         assert!(matches!(read_all(b"n n n n", 3), Err(Outcome::Kept)));
         assert!(matches!(read_all(b"1 2 3 4 m", 3), Err(Outcome::Kept)), "operands count too");
         assert!(matches!(read_all(b"n ) n", 3), Err(Outcome::Unreadable)));
+        // Operands with no operator after them are held until the end: counted before reading.
+        assert!(matches!(read_all(b"1 1 1 1 1 1 1", 3), Err(Outcome::Kept)));
+        assert!(matches!(read_all(b"[1 1 1 1 1 1] n", 3), Err(Outcome::Kept)), "array elements count");
     }
 
     #[test]
