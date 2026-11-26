@@ -88,7 +88,7 @@ pub enum OutlineError {
 
 type Result<T> = std::result::Result<T, OutlineError>;
 
-fn outline_root(doc: &Document) -> Option<ObjRef> {
+pub(crate) fn outline_root(doc: &Document) -> Option<ObjRef> {
     let root = doc.root()?;
     doc.get(root).as_dict()?.reference(b"Outlines")
 }
@@ -422,7 +422,7 @@ pub(crate) fn container(doc: &mut Document, parent_path: &[usize]) -> Result<Obj
 }
 
 /// Set `key` on the dictionary `r` (or remove it with `None`) only if it changes.
-fn put(doc: &mut Document, r: ObjRef, key: &[u8], value: Option<Object>) -> Result<()> {
+pub(crate) fn put(doc: &mut Document, r: ObjRef, key: &[u8], value: Option<Object>) -> Result<()> {
     let current = doc.get(r).as_dict().and_then(|d| d.get(key).cloned());
     if current == value {
         return Ok(());
