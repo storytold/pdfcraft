@@ -2,11 +2,66 @@ use super::values::{FieldDatum, Want, wanted, with_template};
 use super::{Document, HashMap, MAX_DEPTH, XFA_DATA_NS};
 
 pub(super) fn xml_name(s: &str) -> String {
-    let mut out: String = s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' { c } else { '_' }).collect();
-    if out.is_empty() || !(out.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')) {
-        out.insert(0, '_');
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else { return "_".into() };
+    let mut out = String::with_capacity(s.len());
+    if is_ncname_start_char(first) {
+        out.push(first);
+    } else if is_ncname_char(first) {
+        out.push('_');
+        out.push(first);
+    } else {
+        out.push('_');
     }
+    out.extend(chars.map(|c| if is_ncname_char(c) { c } else { '_' }));
     out
+}
+
+/// XML 1.0 Fifth Edition NCName characters; colon is excluded because these are local names.
+fn is_ncname_start_char(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x41..=0x5A
+            | 0x5F
+            | 0x61..=0x7A
+            | 0xC0..=0xD6
+            | 0xD8..=0xF6
+            | 0xF8..=0x2FF
+            | 0x370..=0x37D
+            | 0x37F..=0x1FFF
+            | 0x200C..=0x200D
+            | 0x2070..=0x218F
+            | 0x2C00..=0x2FEF
+            | 0x3001..=0xD7FF
+            | 0xF900..=0xFDCF
+            | 0xFDF0..=0xFFFD
+            | 0x10000..=0xEFFFF
+    )
+}
+
+fn is_ncname_char(c: char) -> bool {
+    is_ncname_start_char(c) || matches!(c as u32, 0x2D | 0x2E | 0x30..=0x39 | 0xB7 | 0x300..=0x36F | 0x203F..=0x2040)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::xml_name;
+
+    #[test]
+    fn data_names_keep_xml_name_characters() {
+        for name in ["Straße", "Société", "氏名", "name\u{0301}2", "a\u{203F}b"] {
+            assert_eq!(xml_name(name), name);
+        }
+    }
+
+    #[test]
+    fn data_names_replace_only_invalid_characters_or_positions() {
+        assert_eq!(xml_name("a:b c"), "a_b_c");
+        assert_eq!(xml_name("1field"), "_1field");
+        assert_eq!(xml_name("-field"), "_-field");
+        assert_eq!(xml_name("\u{0301}field"), "_\u{0301}field");
+        assert_eq!(xml_name(""), "_");
+    }
 }
 
 /// `s` as XML character data. Characters XML 1.0 cannot hold are left out; the flag says

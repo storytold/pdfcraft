@@ -265,6 +265,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-26 (M12, #8374):** New XFA data nodes preserve valid Unicode XML local-name characters and read back after save/reopen; invalid local-name characters are sanitized consistently. Regression covers accented Latin, CJK, a combining mark, digits, and a name requiring sanitization. Overall XFA support remains partial.
+
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
 

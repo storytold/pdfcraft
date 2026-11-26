@@ -1,3 +1,4 @@
+use super::build::xml_name;
 use super::{DataNode, DataPath, Field, MAX_DEPTH, MAX_NODES, Node, SomIndices, Template, XFA_DATA_NS};
 
 fn to_node(n: crate::xml::Node, depth: usize) -> DataNode {
@@ -54,19 +55,22 @@ pub(super) fn parse_datasets_packet(text: &str) -> Option<DataNode> {
 /// The data path a SOM expression names: `form[0].#subform[0].name[1]` → `[(form, 0), (name, 1)]`.
 /// Unnamed containers (`#subform`) have no data node.
 pub fn som_to_path(som: &str) -> DataPath {
-    som.split('.')
-        .filter_map(|seg| {
-            let seg = seg.trim();
-            if seg.is_empty() || seg.starts_with('#') || seg.starts_with('$') {
-                return None;
-            }
-            let (name, idx) = match seg.split_once('[') {
-                Some((n, rest)) => (n, rest.trim_end_matches(']').parse::<usize>().unwrap_or(0)),
-                None => (seg, 0),
-            };
-            Some((name.to_string(), idx.min(100_000)))
-        })
-        .collect()
+    som_segments(som).map(|(name, index)| (xml_name(name), index)).collect()
+}
+
+// Template lookup uses the original spelling. Only names used in the XML data tree are cleaned.
+fn som_segments(som: &str) -> impl Iterator<Item = (&str, usize)> {
+    som.split('.').filter_map(|seg| {
+        let seg = seg.trim();
+        if seg.is_empty() || seg.starts_with('#') || seg.starts_with('$') {
+            return None;
+        }
+        let (name, idx) = match seg.split_once('[') {
+            Some((n, rest)) => (n, rest.trim_end_matches(']').parse::<usize>().unwrap_or(0)),
+            None => (seg, 0),
+        };
+        Some((name, idx.min(100_000)))
+    })
 }
 
 /// The data path the object at `som` binds to: [`som_to_path`] without the areas on the way.
@@ -79,7 +83,7 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
     // The template children the next segment is looked up in; `None` until the root matched,
     // and again once a segment is not a container the template has.
     let mut level: Option<&[Node]> = None;
-    let segments = som_to_path(som);
+    let segments: DataPath = som_segments(som).map(|(name, i)| (name.to_owned(), i)).collect();
     let page_area_index = page_area_index(tpl, &segments);
     for (i, (name, index)) in segments.into_iter().enumerate() {
         // A page area's SOM index is the page made from it; see [`page_area_index`].
@@ -97,11 +101,11 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
             Some(Container::Area(children)) => level = Some(children),
             Some(Container::Children(children)) => {
                 level = Some(children);
-                out.push((name, index));
+                out.push((xml_name(&name), index));
             }
             None => {
                 level = None;
-                out.push((name, index));
+                out.push((xml_name(&name), index));
             }
         }
     }
@@ -204,9 +208,9 @@ pub(crate) fn template_field<'a>(tpl: &'a Template, som: &str) -> Option<&'a Fie
 /// instance of, found as [`template_field`] finds a field. `None` for the root and for a button
 /// of an exclusion group.
 pub(crate) fn template_object<'a>(tpl: &'a Template, som: &str) -> Option<&'a Node> {
-    let path = som_to_path(som);
+    let path: Vec<_> = som_segments(som).collect();
     let ((root, _), rest) = path.split_first()?;
-    if tpl.root.common.name.as_deref() != Some(root.as_str()) {
+    if tpl.root.common.name.as_deref() != Some(*root) {
         return None;
     }
     let ((last, last_index), inner) = rest.split_last()?;
