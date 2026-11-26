@@ -2789,3 +2789,97 @@ fn shared_xfdf_fields_match_retained_reader() -> Result<(), Box<dyn std::error::
     );
     Ok(())
 }
+
+#[test]
+fn xfdf_annotation_formatting_round_trips_via_shared_grammar() {
+    let mut src = blank();
+    let shape = Shape::Rectangle { rect: [24.0, 48.0, 144.0, 108.0] };
+    add_annotation(
+        &mut src,
+        &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: "Dashed box".into(), author: "Ada".into() },
+        &Meta { id: "fmt-rt-1".into(), date: Some("D:20261119120000Z".into()) },
+    )
+    .unwrap();
+    let page = pdfcraft_model::pages(&src)[0].obj;
+    let annot_ref =
+        src.get(page).as_dict().unwrap().get(b"Annots").map(|a| src.resolve(a)).unwrap().as_array().unwrap().last().unwrap().as_ref().unwrap();
+    let mut bs = Dict::new();
+    bs.set(b"W".to_vec(), Object::Real(2.5));
+    bs.set(b"S".to_vec(), Object::name("D"));
+    bs.set(b"D".to_vec(), Object::Array(vec![Object::Real(4.0), Object::Real(2.0)]));
+    src.update_dict(annot_ref, |d| {
+        d.set(b"BS".to_vec(), Object::Dict(bs));
+        d.set(b"F".to_vec(), Object::Int(4 | 128));
+    })
+    .unwrap();
+
+    let xfdf = export_xfdf(&src, true, false, "fmt.pdf");
+    assert!(is_xfdf_comments(&xfdf), "{xfdf}");
+    assert!(xfdf.contains("style=\"dash\""), "{xfdf}");
+    assert!(xfdf.contains("dashes=\"4,2\""), "{xfdf}");
+    assert!(xfdf.contains("flags=\"print,locked\""), "{xfdf}");
+
+    let mut dst = blank();
+    let report = import_comments(&mut dst, &xfdf, None, None, None).unwrap();
+    assert_eq!(report.comments, 1, "{report:?}");
+    let dst_page = pdfcraft_model::pages(&dst)[0].obj;
+    let dst_ref =
+        dst.get(dst_page).as_dict().unwrap().get(b"Annots").map(|a| dst.resolve(a)).unwrap().as_array().unwrap().last().unwrap().as_ref().unwrap();
+    let dst_obj = dst.get(dst_ref);
+    let dst_dict = dst_obj.as_dict().unwrap();
+    assert_eq!(dst_dict.get(b"F").and_then(|f| dst.resolve(f).as_int()), Some(4 | 128));
+    let dst_bs = dst_dict.get(b"BS").map(|o| dst.resolve(o)).unwrap();
+    let dst_bs = dst_bs.as_dict().unwrap();
+    assert_eq!(dst_bs.name(b"S"), Some(b"D".as_slice()));
+    assert_eq!(dst_bs.get(b"W").and_then(|w| dst.resolve(w).as_f64()), Some(2.5));
+}
+
+/// Check boxes sharing one name with different on states (`/A`, `/B`) are one field whose value
+/// picks the box. Importing `B` turned on the first box's state instead, whatever the data said.
+fn check_box_pair(value: &str) -> Document {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".to_string(),
+        "<< /Fields [5 0 R] >>".to_string(),
+        format!("<< /FT /Btn /T (choice) /V /{value} /Kids [6 0 R 7 0 R] >>"),
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /P 3 0 R /Rect [50 700 64 714] /AS /{} /AP << /N << /A 8 0 R /Off 8 0 R >> >> >>",
+            if value == "A" { "A" } else { "Off" }
+        ),
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /P 3 0 R /Rect [80 700 94 714] /AS /{} /AP << /N << /B 8 0 R /Off 8 0 R >> >> >>",
+            if value == "B" { "B" } else { "Off" }
+        ),
+        "<< /Length 0 >>\nstream\n\nendstream".to_string(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+#[test]
+fn a_check_box_group_value_selects_its_own_box_on_import() {
+    let src = check_box_pair("B");
+    assert_eq!(values(&src), vec![("choice".to_string(), vec!["B".to_string()])]);
+    let exports = [
+        ("xfdf", export_xfdf(&src, false, true, "form.pdf").into_bytes()),
+        ("fdf", export_fdf(&src, false, true, "form.pdf").unwrap()),
+        ("xml", export_data(&src, Format::Xml).into_bytes()),
+    ];
+    for (format, data) in exports {
+        let mut dst = check_box_pair("Off");
+        let report = import(&mut dst, &data);
+        assert_eq!(values(&dst), values(&src), "{format}: {report:?}: {}", String::from_utf8_lossy(&data));
+    }
+}

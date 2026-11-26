@@ -36,7 +36,7 @@ pub enum ShapedScript {
 }
 
 impl ShapedScript {
-    pub fn font(self) -> Option<&'static crate::CraftFont> {
+    pub fn font(self) -> Option<&'static crate::EmbeddedFace> {
         match self {
             Self::Arabic => crate::document_arabic_font(),
             Self::Hebrew => crate::document_hebrew_font(false),

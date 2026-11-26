@@ -141,7 +141,7 @@ pub fn face_has(bytes: &[u8], ch: char) -> bool {
 
 /// Return one glyph of `face` (a craft-fonts face), bounded so hostile replacement text cannot
 /// allocate unbounded outline data.
-pub fn craft_glyph(face: &crate::CraftFont, ch: char) -> Result<GlyphOutline, GlyphError> {
+pub fn craft_glyph(face: &crate::EmbeddedFace, ch: char) -> Result<GlyphOutline, GlyphError> {
     glyph_in_face(face.bytes, ch)
 }
 
@@ -155,7 +155,7 @@ pub fn japanese_glyph(ch: char) -> Result<GlyphOutline, GlyphError> {
 
 /// The bounded outline and advance from the explicitly selected craft-fonts face.
 /// Uses the same complexity and missing-glyph checks as [`japanese_glyph`].
-pub fn japanese_glyph_from(face: &crate::CraftFont, ch: char) -> Result<GlyphOutline, GlyphError> {
+pub fn japanese_glyph_from(face: &crate::EmbeddedFace, ch: char) -> Result<GlyphOutline, GlyphError> {
     glyph_in_face(face.bytes, ch)
 }
 
