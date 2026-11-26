@@ -139,7 +139,12 @@ impl Layouter<'_> {
                     }
                     Ui::ChoiceList => Value::Text(
                         v.lines()
-                            .map(|one| f.item_values.iter().position(|s| s == one.trim()).and_then(|i| f.items.get(i)).map_or(one, String::as_str))
+                            .map(|one| {
+                                // A saved value that matches as written wins over one that
+                                // matches only once the spaces around the data are dropped.
+                                let at = f.item_values.iter().position(|s| s == one).or_else(|| f.item_values.iter().position(|s| s == one.trim()));
+                                at.and_then(|i| f.items.get(i)).map_or(one, String::as_str)
+                            })
                             .collect::<Vec<_>>()
                             .join("\n"),
                     ),
