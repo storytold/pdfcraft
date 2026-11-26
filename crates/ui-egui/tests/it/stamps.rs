@@ -1,6 +1,6 @@
 //! Add a stamp: the palette and placing stamps on the page.
 
-use crate::support::AppHarness as _;
+use crate::support::{AppHarness as _, input::one_frame};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::QuickTool;
@@ -90,7 +90,7 @@ fn natural_image_stamps_keep_displayed_bounds_on_rotated_pages() {
 
 #[test]
 fn creating_placing_and_keeping_custom_stamps() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(|cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
             let mut app = crate::control::new_app();
@@ -103,6 +103,12 @@ fn creating_placing_and_keeping_custom_stamps() {
     h.run_steps(6);
     assert!(h.execute("comment.stamp"));
     h.run_steps(2);
+    // Without saved stamps, the built-in groups precede the Create button.
+    let built_first = |h: &Harness<'_, pdfcraft_ui_egui::PdfCraftApp>| h.get_all_by_label("APPROVED").next().expect("first dynamic stamp").rect();
+    let create = "Create custom stamp…";
+    let empty_first = built_first(&h);
+    let empty_create = h.get_by_label(create).rect();
+    assert!(empty_first.max.y <= empty_create.min.y);
     // An image becomes a stamp: Create ▸ category and name.
     let mut png = Vec::new();
     image::RgbImage::from_pixel(60, 20, image::Rgb([20, 120, 220])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
@@ -119,10 +125,27 @@ fn creating_placing_and_keeping_custom_stamps() {
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::CustomStamp(0));
-    h.get_by_label("Company").scroll_to_me();
-    h.run_steps(2);
-    h.get_by_label("Company");
-    h.get_by_label("logo");
+    let custom = h.get_by_label("logo").rect();
+    let dynamic = built_first(&h);
+    assert!(custom.max.y <= dynamic.min.y, "saved custom stamp should be above the built-in stamps: {custom:?} vs {dynamic:?}");
+    // F6 enters the Tools pane at its first item. Tab continues through the visual order.
+    h.state_mut().quick_tool = QuickTool::Select;
+    let stock_focused = |h: &Harness<'_, pdfcraft_ui_egui::PdfCraftApp>| {
+        h.get_by_label("Stamps").is_focused() || h.get_all_by_label("APPROVED").any(|item| item.is_focused())
+    };
+    for _ in 0..12 {
+        stamp_key(&mut h, egui::Key::F6);
+        if h.get_by_label("logo").is_focused() || stock_focused(&h) {
+            break;
+        }
+    }
+    assert!(h.get_by_label("logo").is_focused(), "keyboard focus reaches the custom stamp before the built-ins");
+    stamp_key(&mut h, egui::Key::Space);
+    assert_eq!(h.state().quick_tool, QuickTool::CustomStamp(0), "Space chooses the focused custom stamp");
+    stamp_key(&mut h, egui::Key::Tab);
+    assert!(h.get_by_label(create).is_focused(), "Tab moves from the custom stamp to Create");
+    stamp_key(&mut h, egui::Key::Tab);
+    assert!(stock_focused(&h), "Tab moves from Create to the built-in stamps");
     // Place it.
     let p = {
         let r = h.state().views[0].page_screen_rect(0).unwrap();
@@ -149,6 +172,37 @@ fn creating_placing_and_keeping_custom_stamps() {
     assert_eq!(again.custom_stamps.len(), 1);
     assert_eq!((again.custom_stamps[0].category.as_str(), again.custom_stamps[0].name.as_str()), ("Company", "logo"));
     assert_eq!(again.custom_stamps[0].data, s.custom_stamps[0].data);
+
+    // The same tile can be picked by pointer, then removed from its context menu.
+    let at = h.get_by_label("logo").rect().center();
+    stamp_click(&mut h, at, egui::PointerButton::Primary);
+    assert_eq!(h.state().quick_tool, QuickTool::CustomStamp(0));
+    stamp_click(&mut h, at, egui::PointerButton::Secondary);
+    let delete = h.get_by_label("Delete stamp").rect().center();
+    stamp_click(&mut h, delete, egui::PointerButton::Primary);
+    assert!(h.state().custom_stamps.is_empty());
+    assert_eq!(h.get_all_by_label(create).count(), 1, "the Create button occurs once on the deletion frame");
+    h.run_steps(2);
+    assert_eq!(h.get_all_by_label(create).count(), 1);
+    assert!(h.query_by_label("logo").is_none());
+    let after_delete = built_first(&h);
+    let after_create = h.get_by_label(create).rect();
+    assert!(after_delete.max.y <= after_create.min.y, "the empty layout follows the built-ins");
+    assert!((after_create.min.y - empty_create.min.y).abs() < 1.0, "the original Create position returns");
+    assert!((after_delete.min.y - empty_first.min.y).abs() < 1.0, "deleting the last stamp leaves no gap above the built-ins");
+}
+
+fn stamp_key(h: &mut Harness<'_, pdfcraft_ui_egui::PdfCraftApp>, key: egui::Key) {
+    for pressed in [true, false] {
+        one_frame(h, [egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: egui::Modifiers::NONE }]);
+    }
+}
+
+fn stamp_click(h: &mut Harness<'_, pdfcraft_ui_egui::PdfCraftApp>, pos: egui::Pos2, button: egui::PointerButton) {
+    one_frame(h, [egui::Event::PointerMoved(pos)]);
+    for pressed in [true, false] {
+        one_frame(h, [egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::NONE }]);
+    }
 }
 
 /// A custom stamp with a line filled in when it is placed (#1741): chosen in the Create dialog,
