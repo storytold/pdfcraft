@@ -1,7 +1,7 @@
 //! A picture in a visible signature, where the signer's name would be large (Acrobat: Configure
 //! Signature Appearance ▸ Draw or Image, and typed signatures). Drawn as Fill & Sign draws its
-//! signatures: ink smoothed and stroked with round ends, typed outlines filled even-odd, images
-//! with their alpha as a soft mask.
+//! signatures: ink smoothed and stroked with round ends, typed outlines filled with the non-zero
+//! winding rule, images with their alpha as a soft mask.
 
 use std::sync::Arc;
 
@@ -21,7 +21,7 @@ const MAX_PIXELS: u64 = 1 << 24;
 pub enum Graphic {
     /// Drawn strokes, y up, in units where the drawing pad is 1 wide (as Fill & Sign saves them).
     Strokes(Vec<Vec<[f64; 2]>>),
-    /// Closed outlines, y up, filled even-odd: a typed signature in the script font.
+    /// Closed outlines, y up, filled with the non-zero winding rule: a typed signature in the script font.
     Outlines(Vec<Vec<[f64; 2]>>),
     /// Straight (not premultiplied) RGBA pixels, rows from the top.
     Image { width: u32, height: u32, rgba: Arc<Vec<u8>> },
@@ -141,7 +141,7 @@ impl Graphic {
                     }
                     c.push_str("h\n");
                 }
-                c.push_str("f*\nQ\n");
+                c.push_str("f\nQ\n");
                 Ok((c, None))
             }
             Graphic::Image { width, height, rgba } => {

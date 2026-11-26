@@ -178,7 +178,27 @@ fn entries() -> Result<Entries, SignError> {
 
 /// Whether the store's key is what the certificate needs (RSA; ECDSA on its curve).
 fn matches_key(key: &NCryptKey, want: StoreKey) -> Result<(), String> {
-    let group = key.algorithm_group().map_err(|e| format!("its private key's algorithm couldn't be read: {}", describe(&e)))?;
+    // Some KSPs (Certisign's desktopID, for one) report NCRYPT_ALGORITHM_GROUP_PROPERTY
+    // as a character count instead of a byte count, so the group can't be read even though
+    // the key works. The certificate already names the key type, so an unreadable group is
+    // trusted: a working key is accepted instead of wrongly rejected. The key size, when it
+    // can be read, still has to agree with the certificate.
+    matches_key_from_group(key.algorithm_group().ok(), key, want)
+}
+
+/// Core check, decoupled from the NCryptKey handle so the algorithm group can be injected
+/// (e.g. forced to `None` to simulate a KSP that reports the property as a character count
+/// instead of a byte count, as Certisign's desktopID KSP does).
+fn matches_key_from_group(group: Option<AlgorithmGroup>, key: &NCryptKey, want: StoreKey) -> Result<(), String> {
+    let Some(group) = group else {
+        return match want {
+            StoreKey::Rsa => Ok(()),
+            StoreKey::Ecdsa(bits) => match key.bits() {
+                Ok(actual) if actual != bits => Err(format!("its certificate holds a P-{bits} key but the store's private key has {actual} bits")),
+                _ => Ok(()),
+            },
+        };
+    };
     let name = |g: &AlgorithmGroup| match g {
         AlgorithmGroup::Rsa => "an RSA".to_string(),
         AlgorithmGroup::Ecdsa => "an ECDSA".to_string(),
@@ -207,6 +227,7 @@ const NTE_NOT_FOUND: u32 = 0x8009_0011;
 const NTE_BAD_PROVIDER: u32 = 0x8009_0013;
 const NTE_BAD_PROV_TYPE: u32 = 0x8009_0014;
 const NTE_BAD_KEYSET: u32 = 0x8009_0016;
+const NTE_PROVIDER_DLL_FAIL: u32 = 0x8009_001D;
 const NTE_PROV_DLL_NOT_FOUND: u32 = 0x8009_001E;
 const NTE_SILENT_CONTEXT: u32 = 0x8009_0022;
 const NTE_NOT_SUPPORTED: u32 = 0x8009_0029;
@@ -215,6 +236,8 @@ const NTE_DEVICE_NOT_READY: u32 = 0x8009_0030;
 const NTE_DEVICE_NOT_FOUND: u32 = 0x8009_0035;
 const NTE_USER_CANCELLED: u32 = 0x8009_0036;
 const CRYPT_E_NO_KEY_PROPERTY: u32 = 0x8009_200B;
+// An NTSTATUS (ntstatus.h) that some key providers pass through unchanged.
+const STATUS_NOT_FOUND: u32 = 0xC000_0225;
 
 /// A CNG error with the Windows code and, for the usual ones, what it means.
 fn describe(e: &CngError) -> String {
@@ -224,6 +247,15 @@ fn describe(e: &CngError) -> String {
         NTE_PERM => "access to the key was denied",
         NTE_BAD_PROVIDER | NTE_BAD_PROV_TYPE | NTE_PROV_DLL_NOT_FOUND => {
             "its key provider isn't available to CNG (a legacy CryptoAPI-only provider, or its driver isn't installed)"
+        }
+        // #2207: a smart card or token's middleware that is missing or broken, or a provider
+        // that exists only as 32-bit code, which a 64-bit process can't load.
+        NTE_PROVIDER_DLL_FAIL => {
+            "its key provider's software failed to load (a smart card or token driver that is missing or broken, or a 32-bit-only provider)"
+        }
+        // #1535: an A3 certificate (key on a token) whose provider can't find the key.
+        STATUS_NOT_FOUND => {
+            "its key provider can't find the key (the smart card or token holding it isn't connected, or its driver doesn't see the key)"
         }
         NTE_NOT_SUPPORTED => "its key provider doesn't support the operation",
         NTE_DEVICE_NOT_READY | NTE_DEVICE_NOT_FOUND => "the smart card or token isn't available",
@@ -247,7 +279,26 @@ mod tests {
             "the key is missing from its key store (deleted, or imported under another Windows account) (Windows error 0x80090016)"
         );
         assert_eq!(describe(&CngError::WindowsError(0x8010_000C)), "the smart card isn't available (Windows error 0x8010000C)");
+        assert_eq!(
+            describe(&CngError::WindowsError(0x8009_001D)),
+            "its key provider's software failed to load (a smart card or token driver that is missing or broken, or a 32-bit-only provider) (Windows error 0x8009001D)",
+            "#2207"
+        );
+        assert_eq!(
+            describe(&CngError::WindowsError(0xC000_0225)),
+            "its key provider can't find the key (the smart card or token holding it isn't connected, or its driver doesn't see the key) (Windows error 0xC0000225)",
+            "#1535"
+        );
         assert_eq!(describe(&CngError::WindowsError(0x57)), "Windows error 0x00000057");
         assert_eq!(describe(&CngError::InvalidHashLength), "Invalid hash length");
+    }
+
+    #[test]
+    fn key_group_matches_trusts_when_group_unreadable() {
+        // Certisign's desktopID KSP reports the algorithm-group property as a character
+        // count (3 for "RSA") instead of a byte count (8), so `algorithm_group` fails. An
+        // unreadable group must not make a usable key look unusable.
+        let key = NCryptKey::new_owned(0);
+        assert_eq!(matches_key(&key, StoreKey::Rsa), Ok(()));
     }
 }

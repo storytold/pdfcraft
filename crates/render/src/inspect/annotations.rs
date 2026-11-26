@@ -1,0 +1,1106 @@
+use super::core::{limited_pdf_string, pretty_date, spend};
+use super::model::{
+    Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, Popup, RemoteDestination, fill_group_text, link_replies,
+    state_or_default,
+};
+use super::navigation::text_string;
+use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
+
+/// Negative cache of failed script-stream decompressions during one structure inspection.
+/// Callers must supply stream addresses that stay stable for that inspection; these are
+/// opaque identities, never dereferenced here. Do not reuse the cache across documents,
+/// edits or inspections, where an address may identify a different stream.
+/// FIFO eviction bounds it to 4096 identities and allows an evicted failure to be retried;
+/// a cache hit does not refresh its position. This bounds retained failures; streams that
+/// decode are remembered in [`LinkScripts`] instead.
+#[derive(Default)]
+pub(super) struct RejectedJavaScript {
+    identities: HashSet<*const lopdf::Stream>,
+    order: std::collections::VecDeque<*const lopdf::Stream>,
+}
+
+impl RejectedJavaScript {
+    pub(super) const CAPACITY: usize = 4096;
+
+    pub(super) fn contains(&self, identity: *const lopdf::Stream) -> bool {
+        self.identities.contains(&identity)
+    }
+
+    pub(super) fn insert(&mut self, identity: *const lopdf::Stream) {
+        if self.identities.contains(&identity) {
+            return;
+        }
+        if self.order.len() >= Self::CAPACITY
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.identities.remove(&oldest);
+        }
+        self.identities.insert(identity);
+        self.order.push_back(identity);
+    }
+}
+
+/// What link JavaScript an inspection may still keep: 4 MiB of source across the document,
+/// the streams that failed to decode, and the source of those that did.
+pub(super) struct LinkScripts {
+    remaining: usize,
+    rejected: RejectedJavaScript,
+    /// Each stream's source once decoded, by its address (see [`RejectedJavaScript`]): many links
+    /// can share one stream, whose decoding costs its encoded length however short the source
+    /// (review on #7144). Every link keeping a source still spends its length from `remaining`,
+    /// so what is kept here stays within the budget, plus at most one source.
+    decoded: HashMap<*const lopdf::Stream, String>,
+    /// Whether the warning that the budget ran out has been given.
+    limit_reported: bool,
+}
+
+impl Default for LinkScripts {
+    fn default() -> Self {
+        Self { remaining: 4 << 20, rejected: RejectedJavaScript::default(), decoded: HashMap::new(), limit_reported: false }
+    }
+}
+
+/// Most bytes of one link's script string or decompressed stream.
+const MAX_LINK_SCRIPT: usize = 256 << 10;
+
+/// At most this many `/State` entries of a set-layer-visibility action are read.
+const MAX_LAYER_STATE: usize = 1024;
+
+/// File specifications retained from a remote-Go-To action are deliberately small.
+pub(super) const MAX_REMOTE_FILE_SPEC_BYTES: usize = 4096;
+
+const MAX_REMOTE_DESTINATION_NAME_BYTES: usize = 1024;
+
+/// Text and geometry `DocInfo::annotations` keeps, as counted by [`retained`]. Past it the rest
+/// are not listed: real comments stay far below, many small ones sharing one long string do not.
+pub(super) const MAX_ANNOTATION_BYTES: usize = 64 << 20;
+
+/// Web-address text and `/QuadPoints` geometry the bookmark and link listings, and name,
+/// description and embedded-file key text the attachment listing, keep together. Many bookmarks,
+/// links or attachments can share one long string or array, which each would otherwise copy. Past
+/// it, a bookmark or link to a web address lists as a URI action without its address (or a link
+/// keeps a relative address unresolved against the document's base), a link is active over its
+/// whole `/Rect`, an attachment is listed under its generic name without a description, and an
+/// embedded file whose key does not fit is not listed.
+pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
+
+/// A colour array as RGB, read as pdfcraft-annot's appearance builder reads it (`appearance::color`
+/// and `drawn_color`): one entry is grey, three RGB, four CMYK; among four entries a non-number is
+/// 0 but a reference is unreadable, otherwise every entry must be a number. `None` for anything
+/// else, an empty array or a value out of range; each component is clamped to 0..=1.
+fn drawn_color(c: &[Object]) -> Option<[f32; 3]> {
+    let v: Vec<f32> = if c.len() == 4 {
+        c.iter()
+            .map(|o| match o {
+                Object::Reference(_) => None,
+                o => Some(o.as_float().unwrap_or(0.0)),
+            })
+            .collect::<Option<_>>()?
+    } else {
+        c.iter().map(|o| o.as_float().ok()).collect::<Option<_>>()?
+    };
+    let rgb = match v.as_slice() {
+        [g] => [*g; 3],
+        [r, g, b] => [*r, *g, *b],
+        [c, m, y, k] => [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)],
+        _ => return None,
+    };
+    // pdfcraft-annot's `finite`: finite and below 1e7 in magnitude.
+    rgb.iter().all(|x| x.is_finite() && x.abs() < 1e7).then(|| rgb.map(|x| x.clamp(0.0, 1.0)))
+}
+
+/// The bytes a listed annotation keeps.
+pub(super) fn retained(a: &Annotation) -> usize {
+    let text = [&a.author, &a.contents, &a.modified, &a.name, &a.in_reply_to, &a.state, &a.intent];
+    text.into_iter()
+        .map(|t| t.as_ref().map_or(0, String::len))
+        .chain([
+            a.subtype.len(),
+            std::mem::size_of_val(a.quads.as_slice()),
+            std::mem::size_of_val(a.points.as_slice()),
+            std::mem::size_of::<Annotation>(),
+        ])
+        .fold(0, usize::saturating_add)
+}
+
+impl<'a> Inspector<'a> {
+    /// Whether an annotation is a Fill & Sign mark. Keep in step with
+    /// `pdfcraft_annot::is_fill_sign`, which the engine's comment list uses.
+    fn is_fill_sign(&self, d: &Dictionary, subtype: &str) -> bool {
+        let yes = |key: &[u8]| matches!(d.get(key).map(|o| self.resolve(o)), Ok(Object::Boolean(true)));
+        if yes(b"PCFillSign") {
+            return true;
+        }
+        match subtype {
+            "FreeText" => self.name(d, b"IT").as_deref() == Some("FreeTextTypeWriter"),
+            "Stamp" => match self.name(d, b"Name").as_deref() {
+                Some("PCCheck" | "PCCross" | "PCDot" | "PCLine" | "PCTypedSignature") => true,
+                Some("PCCustomSignature" | "PCCustomInitials") => yes(b"PCPictureImage"),
+                _ => false,
+            },
+            "Ink" => self.text(d, b"Subj").as_deref() == Some("Signature"),
+            _ => false,
+        }
+    }
+
+    // ── annotations ─────────────────────────────────────────────────────────────────────────
+
+    /// `text_budget` is what is left of [`MAX_LINK_ATTACHMENT_TEXT_BYTES`].
+    pub(super) fn annotations(&self, info: &mut DocInfo, text_budget: &mut usize) {
+        // Indirect `/QuadPoints` arrays whose quadrilaterals did not fit what was left of the budget:
+        // the budget only shrinks, so they are not read again (review on #4474).
+        let mut unfit_quads: HashSet<ObjectId> = HashSet::new();
+        let mut pages: Vec<(ObjectId, usize)> = self.page_index.iter().map(|(&id, &page)| (id, page)).collect();
+        pages.sort_unstable_by_key(|&(_, page)| page);
+        // An annotation, or a whole `/Annots` array, that several entries or pages list is on the
+        // first of them (§12.5.2 allows one page per annotation). Both are told apart by the object
+        // a reference resolves to, since an indirect object may itself hold a reference. Where each
+        // annotation is listed is collected before any is read, so a reply's `/IRT` finds its
+        // parent by reference even when the parent comes later.
+        let mut seen_arrays = HashSet::new();
+        let mut slots: HashMap<ObjectId, (usize, usize)> = HashMap::new();
+        let mut entries = Vec::new();
+        for (id, page) in pages {
+            let Ok(page_dict) = self.doc.get_dictionary(id) else { continue };
+            if let Ok(annots) = page_dict.get(b"Annots")
+                && let Some(r) = self.resolved_id(annots)
+                && !seen_arrays.insert(r)
+            {
+                continue;
+            }
+            let Ok(Object::Array(annots)) = page_dict.get(b"Annots").map(|o| self.resolve(o)) else { continue };
+            for (index, a) in annots.iter().enumerate() {
+                if let Some(r) = self.resolved_id(a) {
+                    let Entry::Vacant(slot) = slots.entry(r) else { continue };
+                    slot.insert((page, index));
+                }
+                entries.push((page, index, a));
+            }
+        }
+        let mut kept = 0usize;
+        // Once the comment budget is spent, comments are no longer built, but links and attachments
+        // are still listed.
+        let mut comments_full = false;
+        // Link JavaScript has its own source budget, apart from link text (#2081).
+        let mut scripts = LinkScripts::default();
+        for (page, index, a) in entries {
+            let Some(d) = self.dict(a) else { continue };
+            // An annotation's `/Type`, when present, is `/Annot` (ISO 32000-2 §12.5.2, Table 166):
+            // a font or other dictionary a page lists among its annotations isn't one, and neither is
+            // one whose `/Type` isn't a name at all. A null or dangling `/Type` counts as absent
+            // (§7.3.9: a null value is the same as leaving the entry out).
+            if let Ok(t) = d.get(b"Type").map(|t| self.resolve(t))
+                && !matches!(t, Object::Null | Object::Reference(_))
+                && t.as_name().ok() != Some(b"Annot".as_slice())
+            {
+                continue;
+            }
+            let Some(subtype) = self.name(d, b"Subtype") else { continue };
+            if subtype == "FileAttachment"
+                && let Ok(fs) = d.get(b"FS")
+            {
+                let fallback = |budget: &mut usize| self.budgeted_text(d, b"Contents", budget);
+                info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
+            }
+            if subtype == "Link" {
+                self.collect_link(info, (page, index), d, text_budget, &mut unfit_quads, &mut scripts);
+                continue;
+            }
+            // Not comments: form widgets, pop-ups and non-markup annotations such as the
+            // Screen annotation that drives a LaTeX `animate` player (keep in step with
+            // `pdfcraft_annot::is_comment_subtype`).
+            if matches!(subtype.as_str(), "Widget" | "Popup" | "Screen" | "Movie" | "RichMedia" | "3D" | "PrinterMark" | "TrapNet" | "Watermark") {
+                continue;
+            }
+            if comments_full {
+                continue;
+            }
+            // Text that trims to nothing is not kept, so `retained` never sees it: charge what is
+            // read, so many comments sharing one huge blank string stop being decoded over and over.
+            let raw: usize = [&b"T"[..], b"Contents", b"M", b"NM", b"State", b"DA"]
+                .iter()
+                .filter_map(|k| match d.get(k).map(|o| self.resolve(o)) {
+                    Ok(Object::String(b, _) | Object::Name(b)) => Some(b.len()),
+                    _ => None,
+                })
+                .fold(0, usize::saturating_add);
+            // (charged once: below, by the larger of these raw bytes and what the annotation keeps)
+            if kept.saturating_add(raw) > MAX_ANNOTATION_BYTES {
+                comments_full = true;
+                continue;
+            }
+            let rect = rect4(self.resolve(d.get(b"Rect").unwrap_or(&Object::Null)));
+            let c = match d.get(b"C").map(|o| self.resolve(o)) {
+                Ok(Object::Array(c)) => Some(c),
+                _ => None,
+            };
+            // Three numbers, some given by reference, with a non-number read as 0.
+            let rgb = c.filter(|c| c.len() == 3).map(|c| {
+                let f = |i: usize| c.get(i).map_or(0.0, |o| self.resolve(o).as_float().unwrap_or(0.0));
+                [f(0), f(1), f(2)]
+            });
+            // Other comments list the stroke colour as pdfcraft-annot draws it and lists it
+            // (`summaries`): grey, CMYK, a non-number among four entries read as 0.
+            let mut color = if subtype == "FreeText" { rgb } else { c.and_then(|c| drawn_color(c)).or(rgb) };
+            // A text box's /C is its background; its text colour is in /DA.
+            if subtype == "FreeText"
+                && let Some(da) = self.text(d, b"DA")
+            {
+                let t: Vec<&str> = da.split_whitespace().collect();
+                if let Some(i) = t.iter().position(|x| *x == "rg")
+                    && i >= 3
+                {
+                    let f = |k: usize| t[k].parse::<f32>().unwrap_or(0.0);
+                    color = Some([f(i - 3), f(i - 2), f(i - 1)]);
+                }
+            }
+            // Only usable quads, by the rule redaction apply reads them with (keep in step with
+            // `pdfcraft_annot::summaries`): a malformed one is not drawn as zeros.
+            let quads = match d.get(b"QuadPoints").map(|o| self.resolve(o)) {
+                Ok(Object::Array(q)) => {
+                    let entries = q.iter().map(|o| self.resolve(o).as_float().ok().map(f64::from));
+                    pdfcraft_geom::quad_points::usable_quads(entries).into_iter().map(|quad| quad.map(|v| v as f32)).collect()
+                }
+                _ => Vec::new(),
+            };
+            let in_reply_to = d.get(b"IRT").ok().and_then(|o| self.dict(o)).and_then(|p| self.text(p, b"NM"));
+            let parent = d.get(b"IRT").ok().and_then(|o| self.resolved_id(o)).and_then(|r| slots.get(&r).copied());
+            let fill_sign = self.is_fill_sign(d, &subtype);
+            // Keep in step with `pdfcraft_annot::summaries`.
+            let key: &[u8] = if subtype == "Line" { b"L" } else { b"Vertices" };
+            let points = match d.get(key).map(|o| self.resolve(o)) {
+                Ok(Object::Array(v)) if matches!(subtype.as_str(), "Line" | "PolyLine" | "Polygon") => {
+                    let v: Vec<f32> = v.iter().map(|o| o.as_float().unwrap_or(0.0)).collect();
+                    let pts: Vec<[f32; 2]> = v.as_chunks::<2>().0.to_vec();
+                    if subtype == "Line" && pts.len() != 2 { Vec::new() } else { pts }
+                }
+                _ => Vec::new(),
+            };
+            // A callout: its arrow point and knee, and its text box (keep in step with
+            // `pdfcraft_annot::summaries`).
+            let (points, text_box) = match self.callout(d, rect) {
+                Some((lead, text_box)) if subtype == "FreeText" => (lead, Some(text_box)),
+                _ => (points, None),
+            };
+            // Only the comment's own pop-up: a pop-up annotation whose /Parent, if any, is a
+            // reference to this comment (keep in step with `pdfcraft_annot::summaries`).
+            let own = self.resolved_id(a);
+            let is_own = |p: &&Dictionary| {
+                self.name(p, b"Subtype").as_deref() == Some("Popup")
+                    && p.get(b"Parent")
+                        .map_or(true, |parent| parent.as_reference().is_ok() && self.resolved_id(parent).is_some_and(|id| Some(id) == own))
+            };
+            // A pop-up without a `/Rect` of four numbers finite as `f32` is none, as
+            // `pdfcraft_annot::summaries` reads it: both lists of the comments agree. Its corners
+            // may come in any order.
+            let popup = d.get(b"Popup").ok().and_then(|o| self.dict(o)).filter(is_own).and_then(|p| {
+                let rect = self.resolve(p.get(b"Rect").ok()?).as_array().ok()?;
+                let nums: Vec<f32> = rect.iter().filter_map(|v| self.resolve(v).as_float().ok()).collect();
+                let [x0, y0, x1, y1] = nums[..] else { return None };
+                if !nums.iter().all(|v| v.is_finite()) {
+                    return None;
+                }
+                Some(Popup {
+                    rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)],
+                    open: p.get(b"Open").ok().and_then(|o| self.resolve(o).as_bool().ok()).unwrap_or(false),
+                })
+            });
+            let annotation = Annotation {
+                page,
+                subtype,
+                author: self.text(d, b"T"),
+                // Acrobat ends lines with CR, which the interface would draw as nothing (keep
+                // in step with `pdfcraft_annot::summaries`).
+                contents: self.text(d, b"Contents").map(|s| s.replace("\r\n", "\n").replace('\r', "\n")),
+                modified: self.text(d, b"M").map(|m| pretty_date(&m)),
+                name: self.text(d, b"NM"),
+                in_reply_to,
+                parent,
+                grouped: self.name(d, b"RT").as_deref() == Some("Group"),
+                rect,
+                color,
+                index,
+                state: state_or_default(self.text(d, b"State"), self.text(d, b"StateModel").as_deref()),
+                quads,
+                locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
+                intent: self.name(d, b"IT"),
+                fill_sign,
+                no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
+                points,
+                text_box,
+                popup,
+            };
+            kept = kept.saturating_add(retained(&annotation).max(raw));
+            if kept > MAX_ANNOTATION_BYTES {
+                comments_full = true;
+                continue;
+            }
+            info.annotations.push(annotation);
+        }
+        info.annotations.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])));
+        link_replies(&mut info.annotations);
+        fill_group_text(&mut info.annotations);
+    }
+
+    /// A callout's arrow point and knee (`/CL`, four or six numbers, without the end that meets
+    /// the text box) and its text box (`/Rect`, here `rect`, inset by `/RD`); ISO 32000-2
+    /// Table 177. `None` when either is missing or unusable.
+    fn callout(&self, d: &Dictionary, rect: [f32; 4]) -> Option<(Vec<[f32; 2]>, [f32; 4])> {
+        let nums = |key: &[u8]| -> Option<Vec<f32>> {
+            match self.resolve(d.get(key).ok()?) {
+                Object::Array(v) => v.iter().map(|o| self.resolve(o).as_float().ok()).collect(),
+                _ => None,
+            }
+        };
+        let cl = nums(b"CL").filter(|l| matches!(l.len(), 4 | 6) && l.iter().all(|x| x.is_finite()))?;
+        let rd = nums(b"RD").filter(|v| v.len() == 4 && v.iter().all(|x| x.is_finite() && *x >= 0.0))?;
+        let tb = [rect[0] + rd[0], rect[1] + rd[1], rect[2] - rd[2], rect[3] - rd[3]];
+        if tb[2] - tb[0] < 1.0 || tb[3] - tb[1] < 1.0 {
+            return None;
+        }
+        let (_, lead) = cl.as_chunks::<2>().0.split_last()?;
+        Some((lead.to_vec(), tb))
+    }
+
+    /// The link annotation `d`, at position `index` of page `page`'s `/Annots`: where its `/Dest`
+    /// goes, else what its action `/A` does ([`Self::action_target`]). `None` when it has no
+    /// rectangle, or a destination or action that leads nowhere. `base` is the catalog's
+    /// `/URI /Base`, which a relative URI action is resolved against. `unfit_quads` holds the
+    /// indirect `/QuadPoints` arrays already found too large for the budget. A JavaScript
+    /// action's source is kept as data, never run here, within `scripts` ([`Self::link_script`]).
+    #[allow(clippy::too_many_arguments)]
+    fn link(
+        &self,
+        page: usize,
+        index: usize,
+        d: &Dictionary,
+        base: Option<&str>,
+        text_budget: &mut usize,
+        unfit_quads: &mut HashSet<ObjectId>,
+        scripts: &mut LinkScripts,
+    ) -> Option<Link> {
+        let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
+        let action = d.get(b"A").ok().and_then(|a| self.dict(a));
+        let target = if let Ok(dest) = d.get(b"Dest") {
+            let (page, view) = self.dest(dest, 0)?;
+            LinkTarget::Page(page, view)
+        } else if let Some(a) = action.filter(|a| self.name(a, b"S").as_deref() == Some("JavaScript")) {
+            self.link_script(a, scripts).map_or_else(|| LinkTarget::Other("JavaScript".into()), LinkTarget::JavaScript)
+        } else {
+            match self.action_target(action?, text_budget)? {
+                LinkTarget::Uri(uri) => match crate::resolve_uri(base, &uri) {
+                    // The raw address is spent already. What the base adds is spent too, or the
+                    // link keeps the raw address.
+                    Some(resolved) if resolved.len().saturating_sub(uri.len()) <= *text_budget => {
+                        *text_budget = text_budget.saturating_sub(resolved.len().saturating_sub(uri.len()));
+                        LinkTarget::Uri(resolved)
+                    }
+                    _ => LinkTarget::Uri(uri),
+                },
+                other => other,
+            }
+        };
+        // Not read at all once no quadrilateral would fit what is left of the budget, or when this
+        // shared array already did not fit: many links can share one long array, and reading it
+        // again for each would cost its length every time (review on #4474).
+        let shared = d.get(b"QuadPoints").ok().and_then(|o| o.as_reference().ok());
+        let readable = *text_budget >= std::mem::size_of::<[f32; 8]>() && shared.is_none_or(|id| !unfit_quads.contains(&id));
+        let quads = match d.get(b"QuadPoints").map(|o| self.resolve(o)) {
+            // Read no further than one value past the cap: a longer array isn't used.
+            Ok(Object::Array(q)) if readable && q.len() <= crate::MAX_LINK_QUADS.saturating_mul(8) => {
+                #[cfg(test)]
+                QUAD_ARRAYS_READ.with(|n| n.set(n.get() + 1));
+                let values: Vec<Option<f32>> = q.iter().map(|o| self.resolve(o).as_float().ok()).collect();
+                let quads = crate::link_quads(&values, rect);
+                // Many links can share one long array, which each would otherwise copy. Past the
+                // budget a link is active over its whole `/Rect`.
+                let bytes = std::mem::size_of_val(quads.as_slice());
+                if bytes <= *text_budget {
+                    *text_budget = text_budget.saturating_sub(bytes);
+                    quads
+                } else {
+                    if let Some(id) = shared {
+                        unfit_quads.insert(id);
+                    }
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        };
+        Some(Link { page, index, rect, quads, target })
+    }
+
+    /// Lists the link annotation `d`, and notes the JavaScript it runs. JavaScript is read from the
+    /// action, not the listed link: once the text budget is spent the action's name is not kept.
+    /// Warns once when the link scripts' budget has run out (#2081).
+    fn collect_link(
+        &self,
+        info: &mut DocInfo,
+        at: (usize, usize),
+        d: &Dictionary,
+        text_budget: &mut usize,
+        unfit_quads: &mut HashSet<ObjectId>,
+        scripts: &mut LinkScripts,
+    ) {
+        info.has_javascript |= self.runs_javascript(d);
+        let Some(link) = self.link(at.0, at.1, d, info.uri_base.as_deref(), text_budget, unfit_quads, scripts) else { return };
+        let refused = matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript");
+        if refused && scripts.remaining == 0 && !scripts.limit_reported {
+            info.warnings
+                .push("Link JavaScript sources reached the 4 MiB document inspection limit; remaining JavaScript actions are unavailable.".into());
+            scripts.limit_reported = true;
+        }
+        info.links.push(link);
+    }
+
+    /// Whether the link's own action is a JavaScript action.
+    fn runs_javascript(&self, d: &Dictionary) -> bool {
+        d.get(b"A").ok().and_then(|a| self.dict(a)).is_some_and(|a| self.name(a, b"S").as_deref() == Some("JavaScript"))
+    }
+
+    /// The source of a link's JavaScript action (`/JS`, a string or a stream), as data. A
+    /// string or decompressed stream over 256 KiB, a stream that fails to decode, or source
+    /// past what is left of the document's 4 MiB is `None` (the link stays
+    /// `Other("JavaScript")`); a stream is decoded once, its source or failure remembered for
+    /// links sharing it. An action's `/Next` chain is not followed.
+    fn link_script(&self, a: &Dictionary, scripts: &mut LinkScripts) -> Option<String> {
+        if scripts.remaining == 0 {
+            return None;
+        }
+        let source = match self.resolve(a.get(b"JS").ok()?) {
+            Object::String(bytes, _) if bytes.len() <= MAX_LINK_SCRIPT => pdfcraft_cos::PdfString::literal(bytes.clone()).to_text(),
+            Object::Stream(stream) => {
+                // The structure's objects stay put for the whole inspection, so the resolved
+                // stream's address identifies it, aliases included.
+                let identity = std::ptr::from_ref(stream);
+                if scripts.rejected.contains(identity) {
+                    return None;
+                }
+                if let Some(source) = scripts.decoded.get(&identity) {
+                    source.clone()
+                } else {
+                    #[cfg(test)]
+                    JS_DECODE_COUNT.with(|n| n.set(n.get() + 1));
+                    // An empty `/Filter []` is no filter: the stream is the source.
+                    match stream.get_plain_content_with_limit(MAX_LINK_SCRIPT) {
+                        Ok(bytes) => {
+                            let source = pdfcraft_cos::PdfString::literal(bytes).to_text();
+                            scripts.decoded.insert(identity, source.clone());
+                            source
+                        }
+                        Err(_) => {
+                            scripts.rejected.insert(identity);
+                            return None;
+                        }
+                    }
+                }
+            }
+            _ => return None,
+        };
+        let Some(remaining) = scripts.remaining.checked_sub(source.len()) else {
+            scripts.remaining = 0;
+            return None;
+        };
+        scripts.remaining = remaining;
+        Some(source)
+    }
+
+    /// What an action does when a link or a bookmark runs it. Only a go-to's `/D` is a place in
+    /// this document; a remote go-to's names a page or destination of another file (ISO 32000-2
+    /// §12.6.4.3). `None` for an action without a type, or a go-to whose destination is not here.
+    /// A web address is spent from `text_budget` (see [`MAX_LINK_ATTACHMENT_TEXT_BYTES`]).
+    pub(super) fn action_target(&self, a: &Dictionary, text_budget: &mut usize) -> Option<LinkTarget> {
+        Some(match self.name(a, b"S").as_deref()? {
+            "GoTo" => {
+                let (page, view) = self.dest(a.get(b"D").ok()?, 0)?;
+                LinkTarget::Page(page, view)
+            }
+            "URI" => {
+                let uri = a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok())?;
+                match spend(uri, text_budget, |b| String::from_utf8_lossy(b).into_owned()) {
+                    Some(uri) => LinkTarget::Uri(uri),
+                    None => LinkTarget::Other("URI".into()),
+                }
+            }
+            "SetOCGState" => self.layer_state(a),
+            "GoToR" => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
+            "Launch" => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
+            other => LinkTarget::Other(spend(other.as_bytes(), text_budget, |b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default()),
+        })
+    }
+
+    fn remote_go_to(&self, action: &Dictionary) -> Option<LinkTarget> {
+        let file = self.action_file(action)?;
+        let destination = match action.get(b"D") {
+            Err(_) => RemoteDestination::Default,
+            Ok(o) => match self.resolve(o) {
+                Object::Array(items) => {
+                    let page = items.first().and_then(|o| self.resolve(o).as_i64().ok()).and_then(|n| usize::try_from(n).ok())?;
+                    let kind = items.get(1).map(|o| self.resolve(o)).and_then(|o| o.as_name().ok());
+                    let operands: [Option<f32>; 4] = std::array::from_fn(|i| items.get(i + 2).and_then(|o| self.resolve(o).as_float().ok()));
+                    RemoteDestination::Page { page, view: DestView::from_operands(kind, &operands) }
+                }
+                Object::Name(name) if name.len() <= MAX_REMOTE_DESTINATION_NAME_BYTES => {
+                    let name = String::from_utf8_lossy(name).into_owned();
+                    if name.is_empty() || name.len() > MAX_REMOTE_DESTINATION_NAME_BYTES {
+                        return None;
+                    }
+                    RemoteDestination::Named(name)
+                }
+                Object::String(bytes, _) if bytes.len() <= MAX_REMOTE_DESTINATION_NAME_BYTES => {
+                    let name = text_string(bytes);
+                    if name.is_empty() || name.len() > MAX_REMOTE_DESTINATION_NAME_BYTES {
+                        return None;
+                    }
+                    RemoteDestination::Named(name)
+                }
+                _ => return None,
+            },
+        };
+        Some(LinkTarget::RemoteGoTo { launch: false, file, destination, new_window: self.new_window(action) })
+    }
+
+    /// The non-empty local file an action's `/F` names (a string or a file specification), shared
+    /// by GoToR and Launch. A URL file system (`/FS /URL`) names no local file.
+    fn action_file(&self, action: &Dictionary) -> Option<String> {
+        if self.name(action, b"FS").as_deref() == Some("URL") {
+            return None;
+        }
+        let file = match self.resolve(action.get(b"F").ok()?) {
+            Object::String(bytes, _) => limited_pdf_string(bytes, MAX_REMOTE_FILE_SPEC_BYTES)?,
+            Object::Dictionary(spec) => {
+                if self.name(spec, b"FS").as_deref() == Some("URL") {
+                    return None;
+                }
+                spec.get(b"UF")
+                    .ok()
+                    .and_then(|o| self.pdf_text(o, MAX_REMOTE_FILE_SPEC_BYTES))
+                    .or_else(|| spec.get(b"F").ok().and_then(|o| self.pdf_text(o, MAX_REMOTE_FILE_SPEC_BYTES)))?
+            }
+            _ => return None,
+        };
+        (!file.is_empty()).then_some(file)
+    }
+
+    fn new_window(&self, action: &Dictionary) -> Option<bool> {
+        match action.get(b"NewWindow").map(|o| self.resolve(o)) {
+            Ok(Object::Boolean(value)) => Some(*value),
+            _ => None,
+        }
+    }
+
+    /// A Launch action (ISO 32000-2 §12.6.4.6, Table 207) whose `/F` names a `.pdf` file, read as
+    /// the remote Go-To to that file's first page that it amounts to (#4168). Launching anything
+    /// else, or with the deprecated `/Win` launch parameters (an application, an operation, its
+    /// arguments), is not followed: a document must not start programs. `\` separators, which
+    /// Windows writers put in such paths, are read as `/` (§7.11.2.1 separates components with
+    /// `/`) when the path has no `/` of its own. Launch has no `/D`, so one present (written
+    /// for GoToR, or junk) is ignored rather than checked as a destination.
+    fn launch_pdf(&self, action: &Dictionary) -> Option<LinkTarget> {
+        if action.has(b"Win") {
+            return None;
+        }
+        let file = self.action_file(action)?;
+        let new_window = self.new_window(action);
+        let file = if file.contains('/') { file } else { file.replace('\\', "/") };
+        let pdf = file.rsplit('/').next().is_some_and(|name| name.len() > 4 && name.to_ascii_lowercase().ends_with(".pdf"));
+        pdf.then_some(LinkTarget::RemoteGoTo { launch: true, file, destination: RemoteDestination::Default, new_window })
+    }
+
+    fn pdf_text(&self, o: &Object, max_bytes: usize) -> Option<String> {
+        match self.resolve(o) {
+            Object::String(bytes, _) => limited_pdf_string(bytes, max_bytes),
+            _ => None,
+        }
+    }
+
+    /// A set-OCG-state action: `/State` is `ON`, `OFF` or `Toggle`, each followed by the groups
+    /// it applies to; `/PreserveRB` is true unless it is `false`.
+    fn layer_state(&self, a: &Dictionary) -> LinkTarget {
+        let mut changes = Vec::new();
+        if let Ok(Object::Array(items)) = a.get(b"State").map(|o| self.resolve(o)) {
+            let mut op = None;
+            for item in items.iter().take(MAX_LAYER_STATE) {
+                match item {
+                    Object::Name(n) => {
+                        op = match n.as_slice() {
+                            b"ON" => Some(LayerOp::On),
+                            b"OFF" => Some(LayerOp::Off),
+                            b"Toggle" => Some(LayerOp::Toggle),
+                            _ => None,
+                        }
+                    }
+                    Object::Reference(id) => changes.extend(op.map(|op| (op, *id))),
+                    _ => {}
+                }
+            }
+        }
+        let preserve_rb = !matches!(a.get(b"PreserveRB").map(|o| self.resolve(o)), Ok(Object::Boolean(false)));
+        LinkTarget::SetLayers { changes, preserve_rb }
+    }
+
+    // ── form fields ─────────────────────────────────────────────────────────────────────────
+
+    /// Whether `o` or one of its descendants under `/Kids` carries an action (`/A` or `/AA`). It
+    /// walks the same tree `field` does, bounded the same way: a field left out of the listing for
+    /// want of text allowance can still have its action on a widget several levels down.
+    pub(super) fn has_action(&self, o: &Object, depth: u32) -> bool {
+        self.has_action_seen(o, depth, &mut HashMap::new())
+    }
+
+    /// The walk behind [`Self::has_action`]. Each indirect descendant is read again only from a
+    /// shallower depth than before (the depth limit may have cut its subtree): a field tree whose
+    /// `/Kids` repeat the same objects would otherwise be walked exponentially, and this reads each
+    /// object at most once per depth.
+    fn has_action_seen(&self, o: &Object, depth: u32, seen: &mut HashMap<ObjectId, u32>) -> bool {
+        if depth > 32 {
+            return false;
+        }
+        if let Object::Reference(id) = o {
+            if seen.get(id).is_some_and(|&first| first <= depth) {
+                return false;
+            }
+            seen.insert(*id, depth);
+        }
+        let Some(d) = self.dict(o) else { return false };
+        if self.carries_action(d) {
+            return true;
+        }
+        let kids = match d.get(b"Kids").map(|k| self.resolve(k)) {
+            Ok(Object::Array(k)) => k,
+            _ => return false,
+        };
+        kids.iter().any(|k| self.has_action_seen(k, depth + 1, seen))
+    }
+
+    /// Whether `/A` or `/AA` here holds an action. An editor can leave an empty dictionary (or
+    /// array) behind, and that is no action: a document with none must not report JavaScript. An
+    /// `/A` is an action when it carries `/S`; an `/AA` is one when an event maps to such an action.
+    fn carries_action(&self, d: &Dictionary) -> bool {
+        let action = |o: &Object| matches!(self.resolve(o), Object::Dictionary(a) if a.get(b"S").is_ok());
+        [&b"A"[..], &b"AA"[..]].iter().any(|k| match d.get(k) {
+            Ok(o) => match self.resolve(o) {
+                Object::Dictionary(x) => x.get(b"S").is_ok() || x.iter().any(|(_, v)| action(v)),
+                Object::Array(a) => a.iter().any(action),
+                _ => false,
+            },
+            Err(_) => false,
+        })
+    }
+
+    pub(super) fn field(
+        &self,
+        o: &'a Object,
+        parent: Option<(&str, Option<String>, Option<i64>)>,
+        out: &mut Vec<Field>,
+        walk: &mut FieldWalk,
+        depth: u32,
+    ) {
+        if depth > 32 {
+            return;
+        }
+        if let Object::Reference(id) = o
+            && !walk.seen.insert(*id)
+        {
+            return;
+        }
+        let Some(d) = self.dict(o) else { return };
+        let (parent_name, parent_ft, parent_ff) = parent.unwrap_or(("", None, None));
+        // Non-terminal: has kids that are fields (they carry /T). Widgets-only kids are terminal.
+        let mut kids: Vec<Object> = match d.get(b"Kids").map(|k| self.resolve(k)) {
+            Ok(Object::Array(k)) => k.clone(),
+            _ => Vec::new(),
+        };
+        // A field left unlisted for want of text allowance still has its actions counted, through
+        // its whole subtree: an action can sit on a descendant widget, not only on the field.
+        let unlisted = || {
+            if self.has_action(o, 0) {
+                self.field_actions.set(true);
+            }
+        };
+        // A /T that does not fit the allowance lists no field (not one under its parent's name).
+        let Ok(partial) = self.field_text_within(d, b"T") else {
+            unlisted();
+            return;
+        };
+        let full = match (&partial, parent_name.is_empty()) {
+            (Some(t), true) => t.clone(),
+            (Some(t), false) => format!("{parent_name}.{t}"),
+            (None, _) => parent_name.to_string(),
+        };
+        // Every field copies its parent's full name: charge it, and list no more once it is spent.
+        if !self.field_charge(full.len()) {
+            unlisted();
+            return;
+        }
+        let ft = self.name(d, b"FT").or(parent_ft);
+        let ff = d.get(b"Ff").ok().and_then(|x| x.as_i64().ok()).or(parent_ff);
+        let (field_kids, widget_kids): (Vec<Object>, Vec<Object>) =
+            kids.iter().cloned().partition(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok()));
+        let field_kids: Vec<_> = field_kids.iter().filter(|k| !self.not_a_child(walk, o, k)).collect();
+        if !field_kids.is_empty() {
+            let here = match o {
+                Object::Reference(id) => Some(*id),
+                _ => None,
+            };
+            walk.path.extend(here);
+            for k in field_kids {
+                // A fully qualified name is built up the field's own `/Parent` chain (ISO 32000-2
+                // §12.7.4.2): a kid that doesn't name this field as its `/Parent` is named from its
+                // own chain, as the form reader names it.
+                let parent = match self.dict(k).map(|kd| kd.get(b"Parent")) {
+                    Some(Ok(Object::Reference(p))) => Some(*p),
+                    _ => None,
+                };
+                if parent == here {
+                    self.field(k, Some((&full, ft.clone(), ff)), out, walk, depth + 1);
+                } else {
+                    let own = parent.map(|p| self.qualified_name(p)).unwrap_or_default();
+                    self.field(k, Some((&own, ft.clone(), ff)), out, walk, depth + 1);
+                }
+            }
+            if here.is_some() {
+                walk.path.pop();
+            }
+            // "A field's children in the hierarchy may also include widget annotations" (ISO
+            // 32000-2 §12.7.4): widget annotations listed beside named kids are still this
+            // field's widgets, listed as a field of this name, as the form reader reads them.
+            kids.retain(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_err() && self.name(kd, b"Subtype").as_deref() == Some("Widget")));
+            if kids.is_empty() {
+                return;
+            }
+        }
+        let flags = ff.unwrap_or(0);
+        let kind = match ft.as_deref() {
+            Some("Tx") => FieldKind::Text,
+            Some("Btn") if flags & (1 << 16) != 0 => FieldKind::PushButton,
+            Some("Btn") if flags & (1 << 15) != 0 => FieldKind::Radio,
+            Some("Btn") => FieldKind::CheckBox,
+            Some("Ch") if flags & (1 << 17) != 0 => FieldKind::Combo,
+            Some("Ch") => FieldKind::List,
+            Some("Sig") => FieldKind::Signature,
+            _ => FieldKind::Unknown,
+        };
+        let value = match d.get(b"V").map(|v| self.resolve(v)) {
+            Ok(Object::Name(n)) => self.field_spend(n, |n| String::from_utf8_lossy(n).into_owned()),
+            Ok(Object::String(bytes, _)) => self.field_spend(bytes, text_string),
+            Ok(Object::Array(a)) => {
+                let mut shown = Vec::new();
+                let mut dropped = false;
+                for x in a {
+                    let text = match self.resolve(x) {
+                        Object::String(bytes, _) => self.field_spend(bytes, text_string),
+                        // A name entry (`/V [/Opt1 (b)]`) is a selection too, as the forms reader
+                        // takes it; leaving it out reported a partial selection as complete.
+                        Object::Name(n) => self.field_spend(n, |n| String::from_utf8_lossy(n).into_owned()),
+                        _ => continue,
+                    };
+                    // The ", " between selections is charged to the allowance like the text.
+                    match text {
+                        Some(text) if shown.is_empty() || self.field_charge(2) => shown.push(text),
+                        _ => dropped = true,
+                    }
+                }
+                // A selected value the allowance could not hold shows as an omission rather than
+                // as part of a complete selection (its few bytes are charged, fit or not).
+                let mut value = shown.join(", ");
+                if dropped {
+                    self.field_charge(5);
+                    if !value.is_empty() {
+                        value.push_str(", ");
+                    }
+                    value.push('…');
+                }
+                Some(value)
+            }
+            Ok(Object::Dictionary(_)) if kind == FieldKind::Signature => Some("signed".into()),
+            _ => None,
+        };
+        // The widget is this dict (merged field/widget) or its first kid. A merged dict that also
+        // lists widget kids has them as its widgets (ISO 32000-2 §12.7.4), as the form reader has
+        // it. With no widget among its kids, it is the first page widget naming this field as its
+        // `/Parent`: a child names its parent (ISO 32000-2 §12.7.4.1, Table 226), as MuPDF and
+        // PDFium read it.
+        let merged = d.get(b"Rect").is_ok();
+        let named = if merged || !widget_kids.is_empty() { None } else { self.widget_naming(o) };
+        let widget_kid = widget_kids.iter().filter_map(|k| self.dict(k)).find(|kd| self.name(kd, b"Subtype").as_deref() == Some("Widget"));
+        let widget = match widget_kid {
+            Some(w) => Some(w),
+            None if merged => Some(d),
+            None => widget_kids.first().and_then(|k| self.dict(k)).or_else(|| named.and_then(|id| self.doc.get_dictionary(id).ok())),
+        };
+        let page = widget
+            .and_then(|w| w.get(b"P").ok())
+            .and_then(|p| self.page_of(p))
+            .or_else(|| self.find_widget_page(o, &kids))
+            .or_else(|| named.and_then(|id| self.annotation_pages.get_or_init(|| self.annotation_pages()).get(&id).copied()));
+        let has_actions = self.carries_action(d)
+            || widget.is_some_and(|w| self.carries_action(w))
+            || kids.iter().any(|k| self.dict(k).is_some_and(|w| self.carries_action(w)));
+        let rect = widget.and_then(|w| w.get(b"Rect").ok()).map(|r| rect4(self.resolve(r)));
+        out.push(Field { name: full, kind, value, page, tooltip: self.field_text(d, b"TU"), has_actions, rect });
+    }
+
+    /// Whether `k`, listed in the `/Kids` of field `o`, is not a child of `o` after all: `o` itself
+    /// or a field `o` descends from (a loop), or a root field (one `/Fields` lists) that doesn't
+    /// name `o` as its `/Parent`. Root fields have no ancestors (ISO 32000-2 §12.7.3, Table 224),
+    /// and a child names its parent (§12.7.4.1, Table 226).
+    fn not_a_child(&self, walk: &FieldWalk, o: &Object, k: &Object) -> bool {
+        let Object::Reference(k) = k else { return false };
+        let parent = self.dict(&Object::Reference(*k)).and_then(|d| match d.get(b"Parent") {
+            Ok(Object::Reference(p)) => Some(*p),
+            _ => None,
+        });
+        let o = if let Object::Reference(o) = o { Some(*o) } else { None };
+        o == Some(*k) || walk.path.contains(k) || (walk.roots.contains(k) && (o.is_none() || parent != o))
+    }
+
+    /// The first page widget that names field `o` as its `/Parent` and is not a field of its own
+    /// (no `/T`), in page-annotation order.
+    fn widget_naming(&self, o: &Object) -> Option<ObjectId> {
+        let Object::Reference(id) = o else { return None };
+        self.parent_widgets.get_or_init(|| self.parent_widgets()).get(id).copied()
+    }
+
+    /// The first page widget (no `/T`) naming each field as its `/Parent`, in page-annotation order.
+    fn parent_widgets(&self) -> HashMap<ObjectId, ObjectId> {
+        let mut first = HashMap::new();
+        for &pid in &self.page_ids {
+            let Some(annots) = self.doc.get_dictionary(pid).ok().and_then(|d| d.get(b"Annots").ok()) else { continue };
+            let Ok(annots) = self.resolve(annots).as_array() else { continue };
+            for a in annots {
+                let Object::Reference(id) = a else { continue };
+                let Ok(w) = self.doc.get_dictionary(*id) else { continue };
+                if self.name(w, b"Subtype").as_deref() != Some("Widget") || w.get(b"T").is_ok() {
+                    continue;
+                }
+                if let Ok(Object::Reference(parent)) = w.get(b"Parent") {
+                    first.entry(*parent).or_insert(*id);
+                }
+            }
+        }
+        first
+    }
+
+    /// The first page whose `/Annots` lists the field or one of its kids.
+    fn find_widget_page(&self, field: &Object, kids: &[Object]) -> Option<usize> {
+        let pages = self.annotation_pages.get_or_init(|| self.annotation_pages());
+        std::iter::once(field).chain(kids).filter_map(|o| if let Object::Reference(id) = o { pages.get(id).copied() } else { None }).min()
+    }
+
+    /// Each annotation listed in a page's `/Annots`, with the first page that lists it.
+    fn annotation_pages(&self) -> HashMap<ObjectId, usize> {
+        let mut pages = HashMap::new();
+        for (idx, &pid) in self.page_ids.iter().enumerate() {
+            let Some(annots) = self.doc.get_dictionary(pid).ok().and_then(|d| d.get(b"Annots").ok()) else { continue };
+            let Ok(annots) = self.resolve(annots).as_array() else { continue };
+            for a in annots {
+                if let Object::Reference(id) = a {
+                    pages.entry(*id).or_insert(idx);
+                }
+            }
+        }
+        pages
+    }
+
+    /// The fully qualified name of the field `id`: the partial names (`/T`) up its `/Parent`
+    /// chain, joined with periods; empty when none has one or the chain reaches an object that
+    /// isn't a dictionary, as the form reader has it. A `/Parent` loop ends the walk.
+    fn qualified_name(&self, id: ObjectId) -> String {
+        let mut parts = Vec::new();
+        let mut visited = HashSet::new();
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            if visited.len() > 64 || !visited.insert(c) {
+                break;
+            }
+            let o = Object::Reference(c);
+            let Some(d) = self.dict(&o) else { return String::new() };
+            parts.extend(self.text(d, b"T"));
+            cur = match d.get(b"Parent") {
+                Ok(Object::Reference(p)) => Some(*p),
+                _ => None,
+            };
+        }
+        parts.reverse();
+        parts.join(".")
+    }
+
+    /// The topmost field above widget `id` (itself without a `/Parent` that is a field), or `None` when it or an
+    /// ancestor is already reachable from the `/Fields` tree, or a `/Parent` loop hides the top.
+    pub(super) fn unlisted_field(&self, id: ObjectId, seen: &HashSet<ObjectId>) -> Option<ObjectId> {
+        let mut top = id;
+        let mut visited = HashSet::from([id]);
+        loop {
+            let o = Object::Reference(top);
+            let d = self.dict(&o)?;
+            // A `/Parent` naming an object the file doesn't hold, or no dictionary, reads as
+            // `null`, the same as no parent (ISO 32000-2 §7.3.9).
+            let parent = match d.get(b"Parent") {
+                Ok(Object::Reference(p)) if self.dict(&Object::Reference(*p)).is_some() => Some(*p),
+                _ => None,
+            };
+            let Some(p) = parent else {
+                return if seen.contains(&top) { None } else { Some(top) };
+            };
+            if !visited.insert(p) || visited.len() > 64 {
+                return None;
+            }
+            if seen.contains(&p) {
+                return None;
+            }
+            top = p;
+        }
+    }
+}
+
+/// What one reading of the form's fields keeps: the fields read, the root fields `/Fields` lists,
+/// and the fields whose `/Kids` are being read, outermost first.
+#[derive(Default)]
+pub(super) struct FieldWalk {
+    pub(super) seen: HashSet<ObjectId>,
+    pub(super) roots: HashSet<ObjectId>,
+    path: Vec<ObjectId>,
+}
+
+/// An annotation's `/F` as the renderer reads it: a real is truncated, and a value that isn't a
+/// `u32` counts as no flags.
+fn draw_flags(o: &Object) -> u32 {
+    let f = match o {
+        Object::Integer(i) => *i,
+        Object::Real(r) => *r as i64,
+        _ => 0,
+    };
+    u32::try_from(f).unwrap_or(0)
+}
+
+fn rect4(o: &Object) -> [f32; 4] {
+    match o {
+        Object::Array(a) if a.len() == 4 => {
+            let v: Vec<f32> = a.iter().map(|x| x.as_float().unwrap_or(0.0)).collect();
+            [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])]
+        }
+        _ => [0.0; 4],
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// `/QuadPoints` arrays whose values were read.
+    pub(super) static QUAD_ARRAYS_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! { static JS_DECODE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+#[cfg(test)]
+mod remediation_probes {
+    use super::*;
+    use crate::inspect::{Arc, inspect};
+    use lopdf::{Document, dictionary};
+    #[test]
+    fn remediation_rejected_stream_cache_has_a_fixed_bound() {
+        let streams: Vec<_> = (0..8192).map(|_| lopdf::Stream::new(dictionary! {}, vec![])).collect();
+        let mut cache = RejectedJavaScript::default();
+        for stream in &streams {
+            cache.insert(std::ptr::from_ref(stream));
+            assert!(cache.identities.len() <= 4096);
+            assert!(cache.order.len() <= 4096);
+        }
+        assert!(!cache.contains(std::ptr::from_ref(streams.first().unwrap())));
+        assert!(cache.contains(std::ptr::from_ref(streams.last().unwrap())));
+    }
+    fn shared_bad_stream(n: usize, repeated_annotation: bool) -> Vec<u8> {
+        let mut d = Document::with_version("1.7");
+        let pages = d.new_object_id();
+        let mut stream = lopdf::Stream::new(dictionary! {}, vec![b'x'; 300 << 10]);
+        stream.compress().unwrap();
+        let stream_id = d.add_object(stream);
+        let action = d.add_object(dictionary! {"S"=>"JavaScript","JS"=>stream_id});
+        let mut annots = Vec::new();
+        let mut first = None;
+        for _ in 0..n {
+            let annotation_action = if n == 33 {
+                let alias = d.add_object(Object::Reference(stream_id));
+                d.add_object(dictionary! {"S"=>"JavaScript","JS"=>alias})
+            } else {
+                action
+            };
+            let id = if let Some(id) = first.filter(|_| repeated_annotation) {
+                id
+            } else {
+                let id = d.add_object(
+                    dictionary! {"Type"=>"Annot","Subtype"=>"Link","Rect"=>vec![0.into(),0.into(),50.into(),50.into()],"A"=>annotation_action},
+                );
+                first = Some(id);
+                id
+            };
+            annots.push(Object::Reference(id));
+        }
+        let good=d.add_object(dictionary!{"Subtype"=>"Link","Rect"=>vec![0.into(),0.into(),50.into(),50.into()],"A"=>dictionary!{"S"=>"JavaScript","JS"=>Object::string_literal("console.println('valid');")}});
+        annots.push(good.into());
+        let page = d.add_object(dictionary! {"Type"=>"Page","Parent"=>pages,"Annots"=>annots});
+        d.objects.insert(
+            pages,
+            dictionary! {"Type"=>"Pages","Kids"=>vec![page.into()],"Count"=>1,"MediaBox"=>vec![0.into(),0.into(),200.into(),200.into()]}.into(),
+        );
+        let root = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>pages});
+        d.trailer.set("Root", root);
+        let mut bytes = Vec::new();
+        d.save_to(&mut bytes).unwrap();
+        bytes
+    }
+    #[test]
+    fn remediation_rejected_stream_decode_is_cached_and_preserves_budget() {
+        for (n, repeated) in [(1, false), (33, false), (256, false), (1024, false), (1024, true)] {
+            let bytes = shared_bad_stream(n, repeated);
+            let len = bytes.len();
+
+            let mut times = Vec::new();
+            let mut calls = 0;
+            for _ in 0..3 {
+                JS_DECODE_COUNT.with(|n| n.set(0));
+                let now = std::time::Instant::now();
+                let info = inspect(Arc::new(bytes.clone()), None).unwrap();
+                times.push(now.elapsed().as_micros());
+                calls = JS_DECODE_COUNT.with(|n| n.get());
+                assert_eq!(calls, 1);
+                assert_eq!(info.links.len(), if repeated { 2 } else { n + 1 });
+                assert!(matches!(&info.links.last().unwrap().target,LinkTarget::JavaScript(s) if s=="console.println('valid');"));
+                assert!(!info.warnings.iter().any(|w| w.contains("4 MiB")));
+            }
+            println!("REJECT n={n} repeated_annotation={repeated} bytes={len} decode_calls={calls} micros={times:?}");
+        }
+    }
+
+    /// Links sharing a stream that decodes decode it once, even when its source is empty and
+    /// spends none of the budget; a stream whose `/Filter` is an empty array is its own source
+    /// (review on #7144).
+    #[test]
+    fn a_shared_script_stream_is_decoded_once() {
+        let mut d = Document::with_version("1.7");
+        let pages = d.new_object_id();
+        // Whitespace decodes to nothing, at the cost of reading all of it.
+        let blank = d.add_object(lopdf::Stream::new(dictionary! {"Filter"=>"ASCIIHexDecode"}, [vec![b' '; 64 << 10], b">".to_vec()].concat()));
+        let raw = d.add_object(lopdf::Stream::new(dictionary! {"Filter"=>Vec::<Object>::new()}, b"app.alert(1);".to_vec()));
+        let rect = || vec![0.into(), 0.into(), 50.into(), 50.into()];
+        let annots: Vec<Object> = std::iter::repeat_n(blank, 100)
+            .chain([raw])
+            .map(|js| {
+                d.add_object(dictionary! {"Type"=>"Annot","Subtype"=>"Link","Rect"=>rect(),"A"=>dictionary! {"S"=>"JavaScript","JS"=>js}}).into()
+            })
+            .collect();
+        let page = d.add_object(dictionary! {"Type"=>"Page","Parent"=>pages,"Annots"=>annots});
+        d.objects.insert(pages, dictionary! {"Type"=>"Pages","Kids"=>vec![page.into()],"Count"=>1,"MediaBox"=>rect()}.into());
+        let root = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>pages});
+        d.trailer.set("Root", root);
+        let mut bytes = Vec::new();
+        d.save_to(&mut bytes).unwrap();
+        JS_DECODE_COUNT.with(|n| n.set(0));
+        let info = inspect(Arc::new(bytes), None).unwrap();
+        assert_eq!(JS_DECODE_COUNT.with(std::cell::Cell::get), 2, "one decode per stream");
+        assert_eq!(info.links.len(), 101);
+        assert!(info.links[..100].iter().all(|l| matches!(&l.target, LinkTarget::JavaScript(s) if s.is_empty())));
+        assert!(matches!(&info.links[100].target, LinkTarget::JavaScript(s) if s == "app.alert(1);"), "{:?}", info.links[100].target);
+    }
+}
