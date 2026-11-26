@@ -1,5 +1,15 @@
 # Vendored crates
 
+## Embedded Office readers
+
+The desktop converter links local WordCraft, GridCraft and DeckCraft crates. All use PDFCraft's pinned craft-libs revision. The sibling app checkouts are for development and can be absent when building or running PDFCraft.
+
+- GridCraft source and notices come from [GridCraft 1b92ec07](https://github.com/storytold/gridcraft/tree/1b92ec071e407895f4245b238bf4063ef1efdb68).
+- DeckCraft source and notices come from [DeckCraft 9db2fa0c](https://github.com/storytold/deckcraft/tree/9db2fa0ca994ad8ae8d9cc5032d860ae985477d5).
+- [WordCraft provenance and file formats](wordcraft/README.md)
+
+GridCraft supplies the workbook importer, calculation engine and print layout. DeckCraft supplies the presentation readers, renderer and slide PDF writer. The vendored sources cover the libraries used by PDFCraft. The complete upstream repositories contain the standalone apps and their test workspaces.
+
 ## edit-session
 
 Document Properties uses the dependency-free draft state machine from

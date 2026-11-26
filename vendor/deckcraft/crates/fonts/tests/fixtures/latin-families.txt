@@ -1,0 +1,52 @@
+# Synthetic paths; family/style inventory from craft-fonts 76ba5a0496503c0e2841abd626295038cbe07cde.
+Inter | Regular | fonts/fixture.ttf | Latn
+Inter | Italic | fonts/fixture.ttf | Latn
+Inter | SemiBold | fonts/fixture.ttf | Latn
+Inter | Bold | fonts/fixture.ttf | Latn
+Carlito | Regular | fonts/fixture.ttf | Latn
+Carlito | Bold | fonts/fixture.ttf | Latn
+Carlito | Italic | fonts/fixture.ttf | Latn
+Carlito | Bold Italic | fonts/fixture.ttf | Latn
+Caladea | Regular | fonts/fixture.ttf | Latn
+Caladea | Bold | fonts/fixture.ttf | Latn
+Caladea | Italic | fonts/fixture.ttf | Latn
+Caladea | Bold Italic | fonts/fixture.ttf | Latn
+Liberation Sans | Regular | fonts/fixture.ttf | Latn
+Liberation Sans | Bold | fonts/fixture.ttf | Latn
+Liberation Sans | Italic | fonts/fixture.ttf | Latn
+Liberation Sans | Bold Italic | fonts/fixture.ttf | Latn
+Liberation Serif | Regular | fonts/fixture.ttf | Latn
+Liberation Serif | Bold | fonts/fixture.ttf | Latn
+Liberation Serif | Italic | fonts/fixture.ttf | Latn
+Liberation Serif | Bold Italic | fonts/fixture.ttf | Latn
+Liberation Mono | Regular | fonts/fixture.ttf | Latn
+Liberation Mono | Bold | fonts/fixture.ttf | Latn
+Liberation Mono | Italic | fonts/fixture.ttf | Latn
+Liberation Mono | Bold Italic | fonts/fixture.ttf | Latn
+Source Sans 3 | Regular | fonts/fixture.ttf | Latn
+Source Sans 3 | Italic | fonts/fixture.ttf | Latn
+Source Sans 3 | Semibold | fonts/fixture.ttf | Latn
+Source Sans 3 | Bold | fonts/fixture.ttf | Latn
+Source Serif 4 | Regular | fonts/fixture.ttf | Latn
+Source Serif 4 | Italic | fonts/fixture.ttf | Latn
+Source Serif 4 | Semibold | fonts/fixture.ttf | Latn
+Source Serif 4 | Bold | fonts/fixture.ttf | Latn
+Montserrat | Variable | fonts/fixture.ttf | Latn
+Montserrat | Italic Variable | fonts/fixture.ttf | Latn
+Lato | Regular | fonts/fixture.ttf | Latn
+Lato | Bold | fonts/fixture.ttf | Latn
+Lato | Italic | fonts/fixture.ttf | Latn
+Open Sans | Variable | fonts/fixture.ttf | Latn
+Open Sans | Italic Variable | fonts/fixture.ttf | Latn
+Roboto | Variable | fonts/fixture.ttf | Latn
+Roboto | Italic Variable | fonts/fixture.ttf | Latn
+Merriweather | Regular | fonts/fixture.ttf | Latn
+Merriweather | Bold | fonts/fixture.ttf | Latn
+Merriweather | Italic | fonts/fixture.ttf | Latn
+Playfair Display | Variable | fonts/fixture.ttf | Latn
+Playfair Display | Italic Variable | fonts/fixture.ttf | Latn
+Poppins | Regular | fonts/fixture.ttf | Latn
+Poppins | Bold | fonts/fixture.ttf | Latn
+Poppins | Italic | fonts/fixture.ttf | Latn
+Nunito Sans | Variable | fonts/fixture.ttf | Latn
+Nunito Sans | Italic Variable | fonts/fixture.ttf | Latn

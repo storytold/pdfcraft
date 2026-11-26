@@ -1,4 +1,4 @@
-//! pdfcraft-create — create PDFs from nothing, images, text or (through LibreOffice) Office documents (L4). See the README.
+//! pdfcraft-create — create PDFs from nothing, images, text or Office documents (L4). See the README.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -14,9 +14,7 @@ use craft_image_codecs::jpeg_probe::probe_jpeg;
 pub use extract::{ExtractedImage, ImageExport, extract_images, image_file, image_file_within};
 pub use upright_image::jpeg_exif_orientation;
 mod office;
-#[cfg(not(target_arch = "wasm32"))]
-pub use office::libreoffice;
-pub use office::{OFFICE_EXTENSIONS, is_office, office_to_pdf};
+pub use office::{OFFICE_EXTENSIONS, is_office, office_to_pdf, office_to_pdf_with_password};
 use pdfcraft_fonts::wrap_with;
 use text_font::TextFont;
 
@@ -26,7 +24,10 @@ pub enum CreateError {
     Image(String, String),
     #[error("{0}")]
     Invalid(String),
-    /// An Office document LibreOffice couldn't convert, or LibreOffice isn't installed.
+    #[error("the document is protected by a password")]
+    NeedsPassword,
+    #[error("the password is incorrect")]
+    WrongPassword,
     #[error("{0}")]
     Office(String),
 }
@@ -589,7 +590,7 @@ pub enum SourceKind {
     Pdf,
     Image,
     Text,
-    /// A Word, Excel, PowerPoint or OpenDocument file, converted through LibreOffice.
+    /// A document converted by an embedded Office engine.
     Office,
 }
 
@@ -600,7 +601,7 @@ pub const IMAGE_EXTENSIONS: [&str; 11] = ["png", "jpg", "jpeg", "tif", "tiff", "
 pub const TEXT_EXTENSIONS: [&str; 2] = ["txt", "text"];
 
 /// File extensions Create converts to PDF itself: [`IMAGE_EXTENSIONS`] and [`TEXT_EXTENSIONS`]
-/// (Office documents go through LibreOffice, [`OFFICE_EXTENSIONS`]).
+/// (Office documents use a separate filter, [`OFFICE_EXTENSIONS`]).
 pub const CONVERTIBLE: [&str; 13] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "pcx", "txt", "text"];
 
 /// A PCX file: its manufacturer byte, a version (1 was never used), run-length coding and 1 or 8

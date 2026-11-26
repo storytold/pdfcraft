@@ -1,0 +1,440 @@
+{
+  "sheets": [
+    {
+      "name": "Sheet1",
+      "cells": {
+        "bands": {
+          "0": {
+            "rows": {
+              "0": {
+                "0": {
+                  "value": {
+                    "t": "Text",
+                    "v": "Item"
+                  },
+                  "formula": null,
+                  "style": 1
+                },
+                "1": {
+                  "value": {
+                    "t": "Text",
+                    "v": "Qty"
+                  },
+                  "formula": null,
+                  "style": 1
+                }
+              },
+              "1": {
+                "0": {
+                  "value": {
+                    "t": "Text",
+                    "v": "Äpfel ✓"
+                  },
+                  "formula": null,
+                  "style": 0
+                },
+                "1": {
+                  "value": {
+                    "t": "Number",
+                    "v": 3.5
+                  },
+                  "formula": null,
+                  "style": 2
+                }
+              },
+              "2": {
+                "0": {
+                  "value": {
+                    "t": "Text",
+                    "v": "Pears"
+                  },
+                  "formula": null,
+                  "style": 0
+                },
+                "1": {
+                  "value": {
+                    "t": "Number",
+                    "v": 2.0
+                  },
+                  "formula": null,
+                  "style": 2
+                }
+              },
+              "3": {
+                "1": {
+                  "value": {
+                    "t": "Number",
+                    "v": 5.5
+                  },
+                  "formula": {
+                    "text": "SUM(B2:B3)",
+                    "array": null
+                  },
+                  "style": 2
+                }
+              }
+            }
+          }
+        },
+        "len": 7
+      },
+      "cols": {},
+      "rows": {},
+      "default_col_width": 64.0,
+      "default_row_height": 20.0,
+      "merges": [],
+      "freeze": null,
+      "tab_color": null,
+      "visibility": "Visible",
+      "show_gridlines": true,
+      "show_headings": true,
+      "show_formulas": false,
+      "show_zeros": true,
+      "show_outline_symbols": true,
+      "summary_below": true,
+      "summary_right": true,
+      "right_to_left": false,
+      "zoom": 100,
+      "cond_formats": [],
+      "validations": [],
+      "tables": [],
+      "autofilter": null,
+      "comments": {},
+      "hyperlinks": {},
+      "charts": [],
+      "images": [],
+      "shapes": [],
+      "sparklines": [],
+      "slicers": [],
+      "pivots": [],
+      "protection": null,
+      "print": {
+        "orientation": "Portrait",
+        "paper": "Letter",
+        "margins": [
+          0.7,
+          0.7,
+          0.75,
+          0.75,
+          0.3,
+          0.3
+        ],
+        "print_area": null,
+        "title_rows": null,
+        "title_cols": null,
+        "scale": 100,
+        "fit_to": null,
+        "gridlines": false,
+        "headings": false,
+        "center_h": false,
+        "center_v": false,
+        "header": "",
+        "footer": "",
+        "row_breaks": [],
+        "col_breaks": [],
+        "different_first": false,
+        "different_odd_even": false,
+        "first_header": "",
+        "first_footer": "",
+        "even_header": "",
+        "even_footer": "",
+        "hf_scale_with_doc": true,
+        "hf_align_with_margins": true,
+        "page_order": "downThenOver"
+      },
+      "view_active": {
+        "row": 0,
+        "col": 0
+      },
+      "view_top_left": {
+        "row": 0,
+        "col": 0
+      },
+      "view": "normal"
+    }
+  ],
+  "names": [],
+  "styles": {
+    "styles": [
+      {
+        "font": {
+          "name": "Calibri",
+          "size": 11.0,
+          "bold": false,
+          "italic": false,
+          "underline": "None",
+          "strike": false,
+          "color": "Auto",
+          "vert": "Baseline",
+          "charset": null,
+          "family": null,
+          "minor": true
+        },
+        "fill": {
+          "pattern": "None",
+          "fg": "Auto",
+          "bg": "Auto"
+        },
+        "borders": {
+          "left": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "right": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "top": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "bottom": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "diag_down": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "diag_up": {
+            "style": "None",
+            "color": "Auto"
+          }
+        },
+        "align": {
+          "h": "General",
+          "v": "Bottom",
+          "wrap": false,
+          "shrink": false,
+          "indent": 0,
+          "rotation": 0,
+          "reading_order": null
+        },
+        "num_fmt": "General",
+        "protection": {
+          "locked": true,
+          "hidden": false
+        },
+        "dxf_stated": {
+          "bold": false,
+          "italic": false,
+          "strike": false,
+          "underline": false,
+          "size": false,
+          "name": false,
+          "scheme": null,
+          "protection": false
+        }
+      },
+      {
+        "font": {
+          "name": "Calibri",
+          "size": 11.0,
+          "bold": true,
+          "italic": false,
+          "underline": "None",
+          "strike": false,
+          "color": "Auto",
+          "vert": "Baseline",
+          "charset": null,
+          "family": null,
+          "minor": true
+        },
+        "fill": {
+          "pattern": "None",
+          "fg": "Auto",
+          "bg": "Auto"
+        },
+        "borders": {
+          "left": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "right": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "top": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "bottom": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "diag_down": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "diag_up": {
+            "style": "None",
+            "color": "Auto"
+          }
+        },
+        "align": {
+          "h": "General",
+          "v": "Bottom",
+          "wrap": false,
+          "shrink": false,
+          "indent": 0,
+          "rotation": 0,
+          "reading_order": null
+        },
+        "num_fmt": "General",
+        "protection": {
+          "locked": true,
+          "hidden": false
+        },
+        "dxf_stated": {
+          "bold": false,
+          "italic": false,
+          "strike": false,
+          "underline": false,
+          "size": false,
+          "name": false,
+          "scheme": null,
+          "protection": false
+        }
+      },
+      {
+        "font": {
+          "name": "Calibri",
+          "size": 11.0,
+          "bold": false,
+          "italic": false,
+          "underline": "None",
+          "strike": false,
+          "color": "Auto",
+          "vert": "Baseline",
+          "charset": null,
+          "family": null,
+          "minor": true
+        },
+        "fill": {
+          "pattern": "None",
+          "fg": "Auto",
+          "bg": "Auto"
+        },
+        "borders": {
+          "left": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "right": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "top": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "bottom": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "diag_down": {
+            "style": "None",
+            "color": "Auto"
+          },
+          "diag_up": {
+            "style": "None",
+            "color": "Auto"
+          }
+        },
+        "align": {
+          "h": "General",
+          "v": "Bottom",
+          "wrap": false,
+          "shrink": false,
+          "indent": 0,
+          "rotation": 0,
+          "reading_order": null
+        },
+        "num_fmt": "0.00",
+        "protection": {
+          "locked": true,
+          "hidden": false
+        },
+        "dxf_stated": {
+          "bold": false,
+          "italic": false,
+          "strike": false,
+          "underline": false,
+          "size": false,
+          "name": false,
+          "scheme": null,
+          "protection": false
+        }
+      }
+    ]
+  },
+  "theme": {
+    "name": "Craft",
+    "colors": [
+      16777215,
+      0,
+      15263976,
+      927809,
+      1400962,
+      15298866,
+      1665828,
+      1023701,
+      10496915,
+      5154606,
+      4618374,
+      9855101
+    ],
+    "major_font": "Calibri",
+    "minor_font": "Calibri",
+    "major_font_ea": "",
+    "minor_font_ea": "",
+    "major_font_cs": "",
+    "minor_font_cs": "",
+    "major_font_scripts": [],
+    "minor_font_scripts": []
+  },
+  "date_system": "D1900",
+  "calc": {
+    "mode": "Automatic",
+    "iterative": false,
+    "max_iterations": 100,
+    "max_change": 0.001,
+    "precision_as_displayed": false,
+    "r1c1": false
+  },
+  "active_sheet": 0,
+  "props": {
+    "title": "",
+    "subject": "",
+    "author": "GridCraft User",
+    "company": "",
+    "keywords": "",
+    "description": ""
+  },
+  "protected_structure": false,
+  "custom_lists": [],
+  "cell_styles": [],
+  "vba_project": null,
+  "macros": [
+    {
+      "v": 1,
+      "name": "Fill",
+      "description": "",
+      "inputs": [],
+      "steps": [
+        {
+          "type": "command",
+          "id": "cell.set",
+          "params": {
+            "cell": "C1",
+            "input": "x"
+          }
+        }
+      ],
+      "output": {
+        "onConflict": "ask"
+      },
+      "permissions": []
+    }
+  ]
+}

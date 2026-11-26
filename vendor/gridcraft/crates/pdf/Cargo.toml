@@ -1,0 +1,21 @@
+[package]
+name = "gridcraft-pdf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft PDF 1.7 writer with shaped Arabic text, vector drawing and RGBA images"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-pdf.workspace = true
+craft-stream-codecs.workspace = true
+harfrust = "=0.12.0"
+skrifa = { workspace = true }
+unicode-bidi = "=0.3.18"
+
+[build-dependencies]
+sha2 = { workspace = true }
+skrifa = { workspace = true }

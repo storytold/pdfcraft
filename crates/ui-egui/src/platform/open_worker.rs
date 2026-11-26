@@ -19,7 +19,7 @@ pub(crate) enum Input {
 
 pub(crate) enum ResultKind {
     Conversion(Arc<Vec<u8>>),
-    /// An Office document LibreOffice converted here, off the frame thread, or why it couldn't.
+    /// An Word document converted here, off the frame thread, or why it couldn't.
     Converted(Result<Arc<Vec<u8>>, String>),
     Prepared {
         bytes: Arc<Vec<u8>>,
@@ -87,8 +87,16 @@ fn prepare(job: Job, cancel: &Cancel) -> ResultKind {
     }
     match pdfcraft_engine::source_kind(&job.name, &bytes) {
         Some(SourceKind::Image | SourceKind::Text) => return ResultKind::Conversion(bytes),
-        // LibreOffice takes seconds: it runs here, and the frame thread only opens the result.
-        Some(SourceKind::Office) => return ResultKind::Converted(pdfcraft_engine::office_to_pdf(&job.name, &bytes).map_err(|e| e.to_string())),
+        Some(SourceKind::Office) => {
+            use pdfcraft_engine::{CreateError, EditError};
+            let result = pdfcraft_engine::office_to_pdf_with_password(&job.name, &bytes, job.password.as_deref().map(String::as_str));
+            let error = match result {
+                Err(EditError::Create(CreateError::NeedsPassword)) => OpenError::NeedsPassword,
+                Err(EditError::Create(CreateError::WrongPassword)) => OpenError::WrongPassword,
+                other => return ResultKind::Converted(other.map_err(|e| e.to_string())),
+            };
+            return ResultKind::Prepared { bytes, result: Box::new(Err(error)), named: None };
+        }
         Some(SourceKind::Pdf) | None => {}
     }
     let password = job.password.as_deref().map(String::as_str);

@@ -1,0 +1,29 @@
+[package]
+name = "deckcraft-pptx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DeckCraft PPTX: Office Open XML (PresentationML/DrawingML) import and export, written from the public ECMA-376 standard"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-pptx.workspace = true
+craft-opc.workspace = true
+craft-xml.workspace = true
+craft-cfb.workspace = true
+craft-drawingml.workspace = true
+deckcraft-model = { workspace = true }
+deckcraft-geom = { workspace = true }
+deckcraft-color = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+deckcraft-engine = { workspace = true }
+serde_json = { workspace = true }
+deckcraft-color = { workspace = true }
+deckcraft-geom = { workspace = true }
+image = { workspace = true }
+quick-xml = { workspace = true }
+zip = { workspace = true }

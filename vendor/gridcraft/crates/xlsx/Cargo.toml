@@ -1,0 +1,38 @@
+[package]
+name = "gridcraft-xlsx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft file formats: XLSX (SpreadsheetML) and CSV import/export"
+
+[lints]
+workspace = true
+
+[features]
+# Builds password-encrypted workbooks in code for other crates' tests (a dev-dependency feature;
+# never enabled in a shipped build).
+test-support = []
+
+[dependencies]
+gridcraft-core = { workspace = true }
+gridcraft-formula = { workspace = true }
+gridcraft-math = { workspace = true }
+gridcraft-model = { workspace = true }
+craft-cfb = { workspace = true }
+craft-csv = { workspace = true }
+craft-drawingml = { workspace = true }
+craft-math = { workspace = true }
+craft-ods = { workspace = true }
+craft-offcrypto = { workspace = true }
+craft-opc = { workspace = true }
+craft-xls = { workspace = true }
+craft-xml = { workspace = true }
+craft-xlsx = { workspace = true }
+thiserror = { workspace = true }
+quick-xml = { workspace = true }
+zip = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+# Every registered function name, for the formula file-spelling test.
+gridcraft-functions = { workspace = true }

@@ -44,7 +44,7 @@ fn combinable(ext: &str) -> bool {
 
 /// Whether Combine takes a file by what it is: a PDF (by its header or its name) or an image or
 /// text file it converts, as `Session::as_pdf_inline` tells them apart. Not an Office document:
-/// converting one runs LibreOffice for seconds, which Combine can't do on the frame thread, so
+/// converting one runs the Word layout engine, which Combine can't do on the frame thread, so
 /// it is left out and named rather than listed as a file that can't be read.
 pub(super) fn takes(name: &str, bytes: &[u8]) -> bool {
     match pdfcraft_engine::source_kind(name, bytes) {

@@ -1,0 +1,19 @@
+[package]
+name = "wordcraft-geom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WordCraft geometry and units: points, twips, EMU, inches, centimetres; rectangles; measurement parsing"
+
+[lints]
+workspace = true
+
+[features]
+# Picture decoding within a memory budget (`picture`), for the crates that decode pictures.
+image = ["dep:image", "dep:craft-image-codecs", "dep:craft-tiff"]
+
+[dependencies]
+craft-image-codecs = { workspace = true, optional = true }
+craft-tiff = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+serde = { workspace = true }

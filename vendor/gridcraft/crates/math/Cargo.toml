@@ -1,0 +1,15 @@
+[package]
+name = "gridcraft-math"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft equations: LaTeX laid out as plain glyph, rule and path data, and OMML for xlsx"
+
+[lints]
+workspace = true
+
+[dependencies]
+ratex-parser = { workspace = true }
+ratex-layout = { workspace = true }
+ratex-types = { workspace = true }
+ratex-font = { workspace = true }

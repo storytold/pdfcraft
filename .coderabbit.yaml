@@ -1,5 +1,9 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 reviews:
+  # The embedded Craft app snapshots are upstream vendor code. Review the
+  # PDFCraft integration and verification changes around them.
+  path_filters:
+    - "!vendor/**"
   auto_review:
     # Dependabot bumps are checked by CI; skip CodeRabbit reviews on them.
     ignore_usernames:

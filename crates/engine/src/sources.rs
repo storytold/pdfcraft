@@ -15,12 +15,13 @@ pub struct Combined {
     pub renamed_fields: Vec<(String, String)>,
 }
 
-/// Convert the Office document `bytes` named `name` (Word, Excel, PowerPoint, OpenDocument,
-/// RTF) to PDF with an installed LibreOffice, and check the result opens. It runs a separate
-/// process for seconds, so callers keep it off the frame thread. Desktop only: on the web it
-/// returns an error.
+/// Lay out a supported Office document and check the resulting PDF. Call off the frame thread.
 pub fn office_to_pdf(name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
-    let pdf = Arc::new(pdfcraft_create::office_to_pdf(name, bytes)?);
+    office_to_pdf_with_password(name, bytes, None)
+}
+
+pub fn office_to_pdf_with_password(name: &str, bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Result<Arc<Vec<u8>>, EditError> {
+    let pdf = Arc::new(pdfcraft_create::office_to_pdf_with_password(name, bytes, password)?);
     open_source(name, &pdf)?;
     Ok(pdf)
 }

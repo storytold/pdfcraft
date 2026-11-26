@@ -91,7 +91,7 @@ pub(crate) fn pass(app: &mut PdfCraftApp) {
 impl PdfCraftApp {
     /// Convert a non-PDF file (image, text, Office document) into a new tab. Returns `None` when
     /// `bytes` is not something Create understands (the caller then tries to open it as a PDF).
-    /// An Office document blocks while LibreOffice runs: File ▸ Open converts it on the open
+    /// An Office document blocks during Word layout: File ▸ Open converts it on the open
     /// worker instead ([`Self::open_converted_pdf`]), leaving this for startup and inline opens.
     pub(crate) fn open_converted(&mut self, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
         use pdfcraft_engine::SourceKind;

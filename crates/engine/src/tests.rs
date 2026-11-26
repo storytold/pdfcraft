@@ -1671,7 +1671,7 @@ fn files_that_cannot_be_converted_are_refused_clearly() {
     assert_eq!(
         err,
         EditError::Source(
-            "archive.zip: this file type can't be converted; use a PDF, an image, a .txt file or a Word, Excel or PowerPoint file".into()
+            "archive.zip: this file type can't be converted; use a PDF, an image, a .txt file or a supported Office document".into()
         )
     );
     assert!(matches!(s.convert_to_pdf("empty", &Arc::new(Vec::new())), Err(EditError::Source(_))));
@@ -15721,35 +15721,25 @@ fn calculate_now_simple_calculation_reads_formatted_values_and_groups_as_the_nat
     assert_eq!(total(&s), ["3244.75"]);
 }
 
-/// A Word document converts through LibreOffice when it is installed; without it, the error
-/// says what is missing rather than calling the file a broken PDF.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn office_documents_convert_through_libreoffice_or_explain_why_not() {
+fn docx_converts_to_searchable_pdf_in_process() {
     let mut s = Session::new();
     let text = s.create_from_text("t", "Quarterly report").unwrap();
     let id = s.open("t.pdf", None, text, None).unwrap();
     let docx = Arc::new(s.get(id).unwrap().export_office(compare::OfficeFormat::Docx));
     assert_eq!(source_kind("Report.docx", &docx), Some(SourceKind::Office));
-    match s.convert_to_pdf("Report.docx", &docx) {
-        Ok((kind, pdf)) => {
-            assert_eq!(kind, SourceKind::Office);
-            let converted = s.open_new("Report.pdf", pdf).unwrap();
-            assert!(page_texts(&s, converted).concat().contains("Quarterly report"));
-        }
-        // Only "not installed" is an acceptable failure: a conversion that fails, times out or
-        // makes no PDF must fail this test.
-        Err(e) => assert!(e.to_string().contains("LibreOffice, which isn't installed"), "{e}"),
-    }
-    // Combine treats it as a file to convert, not as a PDF to pass through.
-    assert!(
-        s.as_pdf("Report.docx", &docx).map_or_else(|e| e.to_string().contains("LibreOffice, which isn't installed"), |pdf| pdf.starts_with(b"%PDF-"))
-    );
+    let (kind, pdf) = s.convert_to_pdf("Report.docx", &docx).unwrap();
+    assert_eq!(kind, SourceKind::Office);
+    let converted = s.open_new("Report.pdf", pdf).unwrap();
+    assert!(page_texts(&s, converted).concat().contains("Quarterly report"));
+    assert!(s.as_pdf("Report.docx", &docx).unwrap().starts_with(b"%PDF-"));
 }
 
-/// The frame thread never waits for LibreOffice: Insert, Combine and Create Multiple refuse an
+/// The frame thread never waits for document layout: Insert, Combine and Create Multiple refuse an
 /// Office document and point to File ▸ Open, while images and text still convert there.
 #[test]
-fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
+fn inline_conversions_refuse_office_documents_on_the_frame_thread() {
     let s = Session::new();
     let docx = Arc::new(b"PK\x03\x04\x14\x00".to_vec());
     for err in
@@ -15758,7 +15748,7 @@ fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
         assert_eq!(
             err,
             EditError::Source(
-                "Report.docx: Word, Excel and PowerPoint files can't be added here yet; open it with File ▸ Open, which converts it to a PDF".into()
+                "Report.docx: Office documents can't be added here yet; open it with File ▸ Open, which converts it to a PDF".into()
             )
         );
     }

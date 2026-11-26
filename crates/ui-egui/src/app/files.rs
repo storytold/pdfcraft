@@ -464,7 +464,7 @@ impl PdfCraftApp {
         }
         if let Some(p) = path {
             #[cfg(target_os = "macos")]
-            macos_association::repair(std::path::Path::new(&p));
+            crate::macos_association::repair(std::path::Path::new(&p));
             self.recent.retain(|r| r.path != p);
             self.recent_check.opened(&p);
             self.recent.insert(0, RecentFile { name: name.to_string(), path: p, pages, size });
@@ -978,7 +978,7 @@ impl PdfCraftApp {
     }
 
     /// The File ▸ Open picker's file types, in order; the first, PDF, is the default. Images, text
-    /// and (on the desktop, through LibreOffice) Office documents open as new, unsaved PDFs.
+    /// and (on the desktop, through embedded Craft readers) Office documents open as new, unsaved PDFs.
     /// No "All files" in the browser or on macOS, whose panel merges every type into one list
     /// rather than offering a choice.
     pub(crate) fn open_filters() -> Vec<FileFilter> {

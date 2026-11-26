@@ -1,0 +1,27 @@
+[package]
+name = "wordcraft-docx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WordCraft DOCX (OOXML WordprocessingML) reader and writer"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-docx = { workspace = true }
+craft-wordmodel = { workspace = true }
+wordcraft-doc = { workspace = true }
+craft-xml = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+wordcraft-doc = { workspace = true, features = ["test-support"] }
+wordcraft-geom = { workspace = true, features = ["image"] }
+base64 = { workspace = true }
+cfb = { workspace = true }
+log = { workspace = true }
+proptest = { workspace = true }
+image = { workspace = true }
+craft-zip = { workspace = true }

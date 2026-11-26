@@ -11,6 +11,182 @@
 # Adobe-authored non-visual technical data allowed by clean-room.md.
 
 [[asset]]
+path = "vendor/deckcraft/crates/fonts/tests/fixtures/legacy-regular.ttf"
+title = "legacy-regular test face"
+author = "DeckCraft contributors"
+source = "https://github.com/storytold/deckcraft/blob/9db2fa0ca994ad8ae8d9cc5032d860ae985477d5/crates/fonts/tests/fixtures/legacy-regular.ttf"
+licence = "CC0-1.0"
+licence_file = "vendor/deckcraft/ATTRIBUTION.md"
+kind = "font"
+usage = "Synthetic DeckCraft font and rendering test fixture"
+sha256 = "58f9dd88c98fa45efe7b9d9ab47fc7e77a617b4b4bfbe1fdf856ac57f74fa682"
+
+[[asset]]
+path = "vendor/deckcraft/crates/fonts/tests/fixtures/legacy-semibold.ttf"
+title = "legacy-semibold test face"
+author = "DeckCraft contributors"
+source = "https://github.com/storytold/deckcraft/blob/9db2fa0ca994ad8ae8d9cc5032d860ae985477d5/crates/fonts/tests/fixtures/legacy-semibold.ttf"
+licence = "CC0-1.0"
+licence_file = "vendor/deckcraft/ATTRIBUTION.md"
+kind = "font"
+usage = "Synthetic DeckCraft font and rendering test fixture"
+sha256 = "07e1993f91bbdb7ece2ca97e55fe49de192c1c74922e2eb49f1928f9a0d100e6"
+
+[[asset]]
+path = "vendor/deckcraft/crates/render/tests/fixtures/colr-squares.ttf"
+title = "colr-squares test face"
+author = "DeckCraft contributors"
+source = "https://github.com/storytold/deckcraft/blob/9db2fa0ca994ad8ae8d9cc5032d860ae985477d5/crates/render/tests/fixtures/colr-squares.ttf"
+licence = "CC0-1.0"
+licence_file = "vendor/deckcraft/ATTRIBUTION.md"
+kind = "font"
+usage = "Synthetic DeckCraft font and rendering test fixture"
+sha256 = "7dee7d437ce4a82e14e264f3aca347c2c1b512af5a8c580e0562e2360d8b2abf"
+
+[[asset]]
+path = "vendor/wordcraft/assets/fonts/Inter-Medium.ttf"
+title = "Inter-Medium"
+author = "The Inter Project Authors"
+source = "https://github.com/rsms/inter"
+licence = "OFL-1.1"
+licence_file = "vendor/wordcraft/assets/fonts/OFL-Inter.txt"
+kind = "font"
+usage = "Layout and PDF export for imported DOCX documents"
+sha256 = "97ad806f526e41546d46365bb3a393145f75b7b1568913db74549ad8b8dba872"
+
+[[asset]]
+path = "vendor/wordcraft/assets/fonts/Inter-Regular.ttf"
+title = "Inter-Regular"
+author = "The Inter Project Authors"
+source = "https://github.com/rsms/inter"
+licence = "OFL-1.1"
+licence_file = "vendor/wordcraft/assets/fonts/OFL-Inter.txt"
+kind = "font"
+usage = "Layout and PDF export for imported DOCX documents"
+sha256 = "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82"
+
+[[asset]]
+path = "vendor/wordcraft/assets/fonts/Inter-SemiBold.ttf"
+title = "Inter-SemiBold"
+author = "The Inter Project Authors"
+source = "https://github.com/rsms/inter"
+licence = "OFL-1.1"
+licence_file = "vendor/wordcraft/assets/fonts/OFL-Inter.txt"
+kind = "font"
+usage = "Layout and PDF export for imported DOCX documents"
+sha256 = "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3"
+
+[[asset]]
+path = "vendor/wordcraft/assets/fonts/JetBrainsMono-Regular.ttf"
+title = "JetBrainsMono-Regular"
+author = "The JetBrains Mono Project Authors"
+source = "https://github.com/JetBrains/JetBrainsMono"
+licence = "OFL-1.1"
+licence_file = "vendor/wordcraft/assets/fonts/OFL-JetBrainsMono.txt"
+kind = "font"
+usage = "Layout and PDF export for imported DOCX documents"
+sha256 = "e6fd0d7e91550b3ed2b735d4312474362c4716edc4fc0577a0f61ed782d5aed1"
+
+[[asset]]
+path = "vendor/wordcraft/assets/fonts/SourceSans3-Bold.ttf"
+title = "SourceSans3-Bold"
+author = "Adobe and the Source Sans Project Authors"
+source = "https://github.com/adobe-fonts/source-sans"
+licence = "OFL-1.1"
+licence_file = "vendor/wordcraft/assets/fonts/OFL-SourceSans3.txt"
+kind = "font"
+usage = "Layout and PDF export for imported DOCX documents"
+sha256 = "9214b9d95e4231c609802815c2646c98174e2102d0d37f88978a7f8e71006e6a"
+
+[[asset]]
+path = "vendor/wordcraft/assets/fonts/SourceSans3-It.ttf"
+title = "SourceSans3-It"
+author = "Adobe and the Source Sans Project Authors"
+source = "https://github.com/adobe-fonts/source-sans"
+licence = "OFL-1.1"
+licence_file = "vendor/wordcraft/assets/fonts/OFL-SourceSans3.txt"
+kind = "font"
+usage = "Layout and PDF export for imported DOCX documents"
+sha256 = "192afd78f0f54a3c69eaf02d43f4d9a821e9d6110e41d3d25d61a7385cd580e4"
+
+[[asset]]
+path = "vendor/wordcraft/assets/fonts/SourceSans3-Regular.ttf"
+title = "SourceSans3-Regular"
+author = "Adobe and the Source Sans Project Authors"
+source = "https://github.com/adobe-fonts/source-sans"
+licence = "OFL-1.1"
+licence_file = "vendor/wordcraft/assets/fonts/OFL-SourceSans3.txt"
+kind = "font"
+usage = "Layout and PDF export for imported DOCX documents"
+sha256 = "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f"
+
+[[asset]]
+path = "vendor/wordcraft/assets/fonts/SourceSans3-Semibold.ttf"
+title = "SourceSans3-Semibold"
+author = "Adobe and the Source Sans Project Authors"
+source = "https://github.com/adobe-fonts/source-sans"
+licence = "OFL-1.1"
+licence_file = "vendor/wordcraft/assets/fonts/OFL-SourceSans3.txt"
+kind = "font"
+usage = "Layout and PDF export for imported DOCX documents"
+sha256 = "a3f4f8dcf343a8f24dc61951de93f3ba1558b15cd250ba24af8a40e957081b7d"
+
+[[asset]]
+path = "vendor/wordcraft/assets/fonts/SourceSerif4-Bold.ttf"
+title = "SourceSerif4-Bold"
+author = "Adobe and the Source Serif Project Authors"
+source = "https://github.com/adobe-fonts/source-serif"
+licence = "OFL-1.1"
+licence_file = "vendor/wordcraft/assets/fonts/OFL-SourceSerif4.txt"
+kind = "font"
+usage = "Layout and PDF export for imported DOCX documents"
+sha256 = "7cf4f4e1ad74f45058d5bc61716b82560442fbdcd9d3654d2dea96bf6c683d86"
+
+[[asset]]
+path = "vendor/wordcraft/assets/fonts/SourceSerif4-BoldIt.ttf"
+title = "SourceSerif4-BoldIt"
+author = "Adobe and the Source Serif Project Authors"
+source = "https://github.com/adobe-fonts/source-serif"
+licence = "OFL-1.1"
+licence_file = "vendor/wordcraft/assets/fonts/OFL-SourceSerif4.txt"
+kind = "font"
+usage = "Layout and PDF export for imported DOCX documents"
+sha256 = "7b215b37f8873f5579f3f8d2ded3ca7c588e2f435cd996605ebfc5befe2cd5eb"
+
+[[asset]]
+path = "vendor/wordcraft/assets/fonts/SourceSerif4-It.ttf"
+title = "SourceSerif4-It"
+author = "Adobe and the Source Serif Project Authors"
+source = "https://github.com/adobe-fonts/source-serif"
+licence = "OFL-1.1"
+licence_file = "vendor/wordcraft/assets/fonts/OFL-SourceSerif4.txt"
+kind = "font"
+usage = "Layout and PDF export for imported DOCX documents"
+sha256 = "9d2950a8f1da66e21502c35d646a1d2148e79f9ea43fd2158cf02f5232e7f430"
+
+[[asset]]
+path = "vendor/wordcraft/assets/fonts/SourceSerif4-Regular.ttf"
+title = "SourceSerif4-Regular"
+author = "Adobe and the Source Serif Project Authors"
+source = "https://github.com/adobe-fonts/source-serif"
+licence = "OFL-1.1"
+licence_file = "vendor/wordcraft/assets/fonts/OFL-SourceSerif4.txt"
+kind = "font"
+usage = "Layout and PDF export for imported DOCX documents"
+sha256 = "e5a4ee6a3d87bb9024796be390c6771e2a0eb1883dae25effaf57ca01668e24b"
+
+[[asset]]
+path = "vendor/wordcraft/assets/fonts/SourceSerif4-Semibold.ttf"
+title = "SourceSerif4-Semibold"
+author = "Adobe and the Source Serif Project Authors"
+source = "https://github.com/adobe-fonts/source-serif"
+licence = "OFL-1.1"
+licence_file = "vendor/wordcraft/assets/fonts/OFL-SourceSerif4.txt"
+kind = "font"
+usage = "Layout and PDF export for imported DOCX documents"
+sha256 = "36db62940cb5728b12b1802476dc7fcf4c6c519a7bdd476ba23a4e555fc4655f"
+
+[[asset]]
 path = "docs/images/pdfcraft-ocr-verify.png"
 title = "PdfCraft screenshot: OCR Verify screen"
 author = "PdfCraft contributors (generated by `cargo xtask screenshots`)"

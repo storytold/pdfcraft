@@ -1,0 +1,2 @@
+# Golden files are compared byte for byte: no line-ending conversion on checkout.
+* -text

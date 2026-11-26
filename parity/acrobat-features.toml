@@ -7142,7 +7142,7 @@ notes = ""
 
 [[feature]]
 id = "create.from-office"
-title = "Create PDF from Office documents (LibreOffice sidecar)"
+title = "Create PDF from Office documents"
 area = "J"
 tier = "P2"
 milestone = "M10"
@@ -7150,20 +7150,13 @@ status = "partial"
 commands = ["file.open"]
 tools = ["doc_create_multiple", "doc_combine"]
 evidence = [
-    "crates/create/src/office.rs::office_files_are_recognised_by_extension_and_signature",
-    "crates/create/src/office.rs::other_files_are_not_office_documents",
-    "crates/create/src/office.rs::a_converter_that_hangs_is_stopped",
-    "crates/create/src/office.rs::a_converter_that_makes_no_pdf_is_reported",
-    "crates/create/src/office.rs::libreoffice_converts_a_document_when_installed",
-    "crates/create/src/office.rs::the_profile_turns_off_macros_and_never_updates_links",
-    "crates/create/src/office.rs::a_timeout_stops_the_processes_the_converter_started",
+    "crates/create/src/office.rs::every_word_reader_reaches_pdf_export",
     "crates/automation/tests/it/office.rs::office_documents_convert_separately_with_their_text",
     "crates/automation/tests/it/office.rs::office_documents_combine_in_order_with_a_bookmark_each",
-    "crates/engine/src/tests.rs::office_documents_convert_through_libreoffice_or_explain_why_not",
-    "crates/engine/src/tests.rs::inline_conversions_refuse_office_documents_without_running_libreoffice",
+    "crates/engine/src/tests.rs::inline_conversions_refuse_office_documents_on_the_frame_thread",
     "crates/ui-egui/src/platform/open_worker/tests.rs::file_open_converts_an_office_document_on_the_worker",
 ]
-notes = "File ▸ Open (desktop) opens Word, Excel, PowerPoint, OpenDocument and RTF files (Office documents filter; PDF stays the default) as new, unsaved PDFs, converted on the open worker by an installed LibreOffice run headless in a private temporary folder with a fresh profile (macros disabled, untrusted links blocked, Writer and Calc linked content never updated) and stopped after 120 s. Found through PDFCRAFT_SOFFICE, the PATH, or the usual install folders; without it the user is told LibreOffice is needed. The automation tools that convert files (doc_create_multiple, doc_combine, batch convert) take Office documents too. Not yet: Insert pages, Combine files and Create ▸ Multiple files in the app refuse Office documents (they convert on the frame thread) and point to File ▸ Open; no Create ▸ From Office command or conversion settings; Visio and Publisher; the web build; layout fidelity is LibreOffice's, not measured against Acrobat; Impress has no link-update setting and the process's network access isn't sandboxed (synthetic linked sections, pictures and cell references made no connection with LibreOffice 26.8.1); the real-conversion tests skip where LibreOffice isn't installed, CI included."
+notes = "Desktop File ▸ Open converts Office files on the open worker through bundled WordCraft, GridCraft and DeckCraft readers and PDF writers. Automation supports Office documents in batch convert, doc_create_multiple and doc_combine. Inline desktop Insert, Combine and Create Multiple workflows direct users to File ▸ Open. Web conversion and Visio and Publisher imports are unsupported."
 
 [[feature]]
 id = "create.create-multiple"
@@ -7289,7 +7282,6 @@ evidence = ["crates/export/src/tests.rs::table_spans_do_not_consume_text_they_do
     "crates/export/src/pptx/tests.rs::pptx_empty_pages_produce_valid_slide",
     "crates/export/src/pptx/tests.rs::pptx_slide_dimensions_and_clamping",
     "crates/export/src/pptx/tests.rs::pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title",
-    "crates/export/src/pptx/tests.rs::pptx_opens_in_libreoffice",
     "crates/export/src/pptx/tests.rs::pptx_package_parts_are_complete_and_consistent",
     "crates/export/src/pptx/tests.rs::hostile_sizes_do_not_overflow_the_slide_position",
     "crates/export/src/tests.rs::grid_text_becomes_a_real_table_in_every_format",
@@ -7301,7 +7293,7 @@ evidence = ["crates/export/src/tests.rs::table_spans_do_not_consume_text_they_do
     "crates/export/src/tests.rs::a_sentence_that_wraps_after_a_style_change_is_one_paragraph",
     "crates/export/src/tests.rs::a_bulleted_list_is_paragraphs_not_a_table",
 ]
-notes = "Text in slots covered by a preceding table-cell span remains in paragraph flow instead of being discarded. PowerPoint presentation: each page becomes a slide, with the largest non-table text as slide title, remaining paragraphs as body text (a paragraph that wraps onto the next line after a style change stays one paragraph, with the same rules and limits as Word export, #4158; a list whose bullets are blocks of their own is a paragraph per item, not a table), images and detected tables in reading order; DrawingML formatting (font size, bold, italic, text fill colour, cell borders); wired into engine command export.pptx, automation tool doc_export_office, and Export dialog. Missing: content past the slide bottom is not paginated or shrunk across multiple slides (no normAutofit), all slides use the first page's dimensions, title is determined by largest font size rather than semantic structure, and there is no layout-preserving mode (Acrobat keeps positions). Not yet verified in PowerPoint or Keynote: pptx_opens_in_libreoffice only converts the file when LibreOffice is installed and passes silently otherwise (CI has none), so the package structure is checked by pptx_package_parts_are_complete_and_consistent instead."
+notes = "Text in slots covered by a preceding table-cell span remains in paragraph flow instead of being discarded. PowerPoint presentation: each page becomes a slide, with the largest non-table text as slide title, remaining paragraphs as body text (a paragraph that wraps onto the next line after a style change stays one paragraph, with the same rules and limits as Word export, #4158; a list whose bullets are blocks of their own is a paragraph per item, not a table), images and detected tables in reading order; DrawingML formatting (font size, bold, italic, text fill colour, cell borders); wired into engine command export.pptx, automation tool doc_export_office, and Export dialog. Missing: content past the slide bottom is not paginated or shrunk across multiple slides (no normAutofit), all slides use the first page's dimensions, title is determined by largest font size rather than semantic structure, and there is no layout-preserving mode (Acrobat keeps positions). Interoperability with PowerPoint and Keynote is unverified, so the package structure is checked by pptx_package_parts_are_complete_and_consistent instead."
 
 [[feature]]
 id = "create.export-png"
@@ -7493,7 +7485,7 @@ status = "na"
 commands = []
 tools = []
 evidence = []
-notes = "Adobe cloud; LibreOffice sidecar instead"
+notes = "Desktop conversion uses embedded Craft readers"
 
 # ==================================================================================================
 # K. Optimize and standards

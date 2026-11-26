@@ -1,0 +1,14 @@
+[package]
+name = "deckcraft-geom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DeckCraft geometry: units (EMU/pt), transforms, preset shape generators, adjust handles, hit testing"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-drawingml = { workspace = true }
+kurbo = { workspace = true }
+serde = { workspace = true }
