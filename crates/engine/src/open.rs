@@ -266,7 +266,16 @@ impl Session {
         // the pages the model reaches.
         let (bytes, info, cos) = match cos {
             Ok(Ok(cos)) if !info.pages.is_empty() => match repair_page_tree(context, &cos, &bytes, &info, render_password.as_deref(), &rebase) {
-                Ok((b, i, c)) => (b, i, Ok(Ok(c))),
+                // The warnings opening noted so far (an XFA form's scripts changing it, say) stay,
+                // beside those of the repaired file's inspection.
+                Ok((b, mut i, c)) => {
+                    for w in info.warnings {
+                        if !i.warnings.contains(&w) {
+                            i.warnings.push(w);
+                        }
+                    }
+                    (b, i, Ok(Ok(c)))
+                }
                 Err(refused) => {
                     let mut info = info;
                     info.warnings.extend(refused);

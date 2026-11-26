@@ -11477,6 +11477,40 @@ fn a_signature_outside_the_form_fields_keeps_an_unreadable_page_tree_node_as_it_
 }
 
 #[test]
+fn a_page_tree_repair_keeps_the_warnings_opening_noted_before_it() {
+    // A static XFA form whose datasets give its field a value on opening, with its last two pages
+    // under an unreadable page tree node: the page tree is repaired after the values were taken
+    // from the data, and the note saying so stays.
+    let xdp = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"/></template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form1><page1><name>Ada</name></page1></form1></xfa:data></xfa:datasets></xdp:xdp>";
+    let xfa = format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes();
+    let bytes = Arc::new(pdf_of_bodies(
+        &[
+            b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 7 0 R /Fields [8 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
+            b"<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 3 /MediaBox [0 0 200 300] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [10 0 R] >>",
+            b"<< /Type /Page /Parent 6 0 R >>",
+            b"<< /Type /Page /Parent 6 0 R /Rotate 90 >>",
+            b"<< /Type /Pages /Parent 2 0 R /Kids [4 0 R 99\x00\xff0 R 5 0 R] /Count 2 >>",
+            &xfa,
+            b"<< /T (form1[0]) /Kids [9 0 R] >>",
+            b"<< /T (page1[0]) /Parent 8 0 R /Kids [10 0 R] >>",
+            b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (name[0]) /Parent 9 0 R /Rect [10 10 100 30] /P 3 0 R /DA (/Helv 10 Tf 0 g) >>",
+        ],
+        false,
+    ));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, bytes, None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.xfa, Some(pdfcraft_render::Xfa::Static));
+    assert_eq!(doc.form.iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap().value, vec!["Ada".to_string()]);
+    assert_eq!(pdfcraft_organize::page_count(&doc.editor.as_ref().unwrap().cos).unwrap(), 3, "{:?}", doc.info.warnings);
+    assert!(doc.repair_log().iter().any(|l| l.contains("page tree node could not be read")), "{:?}", doc.repair_log());
+    let noted = |w: &[String]| w.iter().filter(|w| w.contains("taken from this form's XFA data")).count();
+    assert_eq!(noted(&doc.info.warnings), 1, "{:?}", doc.info.warnings);
+    assert_eq!(noted(&doc.xfa_warnings), 1, "{:?}", doc.xfa_warnings);
+}
+
+#[test]
 fn a_signed_document_rebuilt_from_object_headers_refuses_edits() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
     let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
