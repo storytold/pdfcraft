@@ -47,9 +47,6 @@ disallowed-types = [
     { path = "rsa::pss::SigningKey", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
     { path = "rsa::pss::BlindedSigningKey", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
     { path = "rsa::oaep::DecryptingKey", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
-]
-cognitive-complexity-threshold = 30
-
-disallowed-types = [
     { path = "egui::ComboBox", reason = "use craft_ui::ComboBox: egui's combo box menu can't grow back while open (egui#5225)" },
 ]
+cognitive-complexity-threshold = 30
