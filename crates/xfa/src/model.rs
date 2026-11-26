@@ -722,6 +722,22 @@ pub struct Draw {
     pub value: Value,
 }
 
+/// How a picture fits its box (XFA 3.3, `<image aspect="…">`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Aspect {
+    /// Scaled proportionally, as large as fits in the box (the default).
+    #[default]
+    Fit,
+    /// Stretched to fill the box exactly without keeping its shape.
+    None,
+    /// Drawn at its own size from its pixel dimensions and resolution.
+    Actual,
+    /// Scaled proportionally so its width equals the box width (height may overflow).
+    Width,
+    /// Scaled proportionally so its height equals the box height (width may overflow).
+    Height,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Value {
     #[default]
@@ -734,6 +750,7 @@ pub enum Value {
         /// Where the template links the picture from (`href`), when it does: its data is then
         /// found in the PDF ([`crate::linked_images`]).
         href: Option<String>,
+        aspect: Aspect,
     },
     /// A diagonal line through the box: `\` (top-left to bottom-right) or `/`.
     Line {

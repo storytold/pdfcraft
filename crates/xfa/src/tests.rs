@@ -8728,3 +8728,177 @@ fn xfa_line_without_width_is_vertical_and_without_height_is_horizontal() {
         lines[5]
     );
 }
+
+fn png_with_header(w: u32, h: u32, phys: Option<(u32, u32, u8)>) -> Vec<u8> {
+    let mut png = tiny_png();
+    png[16..20].copy_from_slice(&w.to_be_bytes());
+    png[20..24].copy_from_slice(&h.to_be_bytes());
+    if let Some((px, py, unit)) = phys {
+        let mut chunk = Vec::with_capacity(21);
+        chunk.extend_from_slice(&9u32.to_be_bytes());
+        chunk.extend_from_slice(b"pHYs");
+        chunk.extend_from_slice(&px.to_be_bytes());
+        chunk.extend_from_slice(&py.to_be_bytes());
+        chunk.push(unit);
+        chunk.extend_from_slice(&[0; 4]);
+        // Insert right after IHDR (8-byte signature + 25-byte IHDR chunk = 33).
+        png.splice(33..33, chunk);
+    }
+    png
+}
+
+fn jpeg_with_jfif(w: u16, h: u16, units: u8, xd: u16, yd: u16) -> Vec<u8> {
+    let mut j = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+    j.extend_from_slice(b"JFIF\0");
+    j.extend_from_slice(&[1, 1, units]);
+    j.extend_from_slice(&xd.to_be_bytes());
+    j.extend_from_slice(&yd.to_be_bytes());
+    j.extend_from_slice(&[0, 0]);
+    j.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 8]);
+    j.extend_from_slice(&h.to_be_bytes());
+    j.extend_from_slice(&w.to_be_bytes());
+    j.extend_from_slice(&[1, 1, 0x11, 0, 0xFF, 0xD9]);
+    j
+}
+
+fn first_image_rect(items: &[Item]) -> Rect {
+    items.iter().find_map(|i| if let Item::Image { rect, .. } = i { Some(*rect) } else { None }).expect("image item")
+}
+
+#[test]
+fn image_draw_aspect_modes_size_pictures_per_spec() {
+    use base64::Engine;
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let draw_rect = |bytes: &[u8], content_type: &str, aspect_attr: &str| {
+        let data = b64(bytes);
+        let items = positioned(&format!(
+            r#"<draw name="pic" x="0pt" y="0pt" w="100pt" h="100pt"><value><image contentType="{content_type}"{aspect_attr}>{data}</image></value></draw>"#
+        ));
+        first_image_rect(&items)
+    };
+    let assert_size = |r: Rect, ew: f64, eh: f64, label: &str| {
+        assert!((r.x - 36.0).abs() < 0.01 && (r.y - 36.0).abs() < 0.01, "{label}: top-left moved: {r:?}");
+        assert!((r.w - ew).abs() < 0.02 && (r.h - eh).abs() < 0.02, "{label}: expected {ew}x{eh}, got {r:?}");
+    };
+
+    let png_20x10 = png_with_header(20, 10, None);
+    assert_size(draw_rect(&png_20x10, "image/png", ""), 100.0, 50.0, "default (fit)");
+    assert_size(draw_rect(&png_20x10, "image/png", r#" aspect="fit""#), 100.0, 50.0, "fit");
+    assert_size(draw_rect(&png_20x10, "image/png", r#" aspect="none""#), 100.0, 100.0, "none");
+    assert_size(draw_rect(&png_20x10, "image/png", r#" aspect="width""#), 100.0, 50.0, "width landscape");
+    assert_size(draw_rect(&png_20x10, "image/png", r#" aspect="height""#), 200.0, 100.0, "height");
+    assert_size(draw_rect(&png_20x10, "image/png", r#" aspect="actual""#), 20.0, 10.0, "actual 72 dpi");
+
+    // Portrait 10x20 under width overflows the 100pt box height (unlike fit's 50x100).
+    let png_10x20 = png_with_header(10, 20, None);
+    assert_size(draw_rect(&png_10x20, "image/png", r#" aspect="width""#), 100.0, 200.0, "width portrait");
+    assert_size(draw_rect(&png_10x20, "image/png", r#" aspect="fit""#), 50.0, 100.0, "fit portrait");
+
+    // Actual size honours PNG pHYs (unit 1: pixels per metre) and JPEG JFIF (units 1 and 2).
+    // 5669 px/m ≈ 143.99 dpi -> 20x10 px is 10x5 pt.
+    let png_144 = png_with_header(20, 10, Some((5669, 5669, 1)));
+    assert_size(draw_rect(&png_144, "image/png", r#" aspect="actual""#), 10.0, 5.0, "actual PNG 144 dpi");
+    // PNG pHYs unit 0 is aspect-ratio only, not a physical resolution -> 72 dpi fallback.
+    let png_unit0 = png_with_header(20, 10, Some((5669, 5669, 0)));
+    assert_size(draw_rect(&png_unit0, "image/png", r#" aspect="actual""#), 20.0, 10.0, "actual PNG unit 0");
+
+    let jpg_144 = jpeg_with_jfif(20, 10, 1, 144, 144);
+    assert_size(draw_rect(&jpg_144, "image/jpeg", r#" aspect="actual""#), 10.0, 5.0, "actual JPEG 144 dpi");
+    let jpg_100_dpcm = jpeg_with_jfif(20, 10, 2, 100, 100);
+    assert_size(draw_rect(&jpg_100_dpcm, "image/jpeg", r#" aspect="actual""#), 20.0 * 72.0 / 254.0, 10.0 * 72.0 / 254.0, "actual JPEG dpcm");
+    let jpg_unit0 = jpeg_with_jfif(20, 10, 0, 144, 144);
+    assert_size(draw_rect(&jpg_unit0, "image/jpeg", r#" aspect="actual""#), 20.0, 10.0, "actual JPEG unit 0");
+
+    // Unknown and wrong-case aspect values fall back to fit.
+    for attr in [r#" aspect="stretch""#, r#" aspect="NONE""#, r#" aspect="Height""#] {
+        assert_size(draw_rect(&png_20x10, "image/png", attr), 100.0, 50.0, attr);
+    }
+}
+
+#[test]
+fn image_field_from_datasets_honours_template_image_aspect() {
+    use base64::Engine;
+    let data_png = base64::engine::general_purpose::STANDARD.encode(png_with_header(20, 10, None));
+    let field_rect = |value_xml: &str| {
+        let xdp = format!(
+            r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="box" w="7.5in" h="3in">
+  <field name="photo" x="0pt" y="0pt" w="100pt" h="100pt"><ui><imageEdit/></ui>{value_xml}</field>
+ </subform>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><box><photo>{data_png}</photo></box></form></xfa:data></xfa:datasets>
+</xdp:xdp>"##
+        );
+        first_image_rect(&layout_xml(&xdp).unwrap().pages[0].items)
+    };
+
+    let r_none = field_rect(r#"<value><image aspect="none"/></value>"#);
+    assert!((r_none.w - 100.0).abs() < 0.01 && (r_none.h - 100.0).abs() < 0.01, "data image field none: {r_none:?}");
+
+    // Also when the template holds its own fallback picture, datasets' picture still takes its aspect.
+    let tpl_png = base64::engine::general_purpose::STANDARD.encode(tiny_png());
+    let r_override = field_rect(&format!(r#"<value><image contentType="image/png" aspect="none">{tpl_png}</image></value>"#));
+    assert!(
+        (r_override.w - 100.0).abs() < 0.01 && (r_override.h - 100.0).abs() < 0.01,
+        "data overrides template picture keeping aspect: {r_override:?}"
+    );
+
+    let r_height = field_rect(r#"<value><image aspect="height"/></value>"#);
+    assert!((r_height.w - 200.0).abs() < 0.01 && (r_height.h - 100.0).abs() < 0.01, "data image field height: {r_height:?}");
+
+    let r_default = field_rect("");
+    assert!((r_default.w - 100.0).abs() < 0.01 && (r_default.h - 50.0).abs() < 0.01, "data image field without template image: {r_default:?}");
+}
+
+#[test]
+fn hostile_image_aspect_and_resolution_headers_produce_sane_rects() {
+    use base64::Engine;
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let draw_rect = |bytes: &[u8], content_type: &str, aspect: &str| {
+        let data = b64(bytes);
+        let items = positioned(&format!(
+            r#"<draw name="pic" x="0pt" y="0pt" w="100pt" h="100pt"><value><image contentType="{content_type}" aspect="{aspect}">{data}</image></value></draw>"#
+        ));
+        first_image_rect(&items)
+    };
+
+    // Zero, tiny and huge DPIs fall back to 72 dpi without division by zero or overflow.
+    for bad in [
+        png_with_header(20, 10, Some((0, 0, 1))),
+        png_with_header(20, 10, Some((1, 1, 1))),
+        png_with_header(20, 10, Some((u32::MAX, u32::MAX, 1))),
+        jpeg_with_jfif(20, 10, 1, 0, 0),
+        jpeg_with_jfif(20, 10, 1, u16::MAX, u16::MAX),
+    ] {
+        assert_eq!(crate::image::resolution(&bad), None);
+        let ct = if bad.starts_with(b"\xFF\xD8") { "image/jpeg" } else { "image/png" };
+        let r = draw_rect(&bad, ct, "actual");
+        assert!(r.w.is_finite() && r.h.is_finite());
+        assert!((r.w - 20.0).abs() < 0.01 && (r.h - 10.0).abs() < 0.01, "fallback 72 dpi: {r:?}");
+    }
+
+    // Truncated headers return None without panicking.
+    assert_eq!(crate::image::resolution(b"\x89PNG\r\n\x1a\n\x00\x00\x00\x09pHYs\x00\x00"), None);
+    assert_eq!(crate::image::resolution(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F']), None);
+
+    // Zero-size images fall back to the box under every aspect without panicking or NaN.
+    for zero in [png_with_header(0, 10, None), png_with_header(20, 0, None)] {
+        for aspect in ["fit", "none", "actual", "width", "height"] {
+            let r = draw_rect(&zero, "image/png", aspect);
+            assert!(r.w.is_finite() && r.h.is_finite(), "{aspect}: {r:?}");
+            assert!((r.w - 100.0).abs() < 0.01 && (r.h - 100.0).abs() < 0.01, "{aspect}: {r:?}");
+        }
+    }
+
+    // Extreme aspect ratio is clamped to the 100,000 pt layout bound.
+    let strip = png_with_header(1, 65_535, None);
+    let data = b64(&strip);
+    let items = positioned(&format!(
+        r#"<draw name="pic" x="0pt" y="0pt" w="1000pt" h="100pt"><value><image contentType="image/png" aspect="width">{data}</image></value></draw>"#
+    ));
+    let r = first_image_rect(&items);
+    assert!(r.w.is_finite() && r.h.is_finite() && r.h <= 100_000.0, "clamped strip: {r:?}");
+}

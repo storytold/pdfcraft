@@ -1,8 +1,8 @@
 use super::common::{button_action, date_pattern};
 use super::items::{BorderShape, Item, Widget, WidgetBorder, WidgetKind};
 use super::{
-    Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value, Views,
-    XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, pattern_to_iso, text,
+    Access, Aspect, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value,
+    Views, XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, pattern_to_iso, text,
 };
 
 impl Layouter<'_> {
@@ -98,9 +98,13 @@ impl Layouter<'_> {
                     }
                 };
                 let box_ = ui.inset(&f.ui_margin);
+                let aspect = match &f.value {
+                    Value::Image { aspect, .. } => *aspect,
+                    _ => Aspect::Fit,
+                };
                 match (&from_data, &f.value) {
-                    (Some(d), _) => self.draw_image(d, "", box_)?,
-                    (None, Value::Image { content_type, data, .. }) => self.draw_image(data, content_type, box_)?,
+                    (Some(d), _) => self.draw_image(d, "", box_, aspect)?,
+                    (None, Value::Image { content_type, data, .. }) => self.draw_image(data, content_type, box_, aspect)?,
                     _ => {}
                 }
                 // Then the field itself, which clicking gives a new picture.

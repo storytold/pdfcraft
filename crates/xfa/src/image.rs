@@ -103,6 +103,114 @@ pub fn size(data: &[u8]) -> Option<(u32, u32)> {
     header_size(data).filter(|&(w, h)| fits(w, h))
 }
 
+/// Lowest and highest resolution (in dots per inch) taken from an image header; anything outside
+/// this range is treated as unknown so callers fall back to 72 dpi.
+const MIN_DPI: f64 = 1.0;
+const MAX_DPI: f64 = 10_000.0;
+
+/// Resolution `(dpi_x, dpi_y)` read from the image header, without decoding:
+/// - JPEG: JFIF `APP0` segment with density unit `1` (dots per inch) or `2` (dots per centimetre).
+/// - PNG: `pHYs` chunk before `IDAT` with unit `1` (pixels per metre).
+///
+/// Returns `None` for other formats (GIF, BMP, TIFF), missing or unitless density headers, or
+/// zero, non-finite or out-of-range values; callers assume 72 dpi.
+pub fn resolution(data: &[u8]) -> Option<(f64, f64)> {
+    let (dx, dy) = match kind(data)? {
+        Kind::Jpeg => jpeg_resolution(data)?,
+        Kind::Png => png_resolution(data)?,
+        Kind::Gif | Kind::Bmp | Kind::Tiff => return None,
+    };
+    let ok = |v: f64| v.is_finite() && (MIN_DPI..=MAX_DPI).contains(&v);
+    (ok(dx) && ok(dy)).then_some((dx, dy))
+}
+
+fn jpeg_resolution(data: &[u8]) -> Option<(f64, f64)> {
+    if data.get(0..2)? != [0xFF, 0xD8] {
+        return None;
+    }
+    let mut i = 2usize;
+    let mut guard = 0usize;
+    while i + 4 <= data.len() && guard < 10_000 {
+        guard += 1;
+        if *data.get(i)? != 0xFF {
+            i += 1;
+            continue;
+        }
+        let marker = *data.get(i + 1)?;
+        if marker == 0xFF {
+            i += 1;
+            continue;
+        }
+        if marker == 0xDA || marker == 0xD9 {
+            return None;
+        }
+        if (0xD0..=0xD8).contains(&marker) || marker == 0x01 || marker == 0x00 {
+            i = i.checked_add(2)?;
+            continue;
+        }
+        let len = u16::from_be_bytes([*data.get(i + 2)?, *data.get(i + 3)?]) as usize;
+        if len < 2 {
+            return None;
+        }
+        if marker == 0xE0 && len >= 14 && data.get(i + 4..i + 9) == Some(b"JFIF\0") {
+            let units = *data.get(i + 11)?;
+            let xd = u16::from_be_bytes([*data.get(i + 12)?, *data.get(i + 13)?]);
+            let yd = u16::from_be_bytes([*data.get(i + 14)?, *data.get(i + 15)?]);
+            if xd > 0 && yd > 0 {
+                match units {
+                    1 => return Some((f64::from(xd), f64::from(yd))),
+                    2 => return Some((f64::from(xd) * 2.54, f64::from(yd) * 2.54)),
+                    _ => {}
+                }
+            }
+        }
+        i = i.checked_add(2)?.checked_add(len)?;
+    }
+    None
+}
+
+fn png_resolution(data: &[u8]) -> Option<(f64, f64)> {
+    if !data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return None;
+    }
+    let mut i = 8usize;
+    let mut guard = 0usize;
+    while i + 12 <= data.len() && guard < 1_024 {
+        guard += 1;
+        let &[l0, l1, l2, l3] = data.get(i..i + 4)? else {
+            return None;
+        };
+        let len = usize::try_from(u32::from_be_bytes([l0, l1, l2, l3])).ok()?;
+        let kind = data.get(i + 4..i + 8)?;
+        let body_start = i.checked_add(8)?;
+        let body_end = body_start.checked_add(len)?;
+        let next = body_end.checked_add(4)?;
+        if next > data.len() {
+            return None;
+        }
+        match kind {
+            b"pHYs" if len == 9 => {
+                let &[x0, x1, x2, x3, y0, y1, y2, y3, unit] = data.get(body_start..body_end)? else {
+                    return None;
+                };
+                if unit == 1 {
+                    let px = u32::from_be_bytes([x0, x1, x2, x3]);
+                    let py = u32::from_be_bytes([y0, y1, y2, y3]);
+                    if px > 0 && py > 0 {
+                        // Pixels per metre to dots per inch (1 in = 0.0254 m exact).
+                        return Some((f64::from(px) * 0.0254, f64::from(py) * 0.0254));
+                    }
+                }
+                return None;
+            }
+            b"IDAT" | b"IEND" => return None,
+            _ => {}
+        }
+        i = next;
+    }
+    None
+}
+
 fn fits(w: u32, h: u32) -> bool {
     w <= MAX_SIDE && h <= MAX_SIDE && u64::from(w) * u64::from(h) <= MAX_PIXELS
 }

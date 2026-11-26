@@ -6,8 +6,8 @@ use base64::Engine;
 
 use crate::XfaError;
 use crate::model::{
-    Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
-    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Prop, Props, Rect, RichText, Run, Script, Stroke, Subform,
+    Access, Anchor, Area, Aspect, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin,
+    Node, Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Prop, Props, Rect, RichText, Run, Script, Stroke, Subform,
     Template, Traversal, Ui, VAlign, Value,
 };
 
@@ -711,7 +711,14 @@ fn parse_value(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Value {
                     return Value::Empty;
                 }
                 let href = c.attribute("href").map(str::trim).filter(|h| !h.is_empty()).map(str::to_string);
-                return Value::Image { content_type: c.attribute("contentType").unwrap_or("").to_string(), data, href };
+                let aspect = match c.attribute("aspect") {
+                    Some("none") => Aspect::None,
+                    Some("actual") => Aspect::Actual,
+                    Some("width") => Aspect::Width,
+                    Some("height") => Aspect::Height,
+                    _ => Aspect::Fit,
+                };
+                return Value::Image { content_type: c.attribute("contentType").unwrap_or("").to_string(), data, href, aspect };
             }
             "line" => {
                 return Value::Line { slope_up: c.attribute("slope") == Some("/"), edge: child(c, "edge").map(parse_edge).unwrap_or_default() };
