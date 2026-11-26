@@ -105,6 +105,15 @@ fn is_complex(c: char) -> bool {
     matches!(c as u32, 0x0300..=0x036F | 0x0900..=0x0DFF | 0x0E00..=0x0EFF | 0x1000..=0x109F | 0x1780..=0x17FF)
 }
 
+/// Hangul, which [`is_cjk`] counts as CJK: syllables, the two jamo blocks, the compatibility
+/// jamo and the halfwidth jamo. Korean is written with spaces between its words (띄어쓰기), unlike Chinese and Japanese,
+/// so a gap between two Korean syllables may be a word gap and is read as one from half a line
+/// height upwards -- a document that writes its spaces as position rather than as space
+/// characters would otherwise lose them (#3722 review).
+fn is_hangul(c: char) -> bool {
+    matches!(c as u32, 0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7AF | 0xFFA0..=0xFFDC)
+}
+
 /// Whether `text` is only combining marks (Unicode Mn and Me, which take bidi class NSM) of a
 /// left-to-right script: Thai tone marks and above or below vowels, Indic signs such as virama,
 /// Latin combining accents. Right-to-left marks are ordered with their script by [`reverse_rtl`].
@@ -595,7 +604,27 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                 let &[p, c] = pair else { continue };
                 let Some(&Some(gap)) = sc.cluster_gap.get(w + 1) else { continue };
                 let (pt, ct) = (cluster_text(p), cluster_text(c));
-                let cjk = pt.chars().any(is_cjk) && ct.chars().any(is_cjk) && gap < h * 0.5;
+                // Character spacing is added after every glyph of a show (`Tc`, ISO 32000-2 §9.3.2), so text spread to a
+                // wider column -- a Chinese label on a form, 分散對齊 -- repeats one gap, while the gap between two cells
+                // of a row stands on its own. A repeated gap is therefore spacing at any width. Chinese and Japanese
+                // write no spaces between these characters, so a space inferred inside a label changes what Copy gives
+                // and stops Find matching it (#3713). The whole-line typical gap cannot tell the two apart: on these
+                // lines most gaps are the zero of the value beside the label.
+                //
+                // A gap of its own is read as spacing only below half a line height, the same width Hangul uses. A
+                // whole line height swallowed the gap between two cells of a form row whenever it was under one em --
+                // 9pt on a 12pt line -- so 姓名 followed by 王小明 copied as 姓名王小明 (noted in review). Repetition,
+                // not width, is what tells spread text apart from two cells.
+                // `cluster_gap[w + 1]` is this pair's gap, so the pairs beside it are at `w` and `w + 2`.
+                let spread = |w: usize| {
+                    let same = |other: Option<&Option<f32>>| other.copied().flatten().is_some_and(|o| (o - gap).abs() <= h * 0.02);
+                    same(sc.cluster_gap.get(w)) || same(sc.cluster_gap.get(w + 2))
+                };
+                // Korean keeps the narrower tolerance and no repetition: its words are separated by spaces, which
+                // a file may write as position rather than as space characters. Measured on three Korean words at
+                // one em, drawn without space glyphs: with the Chinese rule they read as 안녕하세요여러분.
+                let hangul = pt.chars().any(is_hangul) || ct.chars().any(is_hangul);
+                let cjk = pt.chars().any(is_cjk) && ct.chars().any(is_cjk) && (gap < h * 0.5 || (!hangul && spread(w)));
                 // A combining sign that rides on no glyph before it (drawn apart from its base, or in a run of its own)
                 // may sit anywhere over its base, so it never takes a space next to it. Two base letters of these
                 // scripts are measured like any others: a Thai or Indic word gap is narrower than half an em.
