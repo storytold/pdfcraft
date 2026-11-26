@@ -1,4 +1,5 @@
-//! Bookmark trees in and out of documents: `bookmark_export`, `bookmark_import`, `bookmark_copy`.
+//! Bookmark trees in and out of documents: `bookmark_export`, `bookmark_import`, `bookmark_copy`,
+//! and `bookmark_suggest`, which proposes a tree for review before `bookmark_import` applies it.
 //!
 //! The portable form is JSON: `{"bookmarks": [node, …]}`, where a node is `title`, `page`
 //! (1-based, or `null` for one that goes nowhere), `view` (`{"type", "values"}`: a destination
@@ -57,6 +58,31 @@ impl Automation {
         let tree = self.outline_of(from, &path)?;
         let mut out = self.write_tree(a, tree.nodes)?;
         out["truncated"] = json!(tree.truncated);
+        Ok(out)
+    }
+
+    pub(crate) fn bookmark_suggest(&self, a: &Args) -> Result<Value> {
+        // The titles are the document's text, as text_lines is.
+        let doc = self.doc_to_copy(a)?;
+        let id = doc.id.0;
+        let s = doc.suggest_outline().ok_or_else(|| failed(format!("document {id} can't be read for editing")))?;
+        let source = match s.source {
+            pdfcraft_engine::suggest_outline::OutlineSource::Structure => "structure",
+            pdfcraft_engine::suggest_outline::OutlineSource::Layout => "layout",
+        };
+        let mut out = json!({
+            "source": source,
+            "bookmarks": s.tree().iter().map(node_json).collect::<Vec<_>>(),
+            "headings": s.entries.len(),
+            "pages": s.pages,
+            "pages_read": s.pages_read,
+            "truncated": s.truncated,
+        });
+        if s.entries.is_empty() {
+            out["note"] = json!(
+                "no headings found: the text may be in one style; text_styles lists the styles, and bookmark_from_text_styles makes bookmarks from chosen ones"
+            );
+        }
         Ok(out)
     }
 
