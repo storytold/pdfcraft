@@ -31,32 +31,43 @@ pub(crate) fn set_attachments_exact(dst: &mut Document, mut entries: Vec<(Vec<u8
     write_attachments(dst, &mut entries, false)
 }
 
+/// `key` with " (n)" appended in its own encoding: UTF-16BE or UTF-16LE after their byte-order
+/// mark, otherwise as ASCII bytes (which PDFDocEncoding and UTF-8 share).
+fn numbered(key: &[u8], n: usize) -> Vec<u8> {
+    let suffix = format!(" ({n})");
+    let mut out = key.to_vec();
+    match key.get(..2) {
+        Some([0xfe, 0xff]) => out.extend(suffix.encode_utf16().flat_map(u16::to_be_bytes)),
+        Some([0xff, 0xfe]) => out.extend(suffix.encode_utf16().flat_map(u16::to_le_bytes)),
+        _ => out.extend_from_slice(suffix.as_bytes()),
+    }
+    out
+}
+
 /// Write a flat, sorted `/EmbeddedFiles` name tree, optionally renaming duplicate keys.
 fn write_attachments(dst: &mut Document, entries: &mut [(Vec<u8>, Object)], uniquify: bool) -> Result<(), OrganizeError> {
     if entries.is_empty() {
         return Ok(());
     }
-    // Names are compared and numbered as text: a key written as UTF-16 (a name with an accent
-    // or Chinese letters) must not get ASCII bytes appended to it.
+    // Names are compared as text, and numbered in the key's own encoding: a key written as
+    // UTF-16 (a name with an accent or Chinese letters) must not get ASCII bytes appended to it.
     if uniquify {
-        let reserved: std::collections::HashSet<String> =
-            entries.iter().map(|(k, _)| pdfcraft_cos::PdfString::literal(k.clone()).to_text()).collect();
+        let text = |k: &[u8]| pdfcraft_cos::PdfString::literal(k.to_vec()).to_text();
+        let reserved: std::collections::HashSet<String> = entries.iter().map(|(k, _)| text(k)).collect();
         let mut seen = std::collections::HashSet::new();
         for (k, _) in entries.iter_mut() {
-            let base = pdfcraft_cos::PdfString::literal(k.clone()).to_text();
-            let mut text = base.clone();
-            let mut n = 2;
-            if !seen.insert(text.clone()) {
-                loop {
-                    text = format!("{base} ({n})");
-                    n += 1;
-                    if !reserved.contains(&text) && seen.insert(text.clone()) {
-                        break;
-                    }
-                }
+            if seen.insert(text(k)) {
+                continue;
             }
-            if text != base {
-                *k = pdfcraft_cos::PdfString::text(&text).bytes;
+            let mut n = 2;
+            loop {
+                let candidate = numbered(k, n);
+                n += 1;
+                let name = text(&candidate);
+                if !reserved.contains(&name) && seen.insert(name) {
+                    *k = candidate;
+                    break;
+                }
             }
         }
     }
