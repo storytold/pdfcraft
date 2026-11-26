@@ -957,3 +957,250 @@ fn many_names_of_a_redacted_image_are_unlinked_reading_inherited_forms_once() {
     assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
     assert!(!full_save_holds(&doc, b"IMAGESECRET"), "an alias kept the removed image reachable");
 }
+
+/// One page drawing `content` with font /F1 and `resources`, the page keys `page`, the catalog
+/// keys `catalog`, and `extra` from object 7 on.
+fn page_with(content: &[u8], catalog: &str, resources: &str, page: &str, extra: Vec<Vec<u8>>) -> Document {
+    let mut objs = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>").into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> {resources} >> {page} >>")
+            .into_bytes(),
+        stream("", content),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+    ];
+    objs.extend(extra);
+    pdf(objs)
+}
+
+/// A reset button the mark misses lists the redacted field in its action's `/Fields` (#7885): that
+/// reference must not keep the field and its value in the saved file.
+#[test]
+fn a_redacted_field_a_reset_button_names_leaves_the_saved_file() {
+    let mut doc = page_with(
+        b"",
+        "/AcroForm << /Fields [7 0 R 8 0 R] >>",
+        "",
+        "/Annots [7 0 R 8 0 R]",
+        vec![
+            b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (ssn) /V (SSNSECRETV06) /Rect [10 50 100 70] /P 3 0 R >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (reset) /Rect [200 200 250 220] /P 3 0 R /A << /S /ResetForm /Fields [7 0 R] >> >>"
+                .to_vec(),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().fields, 1);
+    assert!(pdfcraft_forms::fields(&doc).iter().any(|f| f.name == "reset"), "the button the mark misses stays");
+    assert!(!full_save_holds(&doc, b"SSNSECRETV06"), "the reset action kept the redacted field");
+}
+
+/// A link the mark misses hides a comment under it (a Hide action's `/T`, #7885): the comment and
+/// its text must not stay in the saved file.
+#[test]
+fn a_redacted_comment_a_hide_action_names_leaves_the_saved_file() {
+    let mut doc = page_with(
+        b"",
+        "",
+        "",
+        "/Annots [7 0 R 8 0 R]",
+        vec![
+            b"<< /Type /Annot /Subtype /FreeText /Rect [10 50 100 70] /Contents (HIDESECRETNOTE) /DA (/Helv 10 Tf 0 g) >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Link /Rect [200 200 250 220] /A << /S /Hide /T 7 0 R >> >>".to_vec(),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    apply(&mut doc, None).unwrap();
+    assert!(!full_save_holds(&doc, b"HIDESECRETNOTE"), "the hide action kept the redacted comment");
+}
+
+/// The link holding the hide action is written as `5 1 obj` while the cross-reference table says
+/// generation 0, and the page names it `5 1 R`. Dropping the comment from the action must keep the
+/// link reachable through the generation the page uses.
+#[test]
+fn an_action_whose_generations_disagree_stays_reachable_by_both() {
+    let objects: [(u32, u16, &str); 5] = [
+        (1, 0, "<< /Type /Catalog /Pages 2 0 R >>"),
+        (2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        (3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << >> /Annots [4 0 R 5 1 R] >>"),
+        (4, 0, "<< /Type /Annot /Subtype /FreeText /Rect [10 50 100 70] /Contents (GENSECRETNOTE) /DA (/Helv 10 Tf 0 g) >>"),
+        (5, 1, "<< /Type /Annot /Subtype /Link /Rect [200 200 250 220] /A << /S /Hide /T 4 0 R >> >>"),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (num, generation, body) in objects {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{num} {generation} obj\n{body}\nendobj\n").as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    let mut doc = Document::open(Arc::new(bytes)).unwrap();
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    apply(&mut doc, None).unwrap();
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    let links = annots_of(&doc, &page.dict).iter().filter(|a| doc.resolve(a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Link"))).count();
+    assert_eq!(links, 1, "the link the mark misses stays on the page");
+    assert!(!full_save_holds(&doc, b"GENSECRETNOTE"), "the hide action kept the redacted comment");
+}
+
+/// A figure tags the form the mark covers through an object reference (`/OBJR`, #7885): the
+/// original form, its text included, must not stay in the saved file.
+#[test]
+fn a_redacted_form_a_figure_tags_leaves_the_saved_file() {
+    let mut doc = page_with(
+        b"/Fm Do",
+        "/StructTreeRoot 9 0 R /MarkInfo << /Marked true >>",
+        "/XObject << /Fm 7 0 R >>",
+        "",
+        vec![
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >>",
+                b"BT /F1 10 Tf 20 60 Td (OBJRFORMSECRET) Tj ET",
+            ),
+            b"<< /Type /StructElem /S /Figure /P 9 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 7 0 R /Pg 3 0 R >> >>".to_vec(),
+            b"<< /Type /StructTreeRoot /K [8 0 R] >>".to_vec(),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    apply(&mut doc, None).unwrap();
+    assert!(!full_save_holds(&doc, b"OBJRFORMSECRET"), "the figure's object reference kept the original form");
+}
+
+/// Any other reference that keeps a removed comment, here a rendition action's `/AN`, refuses the
+/// redaction, naming the object that holds it, and leaves the document as it was.
+#[test]
+fn a_removed_comment_another_reference_keeps_refuses_the_redaction() {
+    let mut doc = page_with(
+        b"",
+        "",
+        "",
+        "/Annots [7 0 R 8 0 R]",
+        vec![
+            b"<< /Type /Annot /Subtype /FreeText /Rect [10 50 100 70] /Contents (KEPTSECRETNOTE) /DA (/Helv 10 Tf 0 g) >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Link /Rect [200 200 250 220] /A << /S /Rendition /OP 0 /AN 7 0 R >> >>".to_vec(),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    let before = marks(&doc).len();
+    let refused = apply(&mut doc, None);
+    assert!(matches!(refused, Err(RedactError::StillReferred { removed: 7, by: Some(8) })), "{refused:?}");
+    assert_eq!(marks(&doc).len(), before, "a refused redaction changes nothing");
+}
+
+/// A reset button the mark misses resets only the redacted field (#7885). With that field gone its
+/// action must not list no fields, which readers (ours too) take for every field, the surviving
+/// ones included: it goes, and the action after it still runs.
+#[test]
+fn a_reset_action_left_with_no_field_goes_and_the_next_one_stays() {
+    let widget = |name: &str, rect: &str, rest: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T ({name}) /Rect [{rect}] /P 3 0 R {rest} >>").into_bytes()
+    };
+    let mut doc = page_with(
+        b"",
+        "/AcroForm << /Fields [7 0 R 8 0 R 9 0 R 10 0 R] >>",
+        "",
+        "/Annots [7 0 R 8 0 R 9 0 R 10 0 R]",
+        vec![
+            b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (ssn) /V (SSNSECRETV07) /Rect [10 50 100 70] /P 3 0 R >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Alice) /DV () /Rect [200 100 280 120] /P 3 0 R >>".to_vec(),
+            widget("then", "200 200 250 220", "/A 11 0 R"),
+            widget("only", "200 240 250 260", "/A << /S /ResetForm /Fields 7 0 R >>"),
+            b"<< /S /ResetForm /Fields [7 0 R] /Next << /S /Named /N /NextPage >> >>".to_vec(),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().fields, 1);
+    let fields = pdfcraft_forms::fields(&doc);
+    let button = |name: &str| fields.iter().find(|f| f.name == name).map(|f| f.button.clone());
+    assert_eq!(button("then"), Some(Some(pdfcraft_forms::af::ButtonAction::Named("NextPage".into()))), "the next action runs in its place");
+    assert_eq!(button("only"), Some(None), "a button that reset only the redacted field resets nothing");
+    assert!(!full_save_holds(&doc, b"SSNSECRETV07"), "the reset actions kept the redacted field");
+}
+
+/// A radio group the form lists holds its buttons in `/Kids`, each with its own `/T` and no
+/// `/Parent` (#7885): with every button under the mark, the redaction succeeds and neither the
+/// buttons nor the group's value stay in the saved file.
+#[test]
+fn a_redacted_radio_group_whose_buttons_name_no_parent_leaves_the_saved_file() {
+    let button = |rect: &str, tip: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T (Group1) /TU ({tip}) /Rect [{rect}] /P 3 0 R /AS /Off >>").into_bytes()
+    };
+    let mut doc = page_with(
+        b"",
+        "/AcroForm << /Fields [7 0 R] >>",
+        "",
+        "/Annots [8 0 R 9 0 R]",
+        vec![
+            b"<< /FT /Btn /Ff 49152 /T (Group1) /V /RADIOSECRETV /Kids [8 0 R 9 0 R] >>".to_vec(),
+            button("10 50 30 70", "RADIOSECRETONE"),
+            button("40 50 60 70", "RADIOSECRETTWO"),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    apply(&mut doc, None).unwrap();
+    for secret in [b"RADIOSECRETONE".as_slice(), b"RADIOSECRETTWO", b"RADIOSECRETV"] {
+        assert!(!full_save_holds(&doc, secret), "{} stayed in the saved file", String::from_utf8_lossy(secret));
+    }
+}
+
+/// A field that is itself a widget on the page, outside the mark, holds the widgets under it in
+/// `/Kids`, each naming it as `/Parent` (#7885): the redaction succeeds and neither those widgets
+/// nor the field's value stay in the saved file.
+#[test]
+fn a_redacted_field_that_is_itself_a_widget_leaves_the_saved_file() {
+    let kid = |rect: &str, state: &str, text: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [{rect}] /P 3 0 R /AS /{state} /Contents ({text}) >>").into_bytes()
+    };
+    let mut doc = page_with(
+        b"",
+        "/AcroForm << /Fields [7 0 R] >>",
+        "",
+        "/Annots [7 0 R 8 0 R 9 0 R]",
+        vec![
+            b"<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T (drink) /V /DRINKSECRETV /Rect [0 0 0 0] /P 3 0 R /Kids [8 0 R 9 0 R] >>"
+                .to_vec(),
+            kid("10 50 30 70", "DRINKSECRETV", "DRINKSECRETONE"),
+            kid("40 50 60 70", "Off", "DRINKSECRETTWO"),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    apply(&mut doc, None).unwrap();
+    for secret in [b"DRINKSECRETONE".as_slice(), b"DRINKSECRETTWO", b"DRINKSECRETV"] {
+        assert!(!full_save_holds(&doc, secret), "{} stayed in the saved file", String::from_utf8_lossy(secret));
+    }
+}
+
+/// A radio group that is itself a widget on the page, outside the mark, holds buttons that name no
+/// `/Parent` (#7885), and a structure element tags the group through an object reference (`/OBJR`).
+/// With every button under the mark the group goes too, after the structure tree was cleaned of
+/// the buttons: its tag goes with it, and the redaction succeeds without the group or its value.
+#[test]
+fn a_tagged_field_left_without_kids_leaves_the_saved_file() {
+    let button = |rect: &str, tip: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T (Group1) /TU ({tip}) /Rect [{rect}] /P 3 0 R /AS /Off >>").into_bytes()
+    };
+    let mut doc = page_with(
+        b"",
+        "/AcroForm << /Fields [7 0 R] >> /StructTreeRoot 10 0 R /MarkInfo << /Marked true >>",
+        "",
+        "/Annots [7 0 R 8 0 R 9 0 R]",
+        vec![
+            b"<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T (Group1) /V /TAGGEDSECRETV /TU (TAGGEDSECRETTIP) /Rect [0 0 0 0] /P 3 0 R /Kids [8 0 R 9 0 R] >>"
+                .to_vec(),
+            button("10 50 30 70", "TAGGEDSECRETONE"),
+            button("40 50 60 70", "TAGGEDSECRETTWO"),
+            b"<< /Type /StructTreeRoot /K [11 0 R] >>".to_vec(),
+            b"<< /Type /StructElem /S /Form /P 10 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 7 0 R /Pg 3 0 R >> >>".to_vec(),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert!(report.tags > 0, "the group's tag counts among the structure-tree changes");
+    for secret in [b"TAGGEDSECRETONE".as_slice(), b"TAGGEDSECRETTWO", b"TAGGEDSECRETV", b"TAGGEDSECRETTIP"] {
+        assert!(!full_save_holds(&doc, secret), "{} stayed in the saved file", String::from_utf8_lossy(secret));
+    }
+}
