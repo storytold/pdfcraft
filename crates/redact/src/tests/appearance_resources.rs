@@ -125,3 +125,35 @@ fn a_type3_font_written_in_shared_appearance_resources_is_refused() {
     mark(&mut doc, 0, &[[9.0, 95.0, 40.0, 110.0]], "");
     assert!(refused_for(&apply(&mut doc, None), None, DIRECT), "a direct Type 3 font in a shared /Font dictionary was not refused");
 }
+
+/// A glyph a kept appearance shows draws, through its font's `/Resources`, glyph C of a second
+/// Type 3 font that the appearances list too but never select. C is in use, so its program stays;
+/// the second font's other glyphs, which nothing shows, still go.
+#[test]
+fn a_type3_glyph_a_surviving_glyph_shows_is_kept() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << >> /Annots [5 0 R 6 0 R] >>".to_vec(),
+        stream("", b""),
+        b"<< /Type /Annot /Subtype /FreeText /Rect [20 20 120 40] /DA (/T3 10 Tf 0 g) /AP << /N 7 0 R >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /FreeText /Rect [150 200 250 220] /DA (/T3 10 Tf 0 g) /AP << /N 8 0 R >> >>".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Resources << /Font << /T3 9 0 R /T4 13 0 R >> >>", b"BT /T3 10 Tf 2 5 Td (A) Tj ET"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Resources << /Font << /T3 9 0 R /T4 13 0 R >> >>", b"BT /T3 10 Tf 2 5 Td (B) Tj ET"),
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 -200 1000 800] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 67 /Widths [500 500 500] /Encoding << /Differences [65 /A /B /C] >> /CharProcs << /A 10 0 R /B 11 0 R /C 12 0 R >> /Resources << /Font << /T4 13 0 R >> >> >>".to_vec(),
+        stream("", b"% REMOVED_ANNOTATION_GLYPH_A"),
+        stream("", b"BT /T4 1000 Tf (C) Tj ET % KEPT_ANNOTATION_GLYPH_B"),
+        stream("", b"% UNUSED_GLYPH_C"),
+        type3_abc(14),
+        stream("", b"% UNUSED_NESTED_GLYPH_A"),
+        stream("", b"% UNUSED_NESTED_GLYPH_B"),
+        stream("", b"% NESTED_GLYPH_C"),
+    ]);
+    mark(&mut doc, 0, &[[10.0, 10.0, 130.0, 50.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().annotations, 1);
+    assert!(full_save_holds(&doc, b"KEPT_ANNOTATION_GLYPH_B"), "the glyph the kept annotation shows was unlinked");
+    assert!(full_save_holds(&doc, b"NESTED_GLYPH_C"), "the glyph a surviving glyph shows was unlinked");
+    assert!(!full_save_holds(&doc, b"REMOVED_ANNOTATION_GLYPH_A"), "the removed annotation's glyph program survived");
+    assert!(!full_save_holds(&doc, b"UNUSED_NESTED_GLYPH_A"), "a glyph nothing shows survived");
+    assert!(!full_save_holds(&doc, b"UNUSED_NESTED_GLYPH_B"), "a glyph nothing shows survived");
+}

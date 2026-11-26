@@ -143,13 +143,18 @@ struct GlyphReads {
     budget: DecodeBudget,
 }
 
+/// Why the cleanup refuses a glyph program it can't read in full.
+const GLYPH_UNREADABLE: &str = "a Type 3 font's glyph has bytes that can't be read";
+/// Why the scan refuses content it can't read in full.
+const CONTENT_UNREADABLE: &str = "content that may show a Type 3 font has bytes that can't be read";
+
 fn collect_used_resources_in_stream(data: &[u8], used: &mut UsedInGlyphs) -> Result<(), RedactError> {
     // One operator at a time, so a glyph program of millions of them is never held whole. A byte
     // that can't be read anywhere in it still refuses, once the loop has read it all.
     let mut read = pdfcraft_content::ops(data);
     read.by_ref().for_each(|op| record_used(&op, used));
     if read.skipped() > 0 {
-        return Err(RedactError::Refused("a Type 3 font's glyph has bytes that can't be read".into()));
+        return Err(RedactError::Refused(GLYPH_UNREADABLE.into()));
     }
     Ok(())
 }
@@ -340,7 +345,7 @@ fn scan_content_stream(
         }
     }
     if read.skipped() > 0 {
-        return Err(RedactError::Refused("content that may show a Type 3 font has bytes that can't be read".into()));
+        return Err(RedactError::Refused(CONTENT_UNREADABLE.into()));
     }
     Ok(())
 }
@@ -771,6 +776,39 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
             let Object::Stream(s) = &*ctx.doc.get(*form_ref) else { continue };
             let data = ctx.doc.with_direct_parms(s).decoded()?;
             scan_content_stream(&mut ctx, std::slice::from_ref(&data), *form_ref, form_res, None, 0)?;
+        }
+    }
+
+    // A surviving glyph's program can show glyphs of another Type 3 font through its font's
+    // `/Resources` (ISO 32000-2 §9.6.4: a glyph description is a content stream), and those glyphs
+    // are in use too. Follow each surviving glyph once, until no new glyph is found; the set of
+    // glyphs is finite, so a glyph that shows itself, or a cycle of them, ends.
+    let mut followed: HashSet<(FontKey, Vec<u8>)> = HashSet::new();
+    loop {
+        let pending: Vec<(FontKey, Vec<u8>)> = ctx
+            .used_glyphs
+            .iter()
+            .flat_map(|(key, glyphs)| glyphs.iter().map(move |g| (*key, g.clone())))
+            .filter(|pair| !followed.contains(pair))
+            .collect();
+        if pending.is_empty() {
+            break;
+        }
+        for (key, glyph) in pending {
+            followed.insert((key, glyph.clone()));
+            let Some(font) = type3_fonts.get(&key) else { continue };
+            let FontKey::Ref(font_ref) = key;
+            let Some(proc_ref) =
+                font.get(b"CharProcs").and_then(|cp| ctx.doc.resolve(cp).as_dict().and_then(|d| d.get(&glyph).and_then(Object::as_ref)))
+            else {
+                continue;
+            };
+            let font_res = font.get(b"Resources").and_then(|r| ctx.doc.resolve(r).as_dict().cloned()).unwrap_or_default();
+            // What can't be read here is the glyph's program, and is refused as such.
+            scan_stream_object(&mut ctx, &font_res, font_ref, proc_ref, None, 0).map_err(|e| match e {
+                RedactError::Refused(why) if why == CONTENT_UNREADABLE => RedactError::Refused(GLYPH_UNREADABLE.into()),
+                e => e,
+            })?;
         }
     }
 
