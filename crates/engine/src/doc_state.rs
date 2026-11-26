@@ -97,7 +97,7 @@ pub(crate) fn writable(cos: &pdfcraft_cos::Document) -> Result<std::borrow::Cow<
     Ok(std::borrow::Cow::Owned(copy))
 }
 
-/// The last-resort guard (AGENTS.md §4): run `f`, turning a panic that escapes it into an error
+/// The last-resort guard (app-agents.md rule 13): run `f`, turning a panic that escapes it into an error
 /// message, so one bad file or edit can't take the app and its other documents down. It is a
 /// safety net for bugs, not a substitute for returning errors.
 pub fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {

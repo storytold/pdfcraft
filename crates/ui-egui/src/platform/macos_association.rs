@@ -264,7 +264,7 @@ mod tests {
             std::fs::write(&file, b"before").unwrap();
             xattr::set(&file, OPEN_WITH, &data).unwrap();
             xattr::set(&file, QUARANTINE, b"0082;1234;Preview;").unwrap();
-            crate::editing::write_atomically(file.to_str().unwrap(), b"after").unwrap();
+            craft::atomic::atomic_write(&file, b"after").unwrap();
             assert_eq!(std::fs::read(&file).unwrap(), b"after");
             assert_eq!(xattr::get(&file, OPEN_WITH).unwrap(), Some(data));
             assert_eq!(xattr::get(&file, QUARANTINE).unwrap(), Some(b"0082;1234;Preview;".to_vec()));
@@ -277,7 +277,7 @@ mod tests {
     fn new_destination_does_not_acquire_an_association() {
         let dir = directory();
         let file = dir.join("new.pdf");
-        crate::editing::write_atomically(file.to_str().unwrap(), b"pdf bytes").unwrap();
+        craft::atomic::atomic_write(&file, b"pdf bytes").unwrap();
         assert!(xattr::get(&file, OPEN_WITH).unwrap().is_none());
         assert!(xattr::get(&file, QUARANTINE).unwrap().is_none());
         std::fs::remove_dir_all(dir).unwrap();
@@ -293,7 +293,7 @@ mod tests {
         xattr::set(&file, OPEN_WITH, &binding).unwrap();
         xattr::set(&file, QUARANTINE, b"0082;1234;Preview;").unwrap();
         assert!(OpeningMetadata::read(&file).is_err());
-        crate::editing::write_atomically(file.to_str().unwrap(), b"new PDF").unwrap();
+        craft::atomic::atomic_write(&file, b"new PDF").unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), b"new PDF");
         let mut saved = vec![0; binding.len()];
         let count = rustix::fs::lgetxattr(&file, OPEN_WITH, saved.as_mut_slice()).unwrap();
