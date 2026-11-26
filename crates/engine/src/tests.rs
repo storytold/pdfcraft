@@ -8733,6 +8733,34 @@ fn static_xfa_comb_fields_update_existing_widgets() {
     assert!(appearance.contains("45.6 0 m 45.6 20 l"), "static dividers run the widget's full height: {appearance}");
 }
 
+/// An explicit SOM binding survives a renamed AcroForm field. Without it, an unrelated
+/// partial name must not claim the template field's data or its comb settings.
+#[test]
+fn renamed_static_comb_uses_the_same_som_as_dataset_values() {
+    let template = r#"<subform name="form1"><subform name="page1"><field name="name"><ui><textEdit><comb numberOfCells="4"/></textEdit></ui></field></subform></subform>"#;
+    for bound in [true, false] {
+        let bytes = pdfcraft_xfa::fixtures::static_shell_with_template(template, "<form1><page1><name>1234</name></page1></form1>");
+        let mut source = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+        let text = pdfcraft_forms::fields(&source).into_iter().find(|f| f.kind == pdfcraft_forms::FieldKind::Text).unwrap();
+        source
+            .update_dict(text.obj, |d| {
+                d.set(b"T".to_vec(), pdfcraft_cos::PdfString::literal(b"local_name".to_vec()));
+                if bound {
+                    d.set(pdfcraft_xfa::SOM_KEY.to_vec(), pdfcraft_cos::PdfString::literal(text.name.as_bytes().to_vec()));
+                }
+            })
+            .unwrap();
+        let original = Arc::new(pdfcraft_cos::write_incremental(&source, &pdfcraft_cos::SaveOptions::default()).unwrap());
+        let mut session = Session::new();
+        let id = session.open("static.pdf", None, original, None).unwrap();
+        let doc = session.get(id).unwrap();
+        let field = doc.form.iter().find(|f| f.name == "form1[0].page1[0].local_name").unwrap();
+        assert_eq!(field.value.iter().any(|v| v == "1234"), bound);
+        assert_eq!(field.is_comb(), bound);
+        assert_eq!(field.max_len, bound.then_some(4));
+    }
+}
+
 /// A stored text value may be longer than the template's comb count. Opening preserves it.
 /// Signed forms retain their comb settings while the existing dataset synchronization still runs.
 #[test]

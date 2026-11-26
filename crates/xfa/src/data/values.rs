@@ -30,8 +30,8 @@ pub(super) fn text_of(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
 }
 
 /// The SOM path of a field: its `/PCSom` when PdfCraft generated it, else its name.
-fn som_of(doc: &Document, f: &FieldDatum) -> String {
-    doc.get(f.obj).as_dict().and_then(|d| text_of(doc, d, crate::pdf::SOM_KEY)).unwrap_or_else(|| f.name.clone())
+pub fn field_som(doc: &Document, obj: ObjRef, field_name: &str) -> String {
+    doc.get(obj).as_dict().and_then(|d| text_of(doc, d, crate::pdf::SOM_KEY)).unwrap_or_else(|| field_name.to_owned())
 }
 
 /// Each button of a radio group, in `/Kids` order: its (`/PCOn` item, on-state name, `/Opt`
@@ -179,7 +179,7 @@ pub(super) fn path_of(tpl: Option<&Template>, som: &str) -> DataPath {
 pub(super) fn wanted(doc: &Document, fields: &[FieldDatum], tpl: Option<&Template>) -> Vec<Want> {
     let mut out = Vec::new();
     for f in fields {
-        let som = som_of(doc, f);
+        let som = field_som(doc, f.obj, &f.name);
         let path = path_of(tpl, &som);
         if path.is_empty() {
             continue;
@@ -224,7 +224,7 @@ fn values_at(doc: &Document, tpl: Option<&Template>, fields: &[FieldDatum]) -> V
     let Some(data) = parse_datasets(&p.xdp) else { return Vec::new() };
     let mut out = Vec::new();
     for f in fields {
-        let som = som_of(doc, f);
+        let som = field_som(doc, f.obj, &f.name);
         let path = path_of(tpl, &som);
         let Some(text) = data.value_at(&path) else { continue };
         let text = text.as_str();

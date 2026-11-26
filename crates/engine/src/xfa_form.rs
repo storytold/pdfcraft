@@ -45,10 +45,11 @@ pub(crate) fn xfa_apply_static_comb_fields(doc: &mut pdfcraft_cos::Document) -> 
     let mut changed = Vec::new();
     let mut changed_objects = std::collections::HashSet::new();
     for field in pdfcraft_forms::fields(doc) {
-        let Some((cells, border)) = combs.get(&field.name).copied() else { continue };
         if field.kind != pdfcraft_forms::FieldKind::Text || field.has(pdfcraft_forms::flags::PASSWORD) {
             continue;
         }
+        let som = pdfcraft_xfa::data::field_som(doc, field.obj, &field.name);
+        let Some((cells, border)) = combs.get(&som).copied() else { continue };
         let max_len = cells.min(100_000);
         if max_len == 0 {
             continue;
