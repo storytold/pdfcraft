@@ -38,23 +38,29 @@ fn absolute(path: &str) -> String {
     path.to_string()
 }
 
+/// The zoom as settings name it. A fixed zoom keeps its fraction (62.5%, not 63%: `zoom_name`
+/// rounds to whole percents), rounded to two decimals so float noise (`110.00000000000001%`)
+/// never reaches the settings file.
+fn zoom_text(fit: canvas::Fit, zoom: f64) -> String {
+    match fit {
+        canvas::Fit::None => format!("{}%", (zoom * 10_000.0).round() / 100.0),
+        fit => ViewDefaults { fit, zoom, ..ViewDefaults::default() }.zoom_name(),
+    }
+}
+
 impl PdfCraftApp {
     /// How view `index` shows its document now; `None` for a document without a file. In full
     /// screen, the display it will go back to, at the page reached.
     fn view_to_remember(&self, index: usize) -> Option<LastView> {
         let view = self.views.get(index)?;
         let path = self.session.get(view.id)?.path.as_deref()?;
+        // PLAN: assumed `DocView::current() -> usize` and `SavedDisplay { display: PageDisplay, zoom: f64, .. }` (pdf-canvas-w8, pdf-canvas-w10); the remaining errors come from those sets not having landed.
         let shown = view.normal_display();
-        // A fixed zoom keeps its fraction (62.5%, not 63%): `zoom_name` rounds to whole percents.
-        let zoom = match shown.fit {
-            canvas::Fit::None => format!("{}%", shown.zoom * 100.0),
-            fit => ViewDefaults { fit, zoom: shown.zoom, ..ViewDefaults::default() }.zoom_name(),
-        };
         Some(LastView {
             path: absolute(path),
-            page: view.current,
-            zoom,
-            display: canvas::display_token(shown.layout, shown.continuous).to_string(),
+            page: view.current(),
+            zoom: zoom_text(shown.fit, shown.zoom),
+            display: canvas::display_token(shown.display, shown.continuous).to_string(),
             cover: shown.cover,
         })
     }
@@ -113,19 +119,45 @@ impl PdfCraftApp {
         let Some(last) = self.last_views.iter().find(|l| l.path == path).cloned() else { return };
         let Some(view) = self.views.get_mut(index) else { return };
         if !self.always_default_view {
-            if let Some((layout, continuous)) = canvas::parse_display_token(&last.display) {
-                view.set_display(layout, continuous);
+            if let Some((display, continuous)) = canvas::parse_display_token(&last.display) {
+                view.view.display = display;
+                view.view.continuous = continuous;
             }
-            view.set_cover(last.cover);
+            view.view.cover = last.cover;
             if let Some(defaults) = ViewDefaults::default().with_zoom(&last.zoom) {
                 match defaults.fit {
-                    canvas::Fit::None => view.set_zoom(defaults.zoom),
-                    fit => view.set_fit(fit),
+                    canvas::Fit::None => {
+                        view.view.fit = canvas::Fit::None;
+                        view.view.zoom = defaults.zoom;
+                    }
+                    fit => view.view.fit = fit,
                 }
             }
+            let current = view.current();
+            view.view.go_to(current);
         }
         if last.page < pages {
             view.go_to_page(last.page);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fixed zoom of 110 % is stored as `110%`, not with float noise, and reads back as the same zoom.
+    #[test]
+    fn a_fixed_zoom_round_trips_without_float_noise() {
+        for zoom in [1.1_f64, 0.625, 1.0, 0.07 + 0.01] {
+            let text = zoom_text(canvas::Fit::None, zoom);
+            let decimals = text.trim_end_matches('%').split_once('.').map_or(0, |(_, d)| d.len());
+            assert!(decimals <= 2, "{text}");
+            let back = ViewDefaults::default().with_zoom(&text).expect("parses back");
+            assert_eq!(back.fit, canvas::Fit::None);
+            assert!((back.zoom - zoom).abs() < 0.00006, "{text} -> {}", back.zoom);
+        }
+        assert_eq!(zoom_text(canvas::Fit::None, 1.1), "110%");
+        assert_eq!(zoom_text(canvas::Fit::None, 0.625), "62.5%");
     }
 }
