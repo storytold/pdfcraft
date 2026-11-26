@@ -928,7 +928,10 @@ impl PdfCraftApp {
             if after_open.is_some() {
                 pending.after_open = after_open;
             }
-            if pending.then.is_none() && matches!(&then, Some(OpenThen::Tool(_))) {
+            // Another file from the same pick may already have used the pending tool choice.
+            if matches!(&then, Some(OpenThen::Tool(_)))
+                && pending.then.as_ref().is_none_or(|then| matches!(then, OpenThen::Tool(group) if group.get().is_none()))
+            {
                 pending.then = then;
             }
             return OpenOutcome::Pending;

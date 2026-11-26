@@ -1187,3 +1187,52 @@ fn home_tool_picker_uses_the_first_file_that_opens_after_a_failure() {
     assert_eq!(h.state().session.get(id).unwrap().name, "usable.pdf");
     assert!(h.state().views[view].organize);
 }
+
+#[test]
+fn a_new_home_tool_reuses_a_pending_file_after_its_first_tool_was_chosen() {
+    use egui::accesskit::Role;
+    use pdfcraft_ui_egui::LeftPanel;
+
+    let dir = scratch("pending-home-tool");
+    let first = dir.join("first.pdf");
+    let second = dir.join("second.pdf");
+    std::fs::write(&first, fixture(1)).unwrap();
+    std::fs::write(&second, fixture(2)).unwrap();
+
+    let mut h = harness(&[]);
+    choose_home_organize(&mut h);
+    assert!(h.files.answer(Picked::Paths(vec![first, second.clone()])).is_some());
+    h.h.run_steps(2);
+    // Stop the open queue as soon as the first file is admitted, with the second still waiting.
+    for _ in 0..30 {
+        if !h.state().views.is_empty() {
+            break;
+        }
+        assert!(h.jobs.run_next(), "a job is waiting to open the first file");
+        h.h.run_steps(1);
+    }
+    let (view, id) = h.state().active_ids().expect("the first picked file is active");
+    assert_eq!(h.state().session.get(id).unwrap().name, "first.pdf");
+    assert!(h.state().views[view].organize);
+    assert_eq!(h.state().views.len(), 1);
+    assert!(h.jobs.waiting() > 0);
+
+    h.get_by_role_and_label(Role::Tab, "first.pdf").click_secondary();
+    h.h.run_steps(2);
+    h.get_by_label("Close Tab").click();
+    h.h.run_steps(2);
+    assert!(h.state().views.is_empty());
+
+    h.get_by_role_and_label(Role::ListBox, "Recommended tools").get_by_role_and_label(Role::ListItem, "Add comments").click();
+    h.h.run_steps(2);
+    assert!(h.files.answer(Picked::Paths(vec![second])).is_some());
+    h.h.run_steps(2);
+    assert!(h.state().views.is_empty(), "the second file is still waiting");
+    settle(&mut h, "the reused pending open", |app| app.views.len() == 1);
+    let active = h.state().active_ids();
+    let left = h.state().left;
+    let _ = std::fs::remove_dir_all(dir);
+    let (_, id) = active.expect("the reopened pick brings its pending file to the front");
+    assert_eq!(h.state().session.get(id).unwrap().name, "second.pdf");
+    assert_eq!(left, LeftPanel::Tool("comment"));
+}
