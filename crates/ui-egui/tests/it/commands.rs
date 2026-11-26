@@ -451,6 +451,37 @@ fn escape_leaves_full_screen(h: &mut Harness<'static, PdfCraftApp>, _c: &Control
     assert!(!h.state().full_screen(), "Escape leaves full screen");
 }
 
+/// F11 fills the screen with the window and keeps its menu bar and panels, and toggles back
+/// (#7954). Full screen mode (Ctrl+L) entered from there gives that window back on leaving, and
+/// F11 in full screen mode leaves it.
+#[test]
+fn f11_toggles_full_screen_with_menu_bar_apart_from_full_screen_mode() {
+    use craft::ui::shell::ScreenMode;
+    let mut h = harness();
+    h.key_press(Key::F11);
+    h.run_steps(2);
+    assert_eq!(h.state().screen_mode, ScreenMode::FullScreenWithMenuBar, "F11 fills the screen");
+    assert!(!h.state().full_screen(), "the tools stay: not full screen mode");
+    h.key_press(Key::F11);
+    h.run_steps(2);
+    assert_eq!(h.state().screen_mode, ScreenMode::Standard, "F11 again gives the window back");
+
+    h.key_press(Key::F11);
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(2);
+    assert!(h.state().full_screen());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(2);
+    assert_eq!(h.state().screen_mode, ScreenMode::FullScreenWithMenuBar, "leaving full screen mode keeps the full-screen window");
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(2);
+    h.key_press(Key::F11);
+    h.run_steps(2);
+    assert_eq!(h.state().screen_mode, ScreenMode::Standard, "F11 leaves full screen mode");
+}
+
 /// Check that choosing Edit ▸ Pages ▸ Delete pages in the menu bar reduces the page count once.
 #[test]
 fn the_pages_menu_comes_from_the_registry() {

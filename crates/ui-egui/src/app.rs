@@ -398,6 +398,7 @@ impl PdfCraftApp {
             password_prompt: None,
             unlock_prompt: None,
             screen_mode: Default::default(),
+            screen_mode_before_full_screen: Default::default(),
             host_dirty: None,
             close_guard: None,
             close_guard_dialog: None,

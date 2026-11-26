@@ -254,6 +254,19 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("edit.column_select", "Column select", EDIT, None, Document, "text-select"),
     c("edit.snapshot", "Take a snapshot", EDIT, None, Copying, "camera"),
     c("view.full_screen", "Full screen mode", VIEW, Some(Shortcut::cmd("L")), Document, "maximize"),
+    // The window fills the screen and keeps its menu bar and panels (#7954): F11, as in browsers
+    // and most desktop apps. macOS keeps its own ⌃⌘F and green button, so F11 stays unbound there.
+    CommandSpec {
+        shortcut_on_mac: false,
+        ..c(
+            "view.full_screen_with_menu_bar",
+            "Full screen mode with menu bar",
+            VIEW,
+            Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "F11" }),
+            Nothing,
+            "monitor",
+        )
+    },
     c("view.read_mode", "Read mode", VIEW, Some(Shortcut { command: true, shift: false, mac_ctrl: true, key: "H" }), Document, "book-open"),
     // Split view (Acrobat's Window ▸ Split): the current document in two panes, or back to one;
     // a tab's right-click menu also splits right or down with any tab.

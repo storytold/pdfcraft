@@ -508,6 +508,9 @@ pub struct PdfCraftApp {
     pub unlock_prompt: Option<UnlockPrompt>,
     /// Standard, full screen with the menu bar, or full screen.
     pub screen_mode: craft::ui::shell::ScreenMode,
+    /// The mode full screen mode (⌘L) was entered from, given back on leaving it, so a window
+    /// already full screen with its menu bar (F11) stays so.
+    screen_mode_before_full_screen: craft::ui::shell::ScreenMode,
     /// Reports unsaved work, or an open OCR review, to the embedding page (web, see [`HostDirtyFn`]).
     pub host_dirty: Option<HostDirtyFn>,
     /// The "save changes?" questions of a closing tab or a quit, asked one document at a time.
