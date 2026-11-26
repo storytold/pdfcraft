@@ -1,10 +1,10 @@
 #[cfg(test)]
 use super::core::inspect;
-use super::core::spend;
-use super::model::{DestView, OutlineItem, PageInfo};
+use super::core::{load_options, spend};
+use super::model::{DestView, LinkTarget, OutlineItem, PageInfo};
 use super::{
-    BTreeMap, Dictionary, HashMap, HashSet, Inspector, MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK,
-    MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES, Object, ObjectId, alpha, roman,
+    Arc, AssertUnwindSafe, BTreeMap, Dictionary, Document, HashMap, HashSet, Inspector, LazyStructure, MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES,
+    MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK, MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES, Object, ObjectId, Structure, alpha, catch_unwind, roman,
 };
 
 /// `DocInfo::outline` holds the first this many bookmarks in outline order. Opening a document
@@ -72,6 +72,17 @@ impl<'a> Inspector<'a> {
         catalog.get(b"Dests").ok().and_then(|o| self.dict(o)).and_then(|d| d.get(key).ok())
     }
 
+    /// The destination whose key, read as a text string (UTF-16 or PDFDocEncoding), is `name`:
+    /// a name tree key, then a key of the PDF 1.1 `/Dests` dictionary, whose names older files
+    /// write in PDFDocEncoding rather than UTF-8.
+    fn named_dest_by_text(&self, name: &str) -> Option<&'a Object> {
+        if let Some((_, dest)) = self.named.iter().find(|(key, _)| text_string(key) == name) {
+            return Some(dest);
+        }
+        let dests = self.doc.catalog().ok()?.get(b"Dests").ok().and_then(|o| self.dict(o))?;
+        dests.iter().find(|(key, _)| text_string(key) == name).map(|(_, dest)| dest)
+    }
+
     /// A name tree's leaves keyed by their raw key bytes (first occurrence wins).
     pub(super) fn name_tree_raw(
         &self,
@@ -79,6 +90,7 @@ impl<'a> Inspector<'a> {
         seen: &mut HashSet<*const Dictionary>,
         depth: u32,
         out: &mut HashMap<Vec<u8>, &'a Object>,
+        key_budget: &mut usize,
     ) {
         if depth > 32 || !seen.insert(node as *const _) {
             return;
@@ -87,18 +99,25 @@ impl<'a> Inspector<'a> {
             for pair in pairs.chunks(2) {
                 if let [k, v] = pair {
                     let key = match self.resolve(k) {
-                        Object::String(s, _) => s.clone(),
-                        Object::Name(n) => n.clone(),
+                        Object::String(s, _) => s,
+                        Object::Name(n) => n,
                         _ => continue,
                     };
-                    out.entry(key).or_insert(v);
+                    // Every key is hashed, so its bytes are spent from one allowance for the whole
+                    // tree (a key repeated by reference is charged each time); one past it is
+                    // not indexed. Only a first occurrence is copied.
+                    let Some(left) = key_budget.checked_sub(key.len()) else { continue };
+                    *key_budget = left;
+                    if !out.contains_key(key.as_slice()) {
+                        out.insert(key.clone(), v);
+                    }
                 }
             }
         }
         if let Ok(Object::Array(kids)) = node.get(b"Kids").map(|o| self.resolve(o)) {
             for k in kids {
                 if let Some(d) = self.dict(k) {
-                    self.name_tree_raw(d, seen, depth + 1, out);
+                    self.name_tree_raw(d, seen, depth + 1, out, key_budget);
                 }
             }
         }
@@ -185,8 +204,9 @@ impl<'a> Inspector<'a> {
 
     /// The window `DocInfo::outline` keeps: the first `OUTLINE_WINDOW` bookmarks in outline order,
     /// nested no deeper than `OUTLINE_DEPTH`, and whether any bookmark was left out. Iterative, and
-    /// each bookmark is read once, so the work and memory stay within the window.
-    pub(super) fn outline_window(&self, first: &'a Object) -> (Vec<OutlineItem>, bool) {
+    /// each bookmark is read once, so the work and memory stay within the window. Web addresses are
+    /// spent from `text_budget`, as links' are.
+    pub(super) fn outline_window(&self, first: &'a Object, text_budget: &mut usize) -> (Vec<OutlineItem>, bool) {
         let mut seen = HashSet::new();
         // The listed bookmarks in outline order, with their depth.
         let mut listed: Vec<(usize, OutlineItem)> = Vec::new();
@@ -210,26 +230,34 @@ impl<'a> Inspector<'a> {
                 break;
             }
             *slot = d.get(b"Next").ok();
-            let dest = d
-                .get(b"Dest")
-                .ok()
-                .and_then(|dest| self.dest(dest, 0))
-                .or_else(|| d.get(b"A").ok().and_then(|a| self.dict(a)).and_then(|a| a.get(b"D").ok()).and_then(|dest| self.dest(dest, 0)));
-            let (page, view) = dest.map_or((None, DestView::Top), |(p, v)| (Some(p), v));
+            // A bookmark goes to its `/Dest`, else does what its action `/A` does, as a link would.
+            // Only a go-to's `/D` is a page here: a remote go-to's names a page of the other file.
+            // An action without a type is still read as the go-to its `/D` suggests.
+            let action = match d.get(b"Dest").ok().and_then(|dest| self.dest(dest, 0)) {
+                Some((page, view)) => Some(LinkTarget::Page(page, view)),
+                None => d.get(b"A").ok().and_then(|a| self.dict(a)).and_then(|a| match a.get(b"S") {
+                    Ok(_) => self.action_target(a, text_budget),
+                    Err(_) => a.get(b"D").ok().and_then(|dest| self.dest(dest, 0)).map(|(page, view)| LinkTarget::Page(page, view)),
+                }),
+            };
+            let ((page, view), action) = match action {
+                Some(LinkTarget::Page(page, view)) => ((Some(page), view), None),
+                other => ((None, DestView::Top), other),
+            };
             match d.get(b"First").ok() {
                 Some(child) if depth < OUTLINE_DEPTH => levels.push(Some(child)),
                 Some(_) => more = true,
                 None => {}
             }
             let open = d.get(b"Count").ok().and_then(|c| c.as_i64().ok()).is_some_and(|c| c > 0);
-            let title = self.text(d, b"Title").unwrap_or_default();
+            let title = self.field_text(d, b"Title").unwrap_or_default();
             let color = match d.get(b"C").map(|o| self.resolve(o)) {
                 Ok(Object::Array(c)) => outline_color(c.iter().map(|v| self.resolve(v).as_float().ok())),
                 _ => None,
             };
             let flags = d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0);
             let (italic, bold) = (flags & 1 != 0, flags & 2 != 0);
-            listed.push((depth, OutlineItem { title, page, view, children: Vec::new(), open, color, italic, bold }));
+            listed.push((depth, OutlineItem { title, page, view, action, children: Vec::new(), open, color, italic, bold }));
         }
         (nest_outline(listed), more)
     }
@@ -443,6 +471,37 @@ fn label_work(left: &mut usize, count: usize) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// The (0-based page, view) of the named destination `name` (ISO 32000-2 §12.3.2.4): a key of
+/// the `/Names /Dests` name tree or of the PDF 1.1 catalog `/Dests` dictionary, as a link's or
+/// `/OpenAction`'s name resolves. `None` when the document can't be read, has no such name, or
+/// the name leads to no page of it. A key matches `name` written in UTF-8 or in PDFDocEncoding,
+/// or as a text string (UTF-16 or PDFDocEncoding) that reads as `name`, the way a link's string
+/// destination is read.
+/// Read like [`inspect`]: the lazy reader first, lopdf's tolerant one when the lazy reader fails.
+pub fn named_destination(bytes: Arc<Vec<u8>>, password: Option<&str>, name: &str) -> Option<(usize, DestView)> {
+    // PDFDocEncoding bytes that are also UTF-8 read as UTF-8, so only this finds "Ã©" written C3 A9.
+    let pdfdoc: Option<Vec<u8>> = name.chars().map(pdfcraft_cos::pdfdoc_byte).collect();
+    let find = |doc: &dyn Structure| {
+        let insp = Inspector::new(doc);
+        let dest = insp
+            .named_dest(name.as_bytes())
+            .or_else(|| pdfdoc.as_deref().and_then(|key| insp.named_dest(key)))
+            .or_else(|| insp.named_dest_by_text(name))?;
+        insp.dest(dest, 1).filter(|(page, _)| *page < insp.page_ids.len())
+    };
+    let lazy = catch_unwind(AssertUnwindSafe(|| {
+        let doc = LazyStructure::new(bytes.clone(), password).ok()?;
+        let found = find(&doc);
+        (!doc.failed()).then_some(found)
+    }))
+    .ok()
+    .flatten();
+    if let Some(found) = lazy {
+        return found;
+    }
+    catch_unwind(AssertUnwindSafe(|| find(&Document::load_mem_with_options(&bytes, load_options(password)).ok()?))).ok().flatten()
+}
+
 #[cfg(test)]
 mod open_dest_tests {
     use std::sync::Arc;
@@ -505,6 +564,39 @@ mod open_dest_tests {
         );
     }
 
+    fn named(catalog: &str, extra: &[String], name: &str) -> Option<(usize, DestView)> {
+        super::named_destination(Arc::new(pdf(catalog, extra)), None, name)
+    }
+
+    #[test]
+    fn a_named_destination_is_looked_up_by_its_name() {
+        // A string key of the /Names /Dests name tree, whose value may be a dictionary with /D.
+        let tree = "/Names << /Dests 6 0 R >>";
+        let nodes = ["<< /Kids [7 0 R] >>".to_string(), "<< /Names [(here) [3 0 R /Fit] (there) << /D [5 0 R /XYZ 100 500 2] >>] >>".to_string()];
+        assert_eq!(named(tree, &nodes, "there"), Some((2, XYZ)));
+        assert_eq!(named(tree, &nodes, "here"), Some((0, DestView::Fit)));
+        // A name key of the PDF 1.1 catalog /Dests dictionary.
+        assert_eq!(named("/Dests << /old [4 0 R /FitH 400] >>", &[], "old"), Some((1, DestView::FitH { top: Some(400.0) })));
+        // A key written as UTF-16 or in PDFDocEncoding matches the text it reads as.
+        assert_eq!(named("/Names << /Dests << /Names [<FEFF0074006800E9> [4 0 R /Fit]] >> >>", &[], "thé"), Some((1, DestView::Fit)));
+        assert_eq!(named("/Names << /Dests << /Names [(th\\351) [5 0 R /Fit]] >> >>", &[], "thé"), Some((2, DestView::Fit)));
+        // So does a catalog /Dests name written in PDFDocEncoding, as older files have them, but
+        // a name written as UTF-8 comes first.
+        assert_eq!(named("/Dests << /th#E9 [4 0 R /Fit] >>", &[], "thé"), Some((1, DestView::Fit)));
+        assert_eq!(named("/Dests << /th#E9 [4 0 R /Fit] /th#C3#A9 [5 0 R /Fit] >>", &[], "thé"), Some((2, DestView::Fit)));
+        // A key whose PDFDocEncoding bytes are also UTF-8 reads as UTF-8 ("é"), yet is found by
+        // the text it holds in PDFDocEncoding ("Ã©") too.
+        assert_eq!(named("/Dests << /#C3#A9 [4 0 R /Fit] >>", &[], "Ã©"), Some((1, DestView::Fit)));
+        assert_eq!(named("/Names << /Dests << /Names [(\\303\\251) [5 0 R /Fit]] >> >>", &[], "Ã©"), Some((2, DestView::Fit)));
+        // A name that isn't there, one past the last page, one that names itself, no names at
+        // all, and bytes that aren't a PDF.
+        assert_eq!(named(tree, &nodes, "missing"), None);
+        assert_eq!(named("/Dests << /far [7 /Fit] >>", &[], "far"), None);
+        assert_eq!(named("/Dests << /loop /loop >>", &[], "loop"), None);
+        assert_eq!(named("", &[], "there"), None);
+        assert_eq!(super::named_destination(Arc::new(b"not a pdf".to_vec()), None, "there"), None);
+    }
+
     #[test]
     fn an_open_action_given_as_a_name_or_string_is_looked_up() {
         assert_eq!(open_dest("/OpenAction /there /Dests << /there [4 0 R /Fit] >>", &[]), Some((1, DestView::Fit)));
@@ -549,5 +641,18 @@ mod open_dest_tests {
         // A shallow one is read.
         let shallow = ["<< /Kids [7 0 R] >>".to_string(), "<< /Kids [8 0 R] >>".into(), "<< /Names [(x) [4 0 R /Fit]] >>".into()];
         assert_eq!(open_dest("/OpenAction (x) /Names << /Dests 6 0 R >>", &shallow), Some((1, DestView::Fit)));
+    }
+
+    #[test]
+    fn a_key_repeated_by_reference_is_charged_each_time_against_the_name_tree_allowance() {
+        let big = format!("<{}>", "41".repeat(1 << 20));
+        let tree = |repeats: usize| {
+            let names = format!("{}(x) [4 0 R /Fit]", "7 0 R [4 0 R /Fit] ".repeat(repeats));
+            [format!("<< /Names [{names}] >>"), big.clone()]
+        };
+        let catalog = "/OpenAction (x) /Names << /Dests 6 0 R >>";
+        assert_eq!(open_dest(catalog, &tree(2)), Some((1, DestView::Fit)));
+        // 17 MiB of repeats of one reference spend the 16 MiB allowance before the real key.
+        assert_eq!(open_dest(catalog, &tree(17)), None);
     }
 }
