@@ -124,30 +124,21 @@ fn custom_elements(
                         }
                     }
                     "edit_text" => {
-                        let text = values.entry(e.id.clone()).or_insert_with(|| "".into());
-                        if !text.is_string() {
-                            *text = edit_text_value(&value).into_owned().into();
+                        let mut text = edit_text_value(&value).into_owned();
+                        let edit =
+                            if e.multiline { egui::TextEdit::multiline(&mut text).desired_rows(4) } else { egui::TextEdit::singleline(&mut text) };
+                        let response = ui.add(edit.password(e.password).interactive(!e.readonly).char_limit(8 << 20));
+                        if *needs_focus && (focus == e.id || focus.is_empty()) {
+                            response.request_focus();
+                            *needs_focus = false;
                         }
-                        if let Some(text) = text.as_str().map(str::to_owned) {
-                            let mut text = text;
-                            let edit = if e.multiline {
-                                egui::TextEdit::multiline(&mut text).desired_rows(4)
-                            } else {
-                                egui::TextEdit::singleline(&mut text)
-                            };
-                            let response = ui.add(edit.password(e.password).interactive(!e.readonly).char_limit(8 << 20));
-                            if *needs_focus && (focus == e.id || focus.is_empty()) {
-                                response.request_focus();
-                                *needs_focus = false;
-                            }
-                            // Moving from an unchanged field into a popup must not resume the
-                            // script: its next dialog snapshot would close the open dropdown.
-                            if response.lost_focus() && text != edit_text_value(&e.value) {
-                                *event = Some(e.id.clone());
-                            }
-                            if response.changed() {
-                                values.insert(e.id.clone(), text.into());
-                            }
+                        // Moving from an unchanged field into a popup must not resume the
+                        // script: its next dialog snapshot would close the open dropdown.
+                        if response.lost_focus() && text != edit_text_value(&e.value) {
+                            *event = Some(e.id.clone());
+                        }
+                        if response.changed() {
+                            values.insert(e.id.clone(), text.into());
                         }
                     }
                     "check_box" | "radio" => {
@@ -746,15 +737,19 @@ mod review_tests {
                 }
                 std::thread::sleep(Duration::from_millis(5));
             }
-            assert!(app.script_pending.as_ref().unwrap().has_prompt());
+            let pending = app.script_pending.as_ref().unwrap();
+            assert!(pending.has_prompt());
+            let loaded = pending.dialog_values["text"].clone();
             let mut h = Harness::builder()
                 .with_size(egui::vec2(800.0, 600.0))
                 .with_accessibility_check(false)
                 .build_ui_state(|ui, app: &mut PdfCraftApp| app.show_script_dialog(ui.ctx()), app);
             h.run();
+            assert_eq!(h.state().script_pending.as_ref().unwrap().dialog_values["text"], loaded);
             if edited {
                 h.get_by_role(egui::accesskit::Role::TextInput).type_text("2");
                 h.run();
+                assert!(h.state().script_pending.as_ref().unwrap().dialog_values["text"].is_string());
             }
             // Harness clicks send actual pointer events, so the edit loses focus just as
             // it does when a person opens the popup (an AccessKit action would not).
