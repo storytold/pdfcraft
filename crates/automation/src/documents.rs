@@ -424,6 +424,7 @@ impl Automation {
             ("remove_invalid_links", &mut settings.remove_invalid_links),
             ("remove_unreferenced_dests", &mut settings.remove_unreferenced_dests),
             ("discard_external_refs", &mut settings.discard_external_refs),
+            ("flatten_layers", &mut settings.flatten_layers),
         ] {
             if let Some(b) = a.opt_bool(key)? {
                 *flag = b;
@@ -542,6 +543,8 @@ impl Automation {
             "unused_xobjects": o.unused_xobjects,
             "merged_objects": r.merged,
             "discarded": r.discarded.iter().map(|(h, n)| json!({ "category": h.id(), "count": n })).collect::<Vec<_>>(),
+            "layers_flattened": r.flattened.visible,
+            "hidden_layers_removed": r.flattened.hidden,
         });
         if let (Some(o), Some(e)) = (out.as_object_mut(), extra.as_object()) {
             o.extend(e.iter().map(|(k, v)| (k.clone(), v.clone())));

@@ -94,12 +94,12 @@ pub(crate) fn passes() -> (usize, usize) {
     (CONTENT_PASSES.with(std::cell::Cell::get), OWNER_WALKS.with(std::cell::Cell::get))
 }
 
-fn catalog(doc: &Document) -> Option<(ObjRef, Dict)> {
+pub(crate) fn catalog(doc: &Document) -> Option<(ObjRef, Dict)> {
     let r = doc.root()?;
     Some((r, doc.get(r).as_dict()?.clone()))
 }
 
-fn sub(doc: &Document, d: &Dict, key: &[u8]) -> Option<Dict> {
+pub(crate) fn sub(doc: &Document, d: &Dict, key: &[u8]) -> Option<Dict> {
     d.get(key).and_then(|o| doc.resolve(o).as_dict().cloned())
 }
 
@@ -471,7 +471,7 @@ fn is_comment(subtype: &[u8]) -> bool {
 /// 8.11.4.4): a rule for the View event in the View category hides a layer whose
 /// `/Usage /View /ViewState` is OFF. Rules that turn a layer on, or apply only when printing or
 /// exporting, leave it as the lists say.
-fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
+pub(crate) fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
     let Some((_, cat)) = catalog(doc) else { return Vec::new() };
     let Some(oc) = sub(doc, &cat, b"OCProperties") else { return Vec::new() };
     let Some(d) = sub(doc, &oc, b"D") else { return Vec::new() };
@@ -617,7 +617,12 @@ fn config_without(doc: &mut Document, mut d: Dict, keep: &impl Fn(&Object) -> bo
 }
 
 /// Glyphs of hidden text, or content of hidden layers, on every page (`write` = remove them).
-fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Result<(usize, std::collections::HashSet<ObjRef>), RedactError> {
+pub(crate) fn content_pass(
+    doc: &mut Document,
+    text: bool,
+    layers: bool,
+    write: bool,
+) -> Result<(usize, std::collections::HashSet<ObjRef>), RedactError> {
     let off = if layers { hidden_layers(doc) } else { Vec::new() };
     if !text && !layers {
         return Ok((0, std::collections::HashSet::new()));

@@ -19,6 +19,7 @@ mod model_3d;
 mod model_render;
 mod office;
 mod optimize_content_boundaries;
+mod optimize_flatten_layers;
 mod page_actions;
 mod page_templates;
 mod portfolio_info;
