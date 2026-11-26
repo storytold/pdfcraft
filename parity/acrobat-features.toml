@@ -6809,8 +6809,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/ocr/src/preprocess.rs::quarter_turns_are_detected_corrected_and_mapped_back", "crates/ocr/src/preprocess.rs::realistic_letter_pages_are_left_upright"]
-notes = "Opt-in preprocessing: 0/90/180/270 detected from projection-profile banding (conservative: under 32 px, blank, or without a clear margin it is a no-op); word boxes map back to the scanned raster through the exact inverse. Correction is proven at the preprocessing layer and the flag flows through the job (needs the models), but correction of a genuinely rotated page through the workflow is not yet covered by a cited end-to-end test."
+evidence = ["crates/ocr/src/preprocess.rs::quarter_turns_are_detected_corrected_and_mapped_back", "crates/ocr/src/preprocess.rs::realistic_letter_pages_are_left_upright", "crates/ocr/src/preprocess.rs::a_judge_confirms_or_declines_the_profiles_turn", "crates/ocr/src/preprocess.rs::an_unsure_profile_puts_all_four_turns_to_the_judge", "crates/engine/src/ocr.rs::a_page_the_profile_cannot_place_is_turned_the_way_the_engine_reads"]
+notes = "Opt-in preprocessing: 0/90/180/270 detected from projection-profile banding (conservative: under 32 px, blank, or without a clear margin it is a no-op); word boxes map back to the scanned raster through the exact inverse. Where the profile can't tell (a drawing's line art, a ruled form) or would turn a page wrongly, the job's engine reads the page shrunk and turned each way and the turn with the most readable words is made, the page as it stands winning ties (#8484). Correction is proven at the preprocessing layer and the flag flows through the job (needs the models), but correction of a genuinely rotated page through the workflow is not yet covered by a cited end-to-end test."
 
 [[feature]]
 id = "ocr.deskew"
