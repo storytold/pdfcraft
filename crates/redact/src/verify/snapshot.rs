@@ -93,7 +93,8 @@ impl Snapshot {
             let mut scratch = doc.clone();
             let mut sink = Report::default();
             let removed: Vec<Removed> = {
-                let mut scope = Scope::new(&rects, Mode::Apply, &mut sink, pdfcraft_cos::DecodeBudget::page(), &mut images);
+                let mut scope =
+                    Scope::new(&rects, Mode::Apply, &mut sink, pdfcraft_cos::DecodeBudget::page(), &mut images).with_page_box(page.crop(doc));
                 scope.removed = Some(Vec::new());
                 process(&mut scratch, &mut scope, &data, &resources, Matrix::IDENTITY);
                 scope.removed.take().unwrap_or_default()

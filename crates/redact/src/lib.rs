@@ -890,7 +890,7 @@ fn redact_page_content(
     let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     // What the walk leaves of the page's allowance, the cleanups below spend.
     let (out, mut budget) = {
-        let mut scope = Scope::new(rects, Mode::Apply, report, budget, images).with_removed_room(*removed_room);
+        let mut scope = Scope::new(rects, Mode::Apply, report, budget, images).with_removed_room(*removed_room).with_page_box(page.crop(doc));
         let out = process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY);
         scope.flush();
         removed_text.append(&mut scope.removed_text);
@@ -974,6 +974,9 @@ fn redact_page_content(
             },
             pi,
         )?;
+        // The ExtGState copies whose soft-mask group was rewritten, in place of the originals.
+        let states = interp::Replaced { added: &out.ext_gstates, names: &out.replaced_gstates, originals: &HashSet::new() };
+        interp::install_ext_gstates(doc, &mut budget, &mut res, &states, &cleaned_data)?;
         // A pattern this page selected but no surviving paint draws leaves its resources, so
         // its cell -- a content stream this pass does not enter -- cannot stay in the file.
         // A Type 3 glyph without resources paints with patterns nobody tracked: keep them all.

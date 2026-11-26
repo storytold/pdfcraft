@@ -127,6 +127,17 @@ pub(crate) struct Output {
     /// dictionaries may name them too (an inherited or shared /Resources, or the caller's when a
     /// form has none of its own): [`unlink_doomed`] removes those entries.
     pub doomed: Vec<ObjRef>,
+    /// New ExtGStates the rewritten content selects: copies of one whose soft mask's group was
+    /// rewritten (#7884), as (resource name, state).
+    pub ext_gstates: Vec<(Vec<u8>, Object)>,
+    /// The ExtGState names a `gs` now selects a copy in place of: the original's group still holds
+    /// what was removed, so the caller drops it where nothing else selects it.
+    pub replaced_gstates: Vec<Vec<u8>>,
+    /// Verifying: the form a `Do` names lies under a mark but can't be read (it doesn't decode,
+    /// or is nested too deep), so apply would drop it unread. A `Do` needs nothing more, as what
+    /// is dropped can't remain; a soft mask's group can't be dropped and refuses the page, so its
+    /// walk counts this as what may remain (#7884).
+    pub unread_form: bool,
     /// Pattern resource names a painting operator that survived the rewrite still uses. A name
     /// this scope saw selected but never painted with afterwards is pruned from the page's
     /// `/Resources /Pattern`, so a cell whose only drawing was redacted does not stay in the
@@ -206,6 +217,16 @@ pub(crate) struct Scope<'a> {
     fonts: HashMap<Vec<u8>, Rc<Metrics>>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
+    /// Walking a soft mask's group: an image in it that can't be cleared refuses the page instead
+    /// of going, as removing it would change the mask, and so what it lets paint, everywhere it
+    /// reaches, not only under the mark (#7884).
+    in_mask: bool,
+    /// The page's visible box (its crop box) in default user space, when known: nothing drawn
+    /// outside it shows.
+    page_box: Option<[f64; 4]>,
+    /// Walking a soft mask's group: where what it draws can change what shows, the page's visible
+    /// box within the group's `/BBox` (and those of the groups it is nested in), when known.
+    mask_shows: Option<[f64; 4]>,
     /// Form entries and decoded bytes left for this page, its content streams already charged:
     /// shared forms drawn from other shared forms would otherwise multiply the work with every
     /// level.
@@ -238,8 +259,18 @@ impl<'a> Scope<'a> {
             fonts: HashMap::new(),
             used_names: Vec::new(),
             depth: 0,
+            in_mask: false,
+            page_box: None,
+            mask_shows: None,
             budget,
         }
+    }
+
+    /// The page's visible box, `[x0 y0 x1 y1]` in default user space: an image in a soft mask's
+    /// group that reaches past a mark only off the page goes as one under the mark would.
+    pub fn with_page_box(mut self, page_box: [f64; 4]) -> Self {
+        self.page_box = Some(page_box);
+        self
     }
 
     /// What is left of the page's allowance once the content is walked, for the cleanups after it
@@ -302,6 +333,20 @@ impl<'a> Scope<'a> {
 
     fn covered(&self, b: [f64; 4]) -> bool {
         self.rects.iter().any(|r| contains(*r, b, 0.01))
+    }
+
+    /// Whether an image with bounds `b` lies under a mark everywhere removing it would change what
+    /// shows. In a soft mask's group that is only the part of it that can show: outside the page
+    /// or the group's box, the mask is the same with the image or without it. Elsewhere the whole
+    /// image counts.
+    fn image_covered(&self, b: [f64; 4]) -> bool {
+        let Some(s) = self.mask_shows else { return self.covered(b) };
+        if !b.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let c = [b[0].max(s[0]), b[1].max(s[1]), b[2].min(s[2]), b[3].min(s[3])];
+        // Nothing of it can show at all, or what can is under a mark.
+        c[0] >= c[2] || c[1] >= c[3] || self.covered(c)
     }
 
     /// Which regions a glyph box counts as under? Any real overlap does (more than a fifth of
@@ -565,6 +610,7 @@ impl Walk {
         }
         if !self.path.is_empty() && matches!(o, b"w" | b"M" | b"j" | b"J" | b"d" | b"gs") {
             self.graphics_state(doc, scope, &op);
+            let op = if op.is("gs") { self.soft_mask(doc, scope, resources, op, piece) } else { op };
             self.pending.push(op);
             return;
         }
@@ -576,7 +622,11 @@ impl Walk {
             self.clip = false;
         }
         let kept = match o {
-            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" | b"M" | b"j" | b"J" => {
+            b"gs" => {
+                self.graphics_state(doc, scope, &op);
+                Some(self.soft_mask(doc, scope, resources, op, piece))
+            }
+            b"q" | b"Q" | b"cm" | b"Tf" | b"w" | b"M" | b"j" | b"J" => {
                 self.graphics_state(doc, scope, &op);
                 Some(op)
             }
@@ -881,15 +931,27 @@ impl Walk {
         None
     }
 
-    /// An inline image under a region is removed (or counted, when verifying).
+    /// An inline image under a region is removed (or counted, when verifying). In a soft mask's
+    /// group, one that reaches past the marks where it can show refuses the page instead, as an
+    /// image XObject that can't be cleared does: removing it would change the mask there (#7884).
     fn inline_image(gs: &Gs, scope: &mut Scope<'_>, out: &mut Output, op: Op, piece: &mut Piece) -> Option<Op> {
         // An image mask paints with the fill colour, pattern included.
         uses_patterns(out, gs, true, false);
-        if !scope.hits(gs.ctm.bbox([0.0, 0.0, 1.0, 1.0])) {
+        let b = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
+        if !scope.hits(b) {
             return Some(op);
         }
         if scope.mode == Mode::Verify {
             out.residue += 1;
+            return Some(op);
+        }
+        if scope.in_mask && !scope.image_covered(b) {
+            out.error = Some(CosError::Syntax {
+                offset: 0,
+                detail:
+                    "an inline image in a soft mask's group under a mark can't be cleared, and removing it would change the mask outside the mark"
+                        .into(),
+            });
             return Some(op);
         }
         scope.report.images_removed += 1;
@@ -919,6 +981,111 @@ impl Walk {
         piece.ops.extend(new);
         None
     }
+
+    /// `gs` with an ExtGState whose soft mask has a group (`/SMask /G`): the group is a form drawn
+    /// in the coordinates in force at the `gs` (ISO 32000-2 §11.6.5.2), and what it draws shows
+    /// through what the mask lets paint, text included (#7884). It is walked as a form drawn here
+    /// would be, so verification counts what of it lies under a mark, and apply points the
+    /// operator at a copy of the ExtGState whose group is the rewritten copy, leaving the original
+    /// for other pages and placements. A group apply can't read would go, which would leave the
+    /// mask without its group, and an image in it that can't be cleared would go too, changing the
+    /// mask far outside the mark; the page is refused instead.
+    fn soft_mask(&mut self, doc: &mut Document, scope: &mut Scope<'_>, resources: &Dict, mut op: Op, piece: &mut Piece) -> Op {
+        // Sanitizing walks for hidden content of its own; only the marks are looked for here.
+        if scope.everywhere() || scope.rects.is_empty() {
+            return op;
+        }
+        let Some(name) = op.last_name().map(<[u8]>::to_vec) else { return op };
+        let Some(state) = self.ext_gstates.get(&name).and_then(|s| doc.resolve(s).as_dict().cloned()) else { return op };
+        let Some(mut mask) = state.get(b"SMask").and_then(|m| doc.resolve(m).as_dict().cloned()) else { return op };
+        let Some(group) = mask.get(b"G").and_then(Object::as_ref) else { return op };
+        // The group drawn under a name of its own, so the form walk reads it as any `Do` it meets.
+        const GROUP: &[u8] = b"PCSoftMaskGroup";
+        let mut held = Dict::new();
+        held.set(GROUP.to_vec(), Object::Ref(group));
+        let draw = Op::new("Do", vec![Object::Name(GROUP.to_vec())]);
+        let mut inner = Output::default();
+        let shows = mask_shows(doc, group, &self.gs.ctm, scope.mask_shows.or(scope.page_box));
+        let outer = (std::mem::replace(&mut scope.in_mask, true), std::mem::replace(&mut scope.mask_shows, shows));
+        let walked = xobject(doc, scope, &draw, &self.gs, resources, &mut held, &mut inner);
+        (scope.in_mask, scope.mask_shows) = outer;
+        // What the walk found, as for a form; the new XObject name is not this scope's.
+        self.out.residue += inner.residue;
+        self.out.vertical |= inner.vertical;
+        self.out.dropped_codes |= inner.dropped_codes;
+        self.out.ambiguous |= inner.ambiguous;
+        self.out.unparsed |= inner.unparsed;
+        self.out.keeps_all_patterns |= inner.keeps_all_patterns;
+        self.out.patterns_painted.extend(inner.patterns_painted);
+        self.out.doomed.extend(inner.doomed);
+        self.out.retired_properties.extend(inner.retired_properties);
+        self.out.tag_changes.extend(inner.tag_changes);
+        self.out.error = inner.error.or(self.out.error.take());
+        // A group under a mark that can't be read refuses the page below; verifying, it may remain.
+        if inner.unread_form {
+            self.out.residue += 1;
+        }
+        // Untouched: no mark meets the group, nothing in it changed, or only verifying.
+        let Some(drawn) = walked else { return op };
+        let Some(rewritten) = drawn.as_ref().and_then(Op::last_name).and_then(|n| held.get(n)).and_then(Object::as_ref) else {
+            self.out.error.get_or_insert(CosError::Syntax {
+                offset: 0,
+                detail: "a soft mask's group under a mark can't be read, so what it draws can't be removed".into(),
+            });
+            return op;
+        };
+        mask.set(b"G".to_vec(), Object::Ref(rewritten));
+        let mut copy = state;
+        copy.set(b"SMask".to_vec(), Object::Dict(mask));
+        let fresh = fresh_name(scope, &self.ext_gstates);
+        self.ext_gstates.set(fresh.clone(), Object::Dict(copy.clone()));
+        self.out.ext_gstates.push((fresh.clone(), Object::Dict(copy)));
+        self.out.replaced_gstates.push(name);
+        if let Some(last) = op.operands.last_mut() {
+            *last = Object::Name(fresh);
+        }
+        piece.changed = true;
+        op
+    }
+}
+
+/// What a rewrite replaced among the ExtGStates of one scope (#7884).
+pub(crate) struct Replaced<'a> {
+    /// The copies it made, whose soft mask's group is the rewritten one, as (name, state).
+    pub added: &'a [(Vec<u8>, Object)],
+    /// The names a `gs` now selects a copy in place of.
+    pub names: &'a [Vec<u8>],
+    /// Original groups and forms the rewrite replaced: a state any of them is the soft mask's group
+    /// of goes too, under whatever name, when nothing selects it.
+    pub originals: &'a HashSet<ObjRef>,
+}
+
+/// Lists in `res` the ExtGState copies a rewrite made, and drops the originals they replaced, and
+/// any other state whose soft mask's group is one of `originals`, that `content`, and the forms
+/// without resources of their own it draws, no longer select: an original's soft-mask group still
+/// holds what was removed (#7884), and a full save keeps whatever is still listed.
+pub(crate) fn install_ext_gstates(
+    doc: &Document,
+    budget: &mut DecodeBudget,
+    res: &mut Dict,
+    replaced: &Replaced<'_>,
+    content: &[Vec<u8>],
+) -> Result<(), CosError> {
+    let masked = res_dict(doc, res, b"ExtGState").iter().any(|(_, v)| prune::masks_with(doc, v, replaced.originals));
+    if replaced.added.is_empty() && !masked {
+        return Ok(());
+    }
+    let selected = prune::selected_states(doc, budget, res, content)?;
+    let mut states = res_dict(doc, res, b"ExtGState");
+    for (name, state) in replaced.added {
+        states.set(name.clone(), state.clone());
+    }
+    for name in replaced.names.iter().filter(|n| !selected.contains(*n)) {
+        states.remove(name);
+    }
+    res.set(b"ExtGState".to_vec(), Object::Dict(states));
+    prune::drop_doomed_states(doc, res, replaced.originals, &selected);
+    Ok(())
 }
 
 /// Strip `/ActualText` (and `/Alt`, `/E`, `/T`) from the marked content around anything redaction
@@ -1108,6 +1275,78 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
     (out, removed)
 }
 
+/// Where a soft mask's `group`, drawn at `ctm`, can change what shows: `outer` (the page's visible
+/// box, or the region of the group it is nested in) within the group's `/BBox`, outside which the
+/// mask is its backdrop whatever the group draws. A `/Matrix` or `/BBox` that can't be read leaves
+/// `outer`; `None` when neither is known.
+fn mask_shows(doc: &Document, group: ObjRef, ctm: &Matrix, outer: Option<[f64; 4]>) -> Option<[f64; 4]> {
+    let obj = doc.get(group);
+    let own = match &*obj {
+        Object::Stream(s) => match (crate::verify::matrix_of(doc, &s.dict), crate::verify::bbox_of(doc, &s.dict)) {
+            (Ok(m), Ok(Some(b))) => Some(m.then(ctm).bbox(b)),
+            _ => None,
+        },
+        _ => None,
+    };
+    match (outer, own) {
+        (Some(a), Some(b)) => Some([a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])]),
+        (a, b) => a.or(b),
+    }
+}
+
+/// `Do` of an image, with the same return value as [`xobject`].
+fn image_xobject(
+    doc: &mut Document,
+    scope: &mut Scope<'_>,
+    r: ObjRef,
+    name: Vec<u8>,
+    gs: &Gs,
+    xobjects: &mut Dict,
+    out: &mut Output,
+) -> Option<Option<Op>> {
+    let obj = doc.get(r);
+    let Object::Stream(s) = &*obj else { return None };
+    let b = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
+    if !scope.hits(b) || scope.mode == Mode::Verify {
+        return None;
+    }
+    if scope.image_covered(b) {
+        scope.report.images_removed += 1;
+        out.replaced.push(name);
+        out.doomed.push(r);
+        return Some(None);
+    }
+    match image::clear(doc, s, &gs.ctm, scope.rects, &mut *scope.images) {
+        Ok(None) => None,
+        Ok(Some(new)) => {
+            let nr = doc.add(Object::Stream(new));
+            let n = fresh_name(scope, xobjects);
+            xobjects.set(n.clone(), Object::Ref(nr));
+            out.xobjects.push((n.clone(), nr));
+            out.replaced.push(name);
+            out.doomed.push(r);
+            scope.report.images_cleared += 1;
+            Some(Some(Op::new("Do", vec![Object::Name(n)])))
+        }
+        // In a soft mask's group the image shapes the mask wherever it lies, so dropping
+        // it would change what the mask lets paint far outside the mark (#7884).
+        Err(()) if scope.in_mask => {
+            out.error = Some(CosError::Syntax {
+                offset: 0,
+                detail: "an image in a soft mask's group under a mark can't be cleared, and removing it would change the mask outside the mark"
+                    .into(),
+            });
+            None
+        }
+        Err(()) => {
+            scope.report.images_removed += 1;
+            out.replaced.push(name);
+            out.doomed.push(r);
+            Some(None)
+        }
+    }
+}
+
 /// `Do`: `None` = leave the operator alone; `Some(None)` = drop it; `Some(Some(op))` = replace it.
 fn xobject(
     doc: &mut Document,
@@ -1137,37 +1376,7 @@ fn xobject(
             out.doomed.push(r);
             Some(None)
         }
-        Some(b"Image") => {
-            let b = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
-            if !scope.hits(b) || scope.mode == Mode::Verify {
-                return None;
-            }
-            if scope.covered(b) {
-                scope.report.images_removed += 1;
-                out.replaced.push(name);
-                out.doomed.push(r);
-                return Some(None);
-            }
-            match image::clear(doc, s, &gs.ctm, scope.rects, &mut *scope.images) {
-                Ok(None) => None,
-                Ok(Some(new)) => {
-                    let nr = doc.add(Object::Stream(new));
-                    let n = fresh_name(scope, xobjects);
-                    xobjects.set(n.clone(), Object::Ref(nr));
-                    out.xobjects.push((n.clone(), nr));
-                    out.replaced.push(name);
-                    out.doomed.push(r);
-                    scope.report.images_cleared += 1;
-                    Some(Some(Op::new("Do", vec![Object::Name(n)])))
-                }
-                Err(()) => {
-                    scope.report.images_removed += 1;
-                    out.replaced.push(name);
-                    out.doomed.push(r);
-                    Some(None)
-                }
-            }
-        }
+        Some(b"Image") => image_xobject(doc, scope, r, name, gs, xobjects, out),
         Some(b"Form") => {
             // Read as the proof reads it, entries by reference included: read as the identity, a
             // form moved onto a mark would be tested against the wrong place and never walked.
@@ -1213,6 +1422,7 @@ fn xobject(
                 if scope.mode == Mode::Verify {
                     // Sanitization removes a Form it cannot enter, so the verification scan
                     // must count that conservative removal or it may decide to skip the pass.
+                    out.unread_form = !scope.everywhere();
                     if scope.everywhere() {
                         scope.layer_blocks += 1;
                     }
@@ -1257,6 +1467,7 @@ fn xobject(
                 Err(_) => {
                     // Apply drops an undecodable Form while sanitizing. Count it during Verify
                     // so a zero-count preflight cannot leave its potentially hidden bytes behind.
+                    out.unread_form = !scope.everywhere();
                     if scope.everywhere() {
                         scope.layer_blocks += 1;
                     }
@@ -1326,6 +1537,15 @@ fn xobject(
                     }
                 }
                 if let Err(error) = prune_form_resources(doc, &mut scope.budget, &mut cleaned_res, content) {
+                    out.error = Some(error);
+                    return None;
+                }
+                // Without /Resources of its own the form is given a copy of its caller's, which may
+                // list the state whose soft mask's group is this very form, or another original
+                // this walk replaced (#7884): the copy must not keep the original reachable.
+                let originals: HashSet<ObjRef> = inner.doomed.iter().copied().chain([r]).collect();
+                let states = Replaced { added: &inner.ext_gstates, names: &inner.replaced_gstates, originals: &originals };
+                if let Err(error) = install_ext_gstates(doc, &mut scope.budget, &mut cleaned_res, &states, content) {
                     out.error = Some(error);
                     return None;
                 }

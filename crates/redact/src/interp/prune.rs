@@ -309,7 +309,9 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         let names: Vec<Vec<u8>> = xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
         let properties = res_dict(doc, &res, b"Properties");
         let property_names: Vec<Vec<u8>> = properties.iter().filter(|(_, v)| retired_properties.contains(v)).map(|(n, _)| n.to_vec()).collect();
-        if names.is_empty() && property_names.is_empty() {
+        // A state whose soft mask's group was rewritten still reaches the original (#7884).
+        let masks = res_dict(doc, &res, b"ExtGState").iter().any(|(_, v)| masks_with(doc, v, &doomed));
+        if names.is_empty() && property_names.is_empty() && !masks {
             continue;
         }
         let mut contents = Vec::with_capacity(users.len());
@@ -336,6 +338,14 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
             res.set(b"XObject".to_vec(), Object::Dict(xo));
         }
         pruned |= prune_retired_properties(doc, &mut res, &property_names, &contents)?;
+        if masks {
+            let mut selected = HashSet::new();
+            for content in &contents {
+                // Each page's content with the allowance of a page, as for the properties above.
+                selected.extend(selected_states(doc, &mut DecodeBudget::page(), &res, content)?);
+            }
+            pruned |= drop_doomed_states(doc, &mut res, &doomed, &selected);
+        }
         if pruned {
             doc.update_dict(node, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
         }
@@ -381,8 +391,8 @@ fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], c
     Ok(pruned)
 }
 
-/// Unlink retired properties and `doomed` XObjects from the resources of the forms reachable from
-/// the page-tree `holders`, each unless the form's own content (or a form inheriting its
+/// Unlink retired properties, `doomed` XObjects and states masking with a doomed group from the
+/// resources of the forms (soft-mask groups included) reachable from the page-tree `holders`, each unless the form's own content (or a form inheriting its
 /// resources) still uses the name. Fails closed when that cannot be determined.
 fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<ObjRef>, retired: &[Object]) -> Result<(), CosError> {
     if retired.is_empty() && doomed.is_empty() {
@@ -394,8 +404,7 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
         .collect();
     let mut seen = HashSet::new();
     while let Some(resources) = pending.pop() {
-        for (_, value) in res_dict(doc, &resources, b"XObject").iter() {
-            let Some(reference) = value.as_ref() else { continue };
+        for reference in forms_in(doc, &resources) {
             if !seen.insert(reference) {
                 continue;
             }
@@ -404,7 +413,8 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
             }
             let object = doc.get(reference);
             let Object::Stream(form) = &*object else { continue };
-            if form.dict.name(b"Subtype") != Some(b"Form") {
+            // A tiling pattern's own /Resources can name a doomed group as a form's can.
+            if form.dict.name(b"Subtype") != Some(b"Form") && form.dict.int(b"PatternType") != Some(1) {
                 continue;
             }
             let Some(mut res) = form.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()) else { continue };
@@ -413,16 +423,24 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
             let mut xo = res_dict(doc, &res, b"XObject");
             let doomed_names: Vec<Vec<u8>> =
                 xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
-            if names.is_empty() && doomed_names.is_empty() {
+            // A state in the form's own resources whose soft mask's group was rewritten still
+            // reaches the original, as on a page (#7884).
+            let masks = res_dict(doc, &res, b"ExtGState").iter().any(|(_, v)| masks_with(doc, v, doomed));
+            if names.is_empty() && doomed_names.is_empty() && !masks {
                 pending.push(res);
                 continue;
             }
             let data = doc.with_direct_parms(form).decoded()?;
+            // A form whose content cannot be read may still select the state: fail closed.
+            let selected = if masks { selected_states(doc, &mut DecodeBudget::page(), &res, std::slice::from_ref(&data))? } else { HashSet::new() };
             let mut pruned = prune_doomed_xobjects(doc, std::slice::from_ref(&data), &mut xo, &doomed_names)?;
             if pruned {
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
             pruned |= prune_retired_properties(doc, &mut res, &names, &[vec![data]])?;
+            if masks {
+                pruned |= drop_doomed_states(doc, &mut res, doomed, &selected);
+            }
             if pruned {
                 doc.update_dict(reference, |d| d.set(b"Resources".to_vec(), Object::Dict(res.clone())))?;
             }
@@ -430,6 +448,17 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
         }
     }
     Ok(())
+}
+
+/// The forms a resource dictionary reaches: its XObjects, its patterns (the caller keeps the
+/// tiling ones), and the groups of the soft masks its graphics states keep (#7884). A doomed group
+/// is among them too: a state still selected elsewhere keeps it, and its own resources may name
+/// another doomed group.
+fn forms_in(doc: &Document, res: &Dict) -> Vec<ObjRef> {
+    let mut forms: Vec<ObjRef> = res_dict(doc, res, b"XObject").iter().filter_map(|(_, v)| v.as_ref()).collect();
+    forms.extend(res_dict(doc, res, b"Pattern").iter().filter_map(|(_, v)| v.as_ref()));
+    forms.extend(res_dict(doc, res, b"ExtGState").iter().filter_map(|(_, state)| soft_mask_group(doc, state)));
+    forms
 }
 
 fn prune_doomed_xobjects(doc: &Document, content: &[Vec<u8>], xo: &mut Dict, doomed_names: &[Vec<u8>]) -> Result<bool, CosError> {
@@ -489,12 +518,21 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
         return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully read the content that uses these resources".into() });
     }
     let xobjects = res_dict(doc, res, b"XObject");
+    let states = res_dict(doc, res, b"ExtGState");
     let mut seen = HashSet::new();
     let mut cursor = 0;
     while cursor < ops.len() {
         let op = &ops[cursor];
-        if op.is("Do")
-            && let Some(r) = op.last_name().and_then(|n| xobjects.get(n)).and_then(Object::as_ref)
+        // A form drawn with `Do`, or a soft mask's group selected with `gs` (#7884): either one
+        // without /Resources of its own uses these.
+        let drawn = if op.is("Do") {
+            op.last_name().and_then(|n| xobjects.get(n)).and_then(Object::as_ref)
+        } else if op.is("gs") {
+            op.last_name().and_then(|n| states.get(n)).and_then(|s| soft_mask_group(doc, s))
+        } else {
+            None
+        };
+        if let Some(r) = drawn
             && seen.insert(r)
             && let Object::Stream(s) = &*doc.get(r)
             && s.dict.name(b"Subtype") == Some(b"Form")
@@ -547,6 +585,44 @@ pub(super) fn prune_form_resources(doc: &Document, budget: &mut DecodeBudget, re
     }
     res.set(b"XObject".to_vec(), Object::Dict(xo));
     Ok(())
+}
+
+/// Drop from `res` the ExtGStates whose soft mask's group is one of `doomed`, an original a rewrite
+/// replaced, that the content drawing through `res` doesn't select. A full save keeps whatever is
+/// still listed, so the group's removed text would survive through such a state (#7884): one in a
+/// page-tree
+/// dictionary the rewritten page no longer inherits, or in the copy of its caller's resources a
+/// rewritten form without its own is given. A state still selected stays, as the same group shown
+/// outside a mark does. `selected` is what [`selected_states`] found. Returns whether any went.
+pub(crate) fn drop_doomed_states(doc: &Document, res: &mut Dict, doomed: &HashSet<ObjRef>, selected: &HashSet<Vec<u8>>) -> bool {
+    let mut states = res_dict(doc, res, b"ExtGState");
+    let names: Vec<Vec<u8>> = states.iter().filter(|(n, v)| !selected.contains(*n) && masks_with(doc, v, doomed)).map(|(n, _)| n.to_vec()).collect();
+    if names.is_empty() {
+        return false;
+    }
+    for name in &names {
+        states.remove(name);
+    }
+    res.set(b"ExtGState".to_vec(), Object::Dict(states));
+    true
+}
+
+/// The ExtGState names `content` (with the forms without resources of their own it draws, read
+/// within `budget`) selects with `gs`; an error when that can't all be read ([`resource_ops`]).
+pub(crate) fn selected_states(doc: &Document, budget: &mut DecodeBudget, res: &Dict, content: &[Vec<u8>]) -> Result<HashSet<Vec<u8>>, CosError> {
+    Ok(resource_ops(doc, budget, res, content)?.iter().filter(|op| op.is("gs")).filter_map(Op::last_name).map(<[u8]>::to_vec).collect())
+}
+
+/// Whether the ExtGState `state` has a soft mask whose group is one of `groups`.
+pub(crate) fn masks_with(doc: &Document, state: &Object, groups: &HashSet<ObjRef>) -> bool {
+    soft_mask_group(doc, state).is_some_and(|g| groups.contains(&g))
+}
+
+/// The group of the soft mask a graphics state sets, when it names one by reference.
+fn soft_mask_group(doc: &Document, state: &Object) -> Option<ObjRef> {
+    let state = doc.resolve(state);
+    let mask = doc.resolve(state.as_dict()?.get(b"SMask")?);
+    mask.as_dict()?.get(b"G")?.as_ref()
 }
 
 /// The font, writing direction and size an ExtGState's `/Font [font size]` entry sets, as `Tf`
