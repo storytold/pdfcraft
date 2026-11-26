@@ -1,7 +1,7 @@
 //! Preferences ▸ Reading colours: the app-wide preference (Acrobat's Replace Document Colors),
 //! how it survives a restart, and how documents open with it.
 
-use egui::accesskit::Role;
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_render::ReadingColors;
@@ -9,41 +9,7 @@ use pdfcraft_ui_egui::PdfCraftApp;
 
 /// One valid page (proper xref, so no repair banner covers the dialog): black text on white.
 fn pdf() -> Vec<u8> {
-    pdf_pages(1)
-}
-
-fn pdf_pages(count: usize) -> Vec<u8> {
-    let mut objs: Vec<Vec<u8>> = vec![
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
-        {
-            let body = b"BT /F1 14 Tf 20 150 Td (The quick brown fox) Tj ET";
-            format!("<< /Length {} >>\nstream\n{}\nendstream", body.len(), String::from_utf8_lossy(body)).into_bytes()
-        },
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
-    ];
-    let mut kids = vec!["3 0 R".to_owned()];
-    for _ in 1..count {
-        kids.push(format!("{} 0 R", objs.len() + 1));
-        objs.push(objs[2].clone());
-    }
-    objs[1] = format!("<< /Type /Pages /Kids [{}] /Count {count} >>", kids.join(" ")).into_bytes();
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
-        out.extend_from_slice(o);
-        out.extend_from_slice(b"\nendobj\n");
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    out
+    crate::support::fixtures::pdf_pages(1)
 }
 
 #[test]
@@ -59,106 +25,156 @@ fn pending_pages_use_document_reading_background() {
         (ReadingColors::GREEN_ON_BLACK, Color32::BLACK),
         (custom, Color32::from_rgb(0x18, 0x24, 0x30)),
     ] {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("pending.pdf", None, pdf_pages(3)).unwrap();
+        let (mut app, _jobs) = crate::control::app_with_manual_jobs();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_bytes(&egui::Context::default(), "pending.pdf", None, crate::support::fixtures::pdf_pages(3)).unwrap();
         let id = app.views[0].id;
         // Deliberately differ from the app preference: the document is the source of truth.
         app.session.set_reading_colors(id, colors);
+        // The page view runs on the framework's runtime, which knows its commands' scopes.
         let ctx = Context::default();
+        crate::support::install_runtime(&ctx);
         for page in 0..3 {
             app.views[0].go_to_page(page);
             // Draw the real canvas without finishing the render frame, so no texture can
             // race the assertion or hide the pending-page background.
-            let mut output =
-                ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 600.0))), ..Default::default() }, |ui| {
-                    pdfcraft_ui_egui::canvas::document_area(&mut app, 0, ui);
-                });
+            let mut raw = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 600.0))), ..Default::default() };
+            <PdfCraftApp as eframe::App>::raw_input_hook(&mut app, &ctx, &mut raw);
+            let mut textures = usize::MAX;
+            let mut output = ctx.run_ui(raw, |ui| {
+                let rect = ui.max_rect();
+                textures = pdfcraft_ui_egui::canvas::document_area_at(&mut app, 0, rect, ui).expect("the page view runs").textures.entries;
+            });
             output.textures_delta.clear();
             let view = &app.views[0];
-            assert_eq!(view.raster_memory().page_count, 0, "the page must still be waiting for its raster");
+            assert_eq!(textures, 0, "the page must still be waiting for its picture");
             let rect = view.page_screen_rect(page).expect("target page visible");
-            let fill = output.shapes.iter().find_map(|s| match &s.shape {
-                Shape::Rect(r) if r.rect == rect && r.stroke.width == 0.0 => Some(r.fill),
-                _ => None,
-            });
+            fn find_fill(shape: &Shape, rect: Rect) -> Option<Color32> {
+                match shape {
+                    Shape::Rect(r) if r.rect == rect && r.stroke.width == 0.0 => Some(r.fill),
+                    Shape::Mesh(mesh) if !mesh.vertices.is_empty() => {
+                        let bounds = mesh.calc_bounds();
+                        let matches = (bounds.min.x - rect.min.x).abs() <= 2.0
+                            && (bounds.min.y - rect.min.y).abs() <= 2.0
+                            && (bounds.max.x - rect.max.x).abs() <= 2.0
+                            && (bounds.max.y - rect.max.y).abs() <= 2.0;
+                        matches.then(|| mesh.vertices.iter().find(|v| v.color.a() == 255).map(|v| v.color)).flatten()
+                    }
+                    Shape::Vec(shapes) => shapes.iter().find_map(|child| find_fill(child, rect)),
+                    _ => None,
+                }
+            }
+            let fill = output.shapes.iter().find_map(|s| find_fill(&s.shape, rect));
             assert_eq!(fill, Some(expected), "page {page}, reading mode {}", colors.mode_name());
         }
     }
 }
 
-/// A small PNG for the Create ▸ Images path, which opens the document it builds.
-fn png() -> Vec<u8> {
-    let mut out = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut out, 8, 4);
-        enc.set_color(png::ColorType::Rgb);
-        enc.set_depth(png::BitDepth::Eight);
-        let mut w = enc.write_header().unwrap();
-        w.write_image_data(&[120u8; 8 * 4 * 3]).unwrap();
-    }
-    out
+/// Picks `option` in the Appearance page's Reading colours row, a select whose options show once it is opened.
+fn pick_reading_colours(h: &mut Harness<'static, PdfCraftApp>, option: &str) {
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Reading colours").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Reading colours").click();
+    h.run_steps(3);
+    h.get_all_by_label(option).last().unwrap_or_else(|| panic!("the {option:?} option is on screen")).click();
+    h.run_steps(3);
 }
 
-/// The Reading colours combo of the preferences dialog: it shows the chosen mode as its value,
-/// and no other combo in the dialog shows `Off` while the setting is off.
-fn combo(h: &mut Harness<'static, PdfCraftApp>) {
-    // The preferences dialog grew taller than the window, which leaves this combo below the
-    // fold where a click lands outside the dialog and dismisses it; scroll it into view and
-    // let the scroll settle before clicking.
-    h.get_by(|n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v == "Off")).scroll_to_me();
-    h.run_steps(4);
-    h.get_by(|n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v == "Off")).click();
+/// A small PNG for the Create ▸ Images path, which opens the document it builds.
+fn png() -> Vec<u8> {
+    let img = craft_image_codecs::Image::from_u8(8, 4, craft_image_codecs::ChannelLayout::Rgb, vec![120u8; 8 * 4 * 3]).unwrap();
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
 }
 
 #[test]
 fn reading_colours_preference_round_trips() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, pdf()).expect("opens");
-        app.set_option("dialog", "preferences").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf()).expect("opens");
+            app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert_eq!(h.state().reading_colors, ReadingColors::default());
-    // Switch the preset to white-on-black in the dialog's Reading colours combo. The open
-    // document keeps repainting, so run a fixed number of steps and let the popup settle.
-    combo(&mut h);
-    h.run_steps(20);
-    h.get_by_label("White on black").click();
-    h.run_steps(2);
+    pick_reading_colours(&mut h, "White on black");
+    assert_eq!(h.state().reading_colors, ReadingColors::WHITE_ON_BLACK, "the row applies immediately");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
     assert_eq!(h.state().reading_colors, ReadingColors::WHITE_ON_BLACK);
     // The preference is app-wide: the already open document follows it too.
     let id = h.state().views[0].id;
     assert_eq!(h.state().session.reading_colors(id), Some(ReadingColors::WHITE_ON_BLACK));
     // Closing the dialog keeps everything.
-    h.state_mut().set_option("dialog", "none").unwrap();
+    h.set_option("dialog", "none").unwrap();
     h.run_steps(1);
 
     // The choice survives a restart through the same path the settings file uses.
-    let mut restored = PdfCraftApp::new();
-    restored.restore(&h.state().persist());
+    let mut restored = crate::control::new_app();
+    restored.apply_settings(&h.state().settings_snapshot());
     assert_eq!(restored.reading_colors, ReadingColors::WHITE_ON_BLACK);
     // A settings file without the field keeps Off.
-    let mut fresh = PdfCraftApp::new();
-    fresh.restore(r#"{"theme": "dark"}"#);
+    let restore = |app: &mut PdfCraftApp, json: &str| app.apply_settings(&pdfcraft_ui_egui::settings::import_json(json).0);
+    let mut fresh = crate::control::new_app();
+    restore(&mut fresh, r#"{"theme": "dark"}"#);
     assert_eq!(fresh.reading_colors, ReadingColors::default());
-    // A corrupt value fails to deserialize and falls back to Off instead of panicking.
-    fresh.restore(r#"{"reading_colors": {"params": {"text": "zzz", "background": [0, 0, 0], "only_black": false, "line_art": true}}}"#);
+    // A corrupt value falls back to Off instead of panicking.
+    restore(&mut fresh, r#"{"reading_colors": {"params": {"text": "zzz", "background": [0, 0, 0], "only_black": false, "line_art": true}}}"#);
     assert_eq!(fresh.reading_colors, ReadingColors::default());
-    fresh.restore(r#"{"reading_colors": 7}"#);
+    restore(&mut fresh, r#"{"reading_colors": 7}"#);
     assert_eq!(fresh.reading_colors, ReadingColors::default());
 }
 
 #[test]
+fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
+            app
+        }
+    });
+    h.run_steps(6);
+    // The document's own colours: the row starts on Off.
+    let row = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Reading colours");
+    assert_eq!(row.value().as_deref(), Some("Off"));
+    let theme = h.state().theme_preference;
+    for (label, expected) in [
+        ("White on black", ReadingColors::WHITE_ON_BLACK),
+        ("Yellow on black", ReadingColors::YELLOW_ON_BLACK),
+        ("Green on black", ReadingColors::GREEN_ON_BLACK),
+        ("Black on white", ReadingColors::BLACK_ON_WHITE),
+        ("Off", ReadingColors::default()),
+    ] {
+        pick_reading_colours(&mut h, label);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert_eq!(h.state().reading_colors, expected);
+        assert_eq!(h.state().theme_preference, theme);
+        h.state_mut().open_preferences();
+        h.run_steps(4);
+    }
+    if let Ok(path) = std::env::var("PDFCRAFT_READING_SHOT") {
+        h.render().unwrap().save(path).unwrap();
+    }
+}
+
+#[test]
 fn reading_colours_seed_on_open() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.reading_colors = ReadingColors::WHITE_ON_BLACK;
-        app.open_bytes("doc.pdf", None, pdf()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.reading_colors = ReadingColors::WHITE_ON_BLACK;
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     // The document opened with the preference already applied.
@@ -189,7 +205,7 @@ fn reading_colours_seed_on_open() {
     assert_eq!(h.state().session.reading_colors(signed), Some(ReadingColors::YELLOW_ON_BLACK));
 
     // Created documents open through their own session calls too — a comment summary via
-    // `open_created`, an image import via `open_created_bytes` — and seed the same way.
+    // `open_created`, an image import via `open_new_document` — and seed the same way.
     h.state_mut().summarize_comments();
     let summary = h.state().views.last().unwrap().id;
     assert_ne!(summary, signed);

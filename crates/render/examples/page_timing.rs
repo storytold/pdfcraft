@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     let threads: usize = match args.get(4) {
         Some(s) => s.parse::<usize>()?.max(1),
-        None => std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(2, 8) - 1,
+        None => std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get).clamp(2, 8) - 1,
     };
 
     let bytes = Arc::new(std::fs::read(path)?);
