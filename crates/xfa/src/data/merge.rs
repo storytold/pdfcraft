@@ -323,6 +323,27 @@ pub(super) fn recover_names(text: &str, within: Within, paths: &[(&DataPath, &[S
     }
 }
 
+/// The ASCII writer's spelling. A normalized path alone cannot tell whether the
+/// underscore before a leading non-ASCII continuation character was in the SOM.
+pub(super) fn legacy_name(name: &str, raw: Option<&String>) -> Option<String> {
+    if name.is_ascii() {
+        return None;
+    }
+    if raw.is_none()
+        && let Some(tail) = name.strip_prefix('_')
+        && tail.starts_with(|c: char| !c.is_ascii())
+        && xml_name(tail) == name
+    {
+        return None;
+    }
+    let raw = raw.map_or(name, String::as_str);
+    let mut old: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.') { c } else { '_' }).collect();
+    if !old.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+        old.insert(0, '_');
+    }
+    Some(old)
+}
+
 fn rename_legacy(src: &str, root: crate::xml::Node, paths: &[(&DataPath, &[String])], edits: &mut Vec<Edit>) {
     type Children = HashMap<String, Vec<crate::xml::NodeId>>;
     let mut index: HashMap<crate::xml::NodeId, Children> = HashMap::new();
@@ -340,37 +361,43 @@ fn rename_legacy(src: &str, root: crate::xml::Node, paths: &[(&DataPath, &[Strin
                 }
                 by
             });
-            let actual = if children.contains_key(name) {
-                name.clone()
-            } else if !name.is_ascii() {
-                // The new writer prefixes certain leading characters with '_'. Use the
-                // original SOM spelling when available before applying the old writer's rule.
-                let raw = raw_names.get(depth).unwrap_or(name);
-                let mut old: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.') { c } else { '_' }).collect();
-                if !old.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
-                    old.insert(0, '_');
-                }
-                old
-            } else {
-                break;
-            };
-            let Some(siblings) = children.get(&actual) else { break };
-            // A lossy spelling shared by multiple requested fields is ambiguous. Leave
-            // the original packet intact instead of assigning another field's data.
-            let claim = claims.entry((parent, actual)).or_insert(name);
-            if *claim != name {
+            let current = children.get(name);
+            if current.is_some() && claims.entry((parent, name.clone())).or_insert((name, 0)).0 != name {
                 return;
             }
-            let Some(child) = siblings.get(*idx) else { break };
+            let mut child = current.and_then(|group| group.get(*idx));
+            if let Some(old) = legacy_name(name, raw_names.get(depth))
+                && let Some(group) = children.get(&old)
+            {
+                let (owner, rename_count) = claims.entry((parent, old)).or_insert((name, 0));
+                if *owner != name {
+                    return;
+                }
+                let have = current.map_or(0, Vec::len);
+                if have == 0 {
+                    *rename_count = group.len();
+                    child = group.get(*idx);
+                } else if let Some(extra) = idx.checked_sub(have)
+                    && let Some(tail) = group.get(extra)
+                    && let (Some(last), Some(first)) =
+                        (current.and_then(|v| v.last()).and_then(|id| tree.get_node(*id)), group.first().and_then(|id| tree.get_node(*id)))
+                    && last.range().start < first.range().start
+                {
+                    // The old writer appended missing occurrences after the preallocated
+                    // Unicode siblings. Only claim the prefix needed for this index.
+                    *rename_count = (*rename_count).max(extra + 1);
+                    child = Some(tail);
+                }
+            }
+            let Some(child) = child else { break };
             parent = *child;
         }
     }
-    for ((parent, old), new) in claims {
-        if old == *new {
+    for ((parent, old), (new, count)) in claims {
+        if count == 0 {
             continue;
         }
-        // Rename the whole same-name sibling group to preserve occurrence indices.
-        for id in &index[&parent][&old] {
+        for id in index[&parent][&old].iter().take(count) {
             let Some(node) = tree.get_node(*id) else { continue };
             let range = node.range();
             let Some(qualified) = qname(src, &range) else { continue };

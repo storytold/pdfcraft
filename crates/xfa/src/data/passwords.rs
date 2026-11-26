@@ -1,6 +1,6 @@
 use super::import::datasets_packet;
-use super::merge::Op;
-use super::path::{data_path, parse_datasets_packet};
+use super::merge::{Op, legacy_name};
+use super::path::parse_datasets_packet;
 use super::values::{Want, path_of, text_of, with_template};
 use super::write::{datasets_stream_ref, rewrite};
 use super::{DataNode, DataPath, Document, MAX_DEPTH, Node, ObjRef, Object, SomIndices, Template, Ui, XfaError};
@@ -92,6 +92,44 @@ fn acro_password_fields(doc: &Document) -> Option<Vec<(String, String)>> {
     (!incomplete).then_some(w.out)
 }
 
+/// Counts current siblings and the old writer's appended legacy group, when the
+/// latter follows every current sibling in document order.
+fn sibling_counts(parent: &DataNode, name: &str, old: &str) -> (usize, usize) {
+    let (mut current, mut legacy, mut interleaved) = (0, 0, false);
+    for child in &parent.children {
+        if child.name == name {
+            current += 1;
+            interleaved |= legacy > 0;
+        } else if child.name == old {
+            legacy += 1;
+        }
+    }
+    (current, if interleaved { 0 } else { legacy })
+}
+
+/// Resolve a bound path against the stored sibling groups. As in the writer,
+/// a current spelling takes precedence over its legacy spelling at each level.
+fn stored_path<'a>(data: &DataNode, path: &'a DataPath, raw_names: &[String]) -> std::borrow::Cow<'a, DataPath> {
+    if raw_names.is_empty() {
+        return std::borrow::Cow::Borrowed(path);
+    }
+    let mut stored = path.clone();
+    let mut parent = data;
+    for (depth, (name, index)) in stored.iter_mut().enumerate() {
+        if let Some(old) = legacy_name(name, raw_names.get(depth))
+            && let (current, legacy) = sibling_counts(parent, name, &old)
+            && let Some(extra) = index.checked_sub(current)
+            && extra < legacy
+        {
+            *name = old;
+            *index = extra;
+        }
+        let Some(child) = parent.children.iter().filter(|c| c.name == *name).nth(*index) else { break };
+        parent = child;
+    }
+    std::borrow::Cow::Owned(stored)
+}
+
 /// The `Want` entries needed to restore password fields in `doc`'s datasets packet to their
 /// defaults (or empty when they have no default).
 ///
@@ -145,7 +183,22 @@ fn password_dataset_wants(doc: &Document) -> Result<Vec<Want>, XfaError> {
                         match n {
                             Node::Subform(sf) => {
                                 let from_data = match &sf.common.name {
-                                    Some(name) if sf.occur.max != Some(1) => self.data.count(&data_path(self.tpl, parent_som), name),
+                                    Some(name) if sf.occur.max != Some(1) => {
+                                        let som = Self::child_som(parent_som, Some(name), sib);
+                                        let (path, raw_names) = path_of(Some(self.tpl), &som);
+                                        let stored = stored_path(self.data, &path, &raw_names);
+                                        stored.split_last().map_or(0, |((stored_name, _), parent)| {
+                                            if let Some((name, _)) = path.last()
+                                                && let Some(old) = legacy_name(name, raw_names.last())
+                                                && let Some(node) = self.data.get(parent)
+                                            {
+                                                let (current, legacy) = sibling_counts(node, name, &old);
+                                                current + legacy
+                                            } else {
+                                                self.data.count(parent, stored_name)
+                                            }
+                                        })
+                                    }
                                     _ => 0,
                                 };
                                 let instances = crate::layout::instance_count(&sf.occur, from_data).max(from_data);
@@ -196,7 +249,7 @@ fn password_dataset_wants(doc: &Document) -> Result<Vec<Want>, XfaError> {
         candidates
             .into_iter()
             .filter_map(|(som, path, raw_names, default)| {
-                let cur = data.value_at(&path)?;
+                let cur = data.value_at(&stored_path(&data, &path, &raw_names))?;
                 (!cur.is_empty() && cur != default).then_some(Want { som, path, raw_names, text: default, ensure: false })
             })
             .collect()

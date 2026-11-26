@@ -1875,6 +1875,70 @@ fn legacy_names_follow_each_bound_som_segment() {
 }
 
 #[test]
+fn legacy_password_values_are_detected_and_cleared_in_repeated_rows() {
+    let xml = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+    <subform name="form"><subform name="Grüppe"><occur min="1" max="-1"/><field name="Straße"><ui><passwordEdit/></ui></field></subform></subform>
+    </template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form>
+    <Gr_ppe><Stra_e/></Gr_ppe><Gr_ppe><Stra_e>typed-fixture</Stra_e><other>keep</other></Gr_ppe>
+    </form></xfa:data></xfa:datasets></xdp:xdp>"#;
+    for first_row in ["<Gr_ppe><Stra_e/></Gr_ppe>", "<Grüppe><Straße/></Grüppe>"] {
+        let packet_xml = xml.replacen("<Gr_ppe><Stra_e/></Gr_ppe>", first_row, 1);
+        let mut doc = Document::open(Arc::new(shell(&packet_xml))).unwrap();
+        assert!(has_password_values(&doc));
+        assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+        let reopened = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert!(!has_password_values(&reopened));
+        let packet = read_packets(&reopened).unwrap().unwrap().xdp;
+        assert!(!packet.contains("typed-fixture"));
+        assert!(packet.contains("<other>keep</other>"));
+    }
+}
+
+#[test]
+fn legacy_path_only_writes_leave_ambiguous_siblings_alone() {
+    use crate::data::{DataOp, write_data_ops};
+    for mark in ['\u{301}', '·', '‿', '⁀'] {
+        for picture in [false, true] {
+            let xml = fields_template("<form><_a>first</_a><__a>second</__a><Stra_e>old</Stra_e></form>");
+            let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+            for field in [format!("{mark}a"), "Straße".into()] {
+                let path = som_to_path(&format!("form[0].{field}[0]"));
+                if picture {
+                    write_data_image(&mut doc, &path, "image/gif", TINY_GIF, None).unwrap();
+                } else {
+                    write_data_ops(&mut doc, &[DataOp::Value { path, text: "updated".into() }], None).unwrap();
+                }
+            }
+            let packet = read_packets(&doc).unwrap().unwrap().xdp;
+            assert!(packet.contains("<_a>first</_a><__a>second</__a>"));
+            assert!(packet.contains(&format!("<_{mark}a")));
+            assert!(packet.contains("<Straße") && !packet.contains("<Stra_e>"));
+        }
+    }
+}
+
+/// The Erlangen benefits form preallocates four data siblings for five field
+/// occurrences. The old writer appended the fifth using its ASCII spelling.
+#[test]
+fn legacy_tail_after_four_unicode_siblings_keeps_its_occurrence() {
+    let name = "Nichtselbständig";
+    let siblings = (0..4).map(|i| format!("<{name}>{i}</{name}>")).collect::<String>();
+    let xml =
+        fields_template(&format!("<form><eFormular_Seite4>{siblings}<Nichtselbst_ndig keep='yes'>24</Nichtselbst_ndig></eFormular_Seite4></form>"));
+    let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+    let mut fields = static_fields("", false);
+    fields.truncate(1);
+    fields[0].name = format!("form[0].eFormular_Seite4[0].{name}[4]");
+    assert_eq!(read_values(&doc, &fields), vec![(fields[0].name.clone(), FieldData::Text("24".into()))]);
+    fields[0].data = FieldData::Text("25".into());
+    write_datasets(&mut doc, &fields).unwrap();
+    let packet = read_packets(&doc).unwrap().unwrap().xdp;
+    assert!(!packet.contains("Nichtselbst_ndig"));
+    assert_eq!(packet.matches(&format!("<{name}")).count(), 5);
+    assert!(packet.contains(&format!("{siblings}<{name} keep='yes'>25</{name}>")));
+}
+
+#[test]
 fn legacy_unicode_picture_renames_the_existing_indexed_nodes() {
     let xml = fields_template("<form><Gr_ppe><Foto_Stra_e>first</Foto_Stra_e><Foto_Stra_e/></Gr_ppe></form>");
     let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
