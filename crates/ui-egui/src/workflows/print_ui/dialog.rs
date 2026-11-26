@@ -286,7 +286,8 @@ impl PdfCraftApp {
         let d = &self.print_draft;
         let new_fields = body::fields_from_draft(d);
         let sections = body::build(d, &sizes, self.units, d.area.is_some(), no_printers);
-        let (duplex, booklet) = (duplex_to_ui(d.duplex), d.handling == Handling::Booklet);
+        // A booklet decides two-sided itself, and each pass of a manual two-sided print is one-sided: the row is left out.
+        let (duplex, by_layout) = (duplex_to_ui(d.duplex), d.handling == Handling::Booklet || d.manual().is_some());
 
         let Some(dialog) = self.dialogs.get_mut::<HostedPrint>() else { return };
         let rows = dialog.fields_mut();
@@ -300,7 +301,7 @@ impl PdfCraftApp {
         dialog.set_sections(sections);
         dialog.set_sheet(sheet);
         dialog.set_preview_pager(pager);
-        dialog.set_duplex_by_layout(booklet);
+        dialog.set_duplex_by_layout(by_layout);
         dialog.set_settings_valid(settings_valid);
 
         if ok.is_some() {

@@ -93,6 +93,7 @@ fn results(app: &mut PdfCraftApp, ctx: &egui::Context) {
     app.link_props_pass(ctx);
     // Print and OCR.
     app.print_pass(ctx);
+    app.second_side_pass(ctx);
     app.recognize_text_pass(ctx);
     app.enhance_scan_pass(ctx);
     // Workflows.

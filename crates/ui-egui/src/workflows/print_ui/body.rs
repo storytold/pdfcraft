@@ -45,6 +45,8 @@ const CONTENT: [(Content, &str); 4] = [
     (Content::DocumentAndStamps, "document_and_stamps"),
     (Content::FormFieldsOnly, "form_fields_only"),
 ];
+const FLIP: [(print::manual_duplex::Flip, &str); 2] =
+    [(print::manual_duplex::Flip::LongEdge, "long_edge"), (print::manual_duplex::Flip::ShortEdge, "short_edge")];
 /// The pages-per-sheet counts the dialog offers.
 const PER_SHEET: [usize; 5] = [2, 4, 6, 9, 16];
 /// The id of the typed columns by rows grid among the pages-per-sheet choices.
@@ -247,6 +249,26 @@ fn paper_section(d: &PrintDraft, sizes: &[(f64, f64)], units: Unit, no_printers:
             "note.duplex",
             tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…"),
         ));
+    }
+    // #2860: for a printer that prints one side, the fronts first, then the backs once the stack is turned over. Only
+    // to a printer, and not for a booklet, which has its own front and back choices.
+    if has_printer && d.handling != Handling::Booklet {
+        params.push(check("manual_duplex", lbl(tl!("Manual two-sided")), d.manual_duplex));
+        let flip = options(
+            &FLIP,
+            vec![
+                (print::manual_duplex::Flip::LongEdge, lbl(tl!("Flip on long edge"))),
+                (print::manual_duplex::Flip::ShortEdge, lbl(tl!("Flip on short edge"))),
+            ],
+        );
+        params.push(choice("manual_flip", row_label(tl!("Two-sided:")), flip, id_of(&FLIP, d.manual_flip)).visible_when("manual_duplex", true));
+        params.push(
+            check("manual_reverse", lbl(tl!("Second side in reverse order")), d.manual_reverse)
+                .tooltip(lbl(tl!(
+                    "Usually needed when the printed sheets go back in printed side up without being turned over, as on most printers with a front tray. Leave it off if you turn the stack over."
+                )))
+                .visible_when("manual_duplex", true),
+        );
     }
     if let Some(e) = &d.driver_error {
         params.push(note("note.error", crate::i18n::fmt(tl!("Couldn't open the printer's preferences: {e}"), &[("e", e)])));
@@ -464,6 +486,9 @@ pub(super) fn fields_from_draft(d: &PrintDraft) -> DialogFields {
     f.set("label_flip", d.label_flip);
     f.set("orientation", id_of(&ORIENTATION, d.orientation));
     f.set("content", id_of(&CONTENT, d.content));
+    f.set("manual_duplex", d.manual_duplex);
+    f.set("manual_flip", id_of(&FLIP, d.manual_flip));
+    f.set("manual_reverse", d.manual_reverse);
     f.set("as_image", d.as_image);
     f.set("dpi", (d.dpi.round() as u32).to_string());
     f.set("paper", d.paper_name());
@@ -626,6 +651,21 @@ pub(super) fn draft_from_fields(d: &mut PrintDraft, f: &DialogFields, edited: &[
         && let Some(v) = text("content").and_then(|t| value_of(&CONTENT, t))
     {
         d.content = v;
+    }
+    if on("manual_duplex")
+        && let Some(v) = f.bool("manual_duplex")
+    {
+        d.manual_duplex = v;
+    }
+    if on("manual_flip")
+        && let Some(v) = text("manual_flip").and_then(|t| value_of(&FLIP, t))
+    {
+        d.manual_flip = v;
+    }
+    if on("manual_reverse")
+        && let Some(v) = f.bool("manual_reverse")
+    {
+        d.manual_reverse = v;
     }
     if on("as_image")
         && let Some(v) = f.bool("as_image")
