@@ -191,7 +191,7 @@ fn figures_stop_at_a_form_drawing_itself_and_reach_nested_forms() {
             d.set(b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
             d
         },
-        b"/Figure <</MCID 3>> BDC 0 0 10 10 re f EMC",
+        b"/Figure <</MCID 3>> BDC -5 -5 20 20 re f EMC",
     )));
     let mut form = match &*doc.get(FORM_OBJ) {
         Object::Stream(s) => s.dict.clone(),
@@ -392,6 +392,9 @@ fn stm_in_an_indirect_k_array_follows_a_replaced_page_stream_only_on_its_page() 
     let (page, _) = marks(&doc);
     assert_eq!(page, [("Artifact".into(), None), ("Artifact".into(), None)], "the visible paragraph on page 10 became an artifact");
     // Page 30 still draws the original stream 11, and its indirect /K array still names 11 0 R.
+    assert_eq!(doc.get(ObjRef::new(30, 0)).as_dict().and_then(|d| d.reference(b"Contents")), Some(ObjRef::new(11, 0)));
+    let k_32 = doc.get(ObjRef::new(32, 0)).as_array().cloned().expect("indirect /K array");
+    assert_eq!(k_32[0].as_dict().and_then(|d| d.reference(b"Stm")), Some(ObjRef::new(11, 0)));
     assert_eq!(tag_content(&doc, ObjRef::new(31, 0)).expect("page 30 content")[0].stream, ContentSource::Page);
     let page_30 = decoded(&doc, &Object::Ref(ObjRef::new(11, 0)));
     assert!(String::from_utf8_lossy(&page_30).contains("/P <</MCID 1>> BDC"));
@@ -403,10 +406,10 @@ fn stm_in_an_indirect_k_array_follows_a_replaced_page_stream_only_on_its_page() 
 #[test]
 fn mcr_pg_supplies_the_page_for_form_bounds_and_page_named_properties() {
     let form = "/Figure /Pr0 BDC 0 0 1 rg 0 0 60 60 re f EMC";
-    let make = || {
+    let make = |el_pg: &str| {
         build(&[
             (1, "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 3 0 R /MarkInfo << /Marked true >> >>".into()),
-            (2, "<< /Type /Pages /Kids [10 0 R] /Count 1 >>".into()),
+            (2, "<< /Type /Pages /Kids [10 0 R 30 0 R] /Count 2 >>".into()),
             (3, "<< /Type /StructTreeRoot /K 4 0 R /ParentTree 5 0 R >>".into()),
             (4, "<< /Type /StructElem /S /Document /P 3 0 R /K [20 0 R 21 0 R 22 0 R] >>".into()),
             (5, "<< /Nums [0 [20 0 R 21 0 R] 1 [22 0 R]] >>".into()),
@@ -421,18 +424,93 @@ fn mcr_pg_supplies_the_page_for_form_bounds_and_page_named_properties() {
             (12, format!("<< /Type /XObject /Subtype /Form /BBox [0 0 60 60] /StructParents 1 /Length {} >>\nstream\n{form}\nendstream", form.len())),
             (20, "<< /Type /StructElem /S /Figure /P 4 0 R /Pg 10 0 R /K 0 /Alt (Page figure) >>".into()),
             (21, "<< /Type /StructElem /S /P /P 4 0 R /Pg 10 0 R /K 1 >>".into()),
-            // No `/Pg` on the element itself: only the MCR names page 10.
-            (22, "<< /Type /StructElem /S /Figure /P 4 0 R /K << /Type /MCR /Pg 10 0 R /Stm 12 0 R /MCID 0 >> /Alt (Form figure) >>".into()),
+            (22, format!("<< /Type /StructElem /S /Figure /P 4 0 R {el_pg}/K << /Type /MCR /Pg 10 0 R /Stm 12 0 R /MCID 0 >> /Alt (Form figure) >>")),
+            (30, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".into()),
         ])
     };
-    let mut doc = make();
-    let form_fig = figures(&doc).into_iter().find(|f| f.obj == FORM_FIGURE).expect("form figure");
-    assert_eq!(form_fig.page, Some(0));
-    assert_eq!(form_fig.bbox, Some([300.0, 600.0, 360.0, 660.0]));
-    mark_tag_artifact(&mut doc, FORM_FIGURE).expect("artifact via MCR /Pg");
-    assert_the_form_entry_was_cleared(&doc);
+    for el_pg in ["", "/Pg 30 0 R "] {
+        let mut doc = make(el_pg);
+        let form_fig = figures(&doc).into_iter().find(|f| f.obj == FORM_FIGURE).expect("form figure");
+        assert_eq!(form_fig.page, Some(0), "el_pg: {el_pg}");
+        assert_eq!(form_fig.bbox, Some([300.0, 600.0, 360.0, 660.0]), "el_pg: {el_pg}");
+        mark_tag_artifact(&mut doc, FORM_FIGURE).expect("artifact via MCR /Pg");
+        assert_the_form_entry_was_cleared(&doc);
 
-    let mut doc = make();
-    mark_decorative(&mut doc, FORM_FIGURE).expect("decorative via MCR /Pg");
-    assert_the_form_entry_was_cleared(&doc);
+        let mut doc = make(el_pg);
+        mark_decorative(&mut doc, FORM_FIGURE).expect("decorative via MCR /Pg");
+        assert_the_form_entry_was_cleared(&doc);
+    }
+}
+
+/// When a tag spans multiple pages and a later page is missing the requested MCID or has a damaged
+/// stream, neither `mark_tag_artifact` nor `mark_decorative` modifies earlier pages.
+#[test]
+fn multi_page_failure_leaves_earlier_pages_untouched() {
+    let make = |second_stream: Stream| {
+        let mut doc = build(&[
+            (1, "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 3 0 R /MarkInfo << /Marked true >> >>".into()),
+            (2, "<< /Type /Pages /Kids [10 0 R 30 0 R] /Count 2 >>".into()),
+            (3, "<< /Type /StructTreeRoot /K 4 0 R /ParentTree 5 0 R >>".into()),
+            (4, "<< /Type /StructElem /S /Document /P 3 0 R /K [20 0 R] >>".into()),
+            (5, "<< /Nums [0 [20 0 R] 1 [20 0 R]] >>".into()),
+            (10, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 11 0 R /StructParents 0 >>".into()),
+            (11, format!("<< /Length {} >>\nstream\n{PAGE}\nendstream", PAGE.len())),
+            (
+                20,
+                "<< /Type /StructElem /S /Figure /P 4 0 R /Pg 10 0 R \
+                 /K [0 << /Type /MCR /Pg 30 0 R /MCID 0 >>] /Alt (Two-page figure) >>"
+                    .into(),
+            ),
+            (30, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 31 0 R /StructParents 1 >>".into()),
+            (31, "<< /Length 0 >>\nstream\n\nendstream".into()),
+        ]);
+        doc.set(ObjRef::new(31, 0), Object::Stream(second_stream));
+        doc
+    };
+
+    // Missing MCID on page 30: mark_tag_artifact fails with ContentNotFound and leaves page 10 untouched.
+    let mut missing = make(Stream::from_raw(pdfcraft_cos::Dict::new(), b"0 0 10 10 re f".to_vec()));
+    let before_pt = parent_tree(&missing);
+    assert_eq!(mark_tag_artifact(&mut missing, PAGE_FIGURE), Err(pdfcraft_a11y::ArtifactError::ContentNotFound));
+    assert_eq!(missing.get(ObjRef::new(10, 0)).as_dict().and_then(|d| d.reference(b"Contents")), Some(ObjRef::new(11, 0)));
+    assert_eq!(parent_tree(&missing), before_pt);
+
+    // Damaged stream on page 30: both mark_tag_artifact and mark_decorative fail with Damaged and leave page 10 untouched.
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    let mut damaged = make(Stream::from_raw(dict, b"not valid zlib".to_vec()));
+    assert_eq!(mark_tag_artifact(&mut damaged, PAGE_FIGURE), Err(pdfcraft_a11y::ArtifactError::Damaged));
+    assert_eq!(mark_decorative(&mut damaged, PAGE_FIGURE), Err(pdfcraft_a11y::AltError::Damaged));
+    assert_eq!(damaged.get(ObjRef::new(10, 0)).as_dict().and_then(|d| d.reference(b"Contents")), Some(ObjRef::new(11, 0)));
+    assert_eq!(parent_tree(&damaged), before_pt);
+}
+
+/// Removing a child tag from a parent whose `/K` also holds a direct MCR on the same page keeps
+/// the remapped `/Stm` on that surviving MCR after the page stream is replaced.
+#[test]
+fn removing_a_child_tag_preserves_remapped_stm_on_parent_direct_mcr() {
+    let mut doc = fixture(FORM, "<< /Type /MCR /MCID 0 /Stm 12 0 R >>", "[22 0 R]");
+    let parent = ObjRef::new(21, 0);
+    // Element 21 (/P) owns both child tag 20 (/Figure, MCID 0 on page 10) and a direct MCR for
+    // MCID 1 naming page 10's content stream 11 0 R.
+    doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"K".to_vec(), Object::Array(vec![Object::Ref(parent), Object::Ref(FORM_FIGURE)]))).unwrap();
+    doc.update_dict(PAGE_FIGURE, |d| d.set(b"P".to_vec(), Object::Ref(parent))).unwrap();
+    doc.update_dict(parent, |d| {
+        let mut mcr = pdfcraft_cos::Dict::new();
+        mcr.set(b"Type".to_vec(), Object::name("MCR"));
+        mcr.set(b"MCID".to_vec(), Object::Int(1));
+        mcr.set(b"Stm".to_vec(), Object::Ref(ObjRef::new(11, 0)));
+        d.set(b"K".to_vec(), Object::Array(vec![Object::Ref(PAGE_FIGURE), Object::Dict(mcr)]));
+    })
+    .unwrap();
+    mark_tag_artifact(&mut doc, PAGE_FIGURE).expect("child figure artifact");
+    let new_contents = doc.get(ObjRef::new(10, 0)).as_dict().and_then(|d| d.reference(b"Contents")).expect("new page contents");
+    assert_ne!(new_contents, ObjRef::new(11, 0));
+    let k = doc.get(parent).as_dict().and_then(|d| d.get(b"K")).and_then(Object::as_array).cloned().expect("parent /K");
+    assert_eq!(k.len(), 1);
+    assert_eq!(k[0].as_dict().and_then(|d| d.reference(b"Stm")), Some(new_contents), "surviving direct MCR keeps the remapped /Stm");
+    assert_eq!(tag_content(&doc, parent).expect("parent content")[0].stream, ContentSource::Page);
+    mark_tag_artifact(&mut doc, parent).expect("parent paragraph artifact");
+    let (page, _) = marks(&doc);
+    assert_eq!(page, [("Artifact".into(), None), ("Artifact".into(), None)]);
 }
