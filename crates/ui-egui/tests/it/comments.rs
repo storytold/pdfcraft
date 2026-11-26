@@ -313,10 +313,17 @@ fn quick_text_markup_colours_fit_and_activate_at_minimum_window_size() {
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
     assert_eq!(h.state().comment_prefs.style(CommentTool::Highlight).color, [0.54, 0.25, 0.82]);
+    let purple = h.get_by_label("Purple quick colour");
+    assert_eq!(purple.accesskit_node().is_selected(), Some(true));
+    assert_eq!(h.get_by_label("Colour").value().unwrap(), purple.value().unwrap());
 
     let blue = h.get_by_label("Blue quick colour").rect().center();
     click(&mut h, blue);
     assert_eq!(h.state().comment_prefs.style(CommentTool::Highlight).color, [0.0, 0.47, 0.84]);
+    let blue = h.get_by_label("Blue quick colour");
+    assert_eq!(blue.accesskit_node().is_selected(), Some(true));
+    assert_eq!(h.get_by_label("Colour").value().unwrap(), blue.value().unwrap());
+    assert_ne!(h.get_by_label("Purple quick colour").accesskit_node().is_selected(), Some(true));
     for tool in [CommentTool::Underline, CommentTool::StrikeOut, CommentTool::Squiggly] {
         h.state_mut().quick_tool = QuickTool::Comment(tool);
         h.run_steps(3);
