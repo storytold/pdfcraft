@@ -49,6 +49,9 @@ impl DocView {
     pub fn invalidate_content(&mut self) {
         // Undo, redo and other document-wide changes: a released drawing's preview would be a ghost.
         self.session.comments.settling.clear();
+        if let Some(image) = &mut self.session.image_selection {
+            image.clear_nudge();
+        }
         self.revisions.bump_all();
         self.session.forms.unbaked.clear();
         self.session.texts.clear();

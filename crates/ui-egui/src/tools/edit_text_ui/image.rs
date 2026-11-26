@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use super::{DocInfo, Edit, MAX_OUTLINES, PageGeometry, PageSession, PageXform, Pos2, Rect, user_box};
 use crate::canvas::page_parts::{Owner, PageLayer, PagePart, PagePress};
+use crate::canvas::pictures::ImageNudgeBackdrop;
 use craft::behavior::geometry::{BoxAllow, BoxPart, BoxRules, BoxState, CropBox, CropGuide, ScaleRule, TransformMode};
 use craft::behavior::kurbo::{BezPath, Point, Rect as DocRect, Vec2};
 use craft::behavior::{CanvasView, CursorIcon, EditEvent, HitShape, IconId, PointerButton};
@@ -42,6 +45,15 @@ pub struct ImageSelection {
     /// not show beside the preview. Not cloned or compared.
     // PLAN: the page's content painter (pdfcraft-canvas-w8) reads this and fills the quad with paper.
     pub(crate) paper: Option<[Point; 4]>,
+    /// Set only by the Edit tool's image nudge, and consumed as the queued edit is applied.
+    pub(crate) nudge_queued: bool,
+    nudge: Option<ImageNudge>,
+}
+
+struct ImageNudge {
+    backdrop: Arc<ImageNudgeBackdrop>,
+    textures: PreviewTextures,
+    revision: Option<PageRevision>,
 }
 
 impl Clone for ImageSelection {
@@ -54,6 +66,8 @@ impl Clone for ImageSelection {
             settled_revision: self.settled_revision,
             preview: None,
             paper: None,
+            nudge_queued: false,
+            nudge: None,
         }
     }
 }
@@ -79,7 +93,27 @@ impl std::fmt::Debug for ImageSelection {
 impl ImageSelection {
     /// Select a page image without an active gesture.
     pub fn at(page: usize, index: usize) -> Self {
-        Self { page, index, crop: None, settled: None, settled_revision: None, preview: None, paper: None }
+        Self { page, index, crop: None, settled: None, settled_revision: None, preview: None, paper: None, nudge_queued: false, nudge: None }
+    }
+
+    pub(crate) fn nudge_backdrop(&self, ctx: &egui::Context) -> Option<Arc<ImageNudgeBackdrop>> {
+        use craft::keymap::Key;
+        let nudge = self.nudge.as_ref().filter(|_| self.crop.is_none() && self.preview.is_none())?;
+        let down = craft::ui::runtime::keys::down(ctx);
+        down.iter().any(|key| matches!(key, Key::Left | Key::Right | Key::Up | Key::Down)).then(|| nudge.backdrop.clone())
+    }
+
+    pub(crate) fn nudge_committed(&mut self, was_nudge: bool, revision: PageRevision) {
+        if let Some(nudge) = self.nudge.as_mut().filter(|_| was_nudge) {
+            nudge.revision = Some(revision);
+        } else {
+            self.clear_nudge();
+        }
+    }
+
+    pub(crate) fn clear_nudge(&mut self) {
+        self.nudge = None;
+        self.nudge_queued = false;
     }
 
     /// Whether a gesture is running: the pixels are cut and the page has not yet been edited.
@@ -286,10 +320,21 @@ fn box_controls(
         s.preview = None;
     }
     let view = &body.view;
-    let quad = picture_quad(xf, info, page, image).map(|p| view.to_doc(p));
+    let original = picture_quad(xf, info, page, image).map(|p| view.to_doc(p));
+    let mut quad = original;
+    prepare_nudge(ui, session, doc, pic);
+    let pending = nudge_rect(session, page, index);
+    let motion = pending.filter(|_| session.image_selection.as_ref().is_some_and(|s| s.nudge.is_some())).map(|rect| {
+        let to_doc = |x, y| view.to_doc(user_to_screen(xf, info, page, x, y));
+        to_doc(rect[0], rect[1]) - to_doc(image.rect[0], image.rect[1])
+    });
+    if let Some(motion) = motion {
+        quad = quad.map(|p| p + motion);
+    }
     let bounds = bounds_of(&quad);
     let visible = image.visible_rect.unwrap_or(image.rect);
-    let pivot = view.to_doc(user_to_screen(xf, info, page, (visible[0] + visible[2]) * 0.5, (visible[1] + visible[3]) * 0.5));
+    let pivot =
+        view.to_doc(user_to_screen(xf, info, page, (visible[0] + visible[2]) * 0.5, (visible[1] + visible[3]) * 0.5)) + motion.unwrap_or(Vec2::ZERO);
     let rules = BoxRules::in_mode(TransformMode::Free)
         .with_scale(ScaleRule::LargerAxis)
         .with_allow(BoxAllow::new(true, false, false))
@@ -354,6 +399,12 @@ fn box_controls(
     // `shown.discard` (Escape with no drag) is ignored: a selected picture has no Escape outside crop mode.
     let Some(s) = session.image_selection.as_mut() else { return edit };
     s.paper = None;
+    if let Some(nudge) = &s.nudge
+        && s.preview.is_none()
+    {
+        picture_preview(ui, body, pic, &nudge.textures, original, quad, true);
+        return edit;
+    }
     let Some(textures) = s.preview.as_ref() else { return edit };
     let from = s.settled.map_or(quad, |(from, _)| corners_of(doc_rect(view, xf, from)));
     let to = if shown.held.is_some() {
@@ -364,18 +415,74 @@ fn box_controls(
     s.paper = Some(from.map(|p| placed.to_page(view.to_screen(p))));
     let paper_quad = from.map(|p| view.to_screen(p));
     PicturePaper::new(paper_quad, placed.rect).show_at(ui, body.rect);
-    let full = matrix_corners(xf, info, page, image.matrix).map(|p| view.to_doc(p));
-    let map = affine_between(quad, to);
+    picture_preview(ui, body, pic, textures, quad, to, false);
+    edit
+}
+
+fn picture_preview(
+    ui: &mut egui::Ui,
+    body: &PageBody<'_>,
+    pic: &PagePicture<'_>,
+    textures: &PreviewTextures,
+    from: [Point; 4],
+    to: [Point; 4],
+    clip_destination: bool,
+) {
+    let PagePicture { placed, xf, info, image, .. } = *pic;
+    let view = body.view;
+    let full = matrix_corners(xf, info, placed.page, image.matrix).map(|p| view.to_doc(p));
+    let map = affine_between(from, to);
     let unit = [Point::new(0.0, 0.0), Point::new(1.0, 0.0), Point::new(1.0, 1.0), Point::new(0.0, 1.0)];
-    let source = affine_between(full, unit);
+    // Nudges have the full decoded bitmap. Clip it where it lands, so pixels
+    // never spill off the page and pixels moving into view are available.
+    let mapped = full.map(map);
+    let source = affine_between(if clip_destination { mapped } else { full }, unit);
     let page_quad = [placed.rect.left_top(), placed.rect.right_top(), placed.rect.right_bottom(), placed.rect.left_bottom()];
     let source_clip = page_quad.map(|p| source(view.to_doc(p)));
-    let _ = TransformPreview::new(tl!("Picture"), textures)
-        .map(PreviewMap::Quad(full.map(map)))
-        .source_clip(source_clip)
-        .clip_quad(to)
-        .show_at(ui, body.rect);
-    edit
+    let _ =
+        TransformPreview::new(tl!("Picture"), textures).map(PreviewMap::Quad(mapped)).source_clip(source_clip).clip_quad(to).show_at(ui, body.rect);
+}
+
+fn nudge_rect(session: &PageSession, page: usize, index: usize) -> Option<[f64; 4]> {
+    let selection = session.image_selection.as_ref()?;
+    match session.pending_edit.as_ref()? {
+        Edit::EditPageImage { page: p, index: i, change: pdfcraft_engine::ImageEdit::Move(rect) }
+            if selection.nudge_queued && (*p, *i) == (page, index) =>
+        {
+            Some(*rect)
+        }
+        _ => None,
+    }
+}
+
+fn prepare_nudge(ui: &egui::Ui, session: &mut PageSession, doc: &pdfcraft_engine::Document, pic: &PagePicture<'_>) {
+    let PagePicture { placed, index, image, .. } = *pic;
+    let page = placed.page;
+    let moving = nudge_rect(session, page, index).is_some();
+    let Some(selection) = session.image_selection.as_mut() else { return };
+    if selection.nudge.as_ref().and_then(|nudge| nudge.revision).is_some_and(|revision| placed.picture_revision == Some(revision)) {
+        selection.nudge = None;
+    }
+    if !moving || selection.nudge.is_some() || selection.preview.is_some() {
+        return;
+    }
+    // The bitmap is only the picture itself. A Form or arbitrary path clip cannot be
+    // reproduced by moving that bitmap, and an oversized bitmap should use the page renderer.
+    let limit = ui.input(|i| i.max_texture_side).min(4096);
+    if image.is_form
+        || (image.has_path_clip() && !doc.is_uncropped_added_image(page, image))
+        || [image.width, image.height].into_iter().any(|side| side as usize > limit)
+    {
+        return;
+    }
+    let Ok((width, height, rgba)) = doc.page_image_rgba(page, index) else { return };
+    let size = [width as usize, height as usize];
+    if size.contains(&0) || size.iter().any(|&side| side > limit) || size[0].checked_mul(size[1]).and_then(|n| n.checked_mul(4)) != Some(rgba.len()) {
+        return;
+    }
+    let image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
+    let textures = PreviewTextures::new(&mut session.image_serials, format!("picture-nudge-{page}-{index}"), PreviewPixels::new(image, [1.0, 1.0]));
+    selection.nudge = Some(ImageNudge { backdrop: ImageNudgeBackdrop::new(doc, page, index), textures, revision: None });
 }
 
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]

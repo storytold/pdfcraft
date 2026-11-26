@@ -169,6 +169,11 @@ impl PdfCraftApp {
         let Some((i, id)) = self.active_ids() else { return false };
         // Taken whatever happens to this edit, so it never carries over to another.
         let across_pages = std::mem::take(&mut self.views[i].session.marks_across_pages).filter(|_| annotated_pages(&edit).is_some());
+        let was_nudge = self.views[i].session.image_selection.as_mut().is_some_and(|s| {
+            std::mem::take(&mut s.nudge_queued)
+                && matches!(&edit, Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Move(_) }
+                    if (*page, *index) == (s.page, s.index))
+        });
         let label = edit.label();
         let target_arrange_image = match &edit {
             Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
@@ -257,11 +262,13 @@ impl PdfCraftApp {
                 } else {
                     view.document_changed(ctx, info);
                 }
-                if let Some(selection) = view.session.image_selection.as_mut()
-                    && selection.settled.is_some()
-                {
+                if let Some(selection) = view.session.image_selection.as_mut() {
                     let (document, page) = view.revisions.of(selection.page);
-                    selection.settled_revision = Some(craft::pages::ui::PageRevision { document, page });
+                    let revision = craft::pages::ui::PageRevision { document, page };
+                    if selection.settled.is_some() {
+                        selection.settled_revision = Some(revision);
+                    }
+                    selection.nudge_committed(was_nudge, revision);
                 }
                 if matches!(edit, Edit::AddAnnotation(_)) || across_pages.is_some() {
                     view.session.comments.comment_added();

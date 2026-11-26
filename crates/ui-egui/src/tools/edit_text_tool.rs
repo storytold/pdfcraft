@@ -104,6 +104,11 @@ impl CanvasTool for EditTextTool<'_> {
                     return false;
                 }
                 let edit = object_ui::nudge(self.session, self.doc, *direction, mods.shift, self.geo);
+                if let (Some(pdfcraft_engine::Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Move(_) }), Some(selection)) =
+                    (&edit, &mut self.session.image_selection)
+                {
+                    selection.nudge_queued = (*page, *index) == (selection.page, selection.index) && selection.crop.is_none();
+                }
                 self.queue(edit);
                 true
             }

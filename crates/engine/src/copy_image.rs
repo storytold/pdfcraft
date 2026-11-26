@@ -38,7 +38,36 @@ fn pictures(cos: &Cos, page: usize) -> Vec<PagePicture> {
         .collect()
 }
 
+/// Make a temporary display copy without one placement, leaving other uses of its resource
+/// and the displayed field and comment appearances intact. This is background render work.
+pub fn image_move_backdrop(display: std::sync::Arc<Vec<u8>>, page: usize, index: usize) -> Result<std::sync::Arc<Vec<u8>>, String> {
+    crate::guard(|| {
+        let mut copy = Cos::open(display).map_err(|e| e.to_string())?;
+        pdfcraft_edit::change_image(&mut copy, page, index, &pdfcraft_edit::ImageChange::Delete).map_err(|e| e.to_string())?;
+        pdfcraft_cos::write_incremental(&copy, &pdfcraft_cos::SaveOptions::default()).map(std::sync::Arc::new).map_err(|e| e.to_string())
+    })?
+}
+
 impl Document {
+    /// An inserted bitmap always has its own box clip. When it is uncropped, the box
+    /// moves with the bitmap and does not need a separate mask in the keyboard preview.
+    pub fn is_uncropped_added_image(&self, page: usize, image: &pdfcraft_edit::PageImage) -> bool {
+        let Some(editor) = &self.editor else { return false };
+        let Some(page_model) = pdfcraft_model::page_at(&editor.cos, page) else { return false };
+        let Some(contents) = page_model.dict.get(b"Contents") else { return false };
+        let stream = match &*editor.cos.resolve(contents) {
+            Object::Array(entries) => entries.get(image.stream).and_then(Object::as_ref),
+            _ if image.stream == 0 => contents.as_ref(),
+            _ => None,
+        };
+        self.added().iter().any(|item| {
+            item.page == page
+                && stream == Some(item.obj)
+                && matches!(&item.content, crate::AddedContent::Image(added)
+                    if image.object == Some(added.image) && added.crop.iter().all(|value| value.abs() <= f64::EPSILON))
+        })
+    }
+
     /// The topmost picture on `page` under user-space point `at`, as its index in
     /// [`Document::page_images`]: a raster image, or Form artwork that holds one.
     pub fn page_image_at(&self, page: usize, at: [f64; 2]) -> Option<usize> {

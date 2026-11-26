@@ -24,7 +24,7 @@ pub mod commands;
 mod comments;
 pub mod compare;
 mod copy_image;
-pub use copy_image::{PagePicture, picture_at};
+pub use copy_image::{PagePicture, image_move_backdrop, picture_at};
 pub mod dates;
 mod document;
 mod edit;
