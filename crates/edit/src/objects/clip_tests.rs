@@ -294,3 +294,61 @@ fn a_copy_brings_the_resources_inheriting_artwork_names() {
         }
     }
 }
+
+/// A graphics state's soft mask whose group form has no resources of its own looks names up in
+/// the page's, as a nested form does: the copy brings the font the mask draws with, and a page
+/// whose /F1 is another font refuses the paste instead of masking with that font.
+#[test]
+fn a_copy_brings_the_resources_a_soft_mask_group_names() {
+    let mask = "BT /F1 40 Tf 0 0 Td (M) Tj ET";
+    let mut doc = pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 7 0 R /F2 7 0 R >> /ExtGState << /GS0 9 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 8 0 R >> >> >>".into(),
+        stream("q /GS0 gs BT /F2 30 Tf 20 20 Td (Masked) Tj ET Q"),
+        stream(""),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".into(),
+        "<< /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G 10 0 R >> >>".into(),
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> /Length {} >>\nstream\n{mask}\nendstream",
+            mask.len()
+        ),
+    ]);
+    let all: Vec<_> = editable_objects(&doc, 0).unwrap().into_iter().map(|o| o.target).collect();
+    let copied = copy_objects(&doc, 0, &all).unwrap();
+    let font = copied.resources.get(b"Font").and_then(Object::as_dict).and_then(|f| f.get(b"F1")).cloned();
+    assert_eq!(font, Some(Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))), "{:?}", copied.resources);
+    let pasted = paste_objects(&mut doc, 1, &copied, [0.0, 0.0]);
+    assert!(matches!(&pasted, Err(EditError::Invalid(why)) if why.contains("uses its resources")), "{pasted:?}");
+}
+
+/// When the items that inherit the page's resources draw more than can be read, the names they
+/// use aren't all known, so the copy takes every resource of the page rather than some.
+#[test]
+fn a_copy_takes_every_resource_when_inherited_names_cant_all_be_read() {
+    let glyphs = 1100;
+    // The first glyph is `a`, which the text shows.
+    let procs: String = (0..glyphs).map(|g| format!("/{} {} 0 R ", if g == 0 { "a".to_string() } else { format!("g{g}") }, 10 + g)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /T3 5 0 R /Other 6 0 R >> >> >>".into(),
+        stream("BT /T3 20 Tf 20 200 Td (a) Tj ET"),
+        format!(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << {procs}>> \
+             /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] >>"
+        ),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".into(),
+        "<< >>".into(),
+        "<< >>".into(),
+        "<< >>".into(),
+    ];
+    objs.extend((0..glyphs).map(|_| stream("1000 0 0 0 1000 1000 d1 0 0 1000 1000 re f")));
+    let doc = pdf(&objs);
+    let all: Vec<_> = editable_objects(&doc, 0).unwrap().into_iter().map(|o| o.target).collect();
+    let copied = copy_objects(&doc, 0, &all).unwrap();
+    let fonts = copied.resources.get(b"Font").and_then(Object::as_dict).cloned().unwrap_or_default();
+    assert!(fonts.get(b"Other").is_some(), "{fonts:?}");
+}

@@ -555,8 +555,9 @@ pub(crate) fn resource_operand(op: &Op) -> Result<Option<(&'static [u8], usize)>
 }
 
 /// The names a nested item that `op` draws from `resources` looks up there: a Form XObject
-/// (`Do`), Type 3 font (`Tf`) or tiling pattern (`scn`/`SCN`) without `/Resources` of its own,
-/// which the renderer gives the resources it is drawn with. Each name its content selects
+/// (`Do`), Type 3 font (`Tf`), tiling pattern (`scn`/`SCN`) or a graphics state's soft-mask
+/// group form (`gs`) without `/Resources` of its own, which the renderer gives the resources it
+/// is drawn with. Each name its content selects
 /// (a form's or pattern's content, each glyph of a Type 3 font, and those of nested items of
 /// theirs that inherit the same resources) is passed to `visit`, which returns `true` to stop.
 /// Returns `true` when `visit` did, or when content can't be read within `budget`, is nested
@@ -571,19 +572,28 @@ pub(crate) fn inherited_names(
     reads: &mut usize,
     depth: usize,
 ) -> bool {
-    let Ok(Some((cat @ (b"XObject" | b"Font" | b"Pattern"), i))) = resource_operand(op) else { return false };
+    let Ok(Some((cat @ (b"XObject" | b"Font" | b"Pattern" | b"ExtGState"), i))) = resource_operand(op) else { return false };
     let Some(Object::Name(name)) = op.operands.get(i) else { return false };
     let Some(entry) = resources.get(cat).map(|d| doc.resolve(d)).and_then(|d| d.as_dict().and_then(|d| d.get(name).cloned())) else {
         return false;
     };
-    let entry = doc.resolve(&entry);
+    let mut entry = doc.resolve(&entry);
+    // A graphics state's soft mask draws its group form (ISO 32000-2 §11.6.5.2) with the
+    // resources of the content that selects the state, when the form has none of its own.
+    if cat == b"ExtGState" {
+        let mask = entry.as_dict().and_then(|gs| gs.get(b"SMask")).map(|m| doc.resolve(m));
+        let Some(group) = mask.as_deref().and_then(Object::as_dict).and_then(|m| m.get(b"G")).map(|g| doc.resolve(g)) else {
+            return false;
+        };
+        entry = group;
+    }
     let (dict, stream) = match &*entry {
         Object::Stream(s) => (&s.dict, Some(s)),
         Object::Dict(d) => (d, None),
         _ => return false,
     };
     let drawn = match cat {
-        b"XObject" => is_name(doc, dict, b"Subtype", b"Form"),
+        b"XObject" | b"ExtGState" => stream.is_some() && is_name(doc, dict, b"Subtype", b"Form"),
         b"Font" => is_name(doc, dict, b"Subtype", b"Type3"),
         // A shading pattern has no content of its own.
         _ => int_of(doc, dict, b"PatternType") == Some(1),
