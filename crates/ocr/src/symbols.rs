@@ -101,9 +101,11 @@ pub(crate) fn repair_word(
         }
         i += 1;
     }
+    // The `°` first, while `out` still lines up with `chars`: dropping a character would put
+    // the digit's columns off by one.
+    let new_right = degree(&mut out, chars, &shapes, slack, next_left);
     // A second character the decoder named for the bar of a `±` goes with it.
     drop_consumed(&mut out, chars, &shapes, slack, &consumed);
-    let new_right = degree(&mut out, chars, &shapes, slack, next_left);
     (out != text).then(|| Repair { text: out.into_iter().collect(), right: new_right })
 }
 
@@ -786,6 +788,24 @@ mod tests {
         let ring = letter_o(&mut o, 36);
         assert_eq!(word(&o, &[read('2', two), read('o', ring)], None), None);
         assert_eq!(word(&c, &[read('2', two)], Some((36.0, false))), None);
+    }
+
+    /// `±1°` read as `+-1?`: the sign's leftover name goes, and the ring is still found after
+    /// the digit, not after whichever character is now where the digit was.
+    #[test]
+    fn a_split_sign_and_a_degree_ring_in_one_word_are_both_repaired() {
+        let mut c = Canvas::new(200, 70);
+        let sign = plus_minus(&mut c, 10);
+        let one = digit(&mut c, 50);
+        let ring = degree(&mut c, 76);
+        let (left_half, right_half) = ((sign.0, sign.0 + 13.0), (sign.0 + 13.0, sign.1));
+        let split = [read('+', left_half), read('-', right_half), read('1', one), read('?', ring)];
+        assert_eq!(word(&c, &split, None).map(|r| r.text).as_deref(), Some("±1°"));
+        // Dropped altogether, the digit's columns running on: appended, and the word grows.
+        let split = [read('+', left_half), read('-', right_half), read('1', one)];
+        let fixed = word(&c, &split, None).expect("both repaired");
+        assert_eq!(fixed.text, "±1°");
+        assert!(fixed.right.is_some_and(|r| r > one.1), "{fixed:?}: the word now ends at the ring");
     }
 
     #[test]
