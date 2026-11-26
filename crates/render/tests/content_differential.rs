@@ -281,16 +281,15 @@ fn both_parsers_read_a_doubled_minus_as_one_number() {
 
 // ── known divergences, pinned on both sides ─────────────────────────────────────────────────
 
-/// No issue filed; #2877 (open) changes number reading in cos and render. ISO 32000-2 §7.3.3
-/// (p.24) says a writer "shall not use … exponential format", so neither reading is the
-/// spec's. The content crate reads `1e3` as the number 1000; hayro reads it as an unknown
-/// operator and drops the operands before it. MuPDF stops the whole stream at it
-/// ("unknown keyword: '1e3'"); pdftotext goes on.
+/// #2877 makes hayro read scientific notation (`1e3`) as the number 1000, matching the content
+/// crate. ISO 32000-2 §7.3.3 (p.24) says a writer "shall not use … exponential format", while a
+/// number glued to non-exponent letters (`12abc`) remains a divergence: the content crate skips
+/// the digits and reads the letters as an operator; hayro reads the whole token as an operator.
 #[test]
 fn scientific_notation_is_a_number_to_the_content_crate_and_an_unknown_operator_to_hayro() {
     let data = b"1e3 w q Q";
     assert_eq!(content(data), [tok("w", &["1000"]), tok("q", &[]), tok("Q", &[])]);
-    assert_eq!(hayro(data), [tok("w", &[]), tok("q", &[]), tok("Q", &[])]);
+    assert_eq!(hayro(data), [tok("w", &["1000"]), tok("q", &[]), tok("Q", &[])]);
     // A number glued to letters: the content crate skips the digits and reads the letters as an
     // operator; hayro reads the whole token as an operator (and clears the operands before it).
     let data = b"12abc w q Q";
