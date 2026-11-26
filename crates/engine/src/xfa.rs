@@ -141,6 +141,9 @@ pub(crate) struct XfaRun<'a> {
     /// start and each script's own): 1, unless the session was given another
     /// ([`crate::Session::with_xfa_time_scale`]).
     pub time_scale: u32,
+    /// The form was laid out again: its pages, widgets and fields were replaced, so the edit
+    /// must rebuild the document's page and field lists, not only refresh their values.
+    pub relaid: bool,
 }
 
 /// The script engine's copies of a form's property trees, by the address of the tree each was
@@ -508,6 +511,9 @@ struct Runner<'a, 'b> {
     skipped: usize,
     relayouts: usize,
     relayouts_skipped: bool,
+    /// The form was laid out again since its layout:ready scripts last ran: they run once more
+    /// when the event ends.
+    laid_out: bool,
     /// Lay the form out once, when the event ends, rather than after every script that changed
     /// its structure (opening: see [`on_open`]).
     defer_relayout: bool,
@@ -573,6 +579,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             skipped: 0,
             relayouts: 0,
             relayouts_skipped: false,
+            laid_out: false,
             defer_relayout: false,
             relayout_owed: false,
             dropped_output: 0,
@@ -856,11 +863,19 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
         self.relayouts += 1;
         self.restyle_pending = false;
+        self.laid_out = true;
         self.flush()?;
+        // Set before the layout: one that fails part way may already have replaced fields.
+        self.run.relaid = true;
         self.embedded_changed = false;
         #[cfg(test)]
         counts::bump(&counts::LAYOUTS);
         let report = pdfcraft_xfa::rerender(self.doc, self.tpl).map_err(|e| e.to_string())?;
+        if report.pages != self.run.page_count {
+            // Later scripts read the new page count (`xfa.layout.pageCount()`) from a new session.
+            self.run.page_count = report.pages;
+            self.session = None;
+        }
         self.console(report.warnings);
         crate::xfa_redraw(self.doc)?;
         self.console(crate::undrawn_field_warnings(self.doc));
@@ -1244,16 +1259,58 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.live().events.iter().filter(|e| e.som == som && e.activity == activity).cloned().collect()
     }
 
-    /// End the event: write what is left, lay the form out if a capped relayout is owed, and
-    /// report what the limits cut.
-    fn finish(mut self) -> Result<Changes, String> {
-        #[cfg(test)]
-        self.check_live();
+    /// Every script of `activity`, in document order (parents before their children).
+    fn events_named(&mut self, activity: &str) -> Vec<ScriptEvent> {
+        self.live().events.iter().filter(|e| e.activity == activity).cloned().collect()
+    }
+
+    /// Every layout:ready script, parents first. A field that numbers pages keeps the number the
+    /// layout gave each page: the value a script writes to it is dropped (one value would put the
+    /// same number on every page).
+    fn layout_ready(&mut self) -> Result<(), String> {
+        self.laid_out = false;
+        let (ready, numbered) = {
+            let live = self.live();
+            let ready: Vec<ScriptEvent> = live.events.iter().filter(|e| e.activity == "layoutReady").cloned().collect();
+            // The fields, gathered in one walk rather than one per script.
+            let mut fields = HashSet::new();
+            field_soms(&live.root, &mut fields, 0);
+            let numbered: HashSet<String> = ready
+                .iter()
+                .filter(|e| fields.contains(&e.som) && pdfcraft_xfa::numbers_pages(&e.script, e.formcalc))
+                .map(|e| e.som.clone())
+                .collect();
+            (ready, numbered)
+        };
+        self.numbered = numbered;
+        for ev in &ready {
+            self.run(ev, "")?;
+        }
+        self.numbered.clear();
+        Ok(())
+    }
+
+    /// Lay the form out once more if a capped relayout is owed.
+    fn owed_relayout(&mut self) -> Result<(), String> {
         if self.relayouts_skipped || self.relayout_owed || self.embedded_changed || self.restyle_pending {
             self.relayouts = 0;
             self.relayouts_skipped = false;
             self.relayout_owed = false;
             self.relayout()?;
+        }
+        Ok(())
+    }
+
+    /// End the event: lay the form out if a capped relayout is owed, run the layout:ready scripts
+    /// again if the form was laid out again (once: what they lay out doesn't run them a third
+    /// time), write what is left, and report what the limits cut.
+    fn finish(mut self) -> Result<Changes, String> {
+        #[cfg(test)]
+        self.check_live();
+        self.owed_relayout()?;
+        if self.laid_out {
+            self.layout_ready()?;
+            self.owed_relayout()?;
         }
         self.flush()?;
         if !self.focus_requests.is_empty() {
@@ -1422,13 +1479,6 @@ fn value_unchanged(doc: &pdfcraft_cos::Document, f: &pdfcraft_forms::Field, v: O
     }
 }
 
-/// On open: initialize scripts, then layout:ready scripts (the form is laid out by now), then
-/// calculations. Returns what they changed.
-///
-/// layout:ready runs once here, where forms set themselves up (turning field highlighting on,
-/// say); a viewer runs it after every layout. Every layout:ready script runs, but a field that
-/// numbers pages keeps the number the layout gave each page: the value a script writes to it is
-/// dropped (one value would put the same number on every page).
 /// Work an event does, counted for tests: the live form built, the copies of it made for the
 /// scripts, the layouts. Timing-independent, so tests can say the work doesn't grow with the
 /// number of writes.
@@ -1461,35 +1511,86 @@ const MAX_PENDING_PROPS: usize = 4_096;
 /// the copy of the form is made again, which is what the script would cost without this list.
 const MAX_PENDING_PROP_BYTES: usize = 1 << 20;
 
+/// On open, in the order another viewer runs them: initialize scripts (children before their
+/// parent), form:ready (parents first), layout:ready (parents first; the form is laid out by
+/// now), docReady, then the calculations. Returns what they changed.
+///
+/// layout:ready runs here, where forms set themselves up (turning field highlighting on, say),
+/// and again whenever a later script lays the form out again ([`Runner::finish`]).
 pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mut XfaRun) -> Result<Changes, String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
     // The scripts read the live form (template, data and overrides), not the pages, so the
-    // pages are laid out once, after the last of them. Laying a large form out after every
-    // script that hides a subform spent the time limit on the first few, and the form was kept
-    // half initialized: a page its initialize scripts hide stayed open to typing until the
-    // next opening hid it and reset its data.
+    // pages are laid out once, after the last of the initialize scripts. Laying a large form out
+    // after every script that hides a subform spent the time limit on the first few, and the
+    // form was kept half initialized: a page its initialize scripts hide stayed open to typing
+    // until the next opening hid it and reset its data.
     r.defer_relayout = true;
-    let events: Vec<ScriptEvent> = r.live().events.iter().filter(|e| e.activity == "initialize" || e.activity == "docReady").cloned().collect();
-    for ev in &events {
+    let initialize = children_first(r.events_named("initialize"));
+    for ev in &initialize {
         r.run(ev, "")?;
     }
-    let (ready, numbered) = {
-        let live = r.live();
-        let ready: Vec<ScriptEvent> = live.events.iter().filter(|e| e.activity == "layoutReady").cloned().collect();
-        // The fields, gathered in one walk rather than one per script.
-        let mut fields = HashSet::new();
-        field_soms(&live.root, &mut fields, 0);
-        let numbered: HashSet<String> =
-            ready.iter().filter(|e| fields.contains(&e.som) && pdfcraft_xfa::numbers_pages(&e.script, e.formcalc)).map(|e| e.som.clone()).collect();
-        (ready, numbered)
-    };
-    r.numbered = numbered;
-    for ev in &ready {
-        r.run(ev, "")?;
-    }
-    r.numbered.clear();
+    // The calculations, before form:ready (XFA 3.3 fires the form ready event once they have run;
+    // another viewer runs them there too).
     r.calculates()?;
+    let calculated = r.field_changes.clone();
+    // `ready` without `ref="$layout"` is form:ready: in the reverse of initialize's order, the
+    // root first and the objects inside it last to first, as another viewer runs it.
+    for ev in &objects_reversed(children_first(r.events_named("ready"))) {
+        r.run(ev, "")?;
+    }
+    // Lay the form out once for what the scripts so far changed, then the layout:ready scripts
+    // see the new pages.
+    r.defer_relayout = false;
+    r.owed_relayout()?;
+    r.layout_ready()?;
+    for ev in &r.events_named("docReady") {
+        r.run(ev, "")?;
+    }
+    // A ready script wrote a value: the calculations run again, as after any change (which of
+    // them read it isn't known here, so all of them).
+    if r.field_changes != calculated {
+        r.calculates()?;
+    }
     r.finish()
+}
+
+/// `events` with their objects in the reverse order, each object's own events keeping theirs.
+fn objects_reversed(events: Vec<ScriptEvent>) -> Vec<ScriptEvent> {
+    let mut objects: Vec<Vec<ScriptEvent>> = Vec::new();
+    for ev in events {
+        match objects.last_mut() {
+            Some(last) if last.first().is_some_and(|e| e.som == ev.som) => last.push(ev),
+            _ => objects.push(vec![ev]),
+        }
+    }
+    objects.into_iter().rev().flatten().collect()
+}
+
+/// `events` (in document order) reordered so that each object's come after those of the objects
+/// inside it, siblings keeping their order; an object's own events keep theirs.
+fn children_first(events: Vec<ScriptEvent>) -> Vec<ScriptEvent> {
+    let mut out = Vec::with_capacity(events.len());
+    // The objects whose events wait for their children's, outermost first.
+    let mut open: Vec<Vec<ScriptEvent>> = Vec::new();
+    for ev in events {
+        while let Some(top) = open.last() {
+            let parent = top.first().map_or("", |e| e.som.as_str());
+            // The same object, or one inside it (the root may have an empty path).
+            let inside = parent.is_empty() || ev.som == parent || ev.som.strip_prefix(parent).is_some_and(|rest| rest.starts_with('.'));
+            if inside {
+                break;
+            }
+            out.extend(open.pop().unwrap_or_default());
+        }
+        match open.last_mut() {
+            Some(top) if top.first().is_some_and(|e| e.som == ev.som) => top.push(ev),
+            _ => open.push(vec![ev]),
+        }
+    }
+    while let Some(top) = open.pop() {
+        out.extend(top);
+    }
+    out
 }
 
 /// After fields `names` took new values: each one's change and exit scripts, its format test
@@ -1548,6 +1649,14 @@ pub(crate) fn on_changes(
         }
     }
     r.calculates()?;
+    r.finish().map(|_| ())
+}
+
+/// The form was laid out again outside its scripts (a field's text grew or shrank): its
+/// layout:ready scripts run, as after any new layout, and what they change is written.
+pub(crate) fn on_layout(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mut XfaRun) -> Result<(), String> {
+    let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
+    r.layout_ready()?;
     r.finish().map(|_| ())
 }
 
@@ -2004,7 +2113,7 @@ mod tests {
         assert!(!page_ops(&pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()).contains(FILL));
         let tpl = template_of_doc(&doc);
         let mut out = JsOutput::default();
-        let mut run = XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, time_scale: 1, highlight: false };
+        let mut run = XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, time_scale: 1, highlight: false, relaid: false };
         let changes = on_open(&mut doc, &tpl, &mut run).unwrap();
         assert_eq!(changes.properties, 1, "{changes:?}");
         assert!(changes.describe().contains("1 changed property"));
@@ -2979,21 +3088,22 @@ page1.note.presence = "visible""#);
         pdfcraft_xfa::render_into(&mut doc).unwrap();
         let tpl = template_of_doc(&doc);
         let mut out = JsOutput::default();
-        let mut run = XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, time_scale: 1000, highlight: false };
+        let mut run = XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, time_scale: 1000, highlight: false, relaid: false };
         let _ = counts::take();
         let changes = on_open(&mut doc, &tpl, &mut run).unwrap();
         assert_eq!(changes.properties, properties, "{changes:?} {:?}", out.console);
         counts::take()
     }
 
-    /// The work an event does doesn't grow with the property changes its scripts make: one live
-    /// form, one copy of it for the scripts and one layout, for 1 field's scripts or 200 (names
+    /// The work an event does doesn't grow with the property changes its scripts make: two live
+    /// forms (the one the scripts before the layout read, and the one layout:ready reads after
+    /// it), one copy of it for the scripts and one layout, for 1 field's scripts or 200 (names
     /// holding a `.` too). Timing-independent: counts, not seconds.
     #[test]
     fn property_writes_dont_multiply_the_work_of_an_event() {
         for dotted in [false, true] {
             for n in [1, 200] {
-                assert_eq!(opening_work(n, dotted), (1, 1, 1), "{n} fields, dotted names {dotted}");
+                assert_eq!(opening_work(n, dotted), (2, 1, 1), "{n} fields, dotted names {dotted}");
             }
         }
     }
@@ -3014,7 +3124,7 @@ page1.note.presence = "visible""#);
                 )
             })
             .collect();
-        assert_eq!(work_of_opening(&fields, 600), (1, 3, 1));
+        assert_eq!(work_of_opening(&fields, 600), (2, 3, 1));
     }
 
     /// A later script of the same event reads what an earlier one wrote to a property: the

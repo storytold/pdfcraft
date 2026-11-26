@@ -886,15 +886,42 @@ fn validate_script_of(validate_el: Option<XmlNode>) -> Option<Script> {
     child(v, "script").map(|s| parse_script(s, "validate"))
 }
 
-/// Whether a subform starts on a new page (`breakBefore` or `break before` to a page or content
-/// area) and whether it ends its page (`breakAfter` or `break after` to one).
-fn page_breaks(n: XmlNode) -> (bool, bool) {
+/// Whether a subform starts on a new page (`breakBefore`, or the deprecated `break` element's
+/// `before`, to a page or content area) and whether it ends its page (`breakAfter`, or `break`'s
+/// `after`), with the page or content area each break names, if any.
+struct PageBreaks {
+    before: bool,
+    after: bool,
+    before_target: Option<String>,
+    after_target: Option<String>,
+}
+
+fn page_breaks(n: XmlNode) -> PageBreaks {
+    let is_page_target = |t: Option<&str>| t.is_none_or(|v| v == "pageArea" || v == "contentArea");
     // A break to a page or content area. With no targetType, the default is `auto`: "layout
     // continues using the current layout container" (XFA 3.3 p. 638), so no break.
     let break_to_page = |name: &str| children(n, name).any(|b| b.attribute("targetType").is_some_and(|t| t == "pageArea" || t == "contentArea"));
+    let break_target = |name: &str, break_attr: &str, target_attr: &str| -> Option<String> {
+        children(n, name)
+            .filter(|b| is_page_target(b.attribute("targetType")))
+            .find_map(|b| non_empty(b.attribute("target")))
+            .or_else(|| child(n, "break").filter(|b| is_page_target(b.attribute(break_attr))).and_then(|b| non_empty(b.attribute(target_attr))))
+    };
     // The deprecated `break` element says both in its `before` and `after` attributes (pp. 632-633).
     let legacy = |side: &str| child(n, "break").is_some_and(|b| b.attribute(side).is_some_and(|v| v == "pageArea" || v == "contentArea"));
-    (break_to_page("breakBefore") || legacy("before"), break_to_page("breakAfter") || legacy("after"))
+    let before_target = break_target("breakBefore", "before", "beforeTarget");
+    let after_target = break_target("breakAfter", "after", "afterTarget");
+    PageBreaks {
+        before: break_to_page("breakBefore") || before_target.is_some() || legacy("before"),
+        after: break_to_page("breakAfter") || after_target.is_some() || legacy("after"),
+        before_target,
+        after_target,
+    }
+}
+
+/// `s` trimmed, unless that leaves nothing.
+fn non_empty(s: Option<&str>) -> Option<String> {
+    s.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
 }
 
 /// A field's choice list as its widget element `e` says (`open`, `textEntry`), for a field
@@ -1015,7 +1042,9 @@ pub(crate) fn restyle_from(node: &mut Node, x: XmlNode, touched: &dyn Fn(&str) -
         }
         Node::Subform(s) => {
             if touched("break") || touched("breakBefore") || touched("breakAfter") {
-                (s.break_before_page, s.break_after_page) = page_breaks(x);
+                let breaks = page_breaks(x);
+                (s.break_before_page, s.break_after_page) = (breaks.before, breaks.after);
+                (s.break_before_target, s.break_after_target) = (breaks.before_target, breaks.after_target);
             }
         }
         Node::Area(_) | Node::Draw(_) => {}
@@ -1181,7 +1210,16 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
         // would exhaust it, and demand a page for every master).
         let occur = child(pa, "occur").map(|o| parse_occur(Some(o)));
         let (occur_min, occur_max) = occur.map_or((0, None), |o| (o.min, o.max));
-        areas.push(PageArea { name: pa.attribute("name").map(str::to_string), width, height, content, items, occur_max, occur_min });
+        areas.push(PageArea {
+            name: pa.attribute("name").map(str::to_string),
+            id: pa.attribute("id").map(str::to_string),
+            width,
+            height,
+            content,
+            items,
+            occur_max,
+            occur_min,
+        });
     }
     // Nested page sets: take their areas too.
     for ps in children(n, "pageSet") {
@@ -1212,7 +1250,10 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize, set_layou
     }
     let column_widths: Vec<f64> =
         n.attribute("columnWidths").map(|s| s.split_whitespace().filter_map(measure).map(|w| w.max(0.0)).take(256).collect()).unwrap_or_default();
-    let (break_before_page, break_after_page) = page_breaks(n);
+    let breaks = page_breaks(n);
+    let overflow_target = child(n, "overflow")
+        .and_then(|o| non_empty(o.attribute("target")))
+        .or_else(|| child(n, "break").and_then(|b| non_empty(b.attribute("overflowTarget"))));
     Subform {
         common,
         layout,
@@ -1220,8 +1261,11 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize, set_layou
         scripts: parse_events(n),
         page_set,
         occur: parse_occur(child(n, "occur")),
-        break_before_page,
-        break_after_page,
+        break_before_page: breaks.before,
+        break_after_page: breaks.after,
+        break_before_target: breaks.before_target,
+        break_after_target: breaks.after_target,
+        overflow_target,
         set: false,
         column_widths,
         overflow_leader: child(n, "overflow").and_then(|o| o.attribute("leader")).map(str::to_string).filter(|s| !s.is_empty()),
