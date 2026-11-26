@@ -1500,13 +1500,18 @@ fn a_non_interactive_field_draws_its_data() {
  <field name="total" access="nonInteractive" w="2in" h="0.3in"><ui><textEdit/></ui><value><text>placeholder</text></value></field>
  <field name="due" access="nonInteractive" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{MM/DD/YYYY}</picture></ui><value><date/></value><bind match="once"><picture>date{YYYYMMDD}</picture></bind></field>
  <field name="kept" access="nonInteractive" w="2in" h="0.3in"><ui><textEdit/></ui><value><text>fallback</text></value></field>
-</subform></template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><total>42</total><due>20261018</due></form></xfa:data></xfa:datasets></xdp:xdp>"#;
-    let form = layout_xml(xdp).unwrap();
+ <field name="photo" access="nonInteractive" w="1in" h="1in"><ui><imageEdit/></ui></field>
+</subform></template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><total>42</total><due>20261018</due><photo>GIF_DATA</photo></form></xfa:data></xfa:datasets></xdp:xdp>"#;
+    use base64::Engine;
+    let gif = base64::engine::general_purpose::STANDARD.encode(TINY_GIF);
+    let xdp = xdp.replace("GIF_DATA", &gif);
+    let form = layout_xml(&xdp).unwrap();
     let shown: Vec<String> = form.pages.iter().flat_map(texts).collect();
     assert!(shown.iter().any(|t| t.contains("42")), "the data's value is drawn: {shown:?}");
     assert!(!shown.iter().any(|t| t.contains("placeholder")), "the default gives way to the data: {shown:?}");
     assert!(shown.iter().any(|t| t.contains("10/18/2026")), "a date shows in its display pattern: {shown:?}");
     assert!(shown.iter().any(|t| t.contains("fallback")), "with no data the default is drawn: {shown:?}");
+    assert!(!shown.iter().any(|t| t.contains(&gif[..8])), "an image field's data is a picture, not text: {shown:?}");
 }
 
 /// A SOM path names the template field its segment numbers count to, repeating rows included.

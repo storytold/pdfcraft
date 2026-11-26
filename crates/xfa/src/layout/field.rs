@@ -126,16 +126,17 @@ impl Layouter<'_> {
         if f.access == Access::NonInteractive && f.ui != Ui::Button {
             // Shown as text, not as a field, but still bound to the data: the data's value wins
             // over the template's default, and a date shows in the field's pattern as its widget
-            // would show it.
-            let data_value =
-                self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som_path()))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).map(
-                    |v| match f.ui {
-                        Ui::DateTimeEdit => {
-                            Value::Text(iso_to_pattern(&data_to_iso(&v, data_date_letters(f).as_deref()), &date_pattern(f.picture.as_deref())))
-                        }
-                        _ => Value::Text(v),
-                    },
-                );
+            // would show it. An image field's data is the picture already drawn above, not text.
+            let data_value = (f.ui != Ui::ImageEdit)
+                .then(|| self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som_path()))))
+                .flatten()
+                .filter(|t| !t.trim().is_empty())
+                .map(|v| match f.ui {
+                    Ui::DateTimeEdit => {
+                        Value::Text(iso_to_pattern(&data_to_iso(v.trim(), data_date_letters(f).as_deref()), &date_pattern(f.picture.as_deref())))
+                    }
+                    _ => Value::Text(v.to_string()),
+                });
             let value = data_value.as_ref().unwrap_or(&f.value);
             return self.draw_value_text(value, ui.inset(&f.ui_margin), &fctx.font, &fctx.para, &fctx.som);
         }
