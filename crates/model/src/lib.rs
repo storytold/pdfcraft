@@ -18,20 +18,45 @@ pub struct Page {
     pub dict: Dict,
 }
 
-fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
+/// The side, in points, at or below which a `/MediaBox` or clipped `/CropBox` has no area and
+/// falls back (the renderer's `is_nearly_zero`, 1/4096).
+const MIN_BOX_SIDE: f64 = 1.0 / 4096.0;
+
+/// Normalized `[x0, y0, x1, y1]` of a page box when its first four entries form a finite, positive rectangle.
+///
+/// Origin and size are unscaled; overflowing widths are returned so [`Page::crop`] can clip them
+/// to the media box.
+fn box_coords(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     let o = doc.resolve(o?);
-    let v: Vec<f64> = o.as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
-    (v.len() == 4 && v.iter().all(|x| x.is_finite())).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
+    let [a, b, c, d, ..] = o.as_array()?.as_slice() else { return None };
+    let coords = [doc.resolve(a).as_f64()?, doc.resolve(b).as_f64()?, doc.resolve(c).as_f64()?, doc.resolve(d).as_f64()?];
+    if !coords.iter().all(|x| x.is_finite()) {
+        return None;
+    }
+    let r = [coords[0].min(coords[2]), coords[1].min(coords[3]), coords[0].max(coords[2]), coords[1].max(coords[3])];
+    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+    (w > 0.0 && h > 0.0).then_some(r)
+}
+
+/// Like [`box_coords`], also rejecting boxes whose span overflows when scaled by [`MAX_USER_UNIT`].
+fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
+    let r = box_coords(doc, o)?;
+    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+    ((w * MAX_USER_UNIT).is_finite() && (h * MAX_USER_UNIT).is_finite()).then_some(r)
 }
 
 impl Page {
-    /// The visible region (crop box clipped to the media box), in user space.
+    /// The visible region (crop box clipped to the media box), in user space. A page with no
+    /// `/MediaBox`, or one without area (a side of at most 1/4096 pt, as the renderer measures
+    /// it), is US Letter, as the renderer and inspector size it.
     pub fn crop(&self, doc: &Document) -> [f64; 4] {
-        let media = rect(doc, self.dict.get(b"MediaBox")).unwrap_or([0.0, 0.0, 612.0, 792.0]);
-        match rect(doc, self.dict.get(b"CropBox")) {
+        let media = rect(doc, self.dict.get(b"MediaBox"))
+            .filter(|m| m[2] - m[0] > MIN_BOX_SIDE && m[3] - m[1] > MIN_BOX_SIDE)
+            .unwrap_or([0.0, 0.0, 612.0, 792.0]);
+        match box_coords(doc, self.dict.get(b"CropBox")) {
             Some(c) => {
                 let r = [c[0].max(media[0]), c[1].max(media[1]), c[2].min(media[2]), c[3].min(media[3])];
-                if r[2] > r[0] && r[3] > r[1] { r } else { media }
+                if r[2] - r[0] > MIN_BOX_SIDE && r[3] - r[1] > MIN_BOX_SIDE { r } else { media }
             }
             None => media,
         }
@@ -82,14 +107,41 @@ pub fn view_matrix_for(rotation: i64, crop: [f64; 4]) -> [f64; 6] {
 }
 
 /// Leaf pages in document order, with inherited attributes resolved. Cycles and absurdly deep
-/// trees are cut off rather than followed.
+/// trees are cut off rather than followed, as is a tree whose inherited values would take more
+/// than [`MAX_INHERITED_COPIES`] bytes to copy into its leaves.
 pub fn pages(doc: &Document) -> Vec<Page> {
     PageTree::new(doc).collect()
 }
 
+/// Leaf page `index` (0-based), walking the page tree only as far as it.
+pub fn page_at(doc: &Document, index: usize) -> Option<Page> {
+    PageTree::new(doc).nth(index)
+}
+
+/// Approximate bytes of inherited values copied into leaf dictionaries by one page walk.
+pub const MAX_INHERITED_COPIES: usize = 1 << 30;
+
+/// Approximate heap bytes of `o`: one [`Object`] per node plus string, name and key bytes.
+/// Values nested deeper than the parser allows weigh as too large.
+fn weight(o: &Object, depth: usize) -> usize {
+    if depth > 256 {
+        return usize::MAX;
+    }
+    let own = std::mem::size_of::<Object>();
+    match o {
+        Object::String(s) => own.saturating_add(s.bytes.len()),
+        Object::Name(n) => own.saturating_add(n.len()),
+        Object::Array(a) => a.iter().fold(own, |n, v| n.saturating_add(weight(v, depth + 1))),
+        Object::Dict(d) => d.iter().fold(own, |n, (k, v)| n.saturating_add(k.len()).saturating_add(weight(v, depth + 1))),
+        Object::Stream(s) => s.dict.iter().fold(own, |n, (k, v)| n.saturating_add(k.len()).saturating_add(weight(v, depth + 1))),
+        _ => own,
+    }
+}
+
 // Retain the owner of each inherited value rather than deep-cloning direct Resources on
-// every edge. Only the final Page dictionaries need owned copies of those values.
-type Inherited = [Option<std::sync::Arc<Object>>; 4];
+// every edge. Only the final Page dictionaries need owned copies of those values. Each owner
+// carries the value's weight, measured once where the value is declared.
+type Inherited = [Option<(std::sync::Arc<Object>, usize)>; 4];
 
 struct Children {
     owner: std::sync::Arc<Object>,
@@ -112,16 +164,23 @@ struct PageTree<'a> {
     // One cursor per ancestor, never one entry per child. This also preserves the first
     // depth-first occurrence's attributes when malformed trees share a child.
     pending: Vec<Children>,
+    // Weight left for copying inherited values into leaves. A large direct value on an
+    // ancestor of many leaves would otherwise be copied once per leaf.
+    budget: usize,
 }
 
 impl<'a> PageTree<'a> {
     fn new(doc: &'a Document) -> Self {
+        Self::with_budget(doc, MAX_INHERITED_COPIES)
+    }
+
+    fn with_budget(doc: &'a Document, budget: usize) -> Self {
         let top = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages")));
         let pending = top
             .into_iter()
             .map(|r| Children { owner: std::sync::Arc::new(Object::Array(vec![Object::Ref(r)])), next: 0, inherited: Default::default() })
             .collect();
-        Self { doc, seen: Default::default(), pending }
+        Self { doc, seen: Default::default(), pending, budget }
     }
 }
 
@@ -149,8 +208,8 @@ impl Iterator for PageTree<'_> {
             let Some(d) = obj.as_dict() else { continue };
             let mut inherited = parent.inherited.clone();
             for (key, owner) in INHERITABLE.iter().zip(&mut inherited) {
-                if d.contains(key) {
-                    *owner = Some(obj.clone());
+                if let Some(value) = d.get(key) {
+                    *owner = Some((obj.clone(), weight(value, 0)));
                 }
             }
             let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
@@ -165,8 +224,15 @@ impl Iterator for PageTree<'_> {
                 let mut dict = d.clone();
                 for (key, owner) in INHERITABLE.iter().zip(&inherited) {
                     if !dict.contains(key)
-                        && let Some(value) = owner.as_ref().and_then(|o| o.as_dict()).and_then(|d| d.get(key))
+                        && let Some((owner, weight)) = owner
+                        && let Some(value) = owner.as_dict().and_then(|d| d.get(key))
                     {
+                        // Past the budget the walk is cut off, like a tree too large to follow.
+                        let Some(left) = self.budget.checked_sub(*weight) else {
+                            self.pending.clear();
+                            return None;
+                        };
+                        self.budget = left;
                         dict.set(key.to_vec(), value.clone());
                     }
                 }
@@ -194,6 +260,11 @@ mod tests {
             format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] /Rotate {rotate} /Resources << /Font << >> >> {pages} >>"),
             format!("<< /Type /Page /Parent 2 0 R /CropBox [10 20 210 320] {page} >>"),
         ];
+        doc_from(&objs)
+    }
+
+    /// A document whose objects 1, 2, … are `objs`, object 1 its catalog.
+    fn doc_from(objs: &[String]) -> Document {
         let mut out = b"%PDF-1.7\n".to_vec();
         let mut offs = Vec::new();
         for (i, o) in objs.iter().enumerate() {
@@ -207,6 +278,116 @@ mod tests {
         }
         out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
         Document::open(Arc::new(out)).unwrap()
+    }
+
+    /// A page with no `/MediaBox`, its own or inherited, is US Letter, the size the renderer
+    /// and the inspector use too (hayro-syntax patch 44; ISO 32000-2 Table 31 gives no default).
+    #[test]
+    fn a_page_without_a_media_box_is_letter() {
+        let d = doc_from(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R >>".to_string(),
+        ]);
+        let p = &pages(&d)[0];
+        assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0]);
+        assert_eq!(p.display_size(&d), (612.0, 792.0));
+    }
+
+    /// A page without a `/MediaBox` of its own inherits its `/Pages` parent's (ISO 32000-2
+    /// §7.7.3.4): only a box neither has falls back to US Letter.
+    #[test]
+    fn a_page_inherits_its_parents_media_box_before_falling_back_to_letter() {
+        let d = doc_from(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R >>".to_string(),
+        ]);
+        let p = &pages(&d)[0];
+        assert_eq!(p.crop(&d), [0.0, 0.0, 300.0, 400.0]);
+        assert_eq!(p.display_size(&d), (300.0, 400.0));
+    }
+
+    /// The box can come from further up: a grandparent `/Pages` node's `/MediaBox`, through a
+    /// `/Pages` node without one, with its origin away from 0 0 kept in the crop and view matrix.
+    #[test]
+    fn a_page_inherits_a_grandparents_media_box_with_its_origin() {
+        let d = doc_from(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [100 200 400 600] >>".to_string(),
+            "<< /Type /Pages /Parent 2 0 R /Kids [4 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 3 0 R >>".to_string(),
+        ]);
+        let p = &pages(&d)[0];
+        assert_eq!(p.crop(&d), [100.0, 200.0, 400.0, 600.0]);
+        assert_eq!(p.display_size(&d), (300.0, 400.0));
+        assert_eq!(p.view_matrix(&d), view_matrix_for(0, [100.0, 200.0, 400.0, 600.0]));
+        assert_ne!(p.view_matrix(&d), view_matrix_for(0, [0.0, 0.0, 300.0, 400.0]), "the origin is kept");
+    }
+
+    /// The nearest ancestor's `/MediaBox` wins over the root's, origin and all: the crop and the view matrix come from
+    /// the intermediate `/Pages` node's box.
+    #[test]
+    fn a_page_takes_its_nearest_ancestors_media_box_and_origin() {
+        let d = doc_from(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".to_string(),
+            "<< /Type /Pages /Parent 2 0 R /Kids [4 0 R] /Count 1 /MediaBox [100 200 400 600] >>".to_string(),
+            "<< /Type /Page /Parent 3 0 R >>".to_string(),
+        ]);
+        let p = &pages(&d)[0];
+        assert_eq!(p.crop(&d), [100.0, 200.0, 400.0, 600.0]);
+        assert_eq!(p.view_matrix(&d), view_matrix_for(0, [100.0, 200.0, 400.0, 600.0]));
+    }
+
+    /// An intermediate `/Pages` node's `/MediaBox` without area is the inherited one, so the page is US Letter, not
+    /// its grandparent's box.
+    #[test]
+    fn a_nearest_media_box_without_area_gives_letter_not_a_further_ancestors() {
+        let d = doc_from(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".to_string(),
+            "<< /Type /Pages /Parent 2 0 R /Kids [4 0 R] /Count 1 /MediaBox [0 0 0 0] >>".to_string(),
+            "<< /Type /Page /Parent 3 0 R >>".to_string(),
+        ]);
+        let p = &pages(&d)[0];
+        assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0]);
+    }
+
+    /// A `/MediaBox` without area (`[0 0 0 0]`) is US Letter too, as the renderer draws it.
+    #[test]
+    fn a_page_whose_media_box_has_no_area_is_letter() {
+        let d = doc_from(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 0 0] >>".to_string(),
+        ]);
+        let p = &pages(&d)[0];
+        assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0]);
+        assert_eq!(p.display_size(&d), (612.0, 792.0));
+    }
+
+    #[test]
+    fn inherited_copies_stop_at_a_budget() {
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        let leaf = d.get(ObjRef { num: 3, generation: 0 }).as_dict().unwrap().clone();
+        let kids: Vec<_> = (0..200).map(|_| Object::Ref(d.add(leaf.clone()))).collect();
+        let mut resources = Dict::new();
+        resources.set(b"Payload".to_vec(), Object::Array(vec![Object::Int(42); 8192]));
+        let resources = Object::Dict(resources);
+        let each = weight(&resources, 0);
+        d.update_dict(root, |dict| {
+            dict.set(b"Kids".to_vec(), Object::Array(kids));
+            dict.set(b"Resources".to_vec(), resources);
+        })
+        .unwrap();
+        let budget = 1 << 20;
+        let pages: Vec<Page> = PageTree::with_budget(&d, budget).collect();
+        let copied: usize = pages.iter().filter_map(|p| p.dict.get(b"Resources")).map(|r| weight(r, 0)).sum();
+        assert!(copied <= budget, "{copied} bytes of inherited values copied into {} pages", pages.len());
+        assert_eq!(pages.len(), budget / each);
+        assert_eq!(super::pages(&d).len(), 200);
     }
 
     #[test]
@@ -342,6 +523,63 @@ mod tests {
         ] {
             let d = doc_with(0, pages_attrs, page_attrs);
             assert_eq!(pages(&d)[0].user_unit(&d), unit, "{pages_attrs} {page_attrs}");
+        }
+    }
+
+    #[test]
+    fn degenerate_or_malformed_boxes_fall_back() {
+        for bad_media in ["[0 0 0 792]", "[10 10 100 10]", "[10 10 10 10]", "[0 0 /Bad 400 500]"] {
+            let d = doc_with(0, &format!("/MediaBox {bad_media}"), "/CropBox null");
+            let p = &pages(&d)[0];
+            assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0], "{bad_media}");
+            assert_eq!(p.display_size(&d), (612.0, 792.0), "{bad_media}");
+        }
+        // Rejected /CropBox falls back to /MediaBox ([0 0 600 800] from doc_with).
+        for bad_crop in ["[0 0 0 800]", "[0 0 /Bad 400 500]"] {
+            let d = doc_with(0, "", &format!("/CropBox {bad_crop}"));
+            assert_eq!(pages(&d)[0].crop(&d), [0.0, 0.0, 600.0, 800.0], "{bad_crop}");
+        }
+        // Reversed coordinates are normalized, and four valid leading coordinates with trailing
+        // entries match the renderer's crop bounds.
+        let reversed = doc_with(0, "", "/CropBox [300 400 10 20]");
+        assert_eq!(pages(&reversed)[0].crop(&reversed), [10.0, 20.0, 300.0, 400.0]);
+        let trailing = doc_with(0, "", "/CropBox [0 0 300 792 /Extra]");
+        assert_eq!(pages(&trailing)[0].crop(&trailing), [0.0, 0.0, 300.0, 792.0]);
+        // An overflowing /CropBox still intersects a normal /MediaBox; the visible region is that
+        // intersection, not the full media box (hidden-text cleanup uses this crop), unless the
+        // clipped intersection is a sliver at or below MIN_BOX_SIDE, matching the renderer.
+        let overflow = doc_with(0, "/MediaBox [0 0 600 800]", "/CropBox [-1e308 0 1e308 792]");
+        assert_eq!(pages(&overflow)[0].crop(&overflow), [0.0, 0.0, 600.0, 792.0]);
+        for sliver in ["/CropBox [-1e308 0 1e308 0.0001]", "/CropBox [-1e308 0 0.0001 800]"] {
+            let d = doc_with(0, "/MediaBox [0 0 600 800]", sliver);
+            assert_eq!(pages(&d)[0].crop(&d), [0.0, 0.0, 600.0, 800.0], "{sliver}");
+        }
+
+        let mut d = doc_with(0, "", "/CropBox null");
+        let leaf = ObjRef { num: 3, generation: 0 };
+        // Indirect box array and indirect coordinate numbers resolve cleanly.
+        let w_ref = d.add(Object::Int(250));
+        let h_ref = d.add(Object::Real(350.0));
+        let box_ref = d.add(Object::Array(vec![Object::Int(0), Object::Int(0), Object::Ref(w_ref), Object::Ref(h_ref)]));
+        d.update_dict(leaf, |dict| dict.set(b"CropBox".to_vec(), Object::Ref(box_ref))).unwrap();
+        assert_eq!(pages(&d)[0].crop(&d), [0.0, 0.0, 250.0, 350.0]);
+        d.update_dict(leaf, |dict| dict.set(b"CropBox".to_vec(), Object::Null)).unwrap();
+
+        for extreme in [
+            vec![Object::Real(-1e308), Object::Real(0.0), Object::Real(1e308), Object::Real(792.0)],
+            vec![Object::Real(0.0), Object::Real(0.0), Object::Real(1e308), Object::Real(792.0)],
+            vec![Object::Real(0.0), Object::Real(0.0), Object::Real(1e306), Object::Real(792.0)],
+            vec![Object::Real(0.0), Object::Real(0.0), Object::Real(f64::NAN), Object::Real(792.0)],
+        ] {
+            d.update_dict(leaf, |dict| {
+                dict.set(b"MediaBox".to_vec(), Object::Array(extreme.clone()));
+                dict.set(b"UserUnit".to_vec(), Object::Real(1000.0));
+            })
+            .unwrap();
+            let p = &pages(&d)[0];
+            assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0], "{extreme:?}");
+            let (w, h) = p.display_size(&d);
+            assert!(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0, "{extreme:?}: ({w}, {h})");
         }
     }
 }

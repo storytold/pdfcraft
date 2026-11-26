@@ -1,0 +1,9 @@
+Label = "Attachments"
+Label = "1"
+Button "Close" [off]
+Button "Attach a file…"
+Image
+Label = "notes.txt"
+Label = "5 bytes"
+Button "Save attachment…" [off]
+Button "Delete attachment" [off]
