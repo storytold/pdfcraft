@@ -324,6 +324,7 @@ impl PdfCraftApp {
             animation_effects: craft::theme::MotionChoice::System,
             full_screen_escape_exits: true,
             full_screen_fill: true,
+            full_screen_click_turns: true,
             language: i18n::AUTO.to_string(),
             ui_scale: None,
             title_bar_choice: Default::default(),

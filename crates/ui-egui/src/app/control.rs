@@ -145,6 +145,13 @@ impl PdfCraftApp {
                     _ => return Err("full-screen-escape must be on or off".into()),
                 };
             }
+            ("full-screen-click-turns", _) => {
+                self.full_screen_click_turns = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("full-screen-click-turns must be on or off".into()),
+                };
+            }
             ("full-screen-fill", _) => {
                 self.full_screen_fill = match value {
                     "on" => true,

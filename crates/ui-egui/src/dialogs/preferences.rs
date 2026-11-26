@@ -76,6 +76,7 @@ struct PrefsDraft {
     default_mode: Mode,
     view_defaults: ViewDefaults,
     full_screen_fill: bool,
+    full_screen_click_turns: bool,
     full_screen_escape_exits: bool,
     highlight_fields: bool,
     always_default_view: bool,
@@ -112,6 +113,7 @@ impl PrefsDraft {
             default_mode: app.default_mode,
             view_defaults: app.view_defaults,
             full_screen_fill: app.full_screen_fill,
+            full_screen_click_turns: app.full_screen_click_turns,
             full_screen_escape_exits: app.full_screen_escape_exits,
             highlight_fields: app.highlight_fields,
             always_default_view: app.always_default_view,
@@ -153,6 +155,7 @@ impl PrefsDraft {
             default_mode: Mode::AllTools,
             view_defaults: ViewDefaults::default(),
             full_screen_fill: true,
+            full_screen_click_turns: true,
             full_screen_escape_exits: true,
             highlight_fields: true,
             always_default_view: false,
@@ -454,6 +457,7 @@ impl PreferencesModel for Prefs<'_> {
             ("view.continuous", PrefValue::Bool(v)) => d.view_defaults.continuous = v,
             ("view.gaps", PrefValue::Bool(v)) => d.view_defaults.page_gaps = v,
             ("view.full_screen_fill", PrefValue::Bool(v)) => d.full_screen_fill = v,
+            ("view.full_screen_click_turns", PrefValue::Bool(v)) => d.full_screen_click_turns = v,
             ("view.full_screen_escape", PrefValue::Bool(v)) => d.full_screen_escape_exits = v,
             ("view.fit", PrefValue::Choice(id)) => d.view_defaults.fit = lookup(&fit_table(), &id).unwrap_or(d.view_defaults.fit),
             ("view.zoom", PrefValue::Int(v)) => {
@@ -550,6 +554,7 @@ impl PreferencesModel for Prefs<'_> {
                 d.default_mode = fresh.default_mode;
                 d.view_defaults = fresh.view_defaults;
                 d.full_screen_fill = fresh.full_screen_fill;
+                d.full_screen_click_turns = fresh.full_screen_click_turns;
                 d.full_screen_escape_exits = fresh.full_screen_escape_exits;
                 d.always_default_view = fresh.always_default_view;
                 d.text_links = fresh.text_links;
@@ -627,6 +632,7 @@ impl PreferencesDraft for Prefs<'_> {
         self.app.default_mode = d.default_mode;
         self.app.view_defaults = d.view_defaults;
         self.app.full_screen_fill = d.full_screen_fill;
+        self.app.full_screen_click_turns = d.full_screen_click_turns;
         self.app.full_screen_escape_exits = d.full_screen_escape_exits;
         self.app.highlight_fields = d.highlight_fields;
         self.app.always_default_view = d.always_default_view;
@@ -759,6 +765,11 @@ impl Prefs<'_> {
                 .help(tl!("Hide gaps to join page edges. Margins inside the PDF remain unchanged.")),
             RowSpec::new("view.full_screen_fill", tl!("Full screen fills the screen with one page at a time"), RowKind::Bool(d.full_screen_fill))
                 .help(tl!("Turn off to keep the page display, such as continuous scrolling, in full screen.")),
+            RowSpec::new(
+                "view.full_screen_click_turns",
+                tl!("Turn pages with mouse clicks in full screen"),
+                RowKind::Bool(d.full_screen_click_turns),
+            ),
             RowSpec::new("view.full_screen_escape", tl!("Esc leaves full screen"), RowKind::Bool(d.full_screen_escape_exits))
                 .help(tl!("Turn off so that only Ctrl+L (⌘L on macOS) leaves full screen, as for a kiosk display.")),
             choice_row("view.fit", tl!("Default zoom"), v.fit, &fit_table())

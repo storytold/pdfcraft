@@ -339,6 +339,8 @@ pub struct PdfCraftApp {
     /// Preferences ▸ Full screen fills the screen with one page at a time (on by default). Off,
     /// full screen keeps the normal page display and the reading position.
     pub full_screen_fill: bool,
+    /// Preferences ▸ Turn pages with mouse clicks in full screen, on by default.
+    pub full_screen_click_turns: bool,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
     /// Preferences ▸ Interface size as a factor, or `None` for the usual size.

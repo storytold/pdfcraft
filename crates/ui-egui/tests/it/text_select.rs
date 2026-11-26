@@ -566,21 +566,24 @@ fn full_screen_link_click_cancels_the_pending_page_turn() {
             ),
         )
         .into_bytes();
-    let (mut h, _) = harness_with(four_pages, |_| {});
-    h.state_mut().set_full_screen(true);
-    crate::support::wait_until(&mut h, "the page in full screen", |app| app.views[0].glyph_screen_pos(0, 5).is_some() && !app.render_pending());
-    let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
-    let at = |x: f32, y: f32| egui::pos2(r.left() + x / 300.0 * r.width(), r.top() + (200.0 - y) / 200.0 * r.height());
-    // A click on blank page area, then, within the double-click time, a click on the link.
-    h.hover_at(at(150.0, 90.0));
-    h.run_steps(1);
-    click(&mut h, at(150.0, 90.0));
-    h.run_steps(3);
-    h.hover_at(at(240.0, 40.0));
-    h.run_steps(1);
-    click(&mut h, at(240.0, 40.0));
-    h.run_steps(30);
-    assert_eq!(h.state().views[0].current(), 2, "the link's page, and no turn after it");
+    for turns in ["on", "off"] {
+        let (mut h, _) = harness_with(four_pages.clone(), |_| {});
+        h.set_option("full-screen-click-turns", turns).unwrap();
+        h.state_mut().set_full_screen(true);
+        crate::support::wait_until(&mut h, "the page in full screen", |app| app.views[0].glyph_screen_pos(0, 5).is_some() && !app.render_pending());
+        let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+        let at = |x: f32, y: f32| egui::pos2(r.left() + x / 300.0 * r.width(), r.top() + (200.0 - y) / 200.0 * r.height());
+        // A click on blank page area, then, within the double-click time, a click on the link.
+        h.hover_at(at(150.0, 90.0));
+        h.run_steps(1);
+        click(&mut h, at(150.0, 90.0));
+        h.run_steps(3);
+        h.hover_at(at(240.0, 40.0));
+        h.run_steps(1);
+        click(&mut h, at(240.0, 40.0));
+        h.run_steps(30);
+        assert_eq!(h.state().views[0].current(), 2, "the link's page, and no turn after it");
+    }
 }
 
 /// Review on #2070: in full screen a click goes forward a page, but a double-click selects the
@@ -628,6 +631,25 @@ fn full_screen_double_click_selects_a_word_and_stays_on_the_page() {
     h.state_mut().set_full_screen(false);
     h.run_steps(30);
     assert_eq!(h.state().views[0].current(), 0, "no page turn after leaving");
+
+    h.set_option("full-screen-click-turns", "off").unwrap();
+    h.state_mut().set_full_screen(true);
+    crate::support::wait_until(&mut h, "the page in full screen", |app| app.views[0].glyph_screen_pos(0, 5).is_some() && !app.render_pending());
+    let at = h.state().views[0].glyph_screen_pos(0, 5).expect("text layer");
+    h.hover_at(at);
+    h.run_steps(1);
+    click(&mut h, at);
+    click(&mut h, at);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
+    h.run_steps(30);
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let blank = egui::pos2(page.center().x, page.bottom() - 20.0);
+    h.hover_at(blank);
+    h.run_steps(1);
+    click(&mut h, blank);
+    h.run_steps(30);
+    assert!(h.state().views[0].selected_text().is_none(), "a plain click still clears the selection");
+    assert_eq!(h.state().views[0].current(), 0, "clearing the selection does not turn the page with click turns off");
 }
 
 /// L-318 (#5302): Esc closes one thing at a time. In full screen with a text selection the first Esc clears the
