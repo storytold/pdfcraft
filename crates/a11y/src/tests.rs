@@ -1868,8 +1868,97 @@ fn headings_naming_one_large_string_stop_decoding_it_at_the_allowance() {
         format!("({})", "a".repeat(512 << 10)),
     ];
     objects.extend((0..count).map(|_| "<< /S /H1 /P 6 0 R /Pg 3 0 R /ActualText 7 0 R >>".to_string()));
-    let found = headings(&pdf(&objects, ""));
+    let (found, cut) = headings_with_truncation(&pdf(&objects, ""));
     assert!(!found.is_empty() && found.len() < count, "{}", found.len());
+    assert!(cut, "headings whose title the allowance turned away were dropped unreported");
+}
+
+/// A title source too large for the allowance is passed over for the next one, and the heading
+/// it names is kept and not reported as missing.
+#[test]
+fn a_title_too_large_for_the_allowance_falls_back_without_truncation() {
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".to_string(),
+        stream("BT ET"),
+        "<< /Type /StructTreeRoot /K 6 0 R >>".to_string(),
+        "<< /S /Document /P 5 0 R /K [8 0 R] >>".to_string(),
+        format!("({})", "a".repeat((32 << 20) / 3 + 1)),
+        "<< /S /H1 /P 6 0 R /Pg 3 0 R /ActualText 7 0 R /Alt (Short) >>".to_string(),
+    ];
+    let (found, cut) = headings_with_truncation(&pdf(&objects, ""));
+    let titles: Vec<String> = found.into_iter().map(|h| h.title).collect();
+    assert_eq!((titles, cut), (vec!["Short".to_string()], false));
+}
+
+/// A tree of `count` H1 elements, each with its text and page.
+fn many_headings(count: usize) -> Vec<String> {
+    let kids: String = (0..count).map(|i| format!("{} 0 R ", i + 7)).collect();
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".to_string(),
+        stream("BT ET"),
+        "<< /Type /StructTreeRoot /K 6 0 R >>".to_string(),
+        format!("<< /S /Document /P 5 0 R /K [{kids}] >>"),
+    ];
+    objects.extend((0..count).map(|_| "<< /S /H1 /P 6 0 R /Pg 3 0 R /ActualText (Head) >>".to_string()));
+    objects
+}
+
+#[test]
+fn headings_past_the_cap_are_reported() {
+    let (at_cap, cut) = headings_with_truncation(&pdf(&many_headings(MAX_HEADINGS), ""));
+    assert_eq!((at_cap.len(), cut), (MAX_HEADINGS, false));
+    let (over, cut) = headings_with_truncation(&pdf(&many_headings(MAX_HEADINGS + 1), ""));
+    assert_eq!((over.len(), cut), (MAX_HEADINGS, true), "a heading past the cap was dropped unreported");
+}
+
+#[test]
+fn a_heading_nested_past_the_depth_limit_is_reported() {
+    let mut objs = headings_doc();
+    let (found, cut) = headings_with_truncation(&pdf(&objs, ""));
+    assert!(!found.is_empty() && !cut);
+    // Element 17 opens a chain of 300 sections, each holding the next, around one H1.
+    let first = objs.len() + 1;
+    objs[9] = format!("<< /S /Document /K [12 0 R {first} 0 R] >>");
+    objs.extend((1..=300).map(|i| format!("<< /S /Sect /K {} 0 R >>", first + i)));
+    objs.push("<< /S /H1 /Pg 3 0 R /ActualText (Deep) >>".into());
+    let (found, cut) = headings_with_truncation(&pdf(&objs, ""));
+    assert!(found.iter().all(|h| h.title != "Deep") && cut, "a heading too deep to reach was dropped unreported");
+}
+
+/// A branch too deep to walk is skipped, not the end of the walk: a heading after it is found.
+#[test]
+fn a_heading_after_a_branch_past_the_depth_limit_is_found() {
+    let mut objs = headings_doc();
+    let first = objs.len() + 1;
+    objs[9] = format!("<< /S /Document /K [{first} 0 R 12 0 R] >>");
+    objs.extend((1..=300).map(|i| format!("<< /S /Sect /K {} 0 R >>", first + i)));
+    objs.push("<< /S /H1 /Pg 3 0 R /ActualText (Deep) >>".into());
+    let (found, cut) = headings_with_truncation(&pdf(&objs, ""));
+    let titles: Vec<&str> = found.iter().map(|h| h.title.as_str()).collect();
+    assert_eq!((titles, cut), (vec!["Chapter One"], true), "the deep branch stopped the walk");
+}
+
+/// An H1 `sects + 1` elements down whose title is only its marked content.
+fn heading_under_sections(sects: usize) -> (Vec<Heading>, bool) {
+    let mut objs = headings_doc();
+    let first = objs.len() + 1;
+    objs[9] = format!("<< /S /Document /K {first} 0 R >>");
+    objs.extend((1..=sects).map(|i| format!("<< /S /Sect /K {} 0 R >>", first + i)));
+    objs.push("<< /S /H1 /Pg 3 0 R /K 0 >>".into());
+    headings_with_truncation(&pdf(&objs, ""))
+}
+
+/// Marked content past the depth limit is reported too: the H1 whose title it holds is lost.
+#[test]
+fn marked_content_past_the_depth_limit_is_reported() {
+    let (found, cut) = heading_under_sections(254);
+    assert_eq!((found.iter().map(|h| h.title.as_str()).collect::<Vec<_>>(), cut), (vec!["Chapter One"], false));
+    let (found, cut) = heading_under_sections(255);
+    assert!(found.is_empty() && cut, "a heading whose text was too deep was dropped unreported");
 }
 
 #[test]
