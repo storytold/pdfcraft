@@ -36,7 +36,7 @@ jobs:
       # the org's 5 macOS slots are kept for release builds, and release.yml builds macOS.
       os: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '["ubuntu-24.04","windows-latest"]' || '["ubuntu-24.04"]' }}
       # Same craft-fonts commit as release.yml and freebsd.yml.
-      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      craft-fonts-ref: c1db6d1a8ed772191241c3d185e2104be84d8691
       # egui/winit/rfd, and the independent oracles (crates/oracle).
       packages: >-
         libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
