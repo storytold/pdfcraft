@@ -832,6 +832,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
     Field {
         common: parse_common(n, warnings),
         ui: kind,
+        pdf417: ui_el.and_then(parse_pdf417),
         ui_border: ui_el.and_then(|e| parse_border(child(e, "border"))),
         ui_margin: parse_margin(ui_el.and_then(|e| child(e, "margin"))),
         check_size: ui_el.and_then(|e| attr_measure(e, "size")).filter(|s| *s > 0.0),
@@ -864,6 +865,37 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         display_picture: child(n, "format").and_then(|f| child(f, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
         keep_intact: child(n, "keep").and_then(|k| k.attribute("intact")).is_some_and(|v| v == "contentArea" || v == "pageArea"),
     }
+}
+
+/// XFA 3.3 PDF417 geometry, error correction and fixed or automatic layout.
+fn parse_pdf417(n: XmlNode) -> Option<crate::barcode::Pdf417Options> {
+    if n.tag_name().name() != "barcode"
+        || !n.attribute("type").is_some_and(|value| value.trim().eq_ignore_ascii_case("pdf417"))
+        || n.attribute("dataPrep").is_some_and(|value| value != "none")
+        || n.attribute("charEncoding").map(str::trim).is_some_and(|value| !value.eq_ignore_ascii_case("none") && !value.eq_ignore_ascii_case("UTF-8"))
+        || child(n, "encrypt").is_some()
+    {
+        return None;
+    }
+    let module_width = measure(n.attribute("moduleWidth").unwrap_or("0.25mm")).filter(|&width| width > 0.0)?;
+    // ISO/IEC 15438 requires rows at least three times as high as the narrowest bar.
+    let row_height = measure(n.attribute("moduleHeight").unwrap_or("5mm")).filter(|&height| height > 0.0)?.max(3.0 * module_width);
+    let error_correction = n.attribute("errorCorrectionLevel").unwrap_or("2").trim().parse::<u8>().ok().filter(|&level| level <= 8)?;
+    let rows = n.attribute("dataRowCount").map(|value| value.trim().parse()).transpose().ok()?;
+    let columns = n.attribute("dataColumnCount").map(|value| value.trim().parse()).transpose().ok()?;
+    if rows.is_some() && columns.is_none() {
+        return None;
+    }
+    let row_column_ratio = match (rows, n.attribute("rowColumnRatio")) {
+        (None, Some(ratio)) => Some(ratio.trim().parse::<f64>().ok().filter(|&ratio| ratio.is_finite() && ratio > 0.0)?),
+        _ => None,
+    };
+    let truncated = match n.attribute("truncate").map(str::trim) {
+        None | Some("0" | "false") => false,
+        Some("1" | "true") => true,
+        _ => return None,
+    };
+    Some(crate::barcode::Pdf417Options { module_width, row_height, error_correction, rows, columns, row_column_ratio, truncated })
 }
 
 /// Whether a `<validate>` element makes its object one that must be filled in: `nullTest="error"`
@@ -1319,13 +1351,21 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     collect_page_roles(&root_node, &mut page_roles, 0);
     let mut embedded = std::collections::BTreeSet::new();
     collect_embedded(&root_node, &mut embedded, 0);
-    let mut tpl = Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default(), cache: Default::default() };
-    let paths = crate::data::fields_with_ids(&tpl)
-        .into_iter()
-        .filter(|(id, _, _)| tpl.embedded.contains(*id))
-        .map(|(_, som, _)| crate::data::data_path(&tpl, &som).into_iter().map(|(name, _)| name).collect())
-        .collect();
-    tpl.embedded_paths = paths;
+    let mut tpl = Template { root: root_sf, page_roles, embedded, ..Default::default() };
+    let is_embedded = |field: &Field| field.common.id.as_deref().is_some_and(|id| tpl.embedded.contains(id));
+    let mut embedded_paths = std::collections::BTreeSet::new();
+    let mut barcode_paths = std::collections::BTreeSet::new();
+    for (som, field) in crate::data::fields_matching(&tpl, |field| field.ui == Ui::Barcode || is_embedded(field)) {
+        let path = crate::data::data_path(&tpl, &som).into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+        if field.ui == Ui::Barcode {
+            barcode_paths.insert(path.clone());
+        }
+        if is_embedded(field) {
+            embedded_paths.insert(path);
+        }
+    }
+    tpl.embedded_paths = embedded_paths;
+    tpl.barcode_paths = barcode_paths;
     Ok((tpl, warnings))
 }
 

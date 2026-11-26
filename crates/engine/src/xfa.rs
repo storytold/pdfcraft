@@ -492,9 +492,9 @@ struct Runner<'a, 'b> {
     /// it): while layout:ready scripts run, a value written to one is dropped, so each page keeps
     /// the number the layout gave it.
     numbered: HashSet<String>,
-    /// A field embedded in rich text (a floating field) took a new value since the form was
-    /// last laid out: the text that shows it is laid out again when the event ends.
-    embedded_changed: bool,
+    /// A barcode or a floating field took a new value. Its page content needs to be
+    /// laid out again when the event ends.
+    drawn_value_changed: bool,
 }
 
 impl<'a, 'b> Runner<'a, 'b> {
@@ -531,7 +531,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             session: None,
             changes: Changes::default(),
             numbered: HashSet::new(),
-            embedded_changed: false,
+            drawn_value_changed: false,
         }
     }
 
@@ -659,9 +659,8 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn set_value(&mut self, som: &str, value: &str) -> bool {
         use pdfcraft_forms::FieldKind as K;
         let path = pdfcraft_xfa::data_path(self.tpl, som);
-        // A floating field shows the value of its data node in the text that embeds it (XFA 3.3
-        // pp. 221–222): a page area's, or one another field shares, as well.
-        let embedded = pdfcraft_xfa::path_is_embedded(self.tpl, &path);
+        // Barcodes and floating fields draw from the data node, including shared bindings.
+        let drawn = pdfcraft_xfa::path_affects_page_content(self.tpl, &path);
         let names = self.widgets_at(&path);
         // The data text: the widget at `som` says how its kind writes the value; without one,
         // the first widget bound to the node, else the value itself.
@@ -711,7 +710,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
         if changed {
             self.changes.values += 1;
-            self.embedded_changed |= embedded;
+            self.drawn_value_changed |= drawn;
         }
         changed
     }
@@ -762,7 +761,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
         self.relayouts += 1;
         self.flush()?;
-        self.embedded_changed = false;
+        self.drawn_value_changed = false;
         let report = pdfcraft_xfa::rerender(self.doc, self.tpl).map_err(|e| e.to_string())?;
         self.console(report.warnings);
         crate::xfa_redraw(self.doc)?;
@@ -839,7 +838,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             let paths = self.data.as_ref().map(|d| d.paths_named(&names, pdfcraft_xfa::MAX_FORM_NODES)).unwrap_or_default();
             for path in paths {
                 if self.data.as_ref().and_then(|d| d.text_at(&path)).unwrap_or("") != default {
-                    self.embedded_changed = true;
+                    self.drawn_value_changed = true;
                     self.data_op(pdfcraft_xfa::DataOp::Value { path, text: default.clone() });
                     self.changes.values += 1;
                 }
@@ -853,7 +852,7 @@ impl<'a, 'b> Runner<'a, 'b> {
     /// list's picks (`value` elements) are compared as its lines (the write replaces them).
     fn reset_data(&mut self, path: pdfcraft_xfa::DataPath, text: String) {
         if self.data.as_ref().and_then(|d| d.value_at(&path)).unwrap_or_default() != text {
-            self.embedded_changed |= pdfcraft_xfa::path_is_embedded(self.tpl, &path);
+            self.drawn_value_changed |= pdfcraft_xfa::path_affects_page_content(self.tpl, &path);
             self.data_op(pdfcraft_xfa::DataOp::Value { path, text });
             self.changes.values += 1;
         }
@@ -1056,7 +1055,7 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn finish(mut self) -> Result<Changes, String> {
         #[cfg(test)]
         self.check_live();
-        if self.relayouts_skipped || self.relayout_owed || self.embedded_changed {
+        if self.relayouts_skipped || self.relayout_owed || self.drawn_value_changed {
             self.relayouts = 0;
             self.relayouts_skipped = false;
             self.relayout_owed = false;
@@ -1165,7 +1164,7 @@ pub(crate) fn relayout_changed_text(
         Some(tpl) => std::borrow::Cow::Borrowed(tpl),
         None => std::borrow::Cow::Owned(pdfcraft_xfa::template_of(current).map_err(|e| e.to_string())?),
     };
-    let reflow = changed.any(|som| pdfcraft_xfa::field_grows_with_text(&template, &som) || pdfcraft_xfa::field_is_embedded(&template, &som));
+    let reflow = changed.any(|som| pdfcraft_xfa::field_grows_with_text(&template, &som) || pdfcraft_xfa::field_affects_page_content(&template, &som));
     drop(changed);
     if !reflow {
         return Ok(None);

@@ -12406,6 +12406,49 @@ fn an_xfa_button_may_open_an_attached_file_and_other_events_may_not() {
     assert!(out.console.iter().any(|c| c.contains("open an attached file")), "{:?}", out.console);
 }
 
+/// This invented XFA form exercises a barcode that a button updates after the initial layout.
+#[test]
+fn a_pdf417_barcode_is_regenerated_when_an_xfa_script_changes_its_value() {
+    use rxing::common::HybridBinarizer;
+    use rxing::pdf417::PDF417Reader;
+    use rxing::{BinaryBitmap, Luma8LuminanceSource, RXingResultMetadataType, RXingResultMetadataValue, Reader};
+
+    let xdp = r#"
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="demo" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="code" w="4in" h="1in"><value><text>DEMO INVENTORY 12345</text></value>
+  <ui><barcode type="pdf417" errorCorrectionLevel="5" moduleWidth="0.338mm" moduleHeight="0.676mm"/></ui>
+ </field>
+ <field name="update" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">code.rawValue = "DEMO UPDATED CAFÉ 67890";</script></event>
+ </field>
+</subform>
+</template>
+</xdp:xdp>"#;
+    let mut session = Session::new();
+    let id = session.open("synthetic-barcode.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let scan = |session: &Session| {
+        let page = render_page(session, id);
+        let grayscale = page.rgba.as_chunks::<4>().0.iter().map(|pixel| pixel[0]).collect();
+        let source = Luma8LuminanceSource::new(grayscale, page.width, page.height).unwrap();
+        let mut bitmap = BinaryBitmap::new(HybridBinarizer::new(source));
+        let decoded = PDF417Reader::new().decode(&mut bitmap).expect("rendered page contains a readable PDF417");
+        assert_eq!(
+            decoded.getRXingResultMetadata().get(&RXingResultMetadataType::ERROR_CORRECTION_LEVEL),
+            Some(&RXingResultMetadataValue::ErrorCorrectionLevel("5".into()))
+        );
+        decoded.getText().to_owned()
+    };
+    assert_eq!(scan(&session), "DEMO INVENTORY 12345");
+    session.apply(id, Edit::XfaEvent { som: "demo[0].update[0]".into(), activity: "click".into() }).unwrap();
+    let updated = scan(&session);
+    assert_eq!(updated, "DEMO UPDATED CAFÉ 67890");
+    session.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    assert_eq!(scan(&session), updated, "the baked barcode changed");
+}
+
 /// A field whose layout:ready script only reads the page count keeps the value its script gives
 /// it: only a field the script gives the page call's result is numbered by the layout.
 #[test]

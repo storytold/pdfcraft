@@ -7,6 +7,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod barcode;
 pub mod data;
 pub mod fixtures;
 pub mod image;
@@ -108,8 +109,9 @@ pub use pdf::{AREA_KEY, CLICK_KEY, DATE_KEY, LAYOUT_KEY, NODE_KEY, SOM_KEY, Stri
 pub use picture::typed_date;
 pub use script::{
     FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, embedded_fields,
-    field_grows_with_text, field_is_embedded, field_objects_by_som, fields_by_som, form_tree, form_tree_paged, has_focus_scripts, has_scripts,
-    overrides, page_area_uses, path_is_embedded, refresh_value, rerender, reset_default, set_overrides, template_of,
+    field_affects_page_content, field_grows_with_text, field_is_embedded, field_objects_by_som, fields_by_som, form_tree, form_tree_paged,
+    has_focus_scripts, has_scripts, overrides, page_area_uses, path_affects_page_content, path_is_embedded, refresh_value, rerender, reset_default,
+    set_overrides, template_of,
 };
 
 #[derive(Debug, thiserror::Error)]

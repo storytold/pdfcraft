@@ -20,6 +20,7 @@ pub enum Item {
     },
     /// A box with rounded (or inverted) corners: its fill, and its edge drawn inside it.
     Rounded(Box<Rounded>),
+    Barcode(Box<crate::barcode::Pdf417Symbol>),
     Text(Span),
     Image {
         rect: Rect,

@@ -90,6 +90,10 @@ Shared PDF backend (pinned in Cargo.lock / licenses/pdf-backend/):
 - hayro 0.7.1 — Apache-2.0 OR MIT, Copyright the hayro authors (licence files kept in licenses/pdf-backend/hayro).
 - hayro-interpret 0.7.0 — Apache-2.0 OR MIT, Copyright the hayro authors (licence files kept in licenses/pdf-backend/hayro-interpret).
 
+XFA PDF417 encoding uses rxing (https://github.com/rxing-core/rxing), Apache-2.0.
+The PDF417 encoder and error correction files credit Jeremias Maerki and the ZXing
+Authors, Copyright 2006. The licence is in licenses/rxing-LICENSE.txt.
+
 Bundled egui font icons
 
 The pinned egui dependency includes egui-icons.ttf, a small subset of John Slegers'

@@ -126,6 +126,7 @@ pub(super) fn solid_extent(item: &Item) -> Option<(f64, f64)> {
     match item {
         Item::Text(s) => Some((s.baseline - s.face.size * 0.8, s.baseline + s.face.size * 0.2)),
         Item::Image { rect, .. } => Some((rect.y, rect.bottom())),
+        Item::Barcode(symbol) => Some((symbol.rect.y, symbol.rect.bottom())),
         Item::Widget(w) => Some((w.rect.y, w.rect.bottom())),
         Item::Turned(t) => Some(t.extent),
         Item::Fill { .. } | Item::Line { .. } | Item::Rounded(_) => None,
@@ -258,6 +259,10 @@ pub(super) fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
             r.rect.x += dx;
             r.rect.y += dy;
         }
+        Item::Barcode(symbol) => {
+            symbol.rect.x += dx;
+            symbol.rect.y += dy;
+        }
         Item::Line { from, to, .. } => {
             *from = (from.0 + dx, from.1 + dy);
             *to = (to.0 + dx, to.1 + dy);
@@ -296,12 +301,19 @@ pub(crate) fn date_pattern(picture: Option<&str>) -> String {
 /// clause this can't read or show (month and weekday names) and for a value that isn't an ISO
 /// date: the raw value stands then.
 pub fn formatted_value(picture: &str, raw: &str) -> Option<String> {
+    format_display_date(picture, raw).filter(|shown| shown != raw)
+}
+
+/// Format a supported numeric date picture, including one that leaves the value unchanged.
+pub(super) fn format_display_date(picture: &str, raw: &str) -> Option<String> {
     let first = picture.split('|').next()?.trim();
     let rest = first.strip_prefix("date")?;
-    if !rest.starts_with(['{', '(']) {
+    let rest = if let Some(locale) = rest.strip_prefix('(') { locale.split_once(')')?.1 } else { rest };
+    let inner = rest.strip_prefix('{')?.strip_suffix('}')?;
+    if inner.contains(['E', 'J', '{', '}']) {
         return None;
     }
-    let pattern = date_pattern(Some(first));
+    let pattern = date_letters(inner)?;
     // A picture with parts this can't show yet (month or weekday names, `MMM` or `EEE`) would
     // leave them as letters: the raw value stands then.
     let shows = |t: &String| !t.chars().all(|c| c.is_ascii_alphabetic()) || matches!(t.as_str(), "yyyy" | "yy" | "mm" | "m" | "dd" | "d");
@@ -314,8 +326,7 @@ pub fn formatted_value(picture: &str, raw: &str) -> Option<String> {
     if !iso {
         return None;
     }
-    let shown = iso_to_pattern(raw, &pattern);
-    (shown != raw).then_some(shown)
+    Some(iso_to_pattern(raw, &pattern))
 }
 
 /// The native PDF action a button's click script amounts to (a reset, print, save or link),

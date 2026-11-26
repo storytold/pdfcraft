@@ -226,7 +226,14 @@ pub(crate) fn template_object<'a>(tpl: &'a Template, som: &str) -> Option<&'a No
 /// named object adding its name and its number among its siblings (repeating subforms as their
 /// first instance). Bounded by [`MAX_DEPTH`].
 pub(crate) fn fields_with_ids(tpl: &Template) -> Vec<(&str, String, &Field)> {
-    fn walk<'a>(nodes: &'a [Node], som: &str, out: &mut Vec<(&'a str, String, &'a Field)>, depth: usize) {
+    fields_matching(tpl, |field| field.common.id.is_some())
+        .into_iter()
+        .filter_map(|(som, field)| Some((field.common.id.as_deref()?, som, field)))
+        .collect()
+}
+
+pub(crate) fn fields_matching(tpl: &Template, select: impl Fn(&Field) -> bool) -> Vec<(String, &Field)> {
+    fn walk<'a>(nodes: &'a [Node], som: &str, select: &impl Fn(&Field) -> bool, out: &mut Vec<(String, &'a Field)>, depth: usize) {
         if depth > MAX_DEPTH {
             return;
         }
@@ -238,30 +245,26 @@ pub(crate) fn fields_with_ids(tpl: &Template) -> Vec<(&str, String, &Field)> {
                 None => som.to_string(),
             };
             match n {
-                Node::Field(f) => {
-                    if let Some(id) = &f.common.id {
-                        out.push((id.as_str(), here, f));
-                    }
-                }
+                Node::Field(f) if select(f) => out.push((here, f)),
                 Node::Subform(s) => {
-                    walk(&s.children, &here, out, depth + 1);
+                    walk(&s.children, &here, select, out, depth + 1);
                     if let Some(ps) = &s.page_set {
                         for a in &ps.areas {
-                            walk(&a.items, &a.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default(), out, depth + 1);
+                            walk(&a.items, &a.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default(), select, out, depth + 1);
                         }
                     }
                 }
-                Node::Area(a) => walk(&a.children, &here, out, depth + 1),
-                Node::ExclGroup(_) | Node::Draw(_) => {}
+                Node::Area(a) => walk(&a.children, &here, select, out, depth + 1),
+                Node::Field(_) | Node::ExclGroup(_) | Node::Draw(_) => {}
             }
         }
     }
     let mut out = Vec::new();
     let root = tpl.root.common.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default();
-    walk(&tpl.root.children, &root, &mut out, 1);
+    walk(&tpl.root.children, &root, &select, &mut out, 1);
     if let Some(ps) = &tpl.root.page_set {
         for a in &ps.areas {
-            walk(&a.items, &a.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default(), &mut out, 1);
+            walk(&a.items, &a.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default(), &select, &mut out, 1);
         }
     }
     out

@@ -38,6 +38,8 @@ pub use items::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widget, 
 pub const MAX_PAGES: usize = 500;
 /// Most items (text spans, lines, widgets…) across all pages.
 const MAX_ITEMS: usize = 400_000;
+/// Barcodes are single layout items, but each contains many modules.
+const MAX_BARCODE_MODULES: usize = 1_000_000;
 /// Deepest nesting followed.
 const MAX_DEPTH: usize = 64;
 /// Most size measurements of one layout. Measurements of containers are memoized, so a real
@@ -181,6 +183,7 @@ struct Layouter<'t> {
     items: usize,
     /// Picture bytes laid out so far (see [`MAX_IMAGE_BYTES`]).
     image_bytes: usize,
+    barcode_modules: usize,
     /// Container sizes by (address of the subform or area in the template, available width,
     /// depth), with the inherited font and paragraph they were measured with.
     measured: RefCell<HashMap<MeasureKey, Measured>>,
@@ -271,6 +274,7 @@ fn layout_inner(tpl: &Template, data: Option<&DataNode>, overrides: Option<&crat
         fields: 0,
         items: 0,
         image_bytes: 0,
+        barcode_modules: 0,
         measured: RefCell::new(HashMap::new()),
         measures: Cell::new(0),
         drawn_chars: Cell::new(0),

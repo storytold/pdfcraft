@@ -67,3 +67,5 @@ craft-tiff = { workspace = true }
 pdfcraft-testkit = { workspace = true }
 # JBIG2 fixtures (`encode_jbig2_generic`).
 pdfcraft-filters = { workspace = true }
+# Decode the rendered XFA PDF417 regression fixture.
+rxing = { version = "0.9.4", default-features = false, features = ["decoders", "encoding_rs", "pdf417"] }

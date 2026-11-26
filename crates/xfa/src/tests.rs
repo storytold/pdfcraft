@@ -1468,6 +1468,50 @@ fn formatted_values_follow_date_display_pictures() {
     assert_eq!(crate::formatted_value("date(YYYYMMDD)", "2026-10-20"), None);
 }
 
+/// A synthetic form with room for a PDF417 symbol at one point per module.
+fn pdf417_fixture(value: &str, picture: &str, sizing: &str) -> Form {
+    layout_xml(&format!(
+        r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="demo" layout="tb">
+ <pageSet><pageArea><contentArea w="500pt" h="720pt"/><medium short="612pt" long="792pt"/></pageArea></pageSet>
+ <field name="code" w="400pt" h="200pt">
+  <value><text>{value}</text></value>{picture}
+  <ui><barcode type="pdf417" errorCorrectionLevel="0" moduleWidth="1pt" moduleHeight="3pt" {sizing}/></ui>
+ </field>
+</subform></template>"#
+    ))
+    .unwrap()
+}
+
+#[test]
+fn pdf417_follows_fixed_columns_and_pads_to_an_explicit_ratio() {
+    // Six codewords fill the source symbol, including its length word and error correction.
+    for (sizing, columns, rows) in [
+        (r#"dataColumnCount="4""#, 4, 3),
+        (r#"dataColumnCount="4" dataRowCount="11" rowColumnRatio="10""#, 4, 11),
+        (r#"rowColumnRatio="10""#, 1, 10),
+        (r#"dataColumnCount="2" rowColumnRatio="10""#, 2, 20),
+    ] {
+        let form = pdf417_fixture("ABCDEF", "", sizing);
+        let barcode = form.pages[0].items.iter().find_map(|item| if let Item::Barcode(symbol) = item { Some(symbol) } else { None });
+        let rect = barcode.expect("the barcode was drawn").rect;
+        // Each data column is 17 modules. The row indicators, start, stop and quiet zone add 73.
+        assert_eq!(((rect.w - 73.0) / 17.0, (rect.h - 4.0) / 3.0), (f64::from(columns), f64::from(rows)), "{sizing}");
+    }
+}
+
+#[test]
+fn pdf417_requires_display_pictures_to_format_the_value_before_encoding() {
+    let unsupported = pdf417_fixture("2025550142", "<format><picture>text{999.999.9999}</picture></format>", "");
+    assert!(unsupported.pages[0].items.iter().all(|item| !matches!(item, Item::Barcode(_))));
+    assert!(texts(&unsupported.pages[0]).iter().any(|text| text == "2025550142"));
+    assert!(unsupported.warnings.iter().any(|w| w.contains("PDF417 barcode value could not be formatted")));
+    for picture in ["date{YYYYMMDD}", "date{YYYY-MM-DD}"] {
+        let form = pdf417_fixture("2026-10-20", &format!("<format><picture>{picture}</picture></format>"), "");
+        assert!(form.pages[0].items.iter().any(|item| matches!(item, Item::Barcode(_))), "{picture}");
+    }
+}
+
 /// A field's `<format><picture>` is its display picture, kept apart from its `<ui>` edit
 /// picture; a field without one has none.
 #[test]
