@@ -1348,6 +1348,122 @@ fn fake_bold_duplicates_are_removed() {
     assert_eq!(layout(v).plain_text(), "e\u{301}");
 }
 
+/// Text drawn once per column clip: "WO" and the `edge` glyphs, lots of other text, then the `second_pass`.
+fn column_passes(edge: &[TextGlyph], second_pass: &[TextGlyph]) -> String {
+    let mut v = Vec::new();
+    word(&mut v, "WO", 10.0, 10.0, 6.0);
+    v.extend_from_slice(edge);
+    for k in 0..50 {
+        word(&mut v, "xx", 100.0, 40.0 + 14.0 * k as f32, 6.0);
+    }
+    v.extend_from_slice(second_pass);
+    layout(v).plain_text()
+}
+
+/// #3173: a page drawn once per column clip draws a glyph on the clip edge in both passes, far apart in drawing order.
+#[test]
+fn a_glyph_redrawn_by_the_other_column_pass_is_dropped() {
+    let mut v = Vec::new();
+    word(&mut v, "WO", 10.0, 10.0, 6.0);
+    v.push(g("R", 22.0, 10.0, 28.0));
+    word(&mut v, "illu", 10.0, 30.0, 6.0);
+    v.push(g("s", 34.0, 30.0, 40.0));
+    // The other pass: lots of other text, then the same glyphs at (almost) the same place and the rest of each word.
+    for k in 0..50 {
+        word(&mut v, "xx", 100.0, 40.0 + 14.0 * k as f32, 6.0);
+    }
+    v.push(g("R", 22.0, 10.0, 28.0));
+    word(&mut v, "LD", 28.0, 10.0, 6.0);
+    v.push(g("s", 33.99, 30.0, 39.99));
+    word(&mut v, "trated", 40.0, 30.0, 6.0);
+    let text = layout(v).plain_text();
+    assert!(text.lines().any(|l| l == "WORLD"), "{text}");
+    assert!(text.lines().any(|l| l == "illustrated"), "{text}");
+}
+
+/// #3173: the second pass draws the glyph a little taller, so its grid cell must still be the one of the first copy.
+#[test]
+fn a_redrawn_glyph_of_slightly_different_height_is_dropped() {
+    // Far from the page origin, a grid cell sized by each glyph's own height would put the two copies three cells apart.
+    let mut v = Vec::new();
+    word(&mut v, "WO", 150.0, 150.0, 6.0);
+    v.push(em_box("R", 162.0, 150.0, 168.0, 160.0));
+    for k in 0..50 {
+        word(&mut v, "xx", 300.0, 200.0 + 14.0 * k as f32, 6.0);
+    }
+    v.push(em_box("R", 162.0, 150.0, 168.0, 160.3));
+    word(&mut v, "LD", 168.0, 150.0, 6.0);
+    let text = layout(v).plain_text();
+    assert!(text.lines().any(|l| l == "WORLD"), "{text}");
+}
+
+/// #3173: a fake-bold copy after the last glyph of a pass does not hide that the glyph ends its run.
+#[test]
+fn a_fake_bold_copy_at_the_end_of_a_pass_does_not_hide_the_run_end() {
+    let mut second = vec![g("R", 22.0, 10.0, 28.0)];
+    word(&mut second, "LD", 28.0, 10.0, 6.0);
+    let text = column_passes(&[g("R", 22.0, 10.0, 28.0), g("R", 22.1, 10.0, 28.1)], &second);
+    assert!(text.lines().any(|l| l == "WORLD"), "{text}");
+}
+
+/// A glyph redrawn five or more times in a row at its own place prints once: the copies past the
+/// four-glyph window still match the kept glyph they follow.
+#[test]
+fn many_copies_of_a_glyph_in_a_row_print_once() {
+    let mut v = Vec::new();
+    word(&mut v, "WOR", 10.0, 10.0, 6.0);
+    for _ in 0..7 {
+        v.push(g("L", 28.0, 10.0, 34.0));
+    }
+    v.push(g("D", 34.0, 10.0, 40.0));
+    assert_eq!(layout(v).plain_text(), "WORLD");
+}
+
+/// #3173: the far redraw check reaches as far as a redraw may sit vertically, for a tall, narrow
+/// glyph whose horizontal tolerance is much smaller than its vertical one.
+#[test]
+fn a_tall_narrow_glyph_redrawn_a_little_higher_is_dropped() {
+    let mut v = vec![em_box("|", 10.0, 100.0, 11.0, 140.0)];
+    for k in 0..50 {
+        word(&mut v, "xx", 100.0, 200.0 + 14.0 * k as f32, 6.0);
+    }
+    v.push(em_box("|", 10.0, 107.0, 11.0, 147.0));
+    let text = layout(v).plain_text();
+    assert_eq!(text.matches('|').count(), 1, "{text}");
+}
+
+/// #3173: a glyph followed by its superscript is inside a run, so a later run starting at its place is not its redraw.
+#[test]
+fn a_glyph_followed_by_its_superscript_is_not_a_run_end() {
+    let mut v = vec![em_box("H", 10.0, 10.0, 16.0, 20.0), em_box("2", 16.0, 16.0, 19.0, 22.0)];
+    for k in 0..50 {
+        word(&mut v, "xx", 100.0, 40.0 + 14.0 * k as f32, 6.0);
+    }
+    v.push(em_box("H", 10.0, 10.0, 16.0, 20.0));
+    v.push(em_box("O", 16.0, 10.0, 22.0, 20.0));
+    let text = layout(v).plain_text();
+    assert_eq!(text.matches('H').count(), 2, "{text}");
+}
+
+/// #3173: a glyph kept in a cell does not hide the earlier glyph there that the redraw matches.
+#[test]
+fn a_redraw_is_matched_against_earlier_glyphs_of_the_same_cell() {
+    // A narrow "l" at 10 ends its line, a second one 0.8 pt to the right (more than a half of its width) is its own letter,
+    // and the last one, more than 4 glyphs later, redraws the first.
+    let v = vec![
+        g("l", 10.0, 10.0, 11.0),
+        g("Z", 200.0, 100.0, 206.0),
+        g("l", 10.8, 10.0, 11.8),
+        g("Y", 300.0, 200.0, 306.0),
+        g("Z", 300.0, 300.0, 306.0),
+        g("Y", 300.0, 400.0, 306.0),
+        g("Z", 300.0, 500.0, 306.0),
+        g("l", 10.0, 10.0, 11.0),
+    ];
+    let text = layout(v).plain_text();
+    assert_eq!(text.matches('l').count(), 2, "{text}");
+}
+
 /// #1467: condensed text (80 Tz and below, OCR layers fitted to the scan) sets narrow letters
 /// closer than a fifth of their height apart; a doubled letter there is two letters, not a redraw.
 #[test]
@@ -3182,6 +3298,104 @@ fn truetype_without_an_encoding_reads_its_codes_as_win_ansi() {
     let expected = "Rückfragen für Überhitzungsschutz: können, weiß, Café";
     assert_eq!(ocr_layer_text(4, false), expected, "symbolic, no /ToUnicode");
     assert_eq!(ocr_layer_text(32, true), expected, "nonsymbolic, /ToUnicode for ASCII only");
+}
+
+/// #3713: a Chinese label spread to the width of a longer one (分散對齊, as on Taiwanese forms)
+/// is one show with character spacing, so every gap of the label is the same, while the value
+/// beside it has none. The line's typical gap is therefore the value's zero, and from half a
+/// line height upwards each of the label's gaps read as a word gap: 「受文者」 copied as
+/// 「受 文 者」 and Find no longer matched it. A repeated gap is spacing, whatever its width.
+#[test]
+fn a_chinese_label_spread_by_character_spacing_keeps_its_characters_together() {
+    // `Tc` is added after every glyph of the string (ISO 32000-2 §9.3.2), so the gap before
+    // the value is the spacing too; the value's own glyphs follow at `0 Tc`.
+    let line = |tc: f32| {
+        let mut v = Vec::new();
+        let mut x = 0.0;
+        for ch in ["受", "文", "者"] {
+            v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+            x += 12.0 + tc;
+        }
+        for ch in ["如", "正", "本"] {
+            v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+            x += 12.0;
+        }
+        layout(v).plain_text()
+    };
+    // A tenth of the font size up to a whole em: the issue's nine steps, the last three of
+    // which used to break.
+    for tc in [1.2, 2.4, 3.0, 3.6, 4.2, 4.8, 6.0, 9.0, 12.0] {
+        assert_eq!(line(tc), "受文者如正本", "{tc} pt of character spacing");
+    }
+
+    // A gap that stands on its own is still a word gap. The width is what the review caught: a
+    // whole line height swallowed any isolated gap under one em, so two cells of a form row set
+    // 9pt apart on a 12pt line copied as one word. Half a line height upwards is a gap, which is
+    // the width Hangul already used; below it is still spacing.
+    let cells = |gap: f32| {
+        let mut v = Vec::new();
+        for (i, ch) in ["姓", "名"].iter().enumerate() {
+            let x = i as f32 * 12.0;
+            v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+        }
+        for (i, ch) in ["王", "小", "明"].iter().enumerate() {
+            let x = 24.0 + gap + i as f32 * 12.0;
+            v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+        }
+        layout(v).plain_text()
+    };
+    // Two character widths, as before, and then the band that used to be lost: half a line
+    // height and up. 6.0 is the boundary itself, which is a gap.
+    for gap in [24.0, 18.0, 12.0, 9.0, 7.2, 6.0] {
+        assert_eq!(cells(gap), "姓名 王小明", "{gap} pt between the two cells");
+    }
+    // And below it, still spacing rather than a gap -- one isolated narrow gap must not start
+    // splitting a label that happens to carry one.
+    for gap in [5.4, 3.0, 1.2, 0.0] {
+        assert_eq!(cells(gap), "姓名王小明", "{gap} pt is spacing, not a gap");
+    }
+}
+
+/// Korean is written with spaces between words (띄어쓰기), and a file may write them as
+/// position rather than as space characters, so the rule for Chinese and Japanese -- where a
+/// gap between two characters is never a word gap -- must not reach Hangul (#3722 review).
+#[test]
+fn korean_words_separated_by_position_keep_their_spaces() {
+    let line = |gap: f32| {
+        let mut v = Vec::new();
+        let mut x = 0.0;
+        for word in ["안녕", "하세요", "여러분"] {
+            for ch in word.chars() {
+                v.push(em_box(&ch.to_string(), x, 0.0, x + 12.0, 12.0));
+                x += 12.0;
+            }
+            x += gap;
+        }
+        layout(v).plain_text()
+    };
+    // Half the line height upwards is a word gap, as it was before the Chinese rule changed.
+    for gap in [6.0, 7.0, 9.0, 12.0] {
+        assert_eq!(line(gap), "안녕 하세요 여러분", "{gap} pt between the words");
+    }
+    // Below that it is letter spacing, which is unchanged.
+    assert_eq!(line(3.0), "안녕하세요여러분");
+}
+
+/// Halfwidth Hangul jamo are Hangul too: equal gaps between them from half a line height up are
+/// word gaps, not the character spacing of spread Chinese text.
+#[test]
+fn halfwidth_hangul_separated_by_equal_gaps_keeps_its_spaces() {
+    let mut v = Vec::new();
+    let mut x = 0.0;
+    // A one-letter word between two others: its two word gaps repeat each other.
+    for word in ["\u{FFA1}\u{FFA2}", "\u{FFA4}", "\u{FFA7}\u{FFA8}"] {
+        for ch in word.chars() {
+            v.push(em_box(&ch.to_string(), x, 0.0, x + 6.0, 12.0));
+            x += 6.0;
+        }
+        x += 7.0;
+    }
+    assert_eq!(layout(v).plain_text(), "\u{FFA1}\u{FFA2} \u{FFA4} \u{FFA7}\u{FFA8}");
 }
 
 /// Issue #2929: a footnote reference (superscript) on a line stays in that line instead of

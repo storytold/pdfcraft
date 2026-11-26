@@ -149,6 +149,32 @@ fn sync_script_history(doc: &Document, previous: &pdfcraft_cos::Document, restor
     }
 }
 
+/// Renamed fields are said, not slipped in: a repair-log note in `next` (with the caveat that
+/// scripts were left alone) and a count in the undo step's label, which it gives back.
+fn note_renamed_fields(next: &mut pdfcraft_cos::Document, edit: &Edit, renamed: &[(String, String)]) -> Label {
+    if !renamed.is_empty() {
+        let shown: Vec<String> = renamed.iter().take(5).map(|(old, new)| format!("{old} → {new}")).collect();
+        let more = renamed.len().saturating_sub(shown.len());
+        let more = if more > 0 { format!(", and {more} more") } else { String::new() };
+        next.note_repair(format!(
+            "inserted pages renamed {} form field{} to keep their names separate ({}{more}); scripts that refer to the old names were not rewritten",
+            renamed.len(),
+            if renamed.len() == 1 { "" } else { "s" },
+            shown.join(", ")
+        ));
+    }
+    // Only Insert from File renames fields; its label says so in a wording the interface
+    // translates (the count lives in the repair note).
+    match (edit, renamed.len()) {
+        (_, 0) => edit.label(),
+        (Edit::InsertPagesFrom { name, .. }, n) => Label::with(
+            if n == 1 { "Insert pages from {name} — 1 field renamed" } else { "Insert pages from {name} — fields renamed" },
+            name.as_str(),
+        ),
+        _ => edit.label(),
+    }
+}
+
 impl Session {
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
@@ -246,34 +272,7 @@ impl Session {
                 .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))
                 .inspect_err(|_| discard_edit_callbacks(&cx))?;
         }
-        // Renamed fields are said, not slipped in: a repair-log note (with the caveat that
-        // scripts were left alone) and a count in the undo step's label.
-        let renamed_note = |renamed: &[(String, String)]| {
-            (!renamed.is_empty()).then(|| {
-                let shown: Vec<String> = renamed.iter().take(5).map(|(old, new)| format!("{old} → {new}")).collect();
-                let more = renamed.len().saturating_sub(shown.len());
-                let more = if more > 0 { format!(", and {more} more") } else { String::new() };
-                format!(
-                    "inserted pages renamed {} form field{} to keep their names separate ({}{more}); scripts that refer to the old names were not rewritten",
-                    renamed.len(),
-                    if renamed.len() == 1 { "" } else { "s" },
-                    shown.join(", ")
-                )
-            })
-        };
-        if let Some(note) = renamed_note(&cx.renamed_fields) {
-            next.note_repair(note);
-        }
-        // Only Insert from File renames fields; its label says so in a wording the interface
-        // translates (the count lives in the repair note).
-        let label = match (&edit, cx.renamed_fields.len()) {
-            (_, 0) => edit.label(),
-            (Edit::InsertPagesFrom { name, .. }, n) => Label::with(
-                if n == 1 { "Insert pages from {name} — 1 field renamed" } else { "Insert pages from {name} — fields renamed" },
-                name.as_str(),
-            ),
-            _ => edit.label(),
-        };
+        let label = note_renamed_fields(&mut next, &edit, &cx.renamed_fields);
         // An XFA form's scripts answer the change: exit and validate scripts of the field, then
         // every calculation (and a reset recalculates). They read the data, so it is brought up
         // to date first. The fields whose exit scripts ran are noted once the edit is kept.
@@ -309,6 +308,7 @@ impl Session {
                     highlight,
                     time_scale: cx.xfa_time_scale,
                     keep_layout: cx.certification.is_some(),
+                    relaid: false,
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
                 // only those).
@@ -316,6 +316,7 @@ impl Session {
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;
+                cx.xfa_relaid |= run.relaid;
                 // The next edit of a batch reads the highlight this one's scripts set.
                 let on = run.highlight;
                 cx.set_highlight(on);
@@ -323,6 +324,13 @@ impl Session {
                     cx.xfa_out.errors.push(e);
                 }
             }
+        }
+        // The form's scripts (a check box showing a section) or its new data (a picture) laid
+        // it out again, even if a later script then failed: as with text growth below, its
+        // pages, widgets and fields were replaced, whether or not the page count changed. The
+        // view and undo/redo rebuild them instead of refreshing only field values.
+        if cx.xfa_relaid {
+            scope = Scope::Full;
         }
         // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
         let mut xfa_notes = Vec::new();
