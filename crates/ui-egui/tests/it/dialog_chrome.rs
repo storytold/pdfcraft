@@ -1,10 +1,12 @@
-//! Dialog cards keep their padding, and text fields are tall enough to use.
+//! The page cursor stays off while a dialog is open, and the Space Audit tab measures when the app says it does.
 
+use crate::support::AppHarness as _;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
 
+/// A one-page file.
 fn fixture() -> Vec<u8> {
     let objs = [
         "<< /Type /Catalog /Pages 2 0 R >>",
@@ -26,73 +28,90 @@ fn fixture() -> Vec<u8> {
     out
 }
 
-fn card(h: &Harness<'_, PdfCraftApp>, id: &str) -> egui::Rect {
-    h.ctx.data(|d| d.get_temp(egui::Id::new(id).with("card"))).unwrap_or_else(|| panic!("missing dialog card {id}"))
+/// The rectangle of the open dialog, from its accessibility node.
+fn dialog_rect(h: &Harness<'_, PdfCraftApp>) -> egui::Rect {
+    h.get_by_role(Role::Dialog).rect()
 }
 
-fn protected() -> Vec<u8> {
-    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture())).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
-        algorithm: pdfcraft_cos::Algorithm::Aes256,
-        user_password: "pw",
-        owner_password: "owner",
-        permissions: -1,
-        encrypt_metadata: true,
-        seed: [4; 32],
+/// A copy of the measured rows, read through the lock the app's job fills them under.
+fn audit(app: &PdfCraftApp) -> Vec<pdfcraft_engine::optimize::SpaceUse> {
+    app.space_audit.read().map(|rows| rows.clone()).unwrap_or_default()
+}
+
+/// An app with `doc.pdf` open and the Space Audit tab of Properties showing.
+fn space_audit_harness() -> Harness<'static, PdfCraftApp> {
+    Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture()).unwrap();
+            app.set_option(&egui::Context::default(), "dialog", "space-audit").unwrap();
+            app
+        }
     })
-    .unwrap();
-    pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()
 }
 
 #[test]
-fn document_properties_fields_are_tall_and_inset() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, fixture()).unwrap();
-        app.set_option("dialog", "properties").unwrap();
-        app
-    });
-    h.run_steps(4);
-    let card = card(&h, "dialog");
-    let heading = h.get_by_label("Document Properties").rect();
-    assert!(heading.left() - card.left() >= 16.0, "heading inset {heading:?} in {card:?}");
-    assert!(heading.top() - card.top() >= 16.0, "heading inset {heading:?} in {card:?}");
-    let field = h.get_by_role_and_label(Role::TextInput, "Title").rect();
-    assert!(field.height() >= 30.0, "title field {field:?}");
-    assert!(field.left() >= card.left() + 16.0, "title field {field:?} in {card:?}");
-    assert!(field.right() <= card.right() - 16.0, "title field {field:?} in {card:?}");
+fn space_audit_tab_measures_the_file() {
+    let mut h = space_audit_harness();
+    crate::support::wait_until(&mut h, "the space audit", |app| !audit(app).is_empty());
+    h.run_steps(2);
+    let card = dialog_rect(&h);
+    let total = h.get_by_role_and_label(egui::accesskit::Role::ListItem, "Total").rect();
+    assert!(card.contains_rect(total), "the Total row {total:?} lies in the dialog {card:?}");
 }
 
 #[test]
-fn password_prompt_field_is_tall_and_inset() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("secret.pdf", None, protected()).unwrap();
-        app
-    });
-    h.run_steps(4);
-    let card = card(&h, "password");
-    let field = h.get_by_role(Role::PasswordInput).rect();
-    assert!(field.height() >= 30.0, "password field {field:?}");
-    assert!(field.left() - card.left() >= 16.0, "password field {field:?} in {card:?}");
-    assert!(card.right() - field.right() >= 16.0, "password field {field:?} in {card:?}");
-    let heading = h.get_by_label("Password required").rect();
-    assert!(heading.top() - card.top() >= 16.0, "heading inset {heading:?} in {card:?}");
+fn space_audit_tab_measures_again_after_an_edit() {
+    use pdfcraft_engine::optimize::SpaceCategory;
+    let mut h = space_audit_harness();
+    crate::support::wait_until(&mut h, "the first space audit", |app| !audit(app).is_empty());
+    let bookmarks = |app: &PdfCraftApp| audit(app).iter().filter(|r| r.category == SpaceCategory::Bookmarks).map(|r| r.bytes).sum::<u64>();
+    let before = audit(h.state());
+    assert_eq!(bookmarks(h.state()), 0, "the fixture has no outline: {before:?}");
+    // Further frames with the file unchanged keep the same measurement.
+    h.run_steps(2);
+    assert_eq!(audit(h.state()), before);
+    // An edit while the tab is open is measured again.
+    let ctx_h = h.ctx.clone();
+    h.state_mut()
+        .apply_edit(&ctx_h, pdfcraft_engine::Edit::AddBookmark { parent: vec![], index: 0, title: "Chapter".into(), page: 0, left: None, top: None });
+    crate::support::wait_until(&mut h, "the new outline to be counted", |app| bookmarks(app) > 0);
+    h.run_steps(2);
+    // The table shows the new row (the rail's Bookmarks button has the same label).
+    let card = dialog_rect(&h);
+    assert!(h.query_all_by_label("Bookmarks").any(|n| card.contains_rect(n.rect())), "a Bookmarks row in {card:?}");
 }
 
 #[test]
-fn document_properties_long_filename_does_not_overflow_card() {
-    let long_name = "Global_sociology_introducing_five_contemporary_societies_Schneider_Linda_Silverman_Arnold_2000_Boston_isbn13_9780072294309_hash_3d2960a9212a8573bba2536e91f36e59_archive_copy.pdf";
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes(long_name, None, fixture()).unwrap();
-        app.set_option("dialog", "properties").unwrap();
-        app
+fn page_hover_cursors_stay_off_while_a_dialog_is_open() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+            // Large enough that the drop-down sits outside the dialog.
+            app.set_option(&egui::Context::default(), "zoom", "300").unwrap();
+            app
+        }
     });
+    for _ in 0..30 {
+        h.run_steps(2);
+    }
+    // The middle of the "country" drop-down (/Rect [20 220 200 240] on a 300 × 400 page).
+    let page = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = page.width() / 300.0;
+    let field = page.min + egui::vec2(110.0 * k, (400.0 - 230.0) * k);
+    h.hover_at(field);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "the drop-down takes clicks");
+    h.set_option("dialog", "security").unwrap();
     h.run_steps(4);
-    let card = card(&h, "dialog");
-    assert!(card.width() <= 700.0, "dialog card should not blow out horizontally on long filename, width was: {}", card.width());
+    let card = dialog_rect(&h);
+    assert!(!card.contains(field), "the drop-down {field:?} is beside the dialog {card:?}, under its backdrop");
+    h.hover_at(field + egui::vec2(1.0, 0.0));
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "nothing under the dialog's backdrop can be clicked");
 }

@@ -14,6 +14,7 @@ use crate::{SignError, Time};
 const TST_INFO: &str = "1.2.840.113549.1.9.16.1.4";
 const MAX_RESPONSE: usize = 4 * 1024 * 1024;
 const MAX_TOKEN: usize = 2 * 1024 * 1024;
+#[cfg(test)]
 const MAX_REQUEST: usize = 1024 * 1024;
 
 /// RFC 3161 request data. `nonce` is optional but recommended for online requests.
@@ -24,6 +25,22 @@ pub struct TimestampQuery {
     pub policy: Option<String>,
     pub nonce: Option<u64>,
     pub certificate_request: bool,
+}
+
+/// Identity and digest algorithm used by a timestamp authority to sign tokens.
+pub struct TimestampSigner<'a> {
+    pub key: &'a PrivateKey,
+    pub certificate: &'a Certificate,
+    pub chain: &'a [Certificate],
+    pub digest: DigestAlg,
+}
+
+/// Issuance details for one timestamp response.
+pub struct TimestampIssuance<'a> {
+    pub query: &'a TimestampQuery,
+    pub policy: &'a str,
+    pub generation_time: Time,
+    pub serial: u64,
 }
 
 impl TimestampQuery {
@@ -90,27 +107,24 @@ fn bad(message: impl Into<String>) -> SignError {
 
 /// Decode a `TimeStampReq` as [`TimestampQuery::encode`] wrote it.
 pub fn parse_request(bytes: &[u8]) -> Result<TimestampQuery, SignError> {
-    if bytes.is_empty() || bytes.len() > MAX_REQUEST {
-        return Err(bad("request is empty or exceeds the 1 MiB limit"));
-    }
-    let fields = Tlv::parse_all(bytes)?.expect(tag::SEQUENCE, "TimeStampReq")?.children()?;
-    let mut it = fields.into_iter();
-    let _version = it.next().ok_or_else(|| bad("missing version"))?.u64()?;
-    let imprint = it.next().ok_or_else(|| bad("missing message imprint"))?.children()?;
-    let alg_oid =
-        imprint.first().ok_or_else(|| bad("missing imprint algorithm"))?.children()?.first().ok_or_else(|| bad("missing algorithm OID"))?.oid()?;
-    let digest = DigestAlg::from_oid(&alg_oid).ok_or_else(|| bad("unsupported imprint digest algorithm"))?;
-    let hash = imprint.get(1).ok_or_else(|| bad("missing imprint digest"))?.expect(tag::OCTET_STRING, "imprint digest")?.value.to_vec();
-    let mut q = TimestampQuery::new(digest, hash)?;
-    for f in it {
-        match f.tag {
-            tag::OID => q.policy = Some(f.oid()?),
-            tag::INTEGER => q.nonce = Some(f.u64()?),
-            tag::BOOLEAN => q.certificate_request = f.value.first() == Some(&0xFF),
-            _ => {}
-        }
-    }
-    Ok(q)
+    let query = craft_pkcs7::timestamp::parse_request(bytes).map_err(der::app_error)?;
+    // Exhaustive mapping preserves the app's digest identity without reparsing or copying.
+    use craft_pkcs7::DigestAlg as Shared;
+    let digest = match query.digest {
+        Shared::Sha1 => DigestAlg::Sha1,
+        Shared::Sha224 => DigestAlg::Sha224,
+        Shared::Sha256 => DigestAlg::Sha256,
+        Shared::Sha384 => DigestAlg::Sha384,
+        Shared::Sha512 => DigestAlg::Sha512,
+        Shared::Sha512_224 => DigestAlg::Sha512_224,
+        Shared::Sha512_256 => DigestAlg::Sha512_256,
+        Shared::Sha3_224 => DigestAlg::Sha3_224,
+        Shared::Sha3_256 => DigestAlg::Sha3_256,
+        Shared::Sha3_384 => DigestAlg::Sha3_384,
+        Shared::Sha3_512 => DigestAlg::Sha3_512,
+        Shared::Ripemd160 => DigestAlg::Ripemd160,
+    };
+    Ok(TimestampQuery { digest, imprint: query.imprint, policy: query.policy, nonce: query.nonce, certificate_request: query.certificate_request })
 }
 
 /// Parse and validate a token (a bare CMS `ContentInfo`): TSTInfo content, bounded size, the
@@ -186,17 +200,9 @@ pub fn parse_response(bytes: &[u8], query: &TimestampQuery) -> Result<TimestampT
 
 /// The TSA side: sign a `TimeStampResp` for `query` at `gen_time`. Used by deterministic test
 /// authorities and a locally configured stamping identity, never implied to be a remote TSA.
-#[allow(clippy::too_many_arguments)]
-pub fn respond(
-    key: &PrivateKey,
-    cert: &Certificate,
-    chain: &[Certificate],
-    alg: DigestAlg,
-    query: &TimestampQuery,
-    policy: &str,
-    gen_time: Time,
-    serial: u64,
-) -> Result<Vec<u8>, SignError> {
+pub fn respond(signer: TimestampSigner<'_>, issuance: TimestampIssuance<'_>) -> Result<Vec<u8>, SignError> {
+    let TimestampSigner { key, certificate: cert, chain, digest: alg } = signer;
+    let TimestampIssuance { query, policy, generation_time: gen_time, serial } = issuance;
     let mut info = vec![
         der::int(1),
         der::try_oid(policy)?,
@@ -241,5 +247,71 @@ mod tests {
         let q = TimestampQuery::new(DigestAlg::Sha256, vec![0; 32]).unwrap();
         assert!(parse_response(&vec![0; MAX_RESPONSE + 1], &q).is_err());
         assert!(parse_request(&vec![0; MAX_REQUEST + 1]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod request_parity {
+    use super::*;
+    // Original request reader: Justin John; algorithm support: Thorsten Hirsch.
+    // Retained as an independent higher-level parser oracle (MIT OR Apache-2.0).
+    fn legacy_request(bytes: &[u8]) -> Result<TimestampQuery, SignError> {
+        if bytes.is_empty() || bytes.len() > MAX_REQUEST {
+            return Err(bad("request is empty or exceeds the 1 MiB limit"));
+        }
+        let fields = Tlv::parse_all(bytes)?.expect(tag::SEQUENCE, "TimeStampReq")?.children()?;
+        let mut it = fields.into_iter();
+        let _version = it.next().ok_or_else(|| bad("missing version"))?.u64()?;
+        let imprint = it.next().ok_or_else(|| bad("missing message imprint"))?.children()?;
+        let alg_oid = imprint
+            .first()
+            .ok_or_else(|| bad("missing imprint algorithm"))?
+            .children()?
+            .first()
+            .ok_or_else(|| bad("missing algorithm OID"))?
+            .oid()?;
+        let digest = DigestAlg::from_oid(&alg_oid).ok_or_else(|| bad("unsupported imprint digest algorithm"))?;
+        let hash = imprint.get(1).ok_or_else(|| bad("missing imprint digest"))?.expect(tag::OCTET_STRING, "imprint digest")?.value.to_vec();
+        let mut q = TimestampQuery::new(digest, hash)?;
+        for f in it {
+            match f.tag {
+                tag::OID => q.policy = Some(f.oid()?),
+                tag::INTEGER => q.nonce = Some(f.u64()?),
+                tag::BOOLEAN => q.certificate_request = f.value.first() == Some(&0xFF),
+                _ => {}
+            }
+        }
+        Ok(q)
+    }
+
+    fn compare(bytes: &[u8]) {
+        match (legacy_request(bytes), parse_request(bytes)) {
+            (Ok(a), Ok(b)) => assert_eq!(a, b),
+            (Err(a), Err(b)) => assert_eq!(format!("{a:?}"), format!("{b:?}")),
+            other => panic!("request parity mismatch: {other:?}"),
+        }
+    }
+    #[test]
+    fn shared_request_preserves_algorithms_fields_errors_and_limits() {
+        for digest in DigestAlg::ALL {
+            let mut query = TimestampQuery::new(digest, digest.digest(&[b"fixture"])).unwrap();
+            query.policy = Some("1.2.3.4".into());
+            query.nonce = Some(u64::MAX);
+            for cert in [false, true] {
+                query.certificate_request = cert;
+                let bytes = query.encode().unwrap();
+                compare(&bytes);
+                for len in 0..bytes.len() {
+                    compare(&bytes[..len]);
+                }
+                for pos in 0..bytes.len() {
+                    let mut changed = bytes.clone();
+                    changed[pos] ^= 255;
+                    compare(&changed);
+                }
+            }
+        }
+        compare(&vec![0; MAX_REQUEST]);
+        compare(&vec![0; MAX_REQUEST + 1]);
     }
 }

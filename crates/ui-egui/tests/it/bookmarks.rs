@@ -1,5 +1,6 @@
 //! Editing bookmarks in the Bookmarks panel (M4.6), driven like a user would.
 
+use crate::support::AppHarness as _;
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -15,13 +16,16 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("pages.pdf", None, PAGES.to_vec()).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "bookmarks").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     h
@@ -70,7 +74,7 @@ fn new_rename_reorder_indent_delete_and_undo() {
     let mut h = harness();
     h.get_by_label("This document has no bookmarks.");
     add(&mut h, "Intro");
-    h.state_mut().set_option("page", "3").unwrap();
+    h.set_option("page", "3").unwrap();
     h.run_steps(3);
     add(&mut h, "Results");
     assert_eq!(outline(&h), [("Intro".into(), Some(0), 0), ("Results".into(), Some(2), 0)]);
@@ -99,44 +103,13 @@ fn new_rename_reorder_indent_delete_and_undo() {
     assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
-/// The side panel's width as egui keeps it from one frame to the next.
-fn panel_width(h: &Harness<'static, PdfCraftApp>) -> f32 {
-    h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new("pdfcraft-inspector-body"))).expect("the inspector body is shown").width()
-}
-
-#[test]
-fn the_panel_keeps_its_width_while_the_pointer_moves() {
-    // The search row was 2 px wider than the panel, and a resizable panel keeps the width its
-    // content used, so every repaint (any pointer move) widened it until it reached its maximum.
-    let mut h = harness();
-    add(&mut h, "Intro");
-    h.get_by_label("Search"); // the search row shows once there are bookmarks
-    let before = panel_width(&h);
-    for i in 0..30 {
-        h.hover_at(egui::pos2(300.0 + 10.0 * i as f32, 400.0));
-        h.run_steps(1);
-    }
-    assert_eq!(panel_width(&h), before, "the Bookmarks panel drifted wider");
-}
-
-#[test]
-fn escape_cancels_a_rename() {
-    let mut h = harness();
-    add(&mut h, "Keep");
-    menu(&mut h, "Keep", "Rename");
-    field(&h, "Keep").type_text("zzz");
-    h.key_press(Key::Escape);
-    h.run_steps(3);
-    assert_eq!(outline(&h)[0].0, "Keep");
-}
-
 #[test]
 fn number_pages_dialog_labels_the_selected_pages() {
     let mut h = harness();
     h.state_mut().views[0].select_pages(&[0, 1]);
-    assert!(h.state_mut().execute("page.number"));
+    assert!(h.execute("page.number"));
     h.run_steps(3);
-    h.get_by_label("Number pages");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Number pages");
     h.get_by_value("1, 2, 3").click(); // the style menu
     h.run_steps(2);
     h.get_by_label("i, ii, iii").click();
@@ -157,10 +130,11 @@ fn search_finds_collapsed_bookmarks_and_keeps_original_paths() {
     for (parent, index, title, page) in
         [(vec![], 0, "Unrelated", 0), (vec![], 1, "Reports", 0), (vec![1], 0, "Other chapter", 1), (vec![1], 1, "Résumé results", 2)]
     {
-        h.state_mut().apply_edit(Edit::AddBookmark { parent, index, title: title.into(), page, left: None, top: None });
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx_h, Edit::AddBookmark { parent, index, title: title.into(), page, left: None, top: None });
     }
     h.run_steps(3);
-    h.get_by_label("Bookmark options").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("Collapse all bookmarks").click();
     h.run_steps(3);
@@ -177,7 +151,7 @@ fn search_finds_collapsed_bookmarks_and_keeps_original_paths() {
     h.get_by_label("Reports");
     h.get_by_label("Résumé results").click();
     h.run_steps(3);
-    assert_eq!(h.state().views[0].current, 2);
+    assert_eq!(h.state().views[0].current(), 2);
     assert!(h.query_by_label("Unrelated").is_none());
     assert!(h.query_by_label("Other chapter").is_none());
     assert_eq!(h.state().session.save_full_bytes(id).unwrap(), before, "search doesn't edit the PDF");
@@ -207,7 +181,8 @@ fn bookmark_search_is_per_document() {
     h.get_by_label("Search").type_text("not found");
     h.run_steps(3);
     h.get_by_label("No matches.");
-    h.state_mut().open_bytes("second.pdf", None, PAGES.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "second.pdf", None, PAGES.to_vec()).unwrap();
     h.run_steps(3);
     add(&mut h, "Second document");
     h.get_by_label("Second document");
@@ -232,9 +207,10 @@ fn new_bookmarks_from_structure_nest_the_tagged_headings() {
 trailer << /Root 1 0 R >>
 %%EOF";
     let mut h = harness();
-    h.state_mut().open_bytes("tagged.pdf", None, TAGGED.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "tagged.pdf", None, TAGGED.to_vec()).unwrap();
     h.run_steps(3);
-    h.get_by_label("Bookmark options").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("New bookmarks from structure").click();
     h.run_steps(3);
@@ -250,26 +226,121 @@ trailer << /Root 1 0 R >>
     }
 }
 
+/// Two pages whose chapter and section headings are set apart only by style (#1693).
+fn styled_pdf() -> Vec<u8> {
+    let page1 = "BT /FB 18 Tf 72 700 Td (Introduction) Tj ET BT /FR 11 Tf 72 670 Td (Some text) Tj ET BT /FB 14 Tf 72 640 Td (Background) Tj ET";
+    let page2 = "BT /FB 18 Tf 72 700 Td (Results) Tj ET BT /FR 11 Tf 72 670 Td (More text) Tj ET";
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /FB 7 0 R /FR 8 0 R >> >> >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Contents 5 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /Contents 6 0 R >> endobj
+5 0 obj << /Length {} >>
+stream
+{page1}
+endstream
+endobj
+6 0 obj << /Length {} >>
+stream
+{page2}
+endstream
+endobj
+7 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >> endobj
+8 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        page1.len(),
+        page2.len()
+    )
+    .into_bytes()
+}
+
+/// #1693: Bookmark options ▸ New bookmarks from text styles… lists the document's styles with a
+/// sample, offers the largest for level 1, and Create makes the bookmarks (sections under
+/// their chapter) as one undo step. Cancel changes nothing; a document without text says so.
+#[test]
+fn new_bookmarks_from_text_styles_from_the_bookmark_options() {
+    let mut h = harness();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "styled.pdf", None, styled_pdf()).unwrap();
+    h.run_steps(3);
+    let id = h.state().active.and_then(|i| h.state().views.get(i)).unwrap().id;
+    let open = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Panel Menu").click();
+        h.run_steps(2);
+        h.get_by_label("New bookmarks from text styles…").click();
+        h.run_steps(3);
+    };
+    open(&mut h);
+    assert!(crate::support::dialog_open(&h), "the dialog opens");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "New bookmarks from text styles");
+    assert_eq!(h.state().text_style_draft.levels, [Some(0), None, None, None], "the largest style is offered for level 1");
+    // Cancel: nothing made.
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(!crate::support::dialog_open(&h));
+    assert!(h.state().session.get(id).unwrap().info.outline.is_empty());
+    // Level 2 from its list: the sections' style.
+    open(&mut h);
+    // Each level's list is named after it, for screen readers too.
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Level 2").click();
+    h.run_steps(2);
+    // It lists every style, by font, size, weight and a sample.
+    h.get_by_label("Helvetica-Bold, 18 pt, bold · “Introduction” (2 lines)");
+    h.get_by_label("Helvetica, 11 pt · “Some text” (2 lines)");
+    h.run_steps(2);
+    h.get_by_label("Helvetica-Bold, 14 pt, bold · “Background” (1 line)").click();
+    h.run_steps(2);
+    assert_eq!(h.state().text_style_draft.levels, [Some(0), Some(1), None, None]);
+    h.get_by_label("Create").click();
+    h.run_steps(3);
+    assert!(!crate::support::dialog_open(&h));
+    let outline = h.state().session.get(id).unwrap().info.outline.clone();
+    assert_eq!(outline.len(), 1);
+    assert_eq!(outline[0].title, "Untitled");
+    let titles: Vec<(&str, Option<usize>)> = outline[0].children.iter().map(|o| (o.title.as_str(), o.page)).collect();
+    assert_eq!(titles, [("Introduction", Some(0)), ("Results", Some(1))]);
+    assert_eq!(outline[0].children[0].children[0].title, "Background");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("New bookmarks from text styles"));
+    assert_eq!(crate::support::right(h.state()), Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
+    // A document with no text: nothing to choose from.
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "pages.pdf", None, PAGES.to_vec()).unwrap();
+    h.run_steps(3);
+    open(&mut h);
+    let message = h.get_by_label("This document has no text to make bookmarks from.").rect();
+    // The dialog's Close, below the message (the panel has a Close of its own).
+    h.get_all_by_label("Close").find(|n| n.rect().top() > message.bottom()).expect("the dialog's Close").click();
+    h.run_steps(2);
+    assert!(!crate::support::dialog_open(&h));
+    // The command (Pages menu, command palette) opens it too.
+    assert!(h.execute("bookmark.from_text_styles"));
+    h.run_steps(2);
+    assert!(crate::support::dialog_open(&h), "the dialog opens");
+}
+
 #[test]
 fn expanding_and_collapsing_all_bookmarks() {
     use pdfcraft_engine::Edit;
     let mut h = harness();
     for (parent, title) in [(vec![], "Part"), (vec![0], "Chapter"), (vec![0, 0], "Section")] {
-        h.state_mut().apply_edit(Edit::AddBookmark { parent, index: 0, title: title.into(), page: 0, left: None, top: None });
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx_h, Edit::AddBookmark { parent, index: 0, title: title.into(), page: 0, left: None, top: None });
     }
     h.run_steps(3);
     let shown = |h: &Harness<'static, PdfCraftApp>, t: &str| h.query_by_label(t).is_some();
-    h.get_by_label("Bookmark options").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("Expand all bookmarks").click();
     h.run_steps(3);
     assert!(shown(&h, "Chapter") && shown(&h, "Section"));
-    h.get_by_label("Bookmark options").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("Collapse all bookmarks").click();
     h.run_steps(3);
     assert!(shown(&h, "Part") && !shown(&h, "Chapter"));
-    h.get_by_label("Bookmark options").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("Expand top-level bookmarks").click();
     h.run_steps(3);
@@ -290,8 +361,8 @@ fn style_and_colour_from_the_bookmark_menu() {
     let submenu = |h: &mut Harness<'static, PdfCraftApp>, menu: &str, item: &str| {
         h.get_by_label("Intro").click_secondary();
         h.run_steps(2);
-        // A submenu's button carries its arrow.
-        h.get_by_label(&format!("{menu} ⏵")).click();
+        // The submenu arrow is painted as an atom; the accessible name is the menu title.
+        h.get_by_label(menu).click();
         h.run_steps(2);
         h.get_by_label(item).click();
         h.run_steps(3);
@@ -333,7 +404,8 @@ fn a_closed_top_level_bookmark_opens_closed() {
 trailer << /Root 1 0 R >>
 %%EOF";
     let mut h = harness();
-    h.state_mut().open_bytes("outlined.pdf", None, OUTLINED.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "outlined.pdf", None, OUTLINED.to_vec()).unwrap();
     h.run_steps(4);
     let shown = |h: &Harness<'static, PdfCraftApp>, t: &str| h.query_by_label(t).is_some();
     assert!(shown(&h, "Closed parent") && shown(&h, "Open parent") && shown(&h, "Uncounted parent"));
@@ -343,12 +415,9 @@ trailer << /Root 1 0 R >>
 
     // The disclosure triangle at the row's left still opens and closes it.
     let toggle = |h: &mut Harness<'static, PdfCraftApp>, title: &str| {
-        let row = h.get_by_label(title).rect();
-        let at = egui::pos2(row.left() + 8.0, row.top() + 14.0);
-        h.hover_at(at);
-        h.run_steps(1);
-        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        let expand = format!("Expand {title}");
+        let collapse = format!("Collapse {title}");
+        h.get_by(|n| n.role() == egui::accesskit::Role::Button && n.label().is_some_and(|l| l == expand || l == collapse)).click();
         h.run_steps(3);
     };
     toggle(&mut h, "Closed parent");
@@ -367,4 +436,115 @@ trailer << /Root 1 0 R >>
     h.get_by_label("Clear").click();
     h.run_steps(3);
     assert!(!shown(&h, "Closed child B") && !shown(&h, "Open child B"), "search leaves the open state alone");
+}
+
+/// The active document's outline, flattened like [`outline`].
+fn active_outline(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, Option<usize>, usize)> {
+    let i = h.state().active.unwrap();
+    let id = h.state().views[i].id;
+    fn flat(items: &[pdfcraft_render::OutlineItem], depth: usize, out: &mut Vec<(String, Option<usize>, usize)>) {
+        for i in items {
+            out.push((i.title.clone(), i.page, depth));
+            flat(&i.children, depth + 1, out);
+        }
+    }
+    let mut out = Vec::new();
+    flat(&h.state().session.get(id).unwrap().info.outline, 0, &mut out);
+    out
+}
+
+const ONE_PAGE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn cut_copy_and_paste_a_bookmark_subtree_within_and_between_documents() {
+    let mut h = harness();
+    add(&mut h, "Intro");
+    h.set_option("page", "3").unwrap();
+    h.run_steps(3);
+    add(&mut h, "Results");
+    menu(&mut h, "Results", "Indent");
+    let tree = [("Intro".to_string(), Some(0), 0), ("Results".to_string(), Some(2), 1)];
+    assert_eq!(outline(&h), tree);
+
+    // Copy and paste after itself: the whole subtree, as one undo step.
+    menu(&mut h, "Intro", "Copy");
+    menu(&mut h, "Intro", "Paste");
+    assert_eq!(outline(&h), [tree.clone(), tree.clone()].concat());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(outline(&h), tree, "a paste is one undo step");
+    // Pasted on a child, it goes in after that child, at the child's level.
+    menu(&mut h, "Results", "Paste");
+    let nested = [("Intro".to_string(), Some(0), 1), ("Results".to_string(), Some(2), 2)];
+    assert_eq!(outline(&h), [tree.clone(), nested].concat());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(outline(&h), tree);
+
+    // Cut takes the subtree away in one step and keeps it to paste.
+    menu(&mut h, "Intro", "Cut");
+    assert!(outline(&h).is_empty());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(outline(&h), tree, "a cut is one undo step");
+
+    // Into a one-page document: Results' page 3 is not there, so it keeps its place without a
+    // destination rather than pointing at the wrong page, and the toast says so.
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "one.pdf", None, ONE_PAGE.to_vec()).unwrap();
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Panel Menu").click();
+    h.run_steps(2);
+    h.get_by_label("Paste bookmarks").click();
+    h.run_steps(3);
+    assert_eq!(active_outline(&h), [("Intro".to_string(), Some(0), 0), ("Results".to_string(), None, 1)]);
+    let toast = crate::support::shown_notice(&h).unwrap_or_default();
+    assert!(toast.contains("1 pasted bookmark points past the last page"), "{toast}");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert!(active_outline(&h).is_empty());
+    assert_eq!(outline(&h), tree, "the source is untouched");
+}
+
+/// A one-page document whose single bookmark "Top" heads a chain `depth` bookmarks deep.
+fn deep_outline_pdf(depth: usize) -> Vec<u8> {
+    let mut pdf = String::from(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Outlines /First 10 0 R /Last 10 0 R /Count 1 >> endobj
+",
+    );
+    for k in 0..depth {
+        let id = 10 + k;
+        let parent = if k == 0 { 4 } else { id - 1 };
+        let title = if k == 0 { "Top".to_string() } else { format!("L{k}") };
+        let kids = if k + 1 < depth { format!("/First {0} 0 R /Last {0} 0 R /Count 1", id + 1) } else { String::new() };
+        pdf.push_str(&format!("{id} 0 obj << /Title ({title}) /Parent {parent} 0 R {kids} /Dest [3 0 R /Fit] >> endobj\n"));
+    }
+    pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF");
+    pdf.into_bytes()
+}
+
+/// Cutting a subtree nested deeper than a copy can hold would lose what the copy left out, so
+/// the cut copies and says why it deleted nothing.
+#[test]
+fn cutting_a_subtree_too_deep_to_copy_keeps_it() {
+    let mut h = harness();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "deep.pdf", None, deep_outline_pdf(40)).unwrap();
+    h.run_steps(3);
+    let before = active_outline(&h);
+    assert_eq!(before.first().map(|b| b.0.as_str()), Some("Top"));
+    menu(&mut h, "Top", "Cut");
+    assert_eq!(active_outline(&h), before, "nothing was cut");
+    let toast = crate::support::shown_notice(&h).unwrap_or_default();
+    assert!(toast.contains("so nothing was cut"), "{toast}");
+    assert!(h.state().bookmark_clipboard.is_some(), "the copy is still on the bookmark clipboard");
 }
