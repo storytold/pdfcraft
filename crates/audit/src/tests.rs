@@ -175,6 +175,148 @@ fn unapplied_redact_mark_is_found() {
     assert!(findings[0].covered_text.contains("DO NOT SHARE"));
 }
 
+/// #2662: a box over one number of a long line hides a few percent of the line, and all of the
+/// number. Found as a cover, and as an unapplied mark over the same word.
+#[test]
+fn a_cover_over_one_word_of_a_long_line_is_found() {
+    // Helvetica 11: "The contract value is " ends near x 132, "98765" spans about 132-163.
+    let line = b"BT /F1 11 Tf 30 100 Td (The contract value is 98765 and the rest of this long line continues here.) Tj ET
+";
+    let mut content = line.to_vec();
+    content.extend_from_slice(
+        b"0 g
+131 96 33 14 re f
+",
+    );
+    let findings = audit_redactions(&open(one_page(&content, ""))).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].kind, FindingKind::CoveredText);
+    assert!(findings[0].covered_text.contains("98765"), "{findings:?}");
+
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+    b.add_stream(line);
+    b.add(FONT);
+    b.add("<< /Type /Annot /Subtype /Redact /Rect [131 96 164 110] >>");
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].kind, FindingKind::UnappliedMark);
+}
+
+/// A box that only grazes the words beside it (less than half of each) is not a cover.
+#[test]
+fn a_box_grazing_a_word_is_not_flagged() {
+    let content = b"BT /F1 11 Tf 30 100 Td (The contract value is 98765 and the rest of this long line continues here.) Tj ET
+0 g
+131 96 6 14 re f
+";
+    let findings = audit_redactions(&open(one_page(content, ""))).expect("audit must run");
+    assert!(findings.is_empty(), "{findings:?}");
+}
+
+#[test]
+fn opaque_filled_square_annotation_over_text_is_found() {
+    let content = b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n";
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+    b.add_stream(content);
+    b.add(FONT);
+    b.add("<< /Type /Annot /Subtype /Square /Rect [95 685 325 725] /C [0 0 0] /IC [0 0 0] >>");
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].kind, FindingKind::CoveredText);
+    assert_eq!(findings[0].rect, [95.0, 685.0, 325.0, 725.0]);
+    assert_eq!(findings[0].covered_text, "SECRET DATA 123");
+}
+
+/// A Hidden Square (`/F 2`) is never drawn, so the text under it is not a finding.
+#[test]
+fn hidden_square_annotation_is_not_a_finding() {
+    let content = b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n";
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+    b.add_stream(content);
+    b.add(FONT);
+    b.add("<< /Type /Annot /Subtype /Square /Rect [95 685 325 725] /C [0 0 0] /IC [0 0 0] /F 2 >>");
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert!(findings.is_empty(), "{findings:?}");
+}
+
+/// A NoView Square (`/F 32`) is never drawn on screen, so the text under it is not a finding.
+#[test]
+fn no_view_square_annotation_is_not_a_finding() {
+    let content = b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n";
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+    b.add_stream(content);
+    b.add(FONT);
+    b.add("<< /Type /Annot /Subtype /Square /Rect [95 685 325 725] /C [0 0 0] /IC [0 0 0] /F 32 >>");
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert!(findings.is_empty(), "{findings:?}");
+}
+
+/// A Print-only Square (`/F 4`) is still drawn on screen, so the text under it is a finding.
+#[test]
+fn print_flag_square_annotation_is_still_a_finding() {
+    let content = b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n";
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+    b.add_stream(content);
+    b.add(FONT);
+    b.add("<< /Type /Annot /Subtype /Square /Rect [95 685 325 725] /C [0 0 0] /IC [0 0 0] /F 4 >>");
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].kind, FindingKind::CoveredText);
+}
+
+/// A white filled Square annotation hides dark text as a white rectangle in the content does:
+/// reported as hidden under white, not passed over by the contrast test.
+#[test]
+fn white_square_annotation_over_text_is_hidden_under_white() {
+    let content = b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n";
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+    b.add_stream(content);
+    b.add(FONT);
+    b.add("<< /Type /Annot /Subtype /Square /Rect [95 685 325 725] /C [0 0 0] /IC [1 1 1] >>");
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!((findings[0].kind.clone(), findings[0].rect), (FindingKind::HiddenUnderWhite, [95.0, 685.0, 325.0, 725.0]));
+    assert_eq!(findings[0].covered_text, "SECRET DATA 123");
+}
+
+/// A Hidden or NoView `/Redact` mark is still an unapplied one: the flag hides the mark, the
+/// text is untouched and extractable.
+#[test]
+fn hidden_redact_mark_is_still_unapplied() {
+    for flags in ["/F 2", "/F 32"] {
+        let content = b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n";
+        let mut b = Builder::new();
+        b.add("<< /Type /Catalog /Pages 2 0 R >>");
+        b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+        b.add_stream(content);
+        b.add(FONT);
+        b.add(&format!("<< /Type /Annot /Subtype /Redact /Rect [95 685 325 725] {flags} >>"));
+        let findings = audit_redactions(&open(b.build())).expect("audit must run");
+        assert_eq!(findings.len(), 1, "{flags}: {findings:?}");
+        assert_eq!(findings[0].kind, FindingKind::UnappliedMark, "{flags}");
+        assert_eq!(findings[0].covered_text, "SECRET DATA 123");
+    }
+}
+
 #[test]
 fn background_before_text_is_not_flagged() {
     // An opaque dark rectangle painted *before* the text is a background, not a cover.
@@ -194,12 +336,13 @@ fn light_shading_after_text_is_not_flagged() {
 #[test]
 fn graphics_state_carries_across_streams() {
     // The first stream sets a white fill after the text; the second stream's rectangle over
-    // the text is therefore white, not the default black: no finding. Without the carry fix
-    // the rectangle would default to black and flag.
+    // the text is therefore white, not the default black: hidden under white, not a dark
+    // cover. Without the carry fix the rectangle would default to black and flag as one.
     let s1 = b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n1 g\n";
     let s2 = b"100 688 220 32 re f\n";
     let findings = audit_redactions(&open(two_streams(s1, s2))).expect("audit must run");
-    assert!(findings.is_empty(), "{findings:?}");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].kind, FindingKind::HiddenUnderWhite, "white, as the first stream set, not the default black");
 }
 
 #[test]
@@ -303,15 +446,17 @@ fn partial_value_is_found(rotated: bool) {
 /// Keep the historic detections with several covers, lines and text-spacing states.
 #[test]
 fn faux_redactions_with_multiple_covers_lines_and_spacing_are_found() {
-    let cases: [&[u8]; 4] = [
-        b"BT /F1 11 Tf 72 742 Td (Account: 123456789) Tj ET\n0 g\n72 738 65 16 re f\n140 738 40 16 re f\n",
-        b"BT /F1 11 Tf 72 742 Td (Account: 123456789) Tj 0 -15 Td (Account: 987654321) Tj ET\n0 g\n115 723 100 30 re f\n",
-        b"BT /F1 11 Tf 8 Tc 72 742 Td (Account: 1234) Tj ET\n0 g\n145 738 90 16 re f\n",
-        b"BT /F1 11 Tf 250 Tz 72 742 Td (Account: 1234) Tj ET\n0 g\n100 738 160 16 re f\n",
+    // The second box of the first case hides most of the number (less than 40% of the line): a
+    // finding of its own since covers are also measured per word (#2662).
+    let cases: [(&[u8], usize); 4] = [
+        (b"BT /F1 11 Tf 72 742 Td (Account: 123456789) Tj ET\n0 g\n72 738 65 16 re f\n140 738 40 16 re f\n", 2),
+        (b"BT /F1 11 Tf 72 742 Td (Account: 123456789) Tj 0 -15 Td (Account: 987654321) Tj ET\n0 g\n115 723 100 30 re f\n", 1),
+        (b"BT /F1 11 Tf 8 Tc 72 742 Td (Account: 1234) Tj ET\n0 g\n145 738 90 16 re f\n", 1),
+        (b"BT /F1 11 Tf 250 Tz 72 742 Td (Account: 1234) Tj ET\n0 g\n100 738 160 16 re f\n", 1),
     ];
-    for content in cases {
+    for (content, expected) in cases {
         let findings = audit_redactions(&open(one_page(content, ""))).expect("audit must run");
-        assert_eq!(findings.len(), 1, "{}: {findings:?}", String::from_utf8_lossy(content));
+        assert_eq!(findings.len(), expected, "{}: {findings:?}", String::from_utf8_lossy(content));
     }
 }
 
@@ -375,6 +520,7 @@ fn finding_kind_ids_are_stable() {
     // formats). They must not change; add a variant instead of renaming.
     assert_eq!(FindingKind::CoveredText.id(), "covered-text");
     assert_eq!(FindingKind::UnappliedMark.id(), "unapplied-mark");
+    assert_eq!(FindingKind::HiddenUnderWhite.id(), "hidden-under-white");
 }
 
 #[test]
@@ -456,4 +602,565 @@ fn forms_nested_past_depth_limit_fail_closed() {
     // page clean with a possible cover left unseen.
     let result = audit_redactions(&open(nested_forms(33)));
     assert!(matches!(result, Err(crate::AuditError::TooDeep)), "{result:?}");
+}
+
+#[test]
+fn comment_across_streams_neither_invents_text_nor_a_cover() {
+    let doc = open(two_streams(b"BT /F1 24 Tf 72 700 Td (Visible text) Tj ET % note", b"0 g 70 690 200 40 re f"));
+    assert!(audit_redactions(&doc).unwrap().is_empty(), "commented cover must not be reported");
+    let doc = open(two_streams(b"BT /F1 24 Tf 72 700 Td (Before comment) Tj ET % note", b"BT /F1 24 Tf 72 650 Td (After comment) Tj ET"));
+    let text: String = pdfcraft_edit::text_lines(&doc, 0).unwrap().into_iter().map(|line| line.text).collect();
+    assert!(!text.contains("After comment"), "editor exposed phantom text: {text}");
+}
+
+#[test]
+fn reading_blocks_respect_stream_comments_and_split_operands() {
+    let doc = open(two_streams(b"BT /F1 24 Tf 72 700 Td (Before comment) Tj ET % note", b"BT /F1 24 Tf 72 650 Td (After comment) Tj ET"));
+    let text: String = pdfcraft_edit::reading_blocks(&doc, 0).unwrap().into_iter().map(|block| block.editor_text).collect();
+    assert_eq!(text, "Before comment");
+    let doc = open(two_streams(b"BT /F1 24 Tf 72 700 Td (Split operand)", b"Tj ET"));
+    let text: String = pdfcraft_edit::reading_blocks(&doc, 0).unwrap().into_iter().map(|block| block.editor_text).collect();
+    assert_eq!(text, "Split operand");
+    // Marked content opened in one stream applies to text in the next: its /ActualText replaces
+    // the glyphs, as when the streams are read joined.
+    for (s1, s2) in [
+        (b"BT /F1 24 Tf 72 700 Td /Span <</ActualText (Replacement text)".as_slice(), b">> BDC (Glyphs) Tj EMC ET".as_slice()),
+        (b"BT /F1 24 Tf 72 700 Td /Span <</ActualText (Replacement text)>> BDC", b"(Glyphs) Tj EMC ET"),
+    ] {
+        let doc = open(two_streams(s1, s2));
+        let text: String = pdfcraft_edit::reading_blocks(&doc, 0).unwrap().into_iter().map(|block| block.editor_text).collect();
+        assert_eq!(text, "Replacement text", "{}", String::from_utf8_lossy(s1));
+    }
+}
+
+/// #2385: a thick black stroke along the text (a "marker" line) paints the same rectangle a
+/// filled one would, and a white one whites the text out; a hairline doesn't hide it, a
+/// translucent stroke doesn't either, and a stroked rectangle only outlines.
+#[test]
+fn thick_stroke_over_text_is_a_cover() {
+    let text = &b"BT /F1 14 Tf 72 700 Td (IBAN IT60X0542811101000000123456) Tj ET\n"[..];
+    let audit = |cover: &[u8]| audit_redactions(&open(one_page(&[text, cover].concat(), ""))).expect("audit must run");
+    let findings = audit(b"0 G 20 w 70 705 m 400 705 l S\n");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!((findings[0].kind.clone(), findings[0].rect), (FindingKind::CoveredText, [70.0, 695.0, 400.0, 715.0]));
+    assert!(findings[0].covered_text.contains("IBAN"), "{:?}", findings[0].covered_text);
+    // Fill and stroke together. A vertical marker over most of the first word hides that word
+    // (#2662), as a filled box there would; a narrow one over its first letter does not.
+    assert_eq!(audit(b"0 G 20 w 70 705 m 400 705 l B\n").len(), 1);
+    assert_eq!(audit(b"0 G 20 w 80 690 m 80 720 l S\n").len(), 1, "a vertical stroke over most of IBAN");
+    assert!(audit(b"0 G 6 w 75 690 m 75 720 l S\n").is_empty(), "a vertical stroke hides only the first letter");
+    for not_a_cover in [&b"0 G 1 w 70 705 m 400 705 l S\n"[..], b"0 G 20 w 70 695 330 20 re S\n"] {
+        assert!(audit(not_a_cover).is_empty(), "{:?}", String::from_utf8_lossy(not_a_cover));
+    }
+    // A white marker whites the text out, like a white rectangle.
+    let findings = audit(b"1 G 20 w 70 705 m 400 705 l S\n");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].kind, FindingKind::HiddenUnderWhite);
+    // A translucent stroke (`/CA`) is not a cover; `/ca` does not apply to strokes.
+    let content = [&b"BT /F1 14 Tf 72 700 Td (IBAN IT60X0542811101000000123456) Tj ET\n"[..], b"/GS1 gs 0 G 20 w 70 705 m 400 705 l S\n"].concat();
+    for (state, found) in [("<< /Type /ExtGState /CA 0.5 >>", 0), ("<< /Type /ExtGState /ca 0.5 >>", 1)] {
+        let mut b = Builder::new();
+        b.add("<< /Type /Catalog /Pages 2 0 R >>");
+        b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS1 6 0 R >> >> >>");
+        b.add_stream(&content);
+        b.add(FONT);
+        b.add(state);
+        assert_eq!(audit_redactions(&open(b.build())).expect("audit must run").len(), found, "{state}");
+    }
+}
+
+/// #2385: a black, opaque Highlight annotation over the text hides it like a cover; a yellow one
+/// or a translucent one doesn't, and a hidden one isn't drawn at all.
+#[test]
+fn black_highlight_annotation_over_text_is_a_cover() {
+    let content = b"BT /F1 14 Tf 72 700 Td (IBAN IT60X0542811101000000123456) Tj ET\n";
+    let audit = |extra: &str| {
+        let mut b = Builder::new();
+        b.add("<< /Type /Catalog /Pages 2 0 R >>");
+        b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+        b.add_stream(content);
+        b.add(FONT);
+        b.add(&format!("<< /Type /Annot /Subtype /Highlight /Rect [70 695 400 715] /F 4 /QuadPoints [70 715 400 715 70 695 400 695] {extra} >>"));
+        audit_redactions(&open(b.build())).expect("audit must run")
+    };
+    let findings = audit("/C [0 0 0]");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!((findings[0].kind.clone(), findings[0].rect), (FindingKind::CoveredText, [70.0, 695.0, 400.0, 715.0]));
+    assert!(findings[0].covered_text.contains("IBAN"), "{:?}", findings[0].covered_text);
+    assert_eq!(audit("/C [0]").len(), 1, "a gray level");
+    for not_a_cover in ["/C [1 1 0]", "/C [0 0 0] /CA 0.5", "/C [0 0 0] /F 2", ""] {
+        assert!(audit(not_a_cover).is_empty(), "{not_a_cover}");
+    }
+}
+
+/// #2385: an opaque white rectangle painted after dark text makes it invisible, the way a form is
+/// "whited out"; that is its own kind, apart from the dark covers, so callers can decide. Light
+/// shading (`0.9 g`) stays unflagged, as before.
+#[test]
+fn white_rectangle_over_text_is_reported_as_hidden_under_white() {
+    let text = &b"BT /F1 14 Tf 72 700 Td (IBAN IT60X0542811101000000123456) Tj ET\n"[..];
+    let audit = |cover: &[u8]| audit_redactions(&open(one_page(&[text, cover].concat(), ""))).expect("audit must run");
+    let findings = audit(b"1 g 70 695 330 20 re f\n");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!((findings[0].kind.clone(), findings[0].rect), (FindingKind::HiddenUnderWhite, [70.0, 695.0, 400.0, 715.0]));
+    assert_eq!(findings[0].kind.clone().id(), "hidden-under-white");
+    assert!(findings[0].covered_text.contains("IBAN"), "{:?}", findings[0].covered_text);
+    assert!(audit(b"0.9 g 70 695 330 20 re f\n").is_empty(), "shading");
+    assert!(
+        audit(b"1 g 70 695 330 20 re f BT /F1 14 Tf 72 700 Td (IBAN IT60X0542811101000000123456) Tj ET\n").len() == 1,
+        "the second copy of the text is drawn after the white"
+    );
+}
+
+/// One page with `content` and `/ExtGState << /GS1 6 0 R /GS2 7 0 R >>` holding `states`.
+fn page_with_states(content: &[u8], states: [&str; 2]) -> Vec<u8> {
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS1 6 0 R /GS2 7 0 R >> >> >>");
+    b.add_stream(content);
+    b.add(FONT);
+    for s in states {
+        b.add(s);
+    }
+    b.build()
+}
+
+/// A `gs` sets only the parameters its dictionary names: `/LW` is the line width as `w` is, and
+/// an alpha it leaves out keeps the value an earlier `gs` set (ISO 32000-2 §8.4.5).
+#[test]
+fn ext_gstate_sets_line_width_and_keeps_omitted_alphas() {
+    let text = &b"BT /F1 14 Tf 72 700 Td (IBAN IT60X0542811101000000123456) Tj ET\n"[..];
+    let audit = |cover: &[u8], states| audit_redactions(&open(page_with_states(&[text, cover].concat(), states))).expect("audit must run");
+    let findings = audit(b"/GS1 gs 0 G 70 705 m 400 705 l S\n", ["<< /LW 20 >>", "<< >>"]);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!((findings[0].kind.clone(), findings[0].rect), (FindingKind::CoveredText, [70.0, 695.0, 400.0, 715.0]));
+    assert!(audit(b"/GS1 gs /GS2 gs 0 G 20 w 70 705 m 400 705 l S\n", ["<< /CA 0.5 >>", "<< /ca 0.5 >>"]).is_empty(), "/CA 0.5 still applies");
+    assert!(audit(b"/GS1 gs /GS2 gs 0 g 70 695 330 20 re f\n", ["<< /ca 0.5 >>", "<< /LW 20 >>"]).is_empty(), "/ca 0.5 still applies");
+}
+
+/// The line width is measured across the stroke after the CTM: under `4 0 0 1 0 0 cm` a
+/// horizontal stroke keeps its width and a vertical one is four times as wide.
+#[test]
+fn stroke_width_follows_a_non_uniform_ctm_across_the_segment() {
+    let text = &b"BT /F1 14 Tf 72 700 Td (IBAN IT60X0542811101000000123456) Tj ET\n"[..];
+    let audit = |cover: &[u8]| audit_redactions(&open(one_page(&[text, cover].concat(), ""))).expect("audit must run");
+    let rects = |cover: &[u8]| audit(cover).into_iter().map(|f| f.rect).collect::<Vec<_>>();
+    assert_eq!(rects(b"q 4 0 0 1 0 0 cm 0 G 20 w 17.5 705 m 100 705 l S Q\n"), [[70.0, 695.0, 400.0, 715.0]]);
+    assert_eq!(rects(b"q 4 0 0 1 0 0 cm 0 G 5 w 20 690 m 20 720 l S Q\n"), [[70.0, 690.0, 90.0, 720.0]]);
+}
+
+/// A round or projecting square cap (`1 J`, `2 J`, or `/LC` in an ExtGState) paints half the
+/// line width past each end of the stroke, so the text under a cap is hidden too; a butt cap
+/// (the default, and `0 J` again) paints none. Under a CTM the cap is the pen's extent along
+/// the stroke: four times the width under `4 0 0 1 0 0 cm`, `sqrt 2` times it under a shear.
+#[test]
+fn stroke_caps_lengthen_the_cover() {
+    let text = &b"BT /F1 14 Tf 72 700 Td (IBAN IT60X0542811101000000123456) Tj ET\n"[..];
+    let rects = |cover: &[u8]| {
+        audit_redactions(&open(one_page(&[text, cover].concat(), ""))).expect("audit must run").into_iter().map(|f| f.rect).collect::<Vec<_>>()
+    };
+    assert_eq!(rects(b"0 G 20 w 80 705 m 400 705 l S\n"), [[80.0, 695.0, 400.0, 715.0]], "butt");
+    assert_eq!(rects(b"0 G 1 J 20 w 80 705 m 400 705 l S\n"), [[70.0, 695.0, 410.0, 715.0]], "round");
+    assert_eq!(rects(b"0 G 2 J 20 w 80 705 m 400 705 l S\n"), [[70.0, 695.0, 410.0, 715.0]], "projecting square");
+    assert_eq!(rects(b"0 G 1 J 0 J 20 w 80 705 m 400 705 l S\n"), [[80.0, 695.0, 400.0, 715.0]], "butt again");
+    assert_eq!(rects(b"0 G 1 J 20 w 80 700 m 80 720 l S\n"), [[70.0, 690.0, 90.0, 730.0]], "vertical");
+    assert_eq!(rects(b"q 4 0 0 1 0 0 cm 0 G 1 J 20 w 20 705 m 100 705 l S Q\n"), [[40.0, 695.0, 440.0, 715.0]], "scaled along the stroke");
+    let [sheared] = rects(b"q 1 0 1 1 0 0 cm 0 G 1 J 20 w -625 705 m -305 705 l S Q\n")[..] else { panic!("one cover") };
+    let want = [80.0 - 10.0 * 2f64.sqrt(), 695.0, 400.0 + 10.0 * 2f64.sqrt(), 715.0];
+    assert!(sheared.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-6), "sheared: {sheared:?} vs {want:?}");
+    // The cap is state like the width: `/LC` sets it, a `gs` without it leaves it, `Q` restores it.
+    let states = |cover: &[u8], states| {
+        audit_redactions(&open(page_with_states(&[text, cover].concat(), states)))
+            .expect("audit must run")
+            .into_iter()
+            .map(|f| f.rect)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(states(b"/GS1 gs /GS2 gs 0 G 80 705 m 400 705 l S\n", ["<< /LC 1 /LW 20 >>", "<< >>"]), [[70.0, 695.0, 410.0, 715.0]]);
+    assert_eq!(rects(b"q 1 J Q 0 G 20 w 80 705 m 400 705 l S\n"), [[80.0, 695.0, 400.0, 715.0]], "restored");
+    // The cap alone can hide a word: with butt caps the stroke stops short of IBAN, the round cap reaches it.
+    let hidden = |cover: &[u8]| {
+        audit_redactions(&open(one_page(&[text, cover].concat(), "")))
+            .expect("audit must run")
+            .into_iter()
+            .map(|f| f.covered_text)
+            .collect::<Vec<_>>()
+    };
+    assert!(hidden(b"0 G 30 w 20 705 m 84 705 l S\n").is_empty(), "butt: under a third of IBAN");
+    assert_eq!(hidden(b"0 G 1 J 30 w 20 705 m 84 705 l S\n"), ["IBAN IT60X0542811101000000123456"], "the cap reaches over most of IBAN");
+}
+
+/// A white cover is `hidden-under-white` whatever the text's color: white text on a dark page,
+/// whited out, is not a dark cover just because text and cover have no contrast.
+#[test]
+fn white_cover_over_white_text_is_hidden_under_white() {
+    let content = b"0 g 0 0 612 792 re f\n1 g BT /F1 14 Tf 72 700 Td (IBAN IT60X0542811101000000123456) Tj ET\n1 g 70 695 330 20 re f\n";
+    let findings = audit_redactions(&open(one_page(content, ""))).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!((findings[0].kind.clone(), findings[0].rect), (FindingKind::HiddenUnderWhite, [70.0, 695.0, 400.0, 715.0]));
+}
+
+/// A highlight paints its `/QuadPoints`, not its `/Rect`: a line inside the rectangle but
+/// outside every quadrilateral is not hidden. Without `/QuadPoints` the `/Rect` is used.
+#[test]
+fn highlight_covers_its_quad_points_not_its_rect() {
+    let content = b"BT /F1 14 Tf 72 700 Td (IBAN IT60X0542811101000000123456) Tj 0 -30 Td (Account holder Jane Doe) Tj ET\n";
+    let audit = |quads: &str| {
+        let mut b = Builder::new();
+        b.add("<< /Type /Catalog /Pages 2 0 R >>");
+        b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+        b.add_stream(content);
+        b.add(FONT);
+        b.add(&format!("<< /Type /Annot /Subtype /Highlight /Rect [70 660 400 715] /C [0 0 0] {quads} >>"));
+        audit_redactions(&open(b.build())).expect("audit must run")
+    };
+    let findings = audit("/QuadPoints [70 715 400 715 70 695 400 695]");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].covered_text, "IBAN IT60X0542811101000000123456");
+    assert_eq!(audit("")[0].covered_text, "IBAN IT60X0542811101000000123456 Account holder Jane Doe");
+}
+
+/// A highlight reports the words under its quadrilaterals, not the words its `/Rect` spans: a
+/// `/Rect` over two lines with quads on part of one reports that part (#4164 for marks with
+/// several areas).
+#[test]
+fn highlight_reports_the_words_under_its_quad_points() {
+    let audit = |quads: &str| {
+        let mut b = Builder::new();
+        b.add("<< /Type /Catalog /Pages 2 0 R >>");
+        b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+        b.add_stream(
+            b"BT /F1 24 Tf 100 700 Td (SECRET) Tj ET
+BT /F1 24 Tf 200 700 Td (tail) Tj ET
+BT /F1 24 Tf 100 660 Td (Jane) Tj ET
+",
+        );
+        b.add(FONT);
+        b.add(&format!("<< /Type /Annot /Subtype /Highlight /Rect [98 650 260 720] /C [0 0 0] /QuadPoints [{quads}] >>"));
+        audit_redactions(&open(b.build())).expect("audit must run")
+    };
+    let secret = "98 720 192 720 98 688 192 688";
+    let jane = "98 680 160 680 98 650 160 650";
+    for (quads, covered) in [(secret.to_owned(), "SECRET"), (format!("{secret} {jane}"), "SECRET Jane")] {
+        let findings = audit(&quads);
+        assert_eq!(
+            findings.iter().map(|f| (f.rect, f.covered_text.as_str())).collect::<Vec<_>>(),
+            [([98.0, 650.0, 260.0, 720.0], covered)],
+            "{quads}"
+        );
+    }
+}
+
+/// The current path is not graphics state: a rectangle built before `Q` and filled after it
+/// paints the box, so it is a cover.
+#[test]
+fn rectangle_filled_after_restore_is_a_cover() {
+    let content = b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n0 g\nq 100 688 220 32 re Q f\n";
+    let findings = audit_redactions(&open(one_page(content, ""))).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(findings[0].covered_text.contains("SECRET"), "{findings:?}");
+}
+
+/// A `/Subtype` may be an indirect reference to the name, like any other value: a `/Redact`
+/// annotation and a covering form XObject named that way are still checked.
+#[test]
+fn indirect_subtype_is_resolved() {
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+    b.add_stream(b"BT /F1 24 Tf 100 700 Td (DO NOT SHARE) Tj ET\n");
+    b.add(FONT);
+    b.add("<< /Type /Annot /Subtype 7 0 R /Rect [95 685 305 725] >>");
+    b.add("/Redact");
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].kind, FindingKind::UnappliedMark);
+
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> /XObject << /X 5 0 R >> >> >>");
+    b.add_stream(b"BT /F1 24 Tf 100 700 Td (SECRET) Tj ET\n/X Do\n");
+    b.add_stream_with(b"0 g\n100 688 220 32 re f\n", "/Type /XObject /Subtype 7 0 R /BBox [0 0 612 792]");
+    b.add(FONT);
+    b.add("/Form");
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].kind, FindingKind::CoveredText);
+}
+
+/// Text drawn after a cover on the same baseline joins the covered text in one line. The cover
+/// still hides the words painted before it.
+#[test]
+fn later_text_on_the_line_does_not_clear_an_earlier_cover() {
+    let content = b"0 g\nBT /F1 24 Tf 100 700 Td (SECRET) Tj ET\n98 688 94 32 re f\nBT /F1 24 Tf 200 700 Td (tail) Tj ET\n";
+    let doc = open(one_page(content, ""));
+    let lines = pdfcraft_edit::text_lines(&doc, 0).expect("text");
+    assert_eq!(lines.len(), 1, "the runs join one line: {:?}", lines.iter().map(|l| &l.text).collect::<Vec<_>>());
+    let findings = audit_redactions(&doc).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(findings[0].covered_text.contains("SECRET"), "{findings:?}");
+}
+
+/// #4164: a cover over part of a line reports the words under it, not the words of the same
+/// line painted beside it, which stay visible.
+#[test]
+fn covered_text_leaves_out_the_words_beside_the_cover() {
+    let covered = |content: &[u8]| {
+        let findings = audit_redactions(&open(one_page(content, ""))).expect("audit must run");
+        findings.into_iter().map(|f| f.covered_text).collect::<Vec<_>>()
+    };
+    assert_eq!(covered(b"0 g\nBT /F1 24 Tf 100 700 Td (SECRET) Tj ET\n98 688 94 32 re f\nBT /F1 24 Tf 200 700 Td (tail) Tj ET\n"), ["SECRET"]);
+    // A word shown in two runs with nothing between them stays one word (review on #4198).
+    assert_eq!(covered(b"0 g\nBT /F1 24 Tf 100 700 Td (SE) Tj (CRET) Tj ET\n98 688 94 32 re f\nBT /F1 24 Tf 200 700 Td (tail) Tj ET\n"), ["SECRET"]);
+
+    // The same for an unapplied redaction mark over the first run only. A mark over both runs
+    // reports both, with the space the line has between them (`tail` is set apart here).
+    for (rect, expected) in [("[98 688 192 720]", "SECRET"), ("[98 688 310 720]", "SECRET tail")] {
+        let mut b = Builder::new();
+        b.add("<< /Type /Catalog /Pages 2 0 R >>");
+        b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+        b.add_stream(b"BT /F1 24 Tf 100 700 Td (SECRET) Tj ET\nBT /F1 24 Tf 250 700 Td (tail) Tj ET\n");
+        b.add(FONT);
+        b.add(&format!("<< /Type /Annot /Subtype /Redact /Rect {rect} >>"));
+        let findings = audit_redactions(&open(b.build())).expect("audit must run");
+        assert_eq!(findings.iter().map(|f| (f.kind.clone(), f.covered_text.as_str())).collect::<Vec<_>>(), [(FindingKind::UnappliedMark, expected)]);
+    }
+}
+
+/// Many covers over the same long line repeat its text in every finding: a small file must not
+/// expand into an unbounded report. Past the budget the audit fails rather than truncate.
+#[test]
+fn covered_text_across_findings_is_bounded() {
+    let text = "X".repeat(60_000);
+    let mut content = format!("BT /F1 1 Tf 0 700 Td ({text}) Tj ET\n0 g\n").into_bytes();
+    for i in 0..1_200 {
+        content.extend_from_slice(format!("-{i} 690 50000 20 re f\n").as_bytes());
+    }
+    let result = audit_redactions(&open(one_page(&content, "")));
+    assert!(matches!(result, Err(crate::AuditError::TooMuchOutput)), "{:?}", result.map(|f| f.len()));
+}
+
+/// Covers compared against lines are bounded per page, so content that is quadratic in its
+/// covers and lines fails the audit instead of running for hours. A line costs one comparison per
+/// word: 20 covers against 20 two-word lines are 800.
+#[test]
+fn cover_and_line_comparisons_are_bounded() {
+    let mut content = Vec::new();
+    for i in 0..20 {
+        content.extend_from_slice(format!("BT /F1 12 Tf 72 {} Td (Line {i}) Tj ET\n", 700 - 14 * i).as_bytes());
+    }
+    for _ in 0..20 {
+        content.extend_from_slice(b"1 g 0 0 10 10 re f\n");
+    }
+    let doc = open(one_page(&content, ""));
+    let limits = crate::Limits { comparisons: 799, covered_text: usize::MAX };
+    assert!(matches!(crate::audit(&doc, limits), Err(crate::AuditError::TooManyComparisons)));
+    let limits = crate::Limits { comparisons: 800, covered_text: usize::MAX };
+    assert!(crate::audit(&doc, limits).expect("within the budget").is_empty());
+}
+
+/// A highlight is compared with the page once per quad, so it is charged once per quad: one
+/// annotation with a few hundred thousand `/QuadPoints` must not be checked for the price of one
+/// cover (review on #2408). 20 quads against 20 two-word lines are 800; the `/Rect` alone is 40.
+#[test]
+fn a_highlights_quads_count_against_the_comparison_bound() {
+    let mut content = Vec::new();
+    for i in 0..20 {
+        content.extend_from_slice(format!("BT /F1 12 Tf 72 {} Td (Line {i}) Tj ET\n", 700 - 14 * i).as_bytes());
+    }
+    let audit = |quads: usize, comparisons: usize| {
+        let mut b = Builder::new();
+        b.add("<< /Type /Catalog /Pages 2 0 R >>");
+        b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+        b.add_stream(&content);
+        b.add(FONT);
+        let quads = "0 10 10 10 0 0 10 0 ".repeat(quads);
+        b.add(&format!("<< /Type /Annot /Subtype /Highlight /Rect [0 0 10 10] /C [0 0 0] /QuadPoints [{quads}] >>"));
+        crate::audit(&open(b.build()), crate::Limits { comparisons, covered_text: usize::MAX })
+    };
+    assert!(matches!(audit(20, 799), Err(crate::AuditError::TooManyComparisons)));
+    assert!(audit(20, 800).expect("within the budget").is_empty());
+    assert!(matches!(audit(0, 39), Err(crate::AuditError::TooManyComparisons)));
+    assert!(audit(0, 40).expect("within the budget").is_empty());
+}
+
+/// A run that draws no word still costs a comparison: the covered text walks every run of a
+/// covered line, so a word followed by many `( ) Tj` must not be checked for free (review on
+/// #4198).
+#[test]
+fn runs_without_words_count_against_the_comparison_bound() {
+    let mut content = b"BT /F1 24 Tf 100 700 Td (SECRET) Tj".to_vec();
+    content.extend_from_slice(&b" ( ) Tj".repeat(50));
+    content.extend_from_slice(
+        b" ET
+0 g
+98 688 94 32 re f
+",
+    );
+    let doc = open(one_page(&content, ""));
+    let lines = pdfcraft_edit::glyph_text_lines(&doc, &pdfcraft_model::pages(&doc)[0]).expect("text");
+    assert_eq!(lines.iter().map(|l| (l.ink.len(), l.runs().count())).collect::<Vec<_>>(), [(1, 51)]);
+    // Plus the hidden line's text, read once to copy it.
+    let text = lines[0].text.len() / crate::TEXT_BYTES_PER_COMPARISON;
+    let limits = crate::Limits { comparisons: 50 + text, covered_text: usize::MAX };
+    assert!(matches!(crate::audit(&doc, limits), Err(crate::AuditError::TooManyComparisons)));
+    let limits = crate::Limits { comparisons: 51 + text, covered_text: usize::MAX };
+    assert_eq!(crate::audit(&doc, limits).expect("within the budget").len(), 1);
+}
+
+/// Covered text is document text: a document whose permissions withhold copying reports where
+/// its covers are but not what they hide, unless it was opened with the owner password.
+#[test]
+fn copy_restricted_documents_withhold_covered_text() {
+    let content = b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n0 g\n100 688 220 32 re f\n";
+    let mut doc = open(one_page(content, ""));
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ 0b1_0000,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .expect("encrypt");
+    let bytes = Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).expect("save"));
+    let user = Document::open_with_password(bytes.clone(), None).expect("open");
+    let findings = audit_redactions(&user).expect("audit must run");
+    assert_eq!(findings.len(), 1, "the cover is still reported: {findings:?}");
+    assert_eq!(findings[0].covered_text, "");
+    // The output bound counts the text reported and the finding's record, so withheld text
+    // costs only the record.
+    let record = std::mem::size_of::<AuditFinding>();
+    let nothing = crate::Limits { comparisons: usize::MAX, covered_text: record };
+    assert_eq!(crate::audit(&user, nothing).expect("withheld text is not output").len(), 1);
+    let none = crate::Limits { covered_text: record - 1, ..nothing };
+    assert!(matches!(crate::audit(&user, none), Err(crate::AuditError::TooMuchOutput)));
+    let owner = Document::open_with_password(bytes, Some("owner")).expect("open");
+    let findings = audit_redactions(&owner).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].covered_text, "SECRET DATA 123");
+    let exact = crate::Limits { comparisons: usize::MAX, covered_text: "SECRET DATA 123".len() + record };
+    assert!(crate::audit(&owner, exact).is_ok());
+    let short = crate::Limits { covered_text: exact.covered_text - 1, ..exact };
+    assert!(matches!(crate::audit(&owner, short), Err(crate::AuditError::TooMuchOutput)));
+}
+
+/// Withheld text is never assembled: covers over one long line would otherwise copy the line once
+/// per cover, a volume neither the comparison nor the output bound charges.
+#[test]
+fn withheld_covered_text_is_not_assembled() {
+    const PAGE: [f64; 4] = [0.0, 0.0, 612.0, 792.0];
+    let doc = open(one_page(b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n", ""));
+    let lines = pdfcraft_edit::text_lines(&doc, 0).expect("text");
+    let mut budget = crate::Budget { limits: crate::Limits::DEFAULT, comparisons: 0, page_cost: 0, covered_text: 0 };
+    budget.start_page(&lines);
+    let withheld = budget.hidden_text(&lines, false, &[PAGE], |_| true).expect("within the budget");
+    assert_eq!(withheld.map(|t| t.capacity()), Some(0), "a finding, with no text built for it");
+    assert_eq!(budget.hidden_text(&lines, false, &[PAGE], |_| false).expect("within the budget"), None);
+    let copied = budget.hidden_text(&lines, true, &[PAGE], |_| true).expect("within the budget");
+    assert_eq!(copied.as_deref(), Some("SECRET DATA 123"));
+}
+
+/// `/ActualText` is metadata the file's author controls: an empty or substitute replacement must
+/// not hide the glyphs a cover sits on.
+#[test]
+fn a_cover_over_text_with_empty_or_substitute_actual_text_is_found() {
+    for actual in ["()", "(nothing here)"] {
+        let content =
+            format!("/Span << /ActualText {actual} >> BDC\nBT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\nEMC\n0 g\n100 688 220 32 re f\n");
+        let findings = audit_redactions(&open(one_page(content.as_bytes(), ""))).expect("audit must run");
+        assert_eq!(findings.len(), 1, "{actual}: {findings:?}");
+        assert!(findings[0].covered_text.contains("SECRET"), "{actual}: covered_text was {:?}", findings[0].covered_text);
+    }
+}
+
+#[test]
+fn repeated_stream_references_share_one_decode_budget() {
+    use pdfcraft_cos::{Dict, Document, Object, Stream};
+    // One 1 MiB stream of spaces (a kilobyte on disk), named 300 times: by the page's /Contents,
+    // and by 300 draws of a form holding it.
+    let mut doc = Document::new_empty();
+    let spaces = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let contents: Dict = [(b"Contents".to_vec(), Object::Array(vec![Object::Ref(spaces); 300]))].into_iter().collect();
+    assert!(crate::cover::filled_rects(&doc, &contents).is_err(), "repeated content streams");
+
+    let form_dict: Dict = [(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()))].into_iter().collect();
+    let form = doc.add(Stream::flate(form_dict, &vec![b' '; 1 << 20]));
+    let draws = doc.add(Stream::from_raw(Dict::new(), "/X Do ".repeat(300).into_bytes()));
+    let xobjects: Dict = [(b"X".to_vec(), Object::Ref(form))].into_iter().collect();
+    let resources: Dict = [(b"XObject".to_vec(), Object::Dict(xobjects))].into_iter().collect();
+    let page: Dict = [(b"Contents".to_vec(), Object::Ref(draws)), (b"Resources".to_vec(), Object::Dict(resources))].into_iter().collect();
+    assert!(crate::cover::filled_rects(&doc, &page).is_err(), "repeated form draws");
+}
+
+#[test]
+fn form_entries_past_the_page_allowance_fail_the_audit() {
+    use pdfcraft_cos::{Dict, Document, Object, Stream};
+    // An empty form decodes to no bytes, so only the count of entries bounds drawing it again.
+    let mut doc = Document::new_empty();
+    let form_dict: Dict = [(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()))].into_iter().collect();
+    let form = doc.add(Stream::from_raw(form_dict, Vec::new()));
+    let draws = doc.add(Stream::from_raw(Dict::new(), "/X Do ".repeat(pdfcraft_cos::MAX_PAGE_FORMS + 1).into_bytes()));
+    let xobjects: Dict = [(b"X".to_vec(), Object::Ref(form))].into_iter().collect();
+    let resources: Dict = [(b"XObject".to_vec(), Object::Dict(xobjects))].into_iter().collect();
+    let page: Dict = [(b"Contents".to_vec(), Object::Ref(draws)), (b"Resources".to_vec(), Object::Dict(resources))].into_iter().collect();
+    assert!(matches!(crate::cover::filled_rects(&doc, &page), Err(crate::AuditError::TooManyForms)));
+}
+
+/// Copying a covered line's text walks all of it, padding included, so a long padded line under
+/// many covers costs its bytes once per cover, not one run per cover (CodeRabbit).
+#[test]
+fn covered_text_bytes_count_against_the_comparison_bound() {
+    // One run: 20 KiB of spaces around a word, which trims to the word alone.
+    let mut content = b"BT /F1 24 Tf 100 700 Td (".to_vec();
+    content.extend_from_slice(&[b' '; 10_000]);
+    content.extend_from_slice(b"SECRET");
+    content.extend_from_slice(&[b' '; 10_000]);
+    content.extend_from_slice(b") Tj ET\n0 g\n");
+    for _ in 0..10 {
+        content.extend_from_slice(b"-1 688 1000000 32 re f\n");
+    }
+    let doc = open(one_page(&content, ""));
+    let lines = pdfcraft_edit::glyph_text_lines(&doc, &pdfcraft_model::pages(&doc)[0]).expect("text");
+    assert_eq!(lines.len(), 1);
+    let bytes = lines[0].text.len();
+    assert!(bytes > 20_000, "{bytes} bytes of text");
+    // Each cover: one comparison for the line, plus its bytes when it is hidden.
+    let exact = crate::Limits { comparisons: 10 * (1 + bytes / crate::TEXT_BYTES_PER_COMPARISON), covered_text: usize::MAX };
+    let findings = crate::audit(&doc, exact).expect("within the budget");
+    assert_eq!(findings.len(), 10, "{findings:?}");
+    assert!(findings.iter().all(|f| f.covered_text == "SECRET"), "{findings:?}");
+    let short = crate::Limits { comparisons: exact.comparisons - 1, ..exact };
+    assert!(matches!(crate::audit(&doc, short), Err(crate::AuditError::TooManyComparisons)));
+}
+
+/// One annotation list shared by many pages makes a finding on each: every finding's record
+/// counts against the output bound, text or no text (CodeRabbit).
+#[test]
+fn every_finding_record_counts_against_the_output_bound() {
+    let content = b"BT /F1 24 Tf 100 700 Td (SECRET) Tj ET\n";
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R 7 0 R 8 0 R] /Count 3 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots 6 0 R >>");
+    b.add_stream(content);
+    b.add(FONT);
+    b.add("[<< /Type /Annot /Subtype /Redact /Rect [95 685 200 725] >>]");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots 6 0 R >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots 6 0 R >>");
+    let doc = open(b.build());
+    let one = "SECRET".len() + std::mem::size_of::<AuditFinding>();
+    let exact = crate::Limits { comparisons: usize::MAX, covered_text: 3 * one };
+    assert_eq!(crate::audit(&doc, exact).expect("within the budget").len(), 3);
+    let short = crate::Limits { covered_text: 3 * one - 1, ..exact };
+    assert!(matches!(crate::audit(&doc, short), Err(crate::AuditError::TooMuchOutput)));
 }
