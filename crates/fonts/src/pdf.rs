@@ -69,6 +69,8 @@ pub struct Metrics {
     /// Subset CIDFontType2 only: one bit per CID (below 65 536) whose glyph has an outline in the
     /// embedded program. See [`cids_with_outlines`].
     outlined_cids: Vec<u64>,
+    /// Whether this font is an OCR placeholder font with no real letterforms (e.g. `/Glyphless`).
+    glyphless: bool,
     /// A stream these metrics come from (a CMap, the program, `/CIDToGIDMap`, a Type 3 glyph
     /// description) was left unread because the decode allowance [`Metrics::from_dict_within`]
     /// was given was spent: what it would have decided (code lengths, CIDs, widths, meanings, a
@@ -93,6 +95,79 @@ fn dict(doc: &Document, o: Option<&Object>) -> Option<Dict> {
     o.and_then(|o| doc.resolve(o).as_dict().cloned())
 }
 
+/// Strip a six-letter uppercase `ABCDEF+` subset prefix, if present.
+fn strip_subset_prefix(name: &str) -> &str {
+    name.split_once('+').filter(|(tag, _)| tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase())).map_or(name, |(_, rest)| rest)
+}
+
+/// Whether `name` identifies an OCR placeholder font that carries widths and Unicode mappings
+/// for invisible (`3 Tr`) text selection but no real letterforms.
+fn glyphless_font_name(name: &str) -> bool {
+    let stem = strip_subset_prefix(name).to_ascii_lowercase();
+    stem.starts_with("glyphless") || stem.starts_with("hiddenhorzocr") || stem.starts_with("hiddenvertocr")
+}
+
+/// Whether `font` carries a known OCR placeholder font name (`Glyphless*`, `HiddenHorzOCR`,
+/// `HiddenVertOCR`, with optional six-letter `ABCDEF+` subset prefix).
+fn has_glyphless_font_name(doc: &Document, font: &Dict) -> bool {
+    let descendant = dict(doc, font.get(b"DescendantFonts").and_then(|o| doc.resolve(o).as_array().and_then(|a| a.first()).cloned()).as_ref());
+    let descriptor = dict(doc, descendant.as_ref().unwrap_or(font).get(b"FontDescriptor"));
+    [font.name(b"BaseFont"), descendant.as_ref().and_then(|d| d.name(b"BaseFont")), descriptor.as_ref().and_then(|d| d.name(b"FontName"))]
+        .into_iter()
+        .flatten()
+        .any(|name| glyphless_font_name(&String::from_utf8_lossy(name)))
+}
+
+/// If every non-zero `/CIDToGIDMap` entry (skipping CID 0) maps to the exact same glyph ID and
+/// there are at least 64 such entries, returns that shared glyph ID.
+fn shared_single_gid(map: &[u8]) -> Option<usize> {
+    let mut gids = map.as_chunks::<2>().0.iter().skip(1).map(|gid| usize::from(u16::from_be_bytes(*gid))).filter(|&gid| gid != 0);
+    let mapped_gid = gids.next()?;
+    let mut mapped = 1usize;
+    for gid in gids {
+        if gid != mapped_gid {
+            return None;
+        }
+        mapped += 1;
+    }
+    (mapped >= 64).then_some(mapped_gid)
+}
+
+/// Returns `Some(gid)` when `loca` has exactly one outlined glyph ID (`>= 1`), stopping at the
+/// second outlined glyph.
+fn only_outlined_gid_from_loca(loca: &skrifa::raw::tables::loca::Loca<'_>) -> Option<usize> {
+    let mut outlined =
+        (1..loca.len().min(0x1_0000)).filter(|&gid| loca.get_raw(gid).zip(loca.get_raw(gid + 1)).is_some_and(|(start, end)| end > start));
+    let gid = outlined.next()?;
+    outlined.next().is_none().then_some(gid)
+}
+
+/// Returns `Some(gid)` when the TrueType program in `face` has exactly one outlined glyph ID.
+fn only_outlined_gid(face: &skrifa::FontRef<'_>) -> Option<usize> {
+    use skrifa::raw::TableProvider as _;
+    let loca = face.loca(None).ok()?;
+    only_outlined_gid_from_loca(&loca)
+}
+
+/// Whether `descendant`'s `/CIDToGIDMap` stream maps at least 64 CIDs solely to `mapped_gid`.
+/// Returns `None` if decoding failed or spent the allowance.
+fn stream_shares_single_gid(doc: &Document, descendant: Option<&Dict>, mapped_gid: usize, budget: &mut DecodeBudget) -> Option<bool> {
+    let cid_to_gid = descendant.and_then(|d| d.get(b"CIDToGIDMap")).map(|o| doc.resolve(o));
+    let Some(Object::Stream(map)) = cid_to_gid.as_deref() else { return Some(false) };
+    let mut reads = Reads::new(doc, budget);
+    let Some(map) = reads.decode(map, MAX_CID_TO_GID) else {
+        return (!reads.refused).then_some(false);
+    };
+    Some(shared_single_gid(&map) == Some(mapped_gid))
+}
+
+#[cfg(test)]
+fn is_glyphless(doc: &Document, font: &Dict) -> bool {
+    let mut budget = DecodeBudget::new(usize::MAX, 0);
+    let mut reads = Reads::new(doc, &mut budget);
+    has_glyphless_font_name(doc, font) || composite_outlines_and_glyphless(doc, font, false, None, &mut reads).1
+}
+
 /// Whether `font`'s `/Encoding` is the name Identity-H, given directly or through a reference,
 /// as [`Metrics::from_dict`] reads it (a Type 0 font's `/Encoding` may be indirect).
 fn identity_h(doc: &Document, font: &Dict) -> bool {
@@ -102,9 +177,7 @@ fn identity_h(doc: &Document, font: &Dict) -> bool {
 /// Whether `base_font` (subset tag allowed) names a legacy Indic font family that is laid out in
 /// visual order (Kruti Dev, DevLys, Chanakya, Shusha, Shivaji, Walkman, Akruti, APS-DV, DV-TT…).
 fn legacy_indic_font(base_font: &str) -> bool {
-    let name =
-        base_font.split_once('+').filter(|(tag, _)| tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase())).map_or(base_font, |(_, n)| n);
-    let name = name.to_ascii_lowercase();
+    let name = strip_subset_prefix(base_font).to_ascii_lowercase();
     ["kruti", "devlys", "chanakya", "shusha", "shivaji", "walkman", "akruti"].iter().any(|n| name.contains(n))
         || ["aps-", "dv-"].iter().any(|p| name.starts_with(p))
 }
@@ -125,6 +198,9 @@ const MAX_SFNT: usize = 16 << 20;
 /// streams of the metrics read that adapts a program without a Unicode cmap.
 pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudget) -> Option<Vec<u8>> {
     use skrifa::{MetadataProvider as _, raw::TableProvider as _};
+    if has_glyphless_font_name(doc, font) {
+        return None;
+    }
     let descendant = dict(doc, font.get(b"DescendantFonts").and_then(|o| doc.resolve(o).as_array().and_then(|a| a.first()).cloned()).as_ref());
     let descriptor = dict(doc, descendant.as_ref().unwrap_or(font).get(b"FontDescriptor"))?;
     for key in [b"FontFile2".as_slice(), b"FontFile3".as_slice()] {
@@ -140,10 +216,16 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
             continue;
         }
         let own_cmap = face.charmap().mappings().next().is_some();
+        let single_gid = only_outlined_gid(&face);
         // A legacy THSarabunPSK subset may keep a Latin-only cmap beside its Thai glyphs, which
         // only the PDF's verified maps reach (`composite_glyph_maps`); other programs keep theirs.
         let base_font = font.name(b"BaseFont").map(String::from_utf8_lossy).unwrap_or_default();
         if own_cmap && !base_font.rsplit('+').next().is_some_and(|f| f.starts_with("THSarabunPSK")) {
+            if let Some(gid) = single_gid
+                && stream_shares_single_gid(doc, descendant.as_ref(), gid, budget) != Some(false)
+            {
+                continue;
+            }
             return Some(bytes);
         }
         // A composite font's cmap is rebuilt only through Identity-H codes (`composite_glyph_maps`):
@@ -151,6 +233,11 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         // cmap of its own is kept as it is, as when the rebuild finds nothing.
         if font.name(b"Subtype") == Some(b"Type0") && !identity_h(doc, font) {
             if own_cmap {
+                if let Some(gid) = single_gid
+                    && stream_shares_single_gid(doc, descendant.as_ref(), gid, budget) != Some(false)
+                {
+                    continue;
+                }
                 return Some(bytes);
             }
             continue;
@@ -158,9 +245,10 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         // PDF subsets may remove the Unicode cmap entirely. Rebuild an editor-only
         // cmap from ToUnicode and the actual CID-to-glyph map; source bytes stay unchanged.
         // Metrics read past the allowance, its widths' read of the program again included,
-        // adapt no copy.
-        let metrics = Metrics::from_dict_within(doc, font, budget);
-        if metrics.past_allowance {
+        // adapt no copy. Skip redundant structural glyphless check when >=2 (or 0) outlined glyphs exist.
+        let known_glyphless = single_gid.is_none().then_some(false);
+        let metrics = Metrics::from_dict_with_glyphless(doc, font, budget, known_glyphless);
+        if metrics.glyphless || metrics.past_allowance {
             continue;
         }
         let mut mappings = std::collections::BTreeMap::new();
@@ -208,35 +296,66 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
     None
 }
 
-/// The CIDs (below 65 536) of a Type 0 font over an embedded TrueType program whose glyph has
-/// outline data, through `/CIDToGIDMap`; empty when the program or the map can't be read.
-/// Subsetters keep glyph ids and empty the glyphs they drop, so an empty glyph is a missing one.
-fn cids_with_outlines(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Vec<u64> {
+/// The CIDs (below 65 536) of a subset Type 0 font over an embedded TrueType program whose glyph
+/// has outline data, plus whether the font is a shared-glyph placeholder font. Decodes
+/// `FontFile2` and `/CIDToGIDMap` at most once each against `reads`.
+fn composite_outlines_and_glyphless(
+    doc: &Document,
+    font: &Dict,
+    is_subset: bool,
+    known_glyphless: Option<bool>,
+    reads: &mut Reads<'_>,
+) -> (Vec<u64>, bool) {
     use skrifa::raw::TableProvider as _;
+    if known_glyphless == Some(true) {
+        return (Vec::new(), true);
+    }
     let Some(descendant) = dict(doc, font.get(b"DescendantFonts").and_then(|o| doc.resolve(o).as_array().and_then(|a| a.first()).cloned()).as_ref())
     else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
-    let Some(program) = dict(doc, descendant.get(b"FontDescriptor")).and_then(|d| d.get(b"FontFile2").cloned()) else { return Vec::new() };
-    let program = doc.resolve(&program);
-    let Object::Stream(stream) = program.as_ref() else { return Vec::new() };
-    let Some(bytes) = reads.decode(stream, MAX_SFNT) else { return Vec::new() };
-    let Some(loca) = skrifa::FontRef::from_index(&bytes, 0).ok().and_then(|face| face.loca(None).ok()) else { return Vec::new() };
+    let font_file2 = |doc: &Document, reads: &mut Reads<'_>| {
+        let program = dict(doc, descendant.get(b"FontDescriptor")).and_then(|d| d.get(b"FontFile2").cloned())?;
+        let program = doc.resolve(&program);
+        let Object::Stream(stream) = program.as_ref() else { return None };
+        reads.decode(stream, MAX_SFNT)
+    };
+    if !is_subset {
+        if known_glyphless == Some(false) {
+            return (Vec::new(), false);
+        }
+        let cid_to_gid = descendant.get(b"CIDToGIDMap").map(|o| doc.resolve(o));
+        let Some(Object::Stream(map)) = cid_to_gid.as_deref() else { return (Vec::new(), false) };
+        let Some(map) = reads.decode(map, MAX_CID_TO_GID) else { return (Vec::new(), false) };
+        let Some(mapped_gid) = shared_single_gid(&map) else { return (Vec::new(), false) };
+        let Some(bytes) = font_file2(doc, reads) else { return (Vec::new(), false) };
+        let glyphless = skrifa::FontRef::from_index(&bytes, 0).ok().and_then(|face| only_outlined_gid(&face)) == Some(mapped_gid);
+        return (Vec::new(), glyphless);
+    }
+    let Some(bytes) = font_file2(doc, reads) else { return (Vec::new(), false) };
+    let Some(loca) = skrifa::FontRef::from_index(&bytes, 0).ok().and_then(|face| face.loca(None).ok()) else { return (Vec::new(), false) };
     let outlined = |gid: u32| loca.get_raw(gid as usize).zip(loca.get_raw(gid as usize + 1)).is_some_and(|(start, end)| end > start);
     match descendant.get(b"CIDToGIDMap").map(|o| doc.resolve(o)).as_deref() {
-        None | Some(Object::Name(_)) => bit_set_below_64k((0..loca.len().min(0x1_0000) as u32).filter(|&gid| outlined(gid))),
+        None | Some(Object::Name(_)) => (bit_set_below_64k((0..loca.len().min(0x1_0000) as u32).filter(|&gid| outlined(gid))), false),
         Some(Object::Stream(map)) => {
-            let Some(map) = reads.decode(map, MAX_CID_TO_GID) else { return Vec::new() };
-            bit_set_below_64k(
+            let Some(map) = reads.decode(map, MAX_CID_TO_GID) else { return (Vec::new(), false) };
+            if known_glyphless.is_none()
+                && let Some(single_gid) = only_outlined_gid_from_loca(&loca)
+                && shared_single_gid(&map) == Some(single_gid)
+            {
+                return (Vec::new(), true);
+            }
+            let cids = bit_set_below_64k(
                 map.as_chunks::<2>()
                     .0
                     .iter()
                     .enumerate()
                     .filter(|(_, gid)| outlined(u32::from(u16::from_be_bytes(**gid))))
                     .map(|(cid, _)| cid as u32),
-            )
+            );
+            (cids, false)
         }
-        Some(_) => Vec::new(),
+        Some(_) => (Vec::new(), false),
     }
 }
 
@@ -915,6 +1034,7 @@ impl Metrics {
             code_len: 1,
             explicit_reverse: (32..127u8).map(|c| (char::from(c), u32::from(c))).collect(),
             outlined_cids: Vec::new(),
+            glyphless: false,
             past_allowance: false,
             codespaces_dropped: false,
         }
@@ -933,6 +1053,10 @@ impl Metrics {
     /// it reads (a page's, say): each stream pays for what it decodes, usable or not. A stream the
     /// allowance can't pay for is left unread, and [`Metrics::past_allowance`] says so.
     pub fn from_dict_within(doc: &Document, font: &Dict, budget: &mut DecodeBudget) -> Self {
+        Self::from_dict_with_glyphless(doc, font, budget, None)
+    }
+
+    fn from_dict_with_glyphless(doc: &Document, font: &Dict, budget: &mut DecodeBudget, known_glyphless: Option<bool>) -> Self {
         let mut reads = Reads::new(doc, budget);
         let mut m = Self::read_metrics(doc, font, &mut reads);
         let base = base_font_name(doc, font);
@@ -941,8 +1065,11 @@ impl Metrics {
         m.bold |= bold;
         m.italic |= italic;
         m.base_font = base;
-        if m.composite && m.subset {
-            m.outlined_cids = cids_with_outlines(doc, font, &mut reads);
+        m.glyphless = has_glyphless_font_name(doc, font);
+        if m.composite && !m.glyphless {
+            let (outlines, structural_glyphless) = composite_outlines_and_glyphless(doc, font, m.subset, known_glyphless, &mut reads);
+            m.outlined_cids = outlines;
+            m.glyphless = structural_glyphless;
         }
         m.code_len = match &m.codes {
             Codes::One => 1,
@@ -950,7 +1077,7 @@ impl Metrics {
             Codes::Ranges(r) => r.last().map_or(2, |x| x.0.clamp(1, 4)),
         };
         m.unicode = unicode_map(doc, font, m.composite, &mut reads);
-        if m.std14.is_some() {
+        if m.std14.is_some() && !m.glyphless {
             embedded_widths(doc, font, &mut m, &mut reads);
         }
         m.past_allowance = reads.refused;
@@ -1200,6 +1327,9 @@ impl Metrics {
     /// Only asked for codes the font's Unicode mapping gives: a subset's `ToUnicode` lists the
     /// glyphs it kept, while its `/W` leaves out those of the default width (#1443).
     fn has_glyph(&self, code: u32) -> bool {
+        if self.glyphless {
+            return false;
+        }
         if self.composite {
             let cid = self.cid(code);
             // CID 0 is `.notdef` (an unmapped code lands there too), whatever ToUnicode says: Word
@@ -1249,9 +1379,9 @@ impl Metrics {
     /// no glyph in it, or the metrics were read past their allowance (the caller then substitutes
     /// another font). Empty text needs no verified glyph and always encodes.
     pub fn encode(&self, text: &str) -> Option<Vec<u8>> {
-        // A refused read cannot establish the mappings or glyphs needed to write new text.
-        // Empty text needs neither and remains usable for erasing existing text.
-        if self.past_allowance && !text.is_empty() {
+        // A glyphless OCR font has no real letterforms; a refused read cannot establish the mappings
+        // or glyphs needed to write new text (empty text still encodes unless glyphless).
+        if self.glyphless || (self.past_allowance && !text.is_empty()) {
             return None;
         }
         // The lowest code showing each wanted character. Explicit entries and the encoding are
@@ -2066,6 +2196,17 @@ mod encoding_tests {
             assert!(embedded_sfnt_within(&doc, &font, &mut budget).is_none());
         }
         assert_eq!(budget.remaining(), 0);
+    }
+
+    #[test]
+    fn named_glyphless_ocr_fonts_are_recognised_without_a_shared_gid_map() {
+        for base in ["GlyphlessFont", "ABCDEF+Glyphless", "HiddenHorzOCR", "ABCDEF+HiddenVertOCR"] {
+            let (doc, d) = simple(base, None, Some(Object::name("WinAnsiEncoding")));
+            let m = Metrics::from_dict(&doc, &d);
+            assert!(m.glyphless && is_glyphless(&doc, &d), "{base} must be marked glyphless by name alone");
+            assert!(!m.has_glyph(b'A'.into()), "{base} must not claim visible glyph outlines");
+            assert!(m.encode("A").is_none(), "{base} must not encode replacement text");
+        }
     }
 }
 
