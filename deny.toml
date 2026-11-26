@@ -22,6 +22,8 @@ allow = [
     "CC0-1.0",
     "IJG",
     "MPL-2.0",
+    # Permissive data licence of the certificate bundle in webpki-roots (rustls' roots via ureq).
+    "CDLA-Permissive-2.0",
 ]
 
 [licenses.private]
@@ -44,6 +46,9 @@ allow-git = [
     "https://github.com/storytold/egui",
     "https://github.com/storytold/winit",
 ]
+# The framework crates reach vectorcraft (craft-svg's geometry and path ops) from the same
+# organisation, pinned by revision in Cargo.lock; any storytold repository is a first-party source.
+allow-org = { github = ["storytold"] }
 
 [advisories]
 yanked = "deny"
