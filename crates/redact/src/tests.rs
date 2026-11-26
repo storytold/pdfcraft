@@ -483,6 +483,7 @@ fn removed_text_kept_for_the_metadata_check_is_bounded_per_document() {
     let mut doc = pdf(objs);
     let mut applying = Applying {
         report: Report::default(),
+        whole_point_gaps: true,
         doomed_fields: Vec::new(),
         doomed_xobjects: Vec::new(),
         retired_properties: Vec::new(),
@@ -736,9 +737,10 @@ fn kerning_spacing_scaling_and_line_operators_are_honoured() {
     let r = apply(&mut doc, None).unwrap();
     assert_eq!(r.glyphs, 3, "{r:?}");
     let c = content(&doc, 0);
-    assert!(c.contains("[(AB) -1700 ( D)] TJ"), "{c}");
-    assert!(c.contains("T*\n[(E) -700] TJ"), "{c}");
-    assert!(c.contains("1 Tw\n0 Tc\nT*\n[-500 (H)] TJ"), "{c}");
+    // The gaps are whole points: 8.5, 3.5 and 2.5 pt become 9, 4 and 3.
+    assert!(c.contains("[(AB) -1800 ( D)] TJ"), "{c}");
+    assert!(c.contains("T*\n[(E) -800] TJ"), "{c}");
+    assert!(c.contains("1 Tw\n0 Tc\nT*\n[-600 (H)] TJ"), "{c}");
     // Everything else stays readable where it was.
     assert_eq!(under(&mut doc, 0, &[[20.0, 195.0, 30.0, 210.0]]), 1, "D");
     assert_eq!(under(&mut doc, 0, &[[2.6, 171.0, 6.0, 180.0]]), 1, "H");
@@ -770,7 +772,89 @@ fn rotated_text_and_composite_fonts() {
     let r = apply(&mut doc, None).unwrap();
     assert_eq!(r.glyphs, 2, "CIDs 2 and 3");
     let c = content(&doc, 0);
-    assert!(c.contains("[<0001> -750 <0004>] TJ") || c.contains("[(\\000\\001) -750 (\\000\\004)] TJ"), "{c}");
+    // The 7.5 pt gap is widened to 8.
+    assert!(c.contains("[<0001> -800 <0004>] TJ") || c.contains("[(\\000\\001) -800 (\\000\\004)] TJ"), "{c}");
+}
+
+/// The numbers in the page's `TJ` arrays.
+fn tj_numbers(text: &str) -> Vec<f64> {
+    text.split(']')
+        .filter_map(|part| part.rsplit_once('[').map(|(_, inside)| inside))
+        .flat_map(|inside| inside.split_whitespace().filter_map(|t| t.parse::<f64>().ok()))
+        .collect()
+}
+
+/// The space removed text leaves on its line is whole points of the page, not the removed glyphs'
+/// exact advance: with the font's widths, an exact width narrows down what the text was. The text
+/// after it moves less than a point further from the mark, whichever way the gap runs: forwards,
+/// also when the text matrix scales the text or `-100 Tz` mirrors it, and backwards under `-7 Tc`.
+#[test]
+fn the_space_left_by_removed_text_is_whole_points() {
+    // Each glyph advances 3.5 pt: "Bob Smith" (31.5 pt) runs from x 41 to 72.5, or mirrored or
+    // backwards from x 100, from 47.5 to 79 or from 51 to 82.5.
+    for (set, marked, gap) in [
+        ("/F1 7 Tf 20 250 Td", [41.5, 245.0, 72.0, 260.0], -32.0),
+        ("/F1 1 Tf 7 0 0 7 20 250 Tm", [41.5, 245.0, 72.0, 260.0], -32.0),
+        ("/F1 7 Tf -100 Tz 100 250 Td", [48.0, 245.0, 78.5, 260.0], -32.0),
+        ("/F1 7 Tf -7 Tc 100 250 Td", [51.5, 245.0, 82.0, 260.0], 32.0),
+    ] {
+        let body = format!("BT {set} (Name: Bob Smith is here) Tj ET");
+        let mut doc = one_page(body.as_bytes(), "", vec![]);
+        mark(&mut doc, 0, &[marked], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.glyphs, 9, "{set}");
+        let numbers = tj_numbers(&content(&doc, 0));
+        assert!(!numbers.is_empty(), "{set}: {}", content(&doc, 0));
+        for n in numbers {
+            let points = n * 7.0 / 1000.0;
+            assert!((points - gap).abs() < 1e-3, "{set}: a gap of {points} pt for 31.5 pt removed");
+        }
+    }
+}
+
+/// A removed glyph that doesn't move the pen (a space whose width `Tw` cancels) adds no gap, so
+/// the `TJ` number before it keeps its exact value.
+#[test]
+fn a_removal_that_adds_no_space_leaves_the_number_before_it() {
+    // A runs from x 20 to 25, then 0.55 pt, then the space from 25.55 to 30.55, advancing 0.
+    let mut doc = one_page(b"BT /F1 10 Tf -5 Tw 20 250 Td [(A) -55 ( )] TJ ET", "", vec![]);
+    mark(&mut doc, 0, &[[25.7, 245.0, 30.5, 260.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    let c = content(&doc, 0);
+    assert!(c.contains("[(A) -55] TJ"), "{c}");
+}
+
+/// Several gaps on one line, in one text operator or in several: each is whole points, and every
+/// surviving glyph ends up less than a point from where it was, never back towards a mark.
+#[test]
+fn the_shift_of_several_gaps_on_a_line_stays_under_a_point() {
+    for body in [&b"BT /F1 7 Tf 20 250 Td (ABCDEF) Tj ET"[..], b"BT /F1 7 Tf 20 250 Td (AB) Tj (CD) Tj (EF) Tj ET"] {
+        let mut doc = one_page(body, "", vec![]);
+        // A, C and E run from x 20, 27 and 34, 3.5 pt each; the marks lie inside them.
+        mark(&mut doc, 0, &[[21.0, 245.0, 22.5, 260.0], [28.0, 245.0, 29.5, 260.0], [35.0, 245.0, 36.5, 260.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().glyphs, 3);
+        let (mut moved, mut exact) = (0.0, 0.0);
+        for n in tj_numbers(&content(&doc, 0)) {
+            moved -= n * 7.0 / 1000.0;
+            exact += 3.5;
+            assert!((moved - f64::round(moved)).abs() < 1e-3 && (0.0..1.0).contains(&(moved - exact)), "{moved} pt for {exact}");
+        }
+        assert_eq!(exact, 10.5, "three gaps");
+    }
+}
+
+/// Two marks close together on one line: widening the first gap would move the text between them
+/// under the second mark, so that apply keeps the exact gaps and still removes both.
+#[test]
+fn close_marks_on_one_line_still_apply() {
+    let mut doc = one_page(b"BT /F1 7 Tf 20 250 Td (SSN 123-45-6789 is private) Tj ET", "", vec![]);
+    // "123-45-6789" runs from x 34 to 72.5, " is " to 86.5, "private" to 111.
+    mark(&mut doc, 0, &[[34.5, 245.0, 72.0, 260.0]], "");
+    mark(&mut doc, 0, &[[86.2, 245.0, 110.5, 260.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 18);
+    let numbers = tj_numbers(&content(&doc, 0));
+    assert!(numbers.iter().any(|n| (n.abs() * 7.0 / 1000.0 - 38.5).abs() < 1e-3), "exact gaps: {numbers:?}");
 }
 
 #[test]
@@ -1746,7 +1830,7 @@ fn a_jbig2_image_past_the_runs_allowance_stops_the_run() {
     let dict = "/Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode";
     let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, coded)]);
     mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
-    let refused = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0));
+    let refused = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0), true);
     assert!(matches!(refused, Err(crate::RedactError::ImagesPastAllowance)), "{refused:?}");
     let mut doc = one_page(
         b"q 160 0 0 20 0 0 cm /Im Do Q",
@@ -1754,7 +1838,7 @@ fn a_jbig2_image_past_the_runs_allowance_stops_the_run() {
         vec![stream(dict, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap())],
     );
     mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
-    assert!(crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(u64::MAX)).is_ok());
+    assert!(crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(u64::MAX), true).is_ok());
 }
 
 /// A Flate image past the run's allowance stops the run as a JBIG2 image does: removed whole, it
@@ -1766,16 +1850,16 @@ fn a_flate_image_past_the_runs_allowance_stops_the_run() {
     let page = || one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, pdfcraft_filters::encode_flate(&[9; 4]))]);
     let mut doc = page();
     mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
-    let refused = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0));
+    let refused = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0), true);
     assert!(matches!(refused, Err(crate::RedactError::ImagesPastAllowance)), "{refused:?}");
     let mut doc = page();
     mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
-    assert!(crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(u64::MAX)).is_ok());
+    assert!(crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(u64::MAX), true).is_ok());
 
     let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /DCTDecode";
     let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, b"not read")]);
     mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
-    let report = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0)).unwrap();
+    let report = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0), true).unwrap();
     assert_eq!(report.images_removed, 1);
 }
 
