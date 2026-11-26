@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::types::{Detail, Fill, Modification, Status, TrustStore};
-use super::validate::{is_doc_timestamp, validate_doc_timestamp, validate_into};
+use super::validate::{SignatureValidation, is_doc_timestamp, validate_doc_timestamp, validate_into};
 use super::{Arc, Dict, DigestAlg, Document, HashMap, HashSet, ObjRef, Object, SignatureInfo};
 
 /// Digests of signed byte ranges (and parsed signed revisions), kept across revalidations of
@@ -517,7 +517,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             details: Vec::new(),
         };
         if let Some(v) = v {
-            validate_into(doc, bytes, trust, &v, &mut info, cache);
+            validate_into(SignatureValidation { doc, bytes, trust, field: Some(&f), stamp_ref: None, info: &mut info, cache }, &v);
         } else if let Some(why) = unreadable {
             info.status = Status::Invalid;
             info.details.push(Detail::of("The signature dictionary could not be read ({}), so the signature cannot be checked.", Fill::Reason(why)));
@@ -566,7 +566,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             verdict_shown: false,
             details: Vec::new(),
         };
-        validate_doc_timestamp(doc, bytes, d, &mut info, cache, trust);
+        validate_doc_timestamp(SignatureValidation { doc, bytes, trust, field: None, stamp_ref: Some(r), info: &mut info, cache }, d);
         out.push(info);
     }
     if !whole {

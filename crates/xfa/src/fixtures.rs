@@ -66,6 +66,44 @@ pub fn template(rows: usize) -> String {
     t
 }
 
+/// A check box `more`, `before`, an 8in block, the hidden section `details` (two fields 3in
+/// tall) and `after`, on letter pages: shown, the section needs another page. With
+/// `calculated`, a hidden field's calculate script shows or hides the section as `more` says
+/// (so a reset does too); otherwise the check box's change script does. `exit` is the check
+/// box's exit script, if not empty.
+pub fn presence_growth_template(calculated: bool, before: &str, after: &str, exit: &str) -> String {
+    let js = |activity: &str, body: &str| {
+        format!(r#"<event activity="{activity}"><script contentType="application/x-javascript">{body}</script></event>"#)
+    };
+    let (change, sync) = if calculated {
+        let script = r#"details.presence = (more.rawValue == 1) ? "visible" : "hidden"; "";"#;
+        let sync = format!(
+            r#"<field name="sync" w="1in" h="0.2in" presence="hidden"><ui><textEdit/></ui><calculate><script contentType="application/x-javascript">{script}</script></calculate></field>"#
+        );
+        (String::new(), sync)
+    } else {
+        (js("change", r#"details.presence = (this.rawValue == 1) ? "visible" : "hidden";"#), String::new())
+    };
+    let exit = if exit.is_empty() { String::new() } else { js("exit", exit) };
+    format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="master"><occur max="-1"/><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <field name="more" w="3in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items>{change}{exit}</field>
+  {sync}{before}
+  <draw name="filler" w="7.5in" h="8in"><value><text>Filler</text></value></draw>
+  <subform name="details" layout="tb" presence="hidden">
+   <field name="d1" w="6in" h="3in"><ui><textEdit/></ui></field>
+   <field name="d2" w="6in" h="3in"><ui><textEdit/></ui></field>
+  </subform>
+  {after}
+ </subform>
+</subform></template>
+</xdp:xdp>"#
+    )
+}
+
 /// A growable rich-text field followed by a section that starts on a new page.
 pub fn growable_text_template(scripted: bool) -> String {
     let event = if scripted { r#"<event activity="initialize"><script contentType="application/x-javascript">0;</script></event>"# } else { "" };
@@ -262,6 +300,52 @@ pub fn layout_ready_template() -> String {
     .to_string()
 }
 
+/// A form whose scripts log the ready events they run, in `log`: the root subform's initialize,
+/// form:ready, layout:ready (with the page count) and docReady, and the same but docReady for the
+/// field `title` inside it. The button `grow` shows the hidden subform `tall`, which takes the form
+/// to a second page.
+pub fn ready_events_template() -> String {
+    let log = |what: &str| {
+        format!(
+            r#"<script contentType="application/x-javascript">var l = xfa.form.form.log; l.rawValue = (l.rawValue == null || l.rawValue == "" ? "" : l.rawValue + "|") + {what};</script>"#
+        )
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <event activity="initialize">{root_init}</event>
+ <event activity="ready" ref="$form">{root_form}</event>
+ <event activity="ready" ref="$layout">{root_layout}</event>
+ <event activity="docReady" ref="$host">{root_doc}</event>
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="title" w="7.5in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="initialize">{title_init}</event>
+  <event activity="ready" ref="$form">{title_form}</event>
+  <event activity="ready" ref="$layout">{title_layout}</event>
+ </field>
+ <field name="grow" w="1.5in" h="0.35in"><ui><button/></ui><caption><value><text>Grow</text></value></caption>
+  <event activity="click"><script contentType="application/x-javascript">xfa.form.form.tall.presence = "visible";</script></event>
+ </field>
+ <field name="log" w="7.5in" h="0.3in"><ui><textEdit/></ui></field>
+ <subform name="tall" layout="tb" w="7.5in" presence="hidden">
+  <draw w="7.5in" h="9.5in"><value><text>A tall section.</text></value></draw>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        root_init = log(r#""root initialize""#),
+        root_form = log(r#""root form:ready""#),
+        root_layout = log(r#""root layout:ready pages=" + xfa.layout.pageCount()"#),
+        root_doc = log(r#""root docReady""#),
+        title_init = log(r#""title initialize""#),
+        title_form = log(r#""title form:ready""#),
+        title_layout = log(r#""title layout:ready""#),
+    )
+}
+
 /// A hidden subform `details` a script may show, holding a named field and three unnamed
 /// objects: a caption, an old caption the form keeps hidden, and a hidden subform. Unnamed
 /// objects have no SOM name of their own, so showing `details` must leave the hidden ones hidden.
@@ -423,6 +507,53 @@ pub fn scripted_template() -> String {
 </xdp:xdp>
 "##
     .to_string()
+}
+
+/// A form whose check box `agree` logs its change and click scripts (with the value each sees)
+/// into `log`, and whose click also shows "Agreed" and asks for the focus in `note` when it turns
+/// the box on; whose radio group `answer` has buttons `yes` and `no` that log their own clicks;
+/// and whose text field `note` has a click script, which a change of its value doesn't run.
+pub fn toggle_template() -> String {
+    let js = "application/x-javascript";
+    // A script line that adds `what` (JavaScript), then ";", to the log field.
+    let add = |what: &str| format!(r#"log.rawValue = (log.rawValue || "") + {what} + ";";"#);
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <field name="agree" w="2in" h="0.3in"><ui><checkButton/></ui><caption placement="right" reserve="1.5in"><value><text>Agree</text></value></caption><items><integer>1</integer><integer>0</integer></items>
+   <event activity="change"><script contentType="{js}">{}</script></event>
+   <event activity="click"><script contentType="{js}">{} if (this.rawValue == 1) {{ xfa.host.messageBox("Agreed"); xfa.host.setFocus("note"); }}</script></event></field>
+  <exclGroup name="answer" layout="lr-tb">
+   <field name="yes" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>Y</text></items><event activity="change"><script contentType="{js}">{}</script></event><event activity="click"><script contentType="{js}">{}</script></event><event activity="exit"><script contentType="{js}">{}</script></event></field>
+   <field name="no" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>N</text></items><event activity="change"><script contentType="{js}">{}</script></event><event activity="click"><script contentType="{js}">{}</script></event><event activity="exit"><script contentType="{js}">{}</script></event></field>
+   <event activity="change"><script contentType="{js}">{}</script></event>
+   <event activity="click"><script contentType="{js}">{}</script></event>
+   <event activity="exit"><script contentType="{js}">{}</script></event>
+  </exclGroup>
+  <field name="note" w="3in" h="0.3in"><ui><textEdit/></ui><event activity="click"><script contentType="{js}">{}</script></event></field>
+  <field name="log" w="4in" h="0.3in" access="protected"><ui><textEdit/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        add(r#""change " + this.rawValue"#),
+        add(r#""click " + this.rawValue"#),
+        add(r#""yes change""#),
+        add(r#""yes click""#),
+        add(r#""yes exit""#),
+        add(r#""no change""#),
+        add(r#""no click""#),
+        add(r#""no exit""#),
+        add(r#""group change " + this.rawValue"#),
+        add(r#""group click""#),
+        add(r#""group exit""#),
+        add(r#""note click""#),
+    )
 }
 
 /// [`scripted_template`] with every script in FormCalc (no `contentType`, as Designer writes
@@ -720,7 +851,8 @@ pub fn date_alternatives_template() -> String {
 }
 
 /// Date fields with each kind of picture: `display` a display picture only, `edit` an edit and a
-/// display picture, `either` an edit picture of two alternatives, `bare` none.
+/// display picture, `either` an edit picture of two alternatives, `bare` none, `swapped` an edit
+/// picture (day first) unlike its display picture (month first).
 pub fn date_pictures_template() -> String {
     r##"<?xml version="1.0" encoding="UTF-8"?>
 <xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
@@ -731,6 +863,7 @@ pub fn date_pictures_template() -> String {
  <field name="edit" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{MM/DD/YYYY}</picture></ui><value><date/></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
  <field name="either" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYYMMDD}|date{DDMMMYY}</picture></ui><value><date/></value><format><picture>date{YYYYMMDD}</picture></format></field>
  <field name="bare" w="2in" h="0.3in"><ui><dateTimeEdit/></ui><value><date/></value></field>
+ <field name="swapped" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date/></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
 </subform>
 </template>
 </xdp:xdp>
