@@ -353,6 +353,15 @@ pub(crate) fn info(d: &Document) -> Value {
         "portfolio": i.portfolio.as_ref().map(|p| json!({
             "initial": p.initial.and_then(|n| i.attachments.get(n)).map(|a| &a.name), "view": p.view.name(),
         })),
+        // PDF 2.0 associated files (`/AF`, ISO 32000-2 §14.13) of the document, its pages and their
+        // annotations; `file` is what associated_file_save takes. Entries left out, and why, are in
+        // `associated_file_notes`.
+        "associated_files": i.associated_files.iter().enumerate().map(|(n, f)| json!({
+            "file": n + 1, "name": f.name, "relationship": f.relationship.name(), "standard_relationship": f.relationship.is_standard(),
+            "description": f.description, "mime": f.mime, "size": f.size,
+            "owners": f.owners.iter().map(|o| associated_file_owner(*o)).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "associated_file_notes": i.associated_file_notes,
         // `substitute` names the face standing in for a program the document does not embed, and
         // `substitution` says why. Both are null for an embedded font: nothing stands in. A null
         // `substitute` with a non-null `substitution` means no face was available at all, so
@@ -367,6 +376,18 @@ pub(crate) fn info(d: &Document) -> Value {
         // lost. Last, so it includes what reading the fields above failed on.
         "unreadable_objects": d.unreadable_objects(),
     })
+}
+
+/// What lists an associated file, pages and annotations counted from 1 (an annotation by its
+/// position in the page's `/Annots`).
+fn associated_file_owner(owner: pdfcraft_render::AssociatedFileOwner) -> Value {
+    match owner {
+        pdfcraft_render::AssociatedFileOwner::Document => json!({ "owner": "document" }),
+        pdfcraft_render::AssociatedFileOwner::Page { page } => json!({ "owner": "page", "page": page.saturating_add(1) }),
+        pdfcraft_render::AssociatedFileOwner::Annotation { page, index } => {
+            json!({ "owner": "annotation", "page": page.saturating_add(1), "annotation": index.saturating_add(1) })
+        }
+    }
 }
 
 /// A user-space rectangle on 0-based `page` in displayed-page coordinates (points from the
