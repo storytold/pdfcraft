@@ -260,7 +260,7 @@ pub(super) fn add_outline(doc: &mut Document, marks: &[Mark]) -> Result<(), Orga
 fn key_text(key: &[u8]) -> String {
     match key {
         [0xff, 0xfe, rest @ ..] => {
-            let units: Vec<u16> = rest.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
             String::from_utf16_lossy(&units)
         }
         _ => pdfcraft_cos::PdfString::literal(key.to_vec()).to_text(),
