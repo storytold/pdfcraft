@@ -219,6 +219,40 @@ fn scroll_list_to(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
     panic!("{label} is not offered in the open drop-down list");
 }
 
+/// One wheel step of `dy` points over the middle of `area`.
+fn wheel_over(h: &mut Harness<'static, PdfCraftApp>, area: egui::Rect, dy: f32) {
+    h.event(egui::Event::PointerMoved(area.center()));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, dy),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(3);
+}
+
+/// Scrolls the open window's table from its top with the mouse wheel until a widget reads `label`,
+/// as a user does: the table lays out only the rows in view, so a row further down has no widget
+/// yet. Text outside the table (the title, the buttons) is found without scrolling.
+fn scroll_table_to(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, label: &str) {
+    use egui::accesskit::Role;
+    let shown = |h: &mut Harness<'static, PdfCraftApp>| ok(h, c, "ui.inspect", json!({ "query": label }))["count"].as_u64().unwrap_or(0) > 0;
+    if shown(h) {
+        return;
+    }
+    let Some(table) = h.query_all_by_role(Role::Table).next().map(|t| t.rect()) else { return };
+    for _ in 0..20 {
+        wheel_over(h, table, 400.0);
+    }
+    for _ in 0..200 {
+        if shown(h) {
+            return;
+        }
+        wheel_over(h, table, -60.0);
+    }
+}
+
 /// Presses `from`, moves through `steps` points to `to` and releases, the way `ui.drag` did: a
 /// click that holds, moves, then releases. `modifiers` are held for the whole gesture and `button`
 /// is `"left"`, `"secondary"` or `"middle"`.
@@ -1069,10 +1103,22 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
     ok(&mut h, &c, "ui.click", json!({ "label": "OK" }));
 
     ok(&mut h, &c, "ui.command", json!({ "id": "help.shortcuts" }));
-    for label in ["キーボードショートカット", "開く", "環境設定", "次／前の検索結果", "ダブルクリック", "閉じる"]
-    {
-        let found = ok(&mut h, &c, "ui.inspect", json!({ "query": label }));
+    let expect_shown = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
+        scroll_table_to(h, &c, label);
+        let found = ok(h, &c, "ui.inspect", json!({ "query": label }));
         assert!(found["count"].as_u64().unwrap() > 0, "{label}: {found}");
+    };
+    for label in ["キーボードショートカット", "開く", "環境設定"] {
+        expect_shown(&mut h, label);
+    }
+    // The keys the document view handles itself are listed under Show ▸ Fixed Keys.
+    let show = ok(&mut h, &c, "ui.inspect", json!({ "query": "表示:" }));
+    let show = show["widgets"].as_array().unwrap().iter().find(|w| w["role"] == "ComboBox").expect("the Show selector").clone();
+    click_center(&mut h, &c, &show);
+    scroll_list_to(&mut h, "Fixed Keys");
+    ok(&mut h, &c, "ui.click", json!({ "label": "Fixed Keys" }));
+    for label in ["次／前の検索結果", "ダブルクリック", "閉じる"] {
+        expect_shown(&mut h, label);
     }
     let english = ok(&mut h, &c, "ui.inspect", json!({ "query": "Next / previous match" }));
     assert_eq!(english["count"], 0);
