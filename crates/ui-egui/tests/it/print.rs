@@ -387,6 +387,39 @@ fn print_dialog_prints_the_selected_pages() {
     assert!(h.state().print_draft.selected.is_empty());
 }
 
+/// Only pages with comments keeps, of the pages chosen, those that carry a comment when the dialog
+/// opens; with none among them there is nothing to print (#7015).
+#[test]
+fn print_dialog_prints_only_the_pages_with_comments() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = harness();
+    let bytes = h.state().session.create_blank(200.0, 300.0, 5).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "five.pdf", None, bytes.as_ref().clone()).unwrap();
+    h.run_steps(3);
+    for page in [1, 3] {
+        let shape = Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] };
+        let style = Style::default_for(&shape);
+        let edit = Edit::AddAnnotation(NewAnnotation { page, shape, style, contents: "Check".into(), author: String::new() });
+        assert!(h.state_mut().apply_edit(&ctx_h, edit));
+    }
+    h.open();
+    assert_eq!(h.pager(), (1, 5), "every page until the option is on");
+    h.set("only_commented", json!(true));
+    assert_eq!(h.pager(), (1, 2), "pages 2 and 4 carry the comments");
+    // A range without a commented page leaves nothing, and the dialog says why.
+    h.set("which", json!("range"));
+    h.set("range", json!("1, 3"));
+    assert_eq!(h.pager().1, 0, "nothing to print");
+    h.set("range", json!("3-5"));
+    assert_eq!(h.pager(), (1, 1), "page 4 of the range");
+    h.pick(None);
+    h.ok();
+    assert!(!h.is_open());
+    let doc = pdfcraft_cos::Document::open(h.saved(0)).unwrap();
+    assert_eq!(pdfcraft_model::pages(&doc).len(), 1);
+}
+
 #[test]
 fn invalid_ranges_are_explained_in_the_preview() {
     let mut h = harness();

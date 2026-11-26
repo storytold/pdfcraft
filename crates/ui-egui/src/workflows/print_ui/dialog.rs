@@ -62,6 +62,7 @@ impl PdfCraftApp {
 
         let current = self.views[i].current();
         let selected: Vec<usize> = self.views[i].selected.items.to_vec();
+        let commented = self.session.get(id).map(|doc| pdfcraft_engine::commented_pages(&doc.info.annotations)).unwrap_or_default();
         let mut keep = std::mem::take(&mut self.print_draft);
         // Leaving Label gives back the paper it replaced (#3564), before the layout resets below.
         if keep.handling == Handling::Label {
@@ -87,6 +88,8 @@ impl PdfCraftApp {
             range: fresh.range,
             subset: fresh.subset,
             reverse: fresh.reverse,
+            only_commented: fresh.only_commented,
+            commented,
             handling: fresh.handling,
             per_sheet: fresh.per_sheet,
             custom_grid: fresh.custom_grid,

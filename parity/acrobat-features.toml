@@ -8272,6 +8272,18 @@ evidence = ["crates/print/src/tests.rs::page_selection", "crates/print/src/tests
 notes = "Odd and even are page numbers, as Acrobat counts them (Adobe Acrobat DC Help, 11/28/2019, Options in the Print dialog box, p. 515: a range of 2, 7–10 with Even Pages Only prints pages 2, 8 and 10), for a typed range, picked thumbnails and the current page; Reverse turns the chosen pages round (#3984). With page labels, odd and even count page positions, not the numbers in the labels: page indices are fixed and consecutive while labels can restart, repeat, use letters or carry no number at all (ISO 32000-2 §12.4.2), so with front matter labelled i–iii the page labelled 1 (the fourth) is even. The other Print-dialog behaviours #3984 mentions are open."
 
 [[feature]]
+id = "print.only-commented-pages"
+title = "Print only the pages that carry comments"
+area = "L"
+tier = "P2"
+milestone = "M10"
+status = "shipped"
+commands = ["print.dialog"]
+tools = ["doc_print"]
+evidence = ["crates/print/src/tests.rs::only_pages_with_comments_narrow_what_the_range_and_subset_chose", "crates/ui-egui/src/workflows/print_ui.rs::only_commented_narrows_the_chosen_pages", "crates/ui-egui/tests/it/print.rs::print_dialog_prints_only_the_pages_with_comments", "crates/automation/tests/it/automation.rs::doc_print_only_the_pages_with_comments"]
+notes = "Requested in #7015. Print's More options gain Only pages with comments, and doc_print takes only_commented: of the pages the range, current page or picked pages chose (odd or even and reverse applied), only those with a comment print, in print order. A comment is what the Comments panel and comment_list list: links, form fields, pop-ups and other non-markup annotations don't count. With no commented page among those chosen, the dialog and the tool say so and nothing prints. The pages are read when the dialog opens. Missing: filtering by comment type, author or status."
+
+[[feature]]
 id = "print.scaling"
 title = "Fit, actual size, shrink oversized, custom scale"
 area = "L"

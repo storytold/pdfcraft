@@ -90,7 +90,13 @@ fn page_selection() {
 /// and the numbers apart from it, and says itself in English exactly as the error prints itself.
 #[test]
 fn wordings_are_said() {
-    let mistakes = [PrintError::NoPages, PrintError::OutOfRange(7, 5), PrintError::NotAPage("x".into()), PrintError::TooManySelected(1_000)];
+    let mistakes = [
+        PrintError::NoPages,
+        PrintError::OutOfRange(7, 5),
+        PrintError::NotAPage("x".into()),
+        PrintError::TooManySelected(1_000),
+        PrintError::NoCommentedPages,
+    ];
     for e in &mistakes {
         assert_eq!(e.said(&in_english), e.to_string(), "{e:?} says itself in English the way it prints itself");
     }
@@ -113,6 +119,22 @@ fn wordings_are_said() {
     assert_eq!(PrintError::OutOfRange(7, 5).said(&other), "el documento tiene 5 páginas, no 7");
     // What was typed goes in as it stands, braces and all, and is never read as a hole.
     assert_eq!(PrintError::NotAPage("{count}".into()).said(&other), "\"{count}\" is not a page number or label");
+}
+
+#[test]
+fn only_pages_with_comments_narrow_what_the_range_and_subset_chose() {
+    let commented = [5, 1, 3];
+    let only = |pages: Vec<usize>| only_commented(pages, &commented);
+    // Every chosen page with a comment stays, in print order; the others go.
+    assert_eq!(only(select_pages(6, None, &[], Subset::All, false).unwrap()).unwrap(), [1, 3, 5]);
+    assert_eq!(only(select_pages(6, None, &[], Subset::All, true).unwrap()).unwrap(), [5, 3, 1], "reverse still turns them round");
+    // A commented page outside the range is not added back.
+    assert_eq!(only(select_pages(6, Some("1-4"), &[], Subset::All, false).unwrap()).unwrap(), [1, 3]);
+    assert_eq!(only(select_listed(6, &[3, 0], Subset::All, false).unwrap()).unwrap(), [3]);
+    // Odd pages are 1, 3, 5 (0-based 0, 2, 4), and none of them has a comment.
+    let odd = select_pages(6, None, &[], Subset::Odd, false).unwrap();
+    assert_eq!(only(odd), Err(PrintError::NoCommentedPages));
+    assert_eq!(only_commented(vec![0, 1, 2], &[]), Err(PrintError::NoCommentedPages), "a document without comments");
 }
 
 #[test]

@@ -27,7 +27,7 @@ pub mod spool;
 #[cfg(test)]
 mod tests;
 
-pub use range::{Subset, position, select_listed, select_pages};
+pub use range::{Subset, only_commented, position, select_listed, select_pages};
 
 mod error;
 mod imposition;

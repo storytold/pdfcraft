@@ -335,6 +335,7 @@ fn pages_section(d: &PrintDraft, count: usize, units: Unit, has_area: bool) -> P
             Param::new("range", lbl(tl!("Pages")), ParamKind::text(d.range.clone())).hint(lbl(format!("1-{count}"))).enabled_when("which", "range"),
             choice("subset", row_label(tl!("More options:")), subset, id_of(&SUBSET, d.subset)),
             check("reverse", lbl(tl!("Reverse pages")), d.reverse),
+            check("only_commented", lbl(tl!("Only pages with comments")), d.only_commented),
         ],
     )
 }
@@ -446,6 +447,7 @@ pub(super) fn fields_from_draft(d: &PrintDraft) -> DialogFields {
     f.set("range", d.range.clone());
     f.set("subset", id_of(&SUBSET, d.subset));
     f.set("reverse", d.reverse);
+    f.set("only_commented", d.only_commented);
     f.set("handling", id_of(&HANDLING, d.handling));
     f.set("size", print::names::size_mode(d.size));
     f.set("custom_scale", d.custom_scale);
@@ -515,6 +517,11 @@ pub(super) fn draft_from_fields(d: &mut PrintDraft, f: &DialogFields, edited: &[
         && let Some(v) = f.bool("reverse")
     {
         d.reverse = v;
+    }
+    if on("only_commented")
+        && let Some(v) = f.bool("only_commented")
+    {
+        d.only_commented = v;
     }
     if on("handling")
         && let Some(h) = text("handling").and_then(handling_from_id)

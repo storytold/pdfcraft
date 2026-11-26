@@ -82,6 +82,15 @@ pub fn comment_type_name(subtype: &str) -> &str {
     }
 }
 
+/// The pages (0-based, ascending, each once) that carry a comment: what Print ▸ Only pages with
+/// comments keeps (#7015). `all` is a document's comment list (`DocInfo::annotations`), which holds
+/// no links, form fields or other non-markup annotations; its pop-ups belong to a comment on the
+/// same page and are not counted on their own.
+pub fn commented_pages(all: &[pdfcraft_render::Annotation]) -> Vec<usize> {
+    let pages: std::collections::BTreeSet<usize> = all.iter().filter(|a| a.subtype != "Popup").map(|a| a.page).collect();
+    pages.into_iter().collect()
+}
+
 /// [`comment_type_name`], telling replaced text, callouts, clouds and typewriter text apart by `/IT`.
 pub fn comment_kind(a: &pdfcraft_render::Annotation) -> &str {
     match a.intent.as_deref() {

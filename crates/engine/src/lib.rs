@@ -155,7 +155,7 @@ pub use pdfcraft_xfdf::{Outline as CommentOutline, comment_count, comment_outlin
 use bookmarks::outline_rows;
 pub use bookmarks::{BookmarkPage, BookmarkRow};
 use comments::comment_list;
-pub use comments::{SummarySort, comment_kind, comment_summary, comment_type_name};
+pub use comments::{SummarySort, comment_kind, comment_summary, comment_type_name, commented_pages};
 #[cfg(test)]
 use document::page_runs;
 pub use document::{Document, EditNotice, TextNotice, display_bytes_for, render_password_for};
