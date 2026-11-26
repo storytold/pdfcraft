@@ -16,6 +16,7 @@ use crate::canvas::{DocView, Snapshot, SnapshotKind};
 pub(crate) mod cert_viewer;
 pub(crate) mod dialog;
 mod panel;
+pub(crate) mod remove;
 pub(crate) mod tool;
 
 #[cfg(test)]
@@ -23,6 +24,7 @@ use dialog::detail_lines;
 use dialog::graphic_of;
 pub(crate) use dialog::{appearance_labels, status_captions};
 pub use panel::{CertViewer, PanelAction, certificate_pem};
+pub use remove::RemoveSigDraft;
 pub(crate) use panel::{banner, panel, status_tone};
 
 /// A digital ID the app knows about (Acrobat: Digital ID files). The file stays where it is;

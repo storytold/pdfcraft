@@ -464,7 +464,7 @@ impl PdfCraftApp {
     /// the document's own file kept as it is, make `dest` the document's file. Returns `true` if
     /// written. The service writes atomically on the desktop and hands the bytes to the page or
     /// the browser's downloads on the web.
-    fn save_doc_to(&mut self, ctx: &egui::Context, id: DocId, dest: &Path, target: SaveTarget) -> bool {
+    pub(crate) fn save_doc_to(&mut self, ctx: &egui::Context, id: DocId, dest: &Path, target: SaveTarget) -> bool {
         let dest_text = dest.to_string_lossy().into_owned();
         let Some((_, bytes)) = self.document_bytes(ctx, id, target, Some(&dest_text)) else { return false };
         let intent = if target == SaveTarget::InPlace { WriteIntent::Save } else { WriteIntent::SaveAs };

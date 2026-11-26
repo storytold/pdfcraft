@@ -93,6 +93,7 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, cx: &mut BodyCx<'_>,
         Some(crate::sign_ui::PanelAction::Trust(c)) => app.trust_certificate(*c),
         Some(crate::sign_ui::PanelAction::ViewCertificate(chain)) => crate::sign_ui::cert_viewer::open(app, chain),
         Some(crate::sign_ui::PanelAction::ViewSigned { len, revision }) => app.view_signed_version(len, revision),
+        Some(crate::sign_ui::PanelAction::Remove(field)) => app.start_remove_signature(Some(&field)),
         Some(crate::sign_ui::PanelAction::Sign(field)) => {
             let page = app.views[index].current();
             app.start_signing(&ctx, page, None, Some(field), None);

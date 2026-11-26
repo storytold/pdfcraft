@@ -405,6 +405,7 @@ impl PdfCraftApp {
             summary_sort: Default::default(),
             summarize_dialog: None,
             sign_draft: None,
+            remove_sig: None,
             presign: None,
             digital_ids: Vec::new(),
             sig_open: Default::default(),
@@ -617,6 +618,7 @@ impl PdfCraftApp {
             || self.redact_search_open
             || self.hidden_draft.is_some()
             || self.sign_draft.is_some()
+            || self.remove_sig.is_some()
             || self.cert_viewer.is_some()
             || self.js_dialog.is_some()
             || self.comment_props.is_some()

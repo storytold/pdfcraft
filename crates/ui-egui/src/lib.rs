@@ -522,6 +522,8 @@ pub struct PdfCraftApp {
     pub(crate) summarize_dialog: Option<craft::ui::dialog::DialogId>,
     /// The signing dialogs' state.
     pub sign_draft: Option<SignDraft>,
+    /// Remove Signature: what it lists and what is chosen.
+    pub remove_sig: Option<crate::sign_ui::RemoveSigDraft>,
     /// A dynamic form's preSign step, run when signing a field began: the document and its undo
     /// depth after the step. Taken back if signing ends without a signature.
     pub(crate) presign: Option<(DocId, usize)>,

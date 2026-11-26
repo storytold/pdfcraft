@@ -503,6 +503,7 @@ impl PdfCraftApp {
                 crate::dialogs::signature::open(self, initials, editing);
             }
             "optimize" => crate::optimize_ui::open_optimizer(self, ctx),
+            "remove-signature" => self.start_remove_signature(None),
             "sign" | "certify" => {
                 // Sign with a Digital ID for an invisible signature on the current page.
                 let page = self.active.and_then(|i| self.views.get(i)).map_or(0, |v| v.current());
