@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use pdfcraft_render::{Layer, LayerOp, RenderPool};
 
-use crate::{Document, display_config, render_threads};
+use crate::{Document, render_threads};
 
 /// Most usage application dictionaries (`/AS` entries) that [`print_layer_states`] reads, and
 /// most category names and groups it reads in all of them together (entries can share one
@@ -132,7 +132,7 @@ pub(crate) fn use_layer_choices(doc: &mut Document) {
     let overrides: Vec<(i32, i32, bool)> = doc.info.layers.iter().map(|l| (l.id.0 as i32, l.id.1 as i32, l.visible)).collect();
     doc.config.layers = Arc::new(overrides);
     doc.config.print_layers = print_preview_layers(doc.editor.as_ref().map(|e| &e.cos), &doc.info.layers);
-    doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
+    doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), crate::live_scripts::screen_config(doc));
 }
 
 /// The layer overrides a print preview draws with (`RenderConfig::print_layers`): the layers as

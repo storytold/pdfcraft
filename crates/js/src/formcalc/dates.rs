@@ -56,6 +56,9 @@ const CENTURY_SPLIT: i64 = 30;
 
 const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
+/// Characters of the longest month name: all a month token needs to read of the text.
+const LONGEST_MONTH: usize = 9;
+
 /// Parse `text` as a date by `picture` (`YYYY-MM-DD`, `MM/DD/YYYY`, `MMM D, YYYY`, …).
 pub(super) fn parse_date(text: &str, picture: &str) -> Option<(i64, u32, u32)> {
     let pic: Vec<char> = picture.chars().collect();
@@ -71,8 +74,9 @@ pub(super) fn parse_date(text: &str, picture: &str) -> Option<(i64, u32, u32)> {
             }
             i += run;
             if c == 'M' && run >= 3 {
-                // Month name.
-                let rest: String = txt.get(j..).unwrap_or(&[]).iter().collect();
+                // Month name: only as much of the text as a name can be, so a picture of many
+                // month tokens does not copy the rest of a long text for each of them.
+                let rest: String = txt.get(j..).unwrap_or(&[]).iter().take(LONGEST_MONTH).collect();
                 let lower = rest.to_ascii_lowercase();
                 let found = MONTHS
                     .iter()

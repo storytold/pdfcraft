@@ -1,4 +1,6 @@
-use super::*;
+#[cfg(not(target_arch = "wasm32"))]
+use super::open_worker;
+use super::{DocId, DocView, comments, fill_sign, measure_ui, prepare};
 
 /// Top-level workspace modes (Acrobat's mode bar).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -95,153 +97,15 @@ pub enum QuickTool {
     ColumnSelect,
 }
 
-/// A file dropped on a page grid: its name, and its bytes or, for a file on disk, the path they are
-/// read from when the file's turn to be inserted comes (so a long drop holds one file at a time).
-pub(crate) type GridFile = (String, Result<Vec<u8>, std::path::PathBuf>);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Dialog {
-    WordCount,
-    CreateImages,
-    Properties(PropsTab),
-    About,
-    Shortcuts,
-    Split,
-    /// Pages ▸ Number pages… (page labels).
-    NumberPages,
-    /// Print production ▸ Add printer marks.
-    PrinterMarks,
-    /// Print production ▸ Convert colours.
-    ConvertColours,
-    /// Print production ▸ Fix hairlines.
-    FixHairlines,
-    /// Organize pages ▸ Page properties (the tab order of the selected pages).
-    PageProps,
-    /// Protect Using Password.
-    Protect,
-    /// Bookmarks ▸ New bookmarks from text styles (#1693).
-    BookmarksFromTextStyles,
-    /// Set Page Boxes (crop, trim, bleed, art, media).
-    PageBoxes,
-    /// Add / Update Header and Footer, Watermark, Background.
-    Marks(pdfcraft_engine::MarkKind),
-    /// Export a PDF ▸ Image / Text.
-    Export(export_ui::ExportKind),
-    /// Fill & Sign ▸ Create signature (the drawing pad).
-    Signature,
-    /// Comment Properties.
-    CommentProps,
-    /// Edit the description of an embedded document attachment.
-    AttachmentDescription,
-    /// Replace Pages (after choosing the file).
-    ReplacePages,
-    /// Prepare a form ▸ Field Properties.
-    FieldProps,
-    /// Shared properties of several selected form fields.
-    BulkFieldProps,
-    /// Redact a PDF ▸ Redact pages, Find text and redact, Set properties, apply confirmation.
-    RedactPages,
-    RedactSearch,
-    RedactProps,
-    RedactApply,
-    /// File ▸ Print.
-    Print,
-    /// File ▸ Revert confirmation.
-    Revert,
-    /// Save over a file that changed on disk since the document came from it (#2166).
-    OverwriteChanged,
-    /// Saving a document with a signature just placed by Fill & Sign: lock it into the page
-    /// first? (#2149)
-    LockSignatures,
-    /// Link Properties.
-    LinkProps,
-    /// Organize ▸ Extract (options), Rotate Pages.
-    Extract,
-    RotatePages,
-    /// Remove Hidden Information and Sanitize Document.
-    RemoveHidden,
-    Sanitize,
-    /// Documents from a session that ended unexpectedly.
-    Recovery,
-    /// Comments ▸ Summarize comments (options).
-    SummarizeComments,
-    /// Sign with a Digital ID ▸ Configure ▸ Sign as.
-    Sign,
-    /// Optimize PDF ▸ Advanced optimization.
-    Optimize,
-    /// Prepare a form ▸ right-click a field ▸ Duplicate.
-    DuplicateField,
-    /// Prepare a form ▸ Text field table: a movable window rather than a modal (`field_table_ui`).
-    FieldTable,
-    /// Check for accessibility ▸ Accessibility Checker Options.
-    AccessibilityOptions,
-    /// Scan & OCR ▸ Recognize text.
-    RecognizeText,
-    /// Scan & OCR ▸ Enhance scanned file.
-    EnhanceScan,
-    /// The JavaScript console (⌘J).
-    JsConsole,
-    /// Document JavaScripts.
-    DocumentJs,
-    /// Preferences.
-    Preferences,
-    /// Compare files: choose the older version.
-    CompareFiles,
-    /// Action Wizard.
-    ActionWizard,
-    /// Standards ▸ PDF/A.
-    PdfA,
-    /// Custom stamps ▸ Create.
-    CreateStamp,
-    /// Prepare for accessibility ▸ Add alternate text.
-    AltText,
-    /// PDF Optimizer ▸ Audit space usage (then back to the optimizer).
-    AuditSpace,
-    /// Signatures ▸ Show certificate.
-    CertificateViewer,
-    /// Pin tools to Home: selection modal.
-    PinTool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PropsTab {
-    Description,
-    InitialView,
-    Security,
-    Fonts,
-    Custom,
-    Advanced,
-    SpaceAudit,
-}
-
-/// Document Properties ▸ Custom being edited: the properties as they will be after OK, in order,
-/// and the Name and Value fields.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct CustomDraft {
-    pub props: Vec<(String, String)>,
-    pub name: String,
-    pub value: String,
-}
-
-/// Duplicate Field: the field and the pages (all, or a range, 1-based).
-#[derive(Clone, Debug, PartialEq)]
-pub struct DuplicateDraft {
-    pub name: String,
-    pub all: bool,
-    pub from: usize,
-    pub to: usize,
-}
-
 /// Page Properties: the document and pages it applies to (0-based), the document's edit
 /// generation when the dialog opened, and the pages' tab order as they have it (`None` when they
-/// differ) and as chosen (`None` until one is chosen).
+/// differ). The order chosen is the hosted dialog's value.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PagePropsDraft {
     pub doc: DocId,
     pub generation: u64,
     pub pages: Vec<usize>,
     pub before: Option<pdfcraft_engine::TabOrder>,
-    pub tab_order: Option<pdfcraft_engine::TabOrder>,
 }
 
 /// Copied comments: their XFDF (each with its replies), for `Edit::PasteComments`.
@@ -271,9 +135,11 @@ pub(crate) enum CopyPage {
 }
 
 /// What a whole-document copy needs, taken from the view on the UI thread: each page's text
-/// layer as far as it was read, and the document to read the others from.
+/// layer as far as it was read, and the document to read the others from. A copy of a text
+/// selection across pages whose pages are not all read yet is one too, limited to its `span`.
 pub(crate) struct DocumentCopyJob {
     pub(crate) pages: Vec<CopyPage>,
+    span: Option<crate::canvas::TextSpan>,
     bytes: std::sync::Arc<Vec<u8>>,
     password: Option<std::sync::Arc<str>>,
 }
@@ -281,19 +147,32 @@ pub(crate) struct DocumentCopyJob {
 impl DocumentCopyJob {
     pub(crate) fn of(v: &DocView, doc: &pdfcraft_engine::Document) -> DocumentCopyJob {
         let pages = (0..v.page_count())
-            .map(|p| match v.texts.get(&p) {
+            .map(|p| match v.session.texts.get(&p) {
                 Some(t) => CopyPage::Read(t.clone()),
-                None if v.text_failed.contains(&p) => CopyPage::Skip,
+                None if v.session.text_failed.contains(&p) => CopyPage::Skip,
                 None => CopyPage::ToRead,
             })
             .collect();
-        DocumentCopyJob { pages, bytes: doc.bytes.clone(), password: doc.password.as_deref().map(std::sync::Arc::from) }
+        DocumentCopyJob { pages, span: None, bytes: doc.bytes.clone(), password: doc.password.as_deref().map(std::sync::Arc::from) }
+    }
+
+    /// A copy of the reading-order text `span` covers: its pages as [`Self::of`] takes them, every
+    /// other page skipped.
+    pub(crate) fn of_selection(v: &DocView, doc: &pdfcraft_engine::Document, span: crate::canvas::TextSpan) -> DocumentCopyJob {
+        let mut job = DocumentCopyJob::of(v, doc);
+        for (page, p) in job.pages.iter_mut().enumerate() {
+            if page < span.start.0 || page > span.end.0 {
+                *p = CopyPage::Skip;
+            }
+        }
+        job.span = Some(span);
+        job
     }
 
     /// The document's text in page order, a page per line run. Each page read here is let go
     /// once its text is taken, so a large document never holds every page's text layer at once.
     /// `None` when `cancel` was set.
-    pub(crate) fn text(self, cancel: &std::sync::atomic::AtomicBool) -> Option<String> {
+    pub(crate) fn text(self, cancel: &craft::host::queue::Cancel) -> Option<String> {
         let mut renderer: Option<pdfcraft_render::PageRenderer> = None;
         let mut out = String::new();
         let mut push = |text: String| {
@@ -304,12 +183,18 @@ impl DocumentCopyJob {
                 out.push_str(&text);
             }
         };
+        // The glyphs taken from `page`: all of them, or the part a selection covers.
+        let span = self.span;
+        let part = |page: usize, t: &pdfcraft_render::PageText| match span {
+            Some(span) => span.on(page, t.glyphs.len()).map(|r| t.text_of(r)).unwrap_or_default(),
+            None => t.text_of(0..t.glyphs.len()),
+        };
         for (page, p) in self.pages.into_iter().enumerate() {
-            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            if cancel.is_cancelled() {
                 return None;
             }
             match p {
-                CopyPage::Read(t) => push(t.text_of(0..t.glyphs.len())),
+                CopyPage::Read(t) => push(part(page, &t)),
                 CopyPage::ToRead => {
                     let r = renderer.get_or_insert_with(|| {
                         let config = pdfcraft_render::RenderConfig { password: self.password.clone(), ..Default::default() };
@@ -324,7 +209,7 @@ impl DocumentCopyJob {
                         preview: false,
                     };
                     if let Some(t) = r.render(req).text {
-                        push(t.text_of(0..t.glyphs.len()));
+                        push(part(page, &t));
                     }
                 }
                 CopyPage::Skip => {}
@@ -339,63 +224,53 @@ pub struct PasswordPrompt {
     pub path: Option<String>,
     pub bytes: std::sync::Arc<Vec<u8>>,
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) stamp: Option<file_watch::Stamp>,
-    pub input: String,
+    pub(crate) stamp: Option<craft::platform::watch::FileStamp>,
     pub error: Option<String>,
     /// A late startup file must stay in the background even after it is unlocked.
     pub(crate) activate: bool,
     /// The bytes are a recovery snapshot: once the document is open it takes the snapshot's
     /// path and recovery entry. Cancelling the prompt drops the association with it (#813).
-    pub(crate) recovered: Option<RecoveryMeta>,
+    pub(crate) recovered: Option<craft::platform::autosave::RecoveryEntry>,
     /// The tool that asked for this file (a tool chosen with no document open): it runs once
     /// the document is unlocked.
     pub(crate) then: Option<&'static str>,
     /// A link destination to apply after the linked PDF is unlocked.
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
     /// A launch-time display override, applied only after this PDF is unlocked.
-    pub(crate) display_override: Option<(canvas::PageLayout, bool)>,
-}
-
-impl Drop for PasswordPrompt {
-    fn drop(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.input);
-    }
+    pub(crate) display_override: Option<(craft::pages::PageDisplay, bool)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct OpenRequest {
     pub(crate) name: String,
     pub(crate) path: Option<String>,
-    pub(crate) stamp: Option<file_watch::Stamp>,
+    pub(crate) stamp: Option<craft::platform::watch::FileStamp>,
     pub(crate) input: open_worker::Input,
     pub(crate) password: Option<zeroize::Zeroizing<String>>,
     pub(crate) activate: bool,
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
-    pub(crate) recovered: Option<RecoveryMeta>,
+    pub(crate) recovered: Option<craft::platform::autosave::RecoveryEntry>,
     pub(crate) then: Option<&'static str>,
+    /// Where the open waits in the worker's queue: a file the user named goes before files
+    /// reopened from the last session.
+    pub(crate) priority: craft::host::queue::Priority,
 }
 
 /// Asks for the permissions password of an open document whose security restricts it, which
 /// lifts the restrictions (#995). Acrobat asks for it when such a document's security is changed.
+/// The typed password stays in the prompt's own field, never here.
 pub struct UnlockPrompt {
     pub doc: DocId,
     pub name: String,
-    pub input: String,
     pub error: Option<String>,
     /// The command to run once unlocked (Protect using password, Remove security), if any.
     pub then: Option<&'static str>,
 }
 
-impl Drop for UnlockPrompt {
-    fn drop(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.input);
-    }
-}
-
 impl UnlockPrompt {
     /// Ask for document `doc`'s permissions password, then run command `then`, if any.
     pub(crate) fn new(doc: &pdfcraft_engine::Document, then: Option<&'static str>) -> Self {
-        Self { doc: doc.id, name: doc.name.clone(), input: String::new(), error: None, then }
+        Self { doc: doc.id, name: doc.name.clone(), error: None, then }
     }
 }
 
@@ -448,21 +323,11 @@ pub struct PendingRemoteLink {
     pub destination: pdfcraft_render::RemoteDestination,
 }
 
-/// Settings for the Number pages dialog.
-#[derive(Clone, Debug, PartialEq)]
-pub struct NumberDraft {
-    pub from: usize,
-    pub to: usize,
-    pub style: pdfcraft_engine::LabelStyle,
-    pub prefix: String,
-    pub start: u32,
-}
-
 /// What [`PdfCraftApp::open_path`] did: opened the file in a new tab, focused the tab already
 /// showing it, handed it to the background open worker, or failed. Failures tell the user
-/// through a toast; this is the programmatic contract for callers that must know (the control
+/// through a notice; this is the programmatic contract for callers that must know (the control
 /// channel, tools that wait for a file) (#1620).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OpenOutcome {
     /// The file opened in a new tab (or raised its password prompt).
     Opened,
@@ -471,6 +336,7 @@ pub enum OpenOutcome {
     /// The file was accepted for opening in the background; its tab appears when the open
     /// completes (`ui.state.pending_opens` lists the files on the way).
     Pending,
-    /// The file could not be read or opened; the user was told.
-    Failed,
+    /// The file could not be read or opened; the user was told this text, which the control
+    /// reply carries too.
+    Failed(String),
 }
