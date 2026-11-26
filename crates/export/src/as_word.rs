@@ -4,6 +4,8 @@
 //! page flowing ([`flow_doc`]); Word writes it with craft-docx, pages that can't flow kept as
 //! positioned text boxes and pictures ([`word_doc`]).
 
+mod pictures;
+
 use super::as_docx::{rgb8, room_for};
 use super::as_html::{allowed, language_tag};
 use super::layout::{Image, Item, Page, Table, body_size, items, reading_order};
@@ -41,7 +43,7 @@ fn push_text(p: &mut Paragraph, text: &str, props: CharProps) {
 pub(crate) fn table(t: &Table) -> craft_wordmodel::Table {
     let mut edges = t.cols.clone();
     edges.push(t.rect[2]);
-    // Whole twips, at least 3 pt wide (Word's narrowest column), as `as_docx` writes them.
+    // Whole twips, at least 20 pt wide, and within Word's range of 3 pt to 22 inches.
     let widths: Vec<f32> = edges.windows(2).map(|w| (((w[1] - w[0]).max(20.0) * 20.0).round().clamp(60.0, 31680.0) / 20.0) as f32).collect();
     let [top, left, bottom, right] = t.ruled.unwrap_or_default();
     let inside = t.ruled.is_some();
@@ -172,10 +174,17 @@ struct Builder<'a> {
     doc: Document,
     body: Vec<Block>,
     media: Vec<(String, &'a Image)>,
+    /// For RTF, which repeats a picture's data at every placement and doesn't turn pictures: what
+    /// its pictures may still cost, and the rotations baked into them ([`pictures::Budget`]).
+    rtf: Option<pictures::Budget>,
+    /// The page (0-based) being built, and the pages that lost a picture to a limit or to a
+    /// picture that couldn't be prepared.
+    page: usize,
+    omitted: Vec<usize>,
 }
 
 impl<'a> Builder<'a> {
-    fn new(pages: &[Page], meta: &Meta) -> Self {
+    fn new(pages: &[Page], meta: &Meta, rtf: Option<pictures::Budget>) -> Self {
         let mut doc = Document::new();
         doc.styles = std::sync::Arc::new(styles(meta.font, meta.language));
         doc.core.title = meta.title.to_string();
@@ -185,15 +194,29 @@ impl<'a> Builder<'a> {
         if let Some(c) = shared.filter(|c| *c != [255; 3] && pages.iter().all(|p| p.background.map(rgb8) == Some(*c))) {
             doc.settings.page_color = Some(Rgb(c[0], c[1], c[2]));
         }
-        Builder { doc, body: Vec::new(), media: Vec::new() }
+        Builder { doc, body: Vec::new(), media: Vec::new(), rtf, page: 0, omitted: Vec::new() }
     }
 
-    /// The media key for `im`, or `None` past the limits.
+    /// The media key for `im`, or `None` for an empty picture, and past the limits or for one that
+    /// can't be prepared, which marks the page as having lost it.
     fn add_media(&mut self, im: &'a Image) -> Option<String> {
-        if !room_for(&self.media, im) {
+        if im.bytes.is_empty() {
             return None;
         }
-        let key = self.doc.add_media(im.bytes.to_vec(), im.ext);
+        let prepared = if !room_for(&self.media, im) {
+            None
+        } else if let Some(budget) = &mut self.rtf {
+            budget.prepare(im)
+        } else {
+            Some((im.bytes.to_vec(), im.ext))
+        };
+        let Some((bytes, ext)) = prepared else {
+            if self.omitted.last() != Some(&self.page) {
+                self.omitted.push(self.page);
+            }
+            return None;
+        };
+        let key = self.doc.add_media(bytes, ext);
         self.media.push((key.clone(), im));
         Some(key)
     }
@@ -221,22 +244,7 @@ impl<'a> Builder<'a> {
             }
             Item::Img(im) => {
                 let Some(media) = self.add_media(im) else { return };
-                let text_w = f64::from((sec.page_w - sec.margin_left - sec.margin_right).max(1.0));
-                let (w, h) = ((im.rect[2] - im.rect[0]).max(1.0), (im.rect[3] - im.rect[1]).max(1.0));
-                let k = (text_w / w).min(1.0);
-                let pic = InlineObject::Image {
-                    media,
-                    w: (w * k) as f32,
-                    h: (h * k) as f32,
-                    alt: String::new(),
-                    float: Float::default(),
-                    crop: [0.0; 4],
-                    fx: Default::default(),
-                    ole: None,
-                };
-                let mut p = Paragraph::new();
-                p.push_object(pic, &CharProps::default());
-                self.body.push(Block::Para(p));
+                self.body.push(Block::Para(picture(media, im, sec)));
             }
             Item::PageBreak => {}
         }
@@ -258,6 +266,28 @@ impl<'a> Builder<'a> {
     }
 }
 
+/// A paragraph holding the picture `media`, scaled down to fit between the margins of `sec`, side
+/// to side and top to bottom.
+fn picture(media: String, im: &Image, sec: &SectionProps) -> Paragraph {
+    let text_w = f64::from((sec.page_w - sec.margin_left - sec.margin_right).max(1.0));
+    let text_h = f64::from((sec.page_h - sec.margin_top - sec.margin_bottom).max(1.0));
+    let (w, h) = ((im.rect[2] - im.rect[0]).max(1.0), (im.rect[3] - im.rect[1]).max(1.0));
+    let k = (text_w / w).min(text_h / h).min(1.0);
+    let pic = InlineObject::Image {
+        media,
+        w: (w * k) as f32,
+        h: (h * k) as f32,
+        alt: String::new(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    let mut p = Paragraph::new();
+    p.push_object(pic, &CharProps::default());
+    p
+}
+
 /// A paragraph that takes no room: no space around it and a 1 pt line.
 fn exact_1pt() -> ParaProps {
     ParaProps { space_before: Some(0.0), space_after: Some(0.0), line_spacing: Some(LineSpacing::Exactly(1.0)), ..ParaProps::default() }
@@ -266,20 +296,26 @@ fn exact_1pt() -> ParaProps {
 /// The pages as one flowing document: each page a section of its own size (so a page always
 /// starts a new one, blank pages included), its paragraphs, tables and pictures in reading order.
 /// Headings are told from the whole document's body size.
-pub(crate) fn flow_doc(pages: &[Page], meta: &Meta) -> Document {
-    let mut b = Builder::new(pages, meta);
-    let mut page = 0usize;
+/// Its pictures are prepared for RTF ([`pictures::Budget`]); the pages (0-based) that lost one
+/// come with it, their other content kept.
+pub(crate) fn flow_doc(pages: &[Page], meta: &Meta) -> (Document, Vec<usize>) {
+    flow_doc_with_budget(pages, meta, pictures::Budget::default())
+}
+
+fn flow_doc_with_budget(pages: &[Page], meta: &Meta, budget: pictures::Budget) -> (Document, Vec<usize>) {
+    let mut b = Builder::new(pages, meta, Some(budget));
     let mut sec = pages.first().map(section).unwrap_or_default();
     for it in items(pages) {
         if matches!(it, Item::PageBreak) {
             b.end_page(sec);
-            page += 1;
-            sec = pages.get(page).map(section).unwrap_or_default();
+            b.page += 1;
+            sec = pages.get(b.page).map(section).unwrap_or_default();
         } else {
             b.flow(it, &sec);
         }
     }
-    b.finish(sec)
+    let omitted = std::mem::take(&mut b.omitted);
+    (b.finish(sec), omitted)
 }
 
 /// Pages with rotated text, or text that actually overlaps an image or an oversized
@@ -422,9 +458,10 @@ fn positioned_page<'a>(b: &mut Builder<'a>, page: &'a Page) {
 /// positioned text boxes and pictures, and the others flow as paragraphs, tables and pictures.
 /// Each page is a section of its own size, and its headings are told from its own body size.
 pub(crate) fn word_doc(pages: &[Page], meta: &Meta) -> Document {
-    let mut b = Builder::new(pages, meta);
+    let mut b = Builder::new(pages, meta, None);
     let mut last = SectionProps::default();
     for (i, page) in pages.iter().enumerate() {
+        b.page = i;
         let sec = section(page);
         if positioned(page) {
             positioned_page(&mut b, page);

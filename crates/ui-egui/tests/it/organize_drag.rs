@@ -1,5 +1,6 @@
 //! A document edit cancels an Organize drag before old page indices can be used.
 
+use crate::support::AppHarness as _;
 use egui::{Modifiers, PointerButton, Pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -28,16 +29,45 @@ fn document(prefix: &str) -> std::sync::Arc<Vec<u8>> {
 
 fn organize() -> Harness<'static, PdfCraftApp> {
     let bytes = document("Page");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("pages.pdf", None, bytes.as_ref().clone()).unwrap();
-        app.set_option("organize", "on").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "pages.pdf", None, bytes.as_ref().clone()).unwrap();
+            app.set_option(&egui::Context::default(), "organize", "on").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3", "Page 4"]);
     h
+}
+
+#[test]
+fn selected_pages_keep_actions_without_pointer_hover() {
+    let mut h = organize();
+    h.state_mut().views[0].select_pages(&[1, 2]);
+    h.hover_at(Pos2::new(10.0, 10.0));
+    h.run_steps(4);
+    for page in [2, 3] {
+        for action in ["Rotate page {label} counterclockwise", "Rotate page {label} clockwise", "Delete page {label}"] {
+            let label = action.replace("{label}", &page.to_string());
+            assert!(h.query_by_label(&label).is_some(), "selected page action is missing: {label}");
+        }
+    }
+}
+
+#[test]
+fn organize_header_paints_a_close_label() {
+    let h = organize();
+    assert!(
+        h.output()
+            .shapes
+            .iter()
+            .any(|shape| { matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Close" && !text.galley.elided) }),
+        "the Organize header must show the Close label"
+    );
 }
 
 fn page_texts(app: &PdfCraftApp) -> Vec<String> {
@@ -56,13 +86,13 @@ fn page_texts(app: &PdfCraftApp) -> Vec<String> {
         .collect()
 }
 
-fn copy_modifier(h: &Harness<'static, PdfCraftApp>, copying: bool) -> Modifiers {
-    if !copying {
-        Modifiers::NONE
-    } else if h.ctx.os() == egui::os::OperatingSystem::Mac {
-        Modifiers::ALT
-    } else {
-        Modifiers::CTRL
+/// Organize copies pages as a file manager copies files: Option on macOS, Ctrl elsewhere.
+fn copy_modifier(_h: &Harness<'static, PdfCraftApp>, copying: bool) -> Modifiers {
+    match (copying, cfg!(target_os = "macos")) {
+        (false, _) => Modifiers::NONE,
+        (true, true) => Modifiers::ALT,
+        // Ctrl as a keyboard sends it off macOS: the command key too.
+        (true, false) => Modifiers { ctrl: true, command: true, ..Modifiers::NONE },
     }
 }
 
@@ -92,19 +122,20 @@ fn release(h: &mut Harness<'static, PdfCraftApp>, to: Pos2, modifiers: Modifiers
 fn assert_saved_order(h: &Harness<'static, PdfCraftApp>, expected: &[&str]) {
     let app = h.state();
     let bytes = app.session.save_bytes(app.views[0].id).unwrap();
-    let mut reopened = PdfCraftApp::new();
-    reopened.open_bytes("saved.pdf", None, bytes.as_ref().clone()).unwrap();
+    let mut reopened = crate::control::new_app();
+    reopened.open_bytes(&egui::Context::default(), "saved.pdf", None, bytes.as_ref().clone()).unwrap();
     assert_eq!(page_texts(&reopened), expected, "save/reopen preserves the post-edit order");
 }
 
 fn check_undo_cancels_drag(copying: bool) {
     let mut h = organize();
-    assert!(h.state_mut().apply_edit(Edit::MovePages { pages: vec![0], to: 3 }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, Edit::MovePages { pages: vec![0], to: 3 }));
     h.run_steps(2);
     assert_eq!(page_texts(h.state()), ["Page 2", "Page 3", "Page 4", "Page 1"]);
     let (to, modifiers) = start_drag(&mut h, copying);
     // The source index now belongs to Page 2. Undo changes it back to Page 1.
-    h.state_mut().undo();
+    h.undo();
     h.run_steps(2);
     assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3", "Page 4"]);
     h.hover_at(to - egui::vec2(1.0, 0.0));
@@ -114,10 +145,10 @@ fn check_undo_cancels_drag(copying: bool) {
     assert_eq!(page_texts(h.state()), expected, "releasing the old drag must not move or copy a different page");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_redo(), Some("Move page"), "the cancelled gesture leaves Redo available");
     assert_saved_order(&h, &expected);
-    h.state_mut().redo();
+    h.redo();
     h.run_steps(2);
     assert_eq!(page_texts(h.state()), ["Page 2", "Page 3", "Page 4", "Page 1"], "the preserved Redo still applies the original edit");
-    h.state_mut().undo();
+    h.undo();
     h.run_steps(2);
     assert_eq!(page_texts(h.state()), expected);
 
@@ -126,10 +157,10 @@ fn check_undo_cancels_drag(copying: bool) {
     release(&mut h, to, modifiers);
     let changed = if copying { vec!["Page 1", "Page 2", "Page 3", "Page 1", "Page 4"] } else { vec!["Page 2", "Page 3", "Page 1", "Page 4"] };
     assert_eq!(page_texts(h.state()), changed);
-    h.state_mut().undo();
+    h.undo();
     h.run_steps(2);
     assert_eq!(page_texts(h.state()), expected);
-    h.state_mut().redo();
+    h.redo();
     h.run_steps(2);
     assert_eq!(page_texts(h.state()), changed);
     assert_saved_order(&h, &changed);
@@ -148,11 +179,12 @@ fn undo_cancels_an_organize_copy_before_pointer_release() {
 #[test]
 fn redo_cancels_an_organize_drag_before_pointer_release() {
     let mut h = organize();
-    assert!(h.state_mut().apply_edit(Edit::MovePages { pages: vec![0], to: 3 }));
-    h.state_mut().undo();
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, Edit::MovePages { pages: vec![0], to: 3 }));
+    h.undo();
     h.run_steps(2);
     let (to, modifiers) = start_drag(&mut h, false);
-    h.state_mut().redo();
+    h.redo();
     h.run_steps(2);
     release(&mut h, to, modifiers);
     let expected = ["Page 2", "Page 3", "Page 4", "Page 1"];
@@ -164,7 +196,8 @@ fn redo_cancels_an_organize_drag_before_pointer_release() {
 fn deleting_a_page_cancels_an_organize_drag_before_pointer_release() {
     let mut h = organize();
     let (to, modifiers) = start_drag(&mut h, false);
-    assert!(h.state_mut().apply_edit(Edit::DeletePages { pages: vec![0] }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, Edit::DeletePages { pages: vec![0] }));
     h.run_steps(2);
     release(&mut h, to, modifiers);
     let expected = ["Page 2", "Page 3", "Page 4"];
@@ -178,11 +211,12 @@ fn replacing_a_document_cancels_an_organize_drag_before_pointer_release() {
     let mut h = organize();
     let (to, modifiers) = start_drag(&mut h, false);
     let bytes = document("Replacement");
+    let ctx = h.ctx.clone();
     let app = h.state_mut();
     let id = app.views[0].id;
     app.session.reload(id, bytes).unwrap();
     let info = &app.session.get(id).unwrap().info;
-    app.views[0].document_replaced(info);
+    app.views[0].document_replaced(&ctx, info);
     let expected = ["Replacement 1", "Replacement 2", "Replacement 3", "Replacement 4"];
     assert_eq!(page_texts(h.state()), expected, "the new content replaces all four pages before release");
     h.run_steps(2);
