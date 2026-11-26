@@ -51,6 +51,7 @@ enum Action {
     Switch(String),
     Refresh,
     RetryOpen,
+    UseAnotherAccount,
     Apply(String, String),
     Remove(String),
 }
@@ -211,8 +212,9 @@ fn dialog_body(ui: &mut egui::Ui, view: &PurviewView, selected: &mut String, jus
             }
         }
         PurviewStatus::SigningIn => {
-            ui.label(tl!("Opening Microsoft sign-in"));
-            ui.label(tl!("Microsoft sign-in and policy loading continue if you close this window."));
+            ui.heading(tl!("Continue signing in in your browser"));
+            ui.label(tl!("A secure Microsoft sign-in window has opened. Finish there, then return to PdfCraft."));
+            ui.label(tl!("Closing this dialog does not cancel the Microsoft sign-in already in progress."));
         }
         PurviewStatus::NotConfigured => {
             ui.strong(tl!("Storytold's approved Microsoft Entra application client ID is missing"));
@@ -230,10 +232,19 @@ fn dialog_body(ui: &mut egui::Ui, view: &PurviewView, selected: &mut String, jus
                 *action = Some(Action::SignIn);
             }
             if let Some(name) = &view.pending_name {
-                ui.label(tl!("Waiting to open"));
-                ui.label(name);
-                if ui.button(tl!("Retry opening")).clicked() {
-                    *action = Some(Action::RetryOpen);
+                if view.error.is_some() {
+                    ui.heading(tl!("This Microsoft account cannot open the protected file"));
+                    ui.label(name);
+                    ui.label(tl!("Try another account, or ask the document owner to grant this account access."));
+                    if view.account_change_reason.is_none() && ui.button(tl!("Use another account")).clicked() {
+                        *action = Some(Action::UseAnotherAccount);
+                    }
+                } else {
+                    ui.label(tl!("Protected file ready to open"));
+                    ui.label(name);
+                    if ui.button(tl!("Open file")).clicked() {
+                        *action = Some(Action::RetryOpen);
+                    }
                 }
             }
             if let Some(document) = &view.document {
@@ -324,6 +335,7 @@ impl PdfCraftApp {
             },
             Some(Action::Refresh) => self.refresh_purview_labels(ctx),
             Some(Action::RetryOpen) => self.retry_purview_signin(ctx),
+            Some(Action::UseAnotherAccount) => self.purview_use_another_account(ctx),
             Some(Action::Apply(label, justification)) => {
                 if let Some((_, id)) = self.active_ids() {
                     let reason = (!justification.trim().is_empty()).then_some(justification.as_str());

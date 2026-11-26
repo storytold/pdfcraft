@@ -348,22 +348,14 @@ fn denied_open_shows_a_retry_without_actions_for_the_previous_document() {
     h.state_mut().open_bytes(&ctx, "protected.pfile", None, b"MicrosoftIRMServices Protected PDF".to_vec()).unwrap();
     h.run_steps(3);
     h.get_by_label("protected.pfile");
-    h.get_by_label("Retry opening");
+    h.get_by_label("This Microsoft account cannot open the protected file");
+    h.get_by_label("Use another account");
     assert!(h.query_by_label("Sensitivity labels").is_none());
     assert!(h.query_by_label("Apply label").is_none());
     assert!(h.query_by_label("Remove label").is_none());
-    h.get_by_label("Retry opening").click();
-    for _ in 0..200 {
-        h.run_steps(1);
-        if calls.load(std::sync::atomic::Ordering::SeqCst) >= 2
-            && h.state().purview_signin_prompt.as_ref().is_some_and(|prompt| prompt.error.is_some())
-        {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    assert!(calls.load(std::sync::atomic::Ordering::SeqCst) >= 2);
-    assert!(h.state().purview_signin_prompt.as_ref().is_some_and(|prompt| prompt.error.is_some()));
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().purview_signin_prompt.is_none());
     assert_eq!(h.state().session.docs().len(), 1);
 }
 
@@ -408,7 +400,7 @@ fn microsoft_sign_in_does_not_block_the_ui() {
     h.run_steps(1);
     started_rx.recv_timeout(std::time::Duration::from_secs(2)).expect("sign-in worker started");
     h.run_steps(2);
-    h.get_by_label("Opening Microsoft sign-in");
+    h.get_by_label("Continue signing in in your browser");
     h.get_by_label("Close");
 
     release_tx.send(()).unwrap();

@@ -1011,6 +1011,24 @@ impl PdfCraftApp {
         }
     }
 
+    pub(crate) fn purview_use_another_account(&mut self, ctx: &egui::Context) {
+        if let Some(reason) = self.purview_account_change_reason() {
+            self.notify_tr(reason);
+            return;
+        }
+        match self.session.purview_sign_out() {
+            Ok(()) => {
+                self.clear_purview_labels();
+                self.clear_purview_justification();
+                if self.session.purview_status() == pdfcraft_engine::PurviewStatus::Ready {
+                    self.refresh_purview_labels(ctx);
+                }
+                self.start_purview_sign_in(ctx);
+            }
+            Err(error) => self.notify_fmt("Couldn't switch Microsoft account: {e}", &[("e", &error.to_string())]),
+        }
+    }
+
     /// Retry a document that was held at a Microsoft Purview sign-in boundary. The file bytes,
     /// tab activation, remote destination and tool continuation are preserved.
     pub fn retry_purview_signin(&mut self, ctx: &egui::Context) {
