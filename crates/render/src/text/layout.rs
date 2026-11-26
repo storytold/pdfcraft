@@ -215,7 +215,16 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
 fn pair_threshold(p: &TextGlyph, c: &TextGlyph, typical: f32, threshold: f32) -> f32 {
     let height = |g: &TextGlyph| (g.rect[3] - g.rect[1]).max(0.1);
     let (hp, hc) = (height(p), height(c));
-    if is_script_on(&p.rect, hp, &c.rect, hc) || is_script_on(&c.rect, hc, &p.rect, hp) {
+    // A glyph under the script test's size floor (a small `²`) is still a script when it sits off its neighbour's
+    // baseline inside its line, unlike body text beside a big digit, which shares the digit's baseline.
+    let off_baseline = |host: &[f32; 4], host_h: f32, s: &[f32; 4], s_h: f32| {
+        s_h < host_h * 0.45 && (host[3] - s[3]).abs() >= host_h * 0.15 && s[3] > host[1] && s[1] < host[3]
+    };
+    if is_script_on(&p.rect, hp, &c.rect, hc)
+        || is_script_on(&c.rect, hc, &p.rect, hp)
+        || off_baseline(&p.rect, hp, &c.rect, hc)
+        || off_baseline(&c.rect, hc, &p.rect, hp)
+    {
         return threshold;
     }
     let h = hp.min(hc);

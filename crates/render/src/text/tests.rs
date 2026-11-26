@@ -1381,6 +1381,14 @@ fn a_letter_close_after_a_combining_mark_takes_no_space() {
     assert_eq!(layout(v).plain_text(), "xa\u{301}by");
 }
 
+/// #3172: a superscript too small for the sub- and superscript test (under half its host's height) still keeps the
+/// line's word-gap threshold next to its host: its height says no more about that gap (noted in review).
+#[test]
+fn a_tiny_superscript_close_to_its_host_takes_no_space() {
+    let v = vec![g("a", 0.0, 10.0, 6.0), g("b", 6.0, 10.0, 12.0), tall("2", 13.0, 9.5, 15.4, 4.0)];
+    assert_eq!(layout(v).plain_text(), "ab2");
+}
+
 /// #3172: only another run's ink drops a blank. A space its own run's letter is kerned over is still that run's word
 /// break, even on a line where another run overprints elsewhere.
 #[test]
