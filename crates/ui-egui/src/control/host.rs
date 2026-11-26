@@ -135,6 +135,7 @@ impl crate::PdfCraftApp {
             "left_panel": if self.left_open() { json!(format!("{:?}", self.left)) } else { Value::Null },
             "tools_side": dock["tools_side"].clone(),
             "rail_side": dock["rail_side"].clone(),
+            "rail_controls": dock["rail_controls"].clone(),
             "right_panel": self.right().map(|r| format!("{r:?}")),
             "hidden_interface": self.hidden_interface().to_json(),
             // The top host dialog's key, else the inline window that is open.

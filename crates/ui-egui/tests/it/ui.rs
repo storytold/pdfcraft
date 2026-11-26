@@ -457,6 +457,40 @@ fn navigation_rail_toggles_between_right_and_left_and_persists() {
     assert_eq!(side(&mut h2, "rail_side"), "left");
 }
 
+/// The view controls (page number, page stepping, zoom) can sit in a bar above the document instead of the rail
+/// (#5240): the rail's button and Preferences move them, the choice persists, and the controls stay reachable in
+/// either place.
+#[test]
+fn view_controls_move_to_a_bar_at_the_top_and_persist() {
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    assert_eq!(side(&mut h, "rail_controls"), "rail");
+    // In the rail the dock-side buttons are there; the way back is not.
+    assert!(h.query_by_label("Dock navigation rail on Left").is_some());
+    assert!(h.query_by_label("Show navigation controls in the Rail").is_none());
+    h.get_by_label("Show navigation controls at the Top").click();
+    h.run_steps(3);
+    assert_eq!(side(&mut h, "rail_controls"), "top");
+    // In the bar the way back is there, the rail's side buttons are not, and the page controls are still on screen.
+    assert!(h.query_by_label("Show navigation controls in the Rail").is_some());
+    assert!(h.query_by_label("Dock navigation rail on Left").is_none());
+    assert!(h.query_by_label("Current page").is_some(), "the page box is reachable in the top bar");
+    let saved = h.state().settings_snapshot();
+    let mut h2 = harness(move |app| {
+        app.apply_settings(&saved);
+        app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+    });
+    assert_eq!(side(&mut h2, "rail_controls"), "top", "the placement came back after a restart");
+    h2.get_by_label("Show navigation controls in the Rail").click();
+    h2.run_steps(3);
+    assert_eq!(side(&mut h2, "rail_controls"), "rail");
+    h2.set_option("dialog", "preferences").unwrap();
+    h2.run_steps(3);
+    pick_preference(&mut h2, None, "Page navigation controls", "In a bar at the top");
+    h2.get_by_label("OK").click();
+    h2.run_steps(3);
+    assert_eq!(side(&mut h2, "rail_controls"), "top");
+}
+
 /// Read mode hides the tools, not the navigation panes: the rail's Bookmarks button opens the
 /// bookmarks when Read is the default workspace (#932), and the left tool pane stays hidden.
 #[test]

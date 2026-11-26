@@ -282,6 +282,7 @@ impl PdfCraftApp {
             dock_shown: Default::default(),
             command_states: Default::default(),
             rail_side: craft::behavior::DockSide::End,
+            rail_controls_top: false,
             session: Session::new(),
             status_captions_lang: None,
             views: Vec::new(),

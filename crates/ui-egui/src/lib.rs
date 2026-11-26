@@ -245,6 +245,8 @@ pub struct PdfCraftApp {
     pub(crate) dock_shown: craft::ui::contract::Tracked<std::collections::BTreeSet<craft::ui::docking::PanelKey>>,
     /// The side the rail of panel buttons sits on.
     pub rail_side: craft::behavior::DockSide,
+    /// Whether the rail's view controls sit in a bar above the document instead of in the rail (#5240).
+    pub rail_controls_top: bool,
     pub session: Session,
     /// The interface language signature status captions were last drawn in.
     pub(crate) status_captions_lang: Option<i18n::Lang>,

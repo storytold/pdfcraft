@@ -176,6 +176,7 @@ impl PdfCraftApp {
                     self.notify(e);
                 }
             }
+            "view.rail.top" | "view.rail.in_rail" => self.rail_controls_top = id == "view.rail.top",
             "home.unpin_tool" => {
                 // PLAN: assumed params `{ "tool": <group id> }` and `PdfCraftApp::unpin_tool(&mut self, &str)` (pdf-chrome-w9).
                 if let Some(tool) = fired.command.params.get("tool").and_then(|t| t.as_str()) {

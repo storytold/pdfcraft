@@ -63,6 +63,8 @@ struct PrefsDraft {
     ui_scale: Option<f32>,
     tools_right: bool,
     rail_right: bool,
+    /// The view controls sit in a bar above the document, not in the rail.
+    controls_top: bool,
     animation: MotionChoice,
     reopen_last_session: bool,
     restore_last_view: bool,
@@ -99,6 +101,7 @@ impl PrefsDraft {
             ui_scale: app.ui_scale,
             tools_right: crate::side_panels::tools_on_right(app),
             rail_right: app.rail_side != DockSide::Start,
+            controls_top: app.rail_controls_top,
             animation: app.animation_effects,
             reopen_last_session: app.reopen_last_session,
             restore_last_view: app.restore_last_view,
@@ -140,6 +143,7 @@ impl PrefsDraft {
             ui_scale: None,
             tools_right: false,
             rail_right: true,
+            controls_top: false,
             animation: MotionChoice::System,
             reopen_last_session: false,
             restore_last_view: true,
@@ -315,6 +319,12 @@ fn side_table<'a>() -> Table<'a, bool> {
     vec![(false, "left", tl!("Left")), (true, "right", tl!("Right"))]
 }
 
+/// Where the view controls (page number, page stepping, zoom, page display) sit: in the rail, or in a bar above the
+/// document.
+fn controls_table<'a>() -> Table<'a, bool> {
+    vec![(false, "rail", tl!("In the rail")), (true, "top", tl!("In a bar at the top"))]
+}
+
 fn animation_table<'a>() -> Table<'a, MotionChoice> {
     vec![
         (MotionChoice::System, "system", tl_ctx!("animation effects", "Use system setting")),
@@ -410,6 +420,7 @@ impl PreferencesModel for Prefs<'_> {
             ("general.scale", PrefValue::Choice(id)) => d.ui_scale = id.parse::<u16>().ok().map(|p| f32::from(p) / 100.0),
             ("general.tools_side", PrefValue::Choice(id)) => d.tools_right = lookup(&side_table(), &id).unwrap_or(d.tools_right),
             ("general.rail_side", PrefValue::Choice(id)) => d.rail_right = lookup(&side_table(), &id).unwrap_or(d.rail_right),
+            ("general.rail_controls", PrefValue::Choice(id)) => d.controls_top = lookup(&controls_table(), &id).unwrap_or(d.controls_top),
             ("general.animation", PrefValue::Choice(id)) => d.animation = lookup(&animation_table(), &id).unwrap_or(d.animation),
             ("general.reopen", PrefValue::Bool(v)) => d.reopen_last_session = v,
             ("general.restore_view", PrefValue::Bool(v)) => d.restore_last_view = v,
@@ -531,6 +542,7 @@ impl PreferencesModel for Prefs<'_> {
                 d.ui_scale = fresh.ui_scale;
                 d.tools_right = fresh.tools_right;
                 d.rail_right = fresh.rail_right;
+                d.controls_top = fresh.controls_top;
                 d.animation = fresh.animation;
                 d.reopen_last_session = fresh.reopen_last_session;
                 d.restore_last_view = fresh.restore_last_view;
@@ -609,6 +621,7 @@ impl PreferencesDraft for Prefs<'_> {
         self.app.ui_scale = d.ui_scale;
         crate::side_panels::set_tools_on_right(self.app, d.tools_right)?;
         crate::side_panels::set_rail_side(self.app, if d.rail_right { DockSide::End } else { DockSide::Start })?;
+        self.app.rail_controls_top = d.controls_top;
         self.app.animation_effects = d.animation;
         self.app.reopen_last_session = d.reopen_last_session;
         self.app.restore_last_view = d.restore_last_view;
@@ -686,6 +699,7 @@ impl Prefs<'_> {
                 .help(tl!("Auto follows the system's text size. Pages always render at the display's full resolution.")),
             choice_row("general.tools_side", tl!("Tools panel side"), d.tools_right, &side_table()),
             choice_row("general.rail_side", tl!("Navigation rail side"), d.rail_right, &side_table()),
+            choice_row("general.rail_controls", tl!("Page navigation controls"), d.controls_top, &controls_table()),
             choice_row("general.animation", tl!("Animation effects"), d.animation, &animation_table()),
         ];
         #[cfg(not(target_arch = "wasm32"))]
