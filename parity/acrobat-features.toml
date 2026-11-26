@@ -1,5 +1,9 @@
-# PdfCraft parity checklist vs Acrobat Pro (offline feature set). Generated from plan docs; maintained by hand. # Validated and reported by `cargo xtask parity`. Schema: see the [schema] table. # Status rules: `shipped` = usable today with at least one cited test; `partial` = part exists (notes say what is
-# missing); `planned` = not started; `na` = Adobe-cloud-only (notes name the local or pluggable alternative). # `commands` lists registry ids from crates/engine/src/commands.rs only; `tools` lists crates/automation/src/tools.rs names. [schema]
+# PdfCraft parity checklist vs Acrobat Pro (offline feature set). Generated from plan docs; maintained by hand.
+# Validated and reported by `cargo xtask parity`. Schema: see the [schema] table.
+# Status rules: `shipped` = usable today with at least one cited test; `partial` = part exists (notes say what is
+# missing); `planned` = not started; `na` = Adobe-cloud-only (notes name the local or pluggable alternative).
+# `commands` lists registry ids from crates/engine/src/commands.rs only; `tools` lists crates/automation/src/tools.rs names.
+[schema]
 version = 1
 statuses = ["planned", "partial", "shipped", "na"]
 tiers = ["P0", "P1", "P2", "P3", "N/A"]
@@ -1982,7 +1986,14 @@ status = "partial"
 commands = ["edit.edit_text"]
 tools = ["text_script"]
 evidence = [
-  "crates/engine/src/text_script.rs::every_form_toggles_back_to_its_character",   "crates/engine/src/text_script.rs::text_with_characters_unicode_cannot_raise_toggles_back",   "crates/ui-egui/src/tools/edit_text_ui.rs::superscript_and_subscript_conversion",   "crates/ui-egui/tests/it/editing.rs::the_format_panel_toggles_superscript_and_subscript_on_selection",   "crates/automation/tests/it/automation.rs::superscript_and_subscript_through_tools",   "crates/engine/src/text_script.rs::mixed_plain_and_scripted_text_normalizes_instead_of_round_tripping",   "crates/automation/tests/it/automation.rs::mixed_script_tools_normalize_but_undo_restores_the_exact_mixture", ]
+  "crates/engine/src/text_script.rs::every_form_toggles_back_to_its_character",
+  "crates/engine/src/text_script.rs::text_with_characters_unicode_cannot_raise_toggles_back",
+  "crates/ui-egui/src/tools/edit_text_ui.rs::superscript_and_subscript_conversion",
+  "crates/ui-egui/tests/it/editing.rs::the_format_panel_toggles_superscript_and_subscript_on_selection",
+  "crates/automation/tests/it/automation.rs::superscript_and_subscript_through_tools",
+  "crates/engine/src/text_script.rs::mixed_plain_and_scripted_text_normalizes_instead_of_round_tripping",
+  "crates/automation/tests/it/automation.rs::mixed_script_tools_normalize_but_undo_restores_the_exact_mixture",
+]
 notes = "Toggled in the Format text panel for the selection, and headlessly with text_script on a paragraph or a byte range of it; each toggle of a paragraph is one undo step. Uses Unicode superscript and subscript forms (2 ↔ ²) rather than text rise (Ts) and font scaling, so the font must provide the corresponding glyphs and extracted text contains the Unicode characters. Characters Unicode has no form for (q, most capitals in subscript) stay unchanged and do not determine script state. Two toggles restore uniformly plain or uniformly scripted inputs. Mixed input normalizes (H₂2 → H₂₂ → H22), so a second toggle does not recover the original mixture; Undo restores the exact prior text. The mathematical minus sign U+2212 has its own script mapping, while ASCII hyphen-minus stays unchanged."
 
 [[feature]]
@@ -2210,7 +2221,12 @@ status = "partial"
 commands = []
 tools = ["image_edit"]
 evidence = [
-  "crates/edit/src/tests.rs::image_arrange_stacking_order_and_remove_crop",   "crates/edit/src/tests.rs::image_arrange_refuses_crossed_scope_boundaries_without_changes",   "crates/edit/src/tests.rs::arrange_refuses_unrestorable_extended_print_state",   "crates/automation/tests/it/automation.rs::arranging_page_images_through_tools",   "crates/ui-egui/tests/it/editing.rs::duplicate_xobject_at_different_rects_arrange_and_delete_keeps_other_instance_through_menu", ]
+  "crates/edit/src/tests.rs::image_arrange_stacking_order_and_remove_crop",
+  "crates/edit/src/tests.rs::image_arrange_refuses_crossed_scope_boundaries_without_changes",
+  "crates/edit/src/tests.rs::arrange_refuses_unrestorable_extended_print_state",
+  "crates/automation/tests/it/automation.rs::arranging_page_images_through_tools",
+  "crates/ui-egui/tests/it/editing.rs::duplicate_xobject_at_different_rects_arrange_and_delete_keeps_other_instance_through_menu",
+]
 notes = "Image stacking order in content streams: Bring to Front, Send to Back, Bring Forward, Send Backward with undo/redo and persistence. Refuses arranging across shared marked content, unbalanced graphics/marked-content boundaries, or when clipping path transforms cannot be cleanly preserved. Stacking for arbitrary vector paths and inline images remains planned."
 
 [[feature]]
@@ -2307,7 +2323,12 @@ status = "shipped"
 commands = ["edit.remove_links"]
 tools = ["links_remove"]
 evidence = [
-    "crates/engine/src/tests.rs::links_from_urls_and_link_edits",     "crates/automation/tests/it/automation.rs::links_through_tools",     "crates/annot/src/tests.rs::links_are_added_edited_listed_and_removed",     "crates/ui-egui/tests/it/pdf_links.rs::removing_all_links_and_undo",     "crates/ui-egui/tests/it/pdf_links.rs::the_link_context_menu_shows_only_for_a_right_click_on_a_link", ]
+    "crates/engine/src/tests.rs::links_from_urls_and_link_edits",
+    "crates/automation/tests/it/automation.rs::links_through_tools",
+    "crates/annot/src/tests.rs::links_are_added_edited_listed_and_removed",
+    "crates/ui-egui/tests/it/pdf_links.rs::removing_all_links_and_undo",
+    "crates/ui-egui/tests/it/pdf_links.rs::the_link_context_menu_shows_only_for_a_right_click_on_a_link",
+]
 notes = "removes all link annotations across the document or on specified pages (links_remove pages); a right-click on a link offers Properties, Delete and Remove all links; undoable, with a toast giving the count"
 
 [[feature]]
@@ -5236,7 +5257,11 @@ status = "partial"
 commands = ["form.add.text_table"]
 tools = ["form_add_field_table"]
 evidence = [
-  "crates/forms/src/table.rs::a_grid_fills_its_area_with_gaps_between_the_cells",   "crates/engine/src/field_table.rs::a_table_is_added_and_undone_as_one_step",   "crates/automation/tests/it/automation.rs::adding_a_field_table_through_tools",   "crates/ui-egui/tests/it/prepare.rs::a_text_field_table_is_drawn_set_up_and_added_in_one_step", ]
+  "crates/forms/src/table.rs::a_grid_fills_its_area_with_gaps_between_the_cells",
+  "crates/engine/src/field_table.rs::a_table_is_added_and_undone_as_one_step",
+  "crates/automation/tests/it/automation.rs::adding_a_field_table_through_tools",
+  "crates/ui-egui/tests/it/prepare.rs::a_text_field_table_is_drawn_set_up_and_added_in_one_step",
+]
 notes = "Prepare a form ▸ Text field table: drag an area, then set rows, columns, spacing, column widths (draggable dividers) and a name pattern per column in a movable window, with the table previewed on the page. Added as one undoable edit, or refused whole with the reason (a cell under 4 pt, a name with a period, a repeated or existing name); form_add_field_table does the same headlessly. Missing: copying an existing field of any type, with its properties, into a grid from its context menu, which is what this entry describes; the table only creates new text fields."
 
 [[feature]]
@@ -7125,7 +7150,19 @@ status = "partial"
 commands = ["file.open"]
 tools = ["doc_create_multiple", "doc_combine"]
 evidence = [
-    "crates/create/src/office.rs::office_files_are_recognised_by_extension_and_signature",     "crates/create/src/office.rs::other_files_are_not_office_documents",     "crates/create/src/office.rs::a_converter_that_hangs_is_stopped",     "crates/create/src/office.rs::a_converter_that_makes_no_pdf_is_reported",     "crates/create/src/office.rs::libreoffice_converts_a_document_when_installed",     "crates/create/src/office.rs::the_profile_turns_off_macros_and_never_updates_links",     "crates/create/src/office.rs::a_timeout_stops_the_processes_the_converter_started",     "crates/automation/tests/it/office.rs::office_documents_convert_separately_with_their_text",     "crates/automation/tests/it/office.rs::office_documents_combine_in_order_with_a_bookmark_each",     "crates/engine/src/tests.rs::office_documents_convert_through_libreoffice_or_explain_why_not",     "crates/engine/src/tests.rs::inline_conversions_refuse_office_documents_without_running_libreoffice",     "crates/ui-egui/src/platform/open_worker/tests.rs::file_open_converts_an_office_document_on_the_worker", ]
+    "crates/create/src/office.rs::office_files_are_recognised_by_extension_and_signature",
+    "crates/create/src/office.rs::other_files_are_not_office_documents",
+    "crates/create/src/office.rs::a_converter_that_hangs_is_stopped",
+    "crates/create/src/office.rs::a_converter_that_makes_no_pdf_is_reported",
+    "crates/create/src/office.rs::libreoffice_converts_a_document_when_installed",
+    "crates/create/src/office.rs::the_profile_turns_off_macros_and_never_updates_links",
+    "crates/create/src/office.rs::a_timeout_stops_the_processes_the_converter_started",
+    "crates/automation/tests/it/office.rs::office_documents_convert_separately_with_their_text",
+    "crates/automation/tests/it/office.rs::office_documents_combine_in_order_with_a_bookmark_each",
+    "crates/engine/src/tests.rs::office_documents_convert_through_libreoffice_or_explain_why_not",
+    "crates/engine/src/tests.rs::inline_conversions_refuse_office_documents_without_running_libreoffice",
+    "crates/ui-egui/src/platform/open_worker/tests.rs::file_open_converts_an_office_document_on_the_worker",
+]
 notes = "File ▸ Open (desktop) opens Word, Excel, PowerPoint, OpenDocument and RTF files (Office documents filter; PDF stays the default) as new, unsaved PDFs, converted on the open worker by an installed LibreOffice run headless in a private temporary folder with a fresh profile (macros disabled, untrusted links blocked, Writer and Calc linked content never updated) and stopped after 120 s. Found through PDFCRAFT_SOFFICE, the PATH, or the usual install folders; without it the user is told LibreOffice is needed. The automation tools that convert files (doc_create_multiple, doc_combine, batch convert) take Office documents too. Not yet: Insert pages, Combine files and Create ▸ Multiple files in the app refuse Office documents (they convert on the frame thread) and point to File ▸ Open; no Create ▸ From Office command or conversion settings; Visio and Publisher; the web build; layout fidelity is LibreOffice's, not measured against Acrobat; Impress has no link-update setting and the process's network access isn't sandboxed (synthetic linked sections, pictures and cell references made no connection with LibreOffice 26.8.1); the real-conversion tests skip where LibreOffice isn't installed, CI included."
 
 [[feature]]
@@ -7245,7 +7282,25 @@ milestone = "M10"
 status = "partial"
 commands = ["export.pptx"]
 tools = ["doc_export_office"]
-evidence = ["crates/export/src/tests.rs::table_spans_do_not_consume_text_they_do_not_emit",     "crates/export/src/pptx/tests.rs::pptx_is_a_presentationml_package",     "crates/export/src/pptx/tests.rs::pptx_slide_has_title_body_and_images_in_order",     "crates/export/src/pptx/tests.rs::pptx_text_colour_and_formatting",     "crates/export/src/pptx/tests.rs::pptx_empty_pages_produce_valid_slide",     "crates/export/src/pptx/tests.rs::pptx_slide_dimensions_and_clamping",     "crates/export/src/pptx/tests.rs::pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title",     "crates/export/src/pptx/tests.rs::pptx_opens_in_libreoffice",     "crates/export/src/pptx/tests.rs::pptx_package_parts_are_complete_and_consistent",     "crates/export/src/pptx/tests.rs::hostile_sizes_do_not_overflow_the_slide_position",     "crates/export/src/tests.rs::grid_text_becomes_a_real_table_in_every_format",     "crates/export/src/tests.rs::text_colour_survives_every_format",     "crates/engine/src/tests.rs::exporting_office_files_keeps_images",     "crates/engine/src/tests.rs::exporting_office_files_keeps_text_colour",     "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf",     "crates/ui-egui/tests/it/compare.rs::export_to_word_html_and_rtf",     "crates/export/src/tests.rs::a_sentence_that_wraps_after_a_style_change_is_one_paragraph",     "crates/export/src/tests.rs::a_bulleted_list_is_paragraphs_not_a_table", ]
+evidence = ["crates/export/src/tests.rs::table_spans_do_not_consume_text_they_do_not_emit",
+    "crates/export/src/pptx/tests.rs::pptx_is_a_presentationml_package",
+    "crates/export/src/pptx/tests.rs::pptx_slide_has_title_body_and_images_in_order",
+    "crates/export/src/pptx/tests.rs::pptx_text_colour_and_formatting",
+    "crates/export/src/pptx/tests.rs::pptx_empty_pages_produce_valid_slide",
+    "crates/export/src/pptx/tests.rs::pptx_slide_dimensions_and_clamping",
+    "crates/export/src/pptx/tests.rs::pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title",
+    "crates/export/src/pptx/tests.rs::pptx_opens_in_libreoffice",
+    "crates/export/src/pptx/tests.rs::pptx_package_parts_are_complete_and_consistent",
+    "crates/export/src/pptx/tests.rs::hostile_sizes_do_not_overflow_the_slide_position",
+    "crates/export/src/tests.rs::grid_text_becomes_a_real_table_in_every_format",
+    "crates/export/src/tests.rs::text_colour_survives_every_format",
+    "crates/engine/src/tests.rs::exporting_office_files_keeps_images",
+    "crates/engine/src/tests.rs::exporting_office_files_keeps_text_colour",
+    "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf",
+    "crates/ui-egui/tests/it/compare.rs::export_to_word_html_and_rtf",
+    "crates/export/src/tests.rs::a_sentence_that_wraps_after_a_style_change_is_one_paragraph",
+    "crates/export/src/tests.rs::a_bulleted_list_is_paragraphs_not_a_table",
+]
 notes = "Text in slots covered by a preceding table-cell span remains in paragraph flow instead of being discarded. PowerPoint presentation: each page becomes a slide, with the largest non-table text as slide title, remaining paragraphs as body text (a paragraph that wraps onto the next line after a style change stays one paragraph, with the same rules and limits as Word export, #4158; a list whose bullets are blocks of their own is a paragraph per item, not a table), images and detected tables in reading order; DrawingML formatting (font size, bold, italic, text fill colour, cell borders); wired into engine command export.pptx, automation tool doc_export_office, and Export dialog. Missing: content past the slide bottom is not paginated or shrunk across multiple slides (no normAutofit), all slides use the first page's dimensions, title is determined by largest font size rather than semantic structure, and there is no layout-preserving mode (Acrobat keeps positions). Not yet verified in PowerPoint or Keynote: pptx_opens_in_libreoffice only converts the file when LibreOffice is installed and passes silently otherwise (CI has none), so the package structure is checked by pptx_package_parts_are_complete_and_consistent instead."
 
 [[feature]]
@@ -8370,7 +8425,21 @@ status = "partial"
 commands = ["print.dialog"]
 tools = ["doc_print", "printer_papers"]
 evidence = [
-    "crates/ui-egui/tests/it/print.rs::printer_papers_and_properties_selection",     "crates/automation/tests/it/automation.rs::printer_papers_through_tools",     "crates/print/src/tests.rs::printer_papers_and_default_paper_api",     "crates/print/src/tests.rs::ppd_papers_come_from_the_ppd",     "crates/print/src/tests.rs::a_job_on_a_ppd_paper_names_the_ppd_keyword",     "crates/print/src/tests.rs::a_job_on_a_standard_size_names_the_ppd_keyword_of_that_size",     "crates/print/src/tests.rs::printer_papers_are_read_from_the_queue_ppd",     "crates/print/src/tests.rs::overlapping_paper_discovery_two_sided_and_queue_queries",     "crates/ui-egui/tests/it/print.rs::a_custom_paper_prints_at_its_size_and_its_printer_keeps_it",     "crates/ui-egui/src/workflows/print_paper.rs::the_paper_list_is_the_standard_sizes_then_the_custom_ones",     "crates/ui-egui/src/workflows/print_paper.rs::settings_are_read_as_untrusted",     "crates/ui-egui/src/workflows/print_ui/setups.rs::setups_round_trip_through_the_settings_file",     "crates/ui-egui/tests/it/print_custom_paper_names.rs::a_custom_paper_cannot_take_a_standard_name",     "crates/automation/tests/it/automation.rs::doc_print_takes_a_paper_size_of_its_own", ]
+    "crates/ui-egui/tests/it/print.rs::printer_papers_and_properties_selection",
+    "crates/automation/tests/it/automation.rs::printer_papers_through_tools",
+    "crates/print/src/tests.rs::printer_papers_and_default_paper_api",
+    "crates/print/src/tests.rs::ppd_papers_come_from_the_ppd",
+    "crates/print/src/tests.rs::a_job_on_a_ppd_paper_names_the_ppd_keyword",
+    "crates/print/src/tests.rs::a_job_on_a_standard_size_names_the_ppd_keyword_of_that_size",
+    "crates/print/src/tests.rs::printer_papers_are_read_from_the_queue_ppd",
+    "crates/print/src/tests.rs::overlapping_paper_discovery_two_sided_and_queue_queries",
+    "crates/ui-egui/tests/it/print.rs::a_custom_paper_prints_at_its_size_and_its_printer_keeps_it",
+    "crates/ui-egui/src/workflows/print_paper.rs::the_paper_list_is_the_standard_sizes_then_the_custom_ones",
+    "crates/ui-egui/src/workflows/print_paper.rs::settings_are_read_as_untrusted",
+    "crates/ui-egui/src/workflows/print_ui/setups.rs::setups_round_trip_through_the_settings_file",
+    "crates/ui-egui/tests/it/print_custom_paper_names.rs::a_custom_paper_cannot_take_a_standard_name",
+    "crates/automation/tests/it/automation.rs::doc_print_takes_a_paper_size_of_its_own",
+]
 notes = "In the Print dialog: Custom… beside Paper adds a named size in the preferences' unit (1 to 200 inches a side), kept with the settings and removable. A printer printed to on a custom paper starts on it next time (#2001). The Page Setup button opens the driver's page setup to choose paper size and orientation. printer_papers enumerates driver-reported papers and default paper headlessly. On CUPS they are the queue's PPD papers by the driver's names and its *DefaultPageSize, and a job on one, or on a standard size of one (such as the 4 x 6 in label), is fed it under the PPD's keyword. doc_print takes sizes such as 8.5x14in or 210x297mm or driver papers. Missing: margins."
 
 [[feature]]
