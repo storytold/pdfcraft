@@ -693,8 +693,11 @@ mod review_tests {
                 assert!(app.script_pending.as_ref().unwrap().file_read.is_none());
             } else {
                 old = Some((p.serial, p.token.clone()));
-                let p = app.script_pending.take().unwrap();
+                let mut p = app.script_pending.take().unwrap();
                 app.session.discard_javascript(&p.run);
+                // The replacement realm shares the old worker's execution slot.
+                reply_to_prompt(&ctx, &mut p, None, true);
+                assert!(matches!(p.run.receiver.recv_timeout(Duration::from_secs(5)), Ok(InteractiveEvent::Complete(_))));
             }
         }
     }
