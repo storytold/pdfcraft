@@ -160,22 +160,28 @@ fn json(value: &JsValue, ctx: &mut Context, depth: usize, budget: &mut Budget) -
     }
     Ok(Value::Object(out))
 }
+fn count_retained(target: &JsObject, is_replaced: impl Fn(&PropertyKey) -> bool, budget: &mut Budget, ctx: &mut Context) -> JsResult<()> {
+    for key in target.own_property_keys(ctx)? {
+        if !is_replaced(&key) {
+            if let Some(name) = key_string(&key) {
+                budget.bytes = budget.bytes.checked_sub(name.len()).ok_or_else(|| error("dialog value exceeds its limit"))?;
+            }
+            json(&target.get(key, ctx)?, ctx, 0, budget)?;
+        }
+    }
+    Ok(())
+}
 fn patch(args: &[JsValue], data: &JsObject, bucket: &str, ctx: &mut Context) -> JsResult<JsValue> {
     let source = arg(args, 0).as_object().ok_or_else(|| error("dialog.load/enable/visible expects an object"))?;
     let target = part(data, bucket, ctx)?;
     let ids = part(data, "ids", ctx)?;
-    let mut budget = Budget { nodes: 4096, bytes: 16 << 20 };
+    let limit = Budget { nodes: 4096, bytes: 16 << 20 };
+    let mut budget = Budget { ..limit };
     let keys = source.own_property_keys(ctx)?;
     // Retained values share the conversion budget across calls. Exclude replacements
     // first so writing the same large value again does not consume the limit twice.
-    for key in target.own_property_keys(ctx)? {
-        if !keys.contains(&key) {
-            if let Some(name) = key_string(&key) {
-                budget.bytes = budget.bytes.checked_sub(name.len()).ok_or_else(|| error("dialog value exceeds its limit"))?;
-            }
-            json(&target.get(key, ctx)?, ctx, 0, &mut budget)?;
-        }
-    }
+    count_retained(&target, |key| keys.contains(key), &mut budget, ctx)?;
+    let before_updates = Budget { ..budget };
     let mut updates = Vec::new();
     for key in keys {
         let Some(name) = key_string(&key) else { continue };
@@ -187,6 +193,11 @@ fn patch(args: &[JsValue], data: &JsObject, bucket: &str, ctx: &mut Context) -> 
         let value = json(&value, ctx, 0, &mut budget)?;
         updates.push((key, JsValue::from_json(&value, ctx)?));
     }
+    // Source getters can reenter load and change what is retained. Charge the
+    // converted updates once, then recount the current values they will leave in place.
+    let mut remaining =
+        Budget { nodes: limit.nodes - (before_updates.nodes - budget.nodes), bytes: limit.bytes - (before_updates.bytes - budget.bytes) };
+    count_retained(&target, |key| updates.iter().any(|(updated, _)| updated == key), &mut remaining, ctx)?;
     // Validate the whole patch before retaining any of it.
     for (key, value) in updates {
         target.set(key, value, false, ctx)?;
@@ -510,6 +521,35 @@ mod tests {
     #[test]
     fn repeated_loads_bound_retained_values_and_reject_whole_patches() {
         let script = "var kept;app.execDialog({initialize:function(d){var big='xxx';for(var i=0;i<21;i++)big+=big;d.load({one:big});d.load({two:big});d.load({one:big});try{d.load({small:'changed',three:big});}catch(e){kept=d.store();}d.end('cancel');},description:{elements:['one','two','three','small'].map(function(id){return {type:'edit_text',item_id:id};})}});kept.one.length+':'+kept.two.length+':'+kept.three+':'+kept.small";
+        let out = ScriptSession::default().run(job(script), &[]);
+        assert_eq!(out.error, None);
+        assert_eq!(out.result.as_deref(), Some("6291456:6291456::"));
+    }
+    #[test]
+    fn reentrant_load_counts_toward_retained_limit_before_outer_write() {
+        let script = r#"
+            var kept, rejected = false;
+            app.execDialog({
+                initialize: function(d) {
+                    var big = 'xxx';
+                    for (var i = 0; i < 21; i++) big += big;
+                    try {
+                        d.load({small: 'changed', get three() {
+                            d.load({one: big, two: big});
+                            return big;
+                        }});
+                    } catch (e) {
+                        rejected = String(e).indexOf('dialog value exceeds its limit') !== -1;
+                    }
+                    if (rejected) kept = d.store();
+                    d.end('cancel');
+                },
+                description: {elements: ['one', 'two', 'three', 'small'].map(function(id) {
+                    return {type: 'edit_text', item_id: id};
+                })}
+            });
+            rejected ? kept.one.length + ':' + kept.two.length + ':' + kept.three + ':' + kept.small : 'accepted'
+        "#;
         let out = ScriptSession::default().run(job(script), &[]);
         assert_eq!(out.error, None);
         assert_eq!(out.result.as_deref(), Some("6291456:6291456::"));
