@@ -195,6 +195,30 @@ fn click_tab(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, label: &s
     click_center(h, c, &tab["widgets"][0]);
 }
 
+/// Scrolls the open drop-down list with the mouse wheel until the option `label` is shown, as a
+/// user does: the list lays out only the rows in view, so an option further down has no widget yet.
+fn scroll_list_to(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    use egui::accesskit::Role;
+    for _ in 0..40 {
+        let shown = h.query_all_by_role_and_label(Role::ListBoxOption, label).next().map(|option| option.scroll_to_me()).is_some();
+        if shown {
+            h.run_steps(3);
+            return;
+        }
+        let list = h.query_all_by_role(Role::ListBox).next().expect("an open drop-down list").rect();
+        h.event(egui::Event::PointerMoved(list.center()));
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -60.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.run_steps(3);
+    }
+    panic!("{label} is not offered in the open drop-down list");
+}
+
 /// Presses `from`, moves through `steps` points to `to` and releases, the way `ui.drag` did: a
 /// click that holds, moves, then releases. `modifiers` are held for the whole gesture and `button`
 /// is `"left"`, `"secondary"` or `"middle"`.
@@ -1034,12 +1058,7 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
         let selector = ok(&mut h, &c, "ui.inspect", json!({ "query": current }));
         let combo = selector["widgets"].as_array().unwrap().iter().find(|w| w["role"] == "ComboBox").expect("language selector");
         click_center(&mut h, &c, combo);
-        // The list scrolls: bring the language into view before clicking it, as a user scrolls to it.
-        h.query_all_by_role_and_label(egui::accesskit::Role::ListBoxOption, next)
-            .next()
-            .unwrap_or_else(|| panic!("{next} is offered in the language list"))
-            .scroll_to_me();
-        h.run_steps(3);
+        scroll_list_to(&mut h, next);
         ok(&mut h, &c, "ui.click", json!({ "label": next }));
         assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], code);
     }
