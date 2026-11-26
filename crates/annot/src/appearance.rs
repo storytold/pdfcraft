@@ -10,23 +10,24 @@
 //!
 //! The note icons are PdfCraft's own drawings (clean-room.md and licences.md). Text boxes use a standard text
 //! font with WinAnsi encoding: Helvetica, or the face their `/DA` or `/DS` asks for
-//! ([`crate::text_style`]), and draw Thai from the craft-fonts Thai face as Type 3 glyphs
-//! (`pdfcraft_fonts::shaped_text`, the writer Add text uses); lines break at that face's
-//! standard-14 widths and the Thai face's shaped advances (no other font program is bundled).
+//! ([`crate::text_style`]), and draw Thai from the craft-fonts Thai face, and the Latin, Greek and
+//! Cyrillic letters WinAnsi lacks (`ş`, `ř`, `Γ`) from the bundled Inter face, as Type 3 glyphs
+//! (`pdfcraft_fonts::shaped_text`, the writer Add text and form fields use); lines break at that
+//! face's standard-14 widths and those faces' shaped advances (no font program is embedded).
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::shaped_text;
 use pdfcraft_fonts::{first_undrawable, literal, win_ansi, wrap_with};
 
 /// The width of `text` at `size` as appearances draw it: Helvetica, with Thai shaped in the Thai
-/// face that text boxes draw it with.
+/// face and the letters WinAnsi lacks in the bundled Inter face, as text boxes draw them.
 pub fn text_width(text: &str, size: f64) -> f64 {
     text_width_in(pdfcraft_fonts::Std14::Helvetica, text, size)
 }
 
 /// [`text_width`] in the standard `face` a text box draws its other text in.
 pub fn text_width_in(face: pdfcraft_fonts::Std14, text: &str, size: f64) -> f64 {
-    shaped_text::thai_width(text, size, |s, size| face.text_width(s, size))
+    shaped_text::fallback_width(text, size, true, true, |s, size| face.text_width(s, size))
 }
 
 /// `text` wrapped `width` wide as [`text_width`] measures it; a Thai mark stays on its letter.
@@ -544,14 +545,14 @@ pub(crate) fn inset(d: &Dict) -> Option<[f64; 4]> {
 /// The first text [`build`] would draw in the standard fonts (Helvetica, WinAnsiEncoding) that
 /// they can't, which would come out as `?`: what it is (for the message) and the character. The
 /// text of a text box, callout or Fill & Sign text (whose Thai the Thai face draws, where this
-/// build has one), a line's caption, a measurement's label, a
-/// dynamic stamp's "By …" line, and a redaction mark's overlay text (drawn when it is applied). `None` when all of
+/// build has one, and whose other Latin, Greek and Cyrillic the bundled Inter face draws), a
+/// line's caption, a measurement's label, a dynamic stamp's "By …" line, and a redaction mark's overlay text (drawn when it is applied). `None` when all of
 /// it can be drawn.
 pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     let text = |key: &[u8]| d.get(key).and_then(Object::as_string).map(PdfString::to_text);
     let (what, text) = match d.name(b"Subtype")? {
-        // A text box draws Thai too.
-        b"FreeText" => return Some(("the comment's text", shaped_text::first_undrawable(&text(b"Contents")?)?)),
+        // A text box draws Thai, and the Latin, Greek and Cyrillic WinAnsi lacks, too.
+        b"FreeText" => return Some(("the comment's text", shaped_text::fallback_first_undrawable(&text(b"Contents")?)?)),
         b"Line" if !d.contains(b"PCMeasureValue") => ("the line's caption", line_caption(d)?),
         b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?),
         b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) || d.contains(b"PCPicture") => {
@@ -1567,11 +1568,12 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     if round {
         y -= ((rect[3] - rect[1] - 2.0 * pad - text_lines_height(&lines, size)) / 2.0).max(0.0);
     }
-    // Thai is shaped and drawn from the Thai face (Type 3 fonts in the form's resources, whose
-    // streams `apply_appearance` stores in the document); the rest, and Thai it can't draw (as
-    // `?`, which `undrawable_text` reports), in the box's standard face.
+    // Thai is shaped and drawn from the Thai face, and the Latin, Greek and Cyrillic letters
+    // WinAnsi lacks (Turkish `ş`, #8258) from the bundled Inter face (Type 3 fonts in the form's
+    // resources, whose streams `apply_appearance` stores in the document); the rest, and what
+    // neither face can draw (as `?`, which `undrawable_text` reports), in the box's standard face.
     let mut fonts = font_resources(face);
-    let (pieces, shaped) = shaped_text::appearance_lines(&lines, &mut fonts);
+    let (pieces, shaped) = shaped_text::fallback_appearance_lines(&lines, true, true, &mut fonts);
     let mut current = None;
     for pieces in &pieces {
         if y < rect[1] - size {

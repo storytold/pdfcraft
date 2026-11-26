@@ -5526,6 +5526,45 @@ fn thai_in_fill_sign_text_and_text_boxes_is_drawn_from_the_thai_face() {
     assert!(ys[0] + hi * 24.0 <= r[3] + 1e-3 && ys[ys.len() - 1] + lo * 24.0 >= r[1] - 1e-3, "{ys:?} in {r:?}");
 }
 
+/// #8258: Turkish letters WinAnsiEncoding lacks (Ş ş Ğ ğ İ ı) typed into Fill & Sign text are
+/// drawn from the bundled Inter face, which every build has, as form fields draw them: Type 3
+/// glyphs that copy as typed, never `?`. The letters WinAnsi holds stay in the standard font.
+#[test]
+fn turkish_in_fill_sign_text_is_drawn_from_the_bundled_face() {
+    let mut doc = fixture();
+    let turkish = "Şişli Ğ İı";
+    let shape = Shape::Typewriter { rect: [100.0, 700.0, 300.0, 716.0], font_size: 12.0 };
+    let item = NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: turkish.into(), author: "Ada".into() };
+    let t = add_annotation(&mut doc, &item, &meta("t")).unwrap();
+    let doc = reopen(&doc);
+    let d = &list(&doc, 0)[t];
+    assert_eq!((text(d, b"Contents").as_str(), pdfcraft_fonts::undrawn_mark(d)), (turkish, None));
+    let content = ap_content(&doc, d);
+    assert!(!content.contains('?'), "{content}");
+    assert!(content.contains("(i"), "the letters WinAnsi holds stay in the standard font: {content}");
+    let n = d.get(b"AP").and_then(|a| a.as_dict()).and_then(|a| a.reference(b"N")).unwrap();
+    let ap = doc.get(n);
+    let fonts = ap
+        .as_dict()
+        .and_then(|s| s.get(b"Resources"))
+        .and_then(|r| r.as_dict())
+        .and_then(|r| r.get(b"Font"))
+        .and_then(|f| f.as_dict())
+        .unwrap()
+        .clone();
+    let cmaps: String = fonts
+        .iter()
+        .filter_map(|(_, f)| f.as_dict().filter(|f| f.name(b"Subtype") == Some(&b"Type3"[..]))?.reference(b"ToUnicode"))
+        .map(|r| match &*doc.get(r) {
+            Object::Stream(s) => String::from_utf8_lossy(&s.decoded().unwrap()).into_owned(),
+            _ => panic!("ToUnicode is a stream object"),
+        })
+        .collect();
+    for c in ["015E", "015F", "011E", "0130", "0131"] {
+        assert!(cmaps.contains(c), "U+{c} copies as typed: {cmaps}");
+    }
+}
+
 const QUAD: [f64; 8] = [20.0, 110.0, 40.0, 110.0, 20.0, 95.0, 40.0, 95.0];
 
 fn reals(v: &[f64]) -> Vec<Object> {

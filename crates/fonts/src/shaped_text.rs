@@ -383,6 +383,16 @@ pub fn first_undrawable_in_line(line: &str) -> Option<char> {
     line.chars().find(|c| if is_thai(*c) { thai_fails } else { !crate::win_ansi_encodable(*c) })
 }
 
+/// [`first_undrawable`] for an appearance that also draws the Latin, Greek and Cyrillic characters
+/// the standard fonts lack from the bundled Inter face ([`latin_fallback`];
+/// [`fallback_appearance_lines`] with `thai` and `latin`): those aren't `?` either.
+pub fn fallback_first_undrawable(s: &str) -> Option<char> {
+    s.split(['\n', '\r']).find_map(|line| {
+        let thai_fails = line.chars().any(is_thai) && thai_pieces(line).is_err();
+        line.chars().find(|c| if is_thai(*c) { thai_fails } else { !crate::win_ansi_encodable(*c) && !latin_fallback(*c) })
+    })
+}
+
 /// Why the Thai in `text` can't be drawn ([`thai_message`]): this build has no Thai face, or the
 /// face lacks a character. For tools that refuse such text rather than write `?`; `None` when all
 /// of its Thai draws, or it has none.
