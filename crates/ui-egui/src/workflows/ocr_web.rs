@@ -56,8 +56,8 @@ pub fn state() -> State {
     STATE.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// Download and load the models unless that is already happening; repaint when it's done.
-pub fn start(ctx: egui::Context) {
+/// Download and load the models unless that is already happening; `wake` asks for a frame when it's done.
+pub fn start(wake: craft::host::Wake) {
     {
         let mut s = STATE.lock().unwrap_or_else(|e| e.into_inner());
         if *s == State::Loading {
@@ -75,7 +75,7 @@ pub fn start(ctx: egui::Context) {
             Err(e) => State::Failed(e),
         };
         *STATE.lock().unwrap_or_else(|e| e.into_inner()) = next;
-        ctx.request_repaint();
+        wake.wake();
     });
 }
 
@@ -446,6 +446,8 @@ fn place(shot: &OcrShot, lines: Result<Vec<Line>, String>) -> OcrPage {
 pub struct Batch {
     files: VecDeque<(String, Vec<u8>)>,
     settings: OcrSettings,
+    /// The app session's JavaScript preference, for each file's own session.
+    javascript: bool,
     current: Option<(String, Box<FileJob>, Pages)>,
     total: usize,
     pub ok: usize,
@@ -459,11 +461,12 @@ pub struct Batch {
 }
 
 impl Batch {
-    pub fn new(files: Vec<(String, Vec<u8>)>, settings: OcrSettings) -> Batch {
+    pub fn new(files: Vec<(String, Vec<u8>)>, settings: OcrSettings, javascript: bool) -> Batch {
         let total = files.len();
         Batch {
             files: files.into(),
             settings,
+            javascript,
             current: None,
             total,
             ok: 0,
@@ -482,14 +485,14 @@ impl Batch {
 
     /// Advance; `true` once every file is done. A cancel is honoured between files: the file
     /// in flight finishes, the rest are counted as not run.
-    pub fn pump(&mut self, cancel: bool, ctx: &egui::Context) -> bool {
+    pub fn pump(&mut self, cancel: bool, files: &dyn craft::host::Files, ctx: &egui::Context) -> bool {
         let Some((name, _, pages)) = self.current.as_mut() else {
             if cancel && !self.files.is_empty() {
                 self.not_run = Some(self.files.len());
                 self.files.clear();
             }
             let Some((name, bytes)) = self.files.pop_front() else { return true };
-            match FileJob::open(&name, Arc::new(bytes), None, self.settings.clone()) {
+            match FileJob::open(&name, Arc::new(bytes), None, self.settings.clone(), self.javascript) {
                 Ok(Opened::Skipped(_)) => self.skipped += 1,
                 Ok(Opened::Read(mut file)) => match file.job.take() {
                     Some(job) => self.current = Some((name, file, Pages::new(job.steps()))),
@@ -503,7 +506,7 @@ impl Batch {
         let name = std::mem::take(name);
         let Some((_, file, _)) = self.current.take() else { return false };
         let saved = file.finish(found).and_then(|r| {
-            crate::editing::download(&name, &r.bytes)?;
+            files.write(std::path::Path::new(&name), &r.bytes, craft::host::WriteIntent::SaveAs).map_err(|e| e.to_string())?;
             Ok(r)
         });
         match saved {

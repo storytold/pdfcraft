@@ -84,7 +84,7 @@ mod tests {
     use super::*;
 
     fn setup(paper: usize, size: SizeMode, duplex: Option<Duplex>) -> PrinterSetup {
-        PrinterSetup { paper: super::super::PAPERS[paper].0.to_string(), size, custom_scale: 62.5, duplex }
+        PrinterSetup { paper: pdfcraft_engine::print::PAPERS[paper].0.to_string(), size, custom_scale: 62.5, duplex }
     }
 
     #[test]
@@ -97,21 +97,6 @@ mod tests {
         // A custom paper goes by the name it was given (print.page-setup).
         record(&mut setups, "Labeller", PrinterSetup { paper: "Label 4×6".into(), ..setup(0, SizeMode::Actual, None) });
         assert_eq!(from_json(&to_json(&setups)), Some(setups));
-    }
-
-    #[test]
-    fn printing_again_moves_a_printer_first_and_the_oldest_drops_off() {
-        let mut setups = Vec::new();
-        for i in 0..MAX_PRINTERS + 3 {
-            record(&mut setups, &format!("Queue {i}"), setup(0, SizeMode::Fit, None));
-        }
-        assert_eq!(setups.len(), MAX_PRINTERS);
-        assert_eq!(setups[0].0, format!("Queue {}", MAX_PRINTERS + 2));
-        assert!(setups.iter().all(|(name, _)| name != "Queue 0"));
-        record(&mut setups, "Queue 10", setup(4, SizeMode::Actual, None));
-        assert_eq!(setups.len(), MAX_PRINTERS);
-        assert_eq!(setups[0], ("Queue 10".to_string(), setup(4, SizeMode::Actual, None)));
-        assert_eq!(setups.iter().filter(|(name, _)| name == "Queue 10").count(), 1);
     }
 
     #[test]

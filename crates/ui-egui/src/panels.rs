@@ -1,20 +1,19 @@
 //! Left tool panel (All tools + tool sub-panels, generated from the engine catalogue) and the
 //! right-hand panels (Comments, Bookmarks, Pages, Fields, Layers, Attachments).
 
-use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::catalog::{self, Availability, TOOL_GROUPS, ToolGroup, ToolItem};
-use pdfcraft_render::{DocInfo, FieldKind, OutlineItem};
 
-use crate::theme::{self, Tokens};
-use crate::{LeftPanel, PdfCraftApp, RightPanel, icons, widgets};
+use crate::{LeftPanel, PdfCraftApp, RightPanel};
 
 pub(super) mod all_tools_ui;
-mod bookmarks;
+mod attachments;
+pub(crate) mod bookmarks;
 pub(super) mod comments_panel;
 mod edit;
+mod fields;
 pub(super) mod format_text_ui;
+mod layers;
 pub(super) mod organize_panel;
-pub(super) mod page_selection_ui;
 mod pages;
 mod right;
 pub(super) mod search_ui;
@@ -22,10 +21,7 @@ pub mod side_panels;
 mod tools;
 
 pub use bookmarks::BmAction;
-pub(crate) use bookmarks::ellipsized_prefix;
-pub use right::right_panel;
 pub use tools::left_panel;
-pub(crate) use tools::panel_header;
 
 // ───────────────────────────────────────────────────────────────────────────── right panels
 
@@ -36,6 +32,16 @@ pub(crate) enum Nav {
     /// A bookmark's action that goes nowhere in this document, run as a link's is.
     Action(pdfcraft_render::LinkTarget),
     Flash(usize, [f32; 4]),
+}
+
+/// A panel's empty state: a centred notice with the panel's icon and `text`. Every empty-panel message
+/// goes through here.
+pub(crate) fn empty_state(ui: &mut egui::Ui, icon: &'static str, text: &str) {
+    use craft::ui::contract::Show as _;
+    craft::ui::notices::Notice::new(craft::theme::variant::Tone::Neutral, text.to_string())
+        .layout(craft::ui::notices::NoticeLayout::Centred)
+        .icon(craft::ui::notices::NoticeIcon::Custom(craft::ui::primitives::IconSpec::svg(craft::behavior::IconId::new(icon))))
+        .show(ui);
 }
 
 pub fn human_size(n: usize) -> String {

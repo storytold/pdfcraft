@@ -63,13 +63,13 @@ pub fn is_paper_name(name: &str) -> bool {
 impl PrintDraft {
     /// The paper list: the standard sizes, then the custom ones.
     pub fn paper_count(&self) -> usize {
-        PAPERS.len() + self.custom_papers.len()
+        self.papers.len() + self.custom_papers.len()
     }
 
     /// The chosen paper's size (points, portrait).
     pub fn paper_size(&self) -> (f64, f64) {
-        match self.paper.checked_sub(PAPERS.len()) {
-            None => PAPERS[self.paper.min(PAPERS.len() - 1)].1,
+        match self.paper.checked_sub(self.papers.len()) {
+            None => self.papers.get(self.paper).map_or(PAPERS[0].1, |p| p.1),
             Some(c) => self.custom_papers.get(c).map_or(PAPERS[0].1, |p| (p.width, p.height)),
         }
     }
@@ -81,20 +81,23 @@ impl PrintDraft {
 
     /// The name of the paper at `index` in the list; the first size's for a stale index.
     pub fn paper_name_at(&self, index: usize) -> String {
-        match index.checked_sub(PAPERS.len()) {
-            None => PAPERS[index.min(PAPERS.len() - 1)].0.to_string(),
+        match index.checked_sub(self.papers.len()) {
+            None => self.papers.get(index).map_or_else(|| PAPERS[0].0.to_string(), |p| p.0.clone()),
             Some(c) => self.custom_papers.get(c).map_or_else(|| PAPERS[0].0.to_string(), |p| p.name.clone()),
         }
     }
 
     /// The index of the paper called `name`, standard or custom.
     pub fn paper_index(&self, name: &str) -> Option<usize> {
-        PAPERS.iter().position(|(n, _)| *n == name).or_else(|| self.custom_papers.iter().position(|p| p.name == name).map(|i| PAPERS.len() + i))
+        self.papers
+            .iter()
+            .position(|(n, _)| *n == name)
+            .or_else(|| self.custom_papers.iter().position(|p| p.name == name).map(|i| self.papers.len() + i))
     }
 
     /// True when the chosen paper is a custom one (which can be removed).
     pub fn paper_is_custom(&self) -> bool {
-        self.paper >= PAPERS.len()
+        self.paper >= self.papers.len()
     }
 
     /// Add (or replace, by name) a custom paper and choose it.
@@ -104,12 +107,14 @@ impl PrintDraft {
             self.custom_papers.remove(0);
         }
         self.custom_papers.push(paper);
-        self.paper = PAPERS.len() + self.custom_papers.len() - 1;
+        // Add is an explicit choice too: an outstanding driver read must not replace it.
+        self.paper_overridden = true;
+        self.paper = self.papers.len() + self.custom_papers.len() - 1;
     }
 
     /// Take the chosen custom paper off the list; the dialog goes back to the first size.
     pub fn remove_custom_paper(&mut self) {
-        if let Some(i) = self.paper.checked_sub(PAPERS.len())
+        if let Some(i) = self.paper.checked_sub(self.papers.len())
             && i < self.custom_papers.len()
         {
             self.custom_papers.remove(i);

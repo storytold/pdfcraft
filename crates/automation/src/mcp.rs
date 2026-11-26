@@ -14,15 +14,16 @@
 use std::io::{BufRead, Write};
 
 use base64::Engine as _;
+use craft_jsonrpc::{RpcError, error_response, process_legacy};
+use craft_mcp_server::{Incoming, read_message};
 use serde_json::{Value, json};
 
 use crate::{Automation, Content, ToolError};
 
 /// Protocol revisions we speak, newest first.
-pub const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+pub use craft_mcp_server::SUPPORTED_VERSIONS as PROTOCOL_VERSIONS;
 
 const PARSE_ERROR: i64 = -32700;
-const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 const INTERNAL_ERROR: i64 = -32603;
@@ -88,61 +89,43 @@ impl McpServer {
 
     /// Serve until `input` reaches end of file.
     pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
-        let mut buf = Vec::new();
-        loop {
-            match read_line_limited(&mut input, &mut buf, MAX_LINE_BYTES)? {
-                LineRead::End => return Ok(()),
-                LineRead::TooLong => {
-                    drain_line(&mut input)?;
-                    buf.clear();
-                    buf.shrink_to(64 * 1024);
-                    let reply = error(Value::Null, INVALID_REQUEST, &format!("request line exceeds {MAX_LINE_BYTES} bytes"));
-                    writeln!(output, "{reply}")?;
-                    output.flush()?;
-                    continue;
-                }
-                LineRead::Line => {}
-            }
-            let reply = match std::str::from_utf8(&buf) {
-                Ok(line) if line.trim().is_empty() => None,
-                Ok(line) => self.handle_line(line),
-                Err(e) => Some(error(Value::Null, PARSE_ERROR, &format!("parse error: {e}")).to_string()),
+        while let Some(incoming) = read_message(&mut input, MAX_LINE_BYTES)? {
+            let reply = match incoming {
+                Incoming::Line(line) => self.handle_line(&line),
+                Incoming::Refused(reply) => Some(reply),
             };
-            if buf.capacity() > 64 * 1024 {
-                buf.clear();
-                buf.shrink_to(64 * 1024);
-            }
             if let Some(reply) = reply {
-                writeln!(output, "{reply}")?;
+                output.write_all(reply.as_bytes())?;
+                output.write_all(b"\n")?;
                 output.flush()?;
             }
         }
+        Ok(())
     }
 
     /// Handle one JSON-RPC message; returns the serialized reply, if one is due.
     pub fn handle_line(&mut self, line: &str) -> Option<String> {
+        let line = line.trim();
+        if line.is_empty() {
+            return None;
+        }
         let reply = match serde_json::from_str::<Value>(line) {
             Ok(msg) => self.handle(&msg),
-            Err(e) => Some(error(Value::Null, PARSE_ERROR, &format!("parse error: {e}"))),
+            Err(e) => Some(error_response(Value::Null, RpcError::new(PARSE_ERROR, format!("parse error: {e}")))),
         };
         reply.map(|r| r.to_string())
     }
 
     /// Handle one parsed message. Notifications (no `id`) get no reply.
     pub fn handle(&mut self, msg: &Value) -> Option<Value> {
-        let Some(obj) = msg.as_object() else { return Some(error(Value::Null, INVALID_REQUEST, "expected a JSON-RPC request object")) };
-        let id = obj.get("id").cloned();
-        let Some(method) = obj.get("method").and_then(Value::as_str) else {
-            // A response to something we sent (we send no requests) or garbage.
-            return id.map(|id| error(id, INVALID_REQUEST, "missing method"));
-        };
-        let params = obj.get("params").cloned().unwrap_or(Value::Null);
-        let id = id?; // notifications/initialized, notifications/cancelled, …: nothing to answer
-        let result = guarded_dispatch(method, || self.dispatch(method, &params));
-        Some(match result {
-            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-            Err((code, message)) => error(id, code, &message),
-        })
+        process_legacy(
+            msg,
+            |req| {
+                let params = req.params.cloned().unwrap_or(Value::Null);
+                guarded_dispatch(req.method, || self.dispatch(req.method, &params)).map_err(|(code, message)| RpcError::new(code, message))
+            },
+            |_| {},
+        )
     }
 
     fn dispatch(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
@@ -345,53 +328,6 @@ fn unwrap_tool_call(args: &Value) -> Result<(String, Value), String> {
     Ok((name.to_owned(), inner))
 }
 
-/// What [`read_line_limited`] found.
-#[derive(Debug, PartialEq, Eq)]
-enum LineRead {
-    /// A line, now in the buffer (newline and a trailing `\r` stripped).
-    Line,
-    /// End of stream.
-    End,
-    /// The line is longer than the limit; at most `max + 1` bytes of it were read.
-    TooLong,
-}
-
-/// Read one `\n`-terminated line of at most `max` bytes into `buf`.
-fn read_line_limited(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -> std::io::Result<LineRead> {
-    use std::io::Read as _;
-    buf.clear();
-    // `take` bounds what is buffered for one line: never more than `max + 1` bytes.
-    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
-    if reader.take(limit).read_until(b'\n', buf)? == 0 {
-        return Ok(LineRead::End);
-    }
-    if buf.last() == Some(&b'\n') {
-        buf.pop();
-        if buf.last() == Some(&b'\r') {
-            buf.pop();
-        }
-        return Ok(LineRead::Line);
-    }
-    // No newline: either the limit was passed, or this is a last line before end of stream.
-    Ok(if buf.len() > max { LineRead::TooLong } else { LineRead::Line })
-}
-
-/// Discard the rest of an overlong line up to `\n` or end of stream without buffering it.
-fn drain_line(reader: &mut impl BufRead) -> std::io::Result<()> {
-    loop {
-        let chunk = reader.fill_buf()?;
-        if chunk.is_empty() {
-            return Ok(());
-        }
-        if let Some(pos) = chunk.iter().position(|&b| b == b'\n') {
-            reader.consume(pos + 1);
-            return Ok(());
-        }
-        let len = chunk.len();
-        reader.consume(len);
-    }
-}
-
 /// Last-resort boundary shared by every tools/call route, including compact dispatch.
 fn guarded_tool(f: impl FnOnce() -> Result<Value, (i64, String)>) -> Result<Value, (i64, String)> {
     pdfcraft_engine::guard(f).unwrap_or_else(|message| Ok(tool_error(&format!("internal error: {message}"))))
@@ -547,10 +483,6 @@ impl McpServer {
     }
 }
 
-fn error(id: Value, code: i64, message: &str) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
-}
-
 fn tool_json(t: &crate::ToolDef) -> Value {
     json!({
         "name": t.name,
@@ -615,27 +547,6 @@ mod tests {
     }
 
     #[test]
-    fn read_line_limited_and_drain_line_respect_boundaries() {
-        use super::{LineRead, drain_line, read_line_limited};
-        let mut buf = Vec::new();
-        let mut input: &[u8] = b"aaaaaaaaaa\nbb\r\ncc";
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
-        assert_eq!(buf, b"aaaaaaaaaa", "a line exactly at the limit is accepted");
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
-        assert_eq!(buf, b"bb", "CRLF is stripped");
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
-        assert_eq!(buf, b"cc", "a last line without a newline is still read");
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::End);
-
-        let mut overlong: &[u8] = b"0123456789abcdef\nafter\n";
-        assert_eq!(read_line_limited(&mut overlong, &mut buf, 10).unwrap(), LineRead::TooLong);
-        assert_eq!(buf.len(), 11, "at most max + 1 bytes are buffered");
-        drain_line(&mut overlong).unwrap();
-        assert_eq!(read_line_limited(&mut overlong, &mut buf, 10).unwrap(), LineRead::Line);
-        assert_eq!(buf, b"after", "the next line after an overlong line is read cleanly");
-    }
-
-    #[test]
     fn serve_answers_non_utf8_and_overlong_lines_and_keeps_serving() {
         let init = json!({
             "jsonrpc": "2.0",
@@ -675,5 +586,71 @@ mod tests {
         assert_eq!(parse_uri("pdfcraft://doc/3/page/2/text"), Some(Resource::PageText(3, 2)));
         assert_eq!(parse_uri("pdfcraft://doc/x/info"), None);
         assert_eq!(parse_uri("file:///etc/passwd"), None);
+    }
+
+    #[test]
+    fn stdio_initialize_negotiation_transcript() {
+        let mut lines: Vec<Value> = super::PROTOCOL_VERSIONS
+            .iter()
+            .enumerate()
+            .map(|(i, version)| {
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": i + 1,
+                    "method": "initialize",
+                    "params": {"protocolVersion": version, "capabilities": {}, "clientInfo": {"name": "parity-client", "version": "1.0"}},
+                })
+            })
+            .collect();
+        lines.push(json!({
+            "jsonrpc": "2.0",
+            "id": 99,
+            "method": "initialize",
+            "params": {"protocolVersion": "1999-01-01", "capabilities": {}, "clientInfo": {"name": "parity-client", "version": "1.0"}},
+        }));
+        lines.push(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+        lines.push(json!({"jsonrpc": "2.0", "id": 100, "method": "ping", "params": {}}));
+        let input: String = lines.iter().map(|v| v.to_string() + "\n").collect();
+
+        let mut out = Vec::new();
+        McpServer::new(Automation::new()).serve(BufReader::new(input.as_bytes()), &mut out).unwrap();
+
+        let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(replies.len(), super::PROTOCOL_VERSIONS.len() + 2);
+        for (i, version) in super::PROTOCOL_VERSIONS.iter().enumerate() {
+            assert_eq!(replies[i]["id"], i + 1);
+            assert_eq!(replies[i]["result"]["protocolVersion"], *version);
+            assert_eq!(replies[i]["result"]["serverInfo"]["name"], "pdfcraft");
+        }
+        let fallback = &replies[super::PROTOCOL_VERSIONS.len()];
+        assert_eq!(fallback["id"], 99);
+        assert_eq!(fallback["result"]["protocolVersion"], super::PROTOCOL_VERSIONS[0]);
+        let ping = &replies[super::PROTOCOL_VERSIONS.len() + 1];
+        assert_eq!(ping["id"], 100);
+        assert_eq!(ping["result"], json!({}));
+    }
+
+    #[test]
+    fn stdio_cancel_and_batch_transcript() {
+        let input = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":1,\"reason\":\"client\"}}\n",
+            "[]\n",
+            "[{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":9}}]\n",
+            "[{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"},{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}]\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\",\"params\":{}}\n"
+        );
+        let mut out = Vec::new();
+        McpServer::new(Automation::new()).serve(BufReader::new(input.as_bytes()), &mut out).unwrap();
+
+        let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(replies.len(), 4, "{replies:?}");
+        assert_eq!(replies[0]["id"], 1);
+        assert_eq!(replies[0]["result"]["serverInfo"]["name"], "pdfcraft");
+        assert_eq!(replies[1]["id"], Value::Null);
+        assert_eq!(replies[1]["error"]["code"], -32600);
+        assert_eq!(replies[2], json!([{"jsonrpc": "2.0", "id": 2, "result": {}}]));
+        assert_eq!(replies[3], json!({"jsonrpc": "2.0", "id": 3, "result": {}}));
     }
 }
