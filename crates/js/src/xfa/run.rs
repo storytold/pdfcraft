@@ -181,6 +181,8 @@ pub(crate) fn run_here(
             icon_versions: Default::default(),
             // `getOCGs` is not an XFA event target member: no layers.
             layers: Vec::new(),
+            // Nor are page templates (`templates`).
+            templates: Vec::new(),
         },
         // `calculateNow()` belongs to the AcroForm document; an XFA form recalculates itself.
         // `resetForm` through the event target is the XFA reset (`reset_form` in xfa/globals),

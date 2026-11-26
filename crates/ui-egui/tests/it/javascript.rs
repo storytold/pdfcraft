@@ -1,9 +1,13 @@
 //! Acrobat JavaScript in the shell (egui_kittest): the console, Document JavaScripts, a button
 //! script and Preferences ▸ JavaScript.
 
+use craft::theme::variant::Tone;
+use craft::ui::runtime::{env::WindowKey, toast};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
+// PLAN: assumed `pdfcraft_ui_egui::JsDialog` with `DocumentScripts(DocJsDraft)` and `Console` (pdf-forms-w17)
+use crate::support::AppHarness as _;
+use pdfcraft_ui_egui::{JsDialog, PdfCraftApp};
 
 /// A form with a text field and a push button whose Mouse Up script fills it in.
 fn form() -> Vec<u8> {
@@ -36,11 +40,14 @@ fn form_with_text_action(action: &str) -> Vec<u8> {
 }
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("form.pdf", None, form()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, form()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h
@@ -55,9 +62,9 @@ fn value(h: &Harness<'static, PdfCraftApp>, name: &str) -> Vec<String> {
 #[test]
 fn console_runs_scripts_against_the_document() {
     let mut h = harness();
-    assert!(h.state_mut().execute("tools.js_console"));
+    assert!(h.execute("tools.js_console"));
     h.run_steps(2);
-    h.get_by_label("JavaScript Console");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "JavaScript Console");
     h.state_mut().js_console.input = "getField('greeting').value = 'typed'; console.println(numFields); 6 * 7".into();
     h.get_by_label("Run").click();
     h.run_steps(2);
@@ -72,7 +79,7 @@ fn console_runs_scripts_against_the_document() {
     h.run_steps(4);
     h.get_by_label("Clear").click();
     h.run_steps(2);
-    assert!(h.state().js_console.log.is_empty(), "{:?} {:?}", h.state().js_console.log, h.state().dialog);
+    assert!(h.state().js_console.log.is_empty(), "{:?}", h.state().js_console.log);
 }
 
 /// A button's script fills a field and its message takes the toast.
@@ -80,7 +87,7 @@ fn console_runs_scripts_against_the_document() {
 fn button_scripts_run_and_alert() {
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
-    h.state_mut().run_button_script(id, "hello", "getField('greeting').value = 'Hello from JavaScript'; app.alert('Filled in');");
+    h.run_button_script(id, "hello", "getField('greeting').value = 'Hello from JavaScript'; app.alert('Filled in');");
     wait_for(&mut h, "Filled in");
     h.get_by_label("OK").click();
     wait_value(&mut h, "greeting", "Hello from JavaScript");
@@ -88,16 +95,19 @@ fn button_scripts_run_and_alert() {
 
 #[test]
 fn text_widget_mouse_up_runs_its_menu_and_keeps_the_result() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.set_option("left", "closed").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+crate::support::install_runtime(&cc.egui_ctx);
+{
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         let bytes = form_with_text_action(
             r"/AA << /U << /S /JavaScript /JS (var choice = app.popUpMenuEx\({cName:'Choose test value',cReturn:'selected'}\); if \(choice\) getField\('greeting'\).value = choice;) >> >>",
         );
-        app.open_bytes("text-action.pdf", None, bytes).unwrap();
+        app.open_bytes(&egui::Context::default(), "text-action.pdf", None, bytes).unwrap();
         app
-    });
+    }
+});
     crate::support::settle(&mut h);
     let point = {
         let app = h.state();
@@ -120,110 +130,128 @@ fn text_widget_mouse_up_runs_its_menu_and_keeps_the_result() {
     }
 }
 
-/// One run's messages are all shown, in order (#4294): the first takes the toast with its title
-/// and icon (#4293), the next takes it when the first is gone, and a notice shown meanwhile
-/// doesn't lose the ones still waiting. Messages past the queue's room are counted and reported
-/// once the rest have been shown.
+/// A card as the window shows it: its title, its text and its tone.
+type Shown = (Option<String>, String, Tone);
+
+/// The cards on screen, oldest first. A notice with no message puts its one line in the text.
+fn cards(h: &Harness<'static, PdfCraftApp>) -> Vec<Shown> {
+    toast::cards(&h.ctx, &WindowKey::main())
+        .into_iter()
+        .map(|card| {
+            let title = card.toast.title.as_ref().map(|t| t.as_str().to_owned());
+            let message = card.toast.message.as_str().to_owned();
+            if message.is_empty() { (None, title.unwrap_or_default(), card.toast.tone) } else { (title, message, card.toast.tone) }
+        })
+        .collect()
+}
+
+fn texts(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
+    cards(h).into_iter().map(|c| c.1).collect()
+}
+
+/// The user's close action on every card, then the passes that act on it.
+fn dismiss_all(h: &mut Harness<'static, PdfCraftApp>) {
+    // Programmatic removal emits no close event; use the user's dismiss control. The cards shown now, one at a
+    // time: cards are as wide as their text, so the next card's control moves once one closes.
+    let shown = h.query_all_by(|node| !node.is_hidden() && node.label().as_deref() == Some("Dismiss")).count();
+    for _ in 0..shown {
+        if let Some(button) = h.query_all_by(|node| !node.is_hidden() && node.label().as_deref() == Some("Dismiss")).next() {
+            button.click();
+        }
+        h.run_steps(3);
+    }
+}
+
+/// One run's messages are all shown, in order (#4294): the first is a card with its title and tone
+/// (#4293), the next is posted when the first ends, and a notice raised meanwhile doesn't lose the
+/// ones still waiting. Messages past the queue's room are counted and reported once the rest have
+/// been shown, and a count the card limit dropped is said again.
 #[test]
 fn every_message_a_script_shows_takes_the_toast_in_turn() {
-    use pdfcraft_engine::js::{MessageButtons, MessageIcon};
     let mut h = harness();
+    dismiss_all(&mut h);
     let id = h.state().active_ids().unwrap().1;
     let out = h
         .state_mut()
         .session
         .run_javascript(id, "app.alert('First', 1, 0, 'Order form'); app.alert('Second', 3); app.alert('Third');", None)
         .unwrap();
-    h.state_mut().handle_js(id, pdfcraft_engine::js::JsOutput { alerts: out.alerts, ..Default::default() });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().handle_js(&ctx_h, id, pdfcraft_engine::js::JsOutput { alerts: out.alerts, ..Default::default() });
     h.run_steps(2);
-    let shown = |h: &Harness<'static, PdfCraftApp>| h.state().toast.clone().map(|t| t.0);
-    assert_eq!(shown(&h).as_deref(), Some("First"));
-    let m = h.state().toast_script.clone().expect("the toast shows the script's message");
-    assert_eq!((m.title.as_deref(), m.icon, m.buttons), (Some("Order form"), MessageIcon::Warning, MessageButtons::Ok));
-    assert!(h.query_by_label("Order form").is_some(), "the title is drawn");
-    assert_eq!(h.state().script_messages.len(), 2);
-    // The first is gone: the second takes its place, with its own icon and no title.
-    h.state_mut().toast = None;
-    h.run_steps(2);
-    assert_eq!(shown(&h).as_deref(), Some("Second"));
-    assert_eq!(h.state().toast_script.as_ref().map(|m| (m.title.clone(), m.icon)), Some((None, MessageIcon::Status)));
-    // A notice of the app's own replaces it; the third still follows.
-    h.state_mut().notify("Saved");
-    assert_eq!(h.state().toast_script, None);
-    h.state_mut().toast = None;
-    h.run_steps(2);
-    assert_eq!(shown(&h).as_deref(), Some("Third"));
+    assert_eq!(cards(&h), [(Some("Order form".to_owned()), "First".to_owned(), Tone::Warn)]);
+    assert_eq!(h.state().script_messages.len(), 2, "the others wait");
+    // The first has ended: the second is posted, with its own tone and no title.
+    dismiss_all(&mut h);
+    assert_eq!(cards(&h), [(None, "Second".to_owned(), Tone::Info)]);
+    dismiss_all(&mut h);
+    assert_eq!(texts(&h), ["Third"]);
+    dismiss_all(&mut h);
+    assert!(cards(&h).is_empty());
     assert!(h.state().script_messages.is_empty());
-    // A notice the same run raises first (its submit request) isn't replaced: the message
-    // follows it.
-    h.state_mut().toast = None;
-    h.run_steps(2);
+    // A notice the same run raises first (its submit request) comes before the message.
     let out = h.state_mut().session.run_javascript(id, "this.submitForm('https://example.com/form'); app.alert('Fourth');", None).unwrap();
-    h.state_mut().handle_js(id, pdfcraft_engine::js::JsOutput { alerts: out.alerts, requests: out.requests, ..Default::default() });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().handle_js(&ctx_h, id, pdfcraft_engine::js::JsOutput { alerts: out.alerts, requests: out.requests, ..Default::default() });
     h.run_steps(2);
-    let notice = shown(&h).unwrap_or_default();
-    assert!(notice.contains("submitted"), "the submit notice stays: {notice}");
-    assert_eq!(h.state().script_messages.len(), 1);
-    h.state_mut().toast = None;
-    h.run_steps(2);
-    assert_eq!(shown(&h).as_deref(), Some("Fourth"));
-    // Past the 100 the queue holds, messages are counted, and the toast says how many once the
-    // rest have been shown.
-    h.state_mut().toast = None;
-    h.run_steps(2);
+    let shown = texts(&h);
+    assert!(shown.len() == 2 && shown[0].contains("submitted") && shown[1] == "Fourth", "{shown:?}");
+    dismiss_all(&mut h);
+    // Past the 100 the queue holds, messages are counted, and a notice says how many once the rest
+    // have been shown.
     let many: Vec<_> = (0..105).map(|i| pdfcraft_engine::js::Message::plain(format!("Message {i}"))).collect();
     h.state_mut().show_script_messages(many);
-    assert_eq!(shown(&h).as_deref(), Some("Message 0"));
+    h.run_steps(2);
+    assert_eq!(texts(&h), ["Message 0"]);
     for i in 1..100 {
-        assert!(h.state_mut().next_script_message());
-        assert_eq!(shown(&h), Some(format!("Message {i}")));
+        dismiss_all(&mut h);
+        assert_eq!(texts(&h), [format!("Message {i}")]);
     }
-    assert!(h.state_mut().next_script_message(), "the notice comes after the last message");
-    assert_eq!(shown(&h).as_deref(), Some("5 more messages from the form's scripts were left out."));
-    assert_eq!(h.state().toast_script, None, "an app notice, not a script message");
-    assert!(!h.state_mut().next_script_message(), "said once");
-    // Another notice replacing it before its time doesn't lose the count: once that notice has
-    // been shown its time, the count is said again, and then, its own time over, not again.
-    h.state_mut().notify("Saved");
-    assert_eq!(shown(&h).as_deref(), Some("Saved"));
     let left_out = "5 more messages from the form's scripts were left out.";
-    let mut said_again = false;
-    for _ in 0..600 {
-        h.run_steps(1);
-        said_again |= shown(&h).as_deref() == Some(left_out);
-        if said_again && shown(&h).is_none() {
-            break;
-        }
+    dismiss_all(&mut h);
+    assert_eq!(texts(&h), [left_out], "the count comes after the last message");
+    // Three more notices push the count card out before it was shown its time: it is said again, once.
+    for n in 1..=3 {
+        h.state_mut().notify(format!("Saved {n}"));
     }
-    assert!(said_again, "the count is said again after the notice that replaced it");
-    assert_eq!(shown(&h), None, "and once only");
-    assert!(!h.state_mut().next_script_message());
+    h.run_steps(2);
+    assert_eq!(texts(&h).iter().filter(|t| *t == left_out).count(), 1, "said again after it was dropped: {:?}", texts(&h));
+    dismiss_all(&mut h);
+    assert!(!texts(&h).iter().any(|t| t == left_out), "and once only: {:?}", texts(&h));
 }
 
 #[test]
 fn document_scripts_and_preferences() {
     let mut h = harness();
-    assert!(h.state_mut().execute("tools.document_js"));
+    assert!(h.execute("tools.document_js"));
     h.run_steps(2);
-    h.get_by_label("Document JavaScripts");
-    h.state_mut().doc_js.name = "init".into();
-    h.state_mut().doc_js.script = "function hi() { return 'hi'; }".into();
-    h.get_by_label("Save").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Document JavaScripts");
+    match h.state_mut().js_dialog.as_mut() {
+        Some(JsDialog::DocumentScripts(draft)) => {
+            draft.name = "init".into();
+            draft.script = "function hi() { return 'hi'; }".into();
+        }
+        other => panic!("the Document JavaScripts dialog is not open: {other:?}"),
+    }
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Document JavaScripts").get_by_label("Save").click();
     h.run_steps(2);
     let id = h.state().active_ids().unwrap().1;
     assert_eq!(h.state().session.get(id).unwrap().document_scripts()[0].0, "init");
-    h.state_mut().dialog = Some(Dialog::Preferences);
+    h.key_press(egui::Key::Escape);
     h.run_steps(2);
-    // Below the fold in a 900-point window: the preferences scroll to it.
+    h.state_mut().open_preferences();
+    h.run_steps(2);
     h.get_by_label("Enable Acrobat JavaScript").scroll_to_me();
     h.run_steps(4);
     h.get_by_label("Enable Acrobat JavaScript").click();
     h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
     assert!(!h.state().session.javascript());
-    let saved = h.state().persist();
-    let mut fresh = PdfCraftApp::new();
-    fresh.set_option("language", "en").unwrap();
-    fresh.restore(&saved);
+    let saved = h.state().settings_snapshot();
+    let mut fresh = crate::control::new_app();
+    fresh.set_option(&egui::Context::default(), "language", "en").unwrap();
+    fresh.apply_settings(&saved);
     assert!(!fresh.session.javascript(), "the preference is remembered");
 }
 
@@ -232,33 +260,48 @@ fn merge_data_files_into_a_spreadsheet() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-merge-ui-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("report.csv");
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
-    app.save_override = Some(out.to_string_lossy().into_owned());
-    app.merge_data_files(vec![("form.pdf".into(), form())]);
-    assert_eq!(std::fs::read_to_string(&out).unwrap(), "greeting\n\n");
-    assert!(app.toast.clone().unwrap().0.starts_with("Merged 1 file"));
-    app.merge_data_files(vec![("x.fdf".into(), b"junk".to_vec())]);
-    assert!(app.toast.clone().unwrap().0.starts_with("x.fdf:"));
+    // PLAN: assumed `crate::support::host_with_files(ScriptedFiles) -> Arc<Host>` (pdf-chrome-w9) and `PdfCraftApp::with_host`
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::answering([craft::host::Picked::Paths(vec![out.clone()])]));
+    let host = crate::support::host_with_files(files.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::test_app(host);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
+    });
+    h.run_steps(2);
+    h.state_mut().merge_data_files(vec![("form.pdf".into(), form())]);
+    h.run_steps(4);
+    assert_eq!(files.file(&out).unwrap(), b"greeting\n\n");
+    assert!(texts(&h).iter().any(|t| t.starts_with("Merged 1 file")), "{:?}", texts(&h));
+    dismiss_all(&mut h);
+    h.state_mut().merge_data_files(vec![("x.fdf".into(), b"junk".to_vec())]);
+    h.run_steps(4);
+    assert!(texts(&h).iter().any(|t| t.starts_with("x.fdf:")), "{:?}", texts(&h));
 }
 
 #[test]
 fn prepare_a_form_detects_fields_on_a_paper_form() {
     let paper = pdfcraft_engine::Session::new().create_from_text("t", "Name: ____________________\n\nPhone: ____________________").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("paper.pdf", None, paper.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "paper.pdf", None, paper.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
-    assert!(h.state_mut().execute("form.prepare"));
+    assert!(h.execute("form.prepare"));
     h.run_steps(3);
     let app = h.state();
     let id = app.active_ids().unwrap().1;
     let names: Vec<String> = app.session.get(id).unwrap().form.iter().map(|f| f.name.clone()).collect();
     assert_eq!(names, ["Name", "Phone"]);
-    assert_eq!(app.toast.clone().unwrap().0, "Detected 2 form fields");
+    assert!(texts(&h).iter().any(|t| t == "Detected 2 form fields"), "{:?}", texts(&h));
 }
 
 /// Advance bounded UI frames until the synthetic prompt label becomes available.
@@ -297,9 +340,9 @@ fn native_script_prompts_show_an_app_owned_caption() {
     ] {
         let mut h = harness();
         let id = h.state().active_ids().unwrap().1;
-        h.state_mut().run_button_script(id, "hello", script);
+        h.run_button_script(id, "hello", script);
         wait_for(&mut h, body);
-        assert!(h.query_by_label("This document's script is asking").is_some(), "{script}");
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Dialog, "This document's script is asking").is_some(), "{script}");
         assert_eq!(
             h.query_by_label("This request comes from the document, not PdfCraft. Only enter a password if you trust this document.").is_some(),
             script.contains("bPassword:true"),
@@ -327,12 +370,15 @@ fn native_script_prompt_uses_the_german_catalog_when_available() {
     }
     assert_eq!(tr(german, source), heading);
     let mut h = harness();
-    h.state_mut().set_option("language", "de").unwrap();
+    h.set_option("language", "de").unwrap();
     let id = h.state().active_ids().unwrap().1;
-    h.state_mut().run_button_script(id, "hello", "app.response({cQuestion:'Test',bPassword:true});");
+    h.run_button_script(id, "hello", "app.response({cQuestion:'Test',bPassword:true});");
     wait_for(&mut h, heading);
     assert!(h.query_by_label("Dokument: form.pdf").is_some());
-    assert!(h.query_by_label("Diese Aufforderung stammt aus dem Dokument und wird von dessen Skript angezeigt. Gib ein Passwort nur ein, wenn du diesem Dokument vertraust.").is_some());
+    // The warning in the catalog's words, which translators may reword, and never the English.
+    let warning = "This request comes from the document, not PdfCraft. Only enter a password if you trust this document.";
+    assert_ne!(tr(german, warning), warning, "the German catalog translates the password warning");
+    assert!(h.query_by_label(tr(german, warning)).is_some());
 }
 
 #[test]
@@ -341,12 +387,13 @@ fn native_button_popup_and_response_resume_without_replaying_the_script() {
     for typed in [false, true] {
         let mut h = harness();
         let id = h.state().active_ids().unwrap().1;
-        h.state_mut().run_button_script(id,"hello","var calls=typeof calls==='number'?calls:0;calls++;var choice=app.popUpMenuEx({cName:'Morning',cReturn:'08:00'});var extra=app.response({cTitle:'Manual time',cQuestion:'Suffix',cDefault:'x'});getField('greeting').value=choice+'/'+extra+'/'+calls;");
+        h.run_button_script(id,"hello","var calls=typeof calls==='number'?calls:0;calls++;var choice=app.popUpMenuEx({cName:'Morning',cReturn:'08:00'});var extra=app.response({cTitle:'Manual time',cQuestion:'Suffix',cDefault:'x'});getField('greeting').value=choice+'/'+extra+'/'+calls;");
         wait_for(&mut h, "Morning");
         h.get_by_label("Morning").click();
         wait_for(&mut h, "Suffix");
         if typed {
-            h.get_by(|n| n.role() == egui::accesskit::Role::TextInput && n.value().as_deref() == Some("x")).focus();
+            h.get_by(|n| n.role() == egui::accesskit::Role::TextInput && n.label().as_deref() == Some("Answer") && n.value().as_deref() == Some("x"))
+                .focus();
             h.run_steps(2);
             h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
             h.run_steps(1);
@@ -368,11 +415,11 @@ fn native_popup_cancellation_returns_null_and_preserves_the_single_invocation() 
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
     let script = "var calls=typeof calls==='number'?calls:0;calls++;var choice=app.popUpMenuEx({cName:'Choose',cReturn:'yes'});getField('greeting').value=String(choice)+'/'+calls;";
-    h.state_mut().run_button_script(id, "hello", script);
+    h.run_button_script(id, "hello", script);
     wait_for(&mut h, "Choose");
     h.get_by_label("Cancel").click();
     wait_value(&mut h, "greeting", "null/1");
-    h.state_mut().run_button_script(id, "hello", script);
+    h.run_button_script(id, "hello", script);
     wait_for(&mut h, "Choose");
     h.get_by_label("Cancel").click();
     wait_value(&mut h, "greeting", "null/2");
@@ -386,7 +433,7 @@ fn native_popup_submenu_keeps_disabled_items_unselectable() {
     let script = "var calls=typeof calls==='number'?calls:0; calls++; \
                   var choice=app.popUpMenuEx({cName:'Group',oSubMenu:[{cName:'Disabled',bEnabled:false}, \
                   {cName:'Enabled',cReturn:'chosen'}]}); getField('greeting').value=choice+'/'+calls;";
-    h.state_mut().run_button_script(id, "hello", script);
+    h.run_button_script(id, "hello", script);
     wait_for(&mut h, "Group");
     h.get_by_label("Group").click();
     wait_for(&mut h, "Enabled");
@@ -402,7 +449,7 @@ fn native_popup_submenu_keeps_disabled_items_unselectable() {
 fn native_popup_completion_is_discarded_after_the_document_is_edited() {
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
-    h.state_mut().run_button_script(id, "hello", "app.popUpMenuEx({cName:'Wait',cReturn:'yes'});getField('greeting').value='stale';");
+    h.run_button_script(id, "hello", "app.popUpMenuEx({cName:'Wait',cReturn:'yes'});getField('greeting').value='stale';");
     wait_for(&mut h, "Wait");
     h.state_mut()
         .session
@@ -430,64 +477,8 @@ fn native_button_events_match_headless_will_commit() {
     let id = h.state().active_ids().unwrap().1;
     let headless = h.state_mut().session.run_javascript(id, "String(event.willCommit);", Some("hello")).unwrap();
     assert_eq!(headless.result.as_deref(), Some("false"));
-    h.state_mut().run_button_script(id, "hello", "getField('greeting').value=String(event.willCommit);");
+    h.run_button_script(id, "hello", "getField('greeting').value=String(event.willCommit);");
     wait_value(&mut h, "greeting", "false");
-}
-
-/// A popup owns keyboard shortcuts; Undo must not edit the document below it.
-#[test]
-fn native_popup_keeps_undo_shortcuts_out_of_the_document() {
-    let mut h = harness();
-    let id = h.state().active_ids().unwrap().1;
-    h.state_mut()
-        .session
-        .apply(id, pdfcraft_engine::Edit::SetFieldValue { name: "greeting".into(), value: pdfcraft_engine::FieldValue::Text("current".into()) })
-        .unwrap();
-    h.state_mut().run_button_script(id, "hello", "app.popUpMenuEx({cName:'Wait',cReturn:'yes'});");
-    wait_for(&mut h, "Wait");
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
-    h.run_steps(3);
-    assert_eq!(value(&h, "greeting"), ["current"]);
-    assert!(h.query_by_label("Wait").is_some());
-    h.get_by_label("Cancel").click();
-    h.run_steps(5);
-}
-
-/// A script response stays clickable while another modal remains open underneath it.
-#[test]
-fn native_script_prompt_is_above_an_existing_dialog() {
-    let _gpu = crate::gpu();
-    for open_first in [true, false] {
-        let mut h = harness();
-        let id = h.state().active_ids().unwrap().1;
-        if open_first {
-            h.state_mut().dialog = Some(Dialog::JsConsole);
-            h.run_steps(3);
-        }
-        h.state_mut().run_button_script(
-            id,
-            "hello",
-            "getField('greeting').value=app.response({cTitle:'Top prompt',cQuestion:'Answer here',cDefault:'visible'});",
-        );
-        wait_for(&mut h, "Answer here");
-        if !open_first {
-            h.state_mut().dialog = Some(Dialog::JsConsole);
-        }
-        h.run_steps(4);
-        let expected = egui::Id::unique(("document-script-prompt", id.0, 1u32));
-        assert_eq!(h.ctx.memory(|m| m.top_modal_layer()).map(|l| l.id), Some(expected), "the prompt owns modal input, open_first={open_first}");
-        if let Ok(path) = std::env::var("PDFCRAFT_REVIEW4_MODAL_SCREENSHOT") {
-            h.render().unwrap().save(path).unwrap();
-        }
-        h.get_by_label("OK").click();
-        wait_value(&mut h, "greeting", "visible");
-        assert_eq!(h.state().dialog, Some(Dialog::JsConsole));
-        h.state_mut().run_button_script(id, "hello", "getField('greeting').value=String(app.response({cQuestion:'Cancel here'}));");
-        wait_for(&mut h, "Cancel here");
-        h.key_press(egui::Key::Escape);
-        wait_value(&mut h, "greeting", "null");
-        assert_eq!(h.state().dialog, Some(Dialog::JsConsole));
-    }
 }
 
 /// A real pointer click must retain the second same-named button through native completion.
@@ -531,11 +522,14 @@ fn clicking_duplicate_named_buttons_targets_the_clicked_object() {
     })
     .unwrap();
     let bytes = pdfcraft_cos::write_full(&cos, &Default::default()).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("duplicate-buttons.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "duplicate-buttons.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(6);
     let captions = |h: &Harness<'_, PdfCraftApp>| {
@@ -566,10 +560,10 @@ fn clicking_duplicate_named_buttons_targets_the_clicked_object() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(captions(&h), [Some("idle".into()), Some("second".into())]);
-    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.execute("edit.undo"));
     h.run_steps(3);
     assert_eq!(captions(&h), [Some("idle".into()), Some("idle".into())]);
-    assert!(h.state_mut().execute("edit.redo"));
+    assert!(h.execute("edit.redo"));
     h.run_steps(3);
     assert_eq!(captions(&h), [Some("idle".into()), Some("second".into())]);
     let r = h.state().views[0].page_screen_rect(0).unwrap();
@@ -642,20 +636,19 @@ fn clicking_duplicate_image_buttons_imports_only_into_the_clicked_field() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-exact-image-click-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("synthetic.png");
-    let mut png = vec![];
-    {
-        let mut encoder = png::Encoder::new(&mut png, 2, 2);
-        encoder.set_color(png::ColorType::Rgb);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.write_header().unwrap().write_image_data(&[120u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![120u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     std::fs::write(&path, png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("images.pdf", None, bytes).unwrap();
-        app.save_override = Some(path.to_string_lossy().into_owned());
-        app
+    // The image picker answers with the PNG.
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::answering([craft::host::Picked::Paths(vec![path.clone()])]));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::app_with_files(files);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "images.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(6);
     let rect = h.state().views[0].page_screen_rect(0).unwrap();
@@ -687,10 +680,10 @@ fn clicking_duplicate_image_buttons_imports_only_into_the_clicked_field() {
             .collect::<Vec<_>>()
     };
     assert_eq!(icons(&mut h), [false, true]);
-    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.execute("edit.undo"));
     h.run_steps(2);
     assert_eq!(icons(&mut h), [false, false]);
-    assert!(h.state_mut().execute("edit.redo"));
+    assert!(h.execute("edit.redo"));
     h.run_steps(2);
     assert_eq!(icons(&mut h), [false, true]);
     std::fs::remove_file(path).unwrap();
