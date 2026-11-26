@@ -148,13 +148,21 @@ pub enum DataOp {
 impl DataNode {
     /// The node at `path`, made (with empty siblings before it) where missing; `None` past
     /// the index cap.
-    fn ensure(&mut self, path: &[(String, usize)]) -> Option<&mut DataNode> {
+    fn ensure(&mut self, path: &[(String, usize)], budget: &mut usize) -> Option<&mut DataNode> {
         let mut node = self;
         for (name, idx) in path {
             if *idx >= MAX_INDEX {
                 return None;
             }
             let have = node.children.iter().filter(|c| &c.name == name).count();
+            // Every skipped sibling owns a copy of the name: bounded as `Build::at` bounds a write.
+            // The budget is the whole path's, not each level's: a deep path that is affordable at
+            // every level taken alone would otherwise allocate its way past the bound.
+            let need = (*idx + 1).saturating_sub(have).saturating_mul(name.len());
+            if need > *budget {
+                return None;
+            }
+            *budget -= need;
             for _ in have..=*idx {
                 node.children.push(DataNode { name: name.clone(), ..Default::default() });
             }
@@ -166,9 +174,11 @@ impl DataNode {
     /// Apply `op` to this tree (the root is the `xfa:data` element), as [`write_data_ops`]
     /// will to the packet, so scripts that run before it is written see the change.
     pub fn apply(&mut self, op: &DataOp) {
+        // One budget for the op's whole path, as `Build::at` bounds a write.
+        let mut budget = build::MAX_NEW_NAME_BYTES;
         match op {
             DataOp::Value { path, text } => {
-                if let Some(n) = self.ensure(path) {
+                if let Some(n) = self.ensure(path, &mut budget) {
                     // A multi-select list's picks, one `value` each (see `value_at`), told apart
                     // as the packet writer does: `value` leaves only, or a group holding none.
                     let picks = if n.children.is_empty() { n.group } else { n.children.iter().all(|c| c.name == "value" && c.children.is_empty()) };
@@ -189,7 +199,7 @@ impl DataNode {
                 if let Some(&last) = count.checked_sub(1).as_ref() {
                     let mut path = parent.clone();
                     path.push((name.clone(), last.min(MAX_INDEX.saturating_sub(1))));
-                    let _ = self.ensure(&path);
+                    let _ = self.ensure(&path, &mut budget);
                 }
             }
             DataOp::Remove(path) => {

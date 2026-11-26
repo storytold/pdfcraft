@@ -13,12 +13,8 @@ fn tool(a: &mut Automation, name: &str, args: Value) -> Value {
 }
 
 fn png(w: u32, h: u32) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut encoder = png::Encoder::new(&mut out, w, h);
-    encoder.set_color(png::ColorType::Rgb);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header().unwrap().write_image_data(&vec![90; (w * h * 3) as usize]).unwrap();
-    out
+    let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgb, vec![90; (w * h * 3) as usize]).unwrap();
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
 }
 
 fn stream(doc: &Document, obj: &Object) -> Stream {

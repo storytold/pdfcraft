@@ -12,9 +12,6 @@ use std::sync::Arc;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use hayro::hayro_syntax::DecryptionError;
-use hayro::hayro_syntax::LoadPdfError;
-use hayro::hayro_syntax::Pdf;
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
 use pdfcraft_cos::page_labels::{
     MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK, MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES, alpha, roman,
@@ -40,6 +37,7 @@ pub use model::{
     MAX_GROUP_DEPTH, OutlineItem, PageInfo, PageTransition, Popup, Portfolio, PortfolioView, RemoteDestination, ReviewStates, TransitionStyle, Xfa,
     fill_group_text, group_primaries, link_replies, thread_tops,
 };
+pub use navigation::named_destination;
 #[cfg(test)]
 use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
 #[cfg(test)]

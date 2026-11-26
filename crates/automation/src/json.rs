@@ -256,7 +256,7 @@ pub(crate) fn security(d: &Document) -> Value {
                 "method": s.method,
                 "pending": s.pending,
                 "printing": if !p.print() { "none" } else if p.print_high_quality() { "high" } else { "low" },
-                "modify": p.modify(), "assemble": p.assemble(), "copy": p.copy(), "annotate": p.annotate(),
+                "modify": p.modify(), "assemble": p.assemble(), "extract_pages": p.extract_pages(), "copy": p.copy(), "annotate": p.annotate(),
                 "fill_forms": p.fill_forms(), "accessibility": p.extract_for_accessibility(),
             })
         }
@@ -411,6 +411,7 @@ fn link_target(i: &pdfcraft_render::DocInfo, target: &pdfcraft_render::LinkTarge
             })).collect::<Vec<_>>(),
             "preserve_rb": preserve_rb,
         }),
+        pdfcraft_render::LinkTarget::JavaScript(script) => json!({ "javascript": script }),
         pdfcraft_render::LinkTarget::RemoteGoTo { launch, file, destination, new_window } => json!({
             "action": if *launch { "Launch" } else { "GoToR" },
             "remote_document": file,
