@@ -53,7 +53,7 @@ fn kind_of(id: &str) -> CommandKind {
         "view.theme.system" | "view.theme.light" | "view.theme.dark" => CommandKind::Radio { group: Some("theme".into()) },
         PANEL => CommandKind::Radio { group: Some("panel".into()) },
         "view.continuous" | "view.page_gaps" | "view.layout.cover" | "view.full_screen" | "view.read_mode" | "view.side_panel"
-        | "view.tools_pane" | "view.split" => CommandKind::Toggle,
+        | "view.tools_pane" | "view.split" | "view.toggle_hotbar" => CommandKind::Toggle,
         _ => CommandKind::Command,
     }
 }
@@ -237,6 +237,7 @@ fn checked(app: &PdfCraftApp, command: &CommandRef) -> Option<bool> {
         "view.layout.cover" => view.is_some_and(|v| v.cover),
         "view.full_screen" => app.full_screen(),
         "view.read_mode" => app.mode == Mode::Read,
+        "view.toggle_hotbar" => app.hotbar.hidden,
         "view.side_panel" => app.right().is_some(),
         "view.tools_pane" => app.left_open(),
         "view.split" => app.panes.split.is_some(),

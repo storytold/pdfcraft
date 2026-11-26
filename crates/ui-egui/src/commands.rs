@@ -568,6 +568,10 @@ impl PdfCraftApp {
                 self.set_full_screen(on);
             }
             "view.read_mode" => self.switch_mode(ctx, if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
+            "view.toggle_hotbar" => {
+                self.hotbar.hidden = !self.hotbar.hidden;
+                self.save_settings();
+            }
             "view.split" => self.toggle_split(ctx),
             crate::viewer_prefs::TOGGLE => self.toggle_interface(),
             "view.previous_view" | "view.next_view" => {

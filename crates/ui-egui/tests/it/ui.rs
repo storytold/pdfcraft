@@ -36,6 +36,31 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
 }
 
 #[test]
+fn hotbar_visibility_toggle_is_persisted() {
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Select").is_some());
+    assert!(h.execute("view.toggle_hotbar"));
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Select").is_none());
+
+    let saved = h.state().settings_snapshot();
+    let saved = serde_json::to_string(&saved).unwrap();
+    let (saved, errors) = pdfcraft_ui_egui::settings::import_json(&saved);
+    assert!(errors.is_empty());
+    assert_eq!(saved.hotbar.hidden, Some(true));
+    let mut restored = harness(move |app| app.apply_settings(&saved));
+    assert_eq!(restored.state().settings_snapshot().hotbar.hidden, Some(true));
+
+    assert!(restored.execute("view.toggle_hotbar"));
+    restored.run_steps(2);
+    assert_eq!(restored.state().settings_snapshot().hotbar.hidden, Some(false));
+
+    h.set_option("hotbar-visible", "true").unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Select").is_some());
+}
+
+#[test]
 fn home_shows_welcome_and_tools() {
     let h = harness(|_| {});
     h.get_by_label_contains("Welcome to PdfCraft");

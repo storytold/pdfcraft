@@ -585,9 +585,9 @@ impl PdfCraftApp {
         }
     }
 
-    /// Read mode and full screen hide the hotbar (the quick tools), and its tools window with it.
+    /// The saved preference, Read mode and full screen can hide the hotbar and its tools window.
     pub(crate) fn hotbar_hidden(&self) -> bool {
-        self.mode == crate::Mode::Read || self.screen_mode.body_only()
+        self.hotbar.hidden || self.mode == crate::Mode::Read || self.screen_mode.body_only()
     }
 
     /// The pages are covered, and no page key reaches them, a menu click's included: by a dialog or

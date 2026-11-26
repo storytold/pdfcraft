@@ -46,6 +46,16 @@ pdfcraft-cli ui --control 4242 --control-token-file /path/to/token state
 `ui.state.comment_tool_pinned` reports the boolean. `ui.set` accepts `true` or `false` and refuses
 other values before changing the preference. This changes interface settings only.
 
+The document hotbar visibility is a saved app preference. The View menu toggles it, or the opt-in
+UI control channel can set it directly:
+
+```sh
+pdfcraft-cli ui --control 4242 --control-token-file /path/to/token set key=hotbar-visible value=false
+pdfcraft-cli ui --control 4242 --control-token-file /path/to/token state
+```
+
+`ui.state.hotbar.hidden` reports the saved visibility choice. `ui.set` accepts `true` or `false`.
+
 ## Interface appearance
 
 Display theme saves System, Light or Dark separately from the palette currently drawn. New

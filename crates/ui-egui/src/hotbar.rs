@@ -41,6 +41,9 @@ const SLOT_USER: SlotId = 100;
 pub(crate) struct Hotbar {
     /// The commands the user put on the toolbar, in order.
     pub tools: Vec<String>,
+    /// Whether the user chose to hide the toolbar from the View menu.
+    #[serde(skip)]
+    pub hidden: bool,
     /// The tool each slot showed last.
     #[serde(skip)]
     last_used: LastUsed<String>,

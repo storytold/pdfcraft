@@ -26,6 +26,11 @@ impl PdfCraftApp {
         let view = self.active.and_then(|i| self.views.get_mut(i));
         match (key, view) {
             ("hotbar-tools", _) => self.hotbar.set_tools(value)?,
+            ("hotbar-visible", _) => {
+                let visible = value.parse::<bool>().map_err(|_| "hotbar-visible must be true or false")?;
+                self.hotbar.hidden = !visible;
+                self.save_settings();
+            }
             ("language", _) => {
                 let language = i18n::normalize_pref(value).ok_or_else(|| {
                     let codes: Vec<&str> = std::iter::once(i18n::AUTO).chain(i18n::Lang::all().map(i18n::Lang::code)).collect();

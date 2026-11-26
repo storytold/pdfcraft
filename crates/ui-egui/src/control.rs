@@ -37,6 +37,7 @@
 //!   reports the choice and `ui.state.theme` reports the resolved light/dark colours.
 //!   `show_page_edge_shadows=true|false` controls page decoration app-wide.
 //!   `comment-tool-pinned=true|false` remembers the annotation quick bar's pin across restarts.
+//!   `hotbar-visible=true|false` shows or hides the document hotbar and remembers the choice.
 //!   `folder-collapsed=<folder>=on|off` folds a pinned folder on Home down to its heading or
 //!   opens it again; `ui.state.pinned_folders` lists each pinned folder and whether it is.
 //! - `ui.open {path}`: open a file. A file whose tab is already open focuses it
