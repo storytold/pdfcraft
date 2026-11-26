@@ -31,6 +31,22 @@ pub(crate) fn set_attachments_exact(dst: &mut Document, mut entries: Vec<(Vec<u8
     write_attachments(dst, &mut entries, false)
 }
 
+/// Whether a name-tree key is UTF-16LE text: its byte order mark and whole code units.
+fn is_utf16le(k: &[u8]) -> bool {
+    k.starts_with(&[0xff, 0xfe]) && k.len().is_multiple_of(2)
+}
+
+/// A name-tree key as text. `PdfString::to_text` reads PDFDocEncoding and UTF-16BE; a key some
+/// writers store as UTF-16LE with its byte order mark is read as that, so it compares and is
+/// numbered by its letters.
+fn key_text(k: &[u8]) -> String {
+    if is_utf16le(k) {
+        let units: Vec<u16> = k[2..].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+        return String::from_utf16_lossy(&units);
+    }
+    pdfcraft_cos::PdfString::literal(k.to_vec()).to_text()
+}
+
 /// Write a flat, sorted `/EmbeddedFiles` name tree, optionally renaming duplicate keys.
 fn write_attachments(dst: &mut Document, entries: &mut [(Vec<u8>, Object)], uniquify: bool) -> Result<(), OrganizeError> {
     if entries.is_empty() {
@@ -39,11 +55,10 @@ fn write_attachments(dst: &mut Document, entries: &mut [(Vec<u8>, Object)], uniq
     // Names are compared and numbered as text: a key written as UTF-16 (a name with an accent
     // or Chinese letters) must not get ASCII bytes appended to it.
     if uniquify {
-        let reserved: std::collections::HashSet<String> =
-            entries.iter().map(|(k, _)| pdfcraft_cos::PdfString::literal(k.clone()).to_text()).collect();
+        let reserved: std::collections::HashSet<String> = entries.iter().map(|(k, _)| key_text(k)).collect();
         let mut seen = std::collections::HashSet::new();
         for (k, _) in entries.iter_mut() {
-            let base = pdfcraft_cos::PdfString::literal(k.clone()).to_text();
+            let base = key_text(k);
             let mut text = base.clone();
             let mut n = 2;
             if !seen.insert(text.clone()) {
@@ -56,7 +71,12 @@ fn write_attachments(dst: &mut Document, entries: &mut [(Vec<u8>, Object)], uniq
                 }
             }
             if text != base {
-                *k = pdfcraft_cos::PdfString::text(&text).bytes;
+                *k = if is_utf16le(k) {
+                    // A key written as UTF-16LE (with its byte order mark) stays in that encoding.
+                    [0xff, 0xfe].into_iter().chain(text.encode_utf16().flat_map(u16::to_le_bytes)).collect()
+                } else {
+                    pdfcraft_cos::PdfString::text(&text).bytes
+                };
             }
         }
     }
