@@ -510,7 +510,6 @@ pub struct PdfCraftApp {
     pub(crate) progress_cards: std::collections::HashMap<crate::notices::ProgressKey, craft::ui::runtime::toast::ToastId>,
     pub password_prompt: Option<PasswordPrompt>,
     pub purview_signin_prompt: Option<PurviewSignInPrompt>,
-    pub(crate) purview_labels_error: Option<String>,
     #[cfg(not(target_arch = "wasm32"))]
     purview_sign_in_job: Option<std::sync::mpsc::Receiver<PurviewSignInResult>>,
     #[cfg(not(target_arch = "wasm32"))]

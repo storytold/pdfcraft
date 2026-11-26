@@ -482,7 +482,6 @@ impl PdfCraftApp {
             control_epoch: 0,
             bookmark_clipboard: None,
             purview_signin_prompt: None,
-            purview_labels_error: None,
             #[cfg(not(target_arch = "wasm32"))]
             purview_sign_in_job: None,
             #[cfg(not(target_arch = "wasm32"))]

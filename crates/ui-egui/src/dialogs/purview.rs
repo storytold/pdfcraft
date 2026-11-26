@@ -190,15 +190,16 @@ fn labels_section(ui: &mut egui::Ui, view: &PurviewView, selected: &mut String, 
     if ui.add_enabled(!view.labels_loading, egui::Button::new(tl!("Refresh labels"))).clicked() {
         *action = Some(Action::Refresh);
     }
-    let protected = view.document.as_ref().is_some_and(|document| document.protected);
-    if view.has_document && !protected {
+    let document = view.document.as_ref();
+    let security_change_allowed = document.is_none_or(|document| !document.protected || document.rights.can_change_security());
+    if view.has_document && security_change_allowed {
         let label = ui.label(tl!("Justification (required for policy downgrades or removals)"));
         ui.text_edit_multiline(justification).labelled_by(label.id);
         ui.horizontal(|ui| {
             if !selected.is_empty() && ui.button(tl!("Apply label")).clicked() {
                 *action = Some(Action::Apply(selected.clone(), justification.clone()));
             }
-            if view.document.as_ref().is_some_and(|doc| doc.label.is_some()) && ui.button(tl!("Remove label")).clicked() {
+            if document.is_some_and(|doc| doc.label.is_some()) && ui.button(tl!("Remove label")).clicked() {
                 *action = Some(Action::Remove(justification.clone()));
             }
         });
@@ -289,13 +290,15 @@ impl StackDialog for PurviewDialog {
         } else {
             "Microsoft account"
         };
-        let shown = FormDialog::new(tl!(title).to_string(), Bind::bound(label_id)).buttons(FormButtons::Close).enter_confirms(false).show(
-            ui,
-            |ui, _, selected| {
+        let close_label = if view.pending_name.is_some() && view.error.is_some() { "Cancel" } else { "Close" };
+        let shown = FormDialog::new(tl!(title).to_string(), Bind::bound(label_id))
+            .buttons(FormButtons::Close)
+            .cancel_label(tl!(close_label).to_string())
+            .enter_confirms(false)
+            .show(ui, |ui, _, selected| {
                 dialog_body(ui, view, selected, justification, login_hint, action);
                 true
-            },
-        );
+            });
         shown.closed.map(|_| DialogResult::Cancel)
     }
 }
@@ -317,9 +320,9 @@ impl PdfCraftApp {
             self.purview_login_hint.clear();
             if let Some(prompt) = self.purview_signin_prompt.take()
                 && let Some(meta) = prompt.recovered
-                && !self.recoverable.iter().any(|item| item.key == meta.key)
+                && !self.recovered.iter().any(|item| item.key == meta.key)
             {
-                self.recoverable.push(meta);
+                self.recovered.push(meta);
             }
             return;
         }

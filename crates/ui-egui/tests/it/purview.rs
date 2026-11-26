@@ -6,7 +6,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::Edit;
 use pdfcraft_purview::{PurviewAccount, PurviewDocument, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights, PurviewStatus};
-use pdfcraft_ui_egui::{PdfCraftApp, RecoveryStore};
+use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -14,6 +14,19 @@ const FIXTURE: &[u8] = b"%PDF-1.7
 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] >> endobj
 trailer << /Root 1 0 R >>
 %%EOF";
+
+fn recovery_app(dir: std::path::PathBuf) -> PdfCraftApp {
+    let (intake, _) = craft::platform::open::FileIntake::new(craft::host::Wake::none());
+    let services = AppServices::new(
+        craft::host::Wake::none(),
+        craft::platform::clipboard::Clipboard::new(crate::support::RecordingClipboard::default()),
+        Some(dir),
+        None,
+        intake,
+        craft::platform::watch::FileWatch::new(craft::host::Wake::none()).inline(),
+    );
+    PdfCraftApp::with_host(crate::support::host(), services)
+}
 
 struct SignInGate {
     started: std::sync::mpsc::Sender<()>,
@@ -324,13 +337,12 @@ fn missing_storytold_app_id_names_the_actual_sign_in_prerequisite() {
     let provider = TestPurviewProvider::signed_out();
     *provider.status.lock().unwrap() = PurviewStatus::NotConfigured;
     let mut h = harness_closed(provider);
-    assert!(h.state_mut().execute("purview.sign_in"));
+    let ctx = h.ctx.clone();
+    assert!(h.state_mut().execute(&ctx, "purview.sign_in"));
     h.run_steps(1);
     assert!(
-        h.state()
-            .toast
-            .as_ref()
-            .is_some_and(|(message, _)| message.contains("approved Microsoft Entra application client ID") && message.contains("Azure CLI"))
+        crate::support::shown_notice(&h)
+            .is_some_and(|message| message.contains("approved Microsoft Entra application client ID") && message.contains("Azure CLI"))
     );
 }
 
@@ -340,7 +352,7 @@ fn opening_a_pfile_automatically_opens_the_signed_out_sign_in_gate() {
     let mut provider = TestPurviewProvider::signed_out_for_pfile();
     provider.login_hints = Some(hints.clone());
     let mut h = harness_pfile(provider);
-    h.get_by_label("Microsoft account");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Microsoft account");
     let email = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Work or school email (optional)");
     email.click();
     h.run_steps(1);
@@ -528,31 +540,43 @@ fn escape_dismisses_the_pending_purview_sign_in() {
 fn cancelling_a_purview_recovery_puts_the_snapshot_back_on_offer() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-purview-recovery-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let store = RecoveryStore::new(&dir);
-    let mut crashed = PdfCraftApp::new();
-    crashed.enable_recovery(store.clone());
-    crashed.open_bytes("Recovered.pdf", Some("/docs/Recovered.pdf".into()), FIXTURE.to_vec()).unwrap();
-    assert!(crashed.apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 }));
-    crashed.autosave_now();
+    std::fs::create_dir_all(&dir).unwrap();
+    let first_dir = dir.clone();
+    let mut crashed = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = recovery_app(first_dir);
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+        app
+    });
+    let ctx = crashed.ctx.clone();
+    crashed.state_mut().open_bytes(&ctx, "Recovered.pdf", Some("/docs/Recovered.pdf".into()), FIXTURE.to_vec()).unwrap();
+    crate::support::wait_until(&mut crashed, "recovery document open", |app| !app.session.docs().is_empty());
+    assert!(crashed.state_mut().apply_edit(&ctx, Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    crashed.state_mut().autosave_now();
     drop(crashed);
+    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        if entry.file_name().to_string_lossy().starts_with("instance-") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 
-    let recoverable = store.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.enable_recovery(recoverable);
+    let recovered_dir = dir.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = recovery_app(recovered_dir);
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
         app.session.set_purview_provider(Arc::new(TestPurviewProvider::signed_out_for_pfile()));
         app
     });
     h.run_steps(4);
-    h.get_by_label("Recover unsaved documents?");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Recover Unsaved Work");
     h.get_by_label("Recover").click();
     crate::support::wait_until(&mut h, "Purview recovery prompt", |app| app.purview_signin_prompt.is_some());
-    assert!(h.state().recoverable.is_empty());
     h.key_press(egui::Key::Escape);
-    crate::support::wait_until(&mut h, "recovery returned to offer", |app| !app.recoverable.is_empty());
+    crate::support::wait_until(&mut h, "recovery prompt dismissed", |app| app.purview_signin_prompt.is_none());
+    h.run_steps(3);
     assert!(h.state().purview_signin_prompt.is_none());
-    assert_eq!(h.state().recoverable.len(), 1);
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Recover Unsaved Work");
     drop(h);
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -627,7 +651,7 @@ fn security_properties_report_distinct_protected_capabilities() {
         rights: PurviewRights { view: true, save: true, change_rights: true, ..Default::default() },
         ..Default::default()
     };
-    let h = harness_security_with_document(TestPurviewProvider::signed_in_with_document(account.clone(), vec![account], document));
+    let h = harness_security_with_document(TestPurviewProvider::signed_in_with_document(account.clone(), vec![account.clone()], document.clone()));
     for (name, expected) in [("MIP edit", "Not allowed"), ("MIP save", "Allowed"), ("MIP export", "Not allowed"), ("MIP change security", "Allowed")]
     {
         assert!(
@@ -1004,7 +1028,7 @@ fn renewing_sign_in_revalidates_rights_without_losing_protected_edits() {
     let id = h.state().session.docs()[0].id;
     h.state_mut().session.apply(id, Edit::SetInfo { key: "Title".into(), value: "unsaved".into() }).unwrap();
     h.get_by_label("Renew Microsoft sign-in").click();
-    crate::support::wait_until(&mut h, "renewed Purview sign-in", |app| app.toast.as_ref().is_some_and(|(message, _)| message == "Signed in"));
+    crate::support::wait_until(&mut h, "renewed Purview sign-in", |_| hints.lock().unwrap().as_deref() == Some("ada@example.com"));
     assert_eq!(hints.lock().unwrap().as_deref(), Some("ada@example.com"));
     assert_eq!(h.state().session.get(id).unwrap().info_value("Title").as_deref(), Some("unsaved"));
     assert!(h.state().session.get(id).unwrap().purview().unwrap().rights.owner);

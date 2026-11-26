@@ -293,7 +293,13 @@ impl PdfCraftApp {
                 self.open_revision(n);
             } else if matches!(
                 action.as_str(),
-                "protect.password" | "protect.unlock" | "protect.remove" | "purview.sign_in" | "purview.apply_label" | "purview.remove_label"
+                "protect.password"
+                    | "protect.unlock"
+                    | "protect.remove"
+                    | "purview.sign_in"
+                    | "purview.apply_label"
+                    | "purview.remove_label"
+                    | "purview.remove_protection"
             ) {
                 self.execute(ctx, &action);
             }
@@ -485,13 +491,24 @@ fn security_rows(doc: &Document, status: pdfcraft_engine::PurviewStatus) -> Vec<
     }
     let mut actions = Vec::new();
     match status {
-        pdfcraft_engine::PurviewStatus::Ready if doc.purview().is_none_or(|state| !state.protected) => {
-            let label = if doc.purview().is_some_and(|state| state.label.is_some()) {
-                "Change sensitivity label / Microsoft Purview…"
-            } else {
-                "Apply sensitivity label / Microsoft Purview…"
-            };
-            actions.push(button("purview.apply_label", label));
+        pdfcraft_engine::PurviewStatus::Ready => {
+            let purview = doc.purview();
+            let protected = purview.is_some_and(|state| state.protected);
+            let change_allowed = !protected || purview.is_some_and(|state| state.rights.can_change_security()) || doc.allows_security_change();
+            if change_allowed {
+                let label = if purview.is_some_and(|state| state.label.is_some()) {
+                    "Change sensitivity label / Microsoft Purview…"
+                } else {
+                    "Apply sensitivity label / Microsoft Purview…"
+                };
+                actions.push(button("purview.apply_label", label));
+                if purview.is_some_and(|state| state.label.is_some()) {
+                    actions.push(button("purview.remove_label", "Remove sensitivity label…"));
+                }
+            }
+            if purview.is_some_and(|state| state.protected && state.rights.can_export()) {
+                actions.push(button("purview.remove_protection", "Remove protection"));
+            }
         }
         pdfcraft_engine::PurviewStatus::SignedOut => actions.push(button("purview.sign_in", "Sign in to Microsoft Purview…")),
         _ => {}
