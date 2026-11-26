@@ -113,7 +113,7 @@ fn has_candidate(text: &[char], next_digit: bool) -> bool {
     text.iter().enumerate().any(|(i, &c)| {
         (STANDS_FOR_PLUS_MINUS.contains(c) && digit_follows(text, i, next_digit))
             || (STANDS_FOR_DIAMETER.contains(c) && starts_a_number(text, i, next_digit))
-    }) || degree_candidate(text).is_some()
+    }) || !degree_candidates(text).is_empty()
 }
 
 /// A digit, or a decimal point and a digit, follows position `i` (in this word, or at the start
@@ -133,52 +133,64 @@ fn starts_a_number(text: &[char], i: usize, next_digit: bool) -> bool {
     after_separator && digit_follows(text, i, next_digit)
 }
 
-/// The index of the digit a `°` would follow: the word's last character, or the one before a
-/// last character the decoder may have named for the ring.
-fn degree_candidate(text: &[char]) -> Option<usize> {
-    let last = text.len().checked_sub(1)?;
+/// The indices of the digits a `°` could follow, nearest the end first: the word's last
+/// character when it is a digit, and the one before a last character the decoder may have named
+/// for the ring. A last `0` is both: a digit, or the name for a ring after the digit before it.
+fn degree_candidates(text: &[char]) -> Vec<usize> {
+    let Some(last) = text.len().checked_sub(1) else {
+        return Vec::new();
+    };
+    let mut digits = Vec::new();
     if text[last].is_ascii_digit() {
-        return Some(last);
+        digits.push(last);
     }
-    (STANDS_FOR_DEGREE.contains(text[last]) && last >= 1 && text[last - 1].is_ascii_digit()).then(|| last - 1)
+    if STANDS_FOR_DEGREE.contains(text[last]) && last >= 1 && text[last - 1].is_ascii_digit() {
+        digits.push(last - 1);
+    }
+    digits
 }
 
-/// Drop the character after a `±` when the decoder named it for the bar the cross was judged
-/// with: its glyph is one of the components the `±` consumed.
+/// Drop a character beside a `±` when the decoder named it for part of the same ink, a cross
+/// and bar read as two characters: its glyph is one of the components the `±` consumed.
 fn drop_consumed(out: &mut Vec<char>, chars: &[ReadChar], shapes: &Shapes, slack: f32, consumed: &[usize]) {
     if consumed.is_empty() {
         return;
     }
-    let mut i = 1;
-    while i < out.len() {
-        let after_symbol = out[i - 1] == '±' && "_-=".contains(out[i]);
-        let of_the_bar = chars.get(i).and_then(|c| shapes.main_glyph(*c, slack)).is_some_and(|(id, _)| consumed.contains(&id));
-        if after_symbol && of_the_bar {
-            out.remove(i);
-        } else {
-            i += 1;
-        }
+    let dropped: Vec<usize> = (0..out.len())
+        .filter(|&i| {
+            let beside_symbol = out[i] != '±' && ((i >= 1 && out[i - 1] == '±') || out.get(i + 1) == Some(&'±'));
+            let named_for_part = STANDS_FOR_PLUS_MINUS.contains(out[i]) || out[i] == '_';
+            beside_symbol && named_for_part && chars.get(i).and_then(|c| shapes.main_glyph(*c, slack)).is_some_and(|(id, _)| consumed.contains(&id))
+        })
+        .collect();
+    for i in dropped.into_iter().rev() {
+        out.remove(i);
     }
 }
 
 /// Rename or append the `°` after the word's last digit when a small raised ring follows that
 /// digit's glyph; returns the word's new right edge when the ring lay past the word.
 fn degree(out: &mut Vec<char>, chars: &[ReadChar], shapes: &Shapes, slack: f32, next_left: Option<f32>) -> Option<f32> {
-    let digit = degree_candidate(out)?;
-    let (_, glyph) = shapes.main_glyph(*chars.get(digit)?, slack)?;
-    let ring = shapes.ring_after(&glyph, next_left)?;
-    if !shapes.is_degree(&ring) {
-        return None;
-    }
-    let ring_right = ring.right as f32 + 1.0;
-    if digit + 1 < out.len() {
-        out.truncate(digit + 1);
+    for digit in degree_candidates(out) {
+        let Some((_, glyph)) = chars.get(digit).and_then(|c| shapes.main_glyph(*c, slack)) else {
+            continue;
+        };
+        let Some(ring) = shapes.ring_after(&glyph, next_left) else {
+            continue;
+        };
+        if !shapes.is_degree(&ring) {
+            continue;
+        }
+        let ring_right = ring.right as f32 + 1.0;
+        if digit + 1 < out.len() {
+            out.truncate(digit + 1);
+            out.push('°');
+            return None;
+        }
         out.push('°');
-        None
-    } else {
-        out.push('°');
-        (ring_right > chars.last().map_or(ring_right, |c| c.right)).then_some(ring_right)
+        return (ring_right > chars.last().map_or(ring_right, |c| c.right)).then_some(ring_right);
     }
+    None
 }
 
 /// The ink of a region: `on` where a pixel is darker than the midpoint between the region's
@@ -703,6 +715,13 @@ mod tests {
         assert_eq!(word(&c, &[read('t', sign), read('1', one)], None).map(|r| r.text).as_deref(), Some("±1"));
         // The sign as a word of its own, before a word that starts with a digit.
         assert_eq!(word(&c, &[read('+', sign)], Some((50.0, true))).map(|r| r.text).as_deref(), Some("±"));
+        // The decoder may split the one glyph over two steps, a `+` and a `-` side by side: the
+        // leftover name goes with the symbol, whichever side it is on.
+        let (left_half, right_half) = ((sign.0, sign.0 + 13.0), (sign.0 + 13.0, sign.1));
+        let split = [read('+', left_half), read('-', right_half), read('1', one)];
+        assert_eq!(word(&c, &split, None).map(|r| r.text).as_deref(), Some("±1"));
+        let split = [read('-', left_half), read('+', right_half), read('1', one)];
+        assert_eq!(word(&c, &split, None).map(|r| r.text).as_deref(), Some("±1"));
 
         let mut plain = Canvas::new(200, 70);
         let sign = plain_plus(&mut plain, 10);
@@ -743,8 +762,15 @@ mod tests {
         let mut c = Canvas::new(200, 70);
         let two = digit(&mut c, 10);
         let ring = degree(&mut c, 36);
-        // Read as a question mark over the ring's columns: renamed.
+        // Read as a question mark over the ring's columns: renamed. Read as a zero, the same:
+        // a digit at the end of a word may be the name for the ring after the digit before it.
         assert_eq!(word(&c, &[read('2', two), read('?', ring)], None).map(|r| r.text).as_deref(), Some("2°"));
+        assert_eq!(word(&c, &[read('2', two), read('0', ring)], None).map(|r| r.text).as_deref(), Some("2°"));
+        // A full-height zero after the digit is the digit the decoder named.
+        let mut twenty = Canvas::new(200, 70);
+        let tens = digit(&mut twenty, 10);
+        let nought = zero(&mut twenty, 36);
+        assert_eq!(word(&twenty, &[read('2', tens), read('0', nought)], None), None);
         // Dropped, the digit's columns running on to the line's end: appended, and the word
         // grows to the ring.
         let fixed = word(&c, &[read('2', (two.0, 120.0))], None).expect("the dropped ° is appended");
