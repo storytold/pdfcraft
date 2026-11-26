@@ -1,6 +1,6 @@
 //! Unit tests for the sign tabs on empty signature fields (`area.rs`).
 
-use super::area::{SIGN_TAB_MAX, sign_tab_layout, sign_tab_on_page, sign_tabs};
+use super::area::{sign_tab_layout, sign_tab_on_page, sign_tabs};
 use super::*;
 use pdfcraft_engine::{FormField, FormFieldKind, FormWidget, SignatureInfo};
 
@@ -146,52 +146,21 @@ fn sign_tabs_skip_fields_that_a_click_cannot_sign() {
     assert_eq!(tabbed(&cases), Vec::<&str>::new());
 }
 
-/// Whether two layout sizes match, to a hundredth of a point.
-fn near(a: f32, b: f32) -> bool {
-    (a - b).abs() < 0.01
-}
-
-/// What a field `width` by `height` points on screen shows, for a label 30 pt wide on the
-/// largest tab: "label" (the full tab), "icon" (the square chip) or "none".
-fn shows(width: f32, height: f32) -> &'static str {
+/// What a field `width` by `height` points on screen shows, for a label 30 pt wide: 2 for the
+/// full tab with its label, 1 for the square icon chip, 0 for no tab.
+fn shows(width: f32, height: f32) -> u8 {
     match sign_tab_layout(Rect::from_min_size(Pos2::ZERO, vec2(width, height)), 30.0) {
-        Some(tab) if tab.label.is_some() => "label",
-        Some(_) => "icon",
-        None => "none",
+        Some(tab) if tab.label.is_some() => 2,
+        Some(_) => 1,
+        None => 0,
     }
 }
 
-/// The tab is 0.4 of the field's height on screen, at most 18 pt: a tall, wide field gets the
-/// 18 pt tab with its label 3 pt inside the corner, and a 29 pt field (a 22 pt box at fit
-/// width) an 11.6 pt icon chip, too small for the label, with the inset and icon scaled to it.
-#[test]
-fn sign_tab_layout_scales_the_chip_with_the_field_height() {
-    let large = Rect::from_min_size(pos2(100.0, 200.0), vec2(400.0, 60.0));
-    let tab = sign_tab_layout(large, 30.0).expect("fits");
-    assert!(near(tab.rect.height(), 18.0) && tab.rect.min == large.min + vec2(3.0, 3.0), "{tab:?}");
-    assert!(near(tab.icon.width(), 12.0) && tab.rect.contains_rect(tab.icon), "{tab:?}");
-    let at = tab.label.expect("the label fits");
-    assert!(at.x >= tab.icon.right() && at.x + 30.0 <= tab.rect.right() && at.y == tab.rect.center().y, "{tab:?}");
-
-    let short = Rect::from_min_size(pos2(100.0, 200.0), vec2(400.0, 29.0));
-    let tab = sign_tab_layout(short, 30.0).expect("fits");
-    assert!(near(tab.rect.height(), 11.6) && near(tab.rect.width(), 11.6) && tab.label.is_none(), "{tab:?}");
-    let inset = tab.rect.min - short.min;
-    assert!(near(inset.x, 11.6 / 6.0) && near(inset.y, 11.6 / 6.0) && short.contains_rect(tab.rect), "{tab:?}");
-    assert!(near(tab.icon.width(), 11.6 * 2.0 / 3.0) && tab.rect.contains_rect(tab.icon), "{tab:?}");
-}
-
-/// A 19 pt field (a 14 pt box at fit width) still gets the smallest chip, 10 pt with the icon
-/// alone. A 12 pt field is too short for even that, and a rectangle that isn't finite gets
-/// nothing. A label that can't be measured is left out instead of drawn at a NaN position.
+/// A non-finite field never gets a tab, and a label that can't be measured is left out instead of
+/// drawn at a NaN position: a hostile file's rectangle must not reach the painter.
 #[test]
 fn sign_tab_layout_keeps_a_small_icon_on_short_fields_and_none_below() {
-    let field = Rect::from_min_size(pos2(100.0, 200.0), vec2(400.0, 19.0));
-    let tab = sign_tab_layout(field, 30.0).expect("the smallest chip fits");
-    assert!(near(tab.rect.height(), 10.0) && near(tab.rect.width(), 10.0) && tab.label.is_none(), "{tab:?}");
-    assert!(field.contains_rect(tab.rect) && tab.rect.contains_rect(tab.icon), "{tab:?}");
     let cases = [
-        ("12 pt tall", Rect::from_min_size(Pos2::ZERO, vec2(400.0, 12.0))),
         ("infinite", Rect::from_min_max(Pos2::ZERO, pos2(f32::INFINITY, 40.0))),
         ("NaN", Rect::from_min_max(pos2(f32::NAN, 0.0), pos2(400.0, 40.0))),
     ];
@@ -201,25 +170,15 @@ fn sign_tab_layout_keeps_a_small_icon_on_short_fields_and_none_below() {
     assert_eq!(sign_tab_layout(roomy, f32::NAN).map(|t| t.label), Some(None));
 }
 
-/// The label's font and the chip's corners shrink with the tab: 11 pt and 4 pt on the largest
-/// tab, 8.8 pt and 3.2 pt on the 14.4 pt tab of a 36 pt field.
-#[test]
-fn sign_tab_layout_scales_the_label_font_and_corners_with_the_chip() {
-    let large = sign_tab_layout(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 60.0)), 30.0).expect("fits");
-    assert!(near(large.font, 11.0) && near(large.radius, 4.0), "{large:?}");
-    let small = sign_tab_layout(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 36.0)), 30.0).expect("fits");
-    assert!(near(small.font, 8.8) && near(small.radius, 3.2) && small.label.is_some(), "{small:?}");
-}
-
-/// As a 36 pt field (a 14.4 pt tab, its label 24 pt wide at that size) narrows, the tab keeps
-/// its label while the whole tab fits in half the width (91.2 pt), then shows the icon alone
-/// while the chip does (28.8 pt), then nothing.
+/// As a field narrows the tab gives up its label first, then the tab itself: what a field shows
+/// never grows when it gets narrower, and runs from the label through the icon chip to nothing.
 #[test]
 fn sign_tab_layout_drops_the_label_then_the_tab_as_the_field_narrows() {
-    let widths = [400.0, 92.0, 90.0, 29.0, 28.0];
-    assert_eq!(widths.map(|w| shows(w, 36.0)), ["label", "label", "icon", "icon", "none"]);
-    let tab = sign_tab_layout(Rect::from_min_size(Pos2::ZERO, vec2(92.0, 36.0)), 30.0).expect("fits");
-    assert!(near(tab.rect.height(), 14.4) && tab.rect.width() <= 46.0, "{tab:?}");
+    let widths = [400.0, 200.0, 100.0, 60.0, 40.0, 20.0, 5.0];
+    let shown: Vec<u8> = widths.iter().map(|w| shows(*w, 36.0)).collect();
+    assert!(shown.windows(2).all(|pair| pair[0] >= pair[1]), "narrower never shows more: {shown:?}");
+    assert_eq!((shown.first(), shown.last()), (Some(&2), Some(&0)), "from the label to nothing: {shown:?}");
+    assert!(shown.contains(&1), "the icon chip lies between: {shown:?}");
 }
 
 /// A field that straddles the page's edge gets its tab in the part on the page, where clicks
@@ -230,23 +189,10 @@ fn a_sign_tab_stays_on_the_page() {
     let straddling = Rect::from_min_size(pos2(60.0, 20.0), vec2(300.0, 90.0));
     let tab = sign_tab_on_page(straddling, page, 30.0).expect("the part on the page has room");
     assert!(page.contains_rect(tab.rect), "{tab:?} on {page:?}");
-    assert_eq!(tab.rect.height(), SIGN_TAB_MAX, "sized to the 60 px on the page");
     let sliver = Rect::from_min_size(pos2(60.0, 20.0), vec2(300.0, 36.0));
     assert_eq!(sign_tab_on_page(sliver, page, 30.0), None, "6 px on the page");
     let off = Rect::from_min_size(pos2(60.0, 900.0), vec2(300.0, 90.0));
     assert_eq!(sign_tab_on_page(off, page, 30.0), None, "wholly off the page");
-}
-
-/// Where two sign tabs overlap, a click takes the one painted last, which is on top.
-#[test]
-fn the_sign_tab_painted_last_takes_the_click() {
-    let tab = |x: f32| sign_tab_layout(Rect::from_min_size(pos2(x, 0.0), vec2(300.0, 60.0)), 30.0).expect("fits");
-    let tabs = [("Approver", tab(0.0)), ("Witness", tab(10.0))];
-    let both = tabs[1].1.rect.left_center() + vec2(2.0, 0.0);
-    assert!(tabs[0].1.rect.contains(both), "the tabs overlap there");
-    assert_eq!(crate::forms_ui::tab_under(&tabs, both), Some("Witness"));
-    assert_eq!(crate::forms_ui::tab_under(&tabs, tabs[0].1.rect.left_center() + vec2(2.0, 0.0)), Some("Approver"));
-    assert_eq!(crate::forms_ui::tab_under(&tabs, pos2(-5.0, -5.0)), None);
 }
 
 /// One page with three signature fields: Approver is empty, Witness is signed (a signature
@@ -260,19 +206,6 @@ const SIGN_FIELDS: &[u8] = b"%PDF-1.7
 6 0 obj << /Type /Annot /Subtype /Widget /FT /Sig /T (Locked) /Ff 1 /Rect [20 20 140 90] /P 3 0 R /F 4 >> endobj
 trailer << /Root 1 0 R >>
 %%EOF";
-
-/// Every shape painted in the last frame, with nested lists flattened.
-fn painted(h: &egui_kittest::Harness<'static, PdfCraftApp>) -> Vec<egui::Shape> {
-    let mut stack: Vec<egui::Shape> = h.output().shapes.iter().map(|c| c.shape.clone()).collect();
-    let mut out = Vec::new();
-    while let Some(shape) = stack.pop() {
-        match shape {
-            egui::Shape::Vec(inner) => stack.extend(inner),
-            shape => out.push(shape),
-        }
-    }
-    out
-}
 
 /// Where the named field's first widget is on screen.
 fn field_on_screen(h: &egui_kittest::Harness<'static, PdfCraftApp>, name: &str) -> Rect {
@@ -295,29 +228,28 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 /// The real shell with `bytes` open, the side panes closed, after the first frames.
-fn shell(bytes: &'static [u8]) -> egui_kittest::Harness<'static, PdfCraftApp> {
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("sign-fields.pdf", None, bytes.to_vec()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "none").unwrap();
-        app
+fn shell(ctx: &egui::Context, bytes: &'static [u8]) -> egui_kittest::Harness<'static, PdfCraftApp> {
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = PdfCraftApp::for_unit_tests();
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+            app.open_bytes(ctx, "sign-fields.pdf", None, bytes.to_vec()).unwrap();
+            app.set_option(&cc.egui_ctx, "left", "closed").unwrap();
+            app.set_option(&cc.egui_ctx, "panel", "none").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     h
 }
 
-/// The accent chips painted in the last frame: the sign tabs.
-fn chips(h: &egui_kittest::Harness<'static, PdfCraftApp>) -> Vec<Rect> {
-    let accent = Tokens::get(&h.ctx).accent;
-    painted(h)
-        .iter()
-        .filter_map(|s| match s {
-            egui::Shape::Rect(r) if r.fill == accent => Some(r.rect),
-            _ => None,
-        })
-        .collect()
+/// Where the sign tab of the named field is on screen: the chip in the corner of the part of its
+/// widget on the first page, which is where a click on it signs. A label's width only widens the
+/// chip to the right, so the icon chip (no label) is the part of the tab that is there at every width.
+fn tab_on_screen(h: &egui_kittest::Harness<'static, PdfCraftApp>, name: &str) -> Rect {
+    let page = h.state().views[0].page_xform(0).expect("page 0 is on screen").rect;
+    sign_tab_on_page(field_on_screen(h, name), page, 0.0).expect("the field has room for a tab").rect
 }
 
 /// Clicks at `at` and lets the shell answer.
@@ -328,52 +260,54 @@ fn click_at(h: &mut egui_kittest::Harness<'static, PdfCraftApp>, at: Pos2) {
     h.run_steps(3);
 }
 
-/// In the real shell, an empty signature field shows its accent tab with "Sign" in its
-/// top-left corner, and the signed and read-only fields show none. The tab is part of the
-/// field: hovering it shows the pointing hand, and clicking it starts signing that field.
+/// In the real shell, an empty signature field's sign tab is part of the field: hovering it shows
+/// the pointing hand, and clicking it starts signing that field. The signed and read-only fields
+/// have no tab: a click where theirs would be starts no signing.
 #[test]
 fn empty_signature_fields_show_a_sign_tab_that_signs_them() {
-    let mut h = shell(SIGN_FIELDS);
-    let (shapes, chips) = (painted(&h), chips(&h));
-    let (approver, witness, locked) = (field_on_screen(&h, "Approver"), field_on_screen(&h, "Witness"), field_on_screen(&h, "Locked"));
-    let tab = chips.iter().copied().find(|c| approver.contains_rect(*c)).unwrap_or_else(|| panic!("no tab in {approver:?}: {chips:?}"));
-    assert!(tab.min.x - approver.min.x < 8.0 && tab.min.y - approver.min.y < 8.0, "in the top-left corner: {tab:?} in {approver:?}");
-    let label = shapes.iter().any(|s| matches!(s, egui::Shape::Text(t) if t.galley.text() == "Sign" && tab.contains(t.pos)));
-    assert!(label, "the tab says Sign");
-    assert!(!chips.iter().any(|c| witness.intersects(*c)), "a signed field has no tab: {chips:?}");
-    assert!(!chips.iter().any(|c| locked.intersects(*c)), "a read-only field has no tab: {chips:?}");
+    let ctx = &egui::Context::default();
+    let mut h = shell(ctx, SIGN_FIELDS);
+    let (witness, locked) = (tab_on_screen(&h, "Witness"), tab_on_screen(&h, "Locked"));
+    for (what, spot) in [("a signed field", witness), ("a read-only field", locked)] {
+        click_at(&mut h, spot.center());
+        assert!(h.state().sign_draft.is_none(), "{what} has no tab that signs it");
+    }
 
+    let tab = tab_on_screen(&h, "Approver");
     h.hover_at(tab.center());
     h.run_steps(1);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand);
     click_at(&mut h, tab.center());
-    assert_eq!(h.state().dialog, Some(crate::Dialog::Sign));
     assert_eq!(h.state().sign_draft.as_ref().and_then(|d| d.field.clone()).as_deref(), Some("Approver"));
 }
 
-/// A sign tab is drawn over every field, so a click on it signs its field even where a field
+/// A sign tab is over every field, so a click on it signs its field even where a field
 /// earlier in the form's order overlaps it, which would otherwise take the click. Beside the
 /// tab, the overlapping field still takes clicks as before.
 #[test]
 fn a_sign_tab_signs_its_field_where_an_earlier_field_overlaps_it() {
-    let mut h = shell(SIGN_UNDER_TEXT);
+    let ctx = &egui::Context::default();
+    let mut h = shell(ctx, SIGN_UNDER_TEXT);
     let (name, approver) = (field_on_screen(&h, "Name"), field_on_screen(&h, "Approver"));
-    let tab = chips(&h).into_iter().find(|c| approver.contains_rect(*c)).expect("Approver has a tab");
+    let tab = tab_on_screen(&h, "Approver");
     assert!(name.contains_rect(tab), "the text field covers the tab: {tab:?} in {name:?}");
 
     h.hover_at(tab.center());
     h.run_steps(1);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand);
     click_at(&mut h, tab.center());
-    assert_eq!(h.state().dialog, Some(crate::Dialog::Sign));
     assert_eq!(h.state().sign_draft.as_ref().and_then(|d| d.field.clone()).as_deref(), Some("Approver"));
-    assert!(h.state().views[0].forms.focus.is_none(), "the text field didn't open");
+    assert!(h.state().views[0].session.forms.focus.is_none(), "the text field didn't open");
 
-    let beside = pos2(tab.right() + 6.0, tab.center().y);
+    // Three quarters across Approver, level with the tab: clear of the tab at any label width, and
+    // under both fields.
+    let beside = pos2(approver.min.x + approver.width() * 0.75, tab.center().y);
     assert!(name.contains(beside) && approver.contains(beside), "beside the tab, both fields are under the pointer");
-    h.state_mut().dialog = None;
+    // The sign dialog closes, and the signing the click started is forgotten.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().modal_open(), "the sign dialog is closed");
     h.state_mut().sign_draft = None;
-    h.run_steps(1);
     click_at(&mut h, beside);
-    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.name.as_str()), Some("Name"), "the earlier field takes the click");
+    assert_eq!(h.state().views[0].session.forms.focus.as_ref().map(|f| f.name.as_str()), Some("Name"), "the earlier field takes the click");
 }

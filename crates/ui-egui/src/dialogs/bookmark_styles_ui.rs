@@ -6,11 +6,19 @@
 use pdfcraft_engine::text_style_bookmarks::{TextStyle, TextStyleUse};
 use pdfcraft_engine::{DocId, Edit};
 
-use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use craft::ui::dialog::{Alert, DialogResult, HostedAlert, dialog_id};
+use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
+use craft::ui::runtime::env::Label;
+
+use crate::PdfCraftApp;
+use crate::side_panels::{PanelId, set_panel_visible};
 
 /// The levels offered: deeper outlines are rare, and each level needs a style of its own.
 const LEVELS: usize = 4;
+/// The dialog's key: its result is found by it.
+const KEY: &str = "bookmarks-from-text-styles";
+/// The id of the "no style" entry of a level's select.
+const NONE: &str = "none";
 
 /// What the dialog shows and what has been chosen in it.
 #[derive(Debug, Default)]
@@ -31,11 +39,16 @@ impl TextStyleDraft {
     }
 }
 
+/// The key of level `n`'s select.
+fn level_key(n: usize) -> String {
+    format!("level{n}")
+}
+
 impl PdfCraftApp {
     /// Open New bookmarks from text styles for document `id`: its styles are read now, and the
     /// largest is offered for level 1 when there is more than one (headings are larger than the
     /// text around them; a single style has no headings to tell apart).
-    pub fn open_text_style_bookmarks(&mut self, id: DocId) {
+    pub fn open_text_style_bookmarks(&mut self, ctx: &egui::Context, id: DocId) {
         // The style list includes samples copied from the document's text. Enforce the PDF's
         // copy permission before extracting any of that text, not only when creating bookmarks.
         let can_copy = self.session.get(id).is_some_and(|d| d.permissions().is_none_or(|p| p.copy()));
@@ -46,7 +59,65 @@ impl PdfCraftApp {
         let styles = self.session.get(id).map(|d| d.text_styles()).unwrap_or_default();
         let first = (styles.len() > 1).then_some(0);
         self.text_style_draft = TextStyleDraft { doc: Some(id), styles, levels: [first, None, None, None] };
-        self.dialog = Some(crate::Dialog::BookmarksFromTextStyles);
+        let draft = &self.text_style_draft;
+        if draft.styles.is_empty() {
+            // A form dialog always has two buttons; a notice with only Close is an alert.
+            let alert =
+                Alert::new(tl!("New bookmarks from text styles"), tl!("This document has no text to make bookmarks from.")).ok_label(tl!("Close"));
+            self.dialogs.open(HostedAlert::new(alert));
+            return;
+        }
+        let mut options: Vec<(String, Label)> = vec![(NONE.to_string(), tl!("None").into())];
+        options.extend(draft.styles.iter().enumerate().map(|(i, u)| (i.to_string(), Label::from(style_label(u)))));
+        let style_ids: Vec<String> = (0..draft.styles.len()).map(|i| i.to_string()).collect();
+        let params: Vec<Param> = (0..LEVELS)
+            .map(|level| {
+                let name = crate::i18n::fmt(tl!("Level {n}"), &[("n", &(level + 1).to_string())]);
+                let default = Some(draft.levels.get(level).copied().flatten().map_or_else(|| NONE.to_string(), |i| i.to_string()));
+                let param = Param::new(level_key(level), name, ParamKind::choice(options.clone(), default));
+                // A level takes a style only once the one above it has one.
+                if level == 0 { param } else { param.enabled_when_in(level_key(level - 1), style_ids.clone()) }
+            })
+            .collect();
+        let mut fields = DialogFields::new();
+        for (level, slot) in draft.levels.iter().enumerate() {
+            let value = slot.map_or_else(|| NONE.to_string(), |i| i.to_string());
+            fields.set(level_key(level), value);
+        }
+        let dialog = HostedParamDialog::new(ctx, KEY, fields, move |fields| {
+            ParamDialog::new(KEY, tl!("New bookmarks from text styles"), params.clone())
+                .ok_label(tl!("Create").into())
+                .values(craft::ui::contract::Bind::bound(fields))
+        });
+        self.dialogs.open(dialog);
+    }
+
+    /// One pass over the dialog: Create makes the bookmarks and shows them in the Bookmarks panel.
+    pub(crate) fn bookmarks_from_styles_pass(&mut self, ctx: &egui::Context) {
+        if let Some(dialog) = self.dialogs.get_by_id::<HostedParamDialog>(dialog_id(KEY)) {
+            let fields = dialog.fields();
+            for (n, slot) in self.text_style_draft.levels.iter_mut().enumerate() {
+                *slot = fields.text(&level_key(n)).and_then(|id| id.parse::<usize>().ok());
+            }
+        }
+        let Some(result) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
+        let mut draft = std::mem::take(&mut self.text_style_draft);
+        let DialogResult::Ok(result) = result else { return };
+        for (n, slot) in draft.levels.iter_mut().enumerate() {
+            *slot = result.fields.text(&level_key(n)).and_then(|id| id.parse::<usize>().ok());
+        }
+        // A level left without a style ends the list: `chosen` stops at the first gap.
+        let levels = draft.chosen();
+        if levels.is_empty() {
+            return;
+        }
+        // The document the styles came from, even if another tab is active by now.
+        if let Some(i) = draft.doc.and_then(|id| self.views.iter().position(|v| v.id == id)) {
+            self.active = Some(i);
+            if self.apply_edit(ctx, Edit::BookmarksFromTextStyles { levels }) {
+                set_panel_visible(self, PanelId::Bookmarks, true);
+            }
+        }
     }
 }
 
@@ -65,70 +136,4 @@ fn style_label(u: &TextStyleUse) -> String {
     let sample: String = u.sample.chars().take(40).collect();
     let more = if sample.chars().count() < u.sample.chars().count() { "…" } else { "" };
     format!("{s} · “{sample}{more}” ({lines})")
-}
-
-/// The dialog's contents and its buttons. Returns whether it closes; Create makes the
-/// bookmarks and shows them in the Bookmarks panel.
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
-    ui.label(egui::RichText::new(tl!("New bookmarks from text styles")).font(theme::semibold(18.0)));
-    ui.add_space(6.0);
-    let d = &mut app.text_style_draft;
-    let id = d.doc;
-    if d.styles.is_empty() {
-        ui.label(tl!("This document has no text to make bookmarks from."));
-        ui.add_space(12.0);
-        return widgets::pill_button(ui, tl!("Close"), true).clicked();
-    }
-    ui.label(
-        egui::RichText::new(tl!("Every line set in the style chosen for a level becomes a bookmark of that level, under a new first bookmark."))
-            .color(t.text_muted),
-    );
-    ui.add_space(8.0);
-    let none = tl!("None");
-    egui::Grid::new("text_style_levels").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-        for level in 0..LEVELS {
-            // A level takes a style only once the one above it has one.
-            let open = level == 0 || d.levels.get(level - 1).copied().flatten().is_some();
-            let label = ui.label(crate::i18n::fmt(tl!("Level {n}"), &[("n", &(level + 1).to_string())]));
-            ui.add_enabled_ui(open, |ui| {
-                let Some(slot) = d.levels.get_mut(level) else { return };
-                let shown = slot.and_then(|i| d.styles.get(i)).map_or_else(|| none.to_string(), style_label);
-                craft_ui::ComboBox::from_id_salt(("text_style_level", level))
-                    .selected_text(shown)
-                    .width(460.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(slot, None, none);
-                        for (i, u) in d.styles.iter().enumerate() {
-                            ui.selectable_value(slot, Some(i), style_label(u));
-                        }
-                    })
-                    .response
-                    .labelled_by(label.id);
-            });
-            ui.end_row();
-        }
-    });
-    // A level left without a style ends the list: the ones below it don't count.
-    if let Some(gap) = d.levels.iter().position(Option::is_none) {
-        d.levels.iter_mut().skip(gap).for_each(|l| *l = None);
-    }
-    let levels = d.chosen();
-    ui.add_space(16.0);
-    let mut close = false;
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if ui.add_enabled_ui(!levels.is_empty(), |ui| widgets::pill_button(ui, tl!("Create"), true)).inner.clicked() {
-            close = true;
-            // The document the styles came from, even if another tab is active by now.
-            if let Some(i) = id.and_then(|id| app.views.iter().position(|v| v.id == id)) {
-                app.active = Some(i);
-                if app.apply_edit(Edit::BookmarksFromTextStyles { levels }) {
-                    app.right = Some(crate::RightPanel::Bookmarks);
-                }
-            }
-        }
-        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-            close = true;
-        }
-    });
-    close
 }
