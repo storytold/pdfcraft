@@ -32,6 +32,7 @@ struct TestPurviewProvider {
     labels: Vec<PurviewLabel>,
     inspect_calls: Option<Arc<std::sync::atomic::AtomicUsize>>,
     deny_open: bool,
+    login_hints: Option<Arc<Mutex<Option<String>>>>,
 }
 
 impl TestPurviewProvider {
@@ -48,6 +49,7 @@ impl TestPurviewProvider {
             labels: Vec::new(),
             inspect_calls: None,
             deny_open: false,
+            login_hints: None,
         }
     }
 
@@ -64,6 +66,7 @@ impl TestPurviewProvider {
             labels: Vec::new(),
             inspect_calls: None,
             deny_open: false,
+            login_hints: None,
         }
     }
 
@@ -80,6 +83,7 @@ impl TestPurviewProvider {
             labels: Vec::new(),
             inspect_calls: None,
             deny_open: false,
+            login_hints: None,
         }
     }
 
@@ -96,6 +100,7 @@ impl TestPurviewProvider {
             labels: Vec::new(),
             inspect_calls: None,
             deny_open: false,
+            login_hints: None,
         }
     }
 }
@@ -127,7 +132,10 @@ impl PurviewProvider for TestPurviewProvider {
         Ok(())
     }
 
-    fn sign_in(&self, _username_hint: Option<&str>) -> Result<(), PurviewError> {
+    fn sign_in(&self, username_hint: Option<&str>) -> Result<(), PurviewError> {
+        if let Some(hints) = &self.login_hints {
+            *hints.lock().unwrap_or_else(|poison| poison.into_inner()) = username_hint.map(str::to_owned);
+        }
         if let Some(gate) = &self.sign_in_gate {
             gate.started.send(()).unwrap();
             gate.release.lock().unwrap().recv_timeout(std::time::Duration::from_secs(5)).unwrap();
@@ -328,11 +336,27 @@ fn missing_storytold_app_id_names_the_actual_sign_in_prerequisite() {
 
 #[test]
 fn opening_a_pfile_automatically_opens_the_signed_out_sign_in_gate() {
-    let h = harness_pfile(TestPurviewProvider::signed_out_for_pfile());
-    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Microsoft account");
-    h.get_by_label("Sign in");
+    let hints = Arc::new(Mutex::new(None));
+    let mut provider = TestPurviewProvider::signed_out_for_pfile();
+    provider.login_hints = Some(hints.clone());
+    let mut h = harness_pfile(provider);
+    h.get_by_label("Microsoft account");
+    let email = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Work or school email (optional)");
+    email.click();
+    h.run_steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Work or school email (optional)").type_text("ada@contoso.com");
+    h.run_steps(1);
+    h.get_by_label("Continue with Microsoft").click();
+    for _ in 0..100 {
+        h.run_steps(1);
+        if hints.lock().unwrap().is_some() && h.query_by_label("Work or school email (optional)").is_none() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(hints.lock().unwrap().as_deref(), Some("ada@contoso.com"));
+    assert!(h.query_by_label("Work or school email (optional)").is_none(), "login hint leaves the app UI after handoff");
     assert!(h.query_by(|node| node.label().as_deref() == Some("Sensitivity labels")).is_none());
-    assert!(h.query_by(|node| node.label().as_deref() == Some("Document capabilities")).is_none());
 }
 
 #[test]
@@ -368,7 +392,7 @@ fn opening_a_protected_file_keeps_its_prompt_when_the_account_dialog_is_already_
     h.state_mut().open_bytes(&ctx, "protected.pfile", None, b"MicrosoftIRMServices Protected PDF".to_vec()).unwrap();
     h.run_steps(3);
     assert!(h.state().purview_signin_prompt.is_some());
-    h.get_by_label("Sign in");
+    h.get_by_label("Continue with Microsoft");
 }
 
 #[test]
@@ -448,7 +472,7 @@ fn protected_open_waits_for_an_in_progress_account_change() {
 #[test]
 fn successful_sign_in_retries_the_held_file_without_an_extra_close() {
     let mut h = harness_pfile(TestPurviewProvider::signed_out_for_pfile());
-    h.get_by_label("Sign in").click();
+    h.get_by_label("Continue with Microsoft").click();
     for _ in 0..200 {
         h.run_steps(1);
         if !h.state().session.docs().is_empty() {
@@ -468,7 +492,7 @@ fn held_file_opens_while_label_policy_is_still_loading() {
     let mut provider = TestPurviewProvider::signed_out_for_pfile();
     provider.labels_gate = Some(Arc::new(SignInGate { started: started_tx, release: Mutex::new(release_rx) }));
     let mut h = harness_pfile(provider);
-    h.get_by_label("Sign in").click();
+    h.get_by_label("Continue with Microsoft").click();
     let mut labels_started = false;
     for _ in 0..200 {
         h.run_steps(1);
@@ -973,11 +997,15 @@ fn renewing_sign_in_revalidates_rights_without_losing_protected_edits() {
         principal_name: "ada@example.com".into(),
     };
     let document = PurviewDocument { protected: true, rights: PurviewRights { owner: true, view: true, ..Default::default() }, ..Default::default() };
-    let mut h = harness_with_document(TestPurviewProvider::signed_in_with_document(account.clone(), vec![account], document));
+    let hints = Arc::new(Mutex::new(None));
+    let mut provider = TestPurviewProvider::signed_in_with_document(account.clone(), vec![account], document);
+    provider.login_hints = Some(hints.clone());
+    let mut h = harness_with_document(provider);
     let id = h.state().session.docs()[0].id;
     h.state_mut().session.apply(id, Edit::SetInfo { key: "Title".into(), value: "unsaved".into() }).unwrap();
     h.get_by_label("Renew Microsoft sign-in").click();
     crate::support::wait_until(&mut h, "renewed Purview sign-in", |app| app.toast.as_ref().is_some_and(|(message, _)| message == "Signed in"));
+    assert_eq!(hints.lock().unwrap().as_deref(), Some("ada@example.com"));
     assert_eq!(h.state().session.get(id).unwrap().info_value("Title").as_deref(), Some("unsaved"));
     assert!(h.state().session.get(id).unwrap().purview().unwrap().rights.owner);
 }

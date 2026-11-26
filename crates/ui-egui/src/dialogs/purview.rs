@@ -61,12 +61,13 @@ pub(crate) struct PurviewDialog {
     view: PurviewView,
     label_id: String,
     justification: String,
+    login_hint: String,
     action: Option<Action>,
 }
 
 impl PurviewDialog {
     fn new(view: PurviewView, label_id: String, justification: String) -> Self {
-        Self { id: dialog_id("purview"), view, label_id, justification, action: None }
+        Self { id: dialog_id("purview"), view, label_id, justification, login_hint: String::new(), action: None }
     }
 }
 
@@ -204,10 +205,24 @@ fn labels_section(ui: &mut egui::Ui, view: &PurviewView, selected: &mut String, 
     }
 }
 
-fn dialog_body(ui: &mut egui::Ui, view: &PurviewView, selected: &mut String, justification: &mut String, action: &mut Option<Action>) {
+fn dialog_body(
+    ui: &mut egui::Ui,
+    view: &PurviewView,
+    selected: &mut String,
+    justification: &mut String,
+    login_hint: &mut String,
+    action: &mut Option<Action>,
+) {
     match view.status {
         PurviewStatus::SignedOut => {
-            if ui.button(tl!("Sign in")).clicked() {
+            if view.pending_name.is_some() {
+                let email = ui.label(tl!("Work or school email (optional)"));
+                ui.add(egui::TextEdit::singleline(login_hint).char_limit(320).desired_width(270.0).hint_text("name@tenant.com"))
+                    .labelled_by(email.id);
+                ui.label(tl!("Used only to open Microsoft sign-in. PdfCraft does not save this address or ask for a password."));
+            }
+            let action_label = if view.pending_name.is_some() { "Continue with Microsoft" } else { "Sign in" };
+            if ui.button(tl!(action_label)).clicked() {
                 *action = Some(Action::SignIn);
             }
         }
@@ -268,7 +283,7 @@ impl StackDialog for PurviewDialog {
     }
 
     fn show(&mut self, ui: &mut egui::Ui, _: &DialogStack) -> Option<DialogResult<()>> {
-        let Self { view, label_id, justification, action, .. } = self;
+        let Self { view, label_id, justification, login_hint, action, .. } = self;
         let title = if view.status == PurviewStatus::Ready {
             if view.pending_name.is_some() { "Open protected document" } else { "Sensitivity label" }
         } else {
@@ -277,7 +292,7 @@ impl StackDialog for PurviewDialog {
         let shown = FormDialog::new(tl!(title).to_string(), Bind::bound(label_id)).buttons(FormButtons::Close).enter_confirms(false).show(
             ui,
             |ui, _, selected| {
-                dialog_body(ui, view, selected, justification, action);
+                dialog_body(ui, view, selected, justification, login_hint, action);
                 true
             },
         );
@@ -299,6 +314,7 @@ impl PdfCraftApp {
 
     pub(crate) fn purview_pass(&mut self, ctx: &egui::Context) {
         if self.dialogs.take::<PurviewDialog>().is_some() {
+            self.purview_login_hint.clear();
             if let Some(prompt) = self.purview_signin_prompt.take()
                 && let Some(meta) = prompt.recovered
                 && !self.recoverable.iter().any(|item| item.key == meta.key)
@@ -313,6 +329,9 @@ impl PdfCraftApp {
         self.purview_label_id = dialog.label_id.clone();
         self.purview_justification = dialog.justification.clone();
         let action = dialog.action.take();
+        if matches!(&action, Some(Action::SignIn)) {
+            self.purview_login_hint = std::mem::take(&mut dialog.login_hint);
+        }
         match action {
             Some(Action::SignIn) => self.start_purview_sign_in(ctx),
             Some(Action::SignOut) => match self.session.purview_sign_out() {

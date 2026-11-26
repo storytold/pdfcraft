@@ -937,6 +937,15 @@ impl PdfCraftApp {
             self.notify_tr(reason);
             return;
         }
+        let username_hint = if reauthenticate {
+            self.session
+                .purview_account()
+                .and_then(|account| [account.principal_name, account.email].into_iter().find(|value| !value.trim().is_empty()))
+        } else {
+            let hint = self.purview_login_hint.trim().to_owned();
+            (!hint.is_empty()).then_some(hint)
+        };
+        self.purview_login_hint.clear();
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.purview_sign_in_job.is_some() {
@@ -954,7 +963,11 @@ impl PdfCraftApp {
             let (sender, receiver) = std::sync::mpsc::channel();
             let wake = self.wake.clone();
             let worker = std::thread::Builder::new().name("purview-sign-in".into()).spawn(move || {
-                let result = if reauthenticate { provider.reauthenticate_active(None) } else { provider.sign_in(None) };
+                let result = if reauthenticate {
+                    provider.reauthenticate_active(username_hint.as_deref())
+                } else {
+                    provider.sign_in(username_hint.as_deref())
+                };
                 if sender.send((reauthenticate, result)).is_err() {
                     log::debug!("Microsoft sign-in completed after PdfCraft exited");
                 }
@@ -969,7 +982,7 @@ impl PdfCraftApp {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        match self.session.purview_sign_in(None) {
+        match self.session.purview_sign_in(username_hint.as_deref()) {
             Ok(()) => {
                 if reauthenticate && let Err(error) = self.session.purview_revalidate_protected_documents() {
                     self.notify_fmt("Couldn't revalidate Microsoft Purview protection: {e}", &[("e", &error.to_string())]);

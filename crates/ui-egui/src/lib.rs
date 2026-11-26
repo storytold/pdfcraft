@@ -692,6 +692,7 @@ pub struct PdfCraftApp {
     /// Microsoft Purview label selection and downgrade justification.
     pub purview_labels: Vec<pdfcraft_purview::PurviewLabel>,
     pub(crate) purview_labels_error: Option<String>,
+    pub(crate) purview_login_hint: String,
     pub purview_label_id: String,
     pub purview_justification: String,
     /// New bookmarks from text styles dialog state (#1693).
