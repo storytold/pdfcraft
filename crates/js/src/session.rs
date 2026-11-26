@@ -223,12 +223,12 @@ impl Realm {
             if initial.execution_refused {
                 return initial;
             }
-            let (fields, doc, reset_calls, calculation_evaluations) = crate::host::host(ctx)
+            let (fields, doc, calculations, reset_calls, calculation_evaluations) = crate::host::host(ctx)
                 .map(|h| {
                     let h = h.borrow();
-                    (h.fields.clone(), h.doc.clone(), h.reset_calls, h.calculation_evaluations)
+                    (h.fields.clone(), h.doc.clone(), h.calculations.clone(), h.reset_calls, h.calculation_evaluations)
                 })
-                .unwrap_or((job.fields, job.doc.clone(), 0, 0));
+                .unwrap_or((job.fields, job.doc.clone(), job.calculations, 0, 0));
             let saved = link.then(|| crate::timers::save(ctx)).flatten();
             let mut out = crate::run::run_in_context(
                 ctx,
@@ -239,7 +239,7 @@ impl Realm {
                 crate::run::ScriptSetup {
                     doc_scripts: &[],
                     skipped: &[],
-                    calculations: &job.calculations,
+                    calculations: &calculations,
                     initialize: false,
                     reset_calls,
                     calculation_evaluations,

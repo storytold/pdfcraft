@@ -133,6 +133,24 @@ fn initializer_pages_reach_the_first_event() {
 }
 
 #[test]
+fn initializer_template_calculations_reach_the_first_event() {
+    let mut field = FieldState::new("amount", FieldType::Text, vec!["original".into()]);
+    field.pages = vec![0];
+    let job = crate::session::Job {
+        script: "calculateNow();getField('P1.Notes.amount').value".into(),
+        event: Event::doc("Console"),
+        doc: doc(),
+        fields: Arc::new(vec![field]),
+        doc_scripts: vec!["createTemplate('Notes',0);getTemplate('Notes').spawn(1,true,false);".into()].into(),
+        calculations: vec![(0, "event.value='calculated';".into())],
+        timer: None,
+    };
+    let out = crate::session::ScriptSession::default().run(job, &[]);
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("calculated"));
+}
+
+#[test]
 fn positional_spawn_uses_template_name_first() {
     let doc = doc();
     let out = run(
