@@ -6,17 +6,18 @@
 //! dropped, and every positioning operator stays, so the lines after it keep their places
 //! (`Td`, `T*` and friends move from the line matrix, which showing text doesn't change).
 //!
-//! The new text uses the line's own font when every character has a code and a glyph in it;
-//! otherwise it is set in Helvetica (WinAnsi), and the result says the font was substituted.
+//! The new text uses the line's own font when every character has a code and a glyph in it.
+//! Otherwise the words the font can show keep it and only the others are set in Helvetica
+//! (WinAnsi), run by run, and the result says the font was substituted.
 //! Reflowing a paragraph to a new width is not done here (see `edit.text-reflow`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, Object, PdfString, Stream};
 use pdfcraft_fonts::pdf::Metrics;
-use pdfcraft_fonts::{CraftFont, GlyphError, japanese_glyph_from};
+use pdfcraft_fonts::{EmbeddedFace, GlyphError, japanese_glyph_from};
 
 use crate::EditError;
 
@@ -25,8 +26,13 @@ mod regions;
 #[path = "text_session.rs"]
 mod session;
 pub use fallback::strip_subset_tag;
-use regions::{alignment_frame, group_blocks, is_centred, rewrite_changed_words, rewrite_styled_block};
+use regions::{alignment_frame, existing_gap, group_blocks, is_centred, rewrite_changed_words, rewrite_styled_block, row_sources, source_row_step};
 pub use session::TextSession;
+
+#[path = "text_containers.rs"]
+mod containers;
+#[path = "text_row_style.rs"]
+mod row_style;
 
 mod blocks;
 mod editor;
@@ -39,25 +45,29 @@ mod rewrite;
 #[cfg(test)]
 use blocks::wrap;
 pub use blocks::{
-    BlockKey, BlockStyle, RangeStyle, ReadingBlocks, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
+    BlockKey, BlockStyle, RangeStyle, ReadingBlocks, RunSources, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
     replace_block, text_blocks,
 };
 use blocks::{kept_words, paragraph_separator, row_break};
 pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_layout, text_editor_fonts};
 use editor::{builtin_thai_choice, layout_draft};
-#[cfg(test)]
-pub(crate) use fallback::SOURCE_SPACE_CALLS;
 use fallback::{
     MAX_TYPE3_GLYPHS, Type3Glyph, fallback_face, needs_type3, no_fallback_font, no_glyph_for, same_base_font, same_font, source_encodes,
     source_family, source_program, source_show, source_space, source_width, type3_faces, type3_glyph, write_type3_glyphs,
 };
 #[cfg(test)]
+pub(crate) use fallback::{SOURCE_SPACE_CALLS, take_source_character_measurements};
+#[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};
 pub(crate) use fallback::{glyph_path, type3_font_dict, unique_font_name};
+#[cfg(test)]
+pub(crate) use interp::METRICS_BUILT;
 use interp::{Origin, Paint, union};
+#[cfg(test)]
+pub(crate) use lines::dropped_advances_within;
 pub(crate) use lines::{
-    ContentStream, FormBudget, Read, content_streams, content_streams_within, dict_in_place, drawn_before_damage, first_op_after_damage, form_call,
-    joined, resource_dict, rewritten_contents, splice,
+    ContentStream, FormBudget, Read, content_streams, content_streams_within, dict_in_place, drawn_before_damage, dropped_advances,
+    dropped_side_effects, first_op_after_damage, form_call, joined, reopen_text_object, resource_dict, rewritten_contents, splice,
 };
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
 use lines::{page_dict, word_lines};
@@ -107,6 +117,7 @@ pub struct TextLine {
     scope: Option<usize>,
     /// The layers and graphics state parameters it is drawn in; see [`Paint`].
     paint: Paint,
+    containers: Vec<usize>,
     /// Right-to-left `/ActualText` already supplies typing order; glyph text still needs bidi
     /// recovery. Left-to-right ActualText (e.g. a Latin ligature) joins its line as usual.
     logical_order: bool,
@@ -132,6 +143,9 @@ pub struct TextLine {
     /// Chinese/Japanese word split), from `/PCSoft`'s `/N`; 1 when the marker carried none
     /// (#2529). Meaningless otherwise.
     soft_gap: usize,
+    /// The `/PCEdLine` marked-content sequence a replacement mixing fonts wrote the line in
+    /// (see [`fallback::continues_font`]).
+    edited: Option<usize>,
 }
 
 impl TextLine {
@@ -352,11 +366,11 @@ mod tests {
     #[test]
     fn fallback_face_moves_on_when_the_best_face_lacks_a_character() {
         static JPAN: &[&str] = &["Jpan"];
-        let mincho = CraftFont { family: "Mincho", style: "Regular", scripts: JPAN, bytes: b"" };
-        let gothic = CraftFont { family: "Gothic", style: "Regular", scripts: JPAN, bytes: b"" };
+        let mincho = EmbeddedFace { family: "Mincho", style: "Regular", scripts: JPAN, index: 0, bytes: b"", role: None };
+        let gothic = EmbeddedFace { family: "Gothic", style: "Regular", scripts: JPAN, index: 0, bytes: b"", role: None };
         let faces = [&mincho, &gothic];
         // Only the Gothic face has the Cyrillic letter.
-        let has = |face: &CraftFont, ch: char| ch.is_ascii() || face.family == "Gothic";
+        let has = |face: &EmbeddedFace, ch: char| ch.is_ascii() || face.family == "Gothic";
         assert_eq!(fallback_face(&faces, &['a', 'ф'], has).map(|f| f.family), Some("Gothic"));
         // Characters the best face has keep it.
         assert_eq!(fallback_face(&faces, &['a', 'b'], has).map(|f| f.family), Some("Mincho"));
@@ -368,7 +382,7 @@ mod tests {
     #[test]
     fn hebrew_and_japanese_fallback_shards_are_recognized_as_ours() {
         static HEBR: &[&str] = &["Hebr"];
-        let face = CraftFont { family: "FakeHebrew", style: "Regular", scripts: HEBR, bytes: b"" };
+        let face = EmbeddedFace { family: "FakeHebrew", style: "Regular", scripts: HEBR, index: 0, bytes: b"", role: None };
         let glyph = |code, ch| Type3Glyph { code, ch, path: b"0 0 0 0 0 0 d1\nf\n".to_vec(), width: 0.5 };
         let mut doc = Document::new_empty();
         let mut fonts = Dict::new();

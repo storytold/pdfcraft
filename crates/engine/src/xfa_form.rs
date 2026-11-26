@@ -15,13 +15,10 @@ pub(crate) fn xfa_layout(doc: &mut pdfcraft_cos::Document) -> Result<XfaLayout, 
 /// Give the fields of a laid-out XFA form their appearances. A signed signature box keeps the
 /// picture its signer's application drew.
 pub(crate) fn xfa_redraw(doc: &mut pdfcraft_cos::Document) -> Result<(), String> {
-    for f in pdfcraft_forms::fields(doc) {
-        if f.kind == pdfcraft_forms::FieldKind::Signature && doc.get(f.obj).as_dict().is_some_and(|d| d.contains(b"V")) {
-            continue;
-        }
-        pdfcraft_forms::redraw_field(doc, &f.name).map_err(|e| format!("{}: {e}", f.name))?;
-    }
-    Ok(())
+    let signed = |doc: &pdfcraft_cos::Document, f: &pdfcraft_forms::Field| {
+        f.kind == pdfcraft_forms::FieldKind::Signature && doc.get(f.obj).as_dict().is_some_and(|d| d.contains(b"V"))
+    };
+    pdfcraft_forms::redraw_fields(doc, |doc, f| !signed(doc, f)).map_err(|e| e.to_string())
 }
 
 /// A warning for each field whose appearance PdfCraft drew with `?` for a character its font
@@ -246,6 +243,7 @@ pub(crate) fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut E
             ran_away: false,
             highlight,
             time_scale: cx.xfa_time_scale,
+            relaid: false,
         };
         let r = guard(|| xfa::on_data_replaced(doc, &tpl, calculate, &mut run))
             .unwrap_or_else(|m| Err(format!("laying the form out again failed unexpectedly ({m})")));
@@ -253,6 +251,7 @@ pub(crate) fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut E
         cx.xfa_ran_away |= run.ran_away;
         // The next XFA run of a batch starts from the page count this one left.
         cx.pages = run.page_count;
+        cx.xfa_relaid |= run.relaid;
         // The next edit of a batch reads the highlight this one's scripts set.
         let on = run.highlight;
         cx.set_highlight(on);

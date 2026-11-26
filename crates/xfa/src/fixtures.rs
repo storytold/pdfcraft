@@ -66,6 +66,44 @@ pub fn template(rows: usize) -> String {
     t
 }
 
+/// A check box `more`, `before`, an 8in block, the hidden section `details` (two fields 3in
+/// tall) and `after`, on letter pages: shown, the section needs another page. With
+/// `calculated`, a hidden field's calculate script shows or hides the section as `more` says
+/// (so a reset does too); otherwise the check box's change script does. `exit` is the check
+/// box's exit script, if not empty.
+pub fn presence_growth_template(calculated: bool, before: &str, after: &str, exit: &str) -> String {
+    let js = |activity: &str, body: &str| {
+        format!(r#"<event activity="{activity}"><script contentType="application/x-javascript">{body}</script></event>"#)
+    };
+    let (change, sync) = if calculated {
+        let script = r#"details.presence = (more.rawValue == 1) ? "visible" : "hidden"; "";"#;
+        let sync = format!(
+            r#"<field name="sync" w="1in" h="0.2in" presence="hidden"><ui><textEdit/></ui><calculate><script contentType="application/x-javascript">{script}</script></calculate></field>"#
+        );
+        (String::new(), sync)
+    } else {
+        (js("change", r#"details.presence = (this.rawValue == 1) ? "visible" : "hidden";"#), String::new())
+    };
+    let exit = if exit.is_empty() { String::new() } else { js("exit", exit) };
+    format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="master"><occur max="-1"/><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <field name="more" w="3in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items>{change}{exit}</field>
+  {sync}{before}
+  <draw name="filler" w="7.5in" h="8in"><value><text>Filler</text></value></draw>
+  <subform name="details" layout="tb" presence="hidden">
+   <field name="d1" w="6in" h="3in"><ui><textEdit/></ui></field>
+   <field name="d2" w="6in" h="3in"><ui><textEdit/></ui></field>
+  </subform>
+  {after}
+ </subform>
+</subform></template>
+</xdp:xdp>"#
+    )
+}
+
 /// A growable rich-text field followed by a section that starts on a new page.
 pub fn growable_text_template(scripted: bool) -> String {
     let event = if scripted { r#"<event activity="initialize"><script contentType="application/x-javascript">0;</script></event>"# } else { "" };
@@ -324,6 +362,99 @@ pub fn unnamed_hidden_template() -> String {
    <subform layout="tb" presence="hidden"><draw w="4in" h="0.3in"><value><text>Old section</text></value></draw></subform>
    <field name="note" w="4in" h="0.3in"><ui><textEdit/></ui></field>
   </subform>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
+/// The Tab-order probe: fields placed out of document order (A), `next` links (B), a subform
+/// whose `first` link goes to a draw that links on (C), hidden, invisible, read-only and
+/// protected fields (D), and a protected `log` at the top. Another viewer tabs it `start A2 A3
+/// A4 A1 B1 B3 B2 B4 C3 D1 D4 D6 finish C1 C2`, then back to `start`.
+pub fn traversal_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form1" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.25in" y="0.25in" w="8in" h="10.5in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="position" w="8in" h="10in">
+  <field name="log" x="0in" y="0in" w="8in" h="1.1in" access="protected"><ui><textEdit multiLine="1"/></ui></field>
+  <field name="start" x="0in" y="1.3in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="1.85in" w="7.5in" h="0.3in"><value><text>Section A: no links (written A1 A2 A3 A4, placed A2 A3 / A4 A1)</text></value></draw>
+  <field name="A1" x="3in" y="2.65in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="A2" x="0in" y="2.2in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="A3" x="3in" y="2.2in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="A4" x="0in" y="2.65in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="3.2in" w="7.5in" h="0.3in"><value><text>Section B: next links B1 to B3, B3 to B2, B2 to B4</text></value></draw>
+  <field name="B1" x="0in" y="3.55in" w="1.5in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="B3[0]"/></traversal></field>
+  <field name="B2" x="2in" y="3.55in" w="1.5in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="B4[0]"/></traversal></field>
+  <field name="B3" x="4in" y="3.55in" w="1.5in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="B2[0]"/></traversal></field>
+  <field name="B4" x="6in" y="3.55in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="4.1in" w="7.5in" h="0.3in"><value><text>Section C: the subform's first link goes to a label, which links to C3</text></value></draw>
+  <subform name="C" x="0in" y="4.45in" w="8in" h="0.4in" layout="position"><traversal><traverse operation="first" ref="Clabel[0]"/></traversal>
+   <draw name="Clabel" x="0in" y="0in" w="0.6in" h="0.35in"><value><text>C:</text></value><traversal><traverse ref="C3[0]"/></traversal></draw>
+   <field name="C1" x="0.7in" y="0in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+   <field name="C2" x="2.9in" y="0in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+   <field name="C3" x="5.1in" y="0in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  </subform>
+  <draw x="0in" y="5.0in" w="7.5in" h="0.3in"><value><text>Section D: D2 hidden, D3 invisible, D4 read-only, D5 protected</text></value></draw>
+  <field name="D1" x="0in" y="5.35in" w="1.2in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="D2" x="1.35in" y="5.35in" w="1.2in" h="0.35in" presence="hidden"><ui><textEdit/></ui></field>
+  <field name="D3" x="2.7in" y="5.35in" w="1.2in" h="0.35in" presence="invisible"><ui><textEdit/></ui></field>
+  <field name="D4" x="4.05in" y="5.35in" w="1.2in" h="0.35in" access="readOnly"><ui><textEdit/></ui></field>
+  <field name="D5" x="5.4in" y="5.35in" w="1.2in" h="0.35in" access="protected"><ui><textEdit/></ui></field>
+  <field name="D6" x="6.75in" y="5.35in" w="1.2in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="finish" x="0in" y="6.0in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
+/// The second Tab-order probe: in each row, the first field links to an object between the
+/// second and third that links on to the fourth: a hidden subform (E), a hidden field (F), an
+/// invisible field (G) and a protected field (H). Another viewer tabs it `start E1 E2 E3 E4 F1
+/// F4 G1 G4 H1 H4 finish F2 F3 G2 G3 H2 H3`, then back to `start`.
+pub fn traversal_targets_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form1" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.25in" y="0.25in" w="8in" h="10.5in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="position" w="8in" h="10in">
+  <field name="start" x="0in" y="1.3in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="1.85in" w="7.5in" h="0.3in"><value><text>Section E: E1 links to ET, a hidden subform between E2 and E3, which links to E4</text></value></draw>
+  <field name="E1" x="0in" y="2.2in" w="1.3in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="ET[0]"/></traversal></field>
+  <field name="E2" x="1.6in" y="2.2in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <subform name="ET" x="3.0in" y="2.2in" w="1.3in" h="0.35in" layout="position" presence="hidden"><traversal><traverse ref="E4[0]"/></traversal>
+   <field name="ETin" x="0in" y="0in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  </subform>
+  <field name="E3" x="4.4in" y="2.2in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="E4" x="6.0in" y="2.2in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="2.75in" w="7.5in" h="0.3in"><value><text>Section F: F1 links to FT, a hidden field between F2 and F3, which links to F4</text></value></draw>
+  <field name="F1" x="0in" y="3.1in" w="1.3in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="FT[0]"/></traversal></field>
+  <field name="F2" x="1.6in" y="3.1in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="FT" x="3.0in" y="3.1in" w="1.3in" h="0.35in" presence="hidden"><ui><textEdit/></ui><traversal><traverse ref="F4[0]"/></traversal></field>
+  <field name="F3" x="4.4in" y="3.1in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="F4" x="6.0in" y="3.1in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="3.65in" w="7.5in" h="0.3in"><value><text>Section G: G1 links to GT, an invisible field between G2 and G3, which links to G4</text></value></draw>
+  <field name="G1" x="0in" y="4.0in" w="1.3in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="GT[0]"/></traversal></field>
+  <field name="G2" x="1.6in" y="4.0in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="GT" x="3.0in" y="4.0in" w="1.3in" h="0.35in" presence="invisible"><ui><textEdit/></ui><traversal><traverse ref="G4[0]"/></traversal></field>
+  <field name="G3" x="4.4in" y="4.0in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="G4" x="6.0in" y="4.0in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="4.55in" w="7.5in" h="0.3in"><value><text>Section H: H1 links to HT, a protected field between H2 and H3, which links to H4</text></value></draw>
+  <field name="H1" x="0in" y="4.9in" w="1.3in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="HT[0]"/></traversal></field>
+  <field name="H2" x="1.6in" y="4.9in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="HT" x="3.0in" y="4.9in" w="1.3in" h="0.35in" access="protected"><ui><textEdit/></ui><traversal><traverse ref="H4[0]"/></traversal></field>
+  <field name="H3" x="4.4in" y="4.9in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="H4" x="6.0in" y="4.9in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="finish" x="0in" y="5.5in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
  </subform>
 </subform>
 </template>

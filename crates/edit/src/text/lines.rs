@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::fallback::{same_font, same_paint};
+use super::fallback::{adopt_source_font, continues_font, same_paint};
 use super::interp::{Carry, Clip, Origin, Pen, Shown, TextState, Ts, clip_shows, clip_within, direction, interpret, region, to_frame, union};
 use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
 
@@ -113,6 +113,146 @@ pub(crate) fn content_streams_within(doc: &Document, page: &Dict, budget: &mut D
         out.push(ContentStream { entry, data, read });
     }
     Ok(out)
+}
+
+/// What a text-showing operator does besides showing text (ISO 32000-2 §9.4.3, Table 107): `'`
+/// moves to the next line (`T*`), and `"` first sets the word and character spacing (`aw Tw`,
+/// `ac Tc`). Text after it relies on both, so a dropped `'` or `"` leaves these in its place.
+pub(crate) fn show_side_effects(op: &Op) -> Vec<Op> {
+    let mut out = Vec::new();
+    if op.is("\"") {
+        out.extend(op.num(0).map(|aw| Op::new("Tw", vec![pdfcraft_content::num(aw)])));
+        out.extend(op.num(1).map(|ac| Op::new("Tc", vec![pdfcraft_content::num(ac)])));
+    }
+    if op.is("'") || op.is("\"") {
+        out.push(Op::new("T*", vec![]));
+    }
+    out
+}
+
+/// For a paragraph or region rewrite: what dropped operator `i` must leave behind
+/// ([`show_side_effects`]), so the text after it keeps its line and spacing. `split_at` is the
+/// operator the text object was split at: the rewrite's `Tm` and state there already include
+/// that operator's effects.
+pub(crate) fn dropped_side_effects(ops: &[Op], i: usize, keep: bool, split_at: Option<usize>) -> Vec<Op> {
+    if keep || split_at == Some(i) {
+        return Vec::new();
+    }
+    ops.get(i).map(show_side_effects).unwrap_or_default()
+}
+
+/// For a paragraph or region rewrite that splits a text object: what reopens it after the
+/// rewritten paragraph, so the text after it starts where it did. `tlm` and `tm` are the line and
+/// text matrices where the paragraph began, and `size` and `scale` the font size (`Tf`) and
+/// horizontal scaling (`Tz` / 100) in force there. A `Tm` restores the line matrix, which a later
+/// `Td` or `T*` moves from; a kept run before the paragraph on the same baseline had already
+/// advanced the pen beyond it (ISO 32000-2 §9.4.4), so a numeric `TJ` then moves the text matrix
+/// alone by that advance. Only an advance along a horizontal baseline is expressible that way;
+/// one that isn't (a vertical run's, or one at a zero size) leaves the pen at the line matrix.
+pub(crate) fn reopen_text_object(tlm: [f64; 6], tm: [f64; 6], size: Option<f64>, scale: f64) -> Vec<Op> {
+    let n = pdfcraft_content::num;
+    let mut out = vec![Op::new("BT", vec![]), Op::new("Tm", tlm.iter().map(|v| n(*v)).collect())];
+    // tm = [1 0 0 1 tx ty] x tlm: solve for the advance (tx, ty) in text space.
+    let (dx, dy) = (tm[4] - tlm[4], tm[5] - tlm[5]);
+    let det = tlm[0] * tlm[3] - tlm[1] * tlm[2];
+    let tx = (dx * tlm[3] - dy * tlm[2]) / det;
+    let ty = (dy * tlm[0] - dx * tlm[1]) / det;
+    let denominator = size.unwrap_or(0.0) * scale;
+    let adjustment = -1000.0 * tx / denominator;
+    if tx.is_finite() && ty.is_finite() && tx.abs() > 1e-9 && ty.abs() <= 1e-9 && denominator != 0.0 && adjustment.is_finite() {
+        out.push(Op::new("TJ", vec![Object::Array(vec![n(adjustment)])]));
+    }
+    out
+}
+
+/// For a paragraph or region rewrite: a numeric `TJ` per dropped show operator in `drop`, moving
+/// the text matrix as far as that operator's text did without drawing anything (as
+/// [`super::clear_block`] does). Text shown later in the same text object without its own `Td`
+/// or `Tm`, such as a run in another style or column on the same baseline, then stays where it
+/// was. Only an advance such a run relies on is kept: none when the text object ends, or its next
+/// kept run starts a line of its own (`Td`, `TD`, `Tm`, `T*`, `'`, `"`), first. An advance a `TJ`
+/// can't express (spacing at a zero font size) is left out. `resources` is the page's resource
+/// dictionary. This reads the glyphs without `/ActualText`, which can come to more text than the
+/// reading the edit was laid out from; a page whose text that way exceeds the page's text budget
+/// keeps no advances rather than refusing an edit the reading allowed.
+pub(crate) fn dropped_advances(doc: &Document, ops: &[Op], resources: &Dict, drop: &std::collections::HashSet<usize>) -> HashMap<usize, Op> {
+    dropped_advances_within(doc, ops, resources, drop, None)
+}
+
+/// [`dropped_advances`] with `text_left` in place of the page's text budget (tests make it small).
+pub(crate) fn dropped_advances_within(
+    doc: &Document,
+    ops: &[Op],
+    resources: &Dict,
+    drop: &std::collections::HashSet<usize>,
+    text_left: Option<usize>,
+) -> HashMap<usize, Op> {
+    let mut out = HashMap::new();
+    let mut carry = Carry::new();
+    if let Some(left) = text_left {
+        carry.text_left = left;
+    }
+    let follows = kept_run_follows(ops, drop);
+    let Ok(shown) = interpret(doc, ops, resources, &mut HashMap::new(), &mut carry, None, None) else {
+        return out;
+    };
+    for s in shown {
+        if !drop.contains(&s.op) || s.advance == 0.0 || !follows.get(s.op).copied().unwrap_or(false) {
+            continue;
+        }
+        let denominator = s.state.size * s.state.scale;
+        let adjustment = -1000.0 * s.advance / denominator;
+        if denominator != 0.0 && adjustment.is_finite() {
+            out.entry(s.op).or_insert_with(|| Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
+        }
+    }
+    out
+}
+
+/// For each operator: whether a run shown after it in its text object, and not in `drop`, is
+/// placed by the pen it left rather than by a line move of its own (see [`dropped_advances`]).
+/// A `Q` puts back the text matrices its `q` saved (as [`interpret`] reads it), so a line move
+/// between them doesn't count for the text after the `Q`. Leaving an advance in is harmless where
+/// nothing turns out to use it. One pass from the end, so a page of many dropped runs stays linear.
+fn kept_run_follows(ops: &[Op], drop: &std::collections::HashSet<usize>) -> Vec<bool> {
+    // The `q` and `Q` that pair up: [`interpret`] ignores a `Q` with nothing saved, so only a
+    // `Q` that restores something is a boundary here.
+    let mut paired = vec![false; ops.len()];
+    let mut open: Vec<usize> = Vec::new();
+    for (i, op) in ops.iter().enumerate() {
+        if op.is("q") {
+            open.push(i);
+        } else if op.is("Q")
+            && let Some(q) = open.pop()
+        {
+            for at in [q, i] {
+                if let Some(slot) = paired.get_mut(at) {
+                    *slot = true;
+                }
+            }
+        }
+    }
+    let mut out = vec![false; ops.len()];
+    let mut follows = false;
+    // What followed each `Q` still open (read backwards), restored at its `q`.
+    let mut after_restore: Vec<bool> = Vec::new();
+    for (i, op) in ops.iter().enumerate().rev() {
+        if let Some(slot) = out.get_mut(i) {
+            *slot = follows;
+        }
+        let pairs = paired.get(i).copied().unwrap_or(false);
+        match op.op.as_slice() {
+            b"Q" if pairs => {
+                after_restore.push(follows);
+                follows = false;
+            }
+            b"q" if pairs => follows = follows || after_restore.pop().unwrap_or(false),
+            b"ET" | b"BT" | b"Td" | b"TD" | b"Tm" | b"T*" | b"'" | b"\"" => follows = false,
+            b"Tj" | b"TJ" if !drop.contains(&i) => follows = true,
+            _ => {}
+        }
+    }
+    out
 }
 
 /// The page's streams joined into the one stream they are: an operator may span two of them.
@@ -320,6 +460,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
     let pieces = joined(&content_streams(doc, &p.dict)?);
     let ops = pieces.parse().ops;
     let properties = res.get(b"Properties").and_then(|o| doc.dict(o)).unwrap_or_default();
+    carry.containers = std::rc::Rc::new(super::containers::Containers::collect(doc, &ops, &res));
     let shown = interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(&properties))?;
     let mut last: Option<(usize, Pen)> = None; // the stream piece and where its last run ended
     for mut s in shown {
@@ -338,9 +479,11 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             let bt = pen.bt;
             let (near, gap) = pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 });
             piece == si
-                && lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
+                && lines.last().is_some_and(|l| {
+                    l.scope == s.scope && l.paint == s.paint && l.containers == s.containers && l.logical_order == s.logical_order
+                })
                 && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
-                && (s.text.trim().is_empty() || lines.last().is_some_and(|l| same_font(l, &s.font, &s.base_font, s.face.as_deref())))
+                && (s.text.trim().is_empty() || lines.last().is_some_and(|l| continues_font(l, &s)))
                 && (s.text.trim().is_empty()
                     || lines.last().is_some_and(|l| {
                         (s.size - l.size).abs() < 0.01
@@ -374,6 +517,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             if l.unreadable_mode.is_none() {
                 l.unreadable_mode = s.state.unreadable.as_deref().map(str::to_owned);
             }
+            adopt_source_font(l, &s);
             // Spaces may use a separate subset font; they do not change the visible style.
         } else {
             lines.push(TextLine {
@@ -393,6 +537,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 stream: si,
                 scope: s.scope,
                 paint: s.paint.clone(),
+                containers: s.containers.clone(),
                 logical_order: s.logical_order,
                 actual_text: s.actual_text,
                 clips: s.state.render_mode >= 4,
@@ -401,6 +546,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 soft_break: s.soft_break,
                 hard_break: s.hard_break,
                 soft_gap: s.soft_gap,
+                edited: s.edited,
                 ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
                 origin: Origin {
                     tm: s.tm.0,
@@ -459,9 +605,9 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
 fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream: usize) {
     let joins = last.is_some_and(|pen| {
         let bt = pen.bt;
-        lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
+        lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.containers == s.containers && l.logical_order == s.logical_order)
             && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
-            && (s.text.trim().is_empty() || lines.last().is_some_and(|l| same_font(l, &s.font, &s.base_font, s.face.as_deref())))
+            && (s.text.trim().is_empty() || lines.last().is_some_and(|l| continues_font(l, &s)))
             && (s.text.trim().is_empty()
                 || lines.last().is_some_and(|l| {
                     (s.size - l.size).abs() < 0.01
@@ -492,6 +638,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
         if l.unreadable_mode.is_none() {
             l.unreadable_mode = s.state.unreadable.as_deref().map(str::to_owned);
         }
+        adopt_source_font(l, &s);
     } else {
         lines.push(TextLine {
             text: s.text.clone(),
@@ -510,6 +657,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             stream,
             scope: s.scope,
             paint: s.paint.clone(),
+            containers: s.containers.clone(),
             logical_order: s.logical_order,
             actual_text: s.actual_text,
             clips: s.state.render_mode >= 4,
@@ -518,6 +666,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             soft_break: s.soft_break,
             hard_break: s.hard_break,
             soft_gap: s.soft_gap,
+            edited: s.edited,
             ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
             origin: Origin {
                 tm: s.tm.0,
@@ -688,8 +837,8 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         let mut last_stream = None;
         let mut forms = invoked.into_iter().peekable();
         for s in shown {
-            while let Some((_, name, ts)) = forms.next_if(|f| f.0 < s.op) {
-                enter(w, resources, &name, ts, &mut carry.text_left)?;
+            while let Some((i, name, ts)) = forms.next_if(|f| f.0 < s.op) {
+                enter(w, resources, &name, ts, &mut carry.text_left, carry.containers.clone(), [carry.at.as_slice(), &[i]].concat())?;
                 // Text after a form starts a new line.
                 last = None;
             }
@@ -706,13 +855,21 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             }
             add_shown(&mut w.lines, &mut last, s, si);
         }
-        for (_, name, ts) in forms {
-            enter(w, resources, &name, ts, &mut carry.text_left)?;
+        for (i, name, ts) in forms {
+            enter(w, resources, &name, ts, &mut carry.text_left, carry.containers.clone(), [carry.at.as_slice(), &[i]].concat())?;
         }
         Ok(())
     }
     /// `text_left`: the page's text budget, shared with the forms the page draws.
-    fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts, text_left: &mut usize) -> Result<(), EditError> {
+    fn enter(
+        w: &mut Walk,
+        resources: &Dict,
+        name: &[u8],
+        ts: Ts,
+        text_left: &mut usize,
+        containers: std::rc::Rc<super::containers::Containers>,
+        at: Vec<usize>,
+    ) -> Result<(), EditError> {
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
         let ops = parse(&form.data).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
@@ -729,6 +886,8 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             layers: Vec::new(),
             text_left: *text_left,
             gap_space: false,
+            containers,
+            at,
         };
         let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);
@@ -755,6 +914,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
     let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let stream_of = |i: usize| ops.get(i).map_or(0, |op| pieces.pieces_of(op).0);
+    carry.containers = std::rc::Rc::new(super::containers::Containers::collect(doc, &ops, &res));
     walk(&mut w, &ops, &res, &mut carry, &stream_of)?;
     let mut lines = w.lines;
     // A visual-order Indic font draws pre-base vowel signs before their consonant.

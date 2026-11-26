@@ -9,7 +9,7 @@ use crate::data::{
 use crate::data::{add_data_instances, remove_data_instance, write_data_value};
 use crate::fixtures::{
     TINY_GIF, bound_date_template, fields_template, scripted_template, shell, static_shell, template, template_with_data, tiny_bmp, tiny_png,
-    tiny_tiff, unnamed_hidden_template,
+    tiny_tiff, traversal_targets_template, traversal_template, unnamed_hidden_template,
 };
 use crate::layout::Item;
 use crate::layout::WidgetKind;
@@ -426,6 +426,8 @@ fn the_xdp_template_wins_over_the_config_packets_template_element() {
     assert_eq!(tpl.root.common.name.as_deref(), Some("form"));
 }
 
+/// The sample form lays out over two pages: captions, draws and page numbers are drawn,
+/// hidden draws take no space, and each field gets its widget with its size, kind and SOM path.
 #[test]
 fn layout_places_captions_fields_and_sizes_containers_to_their_content() {
     let form = layout_xml(&template(1)).unwrap();
@@ -484,6 +486,97 @@ fn layout_places_captions_fields_and_sizes_containers_to_their_content() {
     );
 }
 
+/// The left edges of the lines of a draw `w` points wide holding `text` in Arial 8 pt, with
+/// `para` attributes, from the content area's left edge (0.5in).
+fn line_starts(text: &str, w: f64, para: &str) -> Vec<f64> {
+    let xdp = format!(
+        r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <draw name="label" w="{w}pt" h="1in"><value><text>{text}</text></value><font typeface="Arial" size="8pt"/><para {para} lineHeight="8pt"/></draw>
+</subform>
+</template></xdp:xdp>"##
+    );
+    let form = layout_xml(&xdp).unwrap();
+    let mut lines: Vec<(i64, f64)> = Vec::new();
+    for item in &form.pages[0].items {
+        let Item::Text(s) = item else { continue };
+        let key = (s.baseline * 100.0).round() as i64;
+        match lines.iter_mut().find(|(b, _)| *b == key) {
+            Some((_, x)) => *x = x.min(s.x),
+            None => lines.push((key, s.x)),
+        }
+    }
+    lines.sort_by_key(|(b, _)| *b);
+    lines.into_iter().map(|(_, x)| x - 36.0).collect()
+}
+
+/// A negative textIndent hangs the first line: it starts left of the others, never left of the
+/// box, and the other lines move in by the hang. A positive indent still moves only the first line.
+#[test]
+fn a_negative_text_indent_hangs_the_first_line_and_indents_the_rest() {
+    let text = "11. SERVICE MEMBER BALANCE (TOTAL)";
+    // No left margin: the first line starts at the box's edge and the others 18pt in.
+    let starts = line_starts(text, 58.0, r#"textIndent="-18pt""#);
+    assert!(starts.len() >= 3, "{starts:?}");
+    assert!(starts[0].abs() < 1e-6, "first line at the edge: {starts:?}");
+    assert!(starts[1..].iter().all(|x| (x - 18.0).abs() < 1e-6), "the rest hang 18pt in: {starts:?}");
+    // With a left margin wider than the hang, the first line starts at the margin less the hang.
+    let starts = line_starts(text, 90.0, r#"marginLeft="30pt" textIndent="-18pt""#);
+    assert!(starts.len() >= 2, "{starts:?}");
+    assert!((starts[0] - 12.0).abs() < 1e-6 && starts[1..].iter().all(|x| (x - 30.0).abs() < 1e-6), "{starts:?}");
+    // A positive indent still moves only the first line in.
+    let starts = line_starts(text, 58.0, r#"textIndent="10pt""#);
+    assert!((starts[0] - 10.0).abs() < 1e-6 && starts[1..].iter().all(|x| x.abs() < 1e-6), "{starts:?}");
+    // Without a negative indent a negative left margin moves every line left, as before.
+    let starts = line_starts(text, 58.0, r#"marginLeft="-6pt""#);
+    assert!(starts.iter().all(|x| (x + 6.0).abs() < 1e-6), "{starts:?}");
+    let starts = line_starts(text, 58.0, r#"marginLeft="-6pt" textIndent="10pt""#);
+    assert!((starts[0] - 4.0).abs() < 1e-6 && starts[1..].iter().all(|x| (x + 6.0).abs() < 1e-6), "{starts:?}");
+}
+
+/// A hang wider than its box is bounded by it: every line still starts and ends inside the box,
+/// and lines after the first keep room for the widest glyph when the text wraps.
+#[test]
+fn a_hang_wider_than_the_box_keeps_every_line_inside_it() {
+    // A 58pt box hanging its first line by 100pt, right-aligned.
+    for text in ["AB CD EF", "ABCDEFGHIJ KLMNOPQRST UVWXYZ MMMM WWWW"] {
+        let xdp = format!(
+            r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <draw name="label" w="58pt" h="5in"><value><text>{text}</text></value><font typeface="Arial" size="8pt"/><para hAlign="right" textIndent="-100pt" lineHeight="8pt"/></draw>
+</subform>
+</template></xdp:xdp>"##
+        );
+        let form = layout_xml(&xdp).unwrap();
+        let mut lines = std::collections::BTreeSet::new();
+        for item in &form.pages[0].items {
+            let Item::Text(s) = item else { continue };
+            lines.insert((s.baseline * 100.0).round() as i64);
+            let right = s.x + s.face.width(s.text.trim_end());
+            assert!(s.x >= 36.0 - 1e-6 && right <= 36.0 + 58.0 + 1e-6, "{text}: {:?} runs from {} to {right}", s.text, s.x);
+        }
+        if text.len() > 10 {
+            assert!(lines.len() > 1, "{text}: wraps onto more lines ({})", lines.len());
+        }
+    }
+}
+
+/// A label without a width that hangs its first line is as wide as that line is laid out: the
+/// hang takes back the left margin the first line doesn't use, so right-aligned text starts at
+/// the label's x.
+#[test]
+fn a_label_without_a_width_measures_its_hanging_indent_as_it_is_laid_out() {
+    let items = positioned(
+        r#"<draw name="a" x="1in" y="0"><value><text>11. BALANCE</text></value><font typeface="Arial" size="8pt"/><para hAlign="right" marginLeft="18pt" textIndent="-18pt"/></draw>"#,
+    );
+    let span = items.iter().find_map(|i| if let Item::Text(s) = i { Some(s) } else { None }).expect("the text");
+    assert!((span.x - (36.0 + 72.0)).abs() < 0.05, "starts at its x: {}", span.x);
+}
+
+/// A long table breaks across pages between whole rows, repeats its header row at the top of
+/// each page it continues on, and keeps every row (and field name) once.
 #[test]
 fn tables_break_across_pages_and_repeat_their_header_row() {
     let form = layout_xml(&template(40)).unwrap();
@@ -4968,6 +5061,149 @@ fn a_typed_date_is_rewritten_only_by_date_clauses_into_a_first_pattern_that_keep
     assert_eq!(typed("form[0].pick[0]", "20011203").as_deref(), Some("011203"), "the next pattern that the first keeps");
 }
 
+/// A one-page positioned form around `body`, for Tab-order tests.
+fn positioned_form(body: &str) -> String {
+    format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form1" layout="tb"><pageSet><pageArea><contentArea x="0.25in" y="0.25in" w="8in" h="10.5in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+<subform name="page" layout="position" w="8in" h="10in">{body}</subform></subform></template></xdp:xdp>"#
+    )
+}
+
+/// The SOM paths of the widgets on the first page, in the order they are written.
+fn widget_soms(xml: &str) -> Vec<String> {
+    let form = layout_xml(xml).unwrap();
+    widgets(&form.pages[0]).iter().map(|w| w.som.trim_start_matches("form1[0].page[0].").to_string()).collect()
+}
+
+/// The widgets are written in the order another viewer tabs the probe form: rows without
+/// links, `next` links, a subform's `first` link through a draw, the stops the chain never
+/// reached at the end, and hidden, invisible and protected fields passed over (the protected
+/// ones keep their places, as do widgets the order doesn't cover).
+#[test]
+fn widgets_are_written_in_the_templates_tab_order() {
+    let soms = widget_soms(&traversal_template());
+    let stops: Vec<&str> = soms.iter().map(String::as_str).filter(|s| *s != "log[0]" && *s != "D5[0]").collect();
+    assert_eq!(
+        stops,
+        [
+            "start[0]",
+            "A2[0]",
+            "A3[0]",
+            "A4[0]",
+            "A1[0]",
+            "B1[0]",
+            "B3[0]",
+            "B2[0]",
+            "B4[0]",
+            "C[0].C3[0]",
+            "D1[0]",
+            "D4[0]",
+            "D6[0]",
+            "finish[0]",
+            "C[0].C1[0]",
+            "C[0].C2[0]"
+        ]
+    );
+    // The protected widgets keep their places among the widgets: `log` first, as written, and
+    // `D5` 16th, between `D4` and `D6` in the order written, so after `finish` here.
+    assert_eq!(soms.iter().position(|s| s == "log[0]"), Some(0), "{soms:?}");
+    assert_eq!(soms.iter().position(|s| s == "D5[0]"), Some(15), "{soms:?}");
+    assert_eq!(soms.len(), 18, "{soms:?}");
+}
+
+/// Links to objects that aren't stops, as another viewer follows them: a hidden subform is
+/// passed over as if it weren't there (the link is ignored, and so is the subform's own),
+/// while a hidden, invisible or protected field passes Tab on by its own link.
+#[test]
+fn links_to_hidden_subforms_are_ignored_and_other_non_stops_pass_tab_on() {
+    let soms = widget_soms(&traversal_targets_template());
+    let stops: Vec<&str> = soms.iter().map(String::as_str).filter(|s| *s != "HT[0]").collect();
+    assert_eq!(
+        stops,
+        [
+            "start[0]",
+            "E1[0]",
+            "E2[0]",
+            "E3[0]",
+            "E4[0]",
+            "F1[0]",
+            "F4[0]",
+            "G1[0]",
+            "G4[0]",
+            "H1[0]",
+            "H4[0]",
+            "finish[0]",
+            "F2[0]",
+            "F3[0]",
+            "G2[0]",
+            "G3[0]",
+            "H2[0]",
+            "H3[0]"
+        ]
+    );
+}
+
+/// `#draw[1]` counts every draw, named or not, and a dotted reference goes down from the
+/// first part found: `a` links into the subform's second draw, which links to `z`.
+#[test]
+fn class_and_dotted_traversal_references_resolve_as_som_paths() {
+    let field = |n: &str, x: &str, y: &str, link: &str| {
+        let t = if link.is_empty() { String::new() } else { format!(r#"<traversal><traverse ref="{link}"/></traversal>"#) };
+        format!(r#"<field name="{n}" x="{x}" y="{y}" w="1.5in" h="0.3in"><ui><textEdit/></ui>{t}</field>"#)
+    };
+    let body = format!(
+        r#"{}<subform name="S" x="0in" y="1in" w="8in" h="3in" layout="position">
+<draw name="head" x="0in" y="0in" w="2in" h="0.3in"><value><text>Head</text></value></draw>
+<draw x="0in" y="0.4in" w="2in" h="0.3in"><value><text>Note</text></value><traversal><traverse ref="z[0]"/></traversal></draw>
+{}{}{}</subform>{}"#,
+        field("a", "0in", "0in", "S[0].#draw[1]"),
+        field("x", "0in", "1in", ""),
+        field("y", "0in", "1.5in", ""),
+        field("z", "0in", "2in", ""),
+        field("b", "0in", "5in", ""),
+    );
+    assert_eq!(widget_soms(&positioned_form(&body)), ["a[0]", "S[0].z[0]", "b[0]", "S[0].x[0]", "S[0].y[0]"]);
+}
+
+/// Links that loop or name nothing end the chain, and the rest follow in rows; every field is
+/// still written once (they are written in the template out of order).
+#[test]
+fn looping_and_dangling_traversal_links_keep_every_field_once() {
+    let field = |n: &str, y: &str, link: &str| {
+        format!(
+            r#"<field name="{n}" x="0in" y="{y}" w="1.5in" h="0.3in"><ui><textEdit/></ui><traversal><traverse ref="{link}"/></traversal></field>"#
+        )
+    };
+    let body = [field("q", "1in", "p[0]"), field("s", "3in", "#field[99]"), field("r", "2in", "nowhere[0]"), field("p", "0in", "q[0]")].concat();
+    assert_eq!(widget_soms(&positioned_form(&body)), ["p[0]", "q[0]", "r[0]", "s[0]"]);
+}
+
+/// A repeating subform is tabbed one instance after another, each in its own rows.
+#[test]
+fn repeated_subform_instances_are_tabbed_one_after_another() {
+    let body = r#"<subform name="rows" x="0in" y="0in" w="8in" h="3in" layout="tb">
+<subform name="row" layout="position" w="8in" h="0.5in"><occur min="3" max="5" initial="3"/>
+<field name="b" x="3in" y="0in" w="1.5in" h="0.3in"><ui><textEdit/></ui></field>
+<field name="a" x="0in" y="0in" w="1.5in" h="0.3in"><ui><textEdit/></ui></field>
+</subform></subform>"#;
+    let soms = widget_soms(&positioned_form(body));
+    let short: Vec<String> = soms.iter().map(|s| s.trim_start_matches("rows[0].").to_string()).collect();
+    assert_eq!(short, ["row[0].a[0]", "row[0].b[0]", "row[1].a[0]", "row[1].b[0]", "row[2].a[0]", "row[2].b[0]"]);
+}
+
+/// `<traversal>` keeps the first `first` and `next` links and ignores the arrow-key ones.
+#[test]
+fn traversal_links_are_parsed() {
+    let (tpl, _) = parse(&positioned_form(
+        r##"<field name="f" x="0in" y="0in" w="1in" h="0.3in"><ui><textEdit/></ui><traversal><traverse operation="down" ref="d[0]"/><traverse ref=" n[0] "/><traverse operation="next" ref="later[0]"/><traverse operation="first" ref="#draw[2]"/><traverse operation="next"/></traversal></field>"##,
+    ))
+    .unwrap();
+    let Some(Node::Subform(page)) = tpl.root.children.first() else { panic!("no page") };
+    let Some(Node::Field(f)) = page.children.first() else { panic!("no field") };
+    assert_eq!(f.common.traversal, Traversal { first: Some("#draw[2]".into()), next: Some("n[0]".into()) });
+}
+
 /// A word longer than its line is broken by character in work linear in its length.
 #[test]
 fn a_long_word_breaks_in_linear_work() {
@@ -5096,6 +5332,15 @@ fn an_inherited_namespace_does_not_multiply_an_import() {
     }
 }
 
+#[test]
+fn data_import_keeps_malformed_xml_distinct_from_namespace_limits() {
+    use crate::data::parse_data_file;
+    for xml in ["<form1><a></form1>", "<form1><p:a/></form1>"] {
+        assert!(matches!(parse_data_file(xml, None), Err(XfaError::Malformed(_))), "{xml}");
+    }
+    let nodes = parse_data_file("<form1 xmlns:p='urn:small'><p:a>value</p:a></form1>", None).unwrap();
+    assert!(!nodes.is_empty());
+}
 /// A long data name with a high index is not copied into every sibling created before it.
 #[test]
 fn long_names_repeated_by_an_index_are_capped() {
@@ -5208,6 +5453,22 @@ fn faces_measure_text_at_their_standard_14_widths() {
     assert!((condensed.width(sample) - 0.8 * Std14::TimesBold.text_width(sample, 10.0)).abs() < 1e-9);
 }
 
+/// Every instance of a repeating subform the layout makes is there to link to, even one that
+/// holds no field: `a` links to the third instance of a row of labels, whose label links to `z`.
+#[test]
+fn links_reach_every_instance_of_a_repeating_subform() {
+    let field = |n: &str, y: &str, link: &str| {
+        let t = if link.is_empty() { String::new() } else { format!(r#"<traversal><traverse ref="{link}"/></traversal>"#) };
+        format!(r#"<field name="{n}" x="0in" y="{y}" w="1.5in" h="0.3in"><ui><textEdit/></ui>{t}</field>"#)
+    };
+    let rows = r#"<subform name="rows" x="0in" y="2in" w="8in" h="2in" layout="tb">
+<subform name="row" layout="position" w="8in" h="0.4in"><occur min="1" max="5" initial="3"/>
+<draw x="0in" y="0in" w="2in" h="0.3in"><value><text>Row</text></value><traversal><traverse ref="z[0]"/></traversal></draw>
+</subform></subform>"#;
+    let body = [field("a", "0in", "rows[0].row[2]"), field("b", "1in", ""), rows.to_string(), field("z", "5in", "")].concat();
+    assert_eq!(widget_soms(&positioned_form(&body)), ["a[0]", "z[0]", "b[0]"]);
+}
+
 /// #3944: clearing XFA password values removes values typed into `<passwordEdit/>` fields from the
 /// datasets packet (including across repeating subforms), restores a field's template default
 /// `<value><text>…</text></value>` when it has one, and replaces the datasets stream in place so
@@ -5272,6 +5533,376 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     assert!(!has_password_values(&doc));
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
+}
+
+/// #3910: `<breakBefore target="…" targetType="pageArea"/>`, `<breakAfter target="…"/>` and
+/// `<break before="pageArea" beforeTarget="…"/>` switch to the named `pageArea` master (including
+/// landscape masters after unbounded portrait masters) and give sections on that master its full
+/// content-area width.
+#[test]
+fn named_page_area_breaks_switch_between_portrait_and_landscape_masters() {
+    let xml = r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+ <subform name="form1" layout="tb">
+  <pageSet>
+   <pageArea name="Page1" id="PA1">
+    <contentArea x="25mm" y="44.45mm" w="172.5mm" h="232.55mm"/>
+    <medium stock="a4" short="210mm" long="297mm"/>
+   </pageArea>
+   <pageArea name="Page2" id="PA2">
+    <contentArea x="25mm" y="31.75mm" w="172.5mm" h="245.25mm"/>
+    <medium stock="a4" short="210mm" long="297mm"/>
+   </pageArea>
+   <pageArea name="Page3" id="PA3">
+    <contentArea x="25mm" y="28.575mm" w="259.5mm" h="161.875mm"/>
+    <medium stock="a4" short="210mm" long="297mm" orientation="landscape"/>
+   </pageArea>
+  </pageSet>
+  <subform name="intro" layout="tb">
+   <field name="f1" w="150mm" h="20mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="wide_flow" layout="tb">
+   <breakBefore target="Page3" targetType="pageArea" startNew="1"/>
+   <field name="f_wide1" w="240mm" h="100mm"><ui><textEdit/></ui></field>
+   <field name="f_wide2" w="240mm" h="100mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="back_portrait" layout="tb">
+   <breakBefore target="Page2" targetType="pageArea" startNew="1"/>
+   <field name="f_p2" w="160mm" h="20mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="wide_positioned" w="250mm" h="50mm">
+   <break before="pageArea" beforeTarget="#PA3" after="pageArea" afterTarget="Page1"/>
+   <field name="f_pos" x="200mm" y="5mm" w="45mm" h="15mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="outro" layout="tb">
+   <field name="f_end" w="120mm" h="20mm"><ui><textEdit/></ui></field>
+  </subform>
+ </subform>
+</template>"##;
+    let form = layout_xml(xml).unwrap();
+    // Pages:
+    // 0: Page1 (portrait) — intro
+    // 1: Page3 (landscape) — wide_flow part 1 (f_wide1)
+    // 2: Page3 (landscape) — wide_flow overflow (f_wide2 stays on Page3)
+    // 3: Page2 (portrait) — back_portrait
+    // 4: Page3 (landscape) — wide_positioned (via #PA3)
+    // 5: Page1 (portrait) — outro (afterTarget="Page1")
+    assert_eq!(form.pages.len(), 6, "expected 6 pages, got {}", form.pages.len());
+    let is_landscape = |p: &Page| p.width > p.height && (p.width - 841.89).abs() < 1.0 && (p.height - 595.28).abs() < 1.0;
+    let is_portrait = |p: &Page| p.height > p.width && (p.width - 595.28).abs() < 1.0 && (p.height - 841.89).abs() < 1.0;
+    assert!(is_portrait(&form.pages[0]), "page 1 is Page1 portrait: {:?}", (form.pages[0].width, form.pages[0].height));
+    assert!(is_landscape(&form.pages[1]), "page 2 is Page3 landscape: {:?}", (form.pages[1].width, form.pages[1].height));
+    assert!(is_landscape(&form.pages[2]), "page 3 overflow stays on Page3 landscape: {:?}", (form.pages[2].width, form.pages[2].height));
+    assert!(is_portrait(&form.pages[3]), "page 4 switches to Page2 portrait: {:?}", (form.pages[3].width, form.pages[3].height));
+    assert!(is_landscape(&form.pages[4]), "page 5 positioned subform switches to #PA3 landscape");
+    assert!(is_portrait(&form.pages[5]), "page 6 afterTarget switches back to Page1 portrait");
+
+    // Wide fields on Page3 keep their full 240mm (~680.3pt) width rather than being clamped to
+    // Page1's 172.5mm (~489pt) portrait content area.
+    let widget_w = |page: usize, name: &str| -> f64 {
+        form.pages[page]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Item::Widget(w) if w.name == name => Some(w.rect.w),
+                _ => None,
+            })
+            .unwrap_or(0.0)
+    };
+    assert!(widget_w(1, "f_wide1") > 670.0, "f_wide1 width on landscape page: {}", widget_w(1, "f_wide1"));
+    assert!(widget_w(2, "f_wide2") > 670.0, "f_wide2 width on landscape overflow page: {}", widget_w(2, "f_wide2"));
+    let pos_right = form.pages[4]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Item::Widget(w) if w.name == "f_pos" => Some(w.rect.x + w.rect.w),
+            _ => None,
+        })
+        .unwrap_or(0.0);
+    assert!(pos_right > 600.0, "f_pos at x=200mm on landscape page is not clipped: {pos_right}");
+
+    // When the very first subform targets Page3, page 1 itself uses Page3 without an extra blank page,
+    // `<overflow target="…"/>` directs overflow pages to a named master, and `<breakAfter target="…"/>`
+    // switches the following page master.
+    let first_landscape = r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+ <subform name="form1" layout="tb">
+  <pageSet>
+   <pageArea name="Page1" id="PA1"><contentArea x="25mm" y="25mm" w="160mm" h="247mm"/><medium stock="a4" short="210mm" long="297mm"/></pageArea>
+   <pageArea name="Page3" id="PA3"><contentArea x="25mm" y="25mm" w="247mm" h="160mm"/><medium stock="a4" short="210mm" long="297mm" orientation="landscape"/></pageArea>
+  </pageSet>
+  <subform name="first" layout="tb">
+   <breakBefore target="#pageSet.Page3[0]" targetType="pageArea" startNew="1"/>
+   <overflow target="pageSet.#PA1"/>
+   <breakAfter target="Page3" targetType="pageArea"/>
+   <field name="f1" w="220mm" h="100mm"><ui><textEdit/></ui></field>
+   <field name="f2" w="150mm" h="100mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="after" layout="tb">
+   <field name="f3" w="220mm" h="20mm"><ui><textEdit/></ui></field>
+  </subform>
+ </subform>
+</template>"##;
+    let first_form = layout_xml(first_landscape).unwrap();
+    assert_eq!(first_form.pages.len(), 3);
+    assert!(is_landscape(&first_form.pages[0]), "first page switched to Page3 landscape");
+    assert!(is_portrait(&first_form.pages[1]), "overflow target switched page 2 to PA1 portrait");
+    assert!(is_landscape(&first_form.pages[2]), "breakAfter target switched page 3 back to Page3 landscape");
+}
+
+/// An `overflow` target applies while its subform is laid out (XFA 3.3, "Break on Overflow").
+/// It must not stay selected for a later sibling's untargeted break: that break keeps the
+/// previous master, which is the first eligible area or an explicit `breakBefore` /
+/// `breakAfter` target. A nested overflow ends with its subform, while an ancestor overflow
+/// that is still open keeps applying, and a descendant's explicit break still sticks.
+#[test]
+fn overflow_target_does_not_steer_a_later_untargeted_break() {
+    fn master(page: &Page) -> &'static str {
+        match (page.width.round() as i64, page.height.round() as i64) {
+            (200, 400) => "Body",
+            (180, 360) => "Overflow",
+            (150, 300) => "Special",
+            _ => "other",
+        }
+    }
+    let field = |name: &str, h: &str| format!(r#"<field name="{name}" w="40pt" h="{h}"><ui><textEdit/></ui></field>"#);
+    let kept = field("kept", "20pt");
+    let a = field("a", "80pt");
+    let b = field("b", "80pt");
+    let after = field("after", "20pt");
+    let inner = field("inner", "20pt");
+    let assert_layout = |label: &str, body: &str, masters: &[&str], fields: &[(&str, usize)]| {
+        let xml = format!(
+            r#"<template><subform layout="tb"><pageSet>
+ <pageArea name="Body"><contentArea x="10pt" y="10pt" w="100pt" h="100pt"/><medium short="200pt" long="400pt"/></pageArea>
+ <pageArea name="Overflow"><contentArea x="12pt" y="10pt" w="100pt" h="100pt"/><medium short="180pt" long="360pt"/></pageArea>
+ <pageArea name="Special"><contentArea x="14pt" y="10pt" w="100pt" h="100pt"/><medium short="150pt" long="300pt"/></pageArea>
+</pageSet>{body}</subform></template>"#
+        );
+        let form = layout_xml(&xml).unwrap();
+        let got: Vec<&str> = form.pages.iter().map(master).collect();
+        assert_eq!(got, masters, "{label}");
+        for (name, page) in fields {
+            let found = form.pages.iter().position(|p| widgets(p).iter().any(|w| w.name == *name));
+            assert_eq!(found, Some(*page), "{label}: {name}");
+        }
+        assert!(form.warnings.is_empty(), "{label}: {:?}", form.warnings);
+    };
+
+    // Nothing overflowed, so the target never applies. The sibling's plain page break stays on Body.
+    assert_layout(
+        "unused overflow target",
+        &format!(
+            r#"<subform name="ov" layout="tb"><overflow target="Overflow"/>{kept}</subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Body", "Body"],
+        &[("kept", 0), ("after", 1)],
+    );
+    // The overflowing fragment uses Overflow. The sibling's untargeted break does not.
+    assert_layout(
+        "taken overflow target",
+        &format!(
+            r#"<subform name="ov" layout="tb"><overflow target="Overflow"/>{a}{b}</subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Body", "Overflow", "Body"],
+        &[("a", 0), ("b", 1), ("after", 2)],
+    );
+    // This subform's own breakBefore is what later untargeted breaks keep.
+    assert_layout(
+        "breakBefore survives an unused overflow target",
+        &format!(
+            r#"<subform name="ov" layout="tb"><breakBefore target="Special"/><overflow target="Overflow"/>{kept}</subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Special", "Special"],
+        &[("kept", 0), ("after", 1)],
+    );
+    assert_layout(
+        "breakBefore survives a taken overflow target",
+        &format!(
+            r#"<subform name="ov" layout="tb"><breakBefore target="Special"/><overflow target="Overflow"/>{a}{b}</subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Special", "Overflow", "Special"],
+        &[("a", 0), ("b", 1), ("after", 2)],
+    );
+    // An untargeted breakAfter is not an overflow, so it must not adopt the overflow master.
+    assert_layout(
+        "untargeted breakAfter",
+        &format!(
+            r#"<subform name="ov" layout="tb"><overflow target="Overflow"/><breakAfter targetType="pageArea"/>{kept}</subform><subform name="next" layout="tb">{after}</subform>"#
+        ),
+        &["Body", "Body"],
+        &[("kept", 0), ("after", 1)],
+    );
+    // An explicit breakAfter still selects its own master after the overflow target is put back.
+    assert_layout(
+        "explicit breakAfter",
+        &format!(
+            r#"<subform name="ov" layout="tb"><overflow target="Overflow"/><breakAfter target="Special"/>{kept}</subform><subform name="next" layout="tb">{after}</subform>"#
+        ),
+        &["Body", "Special"],
+        &[("kept", 0), ("after", 1)],
+    );
+    // A descendant's explicit break sticks, including when it names the same master as the overflow.
+    assert_layout(
+        "descendant break names the overflow master",
+        &format!(
+            r#"<subform name="chapter" layout="tb"><overflow target="Overflow"/><subform name="section" layout="tb"><breakBefore target="Overflow"/>{inner}</subform></subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Overflow", "Overflow"],
+        &[("inner", 0), ("after", 1)],
+    );
+    // The inner overflow ends with that subform. The outer one is still open, so the sibling uses it.
+    assert_layout(
+        "nested overflow yields to the ancestor",
+        &format!(
+            r#"<subform name="outer" layout="tb"><overflow target="Overflow"/><subform name="inner" layout="tb"><overflow target="Special"/>{kept}</subform><subform name="sib" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform></subform>"#
+        ),
+        &["Body", "Overflow"],
+        &[("kept", 0), ("after", 1)],
+    );
+}
+
+/// A discarded page master must not consume field counts or names, even for a widget too
+/// small to be emitted. Earlier retained pages still own their counts and reservations.
+#[test]
+fn replacing_empty_page_restores_master_field_state() {
+    for prior_page in [false, true] {
+        let prior = if prior_page {
+            r#"<subform layout="tb"><breakAfter target="Discard"/><field name="body" w="20pt" h="20pt"><ui><textEdit/></ui></field></subform>"#
+        } else {
+            ""
+        };
+        let xml = format!(
+            r#"<template><subform layout="tb"><pageSet>
+ <pageArea name="Discard"><contentArea x="10pt" y="40pt" w="200pt" h="200pt"/>
+  <field name="shared" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="shared" x="25pt" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="tiny" w="20pt" h="0.5pt"><ui><textEdit/></ui></field>
+ </pageArea>
+ <pageArea name="Intermediate"><contentArea x="20pt" y="40pt" w="200pt" h="200pt"/>
+  <field name="shared" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="tiny" w="20pt" h="0.5pt"><ui><textEdit/></ui></field>
+ </pageArea>
+ <pageArea name="Kept"><contentArea x="30pt" y="40pt" w="200pt" h="200pt"/>
+  <field name="shared" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="tiny" x="25pt" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+ </pageArea>
+ </pageSet>{prior}
+ <subform layout="tb"><breakBefore target="Intermediate"/></subform>
+ <subform layout="tb"><breakBefore target="Kept"/><field name="last" w="20pt" h="20pt"><ui><textEdit/></ui></field></subform>
+ </subform></template>"#
+        );
+        let form = layout_xml(&xml).unwrap();
+        assert_eq!(form.pages.len(), if prior_page { 2 } else { 1 });
+        let actual_fields: usize = form.pages.iter().map(|p| widgets(p).len()).sum();
+        assert_eq!(form.fields, actual_fields, "discarded master fields must not remain counted");
+        let kept = widgets(form.pages.last().unwrap());
+        let names: Vec<&str> = kept.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, if prior_page { vec!["shared_3", "tiny_2", "last"] } else { vec!["shared", "tiny", "last"] });
+        assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+    }
+}
+
+/// Updating frame geometry at a break must include ancestors whose final child crosses several
+/// differently-sized masters before returning, while fixed widths keep their original geometry.
+#[test]
+fn flowed_frame_tracks_every_named_master_including_final_child() {
+    for (limits, widths, x_positions) in [
+        ("", [100.0, 240.0, 140.0], [10.0, 30.0, 50.0]),
+        (r#"minW="120pt" maxW="200pt""#, [100.0, 200.0, 140.0], [10.0, 30.0, 50.0]),
+        (r#"w="80pt""#, [80.0; 3], [10.0; 3]),
+    ] {
+        let xml = format!(
+            r#"<template><subform layout="tb" {limits}>
+ <border><edge/><fill><color value="230,230,230"/></fill></border>
+ <pageSet>
+  <pageArea name="A"><contentArea x="10pt" y="10pt" w="100pt" h="200pt"/></pageArea>
+  <pageArea name="B"><contentArea x="30pt" y="10pt" w="240pt" h="200pt"/></pageArea>
+  <pageArea name="C"><contentArea x="50pt" y="10pt" w="140pt" h="200pt"/></pageArea>
+ </pageSet>
+ <field name="first" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+ <subform layout="tb">
+  <subform layout="tb"><breakBefore target="B"/><field name="second" w="20pt" h="20pt"><ui><textEdit/></ui></field></subform>
+  <subform layout="tb"><breakBefore target="C"/><field name="last" w="20pt" h="20pt"><ui><textEdit/></ui></field></subform>
+ </subform>
+ </subform></template>"#
+        );
+        let form = layout_xml(&xml).unwrap();
+        assert_eq!(form.pages.len(), 3);
+        for (i, page) in form.pages.iter().enumerate() {
+            let fills: Vec<Rect> = page.items.iter().filter_map(|it| if let Item::Fill { rect, .. } = it { Some(*rect) } else { None }).collect();
+            assert_eq!(fills, vec![Rect::new(x_positions[i], 10.0, widths[i], 20.0)], "page {i}, limits {limits}");
+            assert!(matches!(page.items.first(), Some(Item::Fill { .. })), "the fill stays below the widgets");
+        }
+        assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+    }
+}
+
+/// A final field can move to another content area on the same page without another child
+/// observing the changed cursor, and replacing the initial master must refresh open frames too.
+#[test]
+fn flowed_frame_tracks_content_areas_and_initial_master_replacement() {
+    for replace_initial in [false, true] {
+        let unused = if replace_initial { r#"<pageArea name="Unused"><contentArea x="5pt" y="5pt" w="50pt" h="100pt"/></pageArea>"# } else { "" };
+        let xml = format!(
+            r#"<template><subform layout="tb"><border><edge/><fill/></border><pageSet>{unused}
+ <pageArea name="Used">
+  <contentArea x="10pt" y="10pt" w="100pt" h="100pt"/>
+  <contentArea x="130pt" y="10pt" w="240pt" h="100pt"/>
+  <contentArea x="390pt" y="10pt" w="140pt" h="100pt"/>
+ </pageArea></pageSet>
+ <subform layout="tb"><breakBefore target="Used"/>
+  <field name="a" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+  <field name="b" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+  <field name="c" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+ </subform></subform></template>"#
+        );
+        let form = layout_xml(&xml).unwrap();
+        assert_eq!(form.pages.len(), 1);
+        let fills: Vec<Rect> =
+            form.pages[0].items.iter().filter_map(|it| if let Item::Fill { rect, .. } = it { Some(*rect) } else { None }).collect();
+        assert_eq!(fills, vec![Rect::new(10.0, 10.0, 100.0, 80.0), Rect::new(130.0, 10.0, 240.0, 80.0), Rect::new(390.0, 10.0, 140.0, 80.0)]);
+        assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+    }
+}
+
+/// Restarting an auto-width child must keep the available width and inset supplied by an
+/// explicitly sized parent, even when the final child moves to a new content area.
+#[test]
+fn flowed_frame_keeps_fixed_parent_width_and_margins() {
+    let xml = r#"<template><subform layout="tb" w="80pt"><margin leftInset="5pt" rightInset="7pt"/>
+ <pageSet><pageArea>
+  <contentArea x="10pt" y="10pt" w="100pt" h="100pt"/>
+  <contentArea x="10pt" y="130pt" w="100pt" h="100pt"/>
+ </pageArea></pageSet>
+ <subform layout="tb"><border><edge/><fill/></border>
+  <field name="a" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+  <field name="b" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+ </subform></subform></template>"#;
+    let form = layout_xml(xml).unwrap();
+    assert_eq!(form.pages.len(), 1);
+    let fills: Vec<Rect> = form.pages[0].items.iter().filter_map(|it| if let Item::Fill { rect, .. } = it { Some(*rect) } else { None }).collect();
+    assert_eq!(fills, vec![Rect::new(15.0, 10.0, 68.0, 80.0), Rect::new(15.0, 130.0, 68.0, 80.0)]);
+    assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+}
+
+/// A positioned block uses raw area moves while it splits. The next flowed sibling still
+/// receives the new area's horizontal geometry, even though its enclosing border is lost.
+#[test]
+fn flowed_sibling_after_split_block_uses_current_area_width() {
+    let xml = r#"<template><subform layout="tb"><pageSet><pageArea>
+ <contentArea x="10pt" y="10pt" w="100pt" h="100pt"/>
+ <contentArea x="130pt" y="10pt" w="240pt" h="100pt"/>
+ </pageArea></pageSet>
+ <subform w="80pt" h="160pt">
+  <field name="a" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="b" y="120pt" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+ </subform>
+ <field name="after" w="200pt" h="20pt"><ui><textEdit/></ui></field>
+ </subform></template>"#;
+    let form = layout_xml(xml).unwrap();
+    assert_eq!(form.pages.len(), 1);
+    let after = widgets(&form.pages[0]).into_iter().find(|w| w.name == "after").unwrap();
+    assert_eq!((after.rect.x, after.rect.w), (130.0, 200.0));
+    assert!(form.warnings.is_empty(), "{:?}", form.warnings);
 }
 
 /// The data a radio group writes for its selected on state compares every button's state before
@@ -6955,6 +7586,99 @@ fn a_container_is_as_wide_as_a_turned_draw_stands() {
     }
 }
 
+/// The static fixture with its text field (`form1[0].page1[0].name[0]`) flagged Password and
+/// `levels` unnamed fields between `form1[0]` and `page1[0]`, which add no SOM segment.
+fn static_password_doc(levels: usize, data: &str) -> Document {
+    let mut doc = Document::open(Arc::new(static_shell(data))).unwrap();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(8, 0), |d| d.set(b"Ff".to_vec(), Object::Int(1 << 13))).unwrap();
+    let mut next = pdfcraft_cos::ObjRef::new(7, 0);
+    for _ in 0..levels {
+        let mut d = Dict::new();
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(next)]));
+        next = doc.add(Object::Dict(d));
+    }
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(next)]))).unwrap();
+    doc
+}
+
+/// #3944: a Password-flagged AcroForm field of a static XFA form nested deeper than 32 levels (as
+/// deep as the form's own field walk reaches) has its typed value cleared from the datasets.
+#[test]
+fn a_deeply_nested_acroform_password_field_is_cleared_from_the_datasets() {
+    let data = "<form1><page1><name>hunter2</name></page1></form1>";
+    let mut doc = static_password_doc(40, data);
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+    assert!(!String::from_utf8_lossy(&xfa_bytes(&doc)).contains("hunter2"));
+}
+
+/// A field tree deeper than the walk reaches can't be shown to hold no password field: clearing
+/// refuses (so the save does) rather than leave a typed password in the datasets.
+#[test]
+fn a_field_tree_too_deep_to_check_for_passwords_refuses_to_clear() {
+    let mut doc = static_password_doc(80, "<form1><page1><name>hunter2</name></page1></form1>");
+    assert!(has_password_values(&doc));
+    assert!(clear_password_values(&mut doc).is_err());
+    // A shallow form without a typed value has nothing to clear.
+    let mut doc = static_password_doc(0, "<form1><page1><name></name></page1></form1>");
+    assert!(!has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 0);
+}
+
+/// A datasets packet of an XFA array may use the `xfa` prefix its preamble declares: the typed
+/// password in it is still found and cleared, as the datasets writer reads that packet too.
+#[test]
+fn a_password_in_a_datasets_packet_using_the_preamble_prefix_is_cleared() {
+    let mut doc = static_password_doc(0, "");
+    let pre = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">"#;
+    let tpl = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form1"/></template>"#;
+    let ds = "<xfa:datasets><xfa:data><form1><page1><name>hunter2</name></page1></form1></xfa:data></xfa:datasets>";
+    let parts: Vec<Object> = [("preamble", pre), ("template", tpl), ("datasets", ds), ("postamble", "</xdp:xdp>")]
+        .into_iter()
+        .flat_map(|(name, text)| {
+            let r = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), text.as_bytes())));
+            [Object::String(pdfcraft_cos::PdfString::literal(name.as_bytes().to_vec())), Object::Ref(r)]
+        })
+        .collect();
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        let mut acro = c.get(b"AcroForm").and_then(Object::as_dict).cloned().unwrap();
+        acro.set(b"XFA".to_vec(), Object::Array(parts));
+        c.set(b"AcroForm".to_vec(), Object::Dict(acro));
+    })
+    .unwrap();
+    assert!(crate::data::parse_datasets(ds).is_none(), "the packet doesn't parse alone");
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+}
+
+/// Every sibling a SOM index skips owns a copy of the element name: the in-memory builder refuses
+/// a path whose copies would pass the name-byte bound the writer holds itself to, and creates
+/// nothing for it.
+#[test]
+fn the_in_memory_data_builder_bounds_copied_name_bytes() {
+    let mut root = DataNode::default();
+    // 1 KiB x 9,999 skipped siblings is about 10 MB, over the 4 MiB bound.
+    let long = "n".repeat(1 << 10);
+    root.apply(&DataOp::Value { path: vec![(long.clone(), 9_999)], text: "x".into() });
+    assert!(root.children.is_empty());
+    // Within the bound, the same shape still builds (and keeps indexes).
+    root.apply(&DataOp::Value { path: vec![(long, 100)], text: "x".into() });
+    assert_eq!(root.children.len(), 101);
+}
+
+/// Each queued instance owns a copy of its parent path: a long ancestor stops the queue at the
+/// byte allowance, reported as capped, instead of being multiplied by the instance count.
+#[test]
+fn queued_instances_are_bounded_by_the_path_bytes_they_copy() {
+    let mut doc = Document::new_empty();
+    let parent: DataPath = vec![("a".repeat(16 << 20), 0), ("b".repeat(16 << 20), 0)];
+    let written = crate::data::write_data_ops(&mut doc, &[DataOp::Instances { parent, name: "row".into(), count: 100 }], None).unwrap();
+    assert!(written.warnings.iter().any(|w| w.contains("not written past")), "{:?}", written.warnings);
+}
+
 /// A page break splits an empty multi-line field that grows with its text (XFA 3.3 pp. 291–292:
 /// text splits between lines, and a field's `keep intact` is `none`): it starts where it is, its
 /// widget runs to the bottom of the content area, and the rest of its box, closed on every side,
@@ -7753,4 +8477,45 @@ two"
         tree.apply(&DataOp::Value { path: path.clone(), text: "millet".into() });
         assert_eq!(tree, before, "{structured}");
     }
+}
+
+/// A line draw without a width is vertical; one without a height is horizontal,
+/// even when the template declares a default slope="/".
+#[test]
+fn xfa_line_without_width_is_vertical_and_without_height_is_horizontal() {
+    let items = positioned(
+        r#"
+        <draw name="vert" x="1in" y="0.5in" h="2in"><value><line slope="/"><edge thickness="1pt"/></line></value></draw>
+        <draw name="horiz" x="0.5in" y="1in" w="3in"><value><line slope="/"><edge thickness="1pt"/></line></value></draw>
+        <draw name="narrow_horiz" x="0.5in" y="1in" w="3in" h="1pt"><value><line slope="/"><edge thickness="1pt"/></line></value></draw>
+        <draw name="narrow_vert" x="1in" y="0.5in" w="1pt" h="2in"><value><line slope="/"><edge thickness="1pt"/></line></value></draw>
+        <draw name="thick_diag" x="4in" y="0.5in" w="48pt" h="72pt"><value><line slope="/"><edge thickness="25pt"/></line></value></draw>
+        <draw name="flat" x="5in" y="2in" w="2pt" h="0pt"><value><line slope="/"><edge thickness="1pt"/></line></value></draw>
+    "#,
+    );
+    let lines: Vec<&Item> = items.iter().filter(|i| matches!(i, Item::Line { .. })).collect();
+    assert_eq!(lines.len(), 6);
+    let is_vertical = |item: &Item| match item {
+        Item::Line { from, to, .. } => (from.0 - to.0).abs() < 1e-3,
+        _ => false,
+    };
+    let is_horizontal = |item: &Item| match item {
+        Item::Line { from, to, .. } => (from.1 - to.1).abs() < 1e-3,
+        _ => false,
+    };
+    assert!(is_vertical(lines[0]), "vert without width should be strictly vertical: {:?}", lines[0]);
+    // It is as wide as its stroke, so it sits at its own x (1in into a box at the content
+    // area's 0.5in), not in the middle of the row.
+    assert!(matches!(lines[0], Item::Line { from, .. } if (from.0 - (108.0 + 0.5)).abs() < 1e-3), "vert sits at its x: {:?}", lines[0]);
+    assert!(is_horizontal(lines[1]), "horiz without height should be strictly horizontal: {:?}", lines[1]);
+    assert!(is_horizontal(lines[2]), "a line 1pt high should be horizontal: {:?}", lines[2]);
+    assert!(is_vertical(lines[3]), "a line 1pt wide should be vertical: {:?}", lines[3]);
+    // A 25pt stroke is drawn 20pt wide, so a 48pt by 72pt box still follows its slope.
+    assert!(!is_vertical(lines[4]) && !is_horizontal(lines[4]), "a line wider than twice its drawn stroke follows its slope: {:?}", lines[4]);
+    // A 2pt by 0pt line is a 2pt horizontal stroke, not a zero-length vertical one.
+    assert!(
+        matches!(lines[5], Item::Line { from, to, .. } if (from.1 - to.1).abs() < 1e-3 && (to.0 - from.0).abs() > 1.9),
+        "a zero-height line is horizontal: {:?}",
+        lines[5]
+    );
 }

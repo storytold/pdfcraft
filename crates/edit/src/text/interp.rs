@@ -479,6 +479,7 @@ pub(super) struct Shown {
     pub(super) decodable: bool,
     pub(super) scope: Option<usize>,
     pub(super) paint: Paint,
+    pub(super) containers: Vec<usize>,
     pub(super) logical_order: bool,
     pub(super) actual_text: bool,
     /// Set when a `/PCSoft` or `/PCHard` marker was seen since the previous text line.
@@ -489,6 +490,7 @@ pub(super) struct Shown {
     /// `/PCSoft` with no `/N` (a file saved before this was tracked, or by another writer),
     /// matching the single space a rejoin always used before #2529.
     pub(super) soft_gap: usize,
+    pub(super) edited: Option<usize>,
 }
 
 impl Shown {
@@ -622,6 +624,9 @@ pub(super) struct Carry {
     pub(super) layers: Vec<Option<Vec<u8>>>,
     /// Bytes of glyph text the rest of the page may still produce (see [`MAX_PAGE_TEXT`]).
     pub(super) text_left: usize,
+    pub(super) containers: Rc<super::containers::Containers>,
+    /// The operator indices of the `Do`s, from the page down, that draw these operators.
+    pub(super) at: Vec<usize>,
     /// Whether the last run ended in a space read from a gap, with the next operator a `Tj` or
     /// `TJ` that may start with the space glyph that gap widened.
     pub(super) gap_space: bool,
@@ -656,13 +661,29 @@ impl Carry {
             dash: (Vec::new(), 0.0),
             line_cap: 0,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, gap_space: false }
+        Carry {
+            ts,
+            stack: Vec::new(),
+            marked: Vec::new(),
+            layers: Vec::new(),
+            text_left: MAX_PAGE_TEXT,
+            containers: Rc::default(),
+            at: Vec::new(),
+            gap_space: false,
+        }
     }
 }
 
 /// A font resource's metrics, fallback face and vertical advance (see [`Ts`]), read once per page.
 /// The advance is an error message when the font's writing mode can't be read.
 type CachedFont = (Rc<Metrics>, Option<String>, Result<Option<f64>, String>);
+
+#[cfg(test)]
+thread_local! {
+    /// Font metrics built by [`interpret`] on this thread, for the test that keeps font aliases
+    /// sharing one set.
+    pub(crate) static METRICS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// A `Do` met while interpreting: its operator index, XObject name and the state there.
 type Invocation = (usize, Vec<u8>, Ts);
@@ -671,6 +692,8 @@ type Invocation = (usize, Vec<u8>, Ts);
 struct MarkedContent {
     regions: Vec<Option<usize>>,
     layers: Vec<Option<Vec<u8>>>,
+    // The `/PCEdLine` sequences around the text (a replacement mixing fonts), innermost last.
+    edited: Vec<Option<usize>>,
     actual_text: Vec<Option<(usize, usize, String)>>,
 }
 
@@ -684,6 +707,7 @@ impl MarkedContent {
         let layer = op.is("BDC") && op.name(0) == Some(b"OC".as_slice());
         self.layers
             .push(layer.then(|| op.operands.get(1).and_then(Object::as_name).map_or_else(|| format!("@{index}").into_bytes(), <[u8]>::to_vec)));
+        self.edited.push(if op.name(0) == Some(b"PCEdLine") { Some(index) } else { self.edited.last().copied().flatten() });
         // The property list is inline or named in the resources' /Properties (§14.6.2).
         let list = logical_text.and_then(|properties| match op.operands.get(1) {
             Some(Object::Name(name)) => properties.get(name).and_then(|object| doc.dict(object)),
@@ -699,6 +723,7 @@ impl MarkedContent {
     fn end(&mut self, index: usize, shown: &mut Vec<Shown>) {
         self.regions.pop();
         self.layers.pop();
+        self.edited.pop();
         if let Some(Some((start, open, logical))) = self.actual_text.pop() {
             let tail = shown.split_off(start.min(shown.len()));
             if tail.iter().any(|s| s.glyph_count > 0) {
@@ -952,11 +977,13 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         decodable,
         scope: marked.regions.last().copied().flatten(),
         paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
+        containers: Vec::new(),
         logical_order: false,
         actual_text: false,
         soft_break: state.soft_break,
         hard_break: state.hard_break,
         soft_gap: state.soft_gap,
+        edited: marked.edited.last().copied().flatten(),
     });
     carry.gap_space = gap_space;
     Ok(())
@@ -976,6 +1003,7 @@ pub(super) fn interpret(
     let fonts_res = super::resource_dict(doc, resources, b"Font", &mut held_fonts).unwrap_or(&none);
     let states = super::resource_dict(doc, resources, b"ExtGState", &mut held_states).unwrap_or(&none);
     let mut out: Vec<Shown> = Vec::new();
+    let mut by_font: HashMap<pdfcraft_cos::ObjRef, CachedFont> = HashMap::new();
     let mut ts = carry.ts.clone();
     let mut at_bt = (0usize, ts.clone());
     let mut stack: Vec<(Ts, Matrix, Matrix)> = std::mem::take(&mut carry.stack);
@@ -1105,11 +1133,23 @@ pub(super) fn interpret(
                 ts.size = op.num(1).unwrap_or(ts.size);
                 if let Some(name) = op.name(0) {
                     let (m, face, vertical) = cache.entry(name.to_vec()).or_insert_with(|| {
+                        // Names that refer to one font object share what was built for it: a
+                        // thousand aliases of one font are one set of metrics, not a thousand.
+                        let font = fonts_res.get(name).and_then(Object::as_ref);
+                        if let Some(built) = font.and_then(|r| by_font.get(&r)) {
+                            return built.clone();
+                        }
+                        #[cfg(test)]
+                        METRICS_BUILT.with(|n| n.set(n.get() + 1));
                         let dict = fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
                         let metrics = dict.as_ref().map_or_else(Metrics::fallback, |d| Metrics::from_dict(doc, d));
                         let vertical = dict.as_ref().map_or(Ok(None), |d| vertical_advance(doc, d).map_err(|e| e.to_string()));
                         let face = dict.filter(is_type3_fallback).map(|_| metrics.base_font.clone());
-                        (Rc::new(metrics), face, vertical)
+                        let built: CachedFont = (Rc::new(metrics), face, vertical);
+                        if let Some(r) = font {
+                            by_font.insert(r, built.clone());
+                        }
+                        built
                     });
                     ts.font = Some((name.to_vec(), m.clone()));
                     ts.face = face.clone();
@@ -1207,5 +1247,52 @@ pub(super) fn interpret(
     carry.layers = marked.layers;
     out.retain(|s| s.glyph_count > 0 || s.actual_text);
     positioned_tracking(&mut out);
+    assign_containers(&mut out, carry);
     Ok(out)
+}
+
+/// The filled panels each piece of text sits in: its `membership`, less a box a highlight's
+/// height that only part of the text or of its line is in.
+fn assign_containers(out: &mut [Shown], carry: &Carry) {
+    for shown in out.iter_mut() {
+        shown.containers = carry.containers.membership(shown.rect, &[carry.at.as_slice(), &[shown.op]].concat());
+    }
+    // A box a highlight's height that does not reach across the text is a highlight behind part
+    // of it, as when one `Tj` draws the whole line.
+    for shown in out.iter_mut() {
+        let rect = shown.rect;
+        shown.containers.retain(|panel| carry.containers.spans(*panel, rect) || !carry.containers.hugs(*panel, rect));
+    }
+    // Text that runs on along its line keeps a box only part of it is in when the box is a
+    // panel's height: a highlight padded around one word of the line is not a panel.
+    let mut start = 0;
+    while start < out.len() {
+        let mut end = start + 1;
+        while out.get(end).is_some_and(|next| runs_on(&out[end - 1].rect, &next.rect)) {
+            end += 1;
+        }
+        if end - start > 1 {
+            // How many of the run's pieces each box holds (`membership` lists a box once per piece),
+            // counted in one pass: a hostile page can chain thousands of runs into one line.
+            let mut held: HashMap<usize, usize> = HashMap::new();
+            for shown in &out[start..end] {
+                for panel in &shown.containers {
+                    *held.entry(*panel).or_default() += 1;
+                }
+            }
+            for shown in &mut out[start..end] {
+                let rect = shown.rect;
+                shown.containers.retain(|panel| held.get(panel) == Some(&(end - start)) || !carry.containers.hugs(*panel, rect));
+            }
+        }
+        start = end;
+    }
+}
+
+/// Whether text in `next` continues `previous` along its line: about the same height across it,
+/// and starting at or after it with less than a line's height between them.
+fn runs_on(previous: &[f64; 4], next: &[f64; 4]) -> bool {
+    let height = (previous[3] - previous[1]).max(next[3] - next[1]);
+    let centre = |r: &[f64; 4]| (r[1] + r[3]) / 2.0;
+    (centre(previous) - centre(next)).abs() < height / 2.0 && next[0] >= previous[0] && next[0] - previous[2] < height
 }
