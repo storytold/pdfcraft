@@ -14,6 +14,8 @@ fn page_rotation_resolves_inheritance_overrides_and_missing_pages() {
     assert_eq!(page_rotation(&doc, 1).unwrap(), 270);
     assert_eq!(page_rotation(&doc, 0).unwrap(), 90);
     assert_eq!(page_rotation(&doc, 3), Err(OrganizeError::NoSuchPage(3)));
+    // One walk gives each page's rotation, as the per-page call does.
+    assert_eq!(crate::page_rotations(&doc).unwrap(), [90, 270, 90]);
 }
 
 #[test]
@@ -687,6 +689,38 @@ fn document_info_falls_back_to_the_xmp_packet() {
     let mut doc = doc_with_xmp(&latin1);
     doc.trailer_mut().remove(b"Info");
     assert_eq!(info(&doc, "Subject"), None);
+}
+
+/// The title read from XMP each frame (Initial View ▸ Show: Document Title) decodes the packet
+/// once, not on every read; an edit of the packet, or another document, reads afresh.
+#[test]
+fn the_xmp_packet_is_decoded_once_for_repeated_reads() {
+    let decodes = || crate::xmp::XMP_DECODES.with(std::cell::Cell::get);
+    let mut doc = doc_with_xmp(LIBREOFFICE_XMP.as_bytes());
+    doc.trailer_mut().remove(b"Info");
+    let before = decodes();
+    for _ in 0..10 {
+        assert_eq!(info(&doc, "Title").as_deref(), Some("Untitled 1"));
+        assert_eq!(info(&doc, "Author").as_deref(), Some("Old Author"));
+    }
+    assert_eq!(decodes() - before, 1);
+    set_info(&mut doc, "Title", "Report").unwrap();
+    doc.trailer_mut().remove(b"Info");
+    assert_eq!(info(&doc, "Title").as_deref(), Some("Report"), "the edited packet, not the one read before");
+    assert_eq!(decodes() - before, 2);
+    let mut other = doc_with_xmp(LIBREOFFICE_XMP.replace("Untitled 1", "Other").as_bytes());
+    other.trailer_mut().remove(b"Info");
+    assert_eq!(info(&other, "Title").as_deref(), Some("Other"), "another document's packet");
+    assert_eq!(info(&doc, "Title").as_deref(), Some("Report"));
+    let mut latin1 = LIBREOFFICE_XMP.as_bytes().to_vec();
+    latin1.extend_from_slice(&[b'<', 0xE9, b'>']);
+    let mut bad = doc_with_xmp(&latin1);
+    bad.trailer_mut().remove(b"Info");
+    let before = decodes();
+    for _ in 0..10 {
+        assert_eq!(info(&bad, "Title"), None);
+    }
+    assert_eq!(decodes() - before, 1, "an unreadable packet is not decoded again either");
 }
 
 #[test]
@@ -1968,7 +2002,7 @@ fn bookmarks_add_rename_move_delete() {
 fn a_bookmark_tree_nests_entries_by_level_under_a_new_first_bookmark() {
     let mut d = doc_a();
     crate::add_bookmark(&mut d, &[], 0, "Existing", 0).unwrap();
-    let e = |level, title: &str, page, element| crate::OutlineEntry { level, title: title.into(), page, element, top: None };
+    let e = |level, title: &str, page, element| crate::OutlineEntry { level, title: title.into(), page, element, left: None, top: None };
     let se = ObjRef::new(4242, 0);
     let entries = [e(1, "One", 0, Some(se)), e(3, "Deep", 1, None), e(2, "Two", 1, None), e(1, "Next", 2, None)];
     assert_eq!(crate::add_bookmark_tree(&mut d, "Untitled", &entries).unwrap(), vec![0]);
@@ -4175,6 +4209,43 @@ fn attachments_are_added_listed_and_deleted() {
     let doc = save_and_reopen(&doc);
     assert!(attachment_keys(&doc).is_empty());
     assert!(doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"Names").is_none());
+}
+
+#[test]
+fn attachment_description_changes_only_the_file_spec_and_can_be_cleared() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    let key = add_attachment(&mut doc, "notes.txt", b"keep these bytes", Some("Original"), Some("text/plain"), None).unwrap();
+    let root = doc.root().unwrap();
+    let names = doc.get(root).as_dict().unwrap().get(b"Names").cloned().unwrap();
+    let tree = doc.resolve(&names).as_dict().unwrap().get(b"EmbeddedFiles").cloned().unwrap();
+    let tree = doc.resolve(&tree);
+    let pairs = tree.as_dict().unwrap().get(b"Names").cloned().unwrap();
+    let resolved_pairs = doc.resolve(&pairs);
+    let pairs = resolved_pairs.as_array().unwrap();
+    let spec_ref = pairs.get(1).and_then(Object::as_ref).unwrap();
+    let stream_ref = doc.get(spec_ref).as_dict().unwrap().get(b"EF").and_then(Object::as_dict).unwrap().reference(b"F").unwrap();
+    doc.update_dict(spec_ref, |spec| spec.set(b"CustomKey".to_vec(), Object::name("preserved"))).unwrap();
+
+    set_attachment_description(&mut doc, &key, Some("Revised description")).unwrap();
+    let spec_object = doc.get(spec_ref);
+    let spec = spec_object.as_dict().unwrap();
+    assert_eq!(spec.get(b"Desc").and_then(Object::as_string).map(pdfcraft_cos::PdfString::to_text).as_deref(), Some("Revised description"));
+    assert_eq!(spec.get(b"UF").and_then(Object::as_string).map(pdfcraft_cos::PdfString::to_text).as_deref(), Some("notes.txt"));
+    assert_eq!(spec.get(b"CustomKey"), Some(&Object::name("preserved")));
+    assert_eq!(spec.get(b"EF").and_then(Object::as_dict).and_then(|ef| ef.reference(b"F")), Some(stream_ref));
+    let stream_object = doc.get(stream_ref);
+    let pdfcraft_cos::Object::Stream(stream) = stream_object.as_ref() else { panic!("the attachment file remains a stream") };
+    assert_eq!(stream.decoded().unwrap(), b"keep these bytes");
+    assert_eq!(attachment_keys(&doc), ["notes.txt"]);
+
+    set_attachment_description(&mut doc, &key, Some("  ")).unwrap();
+    assert!(!doc.get(spec_ref).as_dict().unwrap().contains(b"Desc"));
+    let reopened = save_and_reopen(&doc);
+    assert_eq!(attachment_keys(&reopened), ["notes.txt"]);
+    assert_eq!(
+        set_attachment_description(&mut doc, "missing.txt", Some("x")),
+        Err(OrganizeError::Invalid("there is no attachment named missing.txt".into()))
+    );
 }
 
 #[test]

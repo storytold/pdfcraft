@@ -85,7 +85,7 @@ pub(crate) fn action_fields(doc: &Document, o: &Object) -> Vec<String> {
 
 /// The fully qualified name of the field that `r` (a field or one of its widgets) belongs to,
 /// from the partial names (`/T`) up its `/Parent` chain.
-fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
+pub(crate) fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
     let mut parts = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut cur = Some(r);
@@ -243,6 +243,69 @@ fn values_of(doc: &Document, o: Option<&Object>, budget: &mut DecodeBudget) -> V
     }
 }
 
+/// A choice field's `/I` (ISO 32000-2 Table 234) as option positions, when it is usable: an array
+/// of integers "sorted in ascending order", each naming one of `count` options. `None` when it is
+/// absent or anything in it is not (a non-integer, a position out of range, out of order or
+/// repeated), so the field falls back to `/V`.
+pub(crate) fn listed_indices(doc: &Document, d: &Dict, count: usize) -> Option<Vec<usize>> {
+    let listed = doc.resolve(d.get(b"I")?);
+    let entries = listed.as_array()?;
+    // Strictly ascending positions below `count` number at most `count`.
+    if entries.len() > count {
+        return None;
+    }
+    let mut out: Vec<usize> = Vec::with_capacity(entries.len());
+    for e in entries {
+        let i = usize::try_from(doc.resolve(e).as_int()?).ok().filter(|&i| i < count)?;
+        if out.last().is_some_and(|&last| last >= i) {
+            return None;
+        }
+        out.push(i);
+    }
+    Some(out)
+}
+
+/// The options a choice field shows selected, as ascending positions in `options`, given its
+/// values (`/V`) and its usable `/I` ([`listed_indices`]).
+///
+/// `/I` decides when it names the same export values as `/V`: it "shall be used when two or more
+/// elements in the Opt array have different names but the same export value", and "if the items
+/// identified by this entry differ from those in the V entry …, the V entry shall be used" (ISO
+/// 32000-2 Table 234). Otherwise each value selects the first option with that export value, as
+/// the writer numbers `/I` when it is given only an export value, so a pick keeps showing the same
+/// option when `/I` is lost. A value no option exports selects nothing.
+pub fn selected_options(options: &[(String, String)], values: &[String], listed: Option<&[usize]>) -> Vec<usize> {
+    if let Some(listed) = listed {
+        // The same items, each as many times: `/V [(1) (1)]` names two items, which an `/I [1]`
+        // naming one doesn't, so `/V` decides then.
+        let mut named: Vec<&str> = values.iter().map(String::as_str).collect();
+        named.sort_unstable();
+        let exports: Option<Vec<&str>> = listed.iter().map(|&i| options.get(i).map(|(e, _)| e.as_str())).collect();
+        if let Some(mut exports) = exports {
+            exports.sort_unstable();
+            if exports == named {
+                return listed.to_vec();
+            }
+        }
+    }
+    let first = first_by_export(options);
+    let mut out: Vec<usize> = values.iter().filter_map(|v| first.get(v.as_str()).copied()).collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Each export value in `options` with the position of the first option exporting it, so
+/// matching values against options takes one pass over each rather than one over the options per
+/// value (a file can hold many of both).
+pub(crate) fn first_by_export(options: &[(String, String)]) -> std::collections::HashMap<&str, usize> {
+    let mut first: std::collections::HashMap<&str, usize> = std::collections::HashMap::with_capacity(options.len());
+    for (i, (e, _)) in options.iter().enumerate() {
+        first.entry(e.as_str()).or_insert(i);
+    }
+    first
+}
+
 fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {
     let o = doc.resolve(o?);
     o.as_array()?.iter().map(|x| doc.resolve(x).as_f64()).collect()
@@ -344,26 +407,53 @@ pub struct Fields {
 }
 
 /// Read all terminal fields and the page-only adoption count in one enumeration.
+///
+/// The last reading on this thread is kept with the state of the document it read
+/// ([`pdfcraft_cos::ReadState`], which every change to the document replaces), and a document
+/// that still reads as that state gets a copy of it instead of a new walk. One form edit reads
+/// the fields in several steps (filling, recalculating, the XFA data, the view), most of them
+/// with nothing changed since the step before: on a form with a thousand fields each walk takes
+/// tens of milliseconds.
 pub fn fields_with_adopted(doc: &Document) -> Fields {
+    let kept = LAST_READING
+        .try_with(|last| match last.try_borrow().as_deref() {
+            Ok(Some((state, fields))) if state.matches(doc) => Some(fields.clone()),
+            _ => None,
+        })
+        .ok()
+        .flatten();
+    if let Some(fields) = kept {
+        return fields;
+    }
     let (items, adopted_page_fields) = enumerate(doc);
-    Fields { items, adopted_page_fields }
+    let fields = Fields { items, adopted_page_fields };
+    // Not kept (the thread is ending, or the slot is in use) costs only a later walk.
+    let _ = LAST_READING.try_with(|last| {
+        if let Ok(mut last) = last.try_borrow_mut() {
+            *last = Some((doc.read_state(), fields.clone()));
+        }
+    });
+    fields
 }
 
-#[cfg(test)]
 thread_local! {
-    /// Whole-form readings ([`enumerate`]) on this thread.
+    /// The last [`fields_with_adopted`] on this thread, with the state of the document it read.
+    /// One entry: one form's fields, and the objects that document had changed when it was read.
+    static LAST_READING: std::cell::RefCell<Option<(pdfcraft_cos::ReadState, Fields)>> = const { std::cell::RefCell::new(None) };
+    /// Whole-form walks ([`enumerate`]) on this thread.
     static FORM_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has read the whole form.
-#[cfg(test)]
-pub(crate) fn form_reads() -> usize {
-    FORM_READS.with(std::cell::Cell::get)
+/// How many times this thread has walked a whole form: [`fields`] and the readings like it, but
+/// not one answered from the last reading. Per thread, so tests running in parallel don't count
+/// each other's; for tests that check how often an edit reads the form.
+#[doc(hidden)]
+pub fn form_reads_on_this_thread() -> usize {
+    FORM_READS.try_with(std::cell::Cell::get).unwrap_or(0)
 }
 
 pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
-    #[cfg(test)]
-    FORM_READS.with(|n| n.set(n.get() + 1));
+    let _ = FORM_READS.try_with(|n| n.set(n.get().saturating_add(1)));
     let af = acroform(doc);
     let mut page_of = std::collections::HashMap::new();
     let mut annot_index = std::collections::HashMap::new();
@@ -661,6 +751,16 @@ fn walk(
                         value.as_string().map(|s| s.to_text())
                     })
                     .flatten(),
+                mouse_up_script: if kind == FieldKind::Text {
+                    let aa = wd.get(b"AA").map(|a| doc.resolve(a));
+                    let action = aa.as_deref().and_then(Object::as_dict).and_then(|aa| aa.get(b"U")).or_else(|| wd.get(b"A"));
+                    action
+                        .filter(|a| doc.resolve(a).as_dict().and_then(|a| a.name(b"S")) == Some(b"JavaScript"))
+                        .and_then(|a| script(doc, a, &mut seen.scripts))
+                } else {
+                    None
+                },
+                mouse_down: wd.get(b"AA").map(|a| doc.resolve(a)).as_deref().and_then(Object::as_dict).is_some_and(|aa| aa.contains(b"D")),
                 list: (kind == FieldKind::List).then(|| appearance::list_rows_of(doc, inh.da.as_deref().unwrap_or("/Helv 0 Tf 0 g"), Some(d), wd)),
                 round: kind == FieldKind::Radio || (kind == FieldKind::CheckBox && appearance::is_round(doc, wd)),
             })
@@ -676,16 +776,36 @@ fn walk(
             Object::Array(pair) if pair.len() >= 2 => Some((text_of(&doc.resolve(&pair[0]))?, text_of(&doc.resolve(&pair[1]))?)),
             other => text_of(other).map(|t| (t.clone(), t)),
         })
-        .collect();
+        .collect::<Vec<(String, String)>>();
+    let mut value = values_of(doc, inh.v.as_ref(), &mut seen.values);
+    // A list box without MultiSelect selects one option: "if clear, at most one item shall be
+    // selected" (ISO 32000-2 Table 233). Given an array /V or /DV anyway, it holds the first
+    // value only, and shows and resets to it; the file keeps its entries until the field is filled.
+    let mut default = values_of(doc, inh.dv.as_ref(), &mut seen.values);
+    let single = kind == FieldKind::List && ff & flags::MULTI_SELECT == 0;
+    let single_value_is_array = single && inh.v.as_ref().is_some_and(|v| doc.resolve(v).as_array().is_some());
+    if single {
+        value.truncate(1);
+        default.truncate(1);
+    }
+    let mut selected = match kind {
+        FieldKind::Combo | FieldKind::List => selected_options(&options, &value, listed_indices(doc, d, options.len()).as_deref()),
+        _ => Vec::new(),
+    };
+    if single {
+        selected.truncate(1);
+    }
     out.push(Field {
         name: inh.name.clone(),
         obj: r,
         kind,
-        value: values_of(doc, inh.v.as_ref(), &mut seen.values),
-        default: values_of(doc, inh.dv.as_ref(), &mut seen.values),
+        value,
+        default,
         flags: ff,
         max_len: inh.max_len,
         options,
+        selected,
+        single_value_is_array,
         da: inh.da.clone().unwrap_or_else(|| "/Helv 0 Tf 0 g".into()),
         quadding: inh.q.unwrap_or(0),
         tooltip: d.get(b"TU").and_then(|o| text_of(&doc.resolve(o))),

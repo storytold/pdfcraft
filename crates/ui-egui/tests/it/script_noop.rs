@@ -1,7 +1,7 @@
 //! A script button with no convertible characters must not rewrite hidden source text.
+use crate::support::AppHarness as _;
 use egui_kittest::{Harness, kittest::Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest};
-use pdfcraft_ui_egui::PdfCraftApp;
 use std::sync::Arc;
 
 fn hidden_text() -> Vec<u8> {
@@ -38,14 +38,17 @@ fn pixels(bytes: Arc<Vec<u8>>) -> Vec<u8> {
 #[test]
 fn unsupported_script_buttons_leave_hidden_text_bytes_history_and_saved_pixels_unchanged() {
     for button in ["Superscript", "Subscript"] {
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
-            app.open_bytes("hidden.pdf", None, hidden_text()).unwrap();
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "hidden.pdf", None, hidden_text()).unwrap();
+                app
+            }
         });
         h.run_steps(4);
-        assert!(h.state_mut().execute("edit.edit_text"));
+        assert!(h.execute("edit.edit_text"));
         h.run_steps(3);
         let id = h.state().views[0].id;
         let block = h.state().session.get(id).unwrap().text_blocks(0).remove(0);
@@ -60,9 +63,12 @@ fn unsupported_script_buttons_leave_hidden_text_bytes_history_and_saved_pixels_u
         h.run_steps(1);
         h.drop_at(at);
         h.run_steps(3);
-        let editor = h.state_mut().views[0].line_editor.as_mut().expect("hidden text editor opens");
-        editor.selection = Some(1..2);
-        editor.focus = true;
+        // Select the second character the way a person does: Home, one step right, Shift+Right.
+        h.key_press(egui::Key::Home);
+        h.run_steps(1);
+        h.key_press(egui::Key::ArrowRight);
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::ArrowRight);
         h.run_steps(1);
         let before = h.state().session.get(id).unwrap().bytes.clone();
         assert!(h.state().session.get(id).unwrap().can_undo().is_none());
@@ -73,8 +79,8 @@ fn unsupported_script_buttons_leave_hidden_text_bytes_history_and_saved_pixels_u
         let doc = h.state().session.get(id).unwrap();
         assert_eq!(doc.bytes.as_ref(), before.as_ref(), "no conversion must leave source bytes untouched");
         assert!(doc.can_undo().is_none(), "no conversion must not create an edit");
-        let mut reopened = PdfCraftApp::new();
-        reopened.open_bytes("reopened.pdf", None, saved.as_ref().clone()).unwrap();
+        let mut reopened = crate::control::new_app();
+        reopened.open_bytes(&egui::Context::default(), "reopened.pdf", None, saved.as_ref().clone()).unwrap();
         assert_eq!(reopened.session.get(reopened.views[0].id).unwrap().text_blocks(0)[0].text, "QQQ");
     }
 }

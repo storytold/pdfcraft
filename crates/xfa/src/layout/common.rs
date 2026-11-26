@@ -1,5 +1,5 @@
 use super::items::{Action, BorderShape, Item, Rounded, Widget, WidgetBorder};
-use super::{DataNode, DataPath, HashMap, Layout, Node, Rect, Script, Template, Ui, data_path, date_letters, iso_to_pattern};
+use super::{DataNode, DataPath, HashMap, HashSet, Layout, MAX_DEPTH, Node, Rect, Script, Template, Ui, data_path, date_letters, iso_to_pattern};
 use crate::data::{data_date_letters, data_to_iso, fields_with_ids};
 
 /// The value of each field with an `id`, for the rich text that embeds it (floating fields,
@@ -39,6 +39,47 @@ impl EmbedSource {
             (Some(v), Some((pattern, data_pattern))) => iso_to_pattern(&data_to_iso(&v, data_pattern.as_deref()), pattern),
             (Some(v), None) => v,
             (None, _) => self.default.clone(),
+        }
+    }
+}
+
+/// The names the template's fields, exclusion groups and the groups' member fields take as
+/// written ([`clean_name`]): a name the layout makes up for a repeated field (`Cell4` →
+/// `Cell4_2`) must not be one of these, or two fields would share it. (A group's radio buttons
+/// are the group's PDF field; a member that isn't one is a PDF field with its own name.)
+pub(super) fn collect_names(nodes: &[Node], out: &mut HashSet<String>, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    for n in nodes {
+        match n {
+            Node::Field(f) => {
+                if let Some(name) = &f.common.name {
+                    out.insert(clean_name(name));
+                }
+            }
+            Node::ExclGroup(g) => {
+                if let Some(name) = &g.common.name {
+                    out.insert(clean_name(name));
+                }
+                // Its members are drawn as fields with their own names (`draw_field`), so a
+                // repeat drawn before the group must not take one.
+                for f in &g.fields {
+                    if let Some(name) = &f.common.name {
+                        out.insert(clean_name(name));
+                    }
+                }
+            }
+            Node::Subform(s) => {
+                collect_names(&s.children, out, depth + 1);
+                if let Some(ps) = &s.page_set {
+                    for a in &ps.areas {
+                        collect_names(&a.items, out, depth + 1);
+                    }
+                }
+            }
+            Node::Area(a) => collect_names(&a.children, out, depth + 1),
+            Node::Draw(_) => {}
         }
     }
 }
@@ -88,12 +129,19 @@ pub(super) fn solid_extent(item: &Item) -> Option<(f64, f64)> {
         Item::Widget(w) => Some((w.rect.y, w.rect.bottom())),
         Item::Turned(t) => Some(t.extent),
         Item::Fill { .. } | Item::Line { .. } | Item::Rounded(_) => None,
+        Item::Only { item, .. } => solid_extent(item),
     }
 }
 
 /// `item` as the part above `cut` and the part below: solid items go whole to the side their
 /// top is on, fills and lines crossing the cut are cut in two.
 pub(super) fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
+    if let Item::Only { views, item } = item {
+        // Each part shows where the whole did.
+        let wrap = |i: Item| Item::Only { views, item: Box::new(i) };
+        let (a, b) = divide(*item, cut);
+        return (a.map(wrap), b.map(wrap));
+    }
     if let Some((top, _)) = solid_extent(&item) {
         return if top < cut - 0.01 { (Some(item), None) } else { (None, Some(item)) };
     }
@@ -198,6 +246,9 @@ pub(super) fn widget_box(rect: Rect, border: &WidgetBorder) -> Vec<Item> {
 
 /// `item` moved by (`dx`, `dy`).
 pub(super) fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
+    if let Item::Only { views, item: inner } = item {
+        return Item::Only { views, item: Box::new(moved(*inner, dx, dy)) };
+    }
     match &mut item {
         Item::Fill { rect, .. } | Item::Image { rect, .. } => {
             rect.x += dx;
@@ -224,6 +275,8 @@ pub(super) fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
             t.extent = (t.extent.0 + dy, t.extent.1 + dy);
             t.items = std::mem::take(&mut t.items).into_iter().map(|i| moved(i, dx, dy)).collect();
         }
+        // Taken apart above.
+        Item::Only { .. } => {}
     }
     item
 }
