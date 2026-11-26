@@ -179,7 +179,8 @@ fn figures_follow_the_form_matrix() {
     assert_eq!(form.bbox, Some([310.0, 600.0, 430.0, 720.0]));
 }
 
-/// A form that draws itself is walked once, not forever; a form drawn from that form still counts.
+/// A form that draws itself is walked once, not forever; a form drawn from that form still counts,
+/// and anything drawn past an enclosing form's `/BBox` is clipped by it.
 #[test]
 fn figures_stop_at_a_form_drawing_itself_and_reach_nested_forms() {
     let mut doc = stm_figures();
@@ -197,13 +198,15 @@ fn figures_stop_at_a_form_drawing_itself_and_reach_nested_forms() {
         _ => unreachable!("the fixture's form is a stream"),
     };
     form.remove(b"Length");
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 110, 60].map(Object::Int).to_vec()));
     let mut xobjects = pdfcraft_cos::Dict::new();
     xobjects.set(b"Me".to_vec(), Object::Ref(FORM_OBJ));
     xobjects.set(b"In".to_vec(), Object::Ref(inner));
     let mut res = pdfcraft_cos::Dict::new();
     res.set(b"XObject".to_vec(), Object::Dict(xobjects));
     form.set(b"Resources".to_vec(), Object::Dict(res));
-    doc.set(FORM_OBJ, Object::Stream(Stream::flate(form, format!("{FORM} /Me Do q 1 0 0 1 100 0 cm /In Do Q").as_bytes())));
+    let body = format!("{FORM} /Me Do q 1 0 0 1 100 0 cm /In Do Q");
+    doc.set(FORM_OBJ, Object::Stream(Stream::flate(form.clone(), body.as_bytes())));
     // The form figure now also owns MCID 3 of the inner form.
     doc.update_dict(FORM_FIGURE, |d| {
         let mut second = pdfcraft_cos::Dict::new();
@@ -214,8 +217,13 @@ fn figures_stop_at_a_form_drawing_itself_and_reach_nested_forms() {
         d.set(b"K".to_vec(), Object::Array(vec![first, Object::Dict(second)]));
     })
     .unwrap();
-    let form = figures(&doc).into_iter().find(|f| f.obj == FORM_FIGURE).expect("form figure");
-    assert_eq!(form.bbox, Some([300.0, 600.0, 410.0, 660.0]), "the blue square and the inner form's square at (400, 600)");
+    let found = figures(&doc).into_iter().find(|f| f.obj == FORM_FIGURE).expect("form figure");
+    assert_eq!(found.bbox, Some([300.0, 600.0, 410.0, 660.0]), "the blue square and the inner form's square at (400, 600)");
+    // Shrinking the outer form's `/BBox` back to [0, 0, 60, 60] clips the inner square at x=100..110.
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 60, 60].map(Object::Int).to_vec()));
+    doc.set(FORM_OBJ, Object::Stream(Stream::flate(form, body.as_bytes())));
+    let clipped = figures(&doc).into_iter().find(|f| f.obj == FORM_FIGURE).expect("form figure");
+    assert_eq!(clipped.bbox, Some([300.0, 600.0, 360.0, 660.0]), "content outside the outer form's /BBox is clipped");
 }
 
 #[test]
@@ -349,4 +357,82 @@ fn tag_content_reports_an_stm_that_is_not_a_reference_as_unreadable() {
     assert_eq!(items[0].stream, ContentSource::Unreadable);
     assert_eq!(items[0].mcid, 0);
     assert_eq!(items[0].text, "");
+}
+
+/// An MCR inside an indirect `/K` array follows a replaced page stream on its own page, without
+/// touching an MCR in another indirect `/K` array that names the same stream on another page.
+#[test]
+fn stm_in_an_indirect_k_array_follows_a_replaced_page_stream_only_on_its_page() {
+    let mut doc = build(&[
+        (1, "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 3 0 R /MarkInfo << /Marked true >> >>".into()),
+        (2, "<< /Type /Pages /Kids [10 0 R 30 0 R] /Count 2 >>".into()),
+        (3, "<< /Type /StructTreeRoot /K 4 0 R /ParentTree 5 0 R >>".into()),
+        (4, "<< /Type /StructElem /S /Document /P 3 0 R /K [20 0 R 22 0 R 31 0 R] >>".into()),
+        (5, "<< /Nums [0 [20 0 R 22 0 R] 1 [31 0 R]] >>".into()),
+        (6, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into()),
+        (
+            10,
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 11 0 R /StructParents 0 \
+             /Resources << /Font << /F1 6 0 R >> /XObject << /FmF 12 0 R >> >> >>"
+                .into(),
+        ),
+        (11, format!("<< /Length {} >>\nstream\n{PAGE}\nendstream", PAGE.len())),
+        (12, format!("<< /Type /XObject /Subtype /Form /BBox [0 0 60 60] /Length {} >>\nstream\n{FORM}\nendstream", FORM.len())),
+        (20, "<< /Type /StructElem /S /Figure /P 4 0 R /Pg 10 0 R /K 0 >>".into()),
+        (22, "<< /Type /StructElem /S /P /P 4 0 R /K 23 0 R >>".into()),
+        (23, "[<< /Type /MCR /Pg 10 0 R /MCID 1 /Stm 11 0 R >>]".into()),
+        (30, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 11 0 R /StructParents 1 >>".into()),
+        (31, "<< /Type /StructElem /S /P /P 4 0 R /Pg 30 0 R /K 32 0 R >>".into()),
+        (32, "[<< /Type /MCR /MCID 1 /Stm 11 0 R >>]".into()),
+    ]);
+    mark_tag_artifact(&mut doc, PAGE_FIGURE).expect("page figure artifact");
+    assert_eq!(tag_content(&doc, FORM_FIGURE).expect("page 10 content")[0].stream, ContentSource::Page);
+    assert_eq!(tag_content(&doc, ObjRef::new(31, 0)).expect("page 30 content")[0].stream, ContentSource::Page);
+    mark_tag_artifact(&mut doc, FORM_FIGURE).expect("paragraph artifact");
+    let (page, _) = marks(&doc);
+    assert_eq!(page, [("Artifact".into(), None), ("Artifact".into(), None)], "the visible paragraph on page 10 became an artifact");
+    // Page 30 still draws the original stream 11, and its indirect /K array still names 11 0 R.
+    assert_eq!(tag_content(&doc, ObjRef::new(31, 0)).expect("page 30 content")[0].stream, ContentSource::Page);
+    let page_30 = decoded(&doc, &Object::Ref(ObjRef::new(11, 0)));
+    assert!(String::from_utf8_lossy(&page_30).contains("/P <</MCID 1>> BDC"));
+}
+
+/// When the structure element has no `/Pg` (or points at another page), an MCR's own `/Pg` supplies
+/// the page for figure bounds and for a form without `/Resources` that uses the page's named
+/// `/Properties`.
+#[test]
+fn mcr_pg_supplies_the_page_for_form_bounds_and_page_named_properties() {
+    let form = "/Figure /Pr0 BDC 0 0 1 rg 0 0 60 60 re f EMC";
+    let make = || {
+        build(&[
+            (1, "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 3 0 R /MarkInfo << /Marked true >> >>".into()),
+            (2, "<< /Type /Pages /Kids [10 0 R] /Count 1 >>".into()),
+            (3, "<< /Type /StructTreeRoot /K 4 0 R /ParentTree 5 0 R >>".into()),
+            (4, "<< /Type /StructElem /S /Document /P 3 0 R /K [20 0 R 21 0 R 22 0 R] >>".into()),
+            (5, "<< /Nums [0 [20 0 R 21 0 R] 1 [22 0 R]] >>".into()),
+            (6, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into()),
+            (
+                10,
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 11 0 R /StructParents 0 \
+                 /Resources << /Font << /F1 6 0 R >> /XObject << /FmF 12 0 R >> /Properties << /Pr0 << /MCID 0 >> >> >> >>"
+                    .into(),
+            ),
+            (11, format!("<< /Length {} >>\nstream\n{PAGE}\nendstream", PAGE.len())),
+            (12, format!("<< /Type /XObject /Subtype /Form /BBox [0 0 60 60] /StructParents 1 /Length {} >>\nstream\n{form}\nendstream", form.len())),
+            (20, "<< /Type /StructElem /S /Figure /P 4 0 R /Pg 10 0 R /K 0 /Alt (Page figure) >>".into()),
+            (21, "<< /Type /StructElem /S /P /P 4 0 R /Pg 10 0 R /K 1 >>".into()),
+            // No `/Pg` on the element itself: only the MCR names page 10.
+            (22, "<< /Type /StructElem /S /Figure /P 4 0 R /K << /Type /MCR /Pg 10 0 R /Stm 12 0 R /MCID 0 >> /Alt (Form figure) >>".into()),
+        ])
+    };
+    let mut doc = make();
+    let form_fig = figures(&doc).into_iter().find(|f| f.obj == FORM_FIGURE).expect("form figure");
+    assert_eq!(form_fig.page, Some(0));
+    assert_eq!(form_fig.bbox, Some([300.0, 600.0, 360.0, 660.0]));
+    mark_tag_artifact(&mut doc, FORM_FIGURE).expect("artifact via MCR /Pg");
+    assert_the_form_entry_was_cleared(&doc);
+
+    let mut doc = make();
+    mark_decorative(&mut doc, FORM_FIGURE).expect("decorative via MCR /Pg");
+    assert_the_form_entry_was_cleared(&doc);
 }
