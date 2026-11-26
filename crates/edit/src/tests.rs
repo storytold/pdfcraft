@@ -2639,6 +2639,8 @@ fn styled_fallback_batches_keep_face_choices_and_range_styles() {
     let range = |range, family, bold| text::RangeStyle {
         range,
         family: Some((family, bold, false)),
+        bold: None,
+        italic: None,
         resource: None,
         size: None,
         color: None,
@@ -8140,6 +8142,8 @@ fn an_ocr_rewrite_goes_on_top_of_paint_over_where_it_lands() {
     let range = text::RangeStyle {
         range: 0..2,
         family: None,
+        bold: None,
+        italic: None,
         resource: None,
         size: Some(120.0),
         color: None,
@@ -8619,6 +8623,8 @@ fn disjoint_style_ranges_preserve_unselected_runs_and_validate_utf8_atomically()
             RangeStyle {
                 range: a..a + 5,
                 family: None,
+                bold: None,
+                italic: None,
                 resource: None,
                 size: Some(15.0),
                 color: Some([0.8, 0.1, 0.2]),
@@ -8629,6 +8635,8 @@ fn disjoint_style_ranges_preserve_unselected_runs_and_validate_utf8_atomically()
             RangeStyle {
                 range: b..b + 4,
                 family: Some((Family::Courier, false, true)),
+                bold: None,
+                italic: None,
                 resource: None,
                 size: None,
                 color: None,
@@ -8658,6 +8666,8 @@ fn disjoint_style_ranges_preserve_unselected_runs_and_validate_utf8_atomically()
         ranges: vec![RangeStyle {
             range: 1..2,
             family: None,
+            bold: None,
+            italic: None,
             resource: None,
             size: Some(12.0),
             color: None,
@@ -8685,6 +8695,188 @@ fn centered_mixed_size_title_keeps_three_rows_when_changed() {
         let line = &lines[row[0]];
         assert!(((line.rect[0] + line.rect[2]) / 2.0 - 150.0).abs() < 0.01);
     }
+}
+
+/// #7275: a range's weight or slant with no family keeps the source's family, which only a face
+/// the document really names can give it. "Georgia" only hints at Times, so the range is refused
+/// rather than saving the word in Times-Bold; an accepted alias such as Arial is that family.
+#[test]
+fn a_range_weight_without_a_family_keeps_the_source_family_or_is_refused() {
+    let range = |range| RangeStyle {
+        range,
+        family: None,
+        bold: Some(true),
+        italic: None,
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let mut doc = styled_text_page("Georgia");
+    let before = page_content_bytes(&doc, 0);
+    let guessed = BlockStyle { ranges: vec![range(0..4)], ..Default::default() };
+    let Err(EditError::Invalid(message)) = text::rewrite_block(&mut doc, 0, 0, Some("Original"), &guessed) else {
+        panic!("a guessed family is refused, not saved in another typeface");
+    };
+    assert!(message.contains("Georgia"), "{message}");
+    assert_eq!(page_content_bytes(&doc, 0), before, "a refused range changes nothing");
+    // Naming the family is the explicit way, and it is unchanged.
+    let named = BlockStyle { ranges: vec![RangeStyle { family: Some((Family::Times, true, false)), ..range(0..4) }], ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("Original"), &named).unwrap();
+    assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].base_font, "Times-Bold");
+    // Arial is Helvetica, so a bold variant of it keeps the family the document asked for.
+    let mut doc = styled_text_page("Arial");
+    text::rewrite_block(&mut doc, 0, 0, Some("Original"), &guessed).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.iter().any(|line| line.text == "Orig" && line.base_font == "Helvetica-Bold"), "{lines:?}");
+}
+
+#[test]
+fn range_noop_weight_preserves_calibration_while_face_change_resets_it() {
+    let base_range = |bold| RangeStyle {
+        range: 0..8,
+        family: None,
+        bold: Some(bold),
+        italic: None,
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let content = "BT /F1 12 Tf 72 700 Td [(O) 80 (r) 80 (i) 80 (g) 80 (i) 80 (n) 80 (a) 80 (l)] TJ ET";
+    let mut doc = text_page(content);
+    let original = text::text_lines(&doc, 0).unwrap()[0].clone();
+    let original_width = original.rect[2] - original.rect[0];
+
+    // No-op override (bold: false on upright Helvetica) keeps the face and its ~0.9 calibration.
+    let noop = BlockStyle { ranges: vec![base_range(false)], ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("Original"), &noop).unwrap();
+    let reopened = reopen(&doc);
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0].font, "F1");
+    assert_eq!(lines[0].base_font, "Helvetica");
+    let noop_width = lines[0].rect[2] - lines[0].rect[0];
+    assert!((noop_width - original_width).abs() < 0.1, "expected calibrated width {original_width}, got {noop_width}");
+
+    // An actual face change (bold: true on upright Helvetica) resets calibration to 1.0.
+    let mut doc = text_page(content);
+    let bold = BlockStyle { ranges: vec![base_range(true)], ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("Original"), &bold).unwrap();
+    let reopened = reopen(&doc);
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    assert_eq!(lines[0].base_font, "Helvetica-Bold");
+    let rewritten = String::from_utf8_lossy(&page_content_bytes(&reopened, 0)).into_owned();
+    let scales: Vec<&str> = rewritten.lines().filter(|l| l.ends_with(" Tz")).collect();
+    assert!(scales.iter().all(|s| *s == "100 Tz"), "{scales:?}: {rewritten}");
+}
+
+#[test]
+fn paragraph_font_resource_does_not_satisfy_range_italic_on_non_standard_face() {
+    let mut doc = styled_text_page("Georgia");
+    let before = page_content_bytes(&doc, 0);
+    let range = RangeStyle {
+        range: 0..4,
+        family: None,
+        bold: None,
+        italic: Some(true),
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    // A paragraph-level font_resource is a single concrete font, so it cannot supply an italic
+    // variant for a range on a non-standard face; the refusal directs callers to the range.
+    let paragraph_only = BlockStyle { resource: Some("F4".into()), ranges: vec![range.clone()], ..Default::default() };
+    let Err(EditError::Invalid(message)) = text::rewrite_block(&mut doc, 0, 0, Some("Original"), &paragraph_only) else {
+        panic!("paragraph font_resource alone must not silently ignore range italic on Georgia");
+    };
+    assert!(message.contains("Georgia") && message.contains("font_resource on the range"), "{message}");
+    assert_eq!(page_content_bytes(&doc, 0), before, "a refused range changes nothing");
+
+    // Setting font_resource on the range itself supplies that range's face without adding PCRange*.
+    let range_resource = BlockStyle { ranges: vec![RangeStyle { resource: Some("F4".into()), ..range }], ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("Original"), &range_resource).unwrap();
+    let reopened = reopen(&doc);
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    assert!(lines.iter().any(|l| l.text == "Orig" && l.font == "F4"), "{lines:?}");
+    let page = pdfcraft_model::pages(&reopened)[0].clone();
+    let res = reopened.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+    let fonts = reopened.resolve(res.get(b"Font").unwrap()).as_dict().unwrap().clone();
+    assert!(!fonts.iter().any(|(name, _)| name.starts_with(b"PCRange")), "unexpected synthetic PCRange font: {fonts:?}");
+}
+
+/// #7275 review: calibration fits a run to the source box at the source's own scale and spacing,
+/// so a range's scale or spacing must reach the page at its full value instead of being shrunk by
+/// the very factor that fits it to that box.
+#[test]
+fn a_range_scale_and_spacing_reach_the_page_at_their_full_value() {
+    let range = |char_spacing, scale| RangeStyle {
+        range: 0..9,
+        family: None,
+        bold: None,
+        italic: None,
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing,
+        scale,
+    };
+    let content = "BT /F1 10 Tf 100 700 Td (Wide text) Tj ET";
+    let width = |style: BlockStyle| {
+        let mut doc = text_page(content);
+        let before = text::text_lines(&doc, 0).unwrap()[0].rect;
+        text::rewrite_block(&mut doc, 0, 0, None, &style).unwrap();
+        let after = text::text_lines(&reopen(&doc), 0).unwrap()[0].rect;
+        (before[2] - before[0], after[2] - after[0])
+    };
+    let (before, doubled) = width(BlockStyle { ranges: vec![range(None, Some(200.0))], ..Default::default() });
+    assert!((doubled - 2.0 * before).abs() < 0.1, "200%: {before} → {doubled}");
+    // Nine characters take 18 more points of spacing, as the paragraph-level setting does.
+    let (before, spaced) = width(BlockStyle { ranges: vec![range(Some(2.0), None)], ..Default::default() });
+    assert!((spaced - before - 18.0).abs() < 0.1, "2 pt spacing: {before} → {spaced}");
+}
+
+/// #7275 review: the paragraph's `font_resource` is the concrete font every glyph is asked of, so a
+/// range's weight or slant asked of it was silently dropped. It is refused, and changes nothing.
+#[test]
+fn a_range_weight_with_a_paragraph_font_resource_is_refused() {
+    let range = |bold, italic| RangeStyle {
+        range: 0..4,
+        family: None,
+        bold,
+        italic,
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let mut doc = styled_text_page("Helvetica");
+    let before = page_content_bytes(&doc, 0);
+    for style in [
+        BlockStyle { resource: Some("F4".into()), ranges: vec![range(Some(true), None)], ..Default::default() },
+        BlockStyle { resource: Some("F4".into()), ranges: vec![range(None, Some(true))], ..Default::default() },
+    ] {
+        let Err(EditError::Invalid(message)) = text::rewrite_block(&mut doc, 0, 0, Some("Original"), &style) else {
+            panic!("a range's weight or slant must not be accepted and dropped for the paragraph resource");
+        };
+        assert!(message.contains("F4") && message.contains("font_resource on the range"), "{message}");
+        assert_eq!(page_content_bytes(&doc, 0), before, "a refused range changes nothing");
+    }
+    // A weight the source already has asks for no new face, so the resource still applies.
+    let noop = BlockStyle { resource: Some("F4".into()), ranges: vec![range(Some(false), None)], ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("Original"), &noop).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.iter().any(|line| line.text == "Original" && line.font == "F4"), "{lines:?}");
 }
 
 #[test]
@@ -9080,6 +9272,8 @@ fn turned_paragraph_keeps_its_line_breaks_when_a_word_is_added() {
     let range = text::RangeStyle {
         range: 0..4,
         family: None,
+        bold: None,
+        italic: None,
         resource: None,
         size: Some(20.0),
         color: None,
@@ -9353,6 +9547,8 @@ fn rows_the_edit_does_not_reach_keep_their_source_operators() {
     let range = text::RangeStyle {
         range: at..at + 4,
         family: None,
+        bold: None,
+        italic: None,
         resource: None,
         size: None,
         color: Some([1.0, 0.0, 0.0]),
@@ -12137,6 +12333,8 @@ fn carriage_returns_break_rows_on_the_styled_path() {
     let red = text::RangeStyle {
         range: 0..3,
         family: None,
+        bold: None,
+        italic: None,
         resource: None,
         size: None,
         color: Some([1.0, 0.0, 0.0]),
@@ -12241,6 +12439,8 @@ fn spaces_and_indents_in_a_subset_without_a_space_glyph_round_trip_across_edits(
         ranges: vec![text::RangeStyle {
             range: 2..5,
             family: None,
+            bold: None,
+            italic: None,
             resource: None,
             size: None,
             color: Some([1.0, 0.0, 0.0]),
@@ -12264,6 +12464,8 @@ fn a_reassigned_subset_space_keeps_its_own_underline() {
         ranges: vec![text::RangeStyle {
             range: 2..5,
             family: None,
+            bold: None,
+            italic: None,
             resource: None,
             size: None,
             color: None,
@@ -14479,6 +14681,8 @@ fn explicit_builtin_thai_replaces_an_unavailable_source_without_installing_a_fon
             range: 0..1,
             resource: Some("builtin:thai".into()),
             family: None,
+            bold: None,
+            italic: None,
             size: None,
             color: None,
             underline: None,
@@ -15589,6 +15793,8 @@ fn unicode_row_breaks_break_the_row_instead_of_needing_a_glyph() {
     let red = text::RangeStyle {
         range: 0..3,
         family: None,
+        bold: None,
+        italic: None,
         resource: None,
         size: None,
         color: Some([1.0, 0.0, 0.0]),

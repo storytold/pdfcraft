@@ -67,12 +67,15 @@ pub(crate) fn parse_style_ranges(value: Option<&Value>) -> Result<Vec<pdfcraft_e
                     "courier" => Ok(pdfcraft_engine::FontFamily::Courier),
                     _ => Err(Args::wrong("font", "helvetica, times or courier")),
                 })
-                .transpose()?
-                .map(|f| -> Result<_> { Ok((f, a.opt_bool("bold")?.unwrap_or(false), a.opt_bool("italic")?.unwrap_or(false))) })
                 .transpose()?;
+            let (bold, italic) = (a.opt_bool("bold")?, a.opt_bool("italic")?);
+            // With a family, unset flags mean regular; without one they keep the source's (#7275).
+            let family = family.map(|f| (f, bold.unwrap_or(false), italic.unwrap_or(false)));
             Ok(pdfcraft_engine::RangeStyle {
                 range: start..end,
                 family,
+                bold: if family.is_none() { bold } else { None },
+                italic: if family.is_none() { italic } else { None },
                 resource: a.opt_str("font_resource")?.map(str::to_owned),
                 size: a.opt_num("size")?,
                 color: a.opt_str("color")?.map(comments::parse_color).transpose()?,
