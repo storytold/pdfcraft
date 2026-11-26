@@ -139,6 +139,9 @@ pub(crate) struct XfaRun<'a> {
     /// would make): values and calculations still go into the fields and the data, and
     /// [`LAYOUT_KEPT`] says so.
     pub keep_layout: bool,
+    /// The form was laid out again: its pages, widgets and fields were replaced, so the edit
+    /// must rebuild the document's page and field lists, not only refresh their values.
+    pub relaid: bool,
 }
 
 /// What a certified XFA form says when it was not laid out again after a change.
@@ -778,6 +781,8 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
         self.relayouts += 1;
         self.flush()?;
+        // Set before the layout: one that fails part way may already have replaced fields.
+        self.run.relaid = true;
         self.embedded_changed = false;
         let report = pdfcraft_xfa::rerender(self.doc, self.tpl).map_err(|e| e.to_string())?;
         self.console(report.warnings);

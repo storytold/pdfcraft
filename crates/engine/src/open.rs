@@ -262,6 +262,7 @@ impl Session {
                             highlight: context.highlight,
                             time_scale: context.xfa_time_scale,
                             keep_layout: certification.is_some(),
+                            relaid: false,
                         };
                         let changes = xfa::on_open(&mut work, &tpl, &mut run);
                         if run.ran_away {
