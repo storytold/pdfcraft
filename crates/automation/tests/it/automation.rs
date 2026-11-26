@@ -3986,6 +3986,18 @@ fn a_shrinking_header_and_footer_moves_the_page_content_out_of_their_way_through
     assert!((after[2] / before[2] - k).abs() < 0.02 && (after[3] / before[3] - k).abs() < 0.02, "scaled by {k}: {before:?} → {after:?}");
     assert!((after[0] - (20.0 * k + (200.0 - 200.0 * k) / 2.0)).abs() < 1.0, "centred across: {before:?} → {after:?}");
     assert!(page_text(&mut a, doc)[0].contains("000001"), "the Bates number is drawn");
+    ok(
+        &mut a,
+        "doc_header_footer",
+        json!({ "doc": doc, "pages": [1], "header_center": "REVISED", "footer_right": "<<Bates Number#6#2##>>", "shrink": true, "replace": true }),
+    );
+    let replaced = text_box(&mut a);
+    assert!(replaced.iter().zip(after).all(|(r, b)| (r - b).abs() < 0.01), "replacement shrinks only once: {after:?} → {replaced:?}");
+    let revised = page_text(&mut a, doc);
+    assert!(revised[0].contains("REVISED") && revised[0].contains("000002") && !revised[0].contains("ACME"), "{revised:?}");
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Update header & footer");
+    let restored_mark = page_text(&mut a, doc);
+    assert!(restored_mark[0].contains("ACME") && restored_mark[0].contains("000001") && !restored_mark[0].contains("REVISED"), "{restored_mark:?}");
     // Margins that leave no room are refused; Remove brings the content back to full size.
     let full = json!({ "doc": doc, "header_center": "X", "margins": [295, 36, 72, 72], "shrink": true, "replace": true });
     assert!(matches!(a.call("doc_header_footer", &full), Err(ToolError::Failed(_))), "no room");

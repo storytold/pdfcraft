@@ -70,7 +70,11 @@ pub(crate) fn free_font_name(doc: &Document, fonts: &Dict, preferred: &str, base
 
 /// Add `fonts` (resource name, font) to the page's own resources.
 pub(crate) fn add_page_fonts(doc: &mut Document, page: &pdfcraft_model::Page, fonts: &Dict) -> Result<(), EditError> {
-    let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    // A mark may have just installed a standard font. Read the leaf's current resources
+    // first, and use the resolved page for inherited resources when the leaf has none.
+    let leaf = doc.get(page.obj);
+    let resources = leaf.as_dict().and_then(|d| d.get(b"Resources")).or_else(|| page.dict.get(b"Resources"));
+    let mut res = resources.map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut all = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     for (name, font) in fonts.iter() {
         all.set(name.clone(), font.clone());

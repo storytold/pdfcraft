@@ -2472,8 +2472,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.header_footer.update", "edit.header_footer.remove"]
 tools = ["doc_header_footer", "doc_remove_marks"]
-evidence = ["crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/ui-egui/tests/it/marks.rs::header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset", "crates/edit/src/mark_transaction_tests.rs::header_footer_changes_are_atomic_after_a_later_page_failure", "crates/edit/src/mark_transaction_tests.rs::replacements_commit_all_selected_pages_and_preserve_other_marks_and_shared_resources"]
-notes = "Add and Update are atomic across all selected pages: errors preserve existing marks, page content/resources and pending edits (#5657). recognises PdfCraft marks; Acrobat-made headers are not detected yet"
+evidence = ["crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/ui-egui/tests/it/marks.rs::header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset", "crates/edit/src/mark_transaction_tests.rs::header_footer_changes_are_atomic_after_a_later_page_failure", "crates/edit/src/mark_transaction_tests.rs::replacements_commit_all_selected_pages_and_preserve_other_marks_and_shared_resources", "crates/automation/tests/it/automation.rs::a_shrinking_header_and_footer_moves_the_page_content_out_of_their_way_through_tools", "crates/edit/src/tests.rs::replacing_a_mixed_thai_header_keeps_its_new_latin_face_and_inherited_fonts"]
+notes = "Add and Update are atomic across all selected pages: errors preserve existing marks, page content/resources and pending edits (#5657). Update reuses the resolved page list and still runs synchronously (#8204). Recognises PdfCraft marks. Acrobat-made headers are not detected yet."
 
 [[feature]]
 id = "edit.header-footer-tokens"

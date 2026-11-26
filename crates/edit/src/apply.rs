@@ -77,7 +77,6 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
     if replace {
         remove_marks(doc, pages, MarkKind::HeaderFooter)?;
     }
-    let all = page_list(doc);
     let count = all.len();
     let number_of = |k: usize| {
         u32::try_from(u64::from(hf.start_number) + k as u64).map_err(|_| EditError::Invalid("the header page numbers are too large".into()))
@@ -145,12 +144,12 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
         if !page_fonts(doc, page).contains(resource.as_bytes()) {
             add_page_resources(doc, page, None, &[(resource.into_bytes(), base)])?;
         }
-        thai.add_to(doc, &page_list(doc)[i])?;
-        let page = &page_list(doc)[i];
+        // Font and content writers read the current leaf through its stable object reference.
+        // Updating the marks leaves the page order and inherited geometry intact.
+        thai.add_to(doc, page)?;
         place(doc, page, MarkKind::HeaderFooter, content, false)?;
         if let Some(Some(m)) = shrinks.get(k) {
             let cm = format!("{} cm\n", m.map(matrix_number).join(" "));
-            let page = &page_list(doc)[i];
             place_inside_wrapper(doc, page, MarkKind::HeaderFooter.tag(), cm.into_bytes())?;
         }
     }

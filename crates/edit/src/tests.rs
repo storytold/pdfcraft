@@ -7001,6 +7001,32 @@ fn header_and_watermark_drawability_matches_what_applying_refuses() {
     }
 }
 
+#[test]
+fn replacing_a_mixed_thai_header_keeps_its_new_latin_face_and_inherited_fonts() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let mut header = HeaderFooter::default();
+    header.text[0] = "Original".into();
+    add_header_footer(&mut doc, &[0, 1], &header, false, &cx()).unwrap();
+    header.text[0] = "Revised หน้า <<1>>".into();
+    header.font = added::Family::Courier;
+    header.shrink = true;
+    add_header_footer(&mut doc, &[0, 1], &header, true, &cx()).unwrap();
+    let doc = reopen(&doc);
+
+    for (i, page) in pdfcraft_model::pages(&doc).iter().take(2).enumerate() {
+        let content = streams(&doc, i).concat();
+        assert!(content.contains("(Revised ") && content.contains("/PCTh") && !content.contains("Original"), "{content}");
+        let fonts = crate::place::page_fonts(&doc, page);
+        assert!(fonts.contains(b"F1"), "the body still uses the inherited face");
+        let courier = doc.resolve(fonts.get(b"PCCour").expect("the replacement installed Courier"));
+        assert_eq!(courier.as_dict().unwrap().name(b"BaseFont"), Some(b"Courier".as_slice()));
+        assert!(fonts.iter().any(|(name, _)| name.starts_with(b"PCTh")), "the Thai face is also present");
+    }
+}
+
 /// Thai in a header, footer or text watermark is drawn from the Thai face as Add text draws it:
 /// Type 3 glyphs with a ToUnicode map, one set of fonts shared by every page the mark goes on,
 /// beside the mark's standard face. A build without a Thai face refuses it, saying what to do.

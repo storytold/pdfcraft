@@ -180,6 +180,43 @@ fn header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset() {
     h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Update Header and Footer");
     h.get_by_label("Cancel").click();
     h.steps(2);
+    let content = |h: &Rig| {
+        let s = h.state();
+        let doc = pdfcraft_cos::Document::open(s.session.get(s.views[0].id).unwrap().bytes.clone()).unwrap();
+        pdfcraft_model::pages(&doc)
+            .iter()
+            .map(|p| {
+                let Some(c) = p.dict.get(b"Contents") else { return vec![] };
+                let streams = doc.resolve(c);
+                streams
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|s| {
+                        let stream = doc.resolve(s);
+                        let pdfcraft_cos::Object::Stream(stream) = stream.as_ref() else { panic!("page content is a stream") };
+                        stream.decoded().unwrap()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    let original = content(&h);
+    assert!(h.execute("edit.header_footer.update"));
+    h.steps(2);
+    set_field(&mut h, MarkKind::HeaderFooter, "hf.text.5", json!("Revised <<1>>"));
+    set_range(&mut h, MarkKind::HeaderFooter, PageRange { subset: Subset::Odd, ..PageRange::default() });
+    h.get_by_label("OK").click();
+    h.steps(4);
+    let updated = content(&h);
+    assert!(!is_open(&h));
+    for page in [0, 2] {
+        assert_ne!(updated[page], original[page]);
+        assert!(updated[page].iter().any(|s| String::from_utf8_lossy(s).contains("Revised")));
+    }
+    assert_eq!(updated[1], original[1]);
+    assert!(h.execute("edit.undo"));
+    assert_eq!(content(&h), original, "one Undo restores all original page streams");
     assert!(h.execute("edit.header_footer.remove"));
     assert!(marks(&h).is_empty());
 }
