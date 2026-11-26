@@ -41,6 +41,9 @@ allow-git = [
     # The reviewed egui 0.37 and winit 0.30.13 fork revisions (immutable pins in Cargo.toml).
     "https://github.com/storytold/egui",
     "https://github.com/storytold/winit",
+    # vectorcraft's geometry and path-ops crates, pinned by craft-libs' craft-svg to an immutable
+    # revision (#8486).
+    "https://github.com/storytold/vectorcraft",
 ]
 
 [advisories]
@@ -81,4 +84,18 @@ allow = ["OFL-1.1", "Ubuntu-font-1.0"]
 # only, never into PdfCraft. Remove when winprint makes those build-dependencies optional.
 [[licenses.exceptions]]
 crate = "webpki-root-certs"
+allow = ["CDLA-Permissive-2.0"]
+
+# option-ext (dirs-sys -> dirs, behind craft-libs' craft-settings and craft-theme-store) is
+# MPL-2.0, which standards/licences.md allows for third-party crates used unmodified. PdfCraft
+# links it unmodified, in the desktop app and pdfcraft-cli (#8486).
+[[licenses.exceptions]]
+crate = "option-ext"
+allow = ["MPL-2.0"]
+
+# webpki-roots (ureq, behind craft-libs' craft-update and craft-font-store) is the Mozilla CA
+# bundle as CDLA-Permissive-2.0 data, on the standards/licences.md allowlist. Unlike
+# webpki-root-certs above, it is compiled into PdfCraft (#8486).
+[[licenses.exceptions]]
+crate = "webpki-roots"
 allow = ["CDLA-Permissive-2.0"]
