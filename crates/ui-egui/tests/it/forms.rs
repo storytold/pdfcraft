@@ -892,7 +892,20 @@ fn lithuanian_calendar_localizes_months_and_days_without_changing_field_values()
     let (y, m, _) = h.state().session.today();
     let months = ["sausis", "vasaris", "kovas", "balandis", "gegužė", "birželis", "liepa", "rugpjūtis", "rugsėjis", "spalis", "lapkritis", "gruodis"];
     h.get_by_label(&format!("{y} m. {}", months[(m - 1) as usize]));
-    // Weekday headers are drawn, not access nodes. A real day cell exposes its full date instead.
+    // Weekday headers are drawn, not access nodes, so they are read from the painted text.
+    let painted: Vec<String> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    for day in ["Sk", "Pr", "An", "Tr", "Kt", "Pn", "Št"] {
+        assert!(painted.iter().any(|text| text == day), "the Lithuanian weekday header {day} is painted: {painted:?}");
+    }
+    // A real day cell exposes its full date.
     let dates = craft_i18n::DateFormat::new(&craft_i18n::Region::from_tag("lt"));
     let day_label = |year, month| {
         dates.format(
