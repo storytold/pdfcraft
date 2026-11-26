@@ -3052,11 +3052,16 @@ impl crate::PurviewProvider for TestProtectedProvider {
     }
 
     fn account(&self) -> Option<crate::PurviewAccount> {
-        None
+        Some(crate::PurviewAccount {
+            id: "test-account".into(),
+            display_name: "Test account".into(),
+            email: "test@example.com".into(),
+            principal_name: "test@example.com".into(),
+        })
     }
 
     fn accounts(&self) -> Vec<crate::PurviewAccount> {
-        Vec::new()
+        self.account().into_iter().collect()
     }
 
     fn switch_account(&self, _account_id: &str) -> Result<(), crate::PurviewError> {
@@ -3102,7 +3107,21 @@ impl crate::PurviewProvider for TestProtectedProvider {
     ) -> Result<crate::PurviewOpen, crate::PurviewError> {
         self.mutation_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         *self.mutation_input.lock().unwrap() = Some((original.clone(), working.clone()));
-        Ok(crate::PurviewOpen { handle: 1, original: working.clone(), bytes: working.clone(), document: Default::default() })
+        let protected = original == &self.original || original == &self.protected_output;
+        Ok(crate::PurviewOpen {
+            handle: 1,
+            original: if protected { self.protected_output.clone() } else { original.clone() },
+            bytes: working.clone(),
+            document: crate::PurviewDocument {
+                protected,
+                rights: if protected {
+                    crate::PurviewRights { owner: true, view: true, export: true, ..Default::default() }
+                } else {
+                    Default::default()
+                },
+                ..Default::default()
+            },
+        })
     }
 
     fn remove_label(
@@ -3114,7 +3133,21 @@ impl crate::PurviewProvider for TestProtectedProvider {
     ) -> Result<crate::PurviewOpen, crate::PurviewError> {
         self.mutation_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         *self.mutation_input.lock().unwrap() = Some((original.clone(), working.clone()));
-        Ok(crate::PurviewOpen { handle: 1, original: working.clone(), bytes: working.clone(), document: Default::default() })
+        let protected = original == &self.original || original == &self.protected_output;
+        Ok(crate::PurviewOpen {
+            handle: 1,
+            original: if protected { self.protected_output.clone() } else { original.clone() },
+            bytes: working.clone(),
+            document: crate::PurviewDocument {
+                protected,
+                rights: if protected {
+                    crate::PurviewRights { owner: true, view: true, export: true, ..Default::default() }
+                } else {
+                    Default::default()
+                },
+                ..Default::default()
+            },
+        })
     }
 
     fn remove_protection(&self, _handle: u64, _original: &Arc<Vec<u8>>, working: &Arc<Vec<u8>>) -> Result<crate::PurviewOpen, crate::PurviewError> {
@@ -3137,10 +3170,11 @@ fn protected_session_for_test() -> (Session, DocId, Arc<TestProtectedProvider>) 
 }
 
 fn protected_session_with_working_for_test(working: Vec<u8>) -> (Session, DocId, Arc<TestProtectedProvider>) {
+    let working = Arc::new(working);
     let provider = Arc::new(TestProtectedProvider {
         original: Arc::new(b"synthetic protected original".to_vec()),
-        protected_output: Arc::new(b"synthetic protected output".to_vec()),
-        original_working: Arc::new(working),
+        protected_output: working.clone(),
+        original_working: working,
         rights: crate::PurviewRights { owner: true, view: true, edit: true, save: true, ..Default::default() },
         published_working: std::sync::Mutex::new(None),
         mutation_input: std::sync::Mutex::new(None),
@@ -3222,12 +3256,39 @@ fn purview_label_changes_discard_history_that_could_restore_old_security() {
 #[test]
 fn purview_account_changes_require_closing_protected_documents() {
     let (mut session, id, _) = protected_session_for_test();
-    for result in [session.purview_sign_in(None), session.purview_switch_account("other"), session.purview_sign_out()] {
+    assert!(matches!(session.purview_sign_in(None), Err(crate::PurviewError::SdkUnavailable)));
+    for result in [session.purview_switch_account("other"), session.purview_sign_out()] {
         assert!(matches!(result, Err(crate::PurviewError::Native(message)) if message.contains("Close all")));
     }
     session.close(id);
     assert!(session.purview_sign_out().is_ok());
     assert!(matches!(session.purview_sign_in(None), Err(crate::PurviewError::SdkUnavailable)));
+}
+
+#[test]
+fn purview_reauthentication_revalidates_rights_without_changing_working_edits() {
+    let (mut session, id, _provider) = protected_session_for_test();
+    session.apply(id, crate::Edit::SetInfo { key: "Title".into(), value: "unsaved".into() }).unwrap();
+    session.doc_mut(id).unwrap().purview.as_mut().unwrap().document.rights = crate::PurviewRights::default();
+
+    session.purview_revalidate_protected_documents().unwrap();
+
+    assert!(session.get(id).unwrap().purview().unwrap().rights.owner);
+    assert_eq!(session.get(id).unwrap().info_value("Title").as_deref(), Some("unsaved"));
+}
+
+#[test]
+fn failed_purview_revalidation_clears_stale_rights() {
+    let (mut session, id, _provider) = protected_session_for_test();
+    session.doc_mut(id).unwrap().purview.as_mut().unwrap().original = Arc::new(b"not a recognized protected original".to_vec());
+
+    let error = session.purview_revalidate_protected_documents().unwrap_err();
+    assert!(matches!(error, crate::PurviewError::Native(_)));
+    let rights = &session.get(id).unwrap().purview().unwrap().rights;
+    assert!(!rights.owner);
+    assert!(!rights.view);
+    assert!(!rights.can_save());
+    assert!(!rights.can_export());
 }
 
 #[test]
@@ -3340,13 +3401,26 @@ fn purview_revert_restores_the_last_protected_version() {
 }
 
 #[test]
-fn purview_protected_label_mutations_fail_closed_before_calling_the_provider() {
+fn purview_protected_label_mutations_use_the_protected_original() {
     let (mut s, id, provider) = protected_session_for_test();
-    assert!(matches!(s.purview_apply_label(id, "label", None), Err(EditError::Protection(_))));
-    assert!(matches!(s.purview_remove_label(id, None), Err(EditError::Protection(_))));
-    assert!(matches!(s.purview_remove_protection(id), Err(EditError::Protection(_))));
-    assert_eq!(provider.mutation_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+    s.purview_apply_label(id, "label", None).unwrap();
+    assert_eq!(provider.mutation_input.lock().unwrap().as_ref().unwrap().0, provider.original);
     assert!(s.get(id).unwrap().purview().unwrap().protected);
+    s.purview_remove_label(id, None).unwrap();
+    assert_eq!(provider.mutation_input.lock().unwrap().as_ref().unwrap().0, provider.protected_output);
+    assert!(s.get(id).unwrap().purview().unwrap().protected);
+    s.purview_remove_protection(id).unwrap();
+    assert_eq!(provider.mutation_calls.load(std::sync::atomic::Ordering::Relaxed), 3);
+    assert!(!s.get(id).unwrap().purview().unwrap().protected);
+}
+
+#[test]
+fn purview_protected_label_mutations_require_change_security_rights() {
+    let (mut session, id) = session_with(1);
+    protect_for_test(&mut session, id, crate::PurviewRights { view: true, extract: true, ..Default::default() });
+    assert!(matches!(session.purview_apply_label(id, "label", None), Err(EditError::NotPermitted(_))));
+    assert!(matches!(session.purview_remove_label(id, None), Err(EditError::NotPermitted(_))));
+    assert!(matches!(session.purview_remove_protection(id), Err(EditError::NotPermitted(_))));
 }
 
 #[test]

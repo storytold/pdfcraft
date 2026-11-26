@@ -222,6 +222,12 @@ fn dialog_body(ui: &mut egui::Ui, view: &PurviewView, selected: &mut String, jus
         }
         PurviewStatus::Ready => {
             account_section(ui, view, action);
+            if view.document.as_ref().is_some_and(|document| document.protected)
+                && view.pending_name.is_none()
+                && ui.button(tl!("Renew Microsoft sign-in")).clicked()
+            {
+                *action = Some(Action::SignIn);
+            }
             if let Some(name) = &view.pending_name {
                 ui.label(tl!("Waiting to open"));
                 ui.label(name);

@@ -577,7 +577,7 @@ fn security_properties_offer_sign_in_then_sensitivity_label_action() {
 fn security_properties_do_not_claim_a_protected_document_is_unrestricted() {
     let account = PurviewAccount { id: "ada".into(), display_name: "Ada".into(), email: "ada@example.com".into(), principal_name: String::new() };
     let document = PurviewDocument { protected: true, rights: PurviewRights { view: true, ..Default::default() }, ..Default::default() };
-    let h = harness_security_with_document(TestPurviewProvider::signed_in_with_document(account.clone(), vec![account], document));
+    let h = harness_security_with_document(TestPurviewProvider::signed_in_with_document(account.clone(), vec![account.clone()], document.clone()));
     h.get_by_label("Managed by Microsoft Purview");
     assert!(
         h.query_all_by(|node| { node.value().as_deref() == Some("Changing labels or protection on protected documents is not available yet.") })
@@ -604,6 +604,11 @@ fn security_properties_report_distinct_protected_capabilities() {
             "{name} should be {expected}"
         );
     }
+    assert!(h.query_by_label("Remove protection").is_none(), "Change Rights does not authorize removal");
+
+    let document = PurviewDocument { rights: PurviewRights { export: true, ..document.rights.clone() }, ..document };
+    let h = harness_security_with_document(TestPurviewProvider::signed_in_with_document(account, vec![], document));
+    h.get_by_label("Remove protection");
 }
 
 #[test]
@@ -888,7 +893,7 @@ fn labeled_document_shows_owner_label_and_dynamic_capabilities() {
 }
 
 #[test]
-fn protected_label_actions_are_unavailable_even_with_owner_rights() {
+fn protected_label_actions_follow_owner_rights_and_keep_account_changes_gated() {
     let ada = PurviewAccount {
         id: "ada".into(),
         display_name: "Ada Lovelace".into(),
@@ -932,11 +937,10 @@ fn protected_label_actions_are_unavailable_even_with_owner_rights() {
         downgrade_justification_required: false,
     };
     let h = harness_with_document(TestPurviewProvider::signed_in_with_document(ada.clone(), vec![ada.clone()], document.clone()));
-    h.get_by_label("Changing labels or protection on protected documents is not available yet.");
-    h.get_by_label("Close all Microsoft Purview-protected documents before changing accounts.");
+    h.get_by_label("Renew Microsoft sign-in");
+    h.get_by_label("Remove label");
     assert!(h.query_by(|node| node.label().as_deref() == Some("Add account")).is_none());
     assert!(h.query_by(|node| node.label().as_deref() == Some("Sign out")).is_none());
-    assert!(h.query_by(|node| node.label().as_deref() == Some("Remove label")).is_none());
     assert!(h.query_by(|node| node.label().as_deref() == Some("Remove protection")).is_none());
 
     let label_only = PurviewDocument {
@@ -951,6 +955,24 @@ fn protected_label_actions_are_unavailable_even_with_owner_rights() {
     h.get_by_label("Sign out");
     h.get_by_label("A default label is configured but is not applied automatically.");
     assert!(h.query_by(|node| node.label().as_deref() == Some("Remove protection")).is_none());
+}
+
+#[test]
+fn renewing_sign_in_revalidates_rights_without_losing_protected_edits() {
+    let account = PurviewAccount {
+        id: "ada".into(),
+        display_name: "Ada Lovelace".into(),
+        email: "ada@example.com".into(),
+        principal_name: "ada@example.com".into(),
+    };
+    let document = PurviewDocument { protected: true, rights: PurviewRights { owner: true, view: true, ..Default::default() }, ..Default::default() };
+    let mut h = harness_with_document(TestPurviewProvider::signed_in_with_document(account.clone(), vec![account], document));
+    let id = h.state().session.docs()[0].id;
+    h.state_mut().session.apply(id, Edit::SetInfo { key: "Title".into(), value: "unsaved".into() }).unwrap();
+    h.get_by_label("Renew Microsoft sign-in").click();
+    crate::support::wait_until(&mut h, "renewed Purview sign-in", |app| app.toast.as_ref().is_some_and(|(message, _)| message == "Signed in"));
+    assert_eq!(h.state().session.get(id).unwrap().info_value("Title").as_deref(), Some("unsaved"));
+    assert!(h.state().session.get(id).unwrap().purview().unwrap().rights.owner);
 }
 
 #[test]

@@ -174,6 +174,9 @@ pub trait PurviewProvider: Send + Sync {
     fn accounts(&self) -> Vec<PurviewAccount>;
     fn switch_account(&self, account_id: &str) -> Result<(), PurviewError>;
     fn sign_in(&self, username_hint: Option<&str>) -> Result<(), PurviewError>;
+    fn reauthenticate_active(&self, username_hint: Option<&str>) -> Result<(), PurviewError> {
+        self.sign_in(username_hint)
+    }
     fn sign_out(&self) -> Result<(), PurviewError>;
     fn inspect(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Option<PurviewOpen>, PurviewError>;
     fn labels(&self) -> Result<Vec<PurviewLabel>, PurviewError>;

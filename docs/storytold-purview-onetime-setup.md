@@ -370,10 +370,11 @@ and IPIA. Do not put an app secret in a desktop binary or source repository.
 
 The following inputs are required to turn the PdfCraft POC from an SDK bridge into a live tenant test:
 
-- Validate protected-document saves, recovery and revert against a live tenant. Optimization,
-  digital signing and label/protection changes on protected documents are intentionally disabled until they
-  can preserve and verify protection. Continue using synthetic test documents; do not
-  distribute the POC for sensitive content.
+- Validate protected-document saves, recovery, revert and original-plus-edits label/protection
+  mutations against a live tenant. Synthetic regressions verify the native protocol and
+  fail-closed rights checks. Optimization and digital signing remain disabled for protected
+  documents. Continue using synthetic test documents; do not distribute the POC for sensitive
+  content.
 - Download the official `mip_sdk_file_macos_1.18.148.zip` package for macOS and, for public release,
   the corresponding `file`, `protection`, and `upe` packages for every supported platform.
 - Extract the package into a private SDK staging directory outside the Git repository.
@@ -408,13 +409,14 @@ is in progress, wait for it to finish and retry the account change.
 If a protected file is denied or unavailable, the dialog identifies the waiting file and offers
 Retry opening once an account is ready; it does not offer actions for a different open document.
 
-The POC does not yet renew expired access tokens or reauthenticate while protected documents
-are open. An SDK operation, protected save, or recovery snapshot can therefore fail after token
-expiry; unsaved changes remain at risk. Do not work around this by exporting plaintext. With
-synthetic fixtures, close or discard the test document and sign in again. Safe same-account
-renewal, challenge handling, preservation of unsaved work, and rights revalidation are release
-blockers and must be tested with a real tenant before use with sensitive documents.
-The unresolved implementation review is tracked in
+The POC now retains token expiry and supports browser reauthentication with the same active
+account while protected documents are open. A different account is rejected. Reauthentication
+preserves current working edits and revalidates every protected original before rights resume;
+unknown or failed rights clear the effective rights. SDK `NoAuthToken`, expired, and invalid-token
+errors are surfaced as sign-in challenges. Do not work around a failure by exporting plaintext.
+MFA, Conditional Access, challenge behavior, and renewal with unsaved edits still require a real
+tenant before use with sensitive documents.
+Live tenant verification of this flow is tracked in
 [storytold/pdfcraft#7843](https://github.com/storytold/pdfcraft/pull/7843#discussion_r4687045314).
 
 Azure CLI is useful to Storytold maintainers for tenant/app-registration setup

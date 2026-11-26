@@ -187,7 +187,7 @@ use workflows::web_print;
 type Queue<K, R> = craft::host::queue::JobQueue<K, R>;
 
 #[cfg(not(target_arch = "wasm32"))]
-type PurviewSignInResult = Result<(), pdfcraft_engine::PurviewError>;
+type PurviewSignInResult = (bool, Result<(), pdfcraft_engine::PurviewError>);
 
 #[cfg(not(target_arch = "wasm32"))]
 type PurviewLabelsResult = (Option<String>, Result<Vec<pdfcraft_engine::PurviewLabel>, pdfcraft_engine::PurviewError>);

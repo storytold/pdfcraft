@@ -919,7 +919,8 @@ impl PdfCraftApp {
     }
 
     pub(crate) fn start_purview_sign_in(&mut self, ctx: &egui::Context) {
-        if let Some(reason) = self.purview_account_change_reason() {
+        let reauthenticate = self.session.has_purview_protected_documents();
+        if !reauthenticate && let Some(reason) = self.purview_account_change_reason() {
             self.notify_tr(reason);
             return;
         }
@@ -929,18 +930,19 @@ impl PdfCraftApp {
                 self.notify_tr("Microsoft sign-in is already in progress");
                 return;
             }
-            let provider = match self.session.purview_sign_in_provider() {
-                Ok(provider) => provider,
-                Err(error) => {
-                    self.notify_fmt("Sign-in failed: {e}", &[("e", &error.to_string())]);
-                    return;
-                }
-            };
+            let provider =
+                match if reauthenticate { self.session.purview_reauthentication_provider() } else { self.session.purview_sign_in_provider() } {
+                    Ok(provider) => provider,
+                    Err(error) => {
+                        self.notify_fmt("Sign-in failed: {e}", &[("e", &error.to_string())]);
+                        return;
+                    }
+                };
             let (sender, receiver) = std::sync::mpsc::channel();
             let wake = self.wake.clone();
             let worker = std::thread::Builder::new().name("purview-sign-in".into()).spawn(move || {
-                let result = provider.sign_in(None);
-                if sender.send(result).is_err() {
+                let result = if reauthenticate { provider.reauthenticate_active(None) } else { provider.sign_in(None) };
+                if sender.send((reauthenticate, result)).is_err() {
                     log::debug!("Microsoft sign-in completed after PdfCraft exited");
                 }
                 wake.wake();
@@ -956,6 +958,10 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         match self.session.purview_sign_in(None) {
             Ok(()) => {
+                if reauthenticate && let Err(error) = self.session.purview_revalidate_protected_documents() {
+                    self.notify_fmt("Couldn't revalidate Microsoft Purview protection: {e}", &[("e", &error.to_string())]);
+                    return;
+                }
                 self.clear_purview_labels();
                 self.clear_purview_justification();
                 self.notify_tr("Signed in");
@@ -969,16 +975,20 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn poll_purview_sign_in(&mut self, ctx: &egui::Context) {
         let Some(receiver) = self.purview_sign_in_job.as_ref() else { return };
-        let result = match receiver.try_recv() {
+        let (reauthenticate, result) = match receiver.try_recv() {
             Ok(result) => result,
             Err(std::sync::mpsc::TryRecvError::Empty) => return,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                Err(pdfcraft_engine::PurviewError::Native("the Microsoft sign-in worker stopped".into()))
+                (false, Err(pdfcraft_engine::PurviewError::Native("the Microsoft sign-in worker stopped".into())))
             }
         };
         self.purview_sign_in_job = None;
         match result {
             Ok(()) => {
+                if reauthenticate && let Err(error) = self.session.purview_revalidate_protected_documents() {
+                    self.notify_fmt("Couldn't revalidate Microsoft Purview protection: {e}", &[("e", &error.to_string())]);
+                    return;
+                }
                 self.notify_tr("Signed in");
                 self.retry_purview_signin(ctx);
                 self.clear_purview_justification();

@@ -10,6 +10,11 @@ use crate::{PurviewAccount, PurviewDocument, PurviewError, PurviewLabel, Purview
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(1);
 const MAX_TEMP_BYTES: u64 = 512 * 1024 * 1024;
+const TOKEN_EXPIRY_SKEW: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn token_usable(expires_at: std::time::Instant) -> bool {
+    expires_at.saturating_duration_since(std::time::Instant::now()) > TOKEN_EXPIRY_SKEW
+}
 
 struct StagedPath(std::path::PathBuf);
 
@@ -175,7 +180,9 @@ fn helper_path_from(
 struct PurviewAccountSession {
     account: PurviewAccount,
     rms_access_token: String,
+    rms_expires_at: std::time::Instant,
     sync_access_token: String,
+    sync_expires_at: std::time::Instant,
 }
 
 #[cfg(feature = "mip-auth")]
@@ -189,11 +196,22 @@ fn matching_account(rms: Option<&PurviewAccount>, sync: Option<&PurviewAccount>)
     Ok(rms.clone())
 }
 
+#[cfg(feature = "mip-auth")]
+fn matching_reauthenticated_account(expected: &str, actual: &PurviewAccount) -> Result<(), PurviewError> {
+    if actual.id == expected {
+        Ok(())
+    } else {
+        Err(PurviewError::Native("Sign in again with the Microsoft account that opened the protected document.".into()))
+    }
+}
+
 pub struct NativePurviewProvider {
     app_id: String,
     auth_status: Mutex<PurviewStatus>,
     account_sessions: Mutex<Vec<PurviewAccountSession>>,
     active_account_id: Mutex<Option<String>>,
+    #[cfg(feature = "mip-auth")]
+    required_account_id: Mutex<Option<String>>,
     account_gate: RwLock<()>,
     staging_dir: Mutex<Option<std::path::PathBuf>>,
 }
@@ -212,6 +230,8 @@ impl NativePurviewProvider {
             auth_status: Mutex::new(PurviewStatus::SignedOut),
             account_sessions: Mutex::new(Vec::new()),
             active_account_id: Mutex::new(None),
+            #[cfg(feature = "mip-auth")]
+            required_account_id: Mutex::new(None),
             account_gate: RwLock::new(()),
             staging_dir: Mutex::new(None),
         }
@@ -324,11 +344,13 @@ impl NativePurviewProvider {
     }
 
     fn rms_token(&self) -> Option<String> {
-        self.active_session().map(|session| session.rms_access_token)
+        let session = self.active_session()?;
+        token_usable(session.rms_expires_at).then_some(session.rms_access_token)
     }
 
     fn sync_token(&self) -> Option<String> {
-        self.active_session().map(|session| session.sync_access_token)
+        let session = self.active_session()?;
+        token_usable(session.sync_expires_at).then_some(session.sync_access_token)
     }
 
     fn has_tokens(&self) -> bool {
@@ -498,11 +520,13 @@ impl PurviewProvider for NativePurviewProvider {
         } else if !self.sdk_ready() || helper_path().is_none() {
             PurviewStatus::SdkUnavailable
         } else {
-            self.auth_status
+            let status = self
+                .auth_status
                 .lock()
                 .ok()
                 .map(|status| *status)
-                .unwrap_or_else(|| if self.has_tokens() { PurviewStatus::Ready } else { PurviewStatus::SignedOut })
+                .unwrap_or_else(|| if self.has_tokens() { PurviewStatus::Ready } else { PurviewStatus::SignedOut });
+            if status == PurviewStatus::Ready && !self.has_tokens() { PurviewStatus::SignedOut } else { status }
         }
     }
 
@@ -582,10 +606,20 @@ impl PurviewProvider for NativePurviewProvider {
             )
             .map_err(|error| PurviewError::Native(error.to_string()))?;
             let account = matching_account(rms_token.account.as_ref(), sync_token.account.as_ref())?;
+            if let Some(required) = self
+                .required_account_id
+                .lock()
+                .map_err(|_| PurviewError::Native("Microsoft account reauthentication state is unavailable".into()))?
+                .clone()
+            {
+                matching_reauthenticated_account(&required, &account)?;
+            }
             let session = PurviewAccountSession {
                 account: account.clone(),
                 rms_access_token: rms_token.access_token,
+                rms_expires_at: rms_token.expires_at,
                 sync_access_token: sync_token.access_token,
+                sync_expires_at: sync_token.expires_at,
             };
             {
                 let mut active =
@@ -603,6 +637,16 @@ impl PurviewProvider for NativePurviewProvider {
         })();
         let mut status = self.auth_status.lock().map_err(|_| PurviewError::Native("Microsoft account sign-in status is unavailable".into()))?;
         *status = if result.is_ok() { PurviewStatus::Ready } else { previous_status };
+        result
+    }
+
+    #[cfg(feature = "mip-auth")]
+    fn reauthenticate_active(&self, username_hint: Option<&str>) -> Result<(), PurviewError> {
+        let account = self.account().ok_or_else(|| PurviewError::Native("there is no active Microsoft account to reauthenticate".into()))?;
+        *self.required_account_id.lock().map_err(|_| PurviewError::Native("Microsoft account reauthentication state is unavailable".into()))? =
+            Some(account.id);
+        let result = self.sign_in(username_hint);
+        *self.required_account_id.lock().map_err(|_| PurviewError::Native("Microsoft account reauthentication state is unavailable".into()))? = None;
         result
     }
 
@@ -714,23 +758,26 @@ impl PurviewProvider for NativePurviewProvider {
         label_id: &str,
         justification: Option<&str>,
     ) -> Result<PurviewOpen, PurviewError> {
-        let _ = (handle, original);
+        let _ = handle;
         let _operation = self.document_operation()?;
         let rms_token = self.rms_token().ok_or(PurviewError::SignInRequired)?;
         let sync_token = self.sync_token().ok_or(PurviewError::SignInRequired)?;
         let username = self.username();
+        let original_path = self.write_temp(original, "pdf")?;
         let input = self.write_temp(working_bytes, "pdf")?;
         let output = self.temp_path("pdf")?;
+        let _original_audit = original_path.with_suffix(".audit");
         let _input_audit = input.with_suffix(".audit");
         let _output_audit = output.with_suffix(".audit");
         let working = output.with_suffix(".working");
         let cache = self.staging_dir()?;
         let request = format!(
-            "apply-label\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "apply-label\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.app_id,
             escape_tsv(&username),
             escape_tsv(&rms_token),
             escape_tsv(&sync_token),
+            escape_tsv(&original_path.to_string_lossy()),
             escape_tsv(&input.to_string_lossy()),
             escape_tsv(&output.to_string_lossy()),
             escape_tsv(label_id),
@@ -751,22 +798,26 @@ impl PurviewProvider for NativePurviewProvider {
         working_bytes: &Arc<Vec<u8>>,
         justification: Option<&str>,
     ) -> Result<PurviewOpen, PurviewError> {
-        let _ = (handle, original);
+        let _ = handle;
         let _operation = self.document_operation()?;
         let rms_token = self.rms_token().ok_or(PurviewError::SignInRequired)?;
         let sync_token = self.sync_token().ok_or(PurviewError::SignInRequired)?;
         let username = self.username();
+        let original_path = self.write_temp(original, "pdf")?;
         let input = self.write_temp(working_bytes, "pdf")?;
         let output = self.temp_path("pdf")?;
+        let _original_audit = original_path.with_suffix(".audit");
+        let working = output.with_suffix(".working");
         let _input_audit = input.with_suffix(".audit");
         let _output_audit = output.with_suffix(".audit");
         let cache = self.staging_dir()?;
         let request = format!(
-            "remove-label\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "remove-label\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.app_id,
             escape_tsv(&username),
             escape_tsv(&rms_token),
             escape_tsv(&sync_token),
+            escape_tsv(&original_path.to_string_lossy()),
             escape_tsv(&input.to_string_lossy()),
             escape_tsv(&output.to_string_lossy()),
             escape_tsv(justification.unwrap_or("")),
@@ -776,26 +827,29 @@ impl PurviewProvider for NativePurviewProvider {
         if line == "JUSTIFICATION" {
             return Err(PurviewError::JustificationRequired);
         }
-        self.parse_mutation(&line, &output, &output, "the label operation produced no document")
+        self.parse_mutation(&line, &output, &working, "the label operation produced no document")
     }
 
     fn remove_protection(&self, handle: u64, original: &Arc<Vec<u8>>, working_bytes: &Arc<Vec<u8>>) -> Result<PurviewOpen, PurviewError> {
-        let _ = (handle, original);
+        let _ = handle;
         let _operation = self.document_operation()?;
         let rms_token = self.rms_token().ok_or(PurviewError::SignInRequired)?;
         let sync_token = self.sync_token().ok_or(PurviewError::SignInRequired)?;
         let username = self.username();
+        let original_path = self.write_temp(original, "pdf")?;
         let input = self.write_temp(working_bytes, "pdf")?;
         let output = self.temp_path("pdf")?;
+        let _original_audit = original_path.with_suffix(".audit");
         let _input_audit = input.with_suffix(".audit");
         let _output_audit = output.with_suffix(".audit");
         let cache = self.staging_dir()?;
         let request = format!(
-            "remove-protection\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "remove-protection\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.app_id,
             escape_tsv(&username),
             escape_tsv(&rms_token),
             escape_tsv(&sync_token),
+            escape_tsv(&original_path.to_string_lossy()),
             escape_tsv(&input.to_string_lossy()),
             escape_tsv(&output.to_string_lossy()),
             escape_tsv(&cache.to_string_lossy())
@@ -1034,11 +1088,20 @@ mod native_tests {
             principal_name: "grace@example.com".into(),
         };
         if let Ok(mut sessions) = provider.account_sessions.lock() {
-            sessions.push(PurviewAccountSession { account: ada.clone(), rms_access_token: "rms-ada".into(), sync_access_token: "sync-ada".into() });
+            let expires_at = std::time::Instant::now() + std::time::Duration::from_secs(3600);
+            sessions.push(PurviewAccountSession {
+                account: ada.clone(),
+                rms_access_token: "rms-ada".into(),
+                rms_expires_at: expires_at,
+                sync_access_token: "sync-ada".into(),
+                sync_expires_at: expires_at,
+            });
             sessions.push(PurviewAccountSession {
                 account: grace.clone(),
                 rms_access_token: "rms-grace".into(),
+                rms_expires_at: expires_at,
                 sync_access_token: "sync-grace".into(),
+                sync_expires_at: expires_at,
             });
         }
         if let Ok(mut active) = provider.active_account_id.lock() {
@@ -1071,6 +1134,31 @@ mod native_tests {
     }
 
     #[test]
+    fn expired_tokens_keep_the_account_but_require_reauthentication() {
+        let provider = NativePurviewProvider::new(Some("e16b2bcd-0a3c-414a-8255-0bcc5f6a7246"));
+        let ada = PurviewAccount {
+            id: "ada".into(),
+            display_name: "Ada Lovelace".into(),
+            email: "ada@example.com".into(),
+            principal_name: "ada@example.com".into(),
+        };
+        let expired = std::time::Instant::now();
+        provider.account_sessions.lock().unwrap().push(PurviewAccountSession {
+            account: ada.clone(),
+            rms_access_token: "expired-rms".into(),
+            rms_expires_at: expired,
+            sync_access_token: "expired-sync".into(),
+            sync_expires_at: expired,
+        });
+        *provider.active_account_id.lock().unwrap() = Some(ada.id.clone());
+        assert_eq!(provider.account(), Some(ada));
+        assert_eq!(provider.rms_token(), None);
+        assert_eq!(provider.sync_token(), None);
+        #[cfg(feature = "mip-sdk")]
+        assert_eq!(provider.status(), PurviewStatus::SignedOut);
+    }
+
+    #[test]
     #[cfg(feature = "mip-auth")]
     fn protection_and_policy_must_identify_the_same_account() {
         let ada = PurviewAccount {
@@ -1084,6 +1172,8 @@ mod native_tests {
         assert!(matching_account(Some(&ada), Some(&grace)).is_err());
         assert!(matching_account(Some(&ada), None).is_err());
         assert!(matching_account(None, Some(&ada)).is_err());
+        assert!(matching_reauthenticated_account(&ada.id, &ada).is_ok());
+        assert!(matching_reauthenticated_account(&ada.id, &grace).is_err());
     }
 
     #[test]
@@ -1096,10 +1186,13 @@ mod native_tests {
             email: "ada@example.com".into(),
             principal_name: "ada@example.com".into(),
         };
+        let expires_at = std::time::Instant::now() + std::time::Duration::from_secs(3600);
         provider.account_sessions.lock().unwrap().push(PurviewAccountSession {
             account: ada.clone(),
             rms_access_token: "rms-ada".into(),
+            rms_expires_at: expires_at,
             sync_access_token: "sync-ada".into(),
+            sync_expires_at: expires_at,
         });
         *provider.active_account_id.lock().unwrap() = Some(ada.id.clone());
         *provider.auth_status.lock().unwrap() = PurviewStatus::Ready;

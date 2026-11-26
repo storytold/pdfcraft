@@ -43,6 +43,7 @@ type MicrosoftClient<
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PurviewToken {
     pub access_token: String,
+    pub expires_at: std::time::Instant,
     pub account: Option<PurviewAccount>,
 }
 
@@ -288,8 +289,12 @@ pub fn acquire_token(
     let http_client = reqwest::blocking::ClientBuilder::new().use_rustls_tls().build().map_err(|e| PurviewAuthError::Token(e.to_string()))?;
     let token =
         client.exchange_code(code).set_pkce_verifier(pkce_verifier).request(&http_client).map_err(|e| PurviewAuthError::Token(e.to_string()))?;
+    let expires_at = token
+        .expires_in()
+        .and_then(|duration| std::time::Instant::now().checked_add(duration))
+        .ok_or_else(|| PurviewAuthError::Token("Microsoft did not return a usable token expiry".into()))?;
     let account = account_from_id_token(token.extra_fields().id_token.as_deref(), username);
-    Ok(PurviewToken { access_token: token.access_token().secret().clone(), account })
+    Ok(PurviewToken { access_token: token.access_token().secret().clone(), expires_at, account })
 }
 
 #[cfg(test)]

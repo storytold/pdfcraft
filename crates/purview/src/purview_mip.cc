@@ -16,6 +16,7 @@
 #endif
 
 #include "mip/common_types.h"
+#include "mip/error.h"
 #include "mip/mip_configuration.h"
 #include "mip/mip_context.h"
 #include "mip/file/file_engine.h"
@@ -64,6 +65,21 @@ static std::string unescape_tsv(const std::string& value) {
         }
     }
     return out;
+}
+
+static bool report_auth_challenge(const std::exception& error) {
+    if (dynamic_cast<const mip::NoAuthTokenError*>(&error)) {
+        std::cout << "SIGNIN\n";
+        return true;
+    }
+    const auto* permissions = dynamic_cast<const mip::NoPermissionsError*>(&error);
+    if (permissions &&
+        (permissions->GetCategory() == mip::NoPermissionsError::Category::AccessExpired ||
+         permissions->GetCategory() == mip::NoPermissionsError::Category::InvalidToken)) {
+        std::cout << "SIGNIN\n";
+        return true;
+    }
+    return false;
 }
 
 static std::vector<std::string> split_tsv(const std::string& line) {
@@ -399,6 +415,9 @@ static void handle_open(const std::vector<std::string>& fields) {
                   << "0\n";
         native.context->ShutDown();
     } catch (const std::exception& error) {
+        if (report_auth_challenge(error)) {
+            return;
+        }
         std::cout << "DENIED\t" << escape_tsv(error.what()) << "\n";
     } catch (...) {
         std::cout << "DENIED\tMicrosoft Purview could not open the document.\n";
@@ -445,6 +464,9 @@ static void handle_labels(const std::vector<std::string>& fields) {
         std::cout << "END\n";
         native.context->ShutDown();
     } catch (const std::exception& error) {
+        if (report_auth_challenge(error)) {
+            return;
+        }
         std::cout << "DENIED\t" << escape_tsv(error.what()) << "\n";
     }
 }
@@ -461,8 +483,15 @@ static std::string open_and_print_result(
     return "";
 }
 
+static bool may_change_security(const std::shared_ptr<mip::ProtectionHandler>& protection) {
+    return !protection ||
+        protection->AccessCheck(mip::rights::Owner()) ||
+        protection->AccessCheck(mip::rights::Export()) ||
+        protection->AccessCheck(mip::rights::EditRightsData());
+}
+
 static void handle_apply_label(const std::vector<std::string>& fields) {
-    if (fields.size() < 10) {
+    if (fields.size() < 11) {
         std::cout << "DENIED\tinvalid apply-label request\n";
         return;
     }
@@ -472,12 +501,22 @@ static void handle_apply_label(const std::vector<std::string>& fields) {
             unescape_tsv(fields[2]),
             unescape_tsv(fields[3]),
             unescape_tsv(fields[4]),
-            unescape_tsv(fields[9]));
-        std::string input = unescape_tsv(fields[5]);
-        std::string output = unescape_tsv(fields[6]);
-        std::string label_id = unescape_tsv(fields[7]);
-        std::string justification = unescape_tsv(fields[8]);
+            unescape_tsv(fields[10]));
+        std::string original = unescape_tsv(fields[5]);
+        std::string input = unescape_tsv(fields[6]);
+        std::string output = unescape_tsv(fields[7]);
+        std::string label_id = unescape_tsv(fields[8]);
+        std::string justification = unescape_tsv(fields[9]);
+        auto original_handler = create_handler(native.engine, original, original + ".audit");
+        auto original_protection = original_handler->GetProtection();
+        if (!may_change_security(original_protection)) {
+            std::cout << "EXPORT_REQUIRED\n";
+            return;
+        }
         auto handler = create_handler(native.engine, input, input + ".audit");
+        if (original_protection) {
+            handler->SetProtection(original_protection);
+        }
         mip::LabelingOptions options(mip::AssignmentMethod::PRIVILEGED);
         if (!justification.empty()) {
             options.SetDowngradeJustification(true, justification);
@@ -525,6 +564,9 @@ static void handle_apply_label(const std::vector<std::string>& fields) {
                   << escape_tsv(output) << "\n";
         native.context->ShutDown();
     } catch (const std::exception& error) {
+        if (report_auth_challenge(error)) {
+            return;
+        }
         std::string message = error.what();
         if (message.find("Justification") != std::string::npos ||
             message.find("justification") != std::string::npos) {
@@ -536,7 +578,7 @@ static void handle_apply_label(const std::vector<std::string>& fields) {
 }
 
 static void handle_remove_label(const std::vector<std::string>& fields) {
-    if (fields.size() < 9) {
+    if (fields.size() < 10) {
         std::cout << "DENIED\tinvalid remove-label request\n";
         return;
     }
@@ -546,11 +588,21 @@ static void handle_remove_label(const std::vector<std::string>& fields) {
             unescape_tsv(fields[2]),
             unescape_tsv(fields[3]),
             unescape_tsv(fields[4]),
-            unescape_tsv(fields[8]));
-        std::string input = unescape_tsv(fields[5]);
-        std::string output = unescape_tsv(fields[6]);
-        std::string justification = unescape_tsv(fields[7]);
+            unescape_tsv(fields[9]));
+        std::string original = unescape_tsv(fields[5]);
+        std::string input = unescape_tsv(fields[6]);
+        std::string output = unescape_tsv(fields[7]);
+        std::string justification = unescape_tsv(fields[8]);
+        auto original_handler = create_handler(native.engine, original, original + ".audit");
+        auto original_protection = original_handler->GetProtection();
+        if (!may_change_security(original_protection)) {
+            std::cout << "EXPORT_REQUIRED\n";
+            return;
+        }
         auto handler = create_handler(native.engine, input, input + ".audit");
+        if (original_protection) {
+            handler->SetProtection(original_protection);
+        }
         mip::LabelingOptions options(mip::AssignmentMethod::PRIVILEGED);
         if (!justification.empty()) {
             options.SetDowngradeJustification(true, justification);
@@ -562,6 +614,21 @@ static void handle_remove_label(const std::vector<std::string>& fields) {
         }
         auto output_handler = create_handler(native.engine, output, output + ".audit");
         auto protection = output_handler->GetProtection();
+        std::string working = output + ".working";
+        if (protection) {
+            auto promise = std::make_shared<std::promise<std::string>>();
+            auto future = promise->get_future();
+            output_handler->GetDecryptedTemporaryFileAsync(promise);
+            std::string decrypted = future.get();
+            copy_file(decrypted, working);
+            std::error_code removed_error;
+            std::filesystem::remove(decrypted, removed_error);
+            if (removed_error) {
+                throw std::runtime_error("Microsoft Purview could not remove its decrypted temporary file");
+            }
+        } else {
+            copy_file(output, working);
+        }
         auto label_fields = content_label_fields(output_handler);
         auto rights_fields = rights_line(protection);
         std::string owner;
@@ -579,15 +646,18 @@ static void handle_remove_label(const std::vector<std::string>& fields) {
                   << (native.engine->IsLabelingRequired() ? "1" : "0") << "\t"
                   << escape_tsv(native.engine->GetDefaultSensitivityLabel() ? native.engine->GetDefaultSensitivityLabel()->GetId() : "") << "\t"
                   << "0\t"
-                  << escape_tsv(output) << "\n";
+                  << escape_tsv(working) << "\n";
         native.context->ShutDown();
     } catch (const std::exception& error) {
+        if (report_auth_challenge(error)) {
+            return;
+        }
         std::cout << "DENIED\t" << escape_tsv(error.what()) << "\n";
     }
 }
 
 static void handle_remove_protection(const std::vector<std::string>& fields) {
-    if (fields.size() < 8) {
+    if (fields.size() < 9) {
         std::cout << "DENIED\tinvalid remove-protection request\n";
         return;
     }
@@ -597,21 +667,19 @@ static void handle_remove_protection(const std::vector<std::string>& fields) {
             unescape_tsv(fields[2]),
             unescape_tsv(fields[3]),
             unescape_tsv(fields[4]),
-            unescape_tsv(fields[7]));
-        std::string input = unescape_tsv(fields[5]);
-        std::string output = unescape_tsv(fields[6]);
-        auto handler = create_handler(native.engine, input, input + ".audit");
-        auto protection = handler->GetProtection();
-        if (!protection || (!protection->AccessCheck(mip::rights::Export()) &&
-                            !protection->AccessCheck(mip::rights::Owner()))) {
+            unescape_tsv(fields[8]));
+        std::string original = unescape_tsv(fields[5]);
+        std::string working = unescape_tsv(fields[6]);
+        std::string output = unescape_tsv(fields[7]);
+        auto original_handler = create_handler(native.engine, original, original + ".audit");
+        auto protection = original_handler->GetProtection();
+        if (!protection ||
+            (!protection->AccessCheck(mip::rights::Export()) &&
+             !protection->AccessCheck(mip::rights::Owner()))) {
             std::cout << "EXPORT_REQUIRED\n";
             return;
         }
-        handler->RemoveProtection();
-        if (!commit_handler(handler, output)) {
-            std::cout << "DENIED\tThe Microsoft Purview SDK did not remove protection.\n";
-            return;
-        }
+        copy_file(working, output);
         auto output_handler = create_handler(native.engine, output, output + ".audit");
         auto protection_after = output_handler->GetProtection();
         auto label_fields = content_label_fields(output_handler);
@@ -633,6 +701,9 @@ static void handle_remove_protection(const std::vector<std::string>& fields) {
                   << escape_tsv(output) << "\n";
         native.context->ShutDown();
     } catch (const std::exception& error) {
+        if (report_auth_challenge(error)) {
+            return;
+        }
         std::cout << "DENIED\t" << escape_tsv(error.what()) << "\n";
     }
 }
@@ -668,6 +739,9 @@ static void handle_republish(const std::vector<std::string>& fields) {
         std::cout << "OK\n";
         native.context->ShutDown();
     } catch (const std::exception& error) {
+        if (report_auth_challenge(error)) {
+            return;
+        }
         std::cout << "DENIED\t" << escape_tsv(error.what()) << "\n";
     }
 }
