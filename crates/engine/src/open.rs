@@ -8,8 +8,8 @@ use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 use crate::history::{Editor, Keys, TextBlocksCache};
 use crate::{
     AppearanceCache, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard,
-    info_fields, js, note_warnings, print_preview_layers, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout,
-    xfa_values_from_datasets,
+    info_fields, js, note_warnings, print_preview_layers, recovered_render_password, render_threads, same_pages, signatures_of, xfa,
+    xfa_apply_static_comb_fields, xfa_layout, xfa_values_from_datasets,
 };
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -172,33 +172,55 @@ impl Session {
             (Some(_), Ok(Ok(cos))) => {
                 let report = pdfcraft_xfa::existing_layout(&cos);
                 let mut work = cos.clone();
+                let mut warnings = Vec::new();
+                let mut comb_fields = Vec::new();
+                if report.is_none() {
+                    match guard(|| xfa_apply_static_comb_fields(&mut work))
+                        .unwrap_or_else(|m| Err(format!("applying comb settings failed unexpectedly ({m})")))
+                    {
+                        Ok(names) => comb_fields = names,
+                        Err(e) => {
+                            warnings.push(format!("The comb settings in this static XFA form could not be applied: {e}"));
+                            work = cos.clone();
+                        }
+                    }
+                }
                 let synced =
                     guard(|| xfa_values_from_datasets(&mut work)).unwrap_or_else(|m| Err(format!("reading its data failed unexpectedly ({m})")));
-                match synced {
-                    Ok(names) if names.is_empty() => (bytes, info, Ok(Ok(cos)), report),
-                    Ok(names) => match rebase(&work) {
+                let names = match synced {
+                    Ok(names) => names,
+                    Err(e) => {
+                        warnings.push(format!("The values in this form's XFA data could not be applied: {e}"));
+                        Vec::new()
+                    }
+                };
+                if names.is_empty() && comb_fields.is_empty() {
+                    let mut info = info;
+                    info.warnings.extend(warnings);
+                    (bytes, info, Ok(Ok(cos)), report)
+                } else {
+                    match rebase(&work) {
                         Ok((b, mut i, c)) => {
-                            // The fields were rewritten from the XFA data: say so, and which.
-                            let shown: Vec<&str> = names.iter().take(5).map(String::as_str).collect();
-                            let more = if names.len() > shown.len() { format!(" and {} more", names.len() - shown.len()) } else { String::new() };
-                            i.warnings.push(format!(
-                                "{} form field value{} were taken from this form's XFA data (filled in by another viewer): {}{more}",
-                                names.len(),
-                                if names.len() == 1 { "" } else { "s" },
-                                shown.join(", ")
-                            ));
+                            i.warnings.extend(warnings);
+                            if !names.is_empty() {
+                                // The fields were rewritten from the XFA data: say so, and which.
+                                let shown: Vec<&str> = names.iter().take(5).map(String::as_str).collect();
+                                let more = if names.len() > shown.len() { format!(" and {} more", names.len() - shown.len()) } else { String::new() };
+                                i.warnings.push(format!(
+                                    "{} form field value{} were taken from this form's XFA data (filled in by another viewer): {}{more}",
+                                    names.len(),
+                                    if names.len() == 1 { "" } else { "s" },
+                                    shown.join(", ")
+                                ));
+                            }
                             (b, i, Ok(Ok(c)), report)
                         }
                         Err(e) => {
                             let mut info = info;
-                            info.warnings.push(format!("The values in this form's XFA data could not be applied: {e}"));
+                            info.warnings.extend(warnings);
+                            info.warnings.push(format!("Changes from this form's XFA data or template could not be saved: {e}"));
                             (bytes, info, Ok(Ok(cos)), report)
                         }
-                    },
-                    Err(e) => {
-                        let mut info = info;
-                        info.warnings.push(format!("The values in this form's XFA data could not be applied: {e}"));
-                        (bytes, info, Ok(Ok(cos)), report)
                     }
                 }
             }

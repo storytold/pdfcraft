@@ -126,8 +126,13 @@ pub fn template_with_data(rows: usize, data: &str) -> String {
 /// a text field, and `…agree[0]`, a check box with on state `1`), plus XFA packets whose
 /// datasets hold `data` (the children of `xfa:data`). No `/NeedsRendering`.
 pub fn static_shell(data: &str) -> Vec<u8> {
+    static_shell_with_template("<subform name=\"form1\"/>", data)
+}
+
+/// [`static_shell`] with a caller-supplied subform inside the template packet.
+pub fn static_shell_with_template(template: &str, data: &str) -> Vec<u8> {
     let xdp = format!(
-        "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"/></template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets></xdp:xdp>"
+        "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\">{template}</template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets></xdp:xdp>"
     );
     let objs: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 5 0 R /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >> >> >> >>".to_vec(),

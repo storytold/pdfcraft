@@ -182,7 +182,7 @@ use test_hooks::{
 };
 use xfa_form::{
     XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, decode_data_file, image_content_type, is_xfa_data_file, note_warnings, strip_xfa, sync_xfa_state,
-    undrawn_field_warnings, xfa_after_data_change, xfa_layout, xfa_redraw, xfa_sync_datasets, xfa_values_from_datasets,
+    undrawn_field_warnings, xfa_after_data_change, xfa_apply_static_comb_fields, xfa_layout, xfa_redraw, xfa_sync_datasets, xfa_values_from_datasets,
 };
 
 mod clock;

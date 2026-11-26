@@ -21,6 +21,112 @@ pub(crate) fn xfa_redraw(doc: &mut pdfcraft_cos::Document) -> Result<(), String>
     pdfcraft_forms::redraw_fields(doc, |doc, f| !signed(doc, f)).map_err(|e| e.to_string())
 }
 
+/// Apply comb settings from a static XFA template to existing text fields. The live form tree
+/// includes hidden and unplaced fields, which have no page item to look up.
+pub(crate) fn xfa_apply_static_comb_fields(doc: &mut pdfcraft_cos::Document) -> Result<Vec<String>, String> {
+    let Some(packets) = pdfcraft_xfa::read_packets(doc).map_err(|e| e.to_string())? else { return Ok(Vec::new()) };
+    if packets.needs_rendering || !packets.has_fields || !packets.xdp.contains("comb") {
+        return Ok(Vec::new());
+    }
+    // Converting existing widgets would modify the field flags and appearances covered by a signature.
+    if pdfcraft_sign::has_signatures(doc) {
+        return Ok(Vec::new());
+    }
+    let tpl = pdfcraft_xfa::template_of(doc).map_err(|e| e.to_string())?;
+    let data = pdfcraft_xfa::data_of(doc);
+    let uses = pdfcraft_xfa::page_area_uses(doc, &tpl);
+    let live = pdfcraft_xfa::form_tree_paged(&tpl, data.as_ref(), &pdfcraft_xfa::overrides(doc), &uses);
+    if live.truncated {
+        return Err("the static XFA form tree exceeded its limit while reading comb fields".into());
+    }
+    let mut combs = std::collections::HashMap::new();
+    collect_static_comb_fields(&live.root, &mut combs);
+
+    let mut changed = Vec::new();
+    let mut changed_objects = std::collections::HashSet::new();
+    for field in pdfcraft_forms::fields(doc) {
+        if field.kind != pdfcraft_forms::FieldKind::Text || field.has(pdfcraft_forms::flags::PASSWORD) {
+            continue;
+        }
+        let som = pdfcraft_xfa::data::field_som(doc, field.obj, &field.name);
+        let Some((cells, border)) = combs.get(&som).copied() else { continue };
+        let max_len = cells.min(100_000);
+        if max_len == 0 {
+            continue;
+        }
+        let flags = (field.flags | pdfcraft_forms::flags::COMB)
+            & !(pdfcraft_forms::flags::MULTILINE | pdfcraft_forms::flags::DO_NOT_SCROLL | pdfcraft_forms::flags::RICH_TEXT);
+        let mut field_changed = flags != field.flags || field.max_len != Some(max_len);
+        if field_changed {
+            doc.update_dict(field.obj, |d| {
+                d.set(b"Ff".to_vec(), pdfcraft_cos::Object::Int(i64::from(flags)));
+                d.set(b"MaxLen".to_vec(), pdfcraft_cos::Object::Int(max_len as i64));
+            })
+            .map_err(|e| e.to_string())?;
+        }
+        for widget in &field.widgets {
+            if comb_border_matches(doc, widget.obj, border) {
+                continue;
+            }
+            doc.update_dict(widget.obj, |d| match border {
+                Some(edge) => {
+                    let mut comb = pdfcraft_cos::Dict::new();
+                    comb.set(b"C".to_vec(), pdfcraft_cos::Object::Array(edge.color.0.iter().map(|v| pdfcraft_cos::Object::Real(*v)).collect()));
+                    comb.set(b"W".to_vec(), pdfcraft_cos::Object::Real(edge.thickness));
+                    d.set(pdfcraft_xfa::COMB_BORDER_KEY.to_vec(), pdfcraft_cos::Object::Dict(comb));
+                }
+                None => {
+                    d.remove(pdfcraft_xfa::COMB_BORDER_KEY);
+                }
+            })
+            .map_err(|e| e.to_string())?;
+            field_changed = true;
+        }
+        if field_changed {
+            changed_objects.insert(field.obj);
+            changed.push(field.name);
+        }
+    }
+    if !changed_objects.is_empty() {
+        pdfcraft_forms::redraw_fields(doc, |_, field| changed_objects.contains(&field.obj)).map_err(|e| e.to_string())?;
+    }
+    Ok(changed)
+}
+
+fn collect_static_comb_fields(
+    node: &pdfcraft_xfa::FormNode,
+    combs: &mut std::collections::HashMap<String, (usize, Option<pdfcraft_xfa::model::CombBorder>)>,
+) {
+    if node.kind == Some(pdfcraft_xfa::NodeKind::Field)
+        && let Some(cells) = node.comb_cells
+    {
+        combs.insert(node.som.clone(), (cells, node.comb_border));
+    }
+    for child in &node.children {
+        collect_static_comb_fields(child, combs);
+    }
+}
+
+fn comb_border_matches(doc: &pdfcraft_cos::Document, widget: pdfcraft_cos::ObjRef, expected: Option<pdfcraft_xfa::model::CombBorder>) -> bool {
+    let object = doc.get(widget);
+    let Some(dict) = object.as_dict() else { return false };
+    let Some(expected) = expected else { return !dict.contains(pdfcraft_xfa::COMB_BORDER_KEY) };
+    let Some(comb) = dict.get(pdfcraft_xfa::COMB_BORDER_KEY).map(|v| doc.resolve(v)) else { return false };
+    let Some(comb) = comb.as_dict() else { return false };
+    let Some(color) = comb.get(b"C").map(|v| doc.resolve(v)) else { return false };
+    let Some(color) = color.as_array() else { return false };
+    if color.len() != 3 {
+        return false;
+    }
+    let correct_color = color
+        .iter()
+        .zip(expected.color.0)
+        .all(|(actual, wanted)| doc.resolve(actual).as_f64().is_some_and(|actual| (actual - wanted).abs() < 0.000_001));
+    let correct_width =
+        comb.get(b"W").map(|v| doc.resolve(v)).and_then(|v| v.as_f64()).is_some_and(|actual| (actual - expected.thickness).abs() < 0.000_001);
+    correct_color && correct_width
+}
+
 /// A warning for each field whose appearance PdfCraft drew with `?` for a character its font
 /// can't draw (laying out an XFA form's own values).
 pub(crate) fn undrawn_field_warnings(doc: &pdfcraft_cos::Document) -> Vec<String> {
@@ -297,10 +403,14 @@ pub(crate) fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Resu
     let mut updates = Vec::new();
     for (name, value) in pdfcraft_xfa::read_values(doc, &data) {
         let Some(f) = by_name.get(name.as_str()) else { continue };
+        // A read-only AcroForm widget is intentionally left at its existing value.
+        if f.has(pdfcraft_forms::flags::READ_ONLY) {
+            continue;
+        }
         let new = match value {
             pdfcraft_xfa::FieldData::Text(t) if matches!(f.kind, pdfcraft_forms::FieldKind::Combo | pdfcraft_forms::FieldKind::List) => {
-                // Saved values, one per line for a multi-select list; shown text stands for
-                // its saved value (an older viewer may have written it).
+                // Saved values, one per line for a multi-select list; shown text stands for its
+                // saved value (an older viewer may have written it).
                 let saved = |v: &str| f.options.iter().find(|(e, s)| e == v || s == v).map_or(v.to_string(), |(e, _)| e.clone());
                 let picked: Vec<String> = if f.has(pdfcraft_forms::flags::MULTI_SELECT) {
                     t.lines().map(str::trim).filter(|l| !l.is_empty()).map(saved).collect()
@@ -312,7 +422,7 @@ pub(crate) fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Resu
             pdfcraft_xfa::FieldData::Text(t) => (f.value.join("\n") != t).then_some(FieldValue::Text(t)),
             pdfcraft_xfa::FieldData::Check(on) => (f.value.is_empty() == on).then_some(FieldValue::Check(on)),
             // The data holds the item; the field takes the on state of the button saving writes it
-            // for ([`radio_button`]), which with `/Opt` may be a position (`1` is the state `/0`).
+            // for radio_button, which with /Opt may be a position rather than its state name.
             pdfcraft_xfa::FieldData::Radio(sel) => {
                 let datum = data.iter().find(|d| d.name == name);
                 let state = sel.map(|v| radio_button(doc, f, datum, &v));
@@ -324,8 +434,16 @@ pub(crate) fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Resu
             updates.push((name, v));
         }
     }
-    // All at once: one by one, each value would read the whole form again, which took minutes
-    // on a form with thousands of fields.
-    let Ok(results) = pdfcraft_forms::set_values(doc, &updates) else { return Ok(Vec::new()) };
-    Ok(updates.into_iter().zip(results).filter(|(_, r)| r.is_ok()).map(|((name, _), _)| name).collect())
+    if updates.is_empty() {
+        return Ok(Vec::new());
+    }
+    // A field or recalculation failure can follow successful writes. Adopt the copy only when the
+    // whole dataset batch succeeds, so no caller keeps a partial mutation.
+    let mut working = doc.clone();
+    let results = pdfcraft_forms::set_values(&mut working, &updates).map_err(|e| e.to_string())?;
+    if let Some(((name, _), Err(error))) = updates.iter().zip(&results).find(|(_, result)| result.is_err()) {
+        return Err(format!("XFA data for {name:?} could not be applied: {error}"));
+    }
+    *doc = working;
+    Ok(updates.into_iter().map(|(name, _)| name).collect())
 }

@@ -419,6 +419,38 @@ fn rich_text_max_length_reaches_the_field_and_layout() {
     }
 }
 
+/// Comb settings on text, numeric and date widgets become a single-line AcroForm cell count.
+#[test]
+fn comb_settings_use_explicit_cells_or_the_text_limit_and_ignore_scroll_policies() {
+    let xml = template(0)
+        .replace(
+            "<textEdit><border>",
+            "<textEdit multiLine=\"1\" hScrollPolicy=\"off\"><comb numberOfCells=\"0\"/><border>",
+        )
+        .replace(
+            "<ui><dateTimeEdit/>",
+            "<ui><dateTimeEdit hScrollPolicy=\"off\"><comb/></dateTimeEdit>",
+        )
+        .replace(
+            "<draw name=\"q\"",
+            "<field name=\"count\" w=\"2in\" h=\"0.3in\"><ui><numericEdit hScrollPolicy=\"off\"><comb numberOfCells=\"7\"/></numericEdit></ui><value><text maxChars=\"4\">42</text></value></field><draw name=\"q\"",
+        );
+    let form = layout_xml(&xml).unwrap();
+    let fields: std::collections::HashMap<&str, &Widget> = form.pages.iter().flat_map(widgets).map(|w| (w.name.as_str(), w)).collect();
+    let family = fields["familyName"];
+    assert_eq!(family.comb_cells, Some(30), "zero falls back to text/maxChars");
+    assert_eq!(family.max_chars, Some(30));
+    assert!(!family.multiline && !family.no_scroll, "comb ignores multiLine and hScrollPolicy");
+    let count = fields["count"];
+    assert_eq!(count.comb_cells, Some(7), "numberOfCells wins over maxChars");
+    assert_eq!(count.max_chars, Some(7));
+    assert!(!count.no_scroll);
+    let born = fields["born"];
+    assert_eq!(born.comb_cells, Some(1), "a comb without a limit defaults to one cell");
+    assert_eq!(born.max_chars, Some(1));
+    assert!(!born.no_scroll);
+}
+
 #[test]
 fn the_xdp_template_wins_over_the_config_packets_template_element() {
     // The config packet has a <template> too; the real one is in the xfa-template namespace.

@@ -27,6 +27,8 @@ pub use strip::{Stripped, XfaShape, existing_layout, strip, xfa_shape};
 
 /// Private key on generated fields: the template's SOM path, so data can be put back.
 pub const SOM_KEY: &[u8] = b"PCSom";
+/// The XFA comb field's bottom edge style, used independently from its outer widget border.
+pub const COMB_BORDER_KEY: &[u8] = b"PCXfaCombBorder";
 /// Private key on the AcroForm: what laying the form out produced, so a reopened file is not
 /// laid out again.
 pub const LAYOUT_KEY: &[u8] = b"PCXfaLayout";
@@ -304,15 +306,20 @@ impl Emitter<'_> {
         match &w.kind {
             WidgetKind::Text | WidgetKind::Date(_) | WidgetKind::Password => {
                 d.set(b"FT".to_vec(), Object::name("Tx"));
-                if w.multiline {
+                if w.multiline && w.comb_cells.is_none() {
                     ff |= 1 << 12;
                 }
                 if w.kind == WidgetKind::Password {
                     ff |= 1 << 13;
                 }
                 // DoNotScroll (ISO 32000-2 Table 228): the field takes no more than it shows.
-                if w.no_scroll {
+                if w.no_scroll && w.comb_cells.is_none() {
                     ff |= 1 << 23;
+                }
+                // Comb (ISO 32000-2 Table 228, bit 25): the forms layer spaces characters into
+                // /MaxLen cells and draws their dividers in the widget border.
+                if w.comb_cells.is_some() {
+                    ff |= 1 << 24;
                 }
                 if let Some(m) = w.max_chars {
                     d.set(b"MaxLen".to_vec(), Object::Int(m.min(100_000) as i64));
@@ -508,6 +515,12 @@ impl Emitter<'_> {
         bs.set(b"W".to_vec(), Object::Real(if w.border.shape == BorderShape::None { 0.0 } else { w.border.width.clamp(0.1, 12.0) }));
         bs.set(b"S".to_vec(), Object::name(if w.border.shape == BorderShape::Underline { "U" } else { "S" }));
         d.set(b"BS".to_vec(), Object::Dict(bs));
+        if let Some(edge) = w.comb_border {
+            let mut comb = Dict::new();
+            comb.set(b"C".to_vec(), rgb_array(edge.color.0));
+            comb.set(b"W".to_vec(), Object::Real(edge.thickness));
+            d.set(COMB_BORDER_KEY.to_vec(), Object::Dict(comb));
+        }
         if matches!(w.kind, WidgetKind::CheckBox { round: true, .. } | WidgetKind::Radio { round: true, .. }) {
             d.set(ROUND_KEY.to_vec(), Object::Bool(true));
         }

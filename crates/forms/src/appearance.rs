@@ -617,13 +617,25 @@ const MAX_COMB_DIVIDERS: usize = 500;
 
 /// The lines between the `cells` positions of a comb field `w` × `h` (ISO 32000-2 Table 228,
 /// Comb: the field is divided into `MaxLen` equally spaced positions), in the border's colour and
-/// width, inside the border. None without a border, or past [`MAX_COMB_DIVIDERS`] cells.
+/// width, inside the border. XFA widgets can supply a separate bottom-edge style; ordinary
+/// AcroForm widgets use `/MK /BC` and `/BS /W`. Drawing stops at [`MAX_COMB_DIVIDERS`] cells.
 fn comb_dividers(doc: &Document, wd: &Dict, w: f64, h: f64, cells: usize) -> String {
     let mk = wd.get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned());
-    let inset = border_width(doc, wd);
-    let lw = line_width(doc, wd);
-    let Some(bc) = color_array(doc, mk.as_ref(), b"BC") else { return String::new() };
-    if !(inset > 0.0 && inset.is_finite() && lw > 0.0 && lw.is_finite() && (2..=MAX_COMB_DIVIDERS).contains(&cells)) {
+    // XFA comb lines use the bottom edge even when hidden, and extend across the widget height.
+    // Ordinary AcroForm combs keep using the visible widget border.
+    let (inset, lw, bc) = if wd.contains(b"PCXfaCombBorder") {
+        let comb = wd.get(b"PCXfaCombBorder").map(|c| doc.resolve(c));
+        let Some(comb) = comb.as_ref().and_then(|v| v.as_dict()) else { return String::new() };
+        let Some(bc) = color_array(doc, Some(comb), b"C") else { return String::new() };
+        let Some(lw) = comb.get(b"W").map(|v| doc.resolve(v)).and_then(|v| v.as_f64()) else { return String::new() };
+        (0.0, lw, bc)
+    } else {
+        let inset = border_width(doc, wd);
+        let lw = line_width(doc, wd);
+        let Some(bc) = color_array(doc, mk.as_ref(), b"BC") else { return String::new() };
+        (inset, lw, bc)
+    };
+    if !(inset.is_finite() && lw > 0.0 && lw.is_finite() && (2..=MAX_COMB_DIVIDERS).contains(&cells)) {
         return String::new();
     }
     let cell = w / cells as f64;

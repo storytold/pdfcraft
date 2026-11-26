@@ -53,6 +53,9 @@ pub struct FormNode {
     pub children: Vec<FormNode>,
     /// Fields: the display picture (see [`Field::display_picture`]), for `formattedValue`.
     pub display_picture: Option<String>,
+    /// Fields: the effective comb count and bottom edge style, including hidden fields without a layout widget.
+    pub comb_cells: Option<usize>,
+    pub comb_border: Option<crate::model::CombBorder>,
     /// The object's attributes and property elements as the template gives them, for scripts to
     /// read: shared with the template and every other instance of the object, never copied.
     pub props: Arc<Props>,
@@ -276,6 +279,8 @@ impl Walker<'_> {
             index,
             children: Vec::new(),
             display_picture: f.display_picture.clone(),
+            comb_cells: f.effective_comb_cells(),
+            comb_border: f.comb_border(),
             props: Arc::clone(&f.common.props),
         }
     }
@@ -341,6 +346,8 @@ impl Walker<'_> {
                             index,
                             children,
                             display_picture: None,
+                            comb_cells: None,
+                            comb_border: None,
                             props: Arc::clone(&sf.common.props),
                         });
                     }
