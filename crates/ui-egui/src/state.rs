@@ -90,6 +90,8 @@ pub enum QuickTool {
     },
     /// View ▸ Zoom ▸ Marquee Zoom.
     MarqueeZoom,
+    /// View ▸ Zoom ▸ Loupe tool: magnifies a page area in a floating window.
+    Loupe,
     /// Edit ▸ Take a Snapshot.
     Snapshot,
     /// Edit ▸ Column Select: drag a rectangle to select only the text inside it (#740). The

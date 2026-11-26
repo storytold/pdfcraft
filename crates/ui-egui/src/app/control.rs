@@ -315,6 +315,20 @@ impl PdfCraftApp {
                 }
             }
             ("notice", Some(v)) => v.notice_dismissed = value == "off",
+            ("loupe", _) => match value {
+                "on" => {
+                    if self.active.is_none() {
+                        return Err("`loupe` needs an open document".into());
+                    }
+                    self.open_loupe();
+                }
+                "off" => self.close_loupe(),
+                _ => return Err("loupe must be on or off".into()),
+            },
+            ("loupe_zoom", _) => {
+                let zoom = crate::loupe_ui::parse_zoom_percent(value).ok_or("loupe_zoom must be a percentage between 100 and 800")?;
+                self.set_loupe_zoom(zoom);
+            }
             ("quick", _) => {
                 // `--quick select|hand|note|freetext|highlight|underline|strikeout|ink|line|arrow|square|circle`
                 self.quick_tool = match value {
@@ -331,6 +345,7 @@ impl PdfCraftApp {
                     "link" => QuickTool::Link,
                     "sign" => QuickTool::SignArea { certify: false },
                     "marquee-zoom" => QuickTool::MarqueeZoom,
+                    "loupe" => QuickTool::Loupe,
                     "snapshot" => QuickTool::Snapshot,
                     "column-select" => QuickTool::ColumnSelect,
                     "certify" => QuickTool::SignArea { certify: true },
@@ -362,6 +377,11 @@ impl PdfCraftApp {
                         QuickTool::Comment(t)
                     }
                 };
+                if self.quick_tool == QuickTool::Loupe {
+                    self.open_loupe();
+                } else {
+                    self.loupe = None;
+                }
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
             ("folder-collapsed", _) => self.set_folder_collapsed(value)?,

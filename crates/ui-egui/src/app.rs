@@ -309,6 +309,8 @@ impl PdfCraftApp {
             portfolio_seen: None,
             portfolio_panel: None,
             quick_tool: QuickTool::Select,
+            loupe: None,
+            loupe_zoom: crate::loupe_ui::LOUPE_ZOOM_DEFAULT,
             full_screen_tool: None,
             comment_prefs: Default::default(),
             recent_colours: Default::default(),
@@ -845,6 +847,7 @@ impl PdfCraftApp {
                 view.session.pending_pick = None;
             }
         }
+        self.settle_loupe();
         panes::frame(self, &ctx);
         // Forms' scripts read Highlight fields as `app.runtimeHighlight`.
         let highlight = self.active.and_then(|i| self.views.get(i)).map_or(self.highlight_fields, |v| v.session.highlight_fields);

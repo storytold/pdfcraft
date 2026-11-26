@@ -40,6 +40,7 @@ mod chrome;
 pub use combine_ui::{CombineView, Lock as CombineLock, SortKey};
 mod commands;
 pub mod control;
+pub mod loupe_ui;
 mod menus;
 mod properties_session;
 /// Header & footer / watermark / background dialog types (tests and automation).
@@ -740,4 +741,8 @@ pub struct PdfCraftApp {
     pub pending_window: Option<viewer_prefs::PendingWindow>,
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
+    /// View ▸ Zoom ▸ Loupe tool: active floating loupe window and aperture state.
+    pub loupe: Option<loupe_ui::LoupeState>,
+    /// Remembered loupe zoom factor (`1.0..=8.0`), shared with `ui.set loupe_zoom`.
+    pub(crate) loupe_zoom: f32,
 }

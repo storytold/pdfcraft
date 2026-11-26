@@ -15,11 +15,12 @@ impl crate::PdfCraftApp {
         let doc = self.active.and_then(|i| self.views.get(i)).map(|v| v.id.0);
         doc.hash(&mut hasher);
         format!(
-            "{:?}/{:?}/{:?}/{:?}/{:?}/{:?}",
+            "{:?}/{:?}/{:?}/{:?}/{:?}/{:?}/{:?}",
             self.dialogs.open_dialogs().iter().map(|d| (d.id, d.key.as_deref())).collect::<Vec<_>>(),
             (self.preferences.is_some(), self.shortcuts.is_some()),
             self.modal_open(),
             self.palette_open,
+            self.loupe.is_some(),
             self.close_guard.is_some(),
             self.active.and_then(|i| self.views.get(i)).and_then(|v| v.find.as_ref().map(|_| true)),
         )
@@ -117,6 +118,7 @@ impl crate::PdfCraftApp {
                 crate::QuickTool::SignArea { certify: false } => "sign".to_string(),
                 crate::QuickTool::SignArea { certify: true } => "certify".to_string(),
                 crate::QuickTool::MarqueeZoom => "marquee-zoom".to_string(),
+                crate::QuickTool::Loupe => "loupe".to_string(),
                 crate::QuickTool::Snapshot => "snapshot".to_string(),
                 crate::QuickTool::ColumnSelect => "column-select".to_string(),
                 crate::QuickTool::Stamp(k) => format!("stamp-{}", k.name().trim_start_matches("PC").to_ascii_lowercase()),
@@ -146,6 +148,11 @@ impl crate::PdfCraftApp {
                 .or_else(|| self.preferences.is_some().then(|| "preferences".to_string()))
                 .or_else(|| self.shortcuts.is_some().then(|| "shortcuts".to_string())),
             "palette_open": self.palette_open,
+            "loupe": {
+                "on": self.loupe.is_some(),
+                "zoom_percent": (self.loupe_zoom_factor() * 100.0).round(),
+                "target_page": self.loupe.as_ref().and_then(|l| l.target.map(|(p, _)| p + 1)),
+            },
             "theme": format!("{:?}", self.root_env(ctx).resolved(ctx).mode),
             "theme_preference": format!("{:?}", self.theme_preference),
             "show_page_edge_shadows": self.show_page_edge_shadows,

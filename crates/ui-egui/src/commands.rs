@@ -305,6 +305,9 @@ impl PdfCraftApp {
             }
         };
         crate::dialogs::discard_inactive_password_drafts(self);
+        if self.quick_tool != crate::QuickTool::Loupe {
+            self.loupe = None;
+        }
         done
     }
 
@@ -590,6 +593,7 @@ impl PdfCraftApp {
                 }
             }
             "view.marquee_zoom" => self.quick_tool = crate::QuickTool::MarqueeZoom,
+            "view.loupe" => self.toggle_loupe(),
             _ => return None,
         }
         Some(true)

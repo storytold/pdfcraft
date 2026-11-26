@@ -482,6 +482,9 @@ pub(crate) struct PageOverlays<'a> {
     /// Snapshot's kept area on this page (view space): outlined until another tool or drag replaces it.
     #[prop]
     kept_area: Option<[f32; 4]>,
+    /// Loupe tool's magnified aperture on this page (view space): thin rectangle in the theme's accent colour.
+    #[prop]
+    loupe_aperture: Option<[f32; 4]>,
     /// The selected picture on this page (user space): tinted like production's selection.
     #[prop]
     picked: Option<[f64; 4]>,
@@ -499,7 +502,19 @@ impl<'a> PageOverlays<'a> {
         compare: &'a [(usize, [f32; 4], Color32)],
         flash: &'a mut Option<(usize, [f32; 4], f64)>,
     ) -> Self {
-        PageOverlays { common: Common::new(), page, xf, doc, tabs, compare, flash, highlight_fields: false, kept_area: None, picked: None }
+        PageOverlays {
+            common: Common::new(),
+            page,
+            xf,
+            doc,
+            tabs,
+            compare,
+            flash,
+            highlight_fields: false,
+            kept_area: None,
+            loupe_aperture: None,
+            picked: None,
+        }
     }
 }
 
@@ -561,6 +576,13 @@ impl Component for PageOverlays<'_> {
             let rect = self.xf.view_rect(area);
             if rect.is_finite() {
                 draw.stroke(&PaintShape::Rect(rect, CornerRadius::ZERO), StrokeWidth::Thick, style.flash);
+            }
+        }
+        if let Some(aperture) = self.loupe_aperture {
+            let rect = self.xf.view_rect(aperture);
+            if rect.is_finite() {
+                draw.faded(0.10, |draw| draw.fill(&PaintShape::Rect(rect, CornerRadius::ZERO), style.flash));
+                draw.stroke(&PaintShape::Rect(rect, CornerRadius::ZERO), StrokeWidth::Thin, style.flash);
             }
         }
         for tab in self.tabs {
