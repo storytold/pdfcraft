@@ -56,8 +56,8 @@ pub fn state() -> State {
     STATE.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// Download and load the models unless that is already happening; repaint when it's done.
-pub fn start(ctx: egui::Context) {
+/// Download and load the models unless that is already happening; `wake` asks for a frame when it's done.
+pub fn start(wake: craft::host::Wake) {
     {
         let mut s = STATE.lock().unwrap_or_else(|e| e.into_inner());
         if *s == State::Loading {
@@ -75,7 +75,7 @@ pub fn start(ctx: egui::Context) {
             Err(e) => State::Failed(e),
         };
         *STATE.lock().unwrap_or_else(|e| e.into_inner()) = next;
-        ctx.request_repaint();
+        wake.wake();
     });
 }
 
@@ -485,7 +485,7 @@ impl Batch {
 
     /// Advance; `true` once every file is done. A cancel is honoured between files: the file
     /// in flight finishes, the rest are counted as not run.
-    pub fn pump(&mut self, cancel: bool, ctx: &egui::Context) -> bool {
+    pub fn pump(&mut self, cancel: bool, files: &dyn craft::host::Files, ctx: &egui::Context) -> bool {
         let Some((name, _, pages)) = self.current.as_mut() else {
             if cancel && !self.files.is_empty() {
                 self.not_run = Some(self.files.len());
@@ -506,7 +506,7 @@ impl Batch {
         let name = std::mem::take(name);
         let Some((_, file, _)) = self.current.take() else { return false };
         let saved = file.finish(found).and_then(|r| {
-            crate::editing::download(&name, &r.bytes)?;
+            files.write(std::path::Path::new(&name), &r.bytes, craft::host::WriteIntent::SaveAs).map_err(|e| e.to_string())?;
             Ok(r)
         });
         match saved {
