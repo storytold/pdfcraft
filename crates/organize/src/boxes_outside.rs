@@ -27,7 +27,8 @@ pub struct BoxOutside {
 /// positive width and height frames nothing and is skipped, as is an array with any entry that
 /// isn't a number.
 ///
-/// Containment is exact, with no tolerance, so a box the smallest amount past an edge is listed.
+/// An edge within [`EDGE_TOLERANCE`] of the media box counts as inside, so a box equal to a media
+/// box written from rounded arithmetic (`383.0` against `382.99999999999994`) is not listed.
 /// A page given twice is listed twice, next to itself.
 pub fn boxes_outside_media(doc: &Document, pages: &[usize]) -> Result<Vec<BoxOutside>, OrganizeError> {
     let all = walk(doc)?;
@@ -64,7 +65,12 @@ fn four_numbers(o: &Object, doc: &Document) -> bool {
     doc.resolve(o).as_array().is_some_and(|a| a.len() == 4 && a.iter().all(|x| doc.resolve(x).as_f64().is_some()))
 }
 
-/// Whether normalized rectangle `outer` contains `inner`, edges included.
+/// How far, in default user-space units, an edge may pass the media box and still count as inside.
+/// Far below anything a page can show, and far above the error of `f64` arithmetic on page sizes.
+const EDGE_TOLERANCE: f64 = 1e-6;
+
+/// Whether normalized rectangle `outer` contains `inner`, edges included, within [`EDGE_TOLERANCE`].
 fn contains(outer: [f64; 4], inner: [f64; 4]) -> bool {
-    inner[0] >= outer[0] && inner[1] >= outer[1] && inner[2] <= outer[2] && inner[3] <= outer[3]
+    let t = EDGE_TOLERANCE;
+    inner[0] >= outer[0] - t && inner[1] >= outer[1] - t && inner[2] <= outer[2] + t && inner[3] <= outer[3] + t
 }

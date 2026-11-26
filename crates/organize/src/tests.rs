@@ -2789,6 +2789,40 @@ fn boxes_outside_are_listed_in_page_order_whatever_the_request_order() {
     assert_eq!(found, [(0, PageBox::Bleed), (1, PageBox::Trim), (1, PageBox::Trim)]);
 }
 
+/// A media box cut to the trim box by margins is written from `f64` arithmetic (`383.0` comes back
+/// as `382.99999999999994`); the boxes equal to it are inside, not listed.
+#[test]
+fn a_media_box_cut_to_the_trim_box_lists_no_box_equal_to_it() {
+    let mut doc = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.276 841.89] /CropBox [131.5 439.89 383.0 600.89] /BleedBox [131.5 439.89 383.0 600.89] /TrimBox [131.5 439.89 383.0 600.89] /ArtBox [131.5 439.89 383.0 600.89] >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    set_page_box(&mut doc, &[0], PageBox::Media, BoxSpec::Margins([131.5, 439.89, 212.276, 241.0])).unwrap();
+    let doc = open(write_incremental(&doc, &SaveOptions::default()).unwrap());
+    let media = page_boxes(&doc).unwrap()[0][0];
+    assert_ne!(media[2], 383.0, "the arithmetic does not land on the trim box exactly: {media:?}");
+    assert_eq!(boxes_outside_media(&doc, &[0]).unwrap(), []);
+}
+
+/// The tolerance is for arithmetic error only: a box a thousandth of a unit past an edge is listed.
+#[test]
+fn a_box_a_thousandth_past_the_media_box_is_still_listed() {
+    let doc = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /TrimBox [0 0 100.001 100] /BleedBox [-0.001 0 100 100] /ArtBox [0 0 100.0000001 100] >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    let found: Vec<PageBox> = boxes_outside_media(&doc, &[0]).unwrap().iter().map(|b| b.which).collect();
+    assert_eq!(found, [PageBox::Bleed, PageBox::Trim], "the art box is within the tolerance");
+}
+
 /// ISO 32000-2 §7.9.5: a rectangle is an array of four numbers. One with an entry that isn't a
 /// number, or with more than four entries, is not a box, so it is never reported.
 #[test]
