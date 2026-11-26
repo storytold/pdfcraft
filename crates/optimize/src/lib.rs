@@ -505,25 +505,39 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             let r = ObjRef { num, generation: doc.generation(num) };
             let obj = doc.get(r);
             let Object::Stream(s) = &*obj else { continue };
-            // XMP stays readable as plain text (PDF/A requires it); tiny streams don't gain.
-            if s.dict.name(b"Type") == Some(b"Metadata") || s.dict.name(b"Type") == Some(b"XRef") || s.raw.len() < 64 {
-                continue;
-            }
-            let replacement = if s.dict.contains(b"Filter") {
-                strip_ascii_wrapper(s)
-            } else {
-                let mut d = s.dict.clone();
-                d.remove(b"Length");
-                let packed = Stream::flate(d, &s.raw);
-                (packed.raw.len() < s.raw.len()).then_some(packed)
-            };
-            if let Some(replacement) = replacement {
+            if let Some(replacement) = flate_unencoded(s) {
                 doc.set(r, Object::Stream(replacement));
                 report.streams_compressed += 1;
             }
         }
     }
     Ok(report)
+}
+
+/// `s` as the passes after content compaction store it, when they change it: LZW recoded as
+/// Flate ([`Settings::lzw_to_flate`]), then compressed or without its ASCII layer
+/// ([`Settings::flate_unencoded`]). The same functions as those passes, so a size compared on
+/// the result is the size written.
+pub(crate) fn as_stored(s: &Stream, settings: &Settings, budget: &mut ImageBudget) -> Option<Stream> {
+    let recoded = if settings.lzw_to_flate { lzw_to_flate(s, MAX_LZW_DECODED, budget) } else { None };
+    let packed = if settings.flate_unencoded { flate_unencoded(recoded.as_ref().unwrap_or(s)) } else { None };
+    packed.or(recoded)
+}
+
+/// `s` Flate-compressed when it has no filter, or without its outer ASCII layer
+/// ([`strip_ascii_wrapper`]), when that is smaller ([`Settings::flate_unencoded`]).
+fn flate_unencoded(s: &Stream) -> Option<Stream> {
+    // XMP stays readable as plain text (PDF/A requires it); tiny streams don't gain.
+    if s.dict.name(b"Type") == Some(b"Metadata") || s.dict.name(b"Type") == Some(b"XRef") || s.raw.len() < 64 {
+        return None;
+    }
+    if s.dict.contains(b"Filter") {
+        return strip_ascii_wrapper(s);
+    }
+    let mut d = s.dict.clone();
+    d.remove(b"Length");
+    let packed = Stream::flate(d, &s.raw);
+    (packed.raw.len() < s.raw.len()).then_some(packed)
 }
 
 /// Largest decoded LZW stream converted, as for a page's content: the data and its check are

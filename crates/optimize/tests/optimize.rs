@@ -5968,6 +5968,62 @@ fn content_under_other_general_filters_is_compacted_to_flate() {
     }
 }
 
+/// Text whose compacted form is smaller unencoded but compresses larger: fixed-width numbers
+/// repeat in a way their shortest forms don't. Both are long enough for the pass that compresses
+/// unencoded streams.
+const COMPRESSES_WORSE: &str = "2.50 0.50 l\n0.50 1.50 2.50 0.00 re\n1.50 1.50 m\n2.50 1.00 m\n0.00 1.50 l\n0.50 1.00 l\n0.00 0.00 l\nS\n";
+
+/// With `flate_unencoded`, an unfiltered stream is compared as that pass stores it: the
+/// compacted text, though shorter, compresses larger, so the original stays and is compressed
+/// as it would be without compaction. Without that pass the shorter text is kept.
+#[test]
+fn an_unfiltered_stream_is_compared_as_it_is_compressed() {
+    let s = Stream::from_raw(Dict::new(), COMPRESSES_WORSE.as_bytes().to_vec());
+    let (mut doc, c) = with_content(s.clone());
+    let r = optimize(&mut doc, &Settings { optimize_content: true, flate_unencoded: false, ..Settings::default() }).unwrap();
+    assert_eq!(r.content_streams, 1);
+    let compacted = stream(&doc, c).raw;
+    assert!(compacted.len() >= 64 && compacted.len() < s.raw.len());
+    let packed = |data: &[u8]| Stream::flate(Dict::new(), data).raw.len();
+    assert!(packed(&compacted) > packed(&s.raw), "the fixture compresses worse once compacted");
+    let (mut doc, c) = with_content(s.clone());
+    let r = optimize(&mut doc, &Settings { optimize_content: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.content_streams, 0, "{r:?}");
+    assert_eq!(stream(&doc, c), Stream::flate(Dict::new(), &s.raw), "the original, compressed by the later pass");
+}
+
+/// Whatever the later passes do to a stream (compress it, take off its ASCII layer, store its
+/// LZW as Flate), the copy with compaction on is never larger than with it off.
+#[test]
+fn compacting_content_never_makes_the_copy_larger() {
+    let short = "0.0 0.0 l\n0.0 0.0 l\n0.0 0.0 0.0 0.0 re\n0.0 0.0 0.0 0.0 re\n0.0 0.0 m\n0.0 0.0 m\n0.0 0.0 0.0 0.0 re\nS\n";
+    let padded = "0.50 g   0 0 m   10.000 10.000 l   S   ".repeat(10);
+    let mut cases = Vec::new();
+    for text in [COMPRESSES_WORSE, short, padded.as_str()] {
+        let data = text.as_bytes();
+        cases.push(Stream::from_raw(Dict::new(), data.to_vec()));
+        let hex: Vec<u8> = pdfcraft_filters::encode_flate(data).iter().flat_map(|b| format!("{b:02X}").into_bytes()).chain(*b">").collect();
+        let mut wrapped = Dict::new();
+        wrapped.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("FlateDecode")]));
+        cases.push(Stream::from_raw(wrapped, hex));
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::name("LZWDecode"));
+        cases.push(Stream::from_raw(d, lzw(data, &Params::default())));
+    }
+    for (lzw_to_flate, flate_unencoded) in [(true, true), (true, false), (false, true), (false, false)] {
+        let written = |s: &Stream, on: bool| {
+            let (mut doc, _) = with_content(s.clone());
+            let settings = Settings { optimize_content: on, lzw_to_flate, flate_unencoded, ..Settings::default() };
+            optimize(&mut doc, &settings).unwrap();
+            write_full(&doc, &SaveOptions::default()).unwrap().len()
+        };
+        for s in &cases {
+            let (off, on) = (written(s, false), written(s, true));
+            assert!(on <= off, "{:?} lzw_to_flate {lzw_to_flate} flate_unencoded {flate_unencoded}: {on} > {off}", s.dict);
+        }
+    }
+}
+
 /// Page contents split into pieces are read as one stream: when one piece can't be read (here
 /// it ends in operands its operator follows in the next piece), no piece is rewritten, since a
 /// piece read alone may then start inside an operator.

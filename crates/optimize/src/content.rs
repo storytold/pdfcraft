@@ -11,10 +11,12 @@ use pdfcraft_content::{Op, ops as read};
 use pdfcraft_cos::{Document, ImageBudget, MAX_PAGE_DECODED, ObjRef, Object, Stream, serialize};
 use pdfcraft_filters::{Filter, Params};
 
-use crate::{OptimizeError, Report, Settings, Stage, stored_len};
+use crate::{OptimizeError, Report, Settings, Stage, as_stored, stored_len};
 
 /// Steps of a run's allowance one decoded byte costs: read, written, read back and compressed.
 const WORK_PER_BYTE: u64 = 16;
+/// Steps one byte costs to compress both the original and the compacted copy, to compare them as stored.
+const ENCODE_WORK: u64 = 8;
 /// Deepest `q` nesting tracked; a stream nested deeper is left as it is.
 const MAX_SAVE_DEPTH: usize = 1024;
 /// Deepest array or dictionary operand written.
@@ -90,7 +92,7 @@ pub(crate) fn run(
                 return Err(OptimizeError::Cancelled);
             }
             let outcome = match &*doc.get(*r) {
-                Object::Stream(s) => compact(s, budget),
+                Object::Stream(s) => compact(s, settings, budget),
                 _ => Outcome::Unreadable,
             };
             done.insert(*r, outcome);
@@ -145,11 +147,14 @@ fn units(doc: &Document, pages: &[ObjRef]) -> Vec<Vec<ObjRef>> {
     units
 }
 
-/// `s` compacted, if that is certain to draw the same and is smaller.
-fn compact(s: &Stream, budget: &mut ImageBudget) -> Outcome {
+/// `s` compacted, if that is certain to draw the same and is smaller as the later passes store
+/// both ([`as_stored`]): an unfiltered stream is compared compressed when they compress it, as
+/// fewer separators and shorter numbers can compress worse.
+fn compact(s: &Stream, settings: &Settings, budget: &mut ImageBudget) -> Outcome {
     let Some(chain) = rewritable_filters(s) else { return Outcome::Unreadable };
     let Ok(data) = budget.decode_chain(&chain, &s.raw, MAX_PAGE_DECODED) else { return Outcome::Unreadable };
-    if !budget.spend(u64::try_from(data.len()).unwrap_or(u64::MAX).saturating_mul(WORK_PER_BYTE)) {
+    let per_byte = if chain.is_empty() && settings.flate_unencoded { WORK_PER_BYTE + ENCODE_WORK } else { WORK_PER_BYTE };
+    if !budget.spend(u64::try_from(data.len()).unwrap_or(u64::MAX).saturating_mul(per_byte)) {
         return Outcome::Unreadable;
     }
     let ops = match read_all(&data, MAX_OPS) {
@@ -167,8 +172,13 @@ fn compact(s: &Stream, budget: &mut ImageBudget) -> Outcome {
     }
     let mut dict = s.dict.clone();
     dict.remove(b"Length");
+    // An unfiltered result stays unfiltered: the later pass compresses it to the bytes compared.
     let new = if chain.is_empty() { Stream::from_raw(dict, out.clone()) } else { Stream::flate(dict, &out) };
-    match (stored_len(&new), stored_len(s)) {
+    let mut stored = |version: &Stream| match as_stored(version, settings, budget) {
+        Some(later) => stored_len(&later),
+        None => stored_len(version),
+    };
+    match (stored(&new), stored(s)) {
         (Some(after), Some(before)) if after < before => {
             let counts = Counts { ops_removed: ops.len().saturating_sub(kept.len()), bytes_before: data.len(), bytes_after: out.len() };
             Outcome::Compacted(new, counts)
@@ -616,10 +626,12 @@ mod tests {
     #[test]
     fn a_spent_allowance_leaves_the_stream_as_it_is() {
         let s = Stream::from_raw(Dict::new(), b"q   Q   0   0   m   10   10   l   S  ".to_vec());
-        // Decoding draws on the same allowance; the pass must still ask for its own share.
-        let cost = u64::try_from(s.raw.len()).unwrap() * WORK_PER_BYTE;
-        let least = (0..=4 * cost).find(|w| matches!(compact(&s, &mut ImageBudget::with_work(*w)), Outcome::Compacted(..)));
+        // Decoding draws on the same allowance; the pass must still ask for its own share, and
+        // for compressing the original too when the later pass compresses unfiltered streams.
+        let settings = Settings::default();
+        let cost = u64::try_from(s.raw.len()).unwrap() * (WORK_PER_BYTE + ENCODE_WORK);
+        let least = (0..=4 * cost).find(|w| matches!(compact(&s, &settings, &mut ImageBudget::with_work(*w)), Outcome::Compacted(..)));
         assert!(least.is_some_and(|w| w >= cost), "{least:?}");
-        assert!(matches!(compact(&s, &mut ImageBudget::with_work(cost - 1)), Outcome::Unreadable));
+        assert!(matches!(compact(&s, &settings, &mut ImageBudget::with_work(cost - 1)), Outcome::Unreadable));
     }
 }
