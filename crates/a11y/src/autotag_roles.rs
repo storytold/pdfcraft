@@ -24,7 +24,7 @@ const MAX_CHARS: usize = 200;
 /// Saved graphics states followed; deeper `q` nesting keeps the current state.
 const MAX_SAVED: usize = 64;
 /// Distinct fonts measured per document; text in any further font counts as unstyled.
-const MAX_FONTS: usize = 256;
+pub(crate) const MAX_FONTS: usize = 256;
 
 /// What one text object shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -101,15 +101,60 @@ struct State {
 }
 
 /// Font metrics for a whole document, measured once per font object and capped at
-/// [`MAX_FONTS`].
+/// [`MAX_FONTS`]. Within a page, each resource name is looked up once, however many readers of the
+/// page's text ask for it, so a font written in place (not by reference) is charged once per page.
 #[derive(Default)]
 pub(crate) struct Fonts {
     by_ref: HashMap<ObjRef, Option<Rc<Metrics>>>,
     measured: usize,
+    /// The current page's `/Font` resources, by name.
+    named: HashMap<Vec<u8>, Option<Rc<Metrics>>>,
+    /// The current page's `/ExtGState` resources, by name: the font and size each sets.
+    states: HashMap<Vec<u8>, Option<StateFont>>,
+}
+
+/// The font and size a graphics state parameter dictionary sets through `/Font` (Table 57).
+#[derive(Clone)]
+pub(crate) struct StateFont {
+    pub font: Object,
+    pub metrics: Option<Rc<Metrics>>,
+    pub size: f64,
 }
 
 impl Fonts {
-    fn get(&mut self, doc: &Document, font: &Object) -> Option<Rc<Metrics>> {
+    /// Starts a page: names are looked up afresh in its resources.
+    pub(crate) fn new_page(&mut self) {
+        self.named.clear();
+        self.states.clear();
+    }
+
+    /// The font that `name` gives in the page's `/Font` resource dictionary `fonts`.
+    pub(crate) fn named(&mut self, doc: &Document, fonts: &Dict, name: &[u8]) -> Option<Rc<Metrics>> {
+        if let Some(found) = self.named.get(name) {
+            return found.clone();
+        }
+        let found = fonts.get(name).and_then(|f| self.get(doc, f));
+        self.named.insert(name.to_vec(), found.clone());
+        found
+    }
+
+    /// The font and size that `name` in the page's `/ExtGState` resource dictionary `states` sets;
+    /// `None` when it sets no font (or a malformed one), which leaves the font as it was.
+    pub(crate) fn state(&mut self, doc: &Document, states: &Dict, name: &[u8]) -> Option<StateFont> {
+        if let Some(found) = self.states.get(name) {
+            return found.clone();
+        }
+        let entry = states.get(name).map(|s| doc.resolve(s)).and_then(|s| s.as_dict().and_then(|d| d.get(b"Font")).map(|f| doc.resolve(f)));
+        let found = entry.and_then(|f| match f.as_array().map(Vec::as_slice) {
+            Some([font, size]) => doc.resolve(size).as_f64().filter(|s| s.is_finite()).map(|size| (font.clone(), size)),
+            _ => None,
+        });
+        let found = found.map(|(font, size)| StateFont { metrics: self.get(doc, &font), font, size });
+        self.states.insert(name.to_vec(), found.clone());
+        found
+    }
+
+    pub(crate) fn get(&mut self, doc: &Document, font: &Object) -> Option<Rc<Metrics>> {
         let key = match font {
             Object::Ref(r) => Some(*r),
             _ => None,
@@ -181,8 +226,7 @@ impl Shown {
 
 /// The evidence for each `(BT, ET)` operator span of a page, in order. `resources` is the page's
 /// `/Font` resource dictionary; `fonts` is shared by the document's pages.
-pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops: &[Op], spans: &[(usize, usize)]) -> Vec<Evidence> {
-    let mut by_name: HashMap<Vec<u8>, Option<Rc<Metrics>>> = HashMap::new();
+pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, states: &Dict, ops: &[Op], spans: &[(usize, usize)]) -> Vec<Evidence> {
     let mut state =
         State { ctm: Matrix::IDENTITY, tm: Matrix::IDENTITY, tlm: Matrix::IDENTITY, size: 0.0, leading: 0.0, invisible: false, metrics: None };
     let (mut saved, mut unsaved) = (Vec::new(), 0usize);
@@ -211,9 +255,12 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
             b"BT" => (state.tm, state.tlm) = (Matrix::IDENTITY, Matrix::IDENTITY),
             b"Tf" => {
                 state.size = op.num(1).unwrap_or(state.size);
-                state.metrics = op
-                    .name(0)
-                    .and_then(|name| by_name.entry(name.to_vec()).or_insert_with(|| resources.get(name).and_then(|f| fonts.get(doc, f))).clone());
+                state.metrics = op.name(0).and_then(|name| fonts.named(doc, resources, name));
+            }
+            b"gs" => {
+                if let Some(set) = op.name(0).and_then(|name| fonts.state(doc, states, name)) {
+                    (state.metrics, state.size) = (set.metrics, set.size);
+                }
             }
             b"TL" => state.leading = op.num(0).unwrap_or(state.leading),
             b"Tr" => state.invisible = matches!(op.num(0), Some(m) if m == 3.0 || m == 7.0),
@@ -343,19 +390,36 @@ mod tests {
         assert!(roles(&[]).is_empty());
     }
 
-    /// The evidence for each `BT`..`ET` of `content`, drawn in Helvetica-Bold as `/F1`.
+    /// The evidence for each `BT`..`ET` of `content`, drawn in Helvetica-Bold as `/F1`. Graphics
+    /// state `/GS1` sets Helvetica at 24 pt; `/GS2` sets only a line width.
     fn walk(content: &[u8]) -> Vec<Evidence> {
         let doc = Document::new_empty();
-        let mut font = Dict::new();
-        font.set(b"Type".to_vec(), Object::name("Font"));
-        font.set(b"Subtype".to_vec(), Object::name("Type1"));
-        font.set(b"BaseFont".to_vec(), Object::name("Helvetica-Bold"));
+        let font = |name: &str| {
+            let mut font = Dict::new();
+            font.set(b"Type".to_vec(), Object::name("Font"));
+            font.set(b"Subtype".to_vec(), Object::name("Type1"));
+            font.set(b"BaseFont".to_vec(), Object::name(name));
+            Object::Dict(font)
+        };
         let mut resources = Dict::new();
-        resources.set(b"F1".to_vec(), Object::Dict(font));
+        resources.set(b"F1".to_vec(), font("Helvetica-Bold"));
+        let (mut gs1, mut gs2, mut states) = (Dict::new(), Dict::new(), Dict::new());
+        gs1.set(b"Font".to_vec(), Object::Array(vec![font("Helvetica"), Object::Int(24)]));
+        gs2.set(b"LW".to_vec(), Object::Int(2));
+        states.set(b"GS1".to_vec(), Object::Dict(gs1));
+        states.set(b"GS2".to_vec(), Object::Dict(gs2));
         let ops = pdfcraft_content::parse(content).ops;
         let at = |name: &[u8]| -> Vec<usize> { ops.iter().enumerate().filter(|(_, o)| o.op == name).map(|(i, _)| i).collect() };
         let spans: Vec<(usize, usize)> = at(b"BT").into_iter().zip(at(b"ET")).collect();
-        evidence(&doc, &mut Fonts::default(), &resources, &ops, &spans)
+        evidence(&doc, &mut Fonts::default(), &resources, &states, &ops, &spans)
+    }
+
+    /// `gs` with `/Font` sets the font and size as `Tf` does (Table 57); without it, both stay.
+    #[test]
+    fn a_graphics_state_that_sets_a_font_sets_the_size_and_weight() {
+        let found = walk(b"BT /F1 10 Tf (body) Tj ET /GS1 gs BT (Title) Tj ET /GS2 gs BT (more) Tj ET");
+        assert_eq!(found[1], Evidence { size: 24.0, bold: false, lines: 1, chars: 5, letters: true });
+        assert_eq!((found[2].size, found[2].bold), (found[1].size, found[1].bold));
     }
 
     #[test]

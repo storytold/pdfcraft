@@ -205,8 +205,11 @@ fn sub(doc: &Document, d: &Dict, key: &[u8]) -> Dict {
 /// own `Td` (Chromium) would otherwise read as "C h a p t e r".
 pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
     let res = sub(doc, page, b"Resources");
-    let (fonts, props) = (sub(doc, &res, b"Font"), sub(doc, &res, b"Properties"));
+    let (fonts, props, states) = (sub(doc, &res, b"Font"), sub(doc, &res, b"Properties"), sub(doc, &res, b"ExtGState"));
     let mut metrics: HashMap<Vec<u8>, std::rc::Rc<Metrics>> = HashMap::new();
+    // The font and size each `/ExtGState` entry sets through `/Font` (Table 57), by name; `None`
+    // when it sets none, which leaves the font as it was.
+    let mut state_fonts: HashMap<Vec<u8>, Option<StateFont>> = HashMap::new();
     // Built once per font object, however many resource names alias it.
     let mut by_font: HashMap<ObjRef, std::rc::Rc<Metrics>> = HashMap::new();
     // The id each open marked-content sequence is in: its own, else the enclosing one's.
@@ -254,33 +257,33 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
             }
             b"Tf" => {
                 gs.size = op.num(1).unwrap_or(gs.size);
-                gs.font = op.name(0).map(<[u8]>::to_vec);
-                if let Some(name) = op.name(0)
-                    && !metrics.contains_key(name)
-                {
-                    // Keyed by the object at the end of the reference chain, so names that reach one
-                    // font through different chains share its metrics (the hop limit is resolve's).
-                    let font = fonts.get(name).and_then(|o| {
-                        let (mut cur, mut last) = (o.clone(), None);
-                        for _ in 0..16 {
-                            let Object::Ref(r) = cur else { break };
-                            last = Some(r);
-                            cur = (*doc.get(r)).clone();
-                        }
-                        last
-                    });
-                    let built = match font.and_then(|r| by_font.get(&r)) {
-                        Some(m) => Some(m.clone()),
-                        None => {
-                            fonts.get(name).map(|f| doc.resolve(f)).and_then(|f| f.as_dict().map(|d| std::rc::Rc::new(Metrics::from_dict(doc, d))))
-                        }
-                    };
-                    if let Some(m) = built {
-                        if let Some(r) = font {
-                            by_font.insert(r, m.clone());
-                        }
+                gs.font = op.name(0).and_then(|name| {
+                    if !metrics.contains_key(name)
+                        && let Some(m) = fonts.get(name).and_then(|f| font_metrics(doc, &mut by_font, f))
+                    {
                         metrics.insert(name.to_vec(), m);
                     }
+                    metrics.get(name).cloned()
+                });
+            }
+            b"gs" => {
+                let set = op.name(0).and_then(|name| {
+                    state_fonts
+                        .entry(name.to_vec())
+                        .or_insert_with(|| {
+                            let entry = states.get(name).map(|s| doc.resolve(s));
+                            let font = entry.and_then(|s| s.as_dict().and_then(|d| d.get(b"Font")).map(|f| doc.resolve(f)));
+                            match font.as_deref().and_then(Object::as_array).map(Vec::as_slice) {
+                                Some([font, size]) => {
+                                    doc.resolve(size).as_f64().filter(|s| s.is_finite()).map(|size| (font_metrics(doc, &mut by_font, font), size))
+                                }
+                                _ => None,
+                            }
+                        })
+                        .clone()
+                });
+                if let Some((font, size)) = set {
+                    (gs.font, gs.size) = (font, size);
                 }
             }
             b"Tc" => gs.char_spacing = op.num(0).unwrap_or(0.0),
@@ -309,7 +312,7 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
             _ => {}
         }
         let shows = matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"");
-        let Some(m) = gs.font.as_ref().and_then(|f| metrics.get(f)).filter(|_| shows) else { continue };
+        let Some(m) = gs.font.clone().filter(|_| shows) else { continue };
         if op.op != b"Tj" && op.op != b"TJ" {
             if op.op == b"\"" {
                 gs.word_spacing = op.num(0).unwrap_or(gs.word_spacing);
@@ -359,6 +362,29 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
     out
 }
 
+/// The font (unmeasurable when `None`) and size a graphics state sets through `/Font`.
+type StateFont = (Option<std::rc::Rc<Metrics>>, f64);
+
+/// The metrics of `font` (a font dictionary, or a reference to one), built once per font object:
+/// keyed by the object at the end of the reference chain, so names that reach one font through
+/// different chains share its metrics (the hop limit is resolve's).
+fn font_metrics(doc: &Document, by_font: &mut HashMap<ObjRef, std::rc::Rc<Metrics>>, font: &Object) -> Option<std::rc::Rc<Metrics>> {
+    let (mut cur, mut last) = (font.clone(), None);
+    for _ in 0..16 {
+        let Object::Ref(r) = cur else { break };
+        last = Some(r);
+        cur = (*doc.get(r)).clone();
+    }
+    if let Some(m) = last.and_then(|r| by_font.get(&r)) {
+        return Some(m.clone());
+    }
+    let built = doc.resolve(font).as_dict().map(|d| std::rc::Rc::new(Metrics::from_dict(doc, d)))?;
+    if let Some(r) = last {
+        by_font.insert(r, built.clone());
+    }
+    Some(built)
+}
+
 /// How deep `q` nests before the text state stops being saved (a hostile stream can nest millions).
 const MAX_SAVED: usize = 256;
 
@@ -366,7 +392,7 @@ const MAX_SAVED: usize = 256;
 #[derive(Clone)]
 struct TextState {
     ctm: Matrix,
-    font: Option<Vec<u8>>,
+    font: Option<std::rc::Rc<Metrics>>,
     size: f64,
     char_spacing: f64,
     word_spacing: f64,
