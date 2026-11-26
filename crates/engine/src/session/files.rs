@@ -235,6 +235,25 @@ impl Session {
         self.print_pdf_marked(id, settings, None)
     }
 
+    /// Whether printer's marks fit around `pages` (0-based): [`pdfcraft_edit::add_printer_marks`]
+    /// run on a scratch copy, so a page the marks would widen past the largest page a PDF can
+    /// have is refused before anything (the Will Print actions) changes the document. The copy
+    /// is dropped; [`Session::print_pdf_marked`] adds the marks again on the print copy.
+    pub fn check_printer_marks(&self, id: DocId, pages: &[usize], marks: &crate::PrinterMarks) -> Result<(), EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let mut cos = match doc.editor.as_ref() {
+            Some(e) => e.cos.clone(),
+            None => {
+                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
+            }
+        };
+        let mut pages = pages.to_vec();
+        pages.sort_unstable();
+        pages.dedup();
+        pdfcraft_edit::add_printer_marks(&mut cos, &pages, marks, true)?;
+        Ok(())
+    }
+
     /// [`Session::print_pdf`] with printer's marks (Acrobat's Marks and Bleeds) drawn around each
     /// printed page on the print copy only: the document itself gets none. A page is widened for
     /// them as [`pdfcraft_edit::add_printer_marks`] widens it, and marks the document already

@@ -451,6 +451,13 @@ impl Automation {
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
         };
+        // Marks that would widen a page past the largest page a PDF can have fail here, before
+        // the Will Print actions run and could change the document for a print that then fails.
+        if let Some(m) = marks.as_ref()
+            && self.doc(a)?.allows_printing()
+        {
+            self.session.check_printer_marks(id, &settings.pages, m).map_err(failed)?;
+        }
         // The document's Will Print actions run first: what they change is printed (#269).
         let scripts = if self.doc(a)?.allows_printing() {
             self.session.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillPrint)
