@@ -5705,6 +5705,36 @@ fn dragged_paragraphs(h: &Harness<'static, PdfCraftApp>) -> Vec<pdfcraft_engine:
     app.session.get(app.views[0].id).unwrap().text_blocks(0)
 }
 
+/// The raised marker ends 0.004 pt beyond the rounded anchor of the following run.
+#[test]
+fn double_click_edits_both_rows_around_a_rounded_footnote() {
+    let bytes = paragraph_drag_fixture(
+        "BT /F1 15 Tf 30 400 Td (The plan was filed by Mira L.) Tj ET \
+         BT /F1 15 Tf 30 382 Td (Fenn) Tj ET \
+         BT /F1 9 Tf 64.2 388 Td (3) Tj ET \
+         BT /F1 15 Tf 69.2 382 Td (. The parcel is now surveyed.) Tj ET",
+        0,
+        1,
+    );
+    let mut h = paragraph_drag_harness(bytes, 0);
+    let point = {
+        let app = h.state();
+        let view = &app.views[0];
+        let doc = app.session.get(view.id).unwrap();
+        let xf = pdfcraft_ui_egui::canvas::PageXform {
+            rect: view.page_screen_rect(0).unwrap(),
+            rot: view.view.rotation,
+            pw: doc.info.pages[0].width,
+            ph: doc.info.pages[0].height,
+        };
+        // Inside the following body run, beyond the right edge of the first row.
+        xf.user_rect(&doc.info, 0, [240.0, 384.0, 241.0, 385.0]).center()
+    };
+    crate::support::input::double_click(&mut h, point);
+    let editor = h.state().views[0].session.line_editor.as_ref().expect("the double-click opens Edit text");
+    assert_eq!(editor.text, "The plan was filed by Mira L.\nFenn3. The parcel is now surveyed.");
+}
+
 /// Resolve the current inventory and transform for every gesture, never an old block index
 /// or cached screen position. With identical labels, choose the last (topmost) source box.
 fn paragraph_drag_points(h: &Harness<'static, PdfCraftApp>, text: &str, offset: [f64; 2]) -> (egui::Pos2, egui::Pos2) {

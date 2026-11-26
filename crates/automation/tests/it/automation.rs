@@ -13598,6 +13598,43 @@ fn clearing_a_kids_default_through_tools_does_not_bring_back_its_parents() {
     assert!(city["value"].is_null() || city["value"] == "", "reset clears it rather than restoring the parent's Main St: {}", city["value"]);
 }
 
+/// A PDF that positions a raised footnote and the following body text separately.
+fn raised_footnote_page(marker_x: f64, following_x: f64) -> Vec<u8> {
+    helvetica_page(&format!(
+        "BT /F1 15 Tf 30 700 Td (The plan was filed by Mira L.) Tj ET \
+         BT /F1 15 Tf 30 682 Td (Fenn) Tj ET \
+         BT /F1 9 Tf {marker_x} 688 Td (3) Tj ET \
+         BT /F1 15 Tf {following_x} 682 Td (. The parcel is now surveyed.) Tj ET",
+    ))
+}
+
+#[test]
+fn rounded_footnote_advance_keeps_the_two_rows_in_one_paragraph() {
+    let dir = workdir("rounded-footnote");
+    // The 9 pt Helvetica digit advances 5.004 pt. A tenth-point position loses 0.004 pt.
+    std::fs::write(dir.join("footnote.pdf"), raised_footnote_page(64.2, 69.2)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "footnote.pdf" }))["doc"].as_u64().unwrap();
+    let listed = ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 1 }));
+    assert_eq!(listed["count"], 1, "there is only one editable box: {listed}");
+    let paragraph = &listed["paragraphs"][0];
+    assert_eq!(paragraph["rows"].as_array().unwrap().len(), 2, "{paragraph}");
+    assert_eq!(paragraph["editor_text"], "The plan was filed by Mira L.\nFenn3. The parcel is now surveyed.");
+}
+
+#[test]
+fn footnote_tolerance_does_not_join_overprinted_runs() {
+    let dir = workdir("overprinted-footnote");
+    let mut a = auto(&dir);
+    let overprint = helvetica_page("BT /F1 15 Tf 30 700 Td (The plan was filed by Mira L.) Tj ET BT /F1 9 Tf 70 706 Td (OVERPRINT) Tj ET");
+    for (path, bytes) in [("larger-overlap.pdf", raised_footnote_page(64.2, 68.2)), ("overprint.pdf", overprint)] {
+        std::fs::write(dir.join(path), bytes).unwrap();
+        let doc = ok(&mut a, "doc_open", json!({ "path": path }))["doc"].as_u64().unwrap();
+        let listed = ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 1 }));
+        assert_eq!(listed["count"], 2, "{path} must stay split: {listed}");
+    }
+}
+
 /// #2517, through the same tools as the report. One blank line is two paragraphs, and editing
 /// the first leaves the second. The neighbour at y=656.8 is one blank line below (two 14.4 pt
 /// leadings under the second row). Growing the first paragraph, saving, reopening and editing
