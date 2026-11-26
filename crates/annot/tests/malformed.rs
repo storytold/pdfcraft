@@ -5,7 +5,7 @@
 //! that is said out loud and pinned as it is: an expected value below is *what PdfCraft does today*,
 //! not a claim that it is right. Each such place carries a `NOTE` comment naming the alternative a
 //! reader could reasonably choose, so a later fix shows up as a changed expectation here rather than a
-//! silent edit. (`AGENTS.md` §4 and `CLAUDE.md` Fidelity: no crash, and never repair silently.)
+//! silent edit. (app-agents.md rule 13 and `CLAUDE.md` Fidelity: no crash, and never repair silently.)
 //!
 //! The shapes come from two directions: bytes written by hand (a file we did not make, including
 //! tokens our typed API cannot even express — a three-number quadrilateral or an unknown keyword), and
@@ -402,7 +402,7 @@ fn a_link_area_that_is_too_small_or_broken_is_refused_before_it_is_written() {
 // ── hostile numbers handed to the builder ─────────────────────────────────────────────────────
 
 /// Non-finite style and geometry must be refused before anything is written: no partial object, no
-/// `NaN` or exponent token in the file. (`AGENTS.md` §4: guard NaN/inf casts.)
+/// `NaN` or exponent token in the file. (app-agents.md rule 13: guard NaN/inf casts.)
 #[test]
 fn non_finite_builder_input_is_refused_and_leaves_the_document_untouched() {
     let shapes = [
@@ -563,7 +563,7 @@ fn an_attachment_needs_a_name_and_leaves_nothing_behind_when_it_has_none() {
 /// renderer's behaviour.
 /// Meanwhile our own `repair_log()` stays empty, which contradicts this project's rule that
 /// dropped or repaired data must be recorded (`CLAUDE.md`, Fidelity). None of these probe files
-/// is committed: any sample PDF would need its own `ATTRIBUTION.toml` entry (`AGENTS.md` §1),
+/// is committed: any sample PDF would need its own `ATTRIBUTION.toml` entry (clean-room.md and licences.md),
 /// which this change avoids — regenerate them from the `file` bytes bound below and re-measure.
 ///
 /// How far a caller can actually get there, checked in this workspace rather than assumed: only

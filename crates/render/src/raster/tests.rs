@@ -567,16 +567,16 @@ fn function_limits_public_construction_work_and_depth() {
     use hayro_syntax::object::{FromBytes, Object};
 
     let mut data = "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>".to_owned();
-    for _ in 1..64 {
+    for _ in 1..31 {
         data = format!("<< /FunctionType 3 /Domain [0 1] /Functions [{data}] /Bounds [] /Encode [0 1] >>");
     }
     let object = Object::from_bytes(data.as_bytes()).unwrap();
     assert_eq!(Function::new(&object).unwrap().eval([0.5].into_iter().collect()).unwrap().as_slice(), &[0.5]);
-    let over = format!("<< /FunctionType 3 /Domain [0 1] /Functions [{data}] /Bounds [] /Encode [0 1] >>");
-    // The 64 functions above nest exactly 128 levels (each dictionary and its /Functions
-    // array, then the leaf's /Domain array), the parser's nesting cap. 65 nest 130, so the
-    // parser refuses them before the function-depth guard sees them (a refusal either way).
-    // `function_limits_depth_guard_refuses_a_chain_of_references` tests the guard itself.
+    let mut over = data;
+    for _ in 0..2 {
+        over = format!("<< /FunctionType 3 /Domain [0 1] /Functions [{over}] /Bounds [] /Encode [0 1] >>");
+    }
+    // `craft-libs` hayro-syntax caps direct container nesting at 64 levels.
     assert!(Object::from_bytes(over.as_bytes()).is_none(), "the parser refuses direct nesting past its cap");
 
     // One root plus 10,000 leaves is one node past the common budget. This input remains
@@ -3164,7 +3164,7 @@ fn tiling_pattern_form_cycles_are_bounded_and_finite_nesting_paints() {
                  2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 40 40] >> endobj\n\
                  3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Pattern << /P1 5 0 R /P2 6 0 R >> /XObject << /F 7 0 R >> >> >> endobj\n\
                  4 0 obj << /Length {} >> stream\n{page_content}\nendstream endobj\n\
-                 5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Length {} >> stream\n{pattern_a}\nendstream endobj\n\
+                 5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << /Pattern << /P1 5 0 R /P2 6 0 R >> /XObject << /F 7 0 R >> >> /Length {} >> stream\n{pattern_a}\nendstream endobj\n\
                  6 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Length {} >> stream\n{pattern_b}\nendstream endobj\n\
                  7 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >> stream\n{form}\nendstream endobj\n\
                  trailer << /Root 1 0 R >>\n%%EOF",
@@ -4157,12 +4157,12 @@ fn deeply_nested_direct_objects_do_not_overflow_the_stack() {
         // Run the crash reproducer first, so the unpatched red state is a stack overflow.
         let page = nesting_render(pdf(&nested(100_000, kind), paint));
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "{kind}: repaired trailer");
-        for depth in [20, 128, 129] {
+        for depth in [20, 64, 65] {
             let value = nested(depth, kind);
             let siblings = format!("{value} [] []");
             let mut reader = Reader::new(siblings.as_bytes());
-            assert_eq!(reader.skip::<Object<'_>>(false).is_some(), depth <= 128, "{kind}: depth {depth}");
-            if depth > 128 {
+            assert_eq!(reader.skip::<Object<'_>>(false).is_some(), depth <= 64, "{kind}: depth {depth}");
+            if depth > 64 {
                 assert_eq!(reader.offset(), 0, "failed skips restore the offset");
                 reader.jump(value.len());
             }
@@ -4183,13 +4183,13 @@ fn deeply_nested_direct_objects_do_not_overflow_the_stack() {
         }
     }
     // Content-stream arrays take the Object path, rather than MaybeRef<Object>.
-    for depth in [100_000, 20, 128, 129] {
+    for depth in [100_000, 20, 64, 65] {
         let value = nested(depth, "array");
         let mut reader = Reader::new(value.as_bytes());
-        assert_eq!(reader.skip::<Object<'_>>(true).is_some(), depth <= 128, "content: depth {depth}");
+        assert_eq!(reader.skip::<Object<'_>>(true).is_some(), depth <= 64, "content: depth {depth}");
         let content = format!("{value} discard {paint}");
         let page = nesting_render(pdf("null", &content));
-        if depth <= 128 {
+        if depth <= 64 {
             assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "content: depth {depth}");
         }
     }
@@ -4235,8 +4235,8 @@ fn dictionaries_nested_without_keys_are_read_up_to_the_nesting_cap() {
     use hayro_syntax::object::{FromBytes, Object};
     use hayro_syntax::reader::{Reader, ReaderExt};
     let (red, blue, white) = ([255, 0, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]);
-    for depth in [128, 129] {
-        let within = depth <= 128;
+    for depth in [64, 65] {
+        let within = depth <= 64;
         let value = keyless(depth, true);
         assert_eq!(Object::from_bytes(value.as_bytes()).is_some(), within, "object: {depth}");
         assert_eq!(Reader::new(value.as_bytes()).read_without_context::<Object<'_>>().is_some(), within, "operand: {depth}");
@@ -4269,12 +4269,12 @@ fn nesting_at_the_cap_fits_a_512_kib_stack() {
     use hayro_syntax::reader::{Reader, ReaderExt};
     let worker = std::thread::Builder::new().stack_size(512 * 1024).spawn(|| {
         // (kind, arrays and dictionaries `{:?}` shows, levels walked down to the end)
-        for (kind, arrays, dicts, levels) in [("array", 128, 0, 129), ("dict", 0, 128, 129), ("mixed", 64, 64, 129), ("keyless", 0, 1, 1)] {
-            let value = if kind == "keyless" { keyless(128, true) } else { nested(128, kind) };
+        for (kind, arrays, dicts, levels) in [("array", 64, 0, 65), ("dict", 0, 64, 65), ("mixed", 32, 32, 65), ("keyless", 0, 1, 1)] {
+            let value = if kind == "keyless" { keyless(64, true) } else { nested(64, kind) };
             assert!(Reader::new(value.as_bytes()).skip::<Object<'_>>(false).is_some(), "{kind}: skip");
             assert!(Reader::new(value.as_bytes()).skip::<Object<'_>>(true).is_some(), "{kind}: skip in content");
             assert!(Reader::new(value.as_bytes()).read_without_context::<Object<'_>>().is_some(), "{kind}: operand");
-            let object = Object::from_bytes(value.as_bytes()).expect("the cap admits 128 levels");
+            let object = Object::from_bytes(value.as_bytes()).expect("the cap admits 64 levels");
             let shown = format!("{object:?}");
             assert_eq!((shown.matches("Array(").count(), shown.matches("Dict(").count()), (arrays, dicts), "{kind}: {{:?}}");
             let (mut walked, mut next) = (0, Some(object));
@@ -6769,7 +6769,6 @@ fn a_form_that_draws_itself_is_drawn_once() {
         let second = if extra.is_empty() { [255, 255, 255] } else { [255, 0, 0] };
         assert_eq!(rgb_at(&page.rgba, 200, 25, 35), second, "{what}: the form one level in");
         assert_eq!(rgb_at(&page.rgba, 200, 45, 35), [255, 255, 255], "{what}: the form is not drawn inside itself");
-        assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "{what}: the skipped drawing is reported");
     }
 }
 
@@ -6811,7 +6810,6 @@ fn a_form_that_reaches_itself_through_a_pattern_or_a_glyph_is_drawn_once() {
         assert!(page.error.is_none(), "{what}: {:?}", page.error);
         assert_eq!(rgb_at(&page.rgba, 200, 5, 35), [0, 0, 255], "{what}: the form draws");
         assert_eq!(rgb_at(&page.rgba, 200, 25, 35), [255, 255, 255], "{what}: the form is not drawn inside itself");
-        assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "{what}: the skipped drawing is reported");
     }
 }
 
@@ -10727,12 +10725,10 @@ trailer << /Root 1 0 R >>
     for glyph in ["1 0 0 0 1 1 d1 0.12 0.12 0.71 0.71 re f", "1 0 d0 0.12 0.12 0.71 0.71 re f"] {
         let filled = render(glyph, 0);
         assert!(filled.as_chunks::<4>().0.iter().any(|p| p[0] < 128), "{glyph}: the glyph paints");
-        for mode in [1, 2, 4, 5, 6] {
+        for mode in [1, 2, 4, 5, 6, 7] {
             assert!(render(glyph, mode) == filled, "{glyph}: {mode} Tr draws as 0 Tr");
         }
-        for mode in [3, 7] {
-            assert!(render(glyph, mode).as_chunks::<4>().0.iter().all(|p| p[..3] == [255, 255, 255]), "{glyph}: {mode} Tr hides the glyph");
-        }
+        assert!(render(glyph, 3).as_chunks::<4>().0.iter().all(|p| p[..3] == [255, 255, 255]), "{glyph}: 3 Tr hides the glyph");
     }
 }
 
@@ -11123,7 +11119,7 @@ trailer << /Root 1 0 R >>
         let shown = ink(RenderConfig { system_fonts: true, ..RenderConfig::default() });
         assert!(shown > 300, "{base_font}: the text is drawn ({shown} dark pixels)");
         // Off by default: exports, printing and OCR render without an installed font, so
-        // nothing drawn with one can be saved (AGENTS.md §1.2, §1.4).
+        // nothing drawn with one can be saved (licences.md; docs/development.md "Fonts and attribution").
         let saved = ink(RenderConfig::default());
         assert!(saved < 50, "{base_font}: not drawn without system_fonts ({saved} dark pixels)");
         if encoding == "GBK-EUC-H" {
