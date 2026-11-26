@@ -7,7 +7,7 @@
 //! does (a mark takes none); correct maps and unrelated fonts are never changed. No font
 //! artwork is bundled.
 
-use super::{Dict, Document, Metrics, dict, only_char, unicode_map};
+use super::{Dict, Document, Metrics, Reads, dict, identity_h, only_char, unicode_map};
 use pdfcraft_cos::{DecodeBudget, Object};
 use std::collections::BTreeMap;
 
@@ -19,15 +19,18 @@ pub fn recovered_thai_map(doc: &Document, font: &Dict) -> Option<Vec<(u16, char)
     let family = base.rsplit('+').next()?;
     if !matches!(family, "THSarabunPSK" | "THSarabunPSK-Bold" | "THSarabunPSK-Italic" | "THSarabunPSK-BoldItalic")
         || font.name(b"Subtype") != Some(b"Type0")
-        || font.name(b"Encoding") != Some(b"Identity-H")
+        || !identity_h(doc, font)
     {
         return None;
     }
     let desc = dict(doc, font.get(b"DescendantFonts").and_then(|a| doc.resolve(a).as_array().and_then(|a| a.first()).cloned()).as_ref())?;
-    if desc.name(b"CIDToGIDMap") != Some(b"Identity") {
+    // A map given by reference is the name it refers to. A missing one is taken as Identity, the
+    // default of PDF 1.x (ISO 32000-1), as `composite_glyph_maps` and the renderer take it; PDF 2.0
+    // gives it no default and requires it with a `/FontFile2`.
+    if desc.get(b"CIDToGIDMap").is_some_and(|m| doc.resolve(m).as_name() != Some(b"Identity".as_slice())) {
         return None;
     }
-    let map = unicode_map(doc, font, true);
+    let map = unicode_map(doc, font, true, &mut Reads::new(doc, &mut DecodeBudget::new(usize::MAX, 0)));
     // Five separated consonants and three contextual marks must agree, together with the
     // corrupt destinations and corrupt range. This is deliberately stricter than font-name
     // detection: a renamed/subsetted font with different glyph order must not be guessed.
@@ -170,7 +173,7 @@ fn embedded_truetype(doc: &Document, descendant: &Dict) -> Option<Vec<u8>> {
     let descriptor = dict(doc, descendant.get(b"FontDescriptor"))?;
     let program = doc.resolve(descriptor.get(b"FontFile2")?);
     let Object::Stream(program) = program.as_ref() else { return None };
-    DecodeBudget::new(super::MAX_SFNT, 0).decode_within(&doc.with_direct_parms(program), super::MAX_SFNT).ok()
+    DecodeBudget::new(super::MAX_SFNT, 0).decode_with_damage(doc, program, super::MAX_SFNT).ok().map(|(data, _)| data)
 }
 
 /// Source glyph positions and the original PDF character codes that draw them. Empty codes
@@ -190,14 +193,15 @@ pub(super) fn composite_glyph_maps(
     budget: &mut DecodeBudget,
 ) -> Option<(BTreeMap<u32, u32>, BTreeMap<u32, u16>)> {
     use skrifa::{MetadataProvider as _, raw::TableProvider as _};
-    if font.name(b"Encoding") != Some(b"Identity-H") {
+    if !identity_h(doc, font) {
         return None;
     }
     let descendant = dict(doc, font.get(b"DescendantFonts").and_then(|a| doc.resolve(a).as_array().and_then(|a| a.first()).cloned()).as_ref())?;
     let cid_map = match descendant.get(b"CIDToGIDMap").map(|m| doc.resolve(m)).as_deref() {
         None => None,
         Some(Object::Name(n)) if n == b"Identity" => None,
-        Some(Object::Stream(s)) => Some(budget.decode_within(&doc.with_direct_parms(s), 1 << 17).ok()?),
+        // Read as the font's other streams are, a map behind several filters too.
+        Some(Object::Stream(s)) => Some(Reads::new(doc, budget).decode(s, super::MAX_CID_TO_GID)?),
         _ => return None,
     };
     let face = skrifa::FontRef::new(bytes).ok()?;
@@ -294,12 +298,16 @@ impl LegacyThaiFont {
     /// Thai glyphs are not in the legacy order: the nominal and alternate marks this shaper
     /// assumes can't be trusted there, so it is shaped as an ordinary source font.
     ///
-    /// Its streams are decoded against `budget`, which the caller shares between every font it
-    /// reads: what they keep is the programs decoded and the editor cmaps added to them.
+    /// Its streams, its metrics' too, are decoded against `budget`, which the caller shares
+    /// between every font it reads: what they keep is the programs decoded and the editor cmaps
+    /// added to them. Metrics read past it adapt nothing: the font is refused.
     pub fn from_pdf(doc: &Document, font: &Dict, space: f64, budget: &mut DecodeBudget) -> Result<Option<Self>, String> {
-        let m = Metrics::from_dict(doc, font);
+        let m = Metrics::from_dict_within(doc, font, budget);
         if !m.base_font.rsplit('+').next().unwrap_or(&m.base_font).starts_with("THSarabunPSK") {
             return Ok(None);
+        }
+        if m.past_allowance {
+            return Err("the source Thai font's metrics are past the edit's allowance".into());
         }
         if !space.is_finite() || space < 0.0 {
             return Err("the source space width is invalid".into());
@@ -528,6 +536,46 @@ mod tests {
     /// An intact legacy map: nominal Thai and two tone alternates.
     const INTACT: &[u8] = b"2 beginbfrange <00d6> <010f> <0e01> <0110> <012a> <0e3f> endbfrange 2 beginbfchar <0160> <0e48> <0161> <0e49> endbfchar";
 
+    /// A THSarabunPSK subset whose own cmap is Latin-only has its Thai mappings rebuilt from its
+    /// `/CIDToGIDMap`. With that map left unread for want of the editor's allowance, the editor
+    /// lists no copy, rather than the program without its Thai mappings.
+    #[test]
+    fn a_map_left_unread_for_the_allowance_lists_no_copy() {
+        let mut doc = Document::new_empty();
+        let program = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+        let file = Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), program))));
+        let map: Vec<u8> = (0u16..512).flat_map(u16::to_be_bytes).collect();
+        let cid_to_gid = Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), &map))));
+        let font = thai_font_over(&mut doc, file, cid_to_gid, INTACT);
+        let mut budget = DecodeBudget::new(usize::MAX / 2, 0);
+        assert!(crate::pdf::embedded_sfnt_within(&doc, &font, &mut budget).is_some());
+        let cost = usize::MAX / 2 - budget.remaining();
+        // The map the cmap is rebuilt from is read last: a byte short of the cost, it is refused.
+        let mut short = DecodeBudget::new(cost - 1, 0);
+        assert!(crate::pdf::embedded_sfnt_within(&doc, &font, &mut short).is_none(), "the program is listed without its Thai mappings");
+        assert_eq!(short.refused(), 1);
+    }
+
+    /// `LegacyThaiFont::from_pdf` reads its metrics within the edit's allowance too: the subset's
+    /// program, for its outlined glyphs, and its ToUnicode are paid for on top of what the
+    /// editor's read of it pays. Metrics read past the allowance refuse the font before its
+    /// program is read.
+    #[test]
+    fn a_legacy_fonts_metrics_are_paid_for_from_the_edits_allowance() {
+        let mut doc = Document::new_empty();
+        let program = thai_ordered_program();
+        let font = thai_font(&mut doc, &program, INTACT);
+        let mut editor = DecodeBudget::new(usize::MAX / 2, 0);
+        assert!(crate::pdf::embedded_sfnt_within(&doc, &font, &mut editor).is_some());
+        let editor_cost = usize::MAX / 2 - editor.remaining();
+        let mut budget = DecodeBudget::new(usize::MAX / 2, 0);
+        LegacyThaiFont::from_pdf(&doc, &font, 0.25, &mut budget).unwrap();
+        assert_eq!(usize::MAX / 2 - budget.remaining(), editor_cost + program.len() + INTACT.len());
+        let mut short = DecodeBudget::new(program.len() + INTACT.len() - 1, 0);
+        let error = LegacyThaiFont::from_pdf(&doc, &font, 0.25, &mut short).err().unwrap_or_default();
+        assert!(error.contains("past the edit's allowance"), "{error}");
+    }
+
     /// The exporter's damaged map: intact anchors, Latin/control destinations for the other Thai
     /// codes, and the oversized range first.
     const DAMAGED: &[u8] = b"begincmap 1 begincodespacerange <0000> <ffff> endcodespacerange \
@@ -547,6 +595,32 @@ mod tests {
         let recovered: HashMap<_, _> = recovered_thai_map(&doc, &font).unwrap().into_iter().collect();
         assert_eq!(recovered[&262], 'ั');
         assert_eq!(recovered[&297], '๘');
+        // `/Encoding` given through a reference is the name it refers to.
+        let mut indirect = font.clone();
+        indirect.set(b"Encoding".to_vec(), Object::Ref(doc.add(Object::name("Identity-H"))));
+        assert_eq!(recovered_thai_map(&doc, &indirect), recovered_thai_map(&doc, &font));
+        // `/CIDToGIDMap` given through a reference is the name it refers to, and a missing one is
+        // taken as Identity, the default of PDF 1.x (ISO 32000-1), as the renderer takes it.
+        let with_map = |map: Option<Object>| {
+            let mut f = font.clone();
+            let Some(Object::Array(desc)) = f.get(b"DescendantFonts").cloned() else { panic!("fixture") };
+            let Some(Object::Dict(mut desc)) = desc.first().cloned() else { panic!("fixture") };
+            match map {
+                Some(map) => desc.set(b"CIDToGIDMap".to_vec(), map),
+                None => {
+                    desc.remove(b"CIDToGIDMap");
+                }
+            }
+            f.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(desc)]));
+            f
+        };
+        let by_reference = with_map(Some(Object::Ref(doc.add(Object::name("Identity")))));
+        assert_eq!(recovered_thai_map(&doc, &by_reference), recovered_thai_map(&doc, &font), "a map by reference");
+        assert_eq!(recovered_thai_map(&doc, &with_map(None)), recovered_thai_map(&doc, &font), "a missing map");
+        // Any other map is refused: one that moves glyphs, and another name.
+        let moved = Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), &[0, 1, 0, 0]))));
+        assert_eq!(recovered_thai_map(&doc, &with_map(Some(moved))), None, "a map that moves glyphs");
+        assert_eq!(recovered_thai_map(&doc, &with_map(Some(Object::name("Foo")))), None, "another name");
         // 259–261 are ฮ, ฯ and ะ, between the last anchor (อ, 258) and the first mark: a font that
         // put Mai Han-akat one glyph earlier passes every anchor and only this check sees it.
         let mut shifted = thai_ordered_program();

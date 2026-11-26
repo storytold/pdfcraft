@@ -237,3 +237,114 @@ fn a_picture_left_out_for_the_pages_allowance_draws_on_the_next_page() {
     assert!(black(&second, 10) && black(&second, 30), "A, and B left out of the first page, draw on the second");
     assert!(second.1.is_empty(), "{:?}", second.1);
 }
+
+/// A JBIG2 mask its decoding work refuses: four typical-row regions of 16,384 × 16,384 take more
+/// than a stream may.
+fn jbig2_mask_past_its_work() -> Vec<u8> {
+    use super::{black_jbig2_page, jbig2_segment, jbig2_white_region};
+    let mut mask = black_jbig2_page();
+    for number in 1..=4 {
+        jbig2_segment(&mut mask, number, 38, &[], &jbig2_white_region(16384, 16384)); // immediate generic region
+    }
+    mask
+}
+
+/// What drawing 64 × 64 pictures under JBIG2 soft masks did, with the page's JBIG2 allowance
+/// `work`: `/P` under `mask` (`/Width` × `/Height` `size`) and `/W` under
+/// [`jbig2_mask_past_its_work`], each of `draws` a name and a size (units square). The decodes the
+/// cache ran, how many times content was said to be left out, and what the device was handed.
+fn draw_under_jbig2_masks(mask: &[u8], size: (u32, u32), draws: &[(&str, u32)], work: u64) -> (usize, usize, Draws) {
+    let pixels = vec![0; 64 * 64 * 3];
+    let picture = |mask: u8| {
+        format!(
+            "<< /Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask {mask} 0 R /Length {} >>",
+            pixels.len()
+        )
+    };
+    let soft_mask = |(width, height): (u32, u32), data: &[u8]| {
+        format!(
+            "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode /Length {} >>",
+            data.len()
+        )
+    };
+    let past_its_work = jbig2_mask_past_its_work();
+    let content = draws.iter().map(|(name, s)| format!("q {s} 0 0 {s} 10 10 cm /{name} Do Q")).collect::<Vec<_>>().join(" ");
+    let bytes = image_cache_pdf(
+        &content,
+        "<< /XObject << /P 5 0 R /W 7 0 R >> >>",
+        &[(&picture(6), &pixels), (&soft_mask(size, mask), mask), (&picture(8), &pixels), (&soft_mask((16, 2), &past_its_work), &past_its_work)],
+    );
+    let parsed = Pdf::new(Arc::new(bytes)).expect("parses");
+    let page = &parsed.pages()[0];
+    let cache = InterpreterCache::new();
+    let truncated = Arc::new(AtomicUsize::new(0));
+    let others = Arc::new(Mutex::new(Vec::new()));
+    let settings = InterpreterSettings {
+        warning_sink: {
+            let (truncated, others) = (truncated.clone(), others.clone());
+            Arc::new(move |warning| match warning {
+                InterpreterWarning::ContentTruncated => {
+                    truncated.fetch_add(1, Ordering::Relaxed);
+                }
+                other => others.lock().unwrap().push(format!("{other:?}")),
+            })
+        },
+        jbig2_work: work,
+        ..InterpreterSettings::default()
+    };
+    let initial = page.initial_transform(true).to_kurbo();
+    let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, 130.0, 70.0), &cache, page.xref(), settings);
+    let mut device = Draws::default();
+    interpret_page(page, &mut ctx, &mut device);
+    assert!(others.lock().unwrap().is_empty(), "reported {:?}", others.lock().unwrap());
+    (cache.decoded_image_decodes(), truncated.load(Ordering::Relaxed), device)
+}
+
+/// A picture whose JBIG2 soft mask a decoder limit refuses isn't drawn (patch 73), and the limit
+/// is the stream's own: decoding it again refuses it again. So the refusal is kept with the picture
+/// that went with it (patch 91), and a page drawing it a hundred times decodes them once, as for
+/// one draw. Kept as content left out, every draw still says so. The refusal wasn't kept, and the
+/// picture, of any size, was decoded again at every draw: 2.45 s for a hundred draws of a 4,096 ×
+/// 4,096 JPX picture, against 0.23 s under a mask the file damaged. A mask larger than its picture
+/// is averaged down for each size it is drawn at, from one kept at an intermediate size (patch 82),
+/// so a second size finds the refusal kept there and keeps it for that size too, also after
+/// another picture's mask was refused for its work, which isn't kept.
+#[test]
+fn a_picture_whose_jbig2_mask_a_limit_refuses_is_decoded_once_however_often_it_is_drawn() {
+    use super::{black_jbig2_page, black_jbig2_page_of, jbig2_segment, wide_jbig2_dictionary};
+    let mut dictionary = black_jbig2_page();
+    jbig2_segment(&mut dictionary, 1, 0, &[], &wide_jbig2_dictionary(65535, &[2048, 2049]));
+    let masks = [
+        ("past the decoder's bound on a side", black_jbig2_page_of(65536, 2), (65536, 2)),
+        ("past the renderer's bound on pixels", black_jbig2_page_of(65535, 65535), (65535, 65535)),
+        ("whose dictionary is past its bound", dictionary, (16, 2)),
+    ];
+    let work = InterpreterSettings::default().jbig2_work;
+    for (what, mask, size) in masks {
+        let (once, _, _) = draw_under_jbig2_masks(&mask, size, &[("P", 20)], work);
+        let (decodes, truncated, draws) = draw_under_jbig2_masks(&mask, size, &[("P", 20); 100], work);
+        assert_eq!(draws.rasters, 0, "a mask {what} leaves the picture out");
+        assert_eq!(decodes, once, "a mask {what}: a hundred draws decode as one does");
+        assert_eq!(truncated, 100, "a mask {what}: every draw says content was left out");
+        // With no page allowance to run out of, so that the mask past its work is refused by its
+        // own limit and the page's allowance doesn't stop what is kept.
+        let each = [("P", 20), ("W", 20), ("P", 40)];
+        let (once_each, _, _) = draw_under_jbig2_masks(&mask, size, &each, u64::MAX);
+        let (decodes, _, draws) = draw_under_jbig2_masks(&mask, size, &[&each[..], &[("P", 40); 2]].concat(), u64::MAX);
+        assert_eq!(draws.rasters, 0, "a mask {what} leaves the picture out at either size");
+        assert_eq!(decodes, once_each, "a mask {what}: drawn again at its second size, decoded as once at each");
+    }
+}
+
+/// A JBIG2 mask refused for the work its decoding takes isn't kept: that work may be what its page
+/// had left, which another page has afresh. So the picture under it is decoded at every draw, here
+/// with no page allowance to run out of, where the stream's own limit is what refuses it.
+#[test]
+fn a_picture_whose_jbig2_mask_is_refused_for_its_work_is_decoded_at_every_draw() {
+    let mask = super::black_jbig2_page();
+    let (once, _, _) = draw_under_jbig2_masks(&mask, (16, 2), &[("W", 20)], u64::MAX);
+    let (decodes, truncated, draws) = draw_under_jbig2_masks(&mask, (16, 2), &[("W", 20); 3], u64::MAX);
+    assert_eq!(draws.rasters, 0, "the picture is left out");
+    assert_eq!(decodes, 3 * once, "decoded at every draw");
+    assert_eq!(truncated, 3, "every draw says content was left out");
+}

@@ -26,6 +26,10 @@ pub fn page_rules(doc: &Document, page: usize) -> Result<Vec<[f64; 4]>, EditErro
     let pages = pdfcraft_model::pages(doc);
     let p = pages.get(page).ok_or(EditError::NoSuchPage(page))?;
     let streams = crate::text::content_streams(doc, &p.dict)?;
+    // Unread content can change the graphics state used by every later stream.
+    if streams.iter().any(|stream| stream.read != crate::text::Read::Whole) {
+        return Err(EditError::Invalid("page content could not be completely decoded; cannot extract its ruled lines safely".into()));
+    }
     let pieces = crate::text::joined(&streams);
     let ops = pieces.parse().ops;
 
