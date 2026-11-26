@@ -20,7 +20,7 @@ pub(crate) struct ShortcutsSession {
 /// The keys the document view handles itself, which no catalog command binds.
 fn fixed_rows(ctx: &egui::Context) -> Vec<FixedRow> {
     let mac = crate::commands::mac_shortcuts(ctx);
-    let key = |s: pdfcraft_engine::commands::Shortcut| s.label(mac);
+    let key = |s: pdfcraft_engine::commands::Shortcut| crate::commands::shortcut_text(s, mac);
     let pair = |a, b| format!("{} / {}", key(a), key(b));
     // Key names, translated where a catalog has them (not scanned as UI literals).
     let named = |k: &str| tl!(k).to_string();
@@ -70,6 +70,7 @@ impl PdfCraftApp {
             return;
         };
         let ShortcutsSession { state, keymap, options } = session;
+        options.fixed = fixed_rows(ui.ctx());
         ShortcutsDialog::new(keymap).options(options).show(ui, state);
         if !state.is_open() {
             self.shortcuts = None;
