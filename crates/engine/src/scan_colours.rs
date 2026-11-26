@@ -1,6 +1,8 @@
 //! Edit text on a scanned page: an OCR word is invisible text over the scan, so rewriting it must
 //! also hide the scanned word. The paper colour around the word becomes the cover drawn over it
-//! ([`pdfcraft_edit::BlockStyle::cover`]) and the colour of its ink becomes the new text's.
+//! ([`pdfcraft_edit::BlockStyle::cover`]) and the colour of its ink becomes the new text's. The
+//! ruled lines that cross the word's surroundings, a table cell's borders, are read too, so the
+//! cover leaves them standing ([`pdfcraft_edit::BlockStyle::cover_keeps`]).
 
 use std::sync::Arc;
 
@@ -13,10 +15,40 @@ const SCALE: f32 = 3.0;
 const MAX_PIXELS: f32 = 4_000_000.0;
 /// How far around the word (points) the paper is read.
 const RING: f32 = 4.0;
+/// How far a rule may lean across the area, as a fraction of its length, and still be read row by
+/// row: a scan is rarely off square by more than half a degree.
+const LEAN: f32 = 1.0 / 120.0;
+/// The least of a row (or column) that must be inked over its rule's length for it to be part of
+/// the rule's strip: the rows a leaning rule runs through, not the blank row beside it that the
+/// lean allowance reads.
+const ROW_INK: f32 = 0.2;
+/// How far (pixels) a rule may stop short of the edge, or of the rule it meets, and still be read
+/// as reaching it: the halo a scanned junction leaves.
+const JUNCTION_GAP: usize = 2;
+/// The least of the area's length a rule must run on ink of its own, outside the rules it crosses:
+/// where a rule across crosses a blank column, that column is no rule down.
+const MIN_RUN: f32 = 0.1;
+/// How far (pixels) a strip reaches past the ink read as the rule, on every side: the grey halo a
+/// scanned line has, which the cover would otherwise paint, leaving a thinner line than the scan's.
+const HALO: usize = 1;
+/// The thickest a rule may be, as a fraction of the area's other side: thicker, the "rule" is a
+/// filled cell, or lettering on a dark ground, and the cover must paint it.
+const RULE_THICKNESS: f32 = 0.3;
 
-/// The paper and ink colours (RGB 0–1) of invisible paragraph `b` on `page`, or `None` when the
-/// paragraph is visible text or the page can't be read.
-pub(crate) fn sample(cos: &pdfcraft_cos::Document, info: &PageInfo, page: usize, b: &TextBlock) -> Option<([f64; 3], [f64; 3])> {
+/// What the scan shows around an invisible paragraph.
+pub(crate) struct Sampled {
+    /// The paper's colour (RGB 0–1): the cover's.
+    pub paper: [f64; 3],
+    /// The ink's colour (RGB 0–1): the new text's.
+    pub ink: [f64; 3],
+    /// The ruled lines that cross the paragraph's surroundings, as boxes in user space, for the
+    /// cover to leave be.
+    pub rules: Vec<[f64; 4]>,
+}
+
+/// The paper and ink colours of invisible paragraph `b` on `page`, and the ruled lines around it,
+/// or `None` when the paragraph is visible text or the page can't be read.
+pub(crate) fn sample(cos: &pdfcraft_cos::Document, info: &PageInfo, page: usize, b: &TextBlock) -> Option<Sampled> {
     if !b.invisible {
         return None;
     }
@@ -54,18 +86,18 @@ pub(crate) fn sample(cos: &pdfcraft_cos::Document, info: &PageInfo, page: usize,
     }
     let pad = ((y1 - y0) * 0.1).clamp(0.5, 2.0);
     let (mut paper, mut ink) = (Vec::new(), Vec::new());
+    let rgb_of = |px: &[u8; 4]| [px[0], px[1], px[2]].map(|c| f64::from(c) / 255.0);
     for (i, px) in shot.rgba.as_chunks::<4>().0.iter().enumerate() {
         let (col, row) = (i % shot.width.max(1) as usize, i / shot.width.max(1) as usize);
         let x = (tx0 as f32 + col as f32 + 0.5) / scale;
         let y = (ty0 as f32 + row as f32 + 0.5) / scale;
-        let rgb = [px[0], px[1], px[2]].map(|c| f64::from(c) / 255.0);
+        let rgb = rgb_of(px);
         if x >= x0 && x <= x1 && y >= y0 && y <= y1 {
             ink.push(rgb);
         } else if x < x0 - pad || x > x1 + pad || y < y0 - pad || y > y1 + pad {
             paper.push(rgb);
         }
     }
-    let luma = |c: &[f64; 3]| 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
     let by_luma = |a: &[f64; 3], b: &[f64; 3]| luma(a).total_cmp(&luma(b));
     paper.sort_by(by_luma);
     ink.sort_by(by_luma);
@@ -80,5 +112,249 @@ pub(crate) fn sample(cos: &pdfcraft_cos::Document, info: &PageInfo, page: usize,
         sum.map(|v| v / darkest.len() as f64)
     };
     let ink = if luma(&paper) - luma(&ink) < 0.25 { [0.0; 3] } else { ink };
-    Some((paper, ink))
+    // Ink is what lies on the ink's side of the midpoint between the two.
+    let mid = (luma(&paper) + luma(&ink)) / 2.0;
+    let dark: Vec<bool> = shot.rgba.as_chunks::<4>().0.iter().map(|px| luma(&rgb_of(px)) < mid).collect();
+    let (w, h) = (shot.width as usize, shot.height as usize);
+    let rules = rule_strips(&dark, w, h)
+        .into_iter()
+        .map(|[sx0, sy0, sx1, sy1]| {
+            // Tile pixels to view space, then back to the space the paragraph's box is in.
+            let view = |x: usize, y: usize| {
+                info.view_to_user_f64(f64::from(tx0 + x as u32) / f64::from(scale), f64::from(ty0 + y as u32) / f64::from(scale))
+            };
+            let corners = [view(sx0, sy0), view(sx1, sy0), view(sx0, sy1), view(sx1, sy1)];
+            corners.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |r, [x, y]| {
+                [r[0].min(*x), r[1].min(*y), r[2].max(*x), r[3].max(*y)]
+            })
+        })
+        .filter(|r| r.iter().all(|v| v.is_finite()))
+        .collect();
+    Some(Sampled { paper, ink, rules })
+}
+
+fn luma(c: &[f64; 3]) -> f64 {
+    0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+}
+
+/// The ruled lines in a `w` × `h` grid of ink, as strips `[x0, y0, x1, y1)`: a row, or a column,
+/// of ink that runs from one edge of the grid to the other, or from an edge to a rule it meets
+/// (a table cell's divider starts at the cell's top rule), or between two. Lettering stops short
+/// of the edges and the rules. A strip thicker than [`RULE_THICKNESS`] of the grid is no rule
+/// either, but a dark ground.
+fn rule_strips(dark: &[bool], w: usize, h: usize) -> Vec<[usize; 4]> {
+    if w < 2 || h < 2 || dark.len() < w * h {
+        return Vec::new();
+    }
+    let at = |x: usize, y: usize| dark.get(y * w + x).copied().unwrap_or(false);
+    // A rule may lean a little: a row is read together with the rows within `lean` of it.
+    let lean = |len: usize| ((len as f32 * LEAN / 2.0).ceil() as usize).max(1);
+    let (lean_y, lean_x) = (lean(w), lean(h));
+    let row_inked = |x: usize, y: usize| (y.saturating_sub(lean_y)..=(y + lean_y).min(h - 1)).any(|yy| at(x, yy));
+    let column_inked = |x: usize, y: usize| (x.saturating_sub(lean_x)..=(x + lean_x).min(w - 1)).any(|xx| at(xx, y));
+    // Rules across first, from edge to edge; then rules down, from an edge or a rule across to
+    // the other; then across again, now reaching a rule down too.
+    let across = |anchors: &[[usize; 4]]| lines(h, w, |y, x| row_inked(x, y), |y, x| at(x, y), anchors);
+    let down = lines(w, h, column_inked, at, &across(&[]));
+    let across = across(&down);
+    // `lines` gives [position0, along0, position1, along1]: rows run along x, columns along y.
+    across.iter().map(|[y0, x0, y1, x1]| [*x0, *y0, *x1, *y1]).chain(down.iter().copied()).collect()
+}
+
+/// The strips of ruled line among `count` positions (rows, say), each `len` long, as
+/// `[position0, along0, position1, along1)`. `inked(i, j)` is ink at position `i`, `j` along,
+/// read with its lean; `own(i, j)` the pixel itself. `anchors` are the strips found the other
+/// way, which lie across `[a[0], a[2])` of this one.
+fn lines(
+    count: usize,
+    len: usize,
+    inked: impl Fn(usize, usize) -> bool,
+    own: impl Fn(usize, usize) -> bool,
+    anchors: &[[usize; 4]],
+) -> Vec<[usize; 4]> {
+    let anchors: Vec<[usize; 2]> = anchors.iter().map(|a| [a[0], a[2]]).collect();
+    let lines: Vec<Option<[usize; 2]>> = (0..count).map(|i| line(len, |j| inked(i, j), |j| own(i, j), &anchors)).collect();
+    let mut strips = Vec::new();
+    for [i0, i1] in runs(count, |i| lines.get(i).is_some_and(Option::is_some)) {
+        if (i1 - i0) as f32 > RULE_THICKNESS * count as f32 {
+            continue;
+        }
+        let along = lines.get(i0..i1).unwrap_or_default().iter().flatten().fold([usize::MAX, 0], |r, [s, e]| [r[0].min(*s), r[1].max(*e)]);
+        // With its halo, within the grid.
+        strips.push([i0.saturating_sub(HALO), along[0].saturating_sub(HALO), (i1 + HALO).min(count), (along[1] + HALO).min(len)]);
+    }
+    strips
+}
+
+/// Where a rule runs at one position: the longest stretch of ink (the rules it crosses counting
+/// as ink) that starts at the edge or at a rule it meets, within [`JUNCTION_GAP`], and ends at
+/// the other, with [`MIN_RUN`] of ink of its own and [`ROW_INK`] of it on this very row, trimmed
+/// to that ink. `None` when there is no such stretch.
+fn line(len: usize, inked: impl Fn(usize) -> bool, own: impl Fn(usize) -> bool, anchors: &[[usize; 2]]) -> Option<[usize; 2]> {
+    let in_anchor = |j: usize| anchors.iter().any(|[a0, a1]| (*a0..*a1).contains(&j));
+    let starts_anchored = |s: usize| s <= JUNCTION_GAP || in_anchor(s) || anchors.iter().any(|[_, a1]| *a1 <= s && s - a1 <= JUNCTION_GAP);
+    let ends_anchored = |e: usize| e + JUNCTION_GAP >= len || in_anchor(e - 1) || anchors.iter().any(|[a0, _]| *a0 >= e && a0 - e <= JUNCTION_GAP);
+    let own_run = ((MIN_RUN * len as f32).ceil() as usize).max(3);
+    runs(len, |j| inked(j) || in_anchor(j))
+        .into_iter()
+        .filter(|[s, e]| starts_anchored(*s) && ends_anchored(*e))
+        .filter(|[s, e]| (*s..*e).filter(|&j| inked(j) && !in_anchor(j)).count() >= own_run)
+        .filter(|[s, e]| (*s..*e).filter(|&j| own(j)).count() as f32 >= ROW_INK * (e - s) as f32)
+        .filter_map(|run| trimmed(run, &own))
+        .max_by_key(|[s, e]| e - s)
+}
+
+/// `[start, end)` without the leading and trailing indexes where `keep` fails, or `None` when
+/// nothing is left.
+fn trimmed([start, end]: [usize; 2], keep: impl Fn(usize) -> bool) -> Option<[usize; 2]> {
+    let first = (start..end).find(|&i| keep(i))?;
+    let last = (start..end).rev().find(|&i| keep(i))?;
+    Some([first, last + 1])
+}
+
+/// The stretches `[start, end)` of `0..n` where `is` holds.
+fn runs(n: usize, is: impl Fn(usize) -> bool) -> Vec<[usize; 2]> {
+    let mut out: Vec<[usize; 2]> = Vec::new();
+    for i in (0..n).filter(|&i| is(i)) {
+        match out.last_mut() {
+            Some(last) if last[1] == i => last[1] = i + 1,
+            _ => out.push([i, i + 1]),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A grid of ink, drawn in code.
+    struct Grid {
+        w: usize,
+        h: usize,
+        dark: Vec<bool>,
+    }
+
+    impl Grid {
+        fn new(w: usize, h: usize) -> Grid {
+            Grid { w, h, dark: vec![false; w * h] }
+        }
+
+        fn rect(&mut self, x0: usize, y0: usize, x1: usize, y1: usize) {
+            for y in y0..y1.min(self.h) {
+                for x in x0..x1.min(self.w) {
+                    self.dark[y * self.w + x] = true;
+                }
+            }
+        }
+
+        /// Lettering: a row of upright strokes with gaps between them.
+        fn letters(&mut self, x0: usize, y0: usize, x1: usize, y1: usize) {
+            for x in (x0..x1).step_by(6) {
+                self.rect(x, y0, x + 4, y1);
+            }
+        }
+
+        fn strips(&self) -> Vec<[usize; 4]> {
+            rule_strips(&self.dark, self.w, self.h)
+        }
+    }
+
+    #[test]
+    fn a_line_across_the_area_is_a_rule_and_lettering_is_not() {
+        let mut g = Grid::new(200, 80);
+        g.rect(0, 10, 200, 13);
+        g.letters(30, 30, 170, 60);
+        // The strip takes in the pixel around the rule: a scanned line's halo.
+        assert_eq!(g.strips(), [[0, 9, 200, 14]]);
+
+        let mut g = Grid::new(200, 80);
+        g.rect(50, 0, 53, 80);
+        g.letters(60, 30, 190, 60);
+        assert_eq!(g.strips(), [[49, 0, 54, 80]], "a divider down the area");
+
+        let mut g = Grid::new(200, 80);
+        g.rect(0, 10, 200, 13);
+        g.rect(50, 0, 53, 80);
+        assert_eq!(g.strips(), [[0, 9, 200, 14], [49, 0, 54, 80]], "both at once");
+    }
+
+    #[test]
+    fn a_rule_may_lean_a_little() {
+        let mut g = Grid::new(240, 80);
+        for x in 0..240 {
+            let y = 10 + x / 120;
+            g.rect(x, y, x + 1, y + 3);
+        }
+        assert_eq!(g.strips(), [[0, 9, 240, 15]], "one strip over the rows it runs through");
+    }
+
+    #[test]
+    fn what_stops_short_of_an_edge_or_fills_the_area_is_not_a_rule() {
+        let mut g = Grid::new(200, 80);
+        g.rect(0, 10, 150, 13);
+        assert!(g.strips().is_empty(), "a line that ends inside the area: {:?}", g.strips());
+
+        let mut g = Grid::new(200, 80);
+        g.rect(60, 0, 63, 70);
+        g.rect(0, 30, 200, 60);
+        assert!(g.strips().is_empty(), "a tall letter, and a solid block that reaches the edges but is no line: {:?}", g.strips());
+
+        let mut g = Grid::new(200, 80);
+        g.rect(0, 0, 200, 80);
+        assert!(g.strips().is_empty(), "a dark ground: {:?}", g.strips());
+    }
+
+    #[test]
+    fn lettering_that_touches_a_rule_leaves_the_rule_its_own_rows() {
+        let mut g = Grid::new(200, 80);
+        g.rect(0, 40, 200, 43);
+        g.letters(20, 10, 180, 40);
+        assert_eq!(g.strips(), [[0, 38, 200, 44]], "the row of lettering touching it goes with it, then the halo on either side");
+    }
+
+    #[test]
+    fn a_divider_runs_from_the_rule_it_meets_to_the_edge() {
+        let mut g = Grid::new(200, 80);
+        g.rect(0, 20, 200, 23);
+        // Down from the rule to the bottom edge; up from the top edge to the rule; and down from
+        // the rule after the halo of a scanned junction. A divider that touches the rule runs
+        // through the rule's rows too: they are its ink as much as the rule's.
+        g.rect(50, 23, 53, 80);
+        g.rect(120, 0, 123, 20);
+        g.rect(150, 25, 153, 80);
+        g.letters(60, 30, 110, 60);
+        assert_eq!(g.strips(), [[0, 19, 200, 24], [49, 19, 54, 80], [119, 0, 124, 24], [149, 24, 154, 80]]);
+
+        // A stroke of lettering that touches the rule, and a stub that meets nothing, are not dividers.
+        let mut g = Grid::new(200, 80);
+        g.rect(0, 20, 200, 23);
+        g.rect(60, 23, 63, 60);
+        g.rect(120, 30, 123, 80);
+        assert_eq!(g.strips(), [[0, 19, 200, 24]]);
+    }
+
+    #[test]
+    fn the_scan_of_the_end_to_end_test_is_read_right() {
+        // The tile `editing_a_word_in_a_table_cell_keeps_the_cells_rules` reads: a 1 pt rule and
+        // divider at 3 px/pt, and the solid block of the scanned word.
+        let mut g = Grid::new(204, 84);
+        g.rect(0, 6, 204, 9);
+        g.rect(6, 0, 9, 84);
+        g.rect(12, 12, 192, 72);
+        assert_eq!(g.strips(), [[0, 5, 204, 10], [5, 0, 10, 84]]);
+    }
+
+    #[test]
+    fn a_strip_is_trimmed_to_what_is_inked() {
+        assert_eq!(trimmed([2, 8], |i| (4..6).contains(&i)), Some([4, 6]));
+        assert_eq!(trimmed([2, 8], |_| true), Some([2, 8]));
+        assert_eq!(trimmed([2, 8], |_| false), None);
+    }
+
+    #[test]
+    fn runs_group_what_is_true() {
+        assert_eq!(runs(6, |i| i == 1 || i == 2 || i == 5), [[1, 3], [5, 6]]);
+        assert!(runs(0, |_| true).is_empty());
+    }
 }

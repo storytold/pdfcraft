@@ -19,10 +19,12 @@ fn prepare_ocr_text_edit(editor: &mut crate::history::Editor, info: &pdfcraft_re
             if style.cover.is_none()
                 && let Some(info) = info.pages.get(page)
                 && let Some(b) = editor.text_blocks(page).ok().and_then(|b| b.get(block).filter(|b| b.invisible).cloned())
-                && let Some((paper, ink)) = guard(|| scan_colours::sample(&editor.cos, info, page, &b)).ok().flatten()
+                && let Some(scan) = guard(|| scan_colours::sample(&editor.cos, info, page, &b)).ok().flatten()
             {
-                style.cover = Some(paper);
-                style.color = style.color.or(Some(ink));
+                style.cover = Some(scan.paper);
+                style.color = style.color.or(Some(scan.ink));
+                // The table rules beside the words are the drawing: the cover goes around them.
+                style.cover_keeps = scan.rules;
                 // A text edit alone leaves the words it doesn't change as the scan shows them.
                 style.changed_words_only = plain;
                 // Nothing to redraw: leave undo history and the dirty flag alone.
