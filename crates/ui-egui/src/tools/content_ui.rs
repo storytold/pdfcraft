@@ -1050,12 +1050,15 @@ fn draft_session(
     // Hung below the box (above when there is no room), in place of production's bar beside it; the
     // warning for text the fonts can't draw is its first member.
     let corners = [paper.left_top(), paper.right_top(), paper.right_bottom(), paper.left_bottom()].map(|p| body.view.to_doc(p));
-    let _ = TaskBar::fixed(tl!("Text box actions"), &corners).compact(true).show(ui, body.rect, |ui, _| {
-        if let Some(c) = blocked {
-            let _ = Text::new(undrawable_message(c)).tone(Tone::Bad).show(ui);
-        }
-        done = IconButton::new(IconId::new("check")).label(tl!("Done adding text")).show(ui).clicks > 0;
-        discard = IconButton::new(IconId::new("close")).label(tl!("Discard this text (Esc)")).show(ui).clicks > 0;
+    // craft salts every fixed bar "task-bar": its own scope keeps it apart from the others in this body.
+    let _ = ui.push_id("text-box-actions", |ui| {
+        TaskBar::fixed(tl!("Text box actions"), &corners).compact(true).show(ui, body.rect, |ui, _| {
+            if let Some(c) = blocked {
+                let _ = Text::new(undrawable_message(c)).tone(Tone::Bad).show(ui);
+            }
+            done = IconButton::new(IconId::new("check")).label(tl!("Done adding text")).show(ui).clicks > 0;
+            discard = IconButton::new(IconId::new("close")).label(tl!("Discard this text (Esc)")).show(ui).clicks > 0;
+        })
     });
     if discard || ended == Some(EditorEnd::Cancel) {
         cv.draft = None;
@@ -1629,67 +1632,73 @@ const FLIP_VERTICAL_ICON: &str = "flip-horizontal-2";
 pub(crate) fn image_panel(ui: &mut egui::Ui, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
     let mut out = None;
     let _ = Section::fixed(tl!("Edit image")).show(ui, |ui, _| {
-        let _ = Row::new().show(ui, |ui, _| {
-            let mut i = img.clone();
-            let r = i.rect;
-            let turn = |i: &mut pdfcraft_engine::AddedImage, k: u8| {
-                i.rotation = (i.rotation + k) % 4;
-                // The box turns with the picture, around its centre.
-                let (cx, cy, w, h) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0, r[2] - r[0], r[3] - r[1]);
-                i.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
-            };
-            let button =
-                |ui: &mut egui::Ui, icon: &'static str, label: &str| IconButton::new(IconId::new(icon)).label(label.to_string()).show(ui).clicks > 0;
-            if button(ui, "rotate-ccw", tl!("Rotate counterclockwise")) {
-                turn(&mut i, 1);
-                out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
-            }
-            if button(ui, "rotate-cw", tl!("Rotate clockwise")) {
-                turn(&mut i, 3);
-                out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
-            }
-            if button(ui, FLIP_HORIZONTAL_ICON, tl!("Flip horizontal")) {
-                i.flip_h = !i.flip_h;
-                out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
-            }
-            if button(ui, FLIP_VERTICAL_ICON, tl!("Flip vertical")) {
-                i.flip_v = !i.flip_v;
-                out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
-            }
-            if button(ui, "replace", tl!("Replace image")) {
-                out = Some(ImageAction::Replace);
-            }
-        });
+        let _ = Row::new().show(ui, |ui, _| out = image_buttons(ui, img));
         let _ = Text::new(tl!("Crop (% trimmed from each side)")).shade(Shade::Muted).show(ui);
-        let most = (1.0 - pdfcraft_engine::AddedImage::MIN_CROP_KEEP) * 100.0;
-        // Unrounded: a side the user doesn't touch keeps its stored value, also one read from a file.
-        let shown = img.crop.map(|v| v * 100.0);
-        let mut changed = None;
-        let _ = Row::new().show(ui, |ui, _| {
-            for (k, label) in ["L", "B", "R", "T"].into_iter().enumerate() {
-                // Up to what the opposite side leaves.
-                let room = (most - shown.get((k + 2) % 4).copied().unwrap_or(0.0)).max(0.0);
-                let Some(side) = shown.get(k).copied() else { continue };
-                let shown_field = Field::new(label).show(ui, |ui, _| {
-                    NumberField::new(label, Bind::given(Some(side))).unit_kind(UnitKind::Percent).unit("%").range(0.0..=room).step(0.5).show(ui).edit
-                });
-                // A typing run or a scrub is one gesture: applied when it commits, one undo step.
-                if let Some(Some(value)) = shown_field.inner.as_ref().and_then(|edit| edit.events.committed()).copied() {
-                    changed = Some((k, value));
-                }
-            }
-        });
-        if let Some((k, value)) = changed {
-            let mut i = img.clone();
-            if let Some(stored) = i.crop.get_mut(k) {
-                *stored = value.clamp(0.0, most) / 100.0;
-            }
-            if i.crop != img.crop {
-                out = Some(ImageAction::Update(AddedContent::Image(i)));
+        out = out.take().or_else(|| crop_fields(ui, img));
+    });
+    out
+}
+
+/// Rotate, flip and replace for an added image, as one button each (Edit image, and the format bar).
+pub(crate) fn image_buttons(ui: &mut egui::Ui, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
+    let mut out = None;
+    let mut i = img.clone();
+    let r = i.rect;
+    let turn = |i: &mut pdfcraft_engine::AddedImage, k: u8| {
+        i.rotation = (i.rotation + k) % 4;
+        // The box turns with the picture, around its centre.
+        let (cx, cy, w, h) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0, r[2] - r[0], r[3] - r[1]);
+        i.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
+    };
+    let button = |ui: &mut egui::Ui, icon: &'static str, label: &str| IconButton::new(IconId::new(icon)).label(label.to_string()).show(ui).clicks > 0;
+    if button(ui, "rotate-ccw", tl!("Rotate counterclockwise")) {
+        turn(&mut i, 1);
+        out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
+    }
+    if button(ui, "rotate-cw", tl!("Rotate clockwise")) {
+        turn(&mut i, 3);
+        out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
+    }
+    if button(ui, FLIP_HORIZONTAL_ICON, tl!("Flip horizontal")) {
+        i.flip_h = !i.flip_h;
+        out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
+    }
+    if button(ui, FLIP_VERTICAL_ICON, tl!("Flip vertical")) {
+        i.flip_v = !i.flip_v;
+        out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
+    }
+    if button(ui, "replace", tl!("Replace image")) {
+        out = Some(ImageAction::Replace);
+    }
+    out
+}
+
+/// The crop of an added image, as the share trimmed from each side (Edit image, and the format bar's Crop).
+pub(crate) fn crop_fields(ui: &mut egui::Ui, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
+    let most = (1.0 - pdfcraft_engine::AddedImage::MIN_CROP_KEEP) * 100.0;
+    // Unrounded: a side the user doesn't touch keeps its stored value, also one read from a file.
+    let shown = img.crop.map(|v| v * 100.0);
+    let mut changed = None;
+    let _ = Row::new().show(ui, |ui, _| {
+        for (k, label) in ["L", "B", "R", "T"].into_iter().enumerate() {
+            // Up to what the opposite side leaves.
+            let room = (most - shown.get((k + 2) % 4).copied().unwrap_or(0.0)).max(0.0);
+            let Some(side) = shown.get(k).copied() else { continue };
+            let shown_field = Field::new(label).show(ui, |ui, _| {
+                NumberField::new(label, Bind::given(Some(side))).unit_kind(UnitKind::Percent).unit("%").range(0.0..=room).step(0.5).show(ui).edit
+            });
+            // A typing run or a scrub is one gesture: applied when it commits, one undo step.
+            if let Some(Some(value)) = shown_field.inner.as_ref().and_then(|edit| edit.events.committed()).copied() {
+                changed = Some((k, value));
             }
         }
     });
-    out
+    let (k, value) = changed?;
+    let mut i = img.clone();
+    if let Some(stored) = i.crop.get_mut(k) {
+        *stored = value.clamp(0.0, most) / 100.0;
+    }
+    (i.crop != img.crop).then_some(ImageAction::Update(AddedContent::Image(i)))
 }
 
 /// The editor's layout of added text with character spacing. The page puts the spacing after every

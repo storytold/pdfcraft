@@ -47,6 +47,8 @@ fn unsupported_script_buttons_leave_hidden_text_bytes_history_and_saved_pixels_u
                 app
             }
         });
+        // Format text in the Edit panel: this tests the panel's own controls, which the format bar also shows.
+        h.set_option("format-bar", "false").unwrap();
         h.run_steps(4);
         assert!(h.execute("edit.edit_text"));
         h.run_steps(3);

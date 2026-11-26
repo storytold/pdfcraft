@@ -326,6 +326,8 @@ pub struct PdfCraftApp {
     pub reading_colors: pdfcraft_render::ReadingColors,
     /// App-wide page decoration only; never part of a PDF edit or render request.
     pub show_page_edge_shadows: bool,
+    /// The format bar's preferences: hidden, and its place.
+    pub(crate) format_bar: canvas::format_bar::FormatBarPrefs,
     /// How far a mouse-wheel notch scrolls.
     pub scroll_speed: scroll_speed::ScrollSpeed,
     /// Preferences ▸ Invert middle-button drag: the middle button's pan or auto-scroll moves the

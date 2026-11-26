@@ -799,6 +799,9 @@ fn the_text_editor_aligns_a_narrow_box_to_its_own_edge() {
 #[test]
 fn format_text_sets_character_spacing_for_added_text() {
     let mut h = harness();
+    // Format text in the Edit panel: this tests the panel's own controls, which the format bar also shows.
+    h.set_option("format-bar", "false").unwrap();
+    h.run_steps(2);
     assert!(h.execute("edit.text"));
     h.run_steps(3);
     h.get_by_label("Character spacing").click();
