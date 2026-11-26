@@ -56,11 +56,16 @@ impl Automation {
             "doc_bates_multi" => self.doc_bates_multi(&a)?,
             "doc_open" => self.doc_open(&a)?,
             "doc_batch" => self.doc_batch(&a)?,
-            "doc_list" => json!({ "documents": self.session.docs().iter().map(summary).collect::<Vec<_>>() }),
+            "doc_list" => {
+                json!({ "documents": self.session.docs().iter().map(|d| self.with_save_in_place(d, summary(d))).collect::<Vec<_>>() })
+            }
             "doc_info" => {
                 let id = self.doc(&a)?.id;
                 self.session.refresh_fonts(id);
-                info(self.doc(&a)?)
+                let doc = self.doc(&a)?;
+                let mut out = info(doc);
+                out["document"] = self.with_save_in_place(doc, out["document"].take());
+                out
             }
             "doc_close" => self.doc_close(&a)?,
             "doc_save" => self.doc_save(&a)?,

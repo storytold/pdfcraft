@@ -183,7 +183,7 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("attachment_edit", "Edit an attachment description", "Change the description of a document attachment by its exact key from doc_info, or by a unique displayed name. An empty description clears it. The file and other attachment data are preserved. Undoable.")
             .with(schema(json!({"doc": doc(), "key": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}}), &["doc", "description"])),
-        t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited. A path that ends in open parameters, as help systems pass them (`manual.pdf#page=12`, `#nameddest=Intro` or `#Intro`), opens the file and reports its destination as link_open does; a path that names a file opens as it is.")
+        t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count, whether it can be edited, and whether doc_save without a path may write it back (save_in_place, with save_in_place_refused saying why not). A path that ends in open parameters, as help systems pass them (`manual.pdf#page=12`, `#nameddest=Intro` or `#Intro`), opens the file and reports its destination as link_open does; a path that names a file opens as it is.")
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),
         t("doc_list", "List open documents", "List the open documents with their ids, page counts and unsaved state.").ro().with(schema(json!({}), &[])),
