@@ -252,8 +252,8 @@ enum Profile {
 /// this reads well enough to tell words from noise at a quarter of the cost of the full page,
 /// and a shrunk page turned four ways costs about one full page.
 pub const JUDGE_SIDE: u32 = 1200;
-/// How many more readable words a turn must find than the page as it stands before it is
-/// made: a word or two is noise, not a reading.
+/// The lead in readable words over the page as it stands that is still noise, not a reading: a
+/// turn is made only when it finds more than this many more.
 const JUDGE_MARGIN: usize = 2;
 
 /// The correction for a page scanned sideways or upside down: the ink's profile
@@ -287,7 +287,7 @@ fn choose_orientation(image: &OcrImage, judge: Option<OrientationJudge<'_>>) -> 
     let Some(&(_, as_it_stands)) = readings.iter().find(|(k, _)| *k == 0) else { return Ok(fallback) };
     let best = readings.iter().filter(|(k, _)| *k != 0).max_by_key(|(_, words)| *words);
     Ok(match best {
-        Some(&(k, words)) if words >= as_it_stands.saturating_add(JUDGE_MARGIN) => k,
+        Some(&(k, words)) if words > as_it_stands.saturating_add(JUDGE_MARGIN) => k,
         // A clear turn the judge reads no worse than the page as it stands keeps the profile's
         // answer; one it reads worse is declined.
         Some(&(k, words)) if profile == Profile::Clear(k) && words >= as_it_stands => k,
@@ -1163,10 +1163,10 @@ mod orientation_tests {
         };
         let reads_third = scripted([1, 1, 1, 9]);
         assert_eq!(choose_orientation(&page, Some(&reads_third)).unwrap(), 3);
-        // A word or two over the page as it stands is noise, not a reading.
-        let within_noise = scripted([5, 6, 5, 5]);
+        // A word or two over the page as it stands is noise, not a reading; three is one.
+        let within_noise = scripted([5, 7, 5, 5]);
         assert_eq!(choose_orientation(&page, Some(&within_noise)).unwrap(), 0);
-        let clearly_better = scripted([5, 7, 5, 5]);
+        let clearly_better = scripted([5, 8, 5, 5]);
         assert_eq!(choose_orientation(&page, Some(&clearly_better)).unwrap(), 1);
         // Through preprocessing: the page comes back turned, with the exact way back.
         let p = preprocess_with_judge(page.clone(), 300.0, &PreprocessOptions { auto_rotate: true, ..Default::default() }, Some(&portrait_reads))
