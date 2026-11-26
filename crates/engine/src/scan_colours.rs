@@ -154,13 +154,21 @@ fn rule_strips(dark: &[bool], w: usize, h: usize) -> Vec<[usize; 4]> {
     let (lean_y, lean_x) = (lean(w), lean(h));
     let row_inked = |x: usize, y: usize| (y.saturating_sub(lean_y)..=(y + lean_y).min(h - 1)).any(|yy| at(x, yy));
     let column_inked = |x: usize, y: usize| (x.saturating_sub(lean_x)..=(x + lean_x).min(w - 1)).any(|xx| at(xx, y));
-    // A pixel is the row's own, the rule's and not lettering's, when the ink of its column within
-    // the lean is one piece that it belongs to: lettering under a rule, with a gap between, is not.
-    let row_owned = |x: usize, y: usize| at(x, y) && one_piece(y.saturating_sub(lean_y), (y + lean_y).min(h - 1), |yy| at(x, yy));
-    let column_owned = |x: usize, y: usize| at(x, y) && one_piece(x.saturating_sub(lean_x), (x + lean_x).min(w - 1), |xx| at(xx, y));
+    // A pixel is the row's own, the rule's and not lettering's, when the piece of ink it belongs
+    // to runs the length of the rule's own ink (to within a junction's gap): lettering beside a
+    // rule, a piece of its own, is not, whichever of its rows the lean reads; a second rule within
+    // the lean is, and so is lettering touching the rule, one piece with it.
+    let (piece, bounds) = ink_pieces(dark, w, h);
+    let piece_bounds = |x: usize, y: usize| piece.get(y * w + x).and_then(|p| bounds.get(*p as usize)).copied();
+    let spans = |[x0, y0, x1, y1]: [usize; 4], across: bool, [s, e]: [usize; 2]| {
+        let (lo, hi) = if across { (x0, x1) } else { (y0, y1) };
+        lo <= s + JUNCTION_GAP && hi + JUNCTION_GAP >= e
+    };
+    let row_owned = |x: usize, y: usize, run: [usize; 2]| at(x, y) && piece_bounds(x, y).is_some_and(|b| spans(b, true, run));
+    let column_owned = |x: usize, y: usize, run: [usize; 2]| at(x, y) && piece_bounds(x, y).is_some_and(|b| spans(b, false, run));
     // Rules across first, from edge to edge; then rules down, from an edge or a rule across to
     // the other; then across again, now reaching a rule down too.
-    let across = |anchors: &[[usize; 4]]| lines(h, w, lean_y, |y, x| row_inked(x, y), |y, x| row_owned(x, y), anchors);
+    let across = |anchors: &[[usize; 4]]| lines(h, w, lean_y, |y, x| row_inked(x, y), |y, x, run| row_owned(x, y, run), anchors);
     let down = lines(w, h, lean_x, column_inked, column_owned, &across(&[]));
     let across = across(&down);
     // `lines` gives [position0, along0, position1, along1]: rows run along x, columns along y.
@@ -169,29 +177,29 @@ fn rule_strips(dark: &[bool], w: usize, h: usize) -> Vec<[usize; 4]> {
 
 /// The strips of ruled line among `count` positions (rows, say), each `len` long, as
 /// `[position0, along0, position1, along1)`. `inked(i, j)` is ink at position `i`, `j` along,
-/// read with its `lean`; `own(i, j)` ink of the position's own there, the rule's and not
-/// lettering's. `anchors` are the strips found the other way, which lie across `[a[0], a[2])` of
-/// this one.
+/// read with its `lean`; `own(i, j, own_run)` ink of the position's own there, the rule's and not
+/// lettering's, for a rule whose own ink runs `own_run` along. `anchors` are the strips found the
+/// other way, which lie across `[a[0], a[2])` of this one.
 fn lines(
     count: usize,
     len: usize,
     lean: usize,
     inked: impl Fn(usize, usize) -> bool,
-    own: impl Fn(usize, usize) -> bool,
+    own: impl Fn(usize, usize, [usize; 2]) -> bool,
     anchors: &[[usize; 4]],
 ) -> Vec<[usize; 4]> {
     let own = &own;
     let anchors: Vec<[usize; 2]> = anchors.iter().map(|a| [a[0], a[2]]).collect();
-    let lines: Vec<Option<[usize; 2]>> = (0..count).map(|i| line(len, |j| inked(i, j), |j| own(i, j), &anchors)).collect();
+    let lines: Vec<Option<Line>> = (0..count).map(|i| line(len, |j| inked(i, j), |j, own_run| own(i, j, own_run), &anchors)).collect();
     // Where a position the rule runs through has no ink of its own, the rule has leaned off it:
     // the strip takes in the positions its ink is on there, so a rule leaning the most that is
     // allowed reaches both its ends.
     let reach = |i: usize| {
-        let Some(Some([s, e])) = lines.get(i) else { return [i, i + 1] };
+        let Some(Some(l)) = lines.get(i) else { return [i, i + 1] };
         let band = i.saturating_sub(lean)..=(i + lean).min(count - 1);
-        (*s..*e)
-            .filter(|&j| !own(i, j))
-            .flat_map(|j| band.clone().filter(move |&p| own(p, j)))
+        (l.run[0]..l.run[1])
+            .filter(|&j| !own(i, j, l.own))
+            .flat_map(|j| band.clone().filter(move |&p| own(p, j, l.own)))
             .fold([i, i + 1], |r, p| [r[0].min(p), r[1].max(p + 1)])
     };
     let mut strips = Vec::new();
@@ -199,7 +207,7 @@ fn lines(
         if (i1 - i0) as f32 > RULE_THICKNESS * count as f32 {
             continue;
         }
-        let along = lines.get(i0..i1).unwrap_or_default().iter().flatten().fold([usize::MAX, 0], |r, [s, e]| [r[0].min(*s), r[1].max(*e)]);
+        let along = lines.get(i0..i1).unwrap_or_default().iter().flatten().fold([usize::MAX, 0], |r, l| [r[0].min(l.run[0]), r[1].max(l.run[1])]);
         let ([lo, _], [_, hi]) = (reach(i0), reach(i1 - 1));
         // With its halo, within the grid.
         strips.push([lo.saturating_sub(HALO), along[0].saturating_sub(HALO), (hi + HALO).min(count), (along[1] + HALO).min(len)]);
@@ -207,36 +215,73 @@ fn lines(
     strips
 }
 
+/// A rule at one position: the stretch `run` it occupies along, the rules it crosses counting as
+/// ink, and the stretch `own` of its own ink within that.
+#[derive(Clone, Copy)]
+struct Line {
+    run: [usize; 2],
+    own: [usize; 2],
+}
+
 /// Where a rule runs at one position: the longest stretch of ink (the rules it crosses counting
 /// as ink) that starts at the edge or at a rule it meets, within [`JUNCTION_GAP`], and ends at
 /// the other, with [`MIN_RUN`] of ink of its own and [`ROW_INK`] of it on this very row. `None`
 /// when there is no such stretch.
-fn line(len: usize, inked: impl Fn(usize) -> bool, own: impl Fn(usize) -> bool, anchors: &[[usize; 2]]) -> Option<[usize; 2]> {
+fn line(len: usize, inked: impl Fn(usize) -> bool, own: impl Fn(usize, [usize; 2]) -> bool, anchors: &[[usize; 2]]) -> Option<Line> {
     let in_anchor = |j: usize| anchors.iter().any(|[a0, a1]| (*a0..*a1).contains(&j));
     let starts_anchored = |s: usize| s <= JUNCTION_GAP || in_anchor(s) || anchors.iter().any(|[_, a1]| *a1 <= s && s - a1 <= JUNCTION_GAP);
     let ends_anchored = |e: usize| e + JUNCTION_GAP >= len || in_anchor(e - 1) || anchors.iter().any(|[a0, _]| *a0 >= e && a0 - e <= JUNCTION_GAP);
     let own_run = ((MIN_RUN * len as f32).ceil() as usize).max(3);
     let row_ink = |run: usize| (ROW_INK * run as f32).min(ROW_INK_LEANING);
+    // The stretch of the rule's own ink, outside the rules it crosses.
+    let own_stretch = |s: usize, e: usize| {
+        let mut own_ink = (s..e).filter(|&j| inked(j) && !in_anchor(j));
+        let first = own_ink.next()?;
+        Some([first, own_ink.last().unwrap_or(first) + 1])
+    };
     runs(len, |j| inked(j) || in_anchor(j))
         .into_iter()
         .filter(|[s, e]| starts_anchored(*s) && ends_anchored(*e))
         .filter(|[s, e]| (*s..*e).filter(|&j| inked(j) && !in_anchor(j)).count() >= own_run)
-        .filter(|[s, e]| (*s..*e).filter(|&j| own(j)).count() as f32 >= row_ink(e - s))
-        .max_by_key(|[s, e]| e - s)
+        .filter_map(|[s, e]| own_stretch(s, e).map(|own| Line { run: [s, e], own }))
+        .filter(|l| (l.run[0]..l.run[1]).filter(|&j| own(j, l.own)).count() as f32 >= row_ink(l.run[1] - l.run[0]))
+        .max_by_key(|l| l.run[1] - l.run[0])
 }
 
-/// Whether the ink among positions `lo..=hi` is one unbroken piece.
-fn one_piece(lo: usize, hi: usize, inked: impl Fn(usize) -> bool) -> bool {
-    let mut pieces = 0;
-    let mut last = false;
-    for p in lo..=hi {
-        let now = inked(p);
-        if now && !last {
-            pieces += 1;
+/// The pieces of ink in the grid, a pixel touching its eight neighbours: each pixel's piece (0 for
+/// paper) and each piece's bounds `[x0, y0, x1, y1)`, the first entry standing for paper.
+fn ink_pieces(dark: &[bool], w: usize, h: usize) -> (Vec<u32>, Vec<[usize; 4]>) {
+    let is_ink = |i: usize| dark.get(i).copied().unwrap_or(false);
+    let mut piece = vec![0u32; w * h];
+    let mut bounds = vec![[0; 4]];
+    let mut pending = Vec::new();
+    for start in (0..w * h).filter(|&i| is_ink(i)) {
+        if piece.get(start).copied().unwrap_or(1) != 0 {
+            continue;
         }
-        last = now;
+        let id = bounds.len() as u32;
+        let mut b = [usize::MAX, usize::MAX, 0, 0];
+        pending.push(start);
+        while let Some(i) = pending.pop() {
+            let Some(p) = piece.get_mut(i) else { continue };
+            if *p != 0 {
+                continue;
+            }
+            *p = id;
+            let (x, y) = (i % w, i / w);
+            b = [b[0].min(x), b[1].min(y), b[2].max(x + 1), b[3].max(y + 1)];
+            for ny in y.saturating_sub(1)..=(y + 1).min(h - 1) {
+                for nx in x.saturating_sub(1)..=(x + 1).min(w - 1) {
+                    let n = ny * w + nx;
+                    if is_ink(n) && piece.get(n).copied().unwrap_or(1) == 0 {
+                        pending.push(n);
+                    }
+                }
+            }
+        }
+        bounds.push(b);
     }
-    pieces == 1
+    (piece, bounds)
 }
 
 /// The stretches `[start, end)` of `0..n` where `is` holds.
@@ -333,6 +378,33 @@ mod tests {
         g.rect(0, 20, 720, 21);
         g.letters(60, 23, 150, 35);
         assert_eq!(g.strips(), [[0, 19, 720, 22]]);
+    }
+
+    #[test]
+    fn two_rules_within_one_lean_are_both_rules() {
+        // A long area reads three rows either side: two rules three rows apart (a double border)
+        // are each within the other's lean, and each is a strip of its own.
+        let mut g = Grid::new(720, 80);
+        g.rect(0, 20, 720, 21);
+        g.rect(0, 23, 720, 24);
+        assert_eq!(g.strips(), [[0, 19, 720, 22], [0, 22, 720, 25]]);
+
+        let mut g = Grid::new(80, 720);
+        g.rect(20, 0, 21, 720);
+        g.rect(23, 0, 24, 720);
+        assert_eq!(g.strips(), [[19, 0, 22, 720], [22, 0, 25, 720]], "and down the area");
+    }
+
+    #[test]
+    fn lettering_over_a_leaning_rule_does_not_widen_its_strip() {
+        // The rule leans one row over 360 px; the lettering three rows over it is within the lean
+        // of the rule's rows but a piece of its own, so the strip stays the rule's.
+        let mut g = Grid::new(720, 80);
+        for x in 0..720 {
+            g.rect(x, 10 + x / 360, x + 1, 11 + x / 360);
+        }
+        g.letters(600, 3, 690, 8);
+        assert_eq!(g.strips(), [[0, 9, 720, 13]]);
     }
 
     #[test]
