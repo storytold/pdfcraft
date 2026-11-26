@@ -9,4 +9,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-pdfcraft-cos = { workspace = true }
+# The parser and serializer live in craft-pdf's `content` feature. The workspace patch points its
+# hayro-syntax at vendor/hayro-syntax, so inline images end where the renderer ends them.
+craft-pdf = { workspace = true, features = ["content"] }
+
+[dev-dependencies]
+hayro-syntax = { workspace = true }
