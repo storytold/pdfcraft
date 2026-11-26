@@ -107,7 +107,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | PAdES B-T (signature timestamp), document timestamps | yes, with configured TSA | partial: works when a TSA is given; no timestamp-server preferences |
 | PAdES B-LT, B-LTA (DSS/VRI, OCSP/CRL) | yes, fetched online | partial: evidence supplied by the caller; no online fetching |
 | DocMDP certification | yes | yes |
-| FieldMDP (lock fields) | yes | none |
+| FieldMDP (lock fields) | yes | partial: signed field locks and XFA manifests are enforced, with limits on supported SOM expressions |
 | UR3 usage rights | preserved, Reader-extending is Adobe-only | none (P3) |
 | Seed values | yes | none |
 | Validation: chain, key usage, EKU, critical extensions, changes after signing, signed version | yes | yes; name constraints and issuer critical extensions missing |

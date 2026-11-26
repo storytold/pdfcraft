@@ -15,6 +15,7 @@ use pdfcraft_xfa::{FormNode, LiveForm, NodeKind, ScriptEvent};
 
 use crate::js::JsOutput;
 use crate::js::Request;
+use crate::signature_locks::SignatureLocks;
 
 /// Most scripts run for one event (calculates of a whole form, say).
 const MAX_SCRIPTS_PER_EVENT: usize = 2_000;
@@ -422,6 +423,28 @@ struct FieldInfo {
     multi: bool,
 }
 
+impl FieldInfo {
+    fn script_value(&self, value: &str) -> Option<Vec<String>> {
+        use pdfcraft_forms::FieldKind as K;
+        Some(match self.kind {
+            K::CheckBox => {
+                if pdfcraft_xfa::data::is_on(value, &self.on_state) || value == self.on_state {
+                    vec![self.on_state.clone()]
+                } else {
+                    Vec::new()
+                }
+            }
+            K::Radio => {
+                let value = value.trim();
+                if value.is_empty() { Vec::new() } else { vec![value.to_string()] }
+            }
+            K::PushButton | K::Signature => return None,
+            K::List if self.multi => value.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_string).collect(),
+            _ => vec![value.to_string()],
+        })
+    }
+}
+
 fn field_infos(doc: &pdfcraft_cos::Document) -> HashMap<String, FieldInfo> {
     pdfcraft_forms::fields(doc)
         .into_iter()
@@ -454,6 +477,8 @@ struct Runner<'a, 'b> {
     doc: &'a mut pdfcraft_cos::Document,
     tpl: &'a Template,
     run: &'a mut XfaRun<'b>,
+    signature_locks: Option<&'a SignatureLocks>,
+    attempted_calculations: AttemptedCalculations,
     clock: Clock,
     runs: usize,
     skipped: usize,
@@ -507,6 +532,8 @@ impl<'a, 'b> Runner<'a, 'b> {
             doc,
             tpl,
             run,
+            signature_locks: None,
+            attempted_calculations: Default::default(),
             clock: Clock::start(budget_ms),
             runs: 0,
             skipped: 0,
@@ -653,6 +680,19 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.invalidate();
     }
 
+    /// Keep the signed value in the form that later calculations read.
+    fn set_calculated_value(&mut self, som: &str, value: &str) -> bool {
+        if let Some(name) = self.signature_locks.and_then(|locks| locks.calculated_name(som)) {
+            let name = name.to_owned();
+            let attempted = self.fields().get(&name).map_or_else(|| Some(vec![value.to_string()]), |info| info.script_value(value));
+            if let Some(attempted) = attempted {
+                self.attempted_calculations.insert(name, attempted);
+            }
+            return false;
+        }
+        self.set_value(som, value)
+    }
+
     /// Give the object at `som` the value `value`: in the data, and in every widget bound to
     /// that data node (each valued by its own kind: a check box by its on state, a list box by
     /// lines). Returns whether anything changed.
@@ -670,24 +710,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         let mut changed = false;
         for name in &names {
             let Some(info) = self.fields().get(name).cloned() else { continue };
-            let new_value: Vec<String> = match info.kind {
-                K::CheckBox => {
-                    if pdfcraft_xfa::data::is_on(value, &info.on_state) || value == info.on_state {
-                        vec![info.on_state.clone()]
-                    } else {
-                        Vec::new()
-                    }
-                }
-                K::Radio => {
-                    let v = value.trim();
-                    if v.is_empty() { Vec::new() } else { vec![v.to_string()] }
-                }
-                // Read-only fields still take values from scripts (calculated totals are
-                // read-only); buttons and signatures hold none.
-                K::PushButton | K::Signature => continue,
-                K::List if info.multi => value.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect(),
-                _ => vec![value.to_string()],
-            };
+            let Some(new_value) = info.script_value(value) else { continue };
             let same = match info.kind {
                 K::CheckBox => info.value.is_empty() == new_value.is_empty(),
                 K::Radio => info.value.first() == new_value.first(),
@@ -892,7 +915,11 @@ impl<'a, 'b> Runner<'a, 'b> {
             match e {
                 XfaEffect::SetValue { som, value } => {
                     if !self.numbered.contains(som) {
-                        self.set_value(som, value);
+                        if ev.activity == "calculate" {
+                            self.set_calculated_value(som, value);
+                        } else {
+                            self.set_value(som, value);
+                        }
                     }
                 }
                 XfaEffect::SetPresence { som, presence } => {
@@ -1041,7 +1068,23 @@ impl<'a, 'b> Runner<'a, 'b> {
                 continue;
             }
             if let Some(result) = o.result {
-                self.set_value(&ev.som, &result);
+                self.set_calculated_value(&ev.som, &result);
+            }
+        }
+        Ok(())
+    }
+
+    fn calculates_for_edit(&mut self, before: Option<&AttemptedCalculations>, suppressed: &mut Vec<String>) -> Result<(), String> {
+        self.calculates()?;
+        for (name, attempted) in std::mem::take(&mut self.attempted_calculations) {
+            let changed = match before {
+                // An individual calculation that didn't finish in the preview has no result
+                // we can compare. If the whole preview was abandoned, use the signed value.
+                Some(before) => before.get(&name).is_some_and(|old| *old != attempted),
+                None => self.fields().get(&name).map_or(&[][..], |field| field.value.as_slice()) != attempted,
+            };
+            if changed && !suppressed.contains(&name) {
+                suppressed.push(name);
             }
         }
         Ok(())
@@ -1236,8 +1279,9 @@ fn value_unchanged(doc: &pdfcraft_cos::Document, f: &pdfcraft_forms::Field, v: O
 /// say); a viewer runs it after every layout. Every layout:ready script runs, but a field that
 /// numbers pages keeps the number the layout gave each page: the value a script writes to it is
 /// dropped (one value would put the same number on every page).
-pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mut XfaRun) -> Result<Changes, String> {
+pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mut XfaRun, locks: &SignatureLocks) -> Result<Changes, String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
+    r.signature_locks = Some(locks);
     // The scripts read the live form (template, data and overrides), not the pages, so the
     // pages are laid out once, after the last of them. Laying a large form out after every
     // script that hides a subform spent the time limit on the first few, and the form was kept
@@ -1267,6 +1311,46 @@ pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mu
     r.finish()
 }
 
+type AttemptedCalculations = std::collections::BTreeMap<String, Vec<String>>;
+
+/// Re-evaluate protected calculations on the previous state, without writing anything back.
+/// A signed field may already have a stale value after an earlier accepted input edit; warning
+/// on every later unrelated edit would be wrong. The script budget is the normal event budget.
+fn calculated_values_before(
+    before: &pdfcraft_cos::Document,
+    tpl: &Template,
+    locks: &SignatureLocks,
+    run: &XfaRun<'_>,
+) -> Option<AttemptedCalculations> {
+    if !locks.has_calculations() {
+        return None;
+    }
+    let mut copy = before.clone();
+    let mut output = JsOutput::default();
+    let mut preview = XfaRun {
+        page_count: run.page_count,
+        out: &mut output,
+        datasets: None,
+        ran_away: false,
+        highlight: run.highlight,
+        time_scale: run.time_scale,
+    };
+    let mut runner = Runner::new(&mut copy, tpl, &mut preview, OPEN_BUDGET_MS);
+    runner.signature_locks = Some(locks);
+    runner.calculates().ok()?;
+    if runner.run.ran_away {
+        return None;
+    }
+    Some(runner.attempted_calculations)
+}
+
+/// Signed values and notices for one edit's calculation pass.
+pub(crate) struct SignedCalculation<'a> {
+    pub before: &'a pdfcraft_cos::Document,
+    pub locks: &'a SignatureLocks,
+    pub suppressed: &'a mut Vec<String>,
+}
+
 /// After fields `names` took new values: each one's change, exit and validate scripts, then
 /// the calculations once (or only those, after a reset). A validate script that answers false,
 /// or fails, shows its message; the value stays, as Acrobat marks the field invalid rather
@@ -1277,8 +1361,11 @@ pub(crate) fn on_changes(
     names: &[String],
     run: &mut XfaRun,
     exited: &mut Vec<String>,
+    signed: Option<SignedCalculation<'_>>,
 ) -> Result<(), String> {
+    let calculation_before = signed.as_ref().and_then(|signed| calculated_values_before(signed.before, tpl, signed.locks, run));
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
+    r.signature_locks = signed.as_ref().map(|signed| signed.locks);
     for name in names {
         let som = r.by_som().iter().find(|(_, f)| *f == name).map(|(s, _)| s.clone());
         let Some(som) = som else { continue };
@@ -1305,7 +1392,11 @@ pub(crate) fn on_changes(
             }
         }
     }
-    r.calculates()?;
+    if let Some(signed) = signed {
+        r.calculates_for_edit(calculation_before.as_ref(), signed.suppressed)?;
+    } else {
+        r.calculates()?;
+    }
     r.finish().map(|_| ())
 }
 
@@ -1342,42 +1433,49 @@ pub(crate) fn typed_date(
     pdfcraft_xfa::typed_date(tpl, &som, text).map(pdfcraft_forms::FieldValue::Text)
 }
 
-/// A button's click script (or any event, by SOM path and activity), then calculations.
-pub(crate) fn on_event(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str, run: &mut XfaRun) -> Result<(), String> {
+/// Run an event by SOM and activity, then its calculations. Returns true for a focus event
+/// that made no changes and therefore needs no undo step.
+pub(crate) fn on_event(
+    doc: &mut pdfcraft_cos::Document,
+    tpl: &Template,
+    som: &str,
+    activity: &str,
+    run: &mut XfaRun,
+    signed: Option<(&SignatureLocks, &mut Vec<String>)>,
+) -> Result<bool, String> {
+    let focus = matches!(activity, "enter" | "exit");
     let mut r = Runner::new(doc, tpl, run, EVENT_BUDGET_MS);
     let events = r.events_of(som, activity);
     if events.is_empty() {
-        return Err(format!("{som} has no {activity} script"));
+        return if focus { Ok(true) } else { Err(format!("{som} has no {activity} script")) };
     }
-    for ev in events {
-        r.run(&ev, "")?;
-    }
-    // The calculations that follow get a budget of their own.
-    r.clock = Clock::start(OPEN_BUDGET_MS.saturating_mul(u64::from(r.run.time_scale)));
-    r.calculates()?;
-    r.finish().map(|_| ())
-}
-
-/// A field gaining (`enter`) or losing (`exit`) focus: its scripts for that activity, then, when
-/// they changed something, the calculations. Returns what changed; nothing (and no error) when
-/// the field has no such script, so a focus change with nothing to run leaves the form alone.
-pub(crate) fn on_focus(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str, run: &mut XfaRun) -> Result<Changes, String> {
-    let mut r = Runner::new(doc, tpl, run, EVENT_BUDGET_MS);
-    let events = r.events_of(som, activity);
-    if events.is_empty() {
-        return Ok(Changes::default());
-    }
+    let before = if let Some((locks, _)) = signed.as_ref().filter(|(locks, _)| locks.has_calculations()) {
+        let before = calculated_values_before(r.doc, tpl, locks, r.run);
+        r.clock = Clock::start(EVENT_BUDGET_MS.saturating_mul(u64::from(r.run.time_scale)));
+        before
+    } else {
+        None
+    };
     // The field's value, as the script's event sees it (`xfa.event.prevText`, `newText`).
-    let value = r.by_som().get(som).cloned().and_then(|name| r.fields().get(&name).map(|f| f.value.join("\n"))).unwrap_or_default();
+    let value = if focus {
+        r.by_som().get(som).cloned().and_then(|name| r.fields().get(&name).map(|f| f.value.join("\n"))).unwrap_or_default()
+    } else {
+        String::new()
+    };
     for ev in events {
         r.run(&ev, &value)?;
     }
-    if !r.changes.is_empty() {
+    if !focus || !r.changes.is_empty() {
         // The calculations that follow get a budget of their own.
         r.clock = Clock::start(OPEN_BUDGET_MS.saturating_mul(u64::from(r.run.time_scale)));
-        r.calculates()?;
+        if let Some((locks, suppressed)) = signed {
+            r.signature_locks = Some(locks);
+            r.calculates_for_edit(before.as_ref(), suppressed)?;
+        } else {
+            r.calculates()?;
+        }
     }
-    r.finish()
+    r.finish().map(|changes| focus && changes.is_empty())
 }
 
 /// The SOM path of widget `widget` of field `field`: each radio button of a group has its own,
