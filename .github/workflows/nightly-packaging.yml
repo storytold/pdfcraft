@@ -1,0 +1,188 @@
+name: Nightly packaging
+
+# Builds the unsigned Nightly artifacts of every platform (packaging/{windows,linux,macos}/nightly.*)
+# and checks them the way the Launcher unpacks them. No secrets, no environment and no publishing:
+# the real Nightly is compiled and signed by the shared producer/signer pair (nightly.yml and
+# nightly-sign.yml), which supplies the craft-fonts and craft-i18n checkout and the release pin.
+#
+# This is the pull-request check for the packaging scripts and the flavor they compile: Windows
+# (`package.ps1 -Nightly -BuildOnly`), Linux (`nightly.sh --arch x86_64`) and macOS
+# (`nightly.sh --arch aarch64` + `nightly-verify.sh --expect unsigned`). The three legs are the
+# cheapest way to exercise all three without the producer.
+on:
+  # macOS runners are shared with release builds: this runs on a labelled PR, or on dispatch.
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-packaging-${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci') && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The Python packaging suites: no compiler, no signing, no network.
+  synthetic:
+    name: Synthetic packaging suites
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 packaging/nightly-tests.py
+      # The Linux launchers run against an argv recorder: no compiler, no window.
+      - run: bash packaging/linux/nightly-launch-test.sh
+      - run: bash packaging/linux/nightly-arch-tar-test.sh
+      - run: bash -n packaging/nightly-common.sh packaging/linux/nightly.sh packaging/linux/nightly-launch.sh packaging/linux/nightly-arch-tar.sh packaging/macos/nightly.sh packaging/macos/nightly-lib.sh packaging/macos/nightly-sign.sh packaging/macos/nightly-verify.sh
+
+  linux:
+    name: Nightly tar (x86_64)
+    needs: synthetic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the window and UI libraries
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev
+      - name: Prepare a Nightly identity for this commit
+        run: |
+          set -euo pipefail
+          base="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"].split("-")[0])')"
+          sha="$(git rev-parse HEAD)"
+          date="$(date -u +%Y-%m-%d)"
+          {
+            echo "PDFCRAFT_BUILD_SHA=$sha"
+            echo "PDFCRAFT_BUILD_DATE=$date"
+            echo "PDFCRAFT_VERSION=$base-nightly.${date//-/}.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT.g${sha:0:12}"
+          } >>"$GITHUB_ENV"
+      - name: Build the unsigned Nightly tar
+        env:
+          PDFCRAFT_BUILD_CHANNEL: nightly-v1
+          CARGO_TARGET_DIR: ${{ runner.temp }}/nightly-targets
+          DIST: ${{ runner.temp }}/nightly-dist
+        run: |
+          set -euo pipefail
+          bash packaging/linux/nightly.sh --arch x86_64
+          test -f "$DIST/pdfcraft-$PDFCRAFT_VERSION-linux-x86_64-nightly.tar.gz"
+      - name: Check the tar as the Launcher unpacks it
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/unpacked" && tar -xzf "$RUNNER_TEMP/nightly-dist/pdfcraft-$PDFCRAFT_VERSION-linux-x86_64-nightly.tar.gz" -C "$RUNNER_TEMP/unpacked"
+          # The standard layout: `pdfcraft` is the launcher and `pdfcraft-bin` the GUI ELF.
+          test "$(stat -c '%a' "$RUNNER_TEMP/unpacked/pdfcraft")" = 755
+          test "$(stat -c '%a' "$RUNNER_TEMP/unpacked/pdfcraft-bin")" = 755
+          test "$(head -c 4 "$RUNNER_TEMP/unpacked/pdfcraft-bin")" = "$(printf '\177ELF')"
+          "$RUNNER_TEMP/unpacked/pdfcraft" --version | grep -Fx "PdfCraft $PDFCRAFT_VERSION (nightly-v1)"
+          # The Launcher's form answers before the root is touched: it never creates the profile.
+          "$RUNNER_TEMP/unpacked/pdfcraft" --launch-profile nightly-v1 --profile-root "$RUNNER_TEMP/profile" --version | grep -Fx "PdfCraft $PDFCRAFT_VERSION (nightly-v1)"
+          test ! -e "$RUNNER_TEMP/profile"
+      - name: Keep the unsigned tar
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pdfcraft-nightly-linux-x86_64-unsigned
+          path: ${{ runner.temp }}/nightly-dist/pdfcraft-${{ env.PDFCRAFT_VERSION }}-linux-x86_64-nightly.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  windows:
+    name: Nightly ZIP (x86_64, unsigned)
+    needs: synthetic
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare a Nightly identity for this commit
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = python -c "import tomllib; print(tomllib.load(open('Cargo.toml', 'rb'))['workspace']['package']['version'].split('-')[0])"
+          if ($LASTEXITCODE -ne 0) { throw 'cannot read the workspace version' }
+          $sha = (git rev-parse HEAD).Trim()
+          $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+          $version = "$base-nightly.$($date -replace '-', '').$env:GITHUB_RUN_NUMBER.$env:GITHUB_RUN_ATTEMPT.g$($sha.Substring(0, 12))"
+          "PDFCRAFT_BUILD_CHANNEL=nightly-v1" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "PDFCRAFT_BUILD_SHA=$sha" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "PDFCRAFT_BUILD_DATE=$date" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "PDFCRAFT_VERSION=$version" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      # The flavor, the PE identity, the version query and the ZIP payload are checked by nightly.ps1
+      # itself; -BuildOnly keeps signing and publication for the trusted signer.
+      - name: Build the unsigned Nightly ZIP
+        shell: pwsh
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/nightly-targets
+          DIST: ${{ runner.temp }}/nightly-dist
+        run: pwsh -NoProfile -File packaging/windows/package.ps1 -Arch x64 -Nightly -BuildOnly
+      - name: Packaging and signing-policy suites
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File packaging/windows/nightly-package-tests.ps1 -FixtureRoot $env:RUNNER_TEMP
+          # Each suite's own status: the next invocation would otherwise replace it.
+          if ($LASTEXITCODE -ne 0) { throw "nightly-package-tests.ps1 failed: $LASTEXITCODE" }
+          pwsh -NoProfile -File packaging/windows/nightly-signing-tests.ps1 -FixtureRoot $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { throw "nightly-signing-tests.ps1 failed: $LASTEXITCODE" }
+      - name: Keep the unsigned ZIP
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pdfcraft-nightly-windows-x86_64-unsigned
+          path: ${{ runner.temp }}/nightly-dist/pdfcraft-${{ env.PDFCRAFT_VERSION }}-windows-x86_64-nightly.unsigned.zip
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  macos:
+    name: Nightly .app (aarch64, unsigned)
+    needs: synthetic
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare a Nightly identity for this commit
+        run: |
+          set -euo pipefail
+          base="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"].split("-")[0])')"
+          sha="$(git rev-parse HEAD)"
+          date="$(date -u +%Y-%m-%d)"
+          {
+            echo "PDFCRAFT_BUILD_SHA=$sha"
+            echo "PDFCRAFT_BUILD_DATE=$date"
+            echo "PDFCRAFT_VERSION=$base-nightly.${date//-/}.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT.g${sha:0:12}"
+          } >>"$GITHUB_ENV"
+      - name: Build the unsigned Nightly bundle
+        env:
+          PDFCRAFT_BUILD_CHANNEL: nightly-v1
+          CARGO_TARGET_DIR: ${{ runner.temp }}/nightly-targets
+          DIST: ${{ runner.temp }}/nightly-dist
+        run: bash packaging/macos/nightly.sh --arch aarch64
+      - name: Check the archive and the bundle's version
+        run: bash packaging/macos/nightly-verify.sh --expect unsigned --input "$RUNNER_TEMP/nightly-dist/pdfcraft-$PDFCRAFT_VERSION-macos-aarch64-nightly.zip"
+      - name: Keep the unsigned archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pdfcraft-nightly-macos-aarch64-unsigned
+          path: ${{ runner.temp }}/nightly-dist/pdfcraft-${{ env.PDFCRAFT_VERSION }}-macos-aarch64-nightly.zip
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

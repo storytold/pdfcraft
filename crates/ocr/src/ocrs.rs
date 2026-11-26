@@ -55,7 +55,12 @@ pub struct Models {
 
 impl Models {
     pub fn dirs_beside_exe(exe_dir: &Path) -> Vec<PathBuf> {
-        vec![exe_dir.join("models"), exe_dir.join("../Resources/models"), exe_dir.join("../share/pdfcraft/models")]
+        let mut dirs = vec![exe_dir.join("models"), exe_dir.join("../Resources/models")];
+        if option_env!("PDFCRAFT_BUILD_CHANNEL") == Some("nightly-v1") {
+            dirs.push(exe_dir.join("../share/pdfcraft-nightly/models"));
+        }
+        dirs.push(exe_dir.join("../share/pdfcraft/models"));
+        dirs
     }
 
     /// The models in `dir`, preferring current ONNX files over legacy RTEN files. An incomplete

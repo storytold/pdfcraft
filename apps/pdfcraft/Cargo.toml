@@ -26,6 +26,11 @@ egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"
 serde_json = { workspace = true }
 # Records from every crate go to standard error and the log file (`craft_platform::logs`).
 log = { workspace = true }
+# The launch-profile refusal of a Nightly build is a native dialog on a desktop session: a Dock
+# double-click has no console to read (`report_launch_profile_error`).
+rfd = { workspace = true }
+# The launch profile's error type (`process_identity`).
+thiserror = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Finder double-click / Open With / Dock drops arrive as Apple events (#73); this small audited
@@ -58,7 +63,7 @@ winit = { version = "0.30", default-features = false, features = ["wayland"] }
 # Which GPU drives which display (EnumDisplayDevices), so the window is drawn on the GPU that
 # shows it (issue #378). Safe wrappers over Win32; only the `user` feature (which brings `kernel` with it),
 # and `advapi` for the session id that names the single-instance socket (#3338).
-winsafe = { version = "0.0.29", default-features = false, features = ["user", "advapi"] }
+winsafe = { version = "0.0.29", default-features = false, features = ["user", "advapi", "shell"] }
 # Single instance (#282): later launches hand their files to the running app over a Unix domain
 # socket. `std` has no Unix sockets on Windows, and calling Winsock directly needs unsafe, which
 # our workspace forbids. Already in the lockfile through zbus; pinned exactly, review before bumping.

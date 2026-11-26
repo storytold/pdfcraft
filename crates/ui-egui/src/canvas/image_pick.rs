@@ -342,6 +342,11 @@ pub(crate) fn safe_name(s: &str) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 fn clipboard_dir() -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
+    // The Nightly profile holds this cache too: a Nightly copy writes nothing to the stable
+    // app's cache folder.
+    if let Some(root) = crate::settings::profile_root() {
+        return Some(root.join("Clipboard"));
+    }
     if let Some(dir) = crate::settings::portable_dir() {
         return Some(dir.join("Clipboard"));
     }

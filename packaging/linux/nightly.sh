@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# App-owned GUI-only nightly tar: no FUSE/AppImage, CLI, association or install hooks.
+set -euo pipefail
+ARCH=
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --arch) [[ $# -ge 2 ]] || { echo 'missing --arch value' >&2; exit 2; }; ARCH="$2"; shift 2 ;;
+    -h|--help) echo 'Usage: nightly.sh --arch x86_64'; exit 0 ;;
+    *) echo "unsupported nightly argument: $1" >&2; exit 2 ;;
+  esac
+done
+[[ "$ARCH" == x86_64 && "$(uname -s)" == Linux ]] || { echo 'only native Linux x86_64 nightly packaging is supported' >&2; exit 2; }
+# shellcheck source=../nightly-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../nightly-common.sh"
+nightly_init linux "$ARCH" x86_64-unknown-linux-gnu
+OUTPUT="$DIST/pdfcraft-$VERSION-linux-x86_64-nightly.tar.gz"
+[[ ! -e "$OUTPUT" && ! -L "$OUTPUT" ]] || nightly_die 'refusing to replace an existing nightly archive'
+nightly_build_gui
+STAGE="$NIGHTLY_WORK/stage"
+mkdir -p "$STAGE"
+# The standard Nightly tarball layout: `pdfcraft` is the launcher and `pdfcraft-bin` the GUI, so an
+# unpacked tar starts through the same private profile every installed format uses, and a bare run
+# of the GUI cannot write the stable profile. The launcher is the one script the deb, rpm, AppImage
+# and Arch handoff install (packaging/linux/nightly-launch.sh), checked by nightly-launch-test.sh.
+cp "$NIGHTLY_GUI" "$STAGE/pdfcraft-bin"
+chmod 755 "$STAGE/pdfcraft-bin"
+install -m755 "$ROOT/packaging/linux/nightly-launch.sh" "$STAGE/pdfcraft"
+if [[ -f "$ROOT/assets/app-icon/pdfcraft-nightly.png" ]]; then
+  cp "$ROOT/assets/app-icon/pdfcraft-nightly.png" "$STAGE/pdfcraft-nightly.png"
+else
+  cp "$ROOT/assets/app-icon/hicolor/256x256/apps/ai.storyteller.pdfcraft.png" "$STAGE/pdfcraft-nightly.png"
+fi
+nightly_copy_notices "$STAGE"
+# The private mktemp cwd is the helper authority root, not a CLI path parent.
+(cd "$NIGHTLY_WORK" && python3 "$ROOT/packaging/nightly-archive.py" linux stage archive.tar.gz)
+nightly_publish_archive "$NIGHTLY_WORK/archive.tar.gz" "$OUTPUT"

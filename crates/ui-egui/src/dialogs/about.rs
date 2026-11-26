@@ -13,15 +13,26 @@ const LOGO: &[u8] = include_bytes!("../../../../docs/brand/artcraft-logo.svg");
 const LOGO_WHITE: &[u8] = include_bytes!("../../../../docs/brand/artcraft-logo-white.svg");
 
 /// What the About tab shows: PdfCraft's name, blurb and version, the ArtCraft brand, and the community links.
+///
+/// A Nightly build says so in its name and adds the commit it was built from; its blurb names the
+/// Launcher as the way updates arrive, because the app's own updater is off there.
 fn info() -> AboutInfo {
-    let info = AboutInfo::new(
-        "PdfCraft",
-        tl!("A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0."),
-        pdfcraft_engine::build_info::version(),
-    )
-    .mark(AboutImage::svg("ArtCraft", MARK))
-    .part_of(AboutImage::svg("ArtCraft", LOGO).dark(LOGO_WHITE))
-    .built_with("Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)");
+    let build = crate::os_window::version();
+    let version = match (crate::os_window::is_nightly(), crate::os_window::commit()) {
+        (true, Some(commit)) => format!("{build} ({})", commit.get(..12).unwrap_or(commit)),
+        _ => build,
+    };
+    let blurb = if crate::os_window::is_nightly() {
+        tl!(
+            "A Nightly build of the clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0. Nightly updates come through ArtCraft Launcher."
+        )
+    } else {
+        tl!("A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.")
+    };
+    let info = AboutInfo::new(crate::os_window::name(), blurb, version)
+        .mark(AboutImage::svg("ArtCraft", MARK))
+        .part_of(AboutImage::svg("ArtCraft", LOGO).dark(LOGO_WHITE))
+        .built_with("Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)");
     info.links(pdfcraft_engine::links::LINKS.iter().enumerate().map(|(i, l)| {
         let label = if i == 0 { tl!("Join our Discord") } else { tl!(l.label) };
         AboutLink::new(label.to_string(), l.url).icon(IconId::new(l.icon))

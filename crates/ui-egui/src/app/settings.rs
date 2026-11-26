@@ -247,14 +247,33 @@ impl Settings for PdfCraftSettings {
 /// The settings store the app reads its preferences from and writes them to.
 pub type Store = craft::settings::SettingsStore<PdfCraftSettings>;
 
-/// How the data folder was chosen (portable marker, environment, platform folder). Resolved once:
-/// it is a fact of how the app was installed, and the settings store opens at the same folder.
-/// Native only: the web has no folder rules.
+/// The Nightly launch profile's data root, installed by the desktop app before anything reads a
+/// settings folder. Everything PdfCraft persists is resolved from [`resolution`] or from it, so
+/// this one value keeps a Nightly run out of the stable folders. `None` for a stable launch.
+static PROFILE_ROOT: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+/// Install the Nightly profile root (`None`: a stable launch). Resolved once, before first use:
+/// a folder chosen after the settings store opened would not be honoured.
+pub fn set_profile_root(root: Option<PathBuf>) -> Result<(), String> {
+    PROFILE_ROOT.set(root).map_err(|_| "the data folder was already resolved".into())
+}
+
+/// The installed Nightly profile root, when this process is a Nightly launch.
+pub fn profile_root() -> Option<&'static PathBuf> {
+    PROFILE_ROOT.get().and_then(Option::as_ref)
+}
+
+/// How the data folder was chosen (portable marker, environment, platform folder, or the Nightly
+/// profile). Resolved once: it is a fact of how the app was installed, and the settings store
+/// opens at the same folder. Native only: the web has no folder rules.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn resolution() -> &'static craft::settings::Resolved {
     use craft::settings::paths::{self, Portable, Probe};
     static RESOLVED: std::sync::OnceLock<craft::settings::Resolved> = std::sync::OnceLock::new();
     RESOLVED.get_or_init(|| {
+        if let Some(root) = profile_root() {
+            return craft::settings::Resolved { dir: Some(root.clone()), rule: craft::settings::Rule::Override, warning: None };
+        }
         let portable = Portable { markers: PdfCraftSettings::PORTABLE_MARKERS, dir: PdfCraftSettings::PORTABLE_DIR };
         paths::resolve_named(PdfCraftSettings::APP_ID, PdfCraftSettings::FOLDER_NAME, &portable, &craft::settings::Location::Auto, &Probe::default())
     })
@@ -297,11 +316,16 @@ pub fn dictionary_dir() -> Option<PathBuf> {
     crate::recovery::default_dictionary_dir()
 }
 
-/// The folders the last releases kept `app.ron` in, nearest first.
+/// The folders the last releases kept `app.ron` in, nearest first. A Nightly launch imports none:
+/// its profile starts empty, and copying the stable preferences in would be the isolation gap the
+/// profile exists to close.
 fn legacy_folders() -> Vec<PathBuf> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut folders = Vec::new();
+        if profile_root().is_some() {
+            return folders;
+        }
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             let config = std::env::var_os("XDG_CONFIG_HOME")

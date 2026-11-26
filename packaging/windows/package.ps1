@@ -22,12 +22,17 @@
 param(
   [ValidateSet('x64', 'x86', 'arm64')] [string] $Arch = 'x64',
   [switch] $SkipBuild,
+  # Nightly packaging is its own path (nightly.ps1): GUI-only ZIP, no MSI, CLI or associations.
+  [switch] $Nightly,
+  # With -Nightly: compile and check the flavor, and leave the archives to the trusted signer.
+  [switch] $BuildOnly,
   # -SkipBuild only: the existing binaries were built without CRAFT_FONTS_DIR, so they embed no
   # craft-fonts faces. Without CRAFT_FONTS_DIR this assertion is required: package.ps1 cannot
   # otherwise know whether the binaries need the fonts' OFL notices.
   [switch] $BuiltWithoutCraftFonts
 )
 $ErrorActionPreference = 'Stop'
+if ($BuildOnly -and -not $Nightly) { throw '-BuildOnly is only for secret-free nightly compilation' }
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
 if ($BuiltWithoutCraftFonts -and -not $SkipBuild) {
@@ -64,12 +69,23 @@ $Dist = if ($env:DIST) { $env:DIST } else { Join-Path $Root 'dist\release' }
 $TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Root 'target' }
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 
-if (-not $env:PDFCRAFT_BUILD_SHA) { $env:PDFCRAFT_BUILD_SHA = (git -C $Root rev-parse HEAD 2>$null) }
-if (-not $env:PDFCRAFT_BUILD_DATE) { $env:PDFCRAFT_BUILD_DATE = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
+# Nightly requires the prepared commit and original run date explicitly; nightly.ps1 checks both.
+if (-not $Nightly) {
+  if (-not $env:PDFCRAFT_BUILD_SHA) { $env:PDFCRAFT_BUILD_SHA = (git -C $Root rev-parse HEAD 2>$null) }
+  if (-not $env:PDFCRAFT_BUILD_DATE) { $env:PDFCRAFT_BUILD_DATE = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
+}
 
 Write-Output "PdfCraft $Version for Windows $Arch ($Target)"
 
+if ($Nightly) {
+  & (Join-Path $PSScriptRoot 'nightly.ps1') -Arch $Arch -Version $Version -Target $Target -TargetDir $TargetDir -Dist $Dist -SkipBuild:$SkipBuild -BuildOnly:$BuildOnly
+  return
+}
+
 if (-not $SkipBuild) {
+  # Say explicitly which channel this is: a leftover nightly value in the environment would
+  # otherwise compile a Nightly executable into a stable package.
+  $env:PDFCRAFT_BUILD_CHANNEL = 'stable'
   # Static CRT: no VC++ redistributable needed. Scoped to the target so host build scripts and
   # proc-macros are unaffected.
   $flagVar = 'CARGO_TARGET_' + ($Target.ToUpper() -replace '-', '_') + '_RUSTFLAGS'
@@ -96,6 +112,9 @@ foreach ($check in @(@('pdfcraft.exe', 2), @('pdfcraft-cli.exe', 3))) {
   if ($h.Machine -ne $Machine) { throw "$($check[0]) is for machine 0x$('{0:X}' -f $h.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)" }
   if ($h.Subsystem -ne $check[1]) { throw "$($check[0]) has PE subsystem $($h.Subsystem), expected $($check[1])" }
   Write-Output "ok $($check[0]): $Arch, PE subsystem $($h.Subsystem)"
+}
+if ((Get-Item -LiteralPath (Join-Path $Bin 'pdfcraft.exe')).VersionInfo.ProductName -eq 'PdfCraft Nightly') {
+  throw 'a nightly executable cannot be packaged as stable'
 }
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue

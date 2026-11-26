@@ -37,10 +37,18 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::os_window;
 
 #[cfg(target_os = "macos")]
 mod apple_events;
+#[cfg(test)]
+mod build_channel;
+mod build_flavor;
 mod compositor_gpu;
+mod launch_profile;
+mod nightly_session;
+mod process_identity;
+mod profile_root;
 mod reopen;
 mod single_instance;
 mod startup;
@@ -48,7 +56,11 @@ mod startup;
 #[path = "windows_manifest.rs"]
 mod windows_manifest;
 
-/// Freedesktop app id: the `.desktop` file name and the hicolor icon name.
+/// Freedesktop app id of a stable build: the `.desktop` file name and the hicolor icon name. The
+/// runtime window id comes from `pdfcraft_ui_egui::os_window` (a Nightly build is a separate app
+/// beside the stable one, so it has two ids); this constant names the entry the Linux and packaging
+/// files install, and `xtask` checks it against them.
+#[allow(dead_code)]
 const APP_ID: &str = "ai.storyteller.pdfcraft";
 
 /// The app icon (assets/app-icon/README.md). macOS gets the version on Apple's icon grid, with a
@@ -157,7 +169,96 @@ fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<S
     out
 }
 
+/// The nightly build's Windows identity: the AUMID the taskbar groups its windows under, set
+/// before any window or COM service exists.
+fn initialize_nightly_process_identity() -> Result<(), process_identity::IdentityError> {
+    process_identity::initialize(
+        build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1,
+        os_window::id_for(os_window::LaunchIdentity::NightlyV1),
+    )
+}
+
+/// A refusal the Launcher can act on: the message on standard error, and on a desktop session of a
+/// Nightly build a native dialog too (a Dock double-click has no console to read).
+fn report_launch_profile_error(error: &str) {
+    let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("PdfCraft launch profile: {error}\n"));
+    let desktop_session = cfg!(windows)
+        || cfg!(target_os = "macos")
+        || (cfg!(target_os = "linux") && ["DISPLAY", "WAYLAND_DISPLAY"].into_iter().any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty())));
+    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session) {
+        if let Err(error) = initialize_nightly_process_identity() {
+            let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("PdfCraft launch profile: {error}\n"));
+            return;
+        }
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+        let _ = rfd::MessageDialog::new()
+            .set_title("PdfCraft Nightly")
+            .set_description(error)
+            .set_level(rfd::MessageLevel::Error)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+    }
+}
+
+/// Select the immutable launch profile before any startup service or side effect, and answer the
+/// version query. `None` means the launch is done (`--version`).
+fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
+    // The trusted Launcher protocol is decided before the logger, crypto, update, font or settings
+    // code runs. Plain `--version`, or the Launcher's `--launch-profile nightly-v1 --profile-root
+    // <dir> --version`: answered before root validation, process identity, IPC or any window.
+    let argv: Vec<_> = std::env::args_os().skip(1).collect();
+    if build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1 && (build_flavor::version_query(&argv) || launch_profile::version_query(&argv))
+    {
+        let version = build_flavor::version(build_flavor::COMPILED, env!("PDFCRAFT_BUILT_VERSION"));
+        // The shared smoke and the release contract compare the *display* name: every other app
+        // prints `PhotoCraft <version> (nightly-v1)`, so a Nightly PdfCraft prints `PdfCraft …`.
+        // Stable `--version` is untouched (it prints `pdfcraft <version>` below).
+        let _ = print_and_exit(&format!("{} {version}", build_flavor::display_name(build_flavor::COMPILED)));
+        return None;
+    }
+    let early = launch_profile::parse(argv)
+        .and_then(|launch| {
+            build_flavor::require_profile(build_flavor::COMPILED, &launch.profile)?;
+            initialize_nightly_process_identity().map_err(|error| error.to_string())?;
+            Ok(launch)
+        })
+        .and_then(|launch| {
+            launch_profile::prepare(launch, |root| {
+                launch_profile::validate_root(root, |key| std::env::var_os(key), std::env::current_exe().ok().as_deref())
+            })
+        })
+        .unwrap_or_else(|error| {
+            report_launch_profile_error(&error);
+            std::process::exit(2)
+        });
+    let identity = if early.profile.is_nightly() { os_window::LaunchIdentity::NightlyV1 } else { os_window::LaunchIdentity::Stable };
+    let is_nightly = early.profile.is_nightly();
+    if let Err(error) = launch_profile::install(early.profile).and_then(|()| os_window::select_identity(identity)) {
+        report_launch_profile_error(&error);
+        std::process::exit(2);
+    }
+    if is_nightly {
+        let Some(dir) = launch_profile::current().root() else {
+            report_launch_profile_error("the Nightly profile root was lost while it was selected");
+            std::process::exit(2);
+        };
+        // Every data root the app resolves follows this, before the settings store opens.
+        if let Err(error) = pdfcraft_ui_egui::settings::set_profile_root(Some(dir.to_path_buf())) {
+            report_launch_profile_error(&error);
+            std::process::exit(2);
+        }
+        // What `--version`, About and the log line report: the prepared identity.
+        let version = build_flavor::version(build_flavor::COMPILED, env!("PDFCRAFT_BUILT_VERSION"));
+        if let Err(error) = os_window::install_build(version, option_env!("PDFCRAFT_BUILD_COMMIT")) {
+            report_launch_profile_error(&error);
+            std::process::exit(2);
+        }
+    }
+    Some(early.args)
+}
+
 fn main() -> eframe::Result {
+    let Some(arguments) = prepare_launch() else { return Ok(()) };
     // Before anything uses aws-lc: an `OPENSSL_ia32cap` naming a CPU feature this processor lacks
     // would stop it, so PdfCraft runs again without it (#2916, `crypto_env`).
     if let Some(code) = pdfcraft_platform::crypto_env::run_without_cpu_override() {
@@ -165,9 +266,12 @@ fn main() -> eframe::Result {
     }
     // aws-lc detects the CPU's features here, where it used to before `main` (`init_crypto`).
     pdfcraft_engine::sign::init_crypto();
-    // Windows: the update helper is a copy of this program started with `--finish-update`.
+    // Windows: the update helper is a copy of this program started with `--finish-update`. A
+    // Nightly build has no updater (the Launcher manages updates), so it never starts one.
     #[cfg(windows)]
-    if let Some(result) = craft_update::self_update::finish(&pdfcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if !launch_profile::current().is_nightly()
+        && let Some(result) = craft_update::self_update::finish(&pdfcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>())
+    {
         std::process::exit(i32::from(result.is_err()));
     }
     // First, so the panic hook and every start-up warning are recorded.
@@ -193,9 +297,9 @@ fn main() -> eframe::Result {
             let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("pdfcraft: {report}\n"));
         }
     }));
-    let mut startup = startup::Arguments::parse(std::env::args().skip(1));
+    let mut startup = startup::Arguments::parse(arguments.into_iter().map(|arg| arg.to_string_lossy().into_owned()));
     if startup.version {
-        return print_and_exit(&format!("pdfcraft {}", pdfcraft_engine::build_info::version()));
+        return print_and_exit(&format!("pdfcraft {}", os_window::version()));
     }
     if startup.help {
         return print_and_exit(USAGE);
@@ -203,19 +307,30 @@ fn main() -> eframe::Result {
     startup.files = rejoin_split_paths(startup.files, |p| std::path::Path::new(p).is_file());
     let may_hand_off = startup.may_hand_off();
     let startup::Arguments { files, options, control_port, control_token, control_token_file, create_images, combine, two_paged, .. } = startup;
-    // A bad control configuration stops the launch before any window opens.
-    let control = match control_options(control_port, control_token, control_token_file) {
-        Ok(control) => control,
-        Err(message) => usage_error(&message),
+    let nightly = launch_profile::current().is_nightly();
+    // A bad control configuration stops the launch before any window opens. A Nightly launch has
+    // no control server: its port, token and agent channels are the stable app's services, and
+    // the Launcher's profile protocol does not open one.
+    let control = if nightly {
+        None
+    } else {
+        match control_options(control_port, control_token, control_token_file) {
+            Ok(control) => control,
+            Err(message) => usage_error(&message),
+        }
     };
-    migrate_legacy_folders();
+    // The profile is new: there is nothing of an earlier name to move into it, and moving the
+    // stable folders in would be the isolation gap the profile closes.
+    if !nightly {
+        migrate_legacy_folders();
+    }
     // The log file stays in the data folder; opened after the arguments (so `--version` leaves
     // no file behind) and after the PrintCraft migration (which a fresh folder would block).
-    // Records logged until now are written to it first.
-    let data_dir = if portable() { settings_dir() } else { eframe::storage_dir("PdfCraft") };
+    // Records logged until now are written to it first. A Nightly launch logs into its profile.
+    let data_dir = if nightly || portable() { settings_dir() } else { eframe::storage_dir("PdfCraft") };
     if let (Some(logger), Some(dir)) = (logger, data_dir) {
         match logger.attach_dir(&dir.join("logs")) {
-            Ok(path) => log::info!("PdfCraft {}, log file {}", pdfcraft_engine::build_info::version(), path.display()),
+            Ok(path) => log::info!("PdfCraft {}, log file {}", os_window::version(), path.display()),
             // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
             Err(e) => log::warn!("no log file: {e}"),
         }
@@ -227,7 +342,9 @@ fn main() -> eframe::Result {
     // Absolute for this instance too: links relative to a document resolve against its folder,
     // never the working directory.
     let files = single_instance::absolute(&files);
-    let instance = match single_instance::claim(&files, may_hand_off, combine) {
+    // A Nightly launch keeps its socket in its own profile: two Nightly windows hand files to each
+    // other, and neither the stable app nor its data folder is involved.
+    let instance = match single_instance::claim(&files, may_hand_off, combine, launch_profile::current().root()) {
         single_instance::Claim::HandedOff => return Ok(()),
         single_instance::Claim::Primary(server) => Some(server),
         single_instance::Claim::Alone => None,
@@ -248,6 +365,36 @@ fn main() -> eframe::Result {
     let lang = startup_lang(saved_lang.as_deref(), &options);
     let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref());
     let launch = Launch { files, options, control, create_images, combine, frame, lang, two_paged };
+    // The Nightly session record: this window owns the profile while it runs, and the next start
+    // reports an exit that skipped the controlled path (a crash, or a forced kill). Written only
+    // in a Nightly launch whose profile is the validated private root.
+    let (session, health_unavailable) =
+        match nightly_session::Session::begin_with_health(launch_profile::current().root(), &os_window::version(), os_window::commit()) {
+            Ok(state) => state,
+            Err(error) => {
+                log::warn!("Nightly session health is unavailable: {error}");
+                (None, true)
+            }
+        };
+    // Whether the *previous* Nightly session left its record behind (a crash or a forced kill).
+    // Read before the session moves into the shared handle the exit hook and the return path use;
+    // a busy secondary owns no record, so it never reports one.
+    let previous_unclean = session.as_ref().is_some_and(nightly_session::Session::previous_unclean);
+    let session = std::sync::Arc::new(std::sync::Mutex::new(session));
+    // Set by the window that showed this start's unclean-exit notice: only then may the record be
+    // cleared, so a start that failed before any window keeps it for the next owner to report.
+    let notice_shown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Built once per run: eframe calls the app creator again for the OpenGL retry, and whichever
+    // run ends first finishes the record (the other's call is a no-op).
+    let make_exit_hook = {
+        let session = std::sync::Arc::clone(&session);
+        let notice_shown = std::sync::Arc::clone(&notice_shown);
+        move || -> Box<dyn FnOnce()> {
+            let session = std::sync::Arc::clone(&session);
+            let notice_shown = std::sync::Arc::clone(&notice_shown);
+            Box::new(move || nightly_session::finish_once(&session, notice_shown.load(std::sync::atomic::Ordering::Acquire)))
+        }
+    };
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
     // that launched us as well as later ones. Lives until the event loop returns.
     #[cfg(target_os = "macos")]
@@ -256,17 +403,21 @@ fn main() -> eframe::Result {
     let started = Rc::new(Cell::new(false));
     let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
     let result = eframe::run_native(
-        "PdfCraft",
+        os_window::name(),
         native_options(launch.integrated(), first),
         app_creator(
             launch.clone(),
             Rc::clone(&started),
             instance.as_ref(),
+            previous_unclean,
+            health_unavailable,
+            std::sync::Arc::clone(&notice_shown),
+            make_exit_hook(),
             #[cfg(target_os = "macos")]
             &apple_events,
         ),
     );
-    match result {
+    let outcome = match result {
         // Only a renderer that couldn't start: without a window or display at all, OpenGL can't
         // help either, and winit's own error says more.
         Err(e @ eframe::Error::Wgpu(_)) if retry_with_gl(choice, started.get()) => {
@@ -274,19 +425,27 @@ fn main() -> eframe::Result {
             // usually still works there, so that's better than quitting.
             log::error!("the GPU renderer (wgpu) didn't start: {e}. Starting with OpenGL instead; set PDFCRAFT_RENDERER=gl to skip wgpu.");
             eframe::run_native(
-                "PdfCraft",
+                os_window::name(),
                 native_options(launch.integrated(), eframe::Renderer::Glow),
                 app_creator(
                     launch,
                     started,
                     instance.as_ref(),
+                    previous_unclean,
+                    health_unavailable,
+                    std::sync::Arc::clone(&notice_shown),
+                    make_exit_hook(),
                     #[cfg(target_os = "macos")]
                     &apple_events,
                 ),
             )
         }
         other => other,
-    }
+    };
+    // The controlled return, for a start that created no window (and a no-op on macOS, where the
+    // exit hook already finished the record inside AppKit's terminate).
+    nightly_session::finish_once(&session, notice_shown.load(std::sync::atomic::Ordering::Acquire));
+    outcome
 }
 
 /// Which renderer to start with, from `PDFCRAFT_RENDERER`.
@@ -358,12 +517,13 @@ fn retry_with_gl(choice: RendererChoice, app_started: bool) -> bool {
 /// The window and renderer settings for one run.
 fn native_options(integrated: bool, renderer: eframe::Renderer) -> eframe::NativeOptions {
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("PdfCraft")
+        .with_title(os_window::name())
         .with_inner_size([1440.0, 920.0])
         .with_min_inner_size(pdfcraft_ui_egui::MIN_WINDOW_SIZE)
         .with_drag_and_drop(true)
-        // Wayland app id: matches packaging/linux/ai.storyteller.pdfcraft.desktop.
-        .with_app_id(APP_ID);
+        // Wayland app id: matches packaging/linux/ai.storyteller.pdfcraft.desktop, or the
+        // Nightly's own `ai.storyteller.pdfcraft.nightly-v1` (a distinct taskbar entry).
+        .with_app_id(os_window::app_id());
     // eframe replaces ICON_BIG with a system-sized icon on its first active frame.
     // An explicitly empty icon disables that setter (None selects eframe's default).
     // Windows installs both sizes directly through winit in app_creator instead.
@@ -444,7 +604,7 @@ fn install_runtime(
     let system = craft::ui::runtime::env::SystemReader::start(move || ctx.request_repaint());
     let spec = InstallSpec::new(ShellInfo::default().backend(Backend::from_env()), std::sync::Arc::new(SystemWindows))
         .system(system)
-        .app_id(APP_ID)
+        .app_id(os_window::app_id())
         .frame(frame);
     craft::ui::shell::embed::install(&cc.egui_ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(lang))
         .map(drop)
@@ -497,6 +657,10 @@ fn app_creator<'a>(
     launch: Launch,
     started: Rc<Cell<bool>>,
     instance: Option<&'a single_instance::Server>,
+    previous_unclean: bool,
+    health_unavailable: bool,
+    notice_shown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    exit_hook: Box<dyn FnOnce()>,
     #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
 ) -> eframe::AppCreator<'a> {
     let Launch { files, options, control, create_images, combine, frame, lang, two_paged } = launch;
@@ -515,6 +679,19 @@ fn app_creator<'a>(
         #[cfg(target_os = "macos")]
         apple_events.connect(intake.sender(), &cc.egui_ctx);
         let mut app = PdfCraftApp::with_intake(&cc.egui_ctx, intake);
+        app.set_exit_hook(exit_hook);
+        // The previous Nightly session ended without its controlled exit (a crash, a kill): say so
+        // once, and only now may this start clear the record (a start that never showed it keeps
+        // the interruption for the next owner to report). An unavailable session store is a
+        // different fact with its own message: it has no record to clear.
+        if previous_unclean {
+            app.notify("PdfCraft Nightly ended unexpectedly last time. Documents with unsaved changes were kept in its recovery folder.".to_string());
+        } else if health_unavailable {
+            app.notify(
+                "PdfCraft Nightly could not record session health in its private profile. It still works, but an unexpected exit cannot be detected."
+                    .to_string(),
+            );
+        }
         // First start (or settings from before Units existed): the region's unit.
         app.units = pdfcraft_ui_egui::units::Unit::system();
         // The system's reopen-windows choice (macOS) starts the preference; a saved choice replaces it.
@@ -583,6 +760,11 @@ fn app_creator<'a>(
             if let Err(e) = result {
                 log::warn!("--{k} {v}: {e}");
             }
+        }
+        // Only now can nothing else fail: a creator error before this leaves the record for the next
+        // launch to report, because no window ever showed the notice.
+        if previous_unclean {
+            notice_shown.store(true, std::sync::atomic::Ordering::Release);
         }
         Ok(Box::new(app))
     })

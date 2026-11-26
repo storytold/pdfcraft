@@ -36,11 +36,14 @@ macro_rules! tl_ctx {
     };
 }
 pub mod canvas;
+mod channel_titles;
 mod chrome;
 pub use combine_ui::{CombineView, Lock as CombineLock, SortKey};
 mod commands;
 pub mod control;
 mod menus;
+/// The app's OS-window identity: the stable and Nightly app ids, names, version and commit.
+pub mod os_window;
 mod properties_session;
 /// Header & footer / watermark / background dialog types (tests and automation).
 pub mod marks {
@@ -374,9 +377,10 @@ pub struct PdfCraftApp {
     /// The border new Fill & Sign text starts each launch with, kept across launches: what Make
     /// Current Properties Default last took from typed text (none at first).
     pub fill_text_default: fill_sign::TextBorder,
-    /// The update check, its prompt and the self-update.
+    /// The update check, its prompt and the self-update. `None` in a Nightly build: the Launcher
+    /// manages updates, so a Nightly copy can never replace itself with a stable release.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) updater: craft::update::updater::Updater,
+    pub(crate) updater: Option<craft::update::updater::Updater>,
     /// The desktop app asks for a newer release once it has started (Preferences permitting).
     pub(crate) startup_check: bool,
     /// Lists the Print dialog's printers in the background (the desktop app sets it; see
@@ -659,6 +663,10 @@ pub struct PdfCraftApp {
     pub window_title: String,
     /// The web page's title last set: the window title, but always with the file's name.
     pub page_title: String,
+    /// Runs once when the app leaves: the Nightly session record is finished here, because a macOS
+    /// quit ends the process inside AppKit's terminate, after `on_exit` and before `run_native`
+    /// returns (so code after the event loop never runs there).
+    pub(crate) at_exit: Option<Box<dyn FnOnce()>>,
     /// The UI control channel, when enabled (`--control`; off by default).
     control: Option<craft::automation::ControlChannel>,
     /// The control server, while it listens (the desktop app's `--control`).

@@ -27,6 +27,8 @@ use craft::ui::shell::embed;
 mod clipboard;
 mod commands;
 mod control;
+#[cfg(test)]
+mod exit_hook_tests;
 mod files;
 mod frame;
 mod input;
@@ -54,11 +56,16 @@ pub struct AppServices {
     wake: Wake,
     clipboard: Clipboard,
     recovery_dir: Option<PathBuf>,
+    /// The update check and self-update. `None` in a Nightly build: the Launcher manages updates,
+    /// so a Nightly copy can never replace itself with a stable release.
     #[cfg(not(target_arch = "wasm32"))]
-    updater: craft::update::updater::Updater,
+    updater: Option<craft::update::updater::Updater>,
     intake: FileIntake,
     #[cfg(not(target_arch = "wasm32"))]
     watch: craft::platform::watch::FileWatch<DocId>,
+    /// Runs once when the app leaves, from `on_exit`: the one exit path macOS has (its quit ends
+    /// the process inside AppKit's terminate, after `on_exit`, before `run_native` returns).
+    pub at_exit: Option<Box<dyn FnOnce()>>,
 }
 
 impl AppServices {
@@ -74,13 +81,13 @@ impl AppServices {
         #[cfg(not(target_arch = "wasm32"))] watch: craft::platform::watch::FileWatch<DocId>,
     ) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
-        let updater = {
-            let updater = craft::update::updater::Updater::new(&UPDATE_APP, pdfcraft_engine::build_info::version().to_string());
+        let updater = crate::os_window::stable_services_allowed().then(|| {
+            let updater = craft::update::updater::Updater::new(&UPDATE_APP, crate::os_window::version());
             match update_source {
                 Some(source) => updater.with_source(source),
                 None => updater,
             }
-        };
+        });
         Self {
             wake,
             clipboard,
@@ -90,6 +97,7 @@ impl AppServices {
             intake,
             #[cfg(not(target_arch = "wasm32"))]
             watch: reload::document_watch(watch),
+            at_exit: None,
         }
     }
 
@@ -97,7 +105,13 @@ impl AppServices {
     /// whose update has already installed (craft-update's `Updater::ready_for_tests`).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn with_updater(mut self, updater: craft::update::updater::Updater) -> Self {
-        self.updater = updater;
+        self.updater = Some(updater);
+        self
+    }
+
+    /// Runs `hook` once when the app leaves (`on_exit`).
+    pub fn with_exit_hook(mut self, hook: Box<dyn FnOnce()>) -> Self {
+        self.at_exit = Some(hook);
         self
     }
 
@@ -140,10 +154,9 @@ impl PdfCraftApp {
         // In split view it names the main pane's document.
         let front = self.pane_front(panes::Place::Main);
         let dirty = front.is_some_and(|i| self.has_unsaved_work(i));
-        let mark = if dirty { " •" } else { "" };
         let titled = |name: Option<String>| {
-            name.or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()))
-                .map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name}{mark} — PdfCraft"))
+            let name = name.or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()));
+            crate::channel_titles::os_title(crate::os_window::name(), name.as_deref().map(|name| (name, dirty)))
         };
         let title = titled(front.and_then(|i| crate::canvas::tab_label(self, i)));
         // The web page's title is what an embedding host reads to tell which file opened, so it
@@ -161,6 +174,12 @@ impl PdfCraftApp {
             }
             self.page_title = page_title;
         }
+    }
+
+    /// Installs the hook [`eframe::App::on_exit`] runs once: the desktop app finishes the Nightly
+    /// session record there, because a macOS quit never returns from `run_native`.
+    pub fn set_exit_hook(&mut self, hook: Box<dyn FnOnce()>) {
+        self.at_exit = Some(hook);
     }
 
     /// The app over the desktop's own services, waking `ctx`.
@@ -225,6 +244,7 @@ impl PdfCraftApp {
             intake,
             #[cfg(not(target_arch = "wasm32"))]
             watch,
+            at_exit,
         } = services;
         #[cfg(not(target_arch = "wasm32"))]
         let store = recovery_dir.and_then(|dir| match RecoveryStore::open(dir) {
@@ -341,6 +361,7 @@ impl PdfCraftApp {
             fill_text_default: fill_sign::TextBorder::NONE,
             #[cfg(not(target_arch = "wasm32"))]
             updater,
+            at_exit,
             startup_check: false,
             printer_source: None,
             options_source: None,
@@ -701,10 +722,17 @@ impl eframe::App for PdfCraftApp {
         self.save_settings();
     }
 
-    /// Starts an update that waits for the exit. On macOS the process ends before the app is dropped.
+    /// Starts an update that waits for the exit, then runs the app's exit hook (the Nightly session
+    /// record). On macOS the process ends before the app is dropped, so `on_exit` is the only place
+    /// that hook runs; the code after `run_native` is a no-op fallback there.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         #[cfg(not(target_arch = "wasm32"))]
-        self.updater.start_pending_update();
+        if let Some(updater) = self.updater.as_mut() {
+            updater.start_pending_update();
+        }
+        if let Some(hook) = self.at_exit.take() {
+            hook();
+        }
     }
 
     /// Each frame's work before drawing: the update check, opens, control-channel requests, the
