@@ -26,9 +26,9 @@ const MAX_TEXT: usize = 1 << 20;
 /// which `next_area` walks before starting a new page, costs time quadratic in the paragraphs.
 const MAX_CONTENT_AREAS: usize = 128;
 
-/// Parse a measurement such as `12.7mm`, `72pt`, `1in`, `2.54cm` into points. Bare numbers are
-/// points. `None` for anything else (including `em`).
-pub fn measure(s: &str) -> Option<f64> {
+/// Parse a measurement `s` such as `12.7mm`, `72pt`, `1in`, `2.54cm` into points, scaling a
+/// bare number (no unit) by `bare_scale`. `None` for anything else (including `em` and `%`).
+fn parse_measure(s: &str, bare_scale: f64) -> Option<f64> {
     let s = s.trim();
     let split = s.find(|c: char| c.is_ascii_alphabetic() || c == '%').unwrap_or(s.len());
     let (num, unit) = s.split_at(split);
@@ -37,7 +37,8 @@ pub fn measure(s: &str) -> Option<f64> {
         return None;
     }
     let k = match unit.trim() {
-        "" | "pt" => 1.0,
+        "" => bare_scale,
+        "pt" => 1.0,
         "mm" => 72.0 / 25.4,
         "cm" => 72.0 / 2.54,
         "in" => 72.0,
@@ -46,6 +47,20 @@ pub fn measure(s: &str) -> Option<f64> {
         _ => return None,
     };
     Some((v * k).clamp(-100_000.0, 100_000.0))
+}
+
+/// Parse an XFA template measurement such as `12.7mm`, `72pt`, `1in`, `2.54cm` into points.
+/// Per XFA 3.3 §Measurements (p. 36–38), a bare number with no unit means inches (`72pt`).
+/// `None` for anything else (including `em` and `%`).
+pub fn measure(s: &str) -> Option<f64> {
+    parse_measure(s, 72.0)
+}
+
+/// Parse a rich-text XHTML/CSS measurement (such as `font-size`) into points. Unlike XFA
+/// template attributes, a bare number with no unit is treated as points (`1pt`). `None` for
+/// anything else (including `em` and `%`).
+pub(crate) fn measure_css(s: &str) -> Option<f64> {
+    parse_measure(s, 1.0)
 }
 
 /// The attribute `name` of `n` read as a measurement in points (see [`measure`]); `None`
@@ -553,7 +568,7 @@ fn parse_rich(body: XmlNode) -> RichText {
                 "font-weight" => s.bold = Some(v == "bold" || v.parse::<u32>().is_ok_and(|w| w >= 600)),
                 "font-style" => s.italic = Some(v == "italic" || v == "oblique"),
                 "text-decoration" => s.underline = Some(v.contains("underline")),
-                "font-size" => s.size = measure(v).filter(|x| *x > 0.0),
+                "font-size" => s.size = measure_css(v).filter(|x| *x > 0.0),
                 "xfa-font-horizontal-scale" => s.h_scale = scale(v),
                 _ => {}
             }

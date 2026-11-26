@@ -14,6 +14,7 @@ use crate::fixtures::{
 use crate::layout::Item;
 use crate::layout::WidgetKind;
 use crate::model::*;
+use crate::parse::measure_css;
 use crate::script::{NodeKind, Overrides, apply_overrides, fields_by_som, form_tree, overrides, rerender, set_overrides};
 
 /// The widgets laid out on `page`, in order.
@@ -26,18 +27,75 @@ fn texts(page: &Page) -> Vec<String> {
     page.items.iter().filter_map(|i| if let Item::Text(s) = i { Some(s.text.clone()) } else { None }).collect()
 }
 
-/// Measurements in points, inches, millimeters and centimeters convert to points, a bare
-/// number is points, and an `em` length, a non-number or a NaN is `None`.
+/// Measurements in points, inches, millimeters and centimeters convert to points; per XFA 3.3
+/// §Measurements (p. 36–38), a bare number is inches in template attributes (`measure`) and
+/// points in rich-text CSS (`measure_css`); an `em` length, a non-number or a NaN is `None`.
 #[test]
 fn measurements_convert_to_points() {
     assert_eq!(measure("72pt"), Some(72.0));
     assert_eq!(measure("1in"), Some(72.0));
+    assert_eq!(measure("1"), measure("1in"));
+    assert_eq!(measure("1"), Some(72.0));
     assert!((measure("25.4mm").unwrap() - 72.0).abs() < 1e-9);
     assert!((measure("2.54cm").unwrap() - 72.0).abs() < 1e-9);
-    assert_eq!(measure(" 12 "), Some(12.0));
+    assert_eq!(measure(" 12 "), Some(864.0));
+    assert_eq!(measure("0"), Some(0.0));
     assert_eq!(measure("3em"), None);
     assert_eq!(measure("abc"), None);
     assert_eq!(measure("NaNpt"), None);
+    // Rich-text CSS keeps bare numbers as points.
+    assert_eq!(measure_css(" 12 "), Some(12.0));
+    assert_eq!(measure_css("12"), Some(12.0));
+    assert_eq!(measure_css("1in"), Some(72.0));
+    assert_eq!(measure_css("0"), Some(0.0));
+    assert_eq!(measure_css("3em"), None);
+}
+
+/// Bare measurement attributes in a template are inches (XFA 3.3 §Measurements, p. 36–38),
+/// so `x="0.5" y="1" w="3in" h="10mm"` places the field and draw at x=36pt, y=72pt, w=216pt,
+/// h≈28.35pt.
+#[test]
+fn bare_template_measurements_lay_out_as_inches() {
+    let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="position">
+ <pageSet><pageArea name="p"><contentArea x="0" y="0" w="8.5in" h="11in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="box" x="0.5" y="1" w="3in" h="10mm"><ui><textEdit/></ui></field>
+ <draw name="panel" x="0.5" y="1" w="3in" h="10mm"><border><fill><color value="220,220,220"/></fill></border></draw>
+</subform>
+</template></xdp:xdp>"#;
+    let form = layout_xml(xdp).unwrap();
+    let page = &form.pages[0];
+    let expected_h = 10.0 * 72.0 / 25.4;
+    let field = widgets(page).into_iter().find(|w| w.name == "box").unwrap();
+    assert!((field.rect.x - 36.0).abs() < 0.01, "field x should be 0.5in = 36pt: {:?}", field.rect);
+    assert!((field.rect.y - 72.0).abs() < 0.01, "field y should be 1in = 72pt: {:?}", field.rect);
+    assert!((field.rect.w - 216.0).abs() < 0.01, "field w should be 3in = 216pt: {:?}", field.rect);
+    assert!((field.rect.h - expected_h).abs() < 0.01, "field h should be 10mm ≈ 28.35pt: {:?}", field.rect);
+    let fill_rect = page.items.iter().find_map(|i| if let Item::Fill { rect, .. } = i { Some(rect) } else { None }).unwrap();
+    assert!((fill_rect.x - 36.0).abs() < 0.01 && (fill_rect.y - 72.0).abs() < 0.01, "draw origin: {fill_rect:?}");
+    assert!((fill_rect.w - 216.0).abs() < 0.01 && (fill_rect.h - expected_h).abs() < 0.01, "draw size: {fill_rect:?}");
+}
+
+/// Template `<font size="1"/>` is a 1-inch (72 pt) font per XFA 3.3 §Measurements Example 2.5,
+/// while rich-text XHTML/CSS `style="font-size:12"` keeps treating a bare number as 12 pt.
+#[test]
+fn bare_font_size_is_inches_in_template_and_points_in_rich_text_css() {
+    let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <draw name="big" w="6in" h="2in"><font typeface="Arial" size="1"/><value><text>OneInch</text></value></draw>
+ <draw name="rich" w="6in" h="1in"><font typeface="Arial" size="10pt"/><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p><span style="font-size:12">TwelvePt</span></p></body></exData></value></draw>
+</subform>
+</template></xdp:xdp>"#;
+    let (tpl, _) = parse(xdp).unwrap();
+    let Node::Draw(big) = &tpl.root.children[0] else { panic!("expected first draw") };
+    assert_eq!(big.common.font.size, Some(72.0), "template <font size=\"1\"/> is 72pt");
+    let form = layout_xml(xdp).unwrap();
+    let spans: Vec<&text::Span> = form.pages[0].items.iter().filter_map(|i| if let Item::Text(s) = i { Some(s) } else { None }).collect();
+    let one_inch = spans.iter().find(|s| s.text == "OneInch").unwrap();
+    let twelve_pt = spans.iter().find(|s| s.text == "TwelvePt").unwrap();
+    assert!((one_inch.face.size - 72.0).abs() < 0.01, "laid-out template font size should be 72pt: {}", one_inch.face.size);
+    assert!((twelve_pt.face.size - 12.0).abs() < 0.01, "laid-out CSS font-size:12 should stay 12pt: {}", twelve_pt.face.size);
 }
 
 /// Two draws of the same text, one at `fontHorizontalScale="80%"`, each 90% as wide as the
