@@ -13,6 +13,7 @@ use std::collections::{BTreeSet, HashMap};
 use pdfcraft_cos::Document;
 
 mod alt;
+mod alt_placeholder;
 mod autotag;
 mod autotag_fields;
 mod autotag_roles;
@@ -568,6 +569,9 @@ pub const WORDINGS: &[&str] = &[
     "{ty} element: {what}",
     "{ty} element on page {p}: {what}",
     "no alternate text",
+    "its alternate text \"{alt}\" is a file name, not a description",
+    "its alternate text \"{alt}\" is a placeholder, not a description",
+    "its alternate text \"{alt}\" is too short to describe it",
     "its alternate text is inside another element's and will never be read",
     "alternate text on an element with no page content",
     "alternate text hides an annotation inside it",

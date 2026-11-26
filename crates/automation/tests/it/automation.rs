@@ -554,6 +554,46 @@ fn autotag_apply_tags_headings_by_size_across_pages() {
     assert_eq!(nesting["status"], "passed", "{check}");
 }
 
+/// #7730, the issue's repro: a tagged figure whose alternate text is a file name fails
+/// figures-alt-text, the finding quotes it, and a real description through accessibility_set_alt
+/// clears it.
+#[test]
+fn placeholder_alternate_text_fails_the_figure_check_until_described() {
+    let dir = workdir("placeholder-alt");
+    let content = "/Figure <</MCID 0>> BDC q 200 0 0 120 100 500 cm /Im1 Do Q EMC";
+    let pdf = |alt: &str| {
+        pdf_of(&[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R /Lang (en) >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /StructParents 0 /Resources << /XObject << /Im1 8 0 R >> >> >>",
+            &format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 9 0 R >>",
+            "<< /Type /StructElem /S /Document /P 5 0 R /K [7 0 R] >>",
+            &format!("<< /Type /StructElem /S /Figure /P 6 0 R /Pg 3 0 R /K 0 /Alt ({alt}) >>"),
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{80}\nendstream",
+            "<< /Nums [0 [7 0 R]] >>",
+        ])
+    };
+    let figure_rule = |a: &mut Automation, doc: u64| {
+        let check = ok(a, "accessibility_check", json!({ "doc": doc, "rules": ["figures-alt-text"] }));
+        check["results"].as_array().unwrap().iter().find(|r| r["rule"] == "figures-alt-text").unwrap().clone()
+    };
+    std::fs::write(dir.join("file-name.pdf"), pdf("IMG_2041.png")).unwrap();
+    std::fs::write(dir.join("described.pdf"), pdf("A red rectangle")).unwrap();
+    let mut a = auto(&dir);
+
+    let doc = ok(&mut a, "doc_open", json!({ "path": "file-name.pdf" }))["doc"].as_u64().unwrap();
+    let rule = figure_rule(&mut a, doc);
+    assert_eq!(rule["status"], "failed", "{rule}");
+    assert!(rule["findings"][0]["message"].as_str().unwrap().contains("IMG_2041.png"), "the finding quotes the alternate text: {rule}");
+    assert_eq!(rule["findings"][0]["object"], 7);
+    ok(&mut a, "accessibility_set_alt", json!({ "doc": doc, "figure": 7, "alt": "A red rectangle" }));
+    assert_eq!(figure_rule(&mut a, doc)["status"], "passed");
+
+    let described = ok(&mut a, "doc_open", json!({ "path": "described.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(figure_rule(&mut a, described)["status"], "passed");
+}
+
 #[test]
 fn autotag_form_fields_writes_reviewable_widget_tags() {
     let dir = workdir("autotag-form-fields");
