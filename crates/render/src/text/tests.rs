@@ -3265,6 +3265,23 @@ fn korean_words_separated_by_position_keep_their_spaces() {
     assert_eq!(line(3.0), "안녕하세요여러분");
 }
 
+/// Halfwidth Hangul jamo are Hangul too: equal gaps between them from half a line height up are
+/// word gaps, not the character spacing of spread Chinese text.
+#[test]
+fn halfwidth_hangul_separated_by_equal_gaps_keeps_its_spaces() {
+    let mut v = Vec::new();
+    let mut x = 0.0;
+    // A one-letter word between two others: its two word gaps repeat each other.
+    for word in ["\u{FFA1}\u{FFA2}", "\u{FFA4}", "\u{FFA7}\u{FFA8}"] {
+        for ch in word.chars() {
+            v.push(em_box(&ch.to_string(), x, 0.0, x + 6.0, 12.0));
+            x += 6.0;
+        }
+        x += 7.0;
+    }
+    assert_eq!(layout(v).plain_text(), "\u{FFA1}\u{FFA2} \u{FFA4} \u{FFA7}\u{FFA8}");
+}
+
 /// Issue #2929: a footnote reference (superscript) on a line stays in that line instead of
 /// splitting out as a raised segment that steals the block's tail and pushes the host line
 /// after the paragraph.

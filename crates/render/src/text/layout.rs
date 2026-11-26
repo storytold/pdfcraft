@@ -105,13 +105,13 @@ fn is_complex(c: char) -> bool {
     matches!(c as u32, 0x0300..=0x036F | 0x0900..=0x0DFF | 0x0E00..=0x0EFF | 0x1000..=0x109F | 0x1780..=0x17FF)
 }
 
-/// Hangul, which [`is_cjk`] counts as CJK: syllables, the two jamo blocks and the compatibility
-/// jamo. Korean is written with spaces between its words (띄어쓰기), unlike Chinese and Japanese,
+/// Hangul, which [`is_cjk`] counts as CJK: syllables, the two jamo blocks, the compatibility
+/// jamo and the halfwidth jamo. Korean is written with spaces between its words (띄어쓰기), unlike Chinese and Japanese,
 /// so a gap between two Korean syllables may be a word gap and is read as one from half a line
 /// height upwards -- a document that writes its spaces as position rather than as space
 /// characters would otherwise lose them (#3722 review).
 fn is_hangul(c: char) -> bool {
-    matches!(c as u32, 0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7AF)
+    matches!(c as u32, 0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7AF | 0xFFA0..=0xFFDC)
 }
 
 /// Whether `text` is only combining marks (Unicode Mn and Me, which take bidi class NSM) of a
