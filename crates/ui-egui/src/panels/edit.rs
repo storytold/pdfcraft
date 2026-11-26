@@ -1,8 +1,18 @@
-use super::tools::row_label;
-use super::{
-    Align2, Availability, Color32, CornerRadius, LeftPanel, PdfCraftApp, Rect, Sense, Stroke, Tokens, ToolGroup, ToolItem, catalog, icons, theme,
-    vec2, widgets,
+use craft::behavior::{IconId, Selection};
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::{
+    Bind, Entry, Outcome as _, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Trigger, clicked,
 };
+use craft::ui::display::{Shade, Text};
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::list::{ListRow, RowInk, ThumbAspect};
+use craft::ui::menu::Menu;
+use craft::ui::primitives::IconSpec;
+use craft::ui::runtime::env::Label;
+use craft::ui::sections::{HeaderAction, HeaderCommand, Panel, Section};
+use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid, TileGroup};
+
+use super::{Availability, PdfCraftApp, ToolGroup, ToolItem, catalog};
 
 /// The page operations Edit shows as a row of icon buttons, as Acrobat's Edit panel does.
 const EDIT_PAGE_BUTTONS: [&str; 4] = ["page.rotate", "page.insert", "page.delete", "page.extract"];
@@ -18,247 +28,270 @@ const EDIT_OTHER_TOOLS: [&str; 3] = ["combine", "redact", "form"];
 /// Add content with the rarer items under More; and Other options, the neighbouring tools.
 /// Edit text & images itself is on the floating toolbar, and on from the moment Edit opens.
 /// Every item comes from the catalogue, so its label, icon and availability have one source.
-pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
+pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static ToolGroup) {
     let items = || g.sections.iter().flat_map(|s| s.items.iter());
     let item = |command: &str| items().find(|i| i.command == command);
     let mut run = None;
     let mut tool = None;
     // Back to All tools only when Edit was opened from there; the Edit tab is its own way back.
     let from_all_tools = app.mode != crate::Mode::Edit;
-    ui.horizontal(|ui| {
-        if from_all_tools && icons::button(ui, "chevron-left", 26.0, false, tl!("Back to all tools")).clicked() {
-            app.left = LeftPanel::AllTools;
-            app.enter_mode(crate::Mode::AllTools);
-        }
-        // "Edit" under the Edit tab, as Acrobat titles it; the tool's own name from All tools.
-        let title = if from_all_tools { tl!(g.label) } else { tl!("Edit") };
-        let title_width = (ui.available_width() - 2.0 * (26.0 + ui.spacing().item_spacing.x)).max(1.0);
-        ui.add_sized([title_width, 26.0], egui::Label::new(egui::RichText::new(title).font(theme::semibold(15.5)).color(t.text)).truncate())
-            .on_hover_text(title);
-        if icons::button(ui, "settings", 26.0, false, tl!("Preferences")).clicked() {
-            run = Some("app.preferences");
-        }
-        if icons::button(ui, "x", 26.0, false, tl!("Close panel")).clicked() {
-            app.left_open = false;
-        }
-    });
-    ui.add_space(4.0);
-    ui.separator();
-    ui.add_space(6.0);
-    // Several objects selected: how many, and how to move them. Acrobat's panel has no idle hint.
-    let count = app.active_ids().filter(|_| app.quick_tool == crate::QuickTool::EditText).map_or(0, |(i, _)| app.views[i].objects.count());
-    if count > 0 {
-        ui.label(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} object selected", "{n} objects selected"));
-        ui.label(tl!("Drag the selection to move it. Esc clears the selection."));
-        ui.add_space(6.0);
+    // "Edit" under the Edit tab, as Acrobat titles it; the tool's own name from All tools.
+    let title = if from_all_tools { tl!(g.label) } else { tl!("Edit") }.to_string();
+    let mut commands = Vec::new();
+    if from_all_tools {
+        commands.push(HeaderCommand::new(IconId::new("chevron-left"), "tools.all"));
     }
-    // Format text at the top while text is selected or being added.
-    format_section(app, ui, t);
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        super::tools::clear_of_scrollbar(ui);
-        widgets::section_title(ui, tl!("Modify page"));
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            for i in EDIT_PAGE_BUTTONS.iter().filter_map(|c| item(c)) {
-                // Enabled as the command itself is: a document that forbids page assembly refuses these.
-                let enabled = pdfcraft_engine::commands::command(i.command).is_some_and(|spec| app.command_enabled(spec));
-                let resp = ui.add_enabled_ui(enabled, |ui| icons::button(ui, i.icon, 34.0, false, tl!(i.label))).inner;
-                if resp.clicked() {
-                    run = Some(i.command);
+    commands.push(HeaderCommand::new(IconId::new("settings"), "app.preferences"));
+    let shown = Panel::new(title).titled().commands(commands).actions([HeaderAction::Close]).show(ui, |ui, _| {
+        // Several objects selected: how many, and how to move them. Acrobat's panel has no idle hint.
+        let count =
+            app.active_ids().filter(|_| app.quick_tool == crate::QuickTool::EditText).map_or(0, |(i, _)| app.views[i].session.objects.count());
+        if count > 0 {
+            Text::new(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} object selected", "{n} objects selected")).show(ui);
+            Text::new(tl!("Drag the selection to move it. Esc clears the selection.").to_string()).show(ui);
+        }
+        // Format text at the top while text is selected or being added.
+        format_section(app, ui);
+
+        Section::fixed(tl!("Modify page").to_string()).show(ui, |ui, _| {
+            Row::new().show(ui, |ui, _| {
+                for i in EDIT_PAGE_BUTTONS.iter().filter_map(|c| item(c)) {
+                    // Enabled as the command itself is: a document that forbids page assembly refuses these.
+                    IconButton::command(IconSpec::svg(IconId::new(i.icon)), i.command).show(ui);
+                }
+            });
+            // Organize pages is a workspace of its own: its panel replaces this one, with the grid.
+            if let Some(i) = item("page.organize")
+                && clicked(&tool_row(ui, i.icon, tl!(i.label), i.availability, false))
+            {
+                // With no document there is no grid to open: the command asks for a file first.
+                if app.active.is_some() {
+                    tool = Some("organize");
+                } else {
+                    run = Some("page.organize");
                 }
             }
         });
-        ui.add_space(2.0);
-        // Organize pages is a workspace of its own: its panel replaces this one, with the grid.
-        if let Some(i) = item("page.organize")
-            && edit_row(ui, t, i.icon, tl!(i.label), i.availability).clicked()
-        {
-            // With no document there is no grid to open: the command asks for a file first.
-            if app.active.is_some() {
-                tool = Some("organize");
-            } else {
-                run = Some("page.organize");
-            }
-        }
 
-        widgets::section_title(ui, tl!("Add content"));
-        let content: Vec<_> =
-            g.sections.iter().filter(|s| s.title == "Add content").flat_map(|s| s.items.iter()).filter(|i| i.command != "edit.edit_text").collect();
-        let more_id = egui::Id::unique("edit_panel_more");
-        let more = ui.data(|d| d.get_temp::<bool>(more_id)).unwrap_or(false);
-        let shown = if more { content.len() } else { EDIT_CONTENT_SHOWN.min(content.len()) };
-        for i in content.iter().take(shown) {
-            let resp = edit_row(ui, t, i.icon, tl!(i.label), i.availability);
-            // Header and footer, Watermark and Background open their Add / Update / Remove menu.
-            if i.actions.is_empty() {
-                if resp.clicked() {
-                    run = Some(i.command);
+        Section::fixed(tl!("Add content").to_string()).show(ui, |ui, _| {
+            let content: Vec<_> = g
+                .sections
+                .iter()
+                .filter(|s| s.title == "Add content")
+                .flat_map(|s| s.items.iter())
+                .filter(|i| i.command != "edit.edit_text")
+                .collect();
+            let shown = if app.edit_more { content.len() } else { EDIT_CONTENT_SHOWN.min(content.len()) };
+            for i in content.iter().take(shown) {
+                let resp = tool_row(ui, i.icon, tl!(i.label), i.availability, !i.actions.is_empty());
+                // Header and footer, Watermark and Background open their Add / Update / Remove menu.
+                if i.actions.is_empty() {
+                    if clicked(&resp) {
+                        run = Some(i.command);
+                    }
+                } else if let Some(cmd) = actions_menu(app, ui, &resp, i) {
+                    run = Some(cmd);
                 }
-            } else if let Some(cmd) = actions_menu(app, ui, &resp, i, resp.rect.right_center() - vec2(14.0, 0.0), t.text) {
-                run = Some(cmd);
             }
-        }
-        if content.len() > EDIT_CONTENT_SHOWN {
-            ui.add_space(4.0);
-            let label = if more { tl!("Less") } else { tl!("More") };
-            let resp = ui
-                .add(
-                    egui::Label::new(egui::RichText::new(label).color(t.accent_text).font(theme::medium(13.0)))
-                        .selectable(false)
-                        .sense(Sense::click()),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            if resp.clicked() {
-                ui.data_mut(|d| d.insert_temp(more_id, !more));
+            if content.len() > EDIT_CONTENT_SHOWN {
+                let label = if app.edit_more { tl!("Less") } else { tl!("More") };
+                if clicked(craft::ui::buttons::Link::new(label.to_string()).show(ui).response()) {
+                    app.edit_more = !app.edit_more;
+                }
             }
-        }
+        });
 
-        widgets::section_title(ui, tl!("Other options"));
-        for other in EDIT_OTHER_TOOLS.iter().filter_map(|id| catalog::group(id)) {
-            if edit_row(ui, t, other.icon, tl!(other.label), other.availability).clicked() {
-                tool = Some(other.id);
+        Section::fixed(tl!("Other options").to_string()).show(ui, |ui, _| {
+            for other in EDIT_OTHER_TOOLS.iter().filter_map(|id| catalog::group(id)) {
+                if clicked(&tool_row(ui, other.icon, tl!(other.label), other.availability, false)) {
+                    tool = Some(other.id);
+                }
             }
-        }
+        });
     });
+    if shown.output.closed.is_some() || shown.output.action == Some(HeaderAction::Close) {
+        app.set_left_open(false);
+    }
     if let Some(id) = tool {
-        app.select_tool(id);
+        app.select_tool(ui.ctx(), id);
     }
     if let Some(cmd) = run {
-        app.run_command(cmd);
+        app.run_command(&ui.ctx().clone(), cmd);
     }
 }
 
-/// A tool entry with further commands (Add / Update / Remove): a caret at `caret` says it opens a
-/// menu, and each command is enabled by its own needs. Returns the command chosen.
-pub(super) fn actions_menu(
-    app: &PdfCraftApp,
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    item: &ToolItem,
-    caret: egui::Pos2,
-    color: Color32,
-) -> Option<&'static str> {
-    ui.painter().add(egui::Shape::convex_polygon(
-        vec![caret + vec2(-3.5, -2.0), caret + vec2(3.5, -2.0), caret + vec2(0.0, 2.5)],
-        color,
-        egui::Stroke::NONE,
-    ));
-    let mut run = None;
-    egui::Popup::menu(resp).show(|ui| {
-        ui.set_min_width(180.0);
-        for (n, id) in item.actions.iter().enumerate() {
-            let Some(spec) = pdfcraft_engine::commands::command(id) else { continue };
+/// A tool entry with further commands (Add / Update / Remove): pressing the row `opener` opens a
+/// menu (a click or the activation key), and each command is enabled by its own needs. Returns the command chosen.
+pub(super) fn actions_menu(app: &PdfCraftApp, ui: &mut egui::Ui, opener: &egui::Response, item: &ToolItem) -> Option<&'static str> {
+    let entries: Vec<Entry<usize>> = item
+        .actions
+        .iter()
+        .enumerate()
+        .filter_map(|(n, id)| {
+            let spec = pdfcraft_engine::commands::command(id)?;
             // Add stays usable with no document open: it asks for a file first.
             let enabled = (n == 0 && app.active.is_none()) || app.command_enabled(spec);
-            let label = crate::i18n::menu_label(spec.id, spec.label);
-            if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
-                run = Some(spec.id);
-                ui.close();
-            }
-        }
-    });
-    run
+            Some(Entry::new(n, Label::from(crate::i18n::menu_label(spec.id, spec.label))).enabled(enabled))
+        })
+        .collect();
+    let picked = Menu::new(tl!(item.label).to_string()).opened_by(opener, Trigger::Click).pick(ui, &entries).picked?;
+    item.actions.get(picked).and_then(|id| pdfcraft_engine::commands::command(id)).map(|spec| spec.id)
 }
 
 /// One row of the Edit panel: a monochrome icon and the label, as Acrobat draws them. A planned
-/// item is muted and says when it ships when hovered.
-fn edit_row(ui: &mut egui::Ui, t: &Tokens, icon: &str, label: &str, availability: Availability) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
-    let press = theme::Press::track(ui, &resp);
-    press.wash(ui, rect, 6, false);
-    let body = rect.translate(press.offset());
-    let ready = availability == Availability::Ready;
-    let fg = if ready { t.text } else { t.text_muted };
-    icons::paint(ui, Rect::from_min_size(body.min + vec2(6.0, 8.0), vec2(18.0, 18.0)), icon, 17.0, if ready { t.text } else { t.text_faint });
-    row_label(ui, label, theme::regular(13.5), fg, body.left_center() + vec2(34.0, 0.0), rect.width() - 42.0);
-    let resp = theme::hand(resp);
-    match availability {
-        Availability::Ready => resp,
-        Availability::Planned(m) => resp.on_hover_text(format!("{} {m}", tl!("Planned for milestone"))),
-        Availability::Provider => resp.on_hover_text(tl!("Optional: needs an AI provider you configure")),
+/// item is dimmed and says when it ships when hovered; `menu` adds the row's More button.
+fn tool_row(ui: &mut egui::Ui, icon: &'static str, label: &str, availability: Availability, menu: bool) -> egui::Response {
+    let mut row = ListRow::new(label.to_string()).icon(IconSpec::svg(IconId::new(icon)));
+    row = match availability {
+        Availability::Ready => row,
+        Availability::Planned(m) => row.ink(RowInk::Dimmed).tooltip(format!("{} {m}", tl!("Planned for milestone"))),
+        Availability::Provider => row.ink(RowInk::Dimmed).tooltip(tl!("Optional: needs an AI provider you configure").to_string()),
+    };
+    if menu {
+        // The disclosure arrow production shows at the end of Header and footer and Watermark; the whole row
+        // opens the menu.
+        row = row.trailing_named("\u{25BE}".to_owned(), tl!("Options").to_owned());
+    }
+    row.show(ui).response
+}
+
+/// The stamps a [`TileGrid`] lists: one tile per kind, in the order of their groups.
+struct Stamps(usize);
+
+impl craft::behavior::DisplayOrder<usize> for Stamps {
+    fn len(&self) -> usize {
+        self.0
+    }
+
+    fn key(&self, at: usize) -> usize {
+        at
+    }
+
+    fn index_of(&self, key: &usize) -> Option<usize> {
+        (*key < self.0).then_some(*key)
+    }
+}
+
+impl craft::behavior::ItemSource<usize> for Stamps {
+    /// Every stamp is a wide strip, as production draws them: six parts wide to one high.
+    fn size_hint(&self, _at: usize) -> craft::behavior::SizeHint {
+        craft::behavior::SizeHint::Aspect(6.0)
     }
 }
 
 /// Add a stamp: Dynamic, Sign Here and Standard Business stamps; click one, then click on the
 /// page to place it.
-pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     use pdfcraft_engine::{StampGroup, StampKind};
-    ui.label(egui::RichText::new(tl!("Choose a stamp, then click on the page to place it.")).small().color(t.text_faint));
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        super::tools::clear_of_scrollbar(ui);
-        for (group, title) in [
-            (StampGroup::Dynamic, tl!("Dynamic")),
-            (StampGroup::SignHere, tl!("Sign Here")),
-            (StampGroup::StandardBusiness, tl!("Standard Business")),
-        ] {
-            widgets::section_title(ui, title);
-            for kind in StampKind::ALL.into_iter().filter(|k| k.group() == group) {
-                let active = app.quick_tool == crate::QuickTool::Stamp(kind);
-                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::click());
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, kind.label()));
-                let press = theme::Press::track(ui, &resp);
-                press.wash(ui, rect, 6, active);
-                let body = rect.translate(press.offset());
-                let [r, g, b] = kind.color().map(|v| (v * 255.0) as u8);
-                let col = Color32::from_rgb(r, g, b);
-                let chip = Rect::from_min_size(body.min + vec2(8.0, 5.0), vec2((rect.width() - 16.0).min(200.0), 28.0));
-                if group == StampGroup::SignHere {
-                    let tip = chip.height() * 0.45;
-                    let pts = vec![
-                        chip.left_center(),
-                        chip.left_top() + vec2(tip, 0.0),
-                        chip.right_top(),
-                        chip.right_bottom(),
-                        chip.left_bottom() + vec2(tip, 0.0),
-                    ];
-                    ui.painter().add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
-                    let label = kind.label();
-                    let font = theme::semibold(11.0);
-                    let shown = crate::widgets::fit_line(label, (chip.width() - 10.0).max(0.0), |s| crate::widgets::text_width(ui, s, &font));
-                    ui.painter().with_clip_rect(chip.shrink(3.0)).text(
-                        chip.center() + vec2(tip / 2.0, 0.0),
-                        Align2::CENTER_CENTER,
-                        shown,
-                        font,
-                        Color32::WHITE,
-                    );
-                } else {
-                    ui.painter().rect(chip, CornerRadius::same(5), col.gamma_multiply(0.1), Stroke::new(1.5, col), egui::StrokeKind::Inside);
-                    let y = if group == StampGroup::Dynamic { chip.center().y - 4.0 } else { chip.center().y };
-                    let font = theme::semibold(11.0);
-                    let shown = crate::widgets::fit_line(kind.label(), (chip.width() - 10.0).max(0.0), |s| crate::widgets::text_width(ui, s, &font));
-                    ui.painter().with_clip_rect(chip.shrink(3.0)).text(egui::pos2(chip.center().x, y), Align2::CENTER_CENTER, shown, font, col);
-                    if group == StampGroup::Dynamic {
-                        let by = "By name at time, date";
-                        let by_font = theme::regular(7.5);
-                        let by_shown = crate::widgets::fit_line(by, (chip.width() - 8.0).max(0.0), |s| crate::widgets::text_width(ui, s, &by_font));
-                        ui.painter().with_clip_rect(chip.shrink(2.0)).text(
-                            egui::pos2(chip.center().x, chip.bottom() - 6.0),
-                            Align2::CENTER_CENTER,
-                            by_shown,
-                            by_font,
-                            col,
-                        );
-                    }
-                }
-                if theme::hand(resp).clicked() {
-                    app.quick_tool = crate::QuickTool::Stamp(kind);
-                }
+    // The dock's group header already names the tool and closes it; a second title here showed "Add a stamp" twice.
+    let shown = Panel::new(tl!("Add a stamp").to_string()).show(ui, |ui, _| {
+        Stack::new().scroll(Scroll::vertical()).show(ui, |ui, _| {
+            Text::new(tl!("Choose a stamp, then click on the page to place it.").to_string()).shade(Shade::Faint).show(ui);
+            let titles = [
+                (StampGroup::Dynamic, tl!("Dynamic")),
+                (StampGroup::SignHere, tl!("Sign Here")),
+                (StampGroup::StandardBusiness, tl!("Standard Business")),
+            ];
+            // The kinds in group order, and the headers' keys after every tile's.
+            let mut kinds: Vec<(StampGroup, StampKind)> = Vec::new();
+            let mut groups = Vec::new();
+            for (n, (group, title)) in titles.iter().enumerate() {
+                let start = kinds.len();
+                kinds.extend(StampKind::ALL.into_iter().filter(|k| k.group() == *group).map(|k| (*group, k)));
+                groups.push(TileGroup::new(1_000_000 + n, start, kinds.len() - start, title.to_uppercase()));
             }
-        }
-        crate::stamps_ui::palette_section(app, ui, t);
+            let mut selection = match app.quick_tool {
+                crate::QuickTool::Stamp(current) => kinds.iter().position(|(_, kind)| *kind == current).map(Selection::single).unwrap_or_default(),
+                _ => Selection::default(),
+            };
+            let before = selection.clone();
+            let _ = TileGrid::<usize>::new(tl!("Stamps").to_string())
+                .natural_height(true)
+                .justified()
+                // Pictures this high keep every strip, the last of a group included, at one size across the panel.
+                .zoom(craft::ui::tile_grid::GridZoom::Fixed(0.22))
+                .caption(CaptionPlace::None)
+                .select(SelectMode::Single)
+                .selection(Bind::bound(&mut selection))
+                .groups(&groups)
+                .show_items(ui, &Stamps(kinds.len()), &mut |key, _| {
+                    let Some((group, kind)) = kinds.get(*key).copied() else { return Tile::new(String::new()) };
+                    let [r, g, b] = kind.color().map(|v| (v * 255.0) as u8);
+                    let color = egui::Color32::from_rgb(r, g, b);
+                    let (label, by) = (kind.label().to_string(), tl!("By name at time, date").to_string());
+                    Tile::new(label.clone()).thumb(ThumbAspect::new(6, 1), move |cx, rect| paint_chip(cx, rect, group, &label, &by, color))
+                });
+            if selection != before
+                && let Some(&at) = selection.items.first()
+                && let Some((_, kind)) = kinds.get(at)
+            {
+                app.quick_tool = crate::QuickTool::Stamp(*kind);
+            }
+            crate::stamps_ui::palette_section(app, ui);
+        });
     });
+    if shown.output.closed.is_some() || shown.output.action == Some(HeaderAction::Close) {
+        app.set_left_open(false);
+    }
+}
+
+/// A stamp's chip: its colour as a tinted frame (Sign Here as a pentagon pointing left, with the label
+/// in white), the label, and the Dynamic stamps' second line.
+fn paint_chip(
+    cx: &craft::ui::primitives::ContentPainterCx<'_>,
+    chip: egui::Rect,
+    group: pdfcraft_engine::StampGroup,
+    label: &str,
+    by: &str,
+    col: egui::Color32,
+) {
+    use craft::ui::primitives::{PaintShape, StrokeWidth};
+    use craft::ui::style::DataColor;
+    use egui::vec2;
+    use pdfcraft_engine::StampGroup;
+    // Sizes follow the chip's height, so the chip scales with its tile.
+    let height = chip.height();
+    let line = cx.stroke_width(StrokeWidth::Thin);
+    let chip = chip.shrink2(vec2(0.0, line));
+    if group == StampGroup::SignHere {
+        let tip = height * 0.45;
+        let pts =
+            vec![chip.left_center(), chip.left_top() + vec2(tip, 0.0), chip.right_top(), chip.right_bottom(), chip.left_bottom() + vec2(tip, 0.0)];
+        cx.with_draw(|draw| draw.data_fill(&PaintShape::Polygon(pts), DataColor::new(col)));
+        centred_text(cx, chip.center() + vec2(tip / 2.0, 0.0), label, height * 0.28, egui::Color32::WHITE);
+    } else {
+        let shape = PaintShape::Rect(chip, egui::CornerRadius::same((height * 0.12).round().clamp(0.0, 255.0) as u8));
+        cx.with_draw(|draw| {
+            draw.data_fill(&shape, DataColor::new(col.gamma_multiply(0.1)));
+            draw.stroke(&shape, StrokeWidth::Thin, DataColor::new(col));
+        });
+        let y = if group == StampGroup::Dynamic { chip.center().y - height * 0.1 } else { chip.center().y };
+        centred_text(cx, egui::pos2(chip.center().x, y), label, height * 0.28, col);
+        if group == StampGroup::Dynamic {
+            centred_text(cx, egui::pos2(chip.center().x, chip.bottom() - height * 0.15), by, height * 0.19, col);
+        }
+    }
+}
+
+/// `text` in the proportional face, centred on `at`, in a colour from the stamp's data.
+fn centred_text(cx: &craft::ui::primitives::ContentPainterCx<'_>, at: egui::Pos2, text: &str, size: f32, color: egui::Color32) {
+    use craft::ui::fonts::FontRef;
+    use craft::ui::primitives::{DocRun, DocText};
+    use craft::ui::style::DataColor;
+    let runs = [DocRun::new(text, FontRef::proportional(), size, DataColor::new(color))];
+    let layout = cx.layout(&DocText::new(&runs));
+    let pos = at - layout.galley.size() / 2.0;
+    cx.with_draw(|draw| draw.galley(pos, &layout));
 }
 
 /// Edit a PDF ▸ Format text: for the selected added text (one undoable change), or the style
 /// new text gets.
-fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    use crate::format_text_ui::{Target, panel};
     // Editing a paragraph of existing text: its formatting, applied as it changes.
     if let Some((i, _)) = app.active_ids()
-        && let Some(ed) = app.views[i].line_editor.clone()
+        && let Some(ed) = app.views[i].session.line_editor.clone()
     {
-        use crate::format_text_ui::{FontChoice, Fonts};
         let mut ed = ed;
         let sources: Vec<(String, String)> = app
             .session
@@ -270,73 +303,21 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             .collect();
         let fmt = ed.selection_formatting(&sources);
         ed.sync_selection_look(&fmt);
-        let shown = fmt.font_shown;
-        let mixed_size = fmt.size.is_none();
-        // A selection aligns the rows it touches; the caret alone, the whole paragraph.
-        let paragraphs = crate::format_text_ui::Paragraphs { text: &ed.text, selection: ed.selection.clone(), tidy: false };
-        let out = crate::format_text_ui::panel(
-            ui,
-            t,
-            &mut ed.look,
-            Some(&mut ed.extras),
-            Fonts { sources: Some(&sources), shown, mixed_size },
-            Some(paragraphs),
-        );
-        if out.size_committed {
-            ed.choose_size(ed.look.size);
-        }
-        let mut changed = out.changed;
-        if let Some(script) = out.script {
-            changed |= crate::edit_text_ui::toggle_script(&mut ed.text, &mut ed.selection, script);
-        }
-        match out.font {
-            Some(FontChoice::KeepSource) => {
-                ed.keep_source_font();
-                changed = true;
-            }
-            Some(FontChoice::Resource(resource)) => {
-                ed.font_resource = Some(resource);
-                changed = true;
-            }
-            Some(FontChoice::Family(family)) => {
-                ed.choose_family(family);
-                changed = true;
-            }
-            Some(FontChoice::Load) => app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false),
-            #[cfg(not(target_arch = "wasm32"))]
-            Some(FontChoice::Installed(path)) => app.use_paths(crate::files::FilePurpose::TextFont { page: ed.page }, &[path]),
-            #[cfg(target_arch = "wasm32")]
-            Some(FontChoice::Installed(_)) => {}
-            None => {}
-        }
-        if changed {
-            app.apply_line_format(i, ed, Some(ui.ctx()));
-        }
+        panel(app, ui, i, Target::Paragraph(Box::new(ed)), Some(&fmt), &sources);
         return;
     }
     // Typing added text: the box's formatting, and alignment for the lines a selection touches.
     if let Some(i) = app.active_ids().map(|(i, _)| i)
-        && let Some(draft) = app.views[i].content.draft.clone()
+        && let Some(draft) = app.views[i].session.content.draft.clone()
     {
         if draft.index.is_none() && app.quick_tool == crate::QuickTool::AddText {
-            crate::content_ui::hint(ui, t);
+            crate::content_ui::hint(ui);
         }
-        let mut style = draft.style.clone();
-        let paragraphs = crate::format_text_ui::Paragraphs { text: &draft.text, selection: draft.selection.clone(), tidy: true };
-        let out = added_text_format(ui, t, &mut style, Some(paragraphs));
-        if let Some(script) = out.script {
-            let mut toggled = draft.clone();
-            if crate::edit_text_ui::toggle_script(&mut toggled.text, &mut toggled.selection, script) {
-                app.views[i].content.draft = Some(toggled);
-            }
-        }
-        if style != draft.style {
-            app.restyle_draft(i, style);
-        }
+        panel(app, ui, i, Target::Draft(Box::new(draft)), None, &[]);
         return;
     }
     let image = app.active_ids().and_then(|(i, id)| {
-        let (page, index) = app.views[i].content.selected?;
+        let (page, index) = app.views[i].session.content.selected?;
         let doc = app.session.get(id)?;
         match &doc.added().iter().filter(|a| a.page == page).nth(index)?.content {
             pdfcraft_engine::AddedContent::Image(img) => Some((page, index, img.clone())),
@@ -344,61 +325,33 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     });
     if let Some((page, index, img)) = image {
-        match crate::content_ui::image_panel(ui, t, &img) {
+        match crate::content_ui::image_panel(ui, &img) {
             Some(crate::content_ui::ImageAction::Update(content)) => {
-                app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content });
+                app.apply_edit(ui.ctx(), pdfcraft_engine::Edit::UpdateContent { page, index, content });
             }
             Some(crate::content_ui::ImageAction::Replace) => app.replace_image_dialog(page, index),
             None => {}
         }
-        ui.add_space(6.0);
-        ui.separator();
         return;
     }
     let selected = app.active_ids().and_then(|(i, id)| {
-        let (page, index) = app.views[i].content.selected?;
+        let (page, index) = app.views[i].session.content.selected?;
         let doc = app.session.get(id)?;
         let a = doc.added().iter().filter(|a| a.page == page).nth(index)?;
         match &a.content {
-            pdfcraft_engine::AddedContent::Text(text) => Some((page, index, text.clone())),
+            pdfcraft_engine::AddedContent::Text(text) => Some((i, page, index, text.clone())),
             _ => None,
         }
     });
     match selected {
-        Some((page, index, text)) => {
-            let mut style = text.clone();
-            added_text_format(ui, t, &mut style, None);
-            if style != text {
-                // The reusable style follows the selection only when the edit took, so a refused one adds nothing odd later.
-                if app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style.clone()) }) {
-                    app.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], aligns: Vec::new(), ..style };
-                }
-            }
-        }
+        Some((i, page, index, text)) => panel(app, ui, i, Target::Added { page, index, text }, None, &[]),
         None if app.quick_tool == crate::QuickTool::AddText => {
-            crate::content_ui::hint(ui, t);
-            let mut style = app.text_style.clone();
-            added_text_format(ui, t, &mut style, None);
-            app.text_style = style;
+            crate::content_ui::hint(ui);
+            let armed = app.text_style.clone();
+            panel(app, ui, 0, Target::Armed(armed), None, &[]);
         }
         None => {}
     }
-}
-
-/// Format text for added text: the standard families, size, colour, style and alignment
-/// (of the lines `paragraphs` selects, while the text is being typed).
-fn added_text_format(
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    style: &mut pdfcraft_engine::AddedText,
-    paragraphs: Option<crate::format_text_ui::Paragraphs>,
-) -> crate::format_text_ui::Outcome {
-    let shown = style.family.label().to_string();
-    let out = crate::format_text_ui::panel(ui, t, style, None, crate::format_text_ui::Fonts { sources: None, shown, mixed_size: false }, paragraphs);
-    if let Some(crate::format_text_ui::FontChoice::Family(family)) = out.font {
-        style.family = family;
-    }
-    out
 }
 
 impl PdfCraftApp {
@@ -406,15 +359,15 @@ impl PdfCraftApp {
     /// style at once and stays open. Text already on the page is updated with what has been typed,
     /// as one undoable change; new text waits until it is finished. Text typed after this styling
     /// starts from it too.
-    pub(crate) fn restyle_draft(&mut self, index: usize, mut style: pdfcraft_engine::AddedText) {
+    pub(crate) fn restyle_draft(&mut self, ctx: &egui::Context, index: usize, mut style: pdfcraft_engine::AddedText) {
         // A gray or CMYK ink the colour no longer shows goes now (#6440): kept, the draft would
         // differ from the item the page reads back without it, and a later pick of the ink's
         // look would bring it back.
         style.drop_stale_ink();
         let Some(view) = self.views.get_mut(index) else { return };
         // Text the standard fonts can't draw stays in the box, unwritten, until it is corrected (#125).
-        let blocked = view.content.blocked().is_some();
-        let Some(d) = view.content.draft.as_mut() else { return };
+        let blocked = view.session.content.blocked().is_some();
+        let Some(d) = view.session.content.draft.as_mut() else { return };
         let committed = d.style.clone();
         // `text` and `rect` stay what the page has; the rest is the new style.
         d.style = pdfcraft_engine::AddedText { text: committed.text.clone(), rect: committed.rect, ..style };
@@ -428,31 +381,34 @@ impl PdfCraftApp {
         if updated == committed {
             return;
         }
-        if self.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index: item, content: pdfcraft_engine::AddedContent::Text(updated.clone()) })
-            && let Some(d) = self.views.get_mut(index).and_then(|v| v.content.draft.as_mut())
+        if self.apply_edit(
+            ctx,
+            pdfcraft_engine::Edit::UpdateContent { page, index: item, content: pdfcraft_engine::AddedContent::Text(updated.clone()) },
+        ) && let Some(d) = self.views.get_mut(index).and_then(|v| v.session.content.draft.as_mut())
         {
             // What the page has now. The aligns stay those of the text in the box.
             d.style = pdfcraft_engine::AddedText { aligns: std::mem::take(&mut d.style.aligns), ..updated };
-            // The page has the box's text: its typing history restarts at the next claim, even
-            // when the restyle left the text as it was, so a Redo can't put undone typing back.
-            d.typing_from = None;
+            // The page has the box's text: its typing history restarts from it, even when the
+            // restyle left the text as it was, so a Redo can't put undone typing back.
+            let now = crate::edit_text_ui::Typed::of(d.text.clone(), d.selection, d.style.aligns.clone());
+            d.history.restart(now);
         }
     }
 
     /// Apply the open paragraph's formatting as one change; the paragraph stays open.
-    pub(crate) fn apply_line_format(&mut self, index: usize, mut ed: crate::edit_text_ui::LineEditor, ctx: Option<&egui::Context>) {
+    pub(crate) fn apply_line_format(&mut self, ctx: &egui::Context, index: usize, mut ed: crate::edit_text_ui::LineEditor) {
         let edit = pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };
-        if self.apply_edit(edit) {
+        if self.apply_edit(ctx, edit) {
             ed.applied();
             if let Some(doc) = self.session.get(self.views[index].id)
                 && let Some(block) = doc.text_blocks(ed.page).get(ed.block)
             {
                 ed.refresh_source(block, doc.text_lines(ed.page));
-                if let Some(ctx) = ctx {
-                    ed.fonts = crate::edit_text_ui::install_source_fonts(ctx, doc, ed.page);
-                }
+                // The page has the paragraph's text: its typing history restarts from it.
+                let now = crate::edit_text_ui::Typed::of(ed.text.clone(), ed.selection, ed.look.aligns.clone());
+                ed.history.restart(now);
             }
         }
-        self.views[index].line_editor = Some(ed);
+        self.views[index].session.line_editor = Some(ed);
     }
 }

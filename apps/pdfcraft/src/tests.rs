@@ -1,44 +1,3 @@
-/// The lockfile package block for `name`, or a panic naming the missing package.
-fn locked_package(root: &std::path::Path, name: &str) -> String {
-    let lock = std::fs::read_to_string(root.join("Cargo.lock")).expect("Cargo.lock");
-    lock.split("[[package]]")
-        .find(|p| p.contains(&format!("\nname = \"{name}\"\n")))
-        .map(str::to_owned)
-        .unwrap_or_else(|| panic!("{name} is not in Cargo.lock"))
-}
-
-/// Interim graph check for the window stack while the reviewed fork revision is not yet
-/// published. The old `vendor/winit` / `vendor/egui-wgpu` path patches were removed from the
-/// published manifest; local integration supplies the reviewed worktrees through an external
-/// Cargo config patch. A git source must name the public storytold fork; a path source is the
-/// local integration graph. Behaviour (surface fitting, error scopes, scroll phases) is tested
-/// directly elsewhere; the retained vendor copies keep provenance until the fork revision is
-/// pinned. No public revision is invented here.
-fn assert_window_stack_graph(root: &std::path::Path, name: &str, version: &str) -> String {
-    let package = locked_package(root, name);
-    assert!(package.contains(&format!("\nversion = \"{version}\"\n")), "{name} must resolve to {version}: {package}");
-    if let Some(source) = package.lines().find_map(|line| line.strip_prefix("source = ")) {
-        assert!(source.contains("github.com/storytold/"), "{name} must come from the reviewed storytold fork once published, not {source}");
-        assert!(
-            source.split(|c: char| !c.is_ascii_hexdigit()).any(|part| part.len() == 40),
-            "{name} must pin the fork's 40-character revision, not {source}"
-        );
-    }
-    // A path patch has no `source =` in Cargo.lock. The local integration config is the only
-    // allowed path source; a machine-local path must never be in the published manifest,
-    // which the root-manifest assertion below checks. A path entry carries no remote identity
-    // to verify, so this test does not claim the resolved code is the published fork.
-    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("root Cargo.toml");
-    assert!(!manifest.contains(&format!("{name} = {{ path = \"vendor/")), "vendor/{name} must not be a published path patch");
-    package
-}
-
-use pdfcraft_ui_egui::control::Endpoint;
-
-fn endpoint() -> std::io::Result<Endpoint> {
-    Ok(Endpoint { port: 4321, token: "0123456789abcdef".into() })
-}
-
 /// Tests that open a real GPU device take this first, so only one of them is inside the
 /// graphics libraries at a time. The test threads otherwise run them together, and on
 /// FreeBSD's CI machine the test process then died with SIGSEGV, in about half the runs:
@@ -52,62 +11,12 @@ fn gpu() -> std::sync::MutexGuard<'static, ()> {
     GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-#[test]
-fn a_control_channel_that_cant_be_published_stops_the_app() {
-    let dir = std::env::temp_dir().join(format!("pdfcraft-app-control-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = |name: &str| dir.join(name).to_str().unwrap().to_owned();
-
-    // A folder in the way stands in for a file another user created first: the write fails.
-    std::fs::create_dir(dir.join("taken.json")).unwrap();
-    let err = super::open_control_channel(&path("taken.json"), endpoint()).unwrap_err();
-    assert!(err.contains("--control") && err.contains("taken.json") && err.contains("only you can write"), "{err}");
-    // No listener: nothing to publish.
-    let err = super::open_control_channel(&path("pc.json"), Err(std::io::Error::other("no loopback"))).unwrap_err();
-    assert!(err.contains("no loopback"), "{err}");
-    assert!(!dir.join("pc.json").exists());
-
-    super::open_control_channel(&path("pc.json"), endpoint()).unwrap();
-    let written: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("pc.json")).unwrap()).unwrap();
-    assert_eq!((written["port"].as_u64(), written["token"].as_str()), (Some(4321), Some("0123456789abcdef")));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn path_from_arg_decodes_file_uris() {
-    assert_eq!(super::path_from_arg("file:///home/alice/report.pdf".to_string()), "/home/alice/report.pdf");
-    assert_eq!(super::path_from_arg("file:///home/alice/my%20report.pdf".to_string()), "/home/alice/my report.pdf");
-    assert_eq!(super::path_from_arg("file://localhost/tmp/a%C3%A9.pdf".to_string()), "/tmp/aé.pdf");
-    // Malformed or truncated escapes are kept as written; bytes that aren't UTF-8 keep the URI.
-    assert_eq!(super::path_from_arg("file:///tmp/100%.pdf".to_string()), "/tmp/100%.pdf");
-    assert_eq!(super::path_from_arg("file:///tmp/a%2".to_string()), "/tmp/a%2");
-    assert_eq!(super::path_from_arg("file:///tmp/%zz%".to_string()), "/tmp/%zz%");
-    assert_eq!(super::path_from_arg("file:///tmp/%FF.pdf".to_string()), "file:///tmp/%FF.pdf");
-}
-
-#[test]
-fn unquoted_paths_with_spaces_are_rejoined() {
-    let have = ["P:\\Archive\\00042A26 Contract.PDF", "C:\\a b c.pdf", "C:\\a.pdf", "C:\\x y.pdf"];
-    let exists = |p: &str| have.contains(&p);
-    let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    // The case an office program produced: one path, split at its space.
-    assert_eq!(super::rejoin_split_paths(args(&["P:\\Archive\\00042A26", "Contract.PDF"]), exists), args(&["P:\\Archive\\00042A26 Contract.PDF"]));
-    // The longest run wins; files that exist on their own are left alone.
-    assert_eq!(super::rejoin_split_paths(args(&["C:\\a", "b", "c.pdf", "C:\\a.pdf"]), exists), args(&["C:\\a b c.pdf", "C:\\a.pdf"]));
-    assert_eq!(super::rejoin_split_paths(args(&["C:\\a.pdf", "C:\\x", "y.pdf"]), exists), args(&["C:\\a.pdf", "C:\\x y.pdf"]));
-    // Nothing to join: kept as given, so the missing file is still reported by name.
-    assert_eq!(super::rejoin_split_paths(args(&["missing.pdf", "other"]), exists), args(&["missing.pdf", "other"]));
-    assert!(super::rejoin_split_paths(Vec::new(), exists).is_empty());
-}
-
-#[test]
-fn path_from_arg_leaves_plain_paths_and_other_schemes_alone() {
-    assert_eq!(super::path_from_arg("report.pdf".to_string()), "report.pdf");
-    assert_eq!(super::path_from_arg("/home/alice/report.pdf".to_string()), "/home/alice/report.pdf");
-    assert_eq!(super::path_from_arg("https://example.com/report.pdf".to_string()), "https://example.com/report.pdf");
-    assert_eq!(super::path_from_arg("file://server/share/a.pdf".to_string()), "file://server/share/a.pdf");
-    assert_eq!(super::path_from_arg("file://".to_string()), "file://");
+/// Installs the framework runtime on a harness's context, as the app's window does, with a system
+/// that opens no OS windows and the interface fonts of English.
+pub(crate) fn install_runtime(ctx: &egui::Context) {
+    use pdfcraft_ui_egui::i18n::Lang;
+    let spec = craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), std::sync::Arc::new(craft::window::system::NoWindows));
+    craft::ui::shell::embed::install(ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(Lang::EN)).expect("the runtime installs on a fresh context");
 }
 
 #[test]
@@ -126,15 +35,8 @@ fn opengl_is_the_fallback_unless_a_renderer_was_chosen() {
     assert!(!retry_with_gl(RendererChoice::Wgpu, false));
     assert!(!retry_with_gl(RendererChoice::Gl, false));
     // Each run states its renderer rather than relying on eframe's default.
-    assert_eq!(native_options(false, false, eframe::Renderer::Wgpu).renderer, eframe::Renderer::Wgpu);
-    assert_eq!(native_options(false, false, eframe::Renderer::Glow).renderer, eframe::Renderer::Glow);
-}
-
-#[test]
-fn the_desktop_frame_is_turned_off_only_when_the_app_draws_one() {
-    use super::native_options;
-    assert_eq!(native_options(false, false, eframe::Renderer::Glow).viewport.decorations, None);
-    assert_eq!(native_options(false, true, eframe::Renderer::Glow).viewport.decorations, Some(false));
+    assert_eq!(native_options(false, eframe::Renderer::Wgpu).renderer, eframe::Renderer::Wgpu);
+    assert_eq!(native_options(false, eframe::Renderer::Glow).renderer, eframe::Renderer::Glow);
 }
 
 #[test]
@@ -143,13 +45,13 @@ fn the_window_and_windows_taskbar_icons_load_from_the_bundled_png() {
     assert!(icon.width > 0 && icon.height > 0);
     assert_eq!(icon.rgba.len(), (icon.width as usize) * (icon.height as usize) * 4);
     #[cfg(not(target_os = "windows"))]
-    assert_eq!(super::native_options(false, false, eframe::Renderer::Glow).viewport.icon.as_deref(), Some(&icon));
+    assert_eq!(super::native_options(false, eframe::Renderer::Glow).viewport.icon.as_deref(), Some(&icon));
     #[cfg(target_os = "windows")]
     {
         // None would load eframe's default icon; only the explicit empty sentinel prevents
         // its first-frame setter from overwriting our full-resolution ICON_BIG.
         for renderer in [eframe::Renderer::Glow, eframe::Renderer::Wgpu] {
-            let viewport = super::native_options(false, false, renderer).viewport;
+            let viewport = super::native_options(false, renderer).viewport;
             assert_eq!(viewport.icon.as_deref(), Some(&egui::IconData::default()));
         }
         assert_eq!((icon.width, icon.height), (256, 256));
@@ -165,15 +67,34 @@ fn the_window_and_windows_taskbar_icons_load_from_the_bundled_png() {
 #[test]
 fn a_software_renderer_is_shown_to_the_user() {
     use eframe::wgpu::DeviceType;
+    // The notices the window shows after one frame of `app`.
+    fn shown(app: pdfcraft_ui_egui::PdfCraftApp) -> Vec<String> {
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |cc| {
+            install_runtime(&cc.egui_ctx);
+            app
+        });
+        h.run_steps(2);
+        let cards = craft::ui::runtime::toast::cards(&h.ctx, &craft::ui::runtime::env::WindowKey::main());
+        // A posted notice's text is the card's title; a message and bullet lines follow it.
+        cards
+            .iter()
+            .map(|card| {
+                let toast = &card.toast;
+                let parts = toast.title.iter().chain(std::iter::once(&toast.message)).chain(&toast.lines);
+                parts.map(|part| part.as_str()).filter(|text| !text.is_empty()).collect::<Vec<_>>().join("\n")
+            })
+            .collect()
+    }
     // Issue #519: WARP or llvmpipe is announced in the app, not just in pdfcraft.log.
-    let mut app = super::PdfCraftApp::new();
+    let mut app = crate::startup::test_app();
     super::notify_software_renderer(&mut app, DeviceType::Cpu);
-    let notice = app.toast.as_ref().map(|(m, _)| m.as_str()).unwrap_or_default();
-    assert!(notice.contains("without a graphics processor"), "{notice:?}");
+    let notices = shown(app);
+    assert!(notices.iter().any(|n| n.contains("without a graphics processor")), "{notices:?}");
     for gpu in [DeviceType::IntegratedGpu, DeviceType::DiscreteGpu, DeviceType::VirtualGpu, DeviceType::Other] {
-        let mut app = super::PdfCraftApp::new();
+        let mut app = crate::startup::test_app();
         super::notify_software_renderer(&mut app, gpu);
-        assert!(app.toast.is_none(), "{gpu:?}: {:?}", app.toast);
+        let notices = shown(app);
+        assert!(notices.is_empty(), "{gpu:?}: {notices:?}");
     }
 }
 
@@ -315,21 +236,6 @@ fn surface_fit_never_empties_or_overflows_a_surface() {
     }
 }
 
-/// Regression test: the lockfile resolves egui-wgpu 0.37.0 through an allowed source, the root manifest
-/// does not path-patch the vendor copy, and that copy stays as provenance for the surface-fit patch.
-#[test]
-fn vendor_provenance_egui_wgpu_surface_fit_identity() {
-    // Issue #577: egui-wgpu configured a window's surface at the window's size, and
-    // `Surface::configure` panics when that's beyond the device's `max_texture_dimension_2d`
-    // (emilk/egui#8361). The reviewed egui 0.37 worktree carries E2 (`surface_fit`); the
-    // behavioural test above exercises it. The old 0.36 vendor copy is retained for
-    // provenance only and is no longer a published path patch, so reading it would not prove
-    // what the app runs.
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    assert_window_stack_graph(&root, "egui-wgpu", "0.37.0");
-    assert!(root.join("vendor/egui-wgpu/src/winit.rs").exists(), "the vendor copy and its provenance stay until the fork revision is pinned");
-}
-
 #[test]
 fn a_gpu_error_while_a_window_is_set_up_is_returned_not_a_panic() {
     // Issue #519: on a 2015 Intel GPU, wgpu's GL backend couldn't configure the window's
@@ -340,7 +246,7 @@ fn a_gpu_error_while_a_window_is_set_up_is_returned_not_a_panic() {
     // than the device allows.
     use eframe::wgpu;
     let _gpu = gpu();
-    let native = super::native_options(false, false, eframe::Renderer::Wgpu);
+    let native = super::native_options(false, eframe::Renderer::Wgpu);
     let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &native.wgpu_options.wgpu_setup else { panic!("default setup creates its own instance") };
     let instance = pollster::block_on(native.wgpu_options.wgpu_setup.new_instance());
     let options = wgpu::RequestAdapterOptions { power_preference: setup.power_preference, ..Default::default() };
@@ -381,27 +287,11 @@ fn a_gpu_error_while_a_window_is_set_up_is_returned_not_a_panic() {
     assert!(matches!(caught, Err(wgpu::Error::Validation { .. })), "outer: {caught:?}");
 }
 
-/// Regression test: the lockfile resolves egui-wgpu 0.37.0 through an allowed source, the root manifest
-/// does not path-patch the vendor copy, and that copy stays as provenance for the catch-errors patch.
-#[test]
-fn vendor_provenance_egui_wgpu_catch_errors_identity() {
-    // Issue #519: E3 (`catch_errors`) is tested above against a real device. The reviewed 0.37
-    // worktree carries it around the first configure of every new window's surface, and its
-    // error reaches eframe as `WgpuError` (eframe then returns `Error::Wgpu`, which `main`
-    // retries with OpenGL). Without it a failed configure panics before the app is created.
-    // `catch_errors` is exercised against a real device in the test above and below; the
-    // graph check makes sure the app runs the reviewed 0.37 worktree (the retained vendor
-    // copy is not read as proof of behaviour).
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    assert_window_stack_graph(&root, "egui-wgpu", "0.37.0");
-    assert!(root.join("vendor/egui-wgpu/src/winit.rs").exists(), "the vendor copy and its provenance stay until the fork revision is pinned");
-}
-
 #[test]
 fn pipeline_creation_error_is_returned_and_device_remains_usable() {
     use eframe::{egui_wgpu, wgpu};
     let _gpu = gpu();
-    let mut native = super::native_options(false, false, eframe::Renderer::Wgpu);
+    let mut native = super::native_options(false, eframe::Renderer::Wgpu);
     let egui_wgpu::WgpuSetup::CreateNew(setup) = &native.wgpu_options.wgpu_setup else { panic!("default setup creates its own instance") };
     let instance = pollster::block_on(native.wgpu_options.wgpu_setup.new_instance());
     let options = wgpu::RequestAdapterOptions { power_preference: setup.power_preference, ..Default::default() };
@@ -426,35 +316,6 @@ fn pipeline_creation_error_is_returned_and_device_remains_usable() {
             assert!(result.is_ok(), "the device must remain usable: {:?}", result.err());
         }
     }
-}
-
-/// Regression test: winit resolves to 0.30.13 without a published vendor path patch, the retained copy
-/// still carries the W1 Windows 11 monitor-scale fix, and its upstream base is recorded.
-#[test]
-fn winit_carries_the_windows_11_monitor_scale_fix() {
-    // Issue #324: winit 0.30.13 as released nudges a window dragged onto a monitor with another
-    // scale factor back onto the one it is leaving, so on Windows 11 it ends up on the wrong
-    // monitor, at the wrong size and scale. vendor/winit carries the fix from winit master. A
-    // dependency bump that resolves winit from crates.io again, or a re-vendored copy without
-    // the patch, would silently bring the bug back: re-apply the patch, or drop the copy once a
-    // winit 0.30 release has the fix (vendor/README.md).
-    // W1 (and W2–W13) were audited against the reviewed winit worktree: the vendor rows in
-    // `vendor/README.md` match the fork's PATCHES.md entries W1–W13. The vendor source is no
-    // longer a published path patch, so this checks the actual graph, not the old copy.
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    assert_window_stack_graph(&root, "winit", "0.30.13");
-    let event_loop = std::fs::read_to_string(root.join("vendor/winit/src/platform_impl/windows/event_loop.rs")).unwrap();
-    // The audited W1 hunk itself, not merely the file's presence: Windows 11 applies the
-    // rect Windows suggests, while Windows 10 keeps the old adjustment.
-    for marker in [
-        "PdfCraft patch: from Windows 11 (build 22000) on, apply the rect Windows suggests",
-        "if !WIN10_BUILD_VERSION.is_some_and(|build| build < 22000) {",
-        "new_outer_rect = suggested_rect;",
-    ] {
-        assert!(event_loop.contains(marker), "vendor/winit lost the W1 monitor-scale patch: {marker}");
-    }
-    let provenance = std::fs::read_to_string(root.join("vendor/winit/.cargo_vcs_info.json")).unwrap();
-    assert!(provenance.contains("e9809ef54b18499bb4f2cac945719ecc2a61061b"), "vendor/winit keeps its upstream base provenance");
 }
 
 const NVIDIA: (u32, u32) = (0x10de, 0x2684);
@@ -605,114 +466,6 @@ fn linux_display_gpus_reads_connected_connectors() -> std::io::Result<()> {
     assert_eq!(laptop, vec![panel(AMD_IGPU), monitor(NVIDIA)]);
     assert!(super::linux_display_gpus(std::path::Path::new("/nonexistent/drm")).is_empty());
     Ok(())
-}
-
-/// A fresh folder per call: tests run in parallel.
-fn scratch() -> std::path::PathBuf {
-    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let d = std::env::temp_dir().join(format!("pdfcraft-control-file-{}-{n}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
-}
-
-/// The control file's port and token, and every name in its folder.
-fn written(dir: &std::path::Path) -> (serde_json::Value, Vec<String>) {
-    let json = serde_json::from_str(&std::fs::read_to_string(dir.join("ctl.json")).unwrap()).unwrap();
-    let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
-    names.sort();
-    (json, names)
-}
-
-#[test]
-fn the_control_file_replaces_a_hard_link_instead_of_writing_through_it() {
-    // The file used to be opened with create + truncate, so a link planted at the path had its
-    // target truncated and overwritten with the token.
-    let dir = scratch();
-    std::fs::write(dir.join("victim.txt"), "keep me").unwrap();
-    std::fs::hard_link(dir.join("victim.txt"), dir.join("ctl.json")).unwrap();
-    super::write_control_file(&dir.join("ctl.json").to_string_lossy(), 4242, "t0ken").unwrap();
-    assert_eq!(std::fs::read_to_string(dir.join("victim.txt")).unwrap(), "keep me");
-    let (json, names) = written(&dir);
-    assert_eq!((json["port"].as_u64(), json["token"].as_str()), (Some(4242), Some("t0ken")));
-    assert_eq!(names, ["ctl.json", "victim.txt"], "no temporary file left behind");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn the_control_file_replaces_a_symlink_instead_of_writing_through_it() {
-    let dir = scratch();
-    let (link, target) = (dir.join("ctl.json"), dir.join("victim.txt"));
-    std::fs::write(&target, "keep me").unwrap();
-    #[cfg(unix)]
-    let made = std::os::unix::fs::symlink(&target, &link);
-    #[cfg(windows)]
-    let made = std::os::windows::fs::symlink_file(&target, &link);
-    if let Err(e) = made {
-        // Windows needs Developer Mode (or admin) for symlinks.
-        eprintln!("skipped: can't create a symlink here: {e}");
-        let _ = std::fs::remove_dir_all(&dir);
-        return;
-    }
-    super::write_control_file(&link.to_string_lossy(), 4242, "t0ken").unwrap();
-    assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep me");
-    assert!(!std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
-    assert_eq!(written(&dir).0["token"].as_str(), Some("t0ken"));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn the_control_file_replaces_the_one_a_previous_run_left() {
-    let dir = scratch();
-    std::fs::write(dir.join("ctl.json"), r#"{"port":1,"token":"old"}"#).unwrap();
-    super::write_control_file(&dir.join("ctl.json").to_string_lossy(), 4242, "t0ken").unwrap();
-    let (json, names) = written(&dir);
-    assert_eq!(json["token"].as_str(), Some("t0ken"));
-    assert_eq!(names, ["ctl.json"]);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(dir.join("ctl.json")).unwrap().permissions().mode();
-        assert_eq!(mode & 0o077, 0, "only the owner can read the token: {mode:o}");
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// #3922: a control file created in a folder that lets every user read what's in it is still
-/// readable by its user and SYSTEM only, like mode 0600 on Unix.
-#[cfg(windows)]
-#[test]
-fn the_control_file_is_owner_only_in_a_folder_other_users_can_read() {
-    use pdfcraft_platform::owner_only;
-    let dir = scratch();
-    let users = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)R").output().unwrap();
-    assert!(users.status.success());
-    // What the folder hands down, for comparison: a plain file there is readable by Users.
-    std::fs::write(dir.join("plain.txt"), "x").unwrap();
-    let me = owner_only::current_user_sid().unwrap();
-    assert!(owner_only::foreign_access(&owner_only::sddl_of(&dir.join("plain.txt")).unwrap(), &me).is_some());
-    super::write_control_file(&dir.join("ctl.json").to_string_lossy(), 4242, "t0ken").unwrap();
-    let sddl = owner_only::sddl_of(&dir.join("ctl.json")).unwrap();
-    assert_eq!(owner_only::foreign_access(&sddl, &me), None, "{sddl}");
-    let (json, names) = written(&dir);
-    assert_eq!(json["token"].as_str(), Some("t0ken"));
-    assert_eq!(names, ["ctl.json", "plain.txt"], "no private staging folder left behind");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// Review on #3956: writing the control file reads the user's SID once, for both the private
-/// folder and the file in it, rather than starting `whoami` for each.
-#[cfg(windows)]
-#[test]
-fn writing_the_control_file_looks_up_the_users_sid_once() {
-    use pdfcraft_platform::owner_only::sid_lookups_on_this_thread;
-    let dir = scratch();
-    let before = sid_lookups_on_this_thread();
-    super::write_control_file(&dir.join("ctl.json").to_string_lossy(), 4242, "t0ken").unwrap();
-    assert_eq!(sid_lookups_on_this_thread().saturating_sub(before), 1, "whoami runs once per control file");
-    assert_eq!(written(&dir).0["token"].as_str(), Some("t0ken"));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// X11 startup notification and docks match a window to its launcher by `StartupWMClass`,
