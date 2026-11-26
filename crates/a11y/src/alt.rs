@@ -23,14 +23,14 @@ pub enum AltError {
     Untagged,
     #[error("object {0} is not a figure")]
     NotAFigure(u32),
+    #[error("the tag has child structure elements; mark a leaf tag instead")]
+    HasChildren,
+    #[error("this action does not support form streams, annotation or object references, other pages or invalid content references")]
+    UnsupportedContent,
     #[error("the page has more content than can be edited")]
     TooLarge,
     #[error("the figure's content may be in a damaged or unreadable content stream, or after the damage, so nothing was changed")]
     Damaged,
-    #[error("the figure's content is in a form XObject or on another page, which this edit can't rewrite, so nothing was changed")]
-    ContentElsewhere,
-    #[error("the figure has child structure elements, which would leave the tag tree with it, so nothing was changed")]
-    HasChildren,
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
 }
@@ -44,10 +44,10 @@ pub enum ArtifactError {
     NotATag(u32),
     #[error("the tag has child structure elements; mark a leaf tag instead")]
     HasChildren,
-    #[error("the tag's content is in a form XObject or on another page, which this edit can't rewrite, so nothing was changed")]
-    ContentElsewhere,
     #[error("the tag has no direct marked content")]
     NoMarkedContent,
+    #[error("this action does not support form streams, annotation or object references, other pages or invalid content references")]
+    UnsupportedContent,
     #[error("the tag has no page")]
     NoPage,
     #[error("the tag's marked content was not found on its page")]
@@ -140,11 +140,6 @@ pub(crate) fn elements(doc: &Document) -> Vec<Element> {
     out
 }
 
-/// The marked-content ids an element owns directly.
-fn mcids(doc: &Document, d: &Dict) -> Vec<i64> {
-    mcids_where(doc, d, |_| true)
-}
-
 /// The marked-content ids an element owns directly in the content of its page `page`: not those of
 /// a marked-content reference with /Stm, which are ids in that stream's content, nor of one whose
 /// /Pg is another page, which are ids on that page (ISO 32000-2 Table 357). An equal id on `page`
@@ -157,17 +152,6 @@ fn page_mcids(doc: &Document, d: &Dict, page: Option<ObjRef>) -> Vec<i64> {
 /// the element holding it (ISO 32000-2 Table 357).
 fn on_page(m: &Dict, page: Option<ObjRef>) -> bool {
     !m.contains(b"Stm") && m.get(b"Pg").and_then(Object::as_ref).is_none_or(|p| Some(p) == page)
-}
-
-/// Whether element `d` directly holds a marked-content reference to content outside the page
-/// content of `page`: in a form XObject (/Stm) or on another page (ISO 32000-2 Table 357).
-fn holds_content_elsewhere(doc: &Document, d: &Dict, page: Option<ObjRef>) -> bool {
-    let elsewhere = |o: &Object| matches!(&*doc.resolve(o), Object::Dict(m) if m.name(b"Type") == Some(b"MCR") && !on_page(m, page));
-    let Some(k) = d.get(b"K").map(|k| doc.resolve(k)) else { return false };
-    match &*k {
-        Object::Array(a) => a.iter().any(elsewhere),
-        o => elsewhere(o),
-    }
 }
 
 /// The marked-content ids an element owns directly: integers, and those of the marked-content
@@ -190,6 +174,74 @@ fn mcids_where(doc: &Document, d: &Dict, keep: impl Fn(&Dict) -> bool) -> Vec<i6
         o => push(o),
     }
     out
+}
+
+/// Validation for the page-only destructive actions. Readout keeps its existing MCID reader.
+enum MutationContentError {
+    HasChildren,
+    Unsupported,
+}
+
+fn mutation_mcids(doc: &Document, tag: &Dict, page: Option<ObjRef>) -> Result<HashSet<i64>, MutationContentError> {
+    fn visit(
+        doc: &Document,
+        item: &Object,
+        page: Option<ObjRef>,
+        depth: usize,
+        remaining: &mut usize,
+        ancestors: &mut HashSet<ObjRef>,
+        ids: &mut HashSet<i64>,
+    ) -> Result<(), MutationContentError> {
+        if depth > 64 || *remaining == 0 {
+            return Err(MutationContentError::Unsupported);
+        }
+        *remaining -= 1;
+        match item {
+            Object::Int(id) if *id >= 0 => {
+                ids.insert(*id);
+            }
+            Object::Array(items) => {
+                for item in items {
+                    visit(doc, item, page, depth + 1, remaining, ancestors, ids)?;
+                }
+            }
+            Object::Ref(reference) => {
+                if reference.generation != doc.generation(reference.num) || !ancestors.insert(*reference) {
+                    return Err(MutationContentError::Unsupported);
+                }
+                let result = visit(doc, &doc.get(*reference), page, depth + 1, remaining, ancestors, ids);
+                ancestors.remove(reference);
+                result?;
+            }
+            Object::Dict(dict) => {
+                if dict.contains(b"S") {
+                    // Retiring a parent also removes descendants whose content was not checked.
+                    return Err(MutationContentError::HasChildren);
+                }
+                // Presence matters: even a malformed stream qualifier must not become a page ID.
+                // Never resolve these targets; this action does not support form streams.
+                if dict.contains(b"Stm") || dict.contains(b"StmOwn") || dict.name(b"Type") != Some(b"MCR") {
+                    return Err(MutationContentError::Unsupported);
+                }
+                if let Some(explicit_page) = dict.get(b"Pg") {
+                    let explicit_page = explicit_page.as_ref().ok_or(MutationContentError::Unsupported)?;
+                    if Some(explicit_page) != page {
+                        return Err(MutationContentError::Unsupported);
+                    }
+                }
+                let id = dict.get(b"MCID").and_then(Object::as_int).filter(|id| *id >= 0).ok_or(MutationContentError::Unsupported)?;
+                ids.insert(id);
+            }
+            _ => return Err(MutationContentError::Unsupported),
+        }
+        Ok(())
+    }
+
+    let mut ids = HashSet::new();
+    if let Some(kids) = tag.get(b"K") {
+        visit(doc, kids, page, 0, &mut 4096, &mut HashSet::new(), &mut ids)?;
+    }
+    Ok(ids)
 }
 
 /// The page's named property lists (`/Resources /Properties`), which a `BDC` can name instead of
@@ -552,21 +604,19 @@ fn artifact_marked_content(
 }
 
 /// Decorative figure: its marked content on the page becomes an artifact, and the element
-/// leaves the structure tree (and the parent tree).
+/// leaves the structure tree (and the parent tree). Form references and structure children refuse
+/// before the document changes.
 pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> {
     let d = check_figure(doc, obj)?;
-    let ids: HashSet<i64> = mcids(doc, &d).into_iter().collect();
     let pages = pdfcraft_model::pages(doc);
     let pg = d.get(b"Pg").and_then(Object::as_ref).or_else(|| elements(doc).into_iter().find(|e| e.object == obj).and_then(|e| e.page));
-    // Only the page's own content is rewritten. An id in a form XObject or on another page is
-    // another sequence there, and an equal id on this page is unrelated content: refuse before
-    // anything changes, the tag tree included.
-    if holds_content_elsewhere(doc, &d, pg) {
-        return Err(AltError::ContentElsewhere);
-    }
-    // Its child elements (a Caption, say) would leave the tree with it.
-    if has_child_structure(doc, &d) {
-        return Err(AltError::HasChildren);
+    let page = pg.and_then(|p| pages.iter().find(|page| page.obj == p));
+    let ids = mutation_mcids(doc, &d, page.map(|page| page.obj)).map_err(|error| match error {
+        MutationContentError::HasChildren => AltError::HasChildren,
+        MutationContentError::Unsupported => AltError::UnsupportedContent,
+    })?;
+    if !ids.is_empty() && page.is_none() {
+        return Err(AltError::UnsupportedContent);
     }
     // Its parent's kids without it, worked out before anything changes. /K may be an indirect
     // reference to the array, which is the same kids as an inline one.
@@ -580,7 +630,7 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
             _ => None,
         }
     });
-    if let Some(page) = pg.and_then(|p| pages.iter().find(|x| x.obj == p)).filter(|_| !ids.is_empty()) {
+    if let Some(page) = page.filter(|_| !ids.is_empty()) {
         let streams = decode_page_streams(doc, &page.dict).ok_or(AltError::TooLarge)?;
         match artifact_marked_content(doc, page, streams, &ids, false)? {
             // The parent tree no longer points those ids at the figure.
@@ -603,22 +653,18 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
 /// Mark a leaf structure tag's directly owned marked content as an artifact.
 ///
 /// This deliberately refuses a tag with child structure elements. Converting a parent would
-/// otherwise silently discard semantic descendants. The visible page content is preserved: each
+/// otherwise silently discard semantic descendants. Form references and invalid page ownership
+/// also refuse before the document changes. A missing, ambiguous or mismatched parent also refuses before
+/// mutation. The visible page content is preserved: each
 /// matching marked-content sequence changes from `BDC` with an MCID to `/Artifact BMC`.
 pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), ArtifactError> {
     tree_root(doc).ok_or(ArtifactError::Untagged)?;
     let elements = elements(doc);
     let Some(element) = elements.iter().find(|e| e.object == obj) else { return Err(ArtifactError::NotATag(obj.num)) };
-    if has_child_structure(doc, &element.dict) {
-        return Err(ArtifactError::HasChildren);
-    }
-    // Only the page's own content is rewritten. An id in a form XObject or on another page is
-    // another sequence there, and an equal id on this page is unrelated content: refuse before
-    // anything changes (ISO 32000-2 Table 357).
-    if holds_content_elsewhere(doc, &element.dict, element.page) {
-        return Err(ArtifactError::ContentElsewhere);
-    }
-    let ids: HashSet<i64> = mcids(doc, &element.dict).into_iter().collect();
+    let ids = mutation_mcids(doc, &element.dict, element.page).map_err(|error| match error {
+        MutationContentError::HasChildren => ArtifactError::HasChildren,
+        MutationContentError::Unsupported => ArtifactError::UnsupportedContent,
+    })?;
     if ids.is_empty() {
         return Err(ArtifactError::NoMarkedContent);
     }
@@ -627,6 +673,14 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     let page = pages.iter().find(|page| page.obj == page_ref).ok_or(ArtifactError::NoPage)?;
     let parent = element.dict.get(b"P").and_then(Object::as_ref).ok_or(ArtifactError::NoParent)?;
     let replacement = replacement_kids(doc, parent, obj)?;
+    // The `/P` the tag names must be the parent it was reached from (or the structure root),
+    // checked before the page changes.
+    let reachable_parent = element
+        .parent
+        .or_else(|| doc.root().and_then(|catalog| doc.get(catalog).as_dict().and_then(|dict| dict.get(b"StructTreeRoot").and_then(Object::as_ref))));
+    if reachable_parent != Some(parent) {
+        return Err(ArtifactError::NoParent);
+    }
     let streams = decode_page_streams(doc, &page.dict).ok_or(ArtifactError::TooLarge)?;
     match artifact_marked_content(doc, page, streams, &ids, true)? {
         Marked::Done => {}
@@ -642,27 +696,6 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
         d.remove(b"P");
     })?;
     Ok(())
-}
-
-/// Whether `tag` has a structure element among its kids. /K may be an indirect reference to the
-/// array of kids, read like an inline one; a reference inside it is followed to a dictionary only,
-/// so a cycle of arrays ends there.
-fn has_child_structure(doc: &Document, tag: &Dict) -> bool {
-    fn child(doc: &Document, item: &Object) -> bool {
-        match item {
-            Object::Array(items) => items.iter().any(|item| child(doc, item)),
-            Object::Ref(r) => doc.get(*r).as_dict().is_some_and(|d| d.contains(b"S")),
-            Object::Dict(d) => d.contains(b"S"),
-            _ => false,
-        }
-    }
-    tag.get(b"K").is_some_and(|items| match items {
-        Object::Ref(r) => match &*doc.get(*r) {
-            Object::Array(items) => items.iter().any(|item| child(doc, item)),
-            other => child(doc, other),
-        },
-        items => child(doc, items),
-    })
 }
 
 fn replacement_kids(doc: &Document, parent: ObjRef, obj: ObjRef) -> Result<Object, ArtifactError> {
