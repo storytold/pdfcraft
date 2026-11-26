@@ -203,6 +203,7 @@ impl Automation {
             "bookmark_export" => self.bookmark_export(&a)?,
             "bookmark_import" => self.bookmark_import(&a)?,
             "bookmark_copy" => self.bookmark_copy(&a)?,
+            "bookmark_suggest" => self.bookmark_suggest(&a)?,
             "bookmark_add" => {
                 let page = self.page(&a)?;
                 let parent = a.opt_path("parent")?.unwrap_or_default();
