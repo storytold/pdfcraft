@@ -297,8 +297,7 @@ pub(crate) fn edit(args: &[String]) -> Result<(), CliError> {
 /// Write a PDF a command produced, through a staging file beside the target (#2166): a write
 /// that fails, or `--out` naming the input, never leaves a truncated file where a good one was.
 fn write_pdf(out: &Path, bytes: &[u8]) -> Result<(), CliError> {
-    use pdfcraft_platform::staging::{StagingName, write_atomically};
-    write_atomically(out, bytes, StagingName::SuffixThenTag).map_err(|e| format!("{}: {e}", out.display()).into())
+    craft::atomic::atomic_write(out, bytes).map_err(|e| format!("{}: {e}", out.display()).into())
 }
 
 fn file_stem(path: &str) -> String {
@@ -434,7 +433,10 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
     for warning in &p.warnings {
         match warning {
             pdfcraft_render::RenderWarning::ContentTruncated => {
-                let _ = writeln!(std::io::stderr().lock(), "warning: page {page}: content past the page's safety budget was skipped");
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "warning: page {page}: content past the page's safety budget, or a picture whose JBIG2 mask is past a decoder limit, was skipped"
+                );
             }
             pdfcraft_render::RenderWarning::ColourFallback => {
                 let _ =

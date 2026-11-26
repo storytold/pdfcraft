@@ -27,7 +27,7 @@
 //! no Unix sockets on Windows, and calling Winsock directly would need `unsafe`, which the
 //! workspace forbids.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
 use std::time::Duration;
 
@@ -36,7 +36,8 @@ use std::os::unix::net::{UnixListener, UnixStream};
 #[cfg(windows)]
 use uds_windows::{UnixListener, UnixStream};
 
-use pdfcraft_ui_egui::{OsEvent, OsEventsFn};
+use craft::host::Wake;
+use craft::platform::open::{FileIntake, IntakeSender};
 
 /// Longest request read: one line of JSON, far longer than any real list of paths.
 #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
@@ -57,69 +58,56 @@ pub enum Claim {
     Alone,
 }
 
-/// Files that later launches handed over, and how to wake the UI for them.
-#[derive(Default)]
-struct Inbox {
-    /// The requests in the order they arrived: [`OsEvent::Open`] or, for `--combine`,
-    /// [`OsEvent::Combine`]. One queue, so the UI handles an Open that came after a Combine after
-    /// it, and that Open comes to the front instead of opening behind the Combine files tab.
-    events: Vec<OsEvent>,
-    wake: Option<Box<dyn Fn() + Send>>,
-}
-
 /// The first PdfCraft's end of the socket. A background thread accepts launches until the
-/// process exits; the UI picks their files up through [`Server::connect`].
+/// process exits and queues their files on an intake; the UI takes the intake through
+/// [`Server::connect`]. The intake exists before the window does, so files that a launch hands
+/// over at once are kept until the UI takes them.
 pub struct Server {
-    inbox: Arc<Mutex<Inbox>>,
+    /// Feeds `intake`; the socket thread keeps a clone.
+    sender: IntakeSender,
+    /// The window's context, set by [`Server::connect`]; a batch that arrives earlier wakes nothing.
+    ctx: Arc<OnceLock<egui::Context>>,
+    /// Handed out once by [`Server::connect`].
+    intake: Mutex<Option<FileIntake>>,
 }
 
 impl Server {
     #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
     fn new() -> Self {
-        Self { inbox: Arc::default() }
+        let ctx: Arc<OnceLock<egui::Context>> = Arc::default();
+        let woken = Arc::clone(&ctx);
+        let wake = Wake::new(move || {
+            if let Some(ctx) = woken.get() {
+                ctx.request_repaint();
+            }
+        });
+        let (intake, sender) = FileIntake::new(wake);
+        Self { sender, ctx, intake: Mutex::new(Some(intake)) }
     }
 
-    /// Queue files from another launch (to open, or to combine) and wake the UI.
-    #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
-    fn deliver(&self, paths: Vec<String>, combine: bool) {
-        if paths.is_empty() {
-            return;
-        }
-        let mut inbox = self.inbox.lock().unwrap_or_else(PoisonError::into_inner);
-        // A run of requests of one kind (File Explorer starts one launch per selected file) stays
-        // one event; a request of the other kind starts a new one after it.
-        match (inbox.events.last_mut(), combine) {
-            (Some(OsEvent::Combine(queued)), true) | (Some(OsEvent::Open(queued)), false) => queued.extend(paths),
-            (_, true) => inbox.events.push(OsEvent::Combine(paths)),
-            (_, false) => inbox.events.push(OsEvent::Open(paths)),
-        }
-        if let Some(wake) = &inbox.wake {
-            wake();
-        }
+    /// The intake the UI drains every frame. Files that arrived before the window existed are in
+    /// the first batch, and later batches wake `ctx`. The first call hands out the server's own
+    /// intake; a second call gets an empty one that nothing feeds, since the files go to the first.
+    pub fn connect(&self, ctx: &egui::Context) -> FileIntake {
+        // A second `connect` keeps the context of the first, which is the one the window runs on.
+        let _ = self.ctx.set(ctx.clone());
+        let taken = self.intake.lock().unwrap_or_else(PoisonError::into_inner).take();
+        taken.unwrap_or_else(|| FileIntake::new(Wake::none()).0)
     }
+}
 
-    /// The queue the UI drains every frame (`PdfCraftApp::os_events`). Files that arrived before
-    /// the window existed are in the first batch. A batch also brings the window forward, as the
-    /// new window it replaces would have been. A Wayland window can't bring itself forward (winit
-    /// ignores `Focus` there), so on `native_wayland` it asks for the user's attention instead,
-    /// which desktops show by highlighting it in the taskbar.
-    pub fn connect(&self, ctx: &egui::Context, native_wayland: bool) -> OsEventsFn {
-        let wake = ctx.clone();
-        self.inbox.lock().unwrap_or_else(PoisonError::into_inner).wake = Some(Box::new(move || wake.request_repaint()));
-        let inbox = Arc::clone(&self.inbox);
-        let ctx = ctx.clone();
-        Box::new(move || {
-            let events = std::mem::take(&mut inbox.lock().unwrap_or_else(PoisonError::into_inner).events);
-            if events.is_empty() {
-                return Vec::new();
-            }
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            if native_wayland {
-                ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
-            }
-            events
-        })
+/// Queue files from another launch (to open, or to combine) on `sender`, which wakes the UI.
+/// Several launches arriving apart are several batches, in the order they arrived, so an Open that
+/// follows a Combine is handled after it and comes to the front instead of opening behind the
+/// Combine files tab.
+#[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
+fn deliver(sender: &IntakeSender, paths: Vec<String>, combine: bool) {
+    // `open` and `open_for` make each path absolute and sort the batch.
+    let paths: Vec<std::path::PathBuf> = paths.into_iter().map(std::path::PathBuf::from).collect();
+    if combine {
+        sender.open_for(paths, "combine");
+    } else {
+        sender.open(paths);
     }
 }
 
@@ -152,9 +140,20 @@ pub fn parse_request(line: &str) -> Option<(Vec<String>, bool)> {
 }
 
 /// File arguments made absolute against this launch's working folder, which the running app
-/// doesn't share. A path that can't be made absolute is sent as it is.
+/// doesn't share. A path that can't be made absolute is sent as it is. Of a file named with open
+/// parameters (`manual.pdf#nameddest=Intro`, #3425), only the file is made absolute and the
+/// parameters are sent as given: as part of the path, `//` and `/./` in a destination name were
+/// folded, and on Windows `/` became `\`, `..` took the file name with it and a trailing dot went.
 pub fn absolute(paths: &[String]) -> Vec<String> {
-    paths.iter().map(|p| std::path::absolute(p).map_or_else(|_| p.clone(), |a| a.to_string_lossy().into_owned())).collect()
+    let made = |p: &str| std::path::absolute(p).map_or_else(|_| p.to_string(), |a| a.to_string_lossy().into_owned());
+    paths
+        .iter()
+        .map(|p| match pdfcraft_engine::open_parameters::split(p, |f| std::path::Path::new(f).is_file()) {
+            // `file` is what comes before one of `p`'s `#`, so the rest starts at that `#`.
+            Some((file, _)) => format!("{}{}", made(&file), p.get(file.len()..).unwrap_or_default()),
+            None => made(p),
+        })
+        .collect()
 }
 
 /// Decide what this launch does. `files` are absolute ([`absolute`]); `may_hand_off` is false
@@ -184,7 +183,7 @@ fn socket_path() -> Option<std::path::PathBuf> {
     // user's file paths or send it files to open. A portable copy uses it too (#889), under its
     // own name so it never hands files to an installed copy (which keeps its settings elsewhere).
     // Never the portable folder itself: it may sit where other accounts can write (`C:\Tools`).
-    let name = if pdfcraft_ui_egui::portable::data_dir().is_some() { format!("portable-{name}") } else { name };
+    let name = if pdfcraft_ui_egui::settings::portable_dir().is_some() { format!("portable-{name}") } else { name };
     std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(|d| std::path::PathBuf::from(d).join("PdfCraft").join(name))
 }
 
@@ -336,10 +335,10 @@ fn hand_off(stream: &UnixStream, files: &[String], combine: bool) -> std::io::Re
 #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
 fn serve(listener: UnixListener) -> Claim {
     let server = Server::new();
-    let inbox = Server { inbox: Arc::clone(&server.inbox) };
+    let sender = server.sender.clone();
     let started = std::thread::Builder::new().name("single-instance".into()).spawn(move || {
         for stream in listener.incoming() {
-            let result = stream.and_then(|s| receive(&s, &inbox));
+            let result = stream.and_then(|s| receive(&s, &sender));
             if let Err(e) = result {
                 log::warn!("single instance: a launch's request failed ({e})");
                 // Don't spin if accepting keeps failing.
@@ -358,7 +357,7 @@ fn serve(listener: UnixListener) -> Claim {
 
 /// Read one launch's request, queue its files and confirm.
 #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
-fn receive(stream: &UnixStream, server: &Server) -> std::io::Result<()> {
+fn receive(stream: &UnixStream, sender: &IntakeSender) -> std::io::Result<()> {
     use std::io::{BufRead, Read, Write};
     stream.set_read_timeout(Some(TIMEOUT))?;
     stream.set_write_timeout(Some(TIMEOUT))?;
@@ -369,7 +368,7 @@ fn receive(stream: &UnixStream, server: &Server) -> std::io::Result<()> {
         return Ok(());
     }
     let (paths, combine) = parse_request(&line).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "not an open request"))?;
-    server.deliver(paths, combine);
+    deliver(sender, paths, combine);
     let mut writer = stream;
     writer.write_all(b"ok\n")
 }
@@ -377,6 +376,8 @@ fn receive(stream: &UnixStream, server: &Server) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    use craft::platform::open::Intake;
 
     #[test]
     fn a_request_names_the_paths_and_round_trips() {
@@ -416,6 +417,26 @@ mod tests {
         assert_eq!(absolute(std::slice::from_ref(&already)), vec![already]);
     }
 
+    /// #3425: the open parameters after a file reach the running app as they were given. Made
+    /// absolute with the file, `a//b/./c` became `a/b/c` (`a\b\c` on Windows), and on Windows
+    /// `x/../y` lost the file name and `Intro.` its dot.
+    #[test]
+    fn only_the_file_before_open_parameters_is_made_absolute() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-instance-{}-open-parameters", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (manual, notes) = (dir.join("manual.pdf"), dir.join("notes#2.pdf"));
+        std::fs::write(&manual, b"%PDF-1.7").unwrap();
+        std::fs::write(&notes, b"%PDF-1.7").unwrap();
+        let made = |p: &std::path::Path| std::path::absolute(p).unwrap().to_string_lossy().into_owned();
+        for parameters in ["#nameddest=a//b/./c", "#nameddest=x/../y", "#Intro.", "#page=2"] {
+            let given = format!("{}{parameters}", manual.to_string_lossy());
+            assert_eq!(absolute(&[given]), vec![format!("{}{parameters}", made(&manual))], "{parameters}");
+        }
+        // A file with `#` in its name is made absolute whole, as before.
+        assert_eq!(absolute(&[notes.to_string_lossy().into_owned()]), vec![made(&notes)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn each_windows_session_gets_its_own_socket_name() {
         // The session id decides: #3338, a launch from Task Scheduler (no SESSIONNAME) in the
@@ -432,37 +453,6 @@ mod tests {
         assert_eq!(socket_name(None, Some(r"..\x/y:z")), "instance-xyz.sock", "never a path");
         assert_eq!(socket_name(None, None), "instance.sock");
         assert_eq!(socket_name(None, Some("")), "instance.sock");
-    }
-
-    #[test]
-    fn delivered_files_reach_the_ui_once_wake_it_and_bring_the_window_forward() {
-        let server = Server::new();
-        // Before the window exists: queued, nothing to wake yet.
-        server.deliver(vec!["a.pdf".into()], false);
-        let ctx = egui::Context::default();
-        let mut poll = server.connect(&ctx, false);
-        server.deliver(vec!["b.pdf".into()], false);
-        let events = poll();
-        assert!(matches!(events.as_slice(), [OsEvent::Open(p)] if p == &["a.pdf", "b.pdf"]));
-        assert!(poll().is_empty(), "each file is delivered once");
-        // Files to combine (one launch each, from File Explorer) arrive as one Combine event,
-        // apart from files to open.
-        server.deliver(vec!["c.pdf".into()], true);
-        server.deliver(vec!["e.pdf".into()], true);
-        let events = poll();
-        assert!(matches!(events.as_slice(), [OsEvent::Combine(c)] if c == &["c.pdf", "e.pdf"]), "{events:?}");
-        // #2503 review: requests reach the UI in the order they arrived, so an Open after a
-        // Combine is handled after it and comes to the front instead of opening behind the
-        // Combine files tab.
-        server.deliver(vec!["f.pdf".into()], true);
-        server.deliver(vec!["g.pdf".into()], false);
-        server.deliver(vec!["h.pdf".into()], true);
-        let events = poll();
-        assert!(
-            matches!(events.as_slice(), [OsEvent::Combine(f), OsEvent::Open(g), OsEvent::Combine(h)] if f == &["f.pdf"] && g == &["g.pdf"] && h == &["h.pdf"]),
-            "{events:?}"
-        );
-        assert!(poll().is_empty());
     }
 
     #[test]
@@ -501,15 +491,19 @@ mod tests {
     fn a_second_launch_hands_its_files_to_the_first() {
         let path = socket("hand-off");
         let Claim::Primary(first) = claim_at(&path, &[], true, false) else { panic!("the first launch listens") };
-        let mut poll = first.connect(&egui::Context::default(), false);
-        assert!(matches!(claim_at(&path, &["C:\\a.pdf".into()], true, false), Claim::HandedOff));
-        assert!(matches!(poll().as_slice(), [OsEvent::Open(p)] if p == &["C:\\a.pdf"]));
+        let intake = first.connect(&egui::Context::default());
+        // Absolute on every platform, so the intake keeps the path as it was sent.
+        let file = |name: &str| std::env::temp_dir().join(name);
+        let text = |name: &str| file(name).to_string_lossy().into_owned();
+        // The reply `ok` is sent after the batch is queued, so it is there once the launch returns.
+        assert!(matches!(claim_at(&path, &[text("a.pdf")], true, false), Claim::HandedOff));
+        assert_eq!(intake.take(), vec![Intake::Open(vec![file("a.pdf")])]);
         // A --combine launch hands its file over for the Combine files tab (#585).
-        assert!(matches!(claim_at(&path, &["C:\\c.pdf".into()], true, true), Claim::HandedOff));
-        assert!(matches!(poll().as_slice(), [OsEvent::Combine(p)] if p == &["C:\\c.pdf"]));
+        assert!(matches!(claim_at(&path, &[text("c.pdf")], true, true), Claim::HandedOff));
+        assert_eq!(intake.take(), vec![Intake::OpenFor { paths: vec![file("c.pdf")], action: "combine".to_string() }]);
         // A launch with options keeps its own window and doesn't take over the socket.
-        assert!(matches!(claim_at(&path, &["C:\\b.pdf".into()], false, false), Claim::Alone));
-        assert!(poll().is_empty());
+        assert!(matches!(claim_at(&path, &[text("b.pdf")], false, false), Claim::Alone));
+        assert!(intake.take().is_empty());
     }
 
     #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
