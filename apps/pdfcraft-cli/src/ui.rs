@@ -23,15 +23,16 @@ pub(crate) fn ui(args: &UiArgs, io: &mut Io) -> Result<(), CliError> {
     let file_flag = args.control_token_file.clone();
     let token_file_given = file_flag.or_else(|| if token_flag.is_some() { None } else { env_file });
     let supplied = token_flag.map(str::to_string).or_else(|| if token_file_given.is_some() { None } else { env_token });
-    let token = client_token(supplied.as_deref(), token_file_given.as_deref(), &FlagNames::default(), &env).map_err(|e| CliError::Ui(e.to_string()))?;
+    let token =
+        client_token(supplied.as_deref(), token_file_given.as_deref(), &FlagNames::default(), &env).map_err(|e| CliError::Ui(e.to_string()))?;
 
     let method = args.method.as_str();
     let method = if method.starts_with("ui.") { method.to_string() } else { format!("ui.{method}") };
     let params: serde_json::Map<String, serde_json::Value> = args.args.iter().map(|kv| (kv.key.clone(), kv.value.clone())).collect();
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    let mut client = ControlClient::connect(addr, &token)
-        .map_err(|e| CliError::Ui(format!("can't reach the app on port {port}: {e} (is it still running?)")))?;
+    let mut client =
+        ControlClient::connect(addr, &token).map_err(|e| CliError::Ui(format!("can't reach the app on port {port}: {e} (is it still running?)")))?;
     let mut result = client.call(&method, serde_json::Value::Object(params)).map_err(|e| CliError::Ui(e.to_string()))?;
     if let (Some(out), Some(data)) = (&args.out, result.get("base64").and_then(|d| d.as_str())) {
         use base64::Engine as _;
