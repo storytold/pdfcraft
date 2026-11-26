@@ -272,6 +272,16 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     if cleared == 0 {
         return Some(None);
     }
+    let mut dict = copy_dict(doc, s);
+    if codec == Codec::Jpx {
+        as_decoded_jpx(&mut dict, jpx_space);
+    }
+    Some(Some(smallest(dict, &data, w, h, ncomp == 1 && bpc == 1, codec == Codec::Jbig2)))
+}
+
+/// `s`'s dictionary for a copy coded again from its samples: without its length, decoding
+/// parameters and alternates, and without the parameters of data in another file unless it has some.
+fn copy_dict(doc: &Document, s: &Stream) -> Dict {
     let mut dict = s.dict.clone();
     for key in [b"Length".as_slice(), b"DecodeParms", b"DP", b"Alternates"] {
         dict.remove(key);
@@ -281,10 +291,7 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
         dict.remove(b"FFilter");
         dict.remove(b"FDecodeParms");
     }
-    if codec == Codec::Jpx {
-        as_decoded_jpx(&mut dict, jpx_space);
-    }
-    Some(Some(smallest(dict, &data, w, h, ncomp == 1 && bpc == 1, codec == Codec::Jbig2)))
+    dict
 }
 
 /// Whether `s`'s data is in another file, which a reader may draw instead of what is here: a `/F`
