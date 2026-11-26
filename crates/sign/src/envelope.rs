@@ -9,7 +9,7 @@
 use cbc::cipher::block_padding::Pkcs7;
 use cbc::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
 use pdfcraft_cos::Algorithm;
-use rsa::{BoxedUint, RsaPrivateKey, RsaPublicKey};
+use rsa::{BoxedUint, RsaPublicKey};
 
 use crate::SignError;
 use crate::der::{self, Tlv, tag};
@@ -254,52 +254,32 @@ fn rsa_pkcs1_encrypt(n: &[u8], e: &[u8], message: &[u8]) -> Result<Vec<u8>, Sign
     Ok(out)
 }
 
-/// The operating system's random generator, for the blinding of the RSA private-key operation.
-struct OsRng;
-
-impl rand_core::TryRng for OsRng {
-    type Error = getrandom::Error;
-    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-        let mut b = [0u8; 4];
-        getrandom::fill(&mut b)?;
-        Ok(u32::from_le_bytes(b))
-    }
-    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-        let mut b = [0u8; 8];
-        getrandom::fill(&mut b)?;
-        Ok(u64::from_le_bytes(b))
-    }
-    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
-        getrandom::fill(dst)
-    }
-}
-impl rand_core::TryCryptoRng for OsRng {}
-
-/// RSAES-PKCS1-v1_5 decryption with an RSA private key read from its PKCS #8 encoding. The
-/// private-key operation is blinded with random numbers and the padding is checked by the rsa
-/// crate in constant time, so a file opened over and over (through automation, say) gives a
-/// timing observer nothing.
+/// RSAES-PKCS1-v1_5 decryption with an RSA private key read from its PKCS #8 encoding, through
+/// aws-lc-rs like every RSA private-key operation (ADR-0009): its padding check runs in constant
+/// time, so a file opened over and over (through automation, say) gives a timing observer nothing.
+#[cfg(not(target_arch = "wasm32"))]
 fn rsa_pkcs1_decrypt(key: &PrivateKey, encrypted: &[u8]) -> Result<Vec<u8>, SignError> {
-    use rsa::traits::PaddingScheme as _;
-    let private = rsa_private_key(key)?;
-    rsa::Pkcs1v15Encrypt
-        .decrypt(Some(&mut OsRng), &private, encrypted)
-        .map_err(|_| SignError::Crypto("the wrapped key does not unwrap with this certificate's key".into()))
-}
-
-/// The RSA private key's numbers from its PKCS #8 `PrivateKeyInfo` (RFC 5208 + RFC 8017 A.1.2).
-fn rsa_private_key(key: &PrivateKey) -> Result<RsaPrivateKey, SignError> {
+    use aws_lc_rs::rsa::{Pkcs1PrivateDecryptingKey, PrivateDecryptingKey};
     if !matches!(key.public_key(), PublicKey::Rsa { .. }) {
         return Err(SignError::Unsupported("opening a certificate-protected document needs an RSA key".into()));
     }
-    let info = Tlv::parse_all(key.pkcs8()).map_err(|_| bad("PKCS #8"))?.expect(tag::SEQUENCE, "PrivateKeyInfo")?.children()?;
-    let inner = info.get(2).ok_or_else(|| bad("PrivateKeyInfo"))?.octets("privateKey")?.into_owned();
-    let rsa_key = Tlv::parse_all(&inner).map_err(|_| bad("RSAPrivateKey"))?.expect(tag::SEQUENCE, "RSAPrivateKey")?.children()?;
-    let num = |i: usize, what: &str| -> Result<BoxedUint, SignError> {
-        Ok(BoxedUint::from_be_slice_vartime(rsa_key.get(i).ok_or_else(|| bad(what))?.uint_bytes()))
-    };
-    let (n, e, d, p, q) = (num(1, "n")?, num(2, "e")?, num(3, "d")?, num(4, "p")?, num(5, "q")?);
-    RsaPrivateKey::from_components(n, e, d, vec![p, q]).map_err(|e| SignError::Crypto(format!("RSA private key: {e}")))
+    let private = PrivateDecryptingKey::from_pkcs8(key.pkcs8())
+        .ok()
+        .and_then(|k| Pkcs1PrivateDecryptingKey::new(k).ok())
+        .ok_or_else(|| SignError::Crypto("RSA private key: not one this key can decrypt with".into()))?;
+    let mut out = vec![0u8; private.min_output_size()];
+    let len = private
+        .decrypt(encrypted, &mut out)
+        .map_err(|_| SignError::Crypto("the wrapped key does not unwrap with this certificate's key".into()))?
+        .len();
+    out.truncate(len);
+    Ok(out)
+}
+
+/// The browser has no RSA private-key operation (as for RSA signing there).
+#[cfg(target_arch = "wasm32")]
+fn rsa_pkcs1_decrypt(_key: &PrivateKey, _encrypted: &[u8]) -> Result<Vec<u8>, SignError> {
+    Err(SignError::Unsupported("opening a certificate-protected document in the browser".into()))
 }
 
 #[cfg(test)]
