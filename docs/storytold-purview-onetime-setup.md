@@ -15,7 +15,9 @@ and testing, but an internal app must not be distributed as the public applicati
 This runbook implements the proposed shared standard in
 [RFC-0075](https://github.com/storytold/craft-contrib/pull/75), which is still a draft, and
 its [RFC discussion](https://github.com/storytold/craft-contrib/issues/73). It is not a
-substitute for Storytold's approval or Microsoft's agreements.
+substitute for Storytold's approval or Microsoft's agreements. Storytold
+pull requests and issues are the canonical references for suite work; fork
+repository URLs are not used in this runbook.
 
 | Application | Tracking | Suggested application of the standard |
 |---|---|---|
