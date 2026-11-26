@@ -51,8 +51,9 @@ impl Layouter<'_> {
     }
 
     /// The size (width, height) of `node` within `avail_w`, uncached ([`Self::size_at`] caches it).
-    /// Without a width, a container, a text draw or a button is as wide as its content (at most
-    /// `avail_w`) and anything else takes `avail_w`; without a height, it is as tall as its content.
+    /// Without a width, a container or a text draw is as wide as its content (at most `avail_w`),
+    /// a button as wide as its caption and anything else takes `avail_w`; without a height, it is
+    /// as tall as its content.
     /// `ctx` holds the SOM path of the instance measured: its repeating children count their
     /// instances under it, and a growing text field finds its value at it. `outer_para` is the
     /// paragraph around the node, which a field's caption takes.
@@ -60,8 +61,8 @@ impl Layouter<'_> {
         let c = node.common();
         let som = ctx.som.clone();
         // A container without a width is as wide as its content (a radio group beside its
-        // question, say), and so is a text label or a button (as wide as its caption), within
-        // what is available, and so is a check box (its box and caption); any other field without
+        // question, say), and so is a text label, within what is available, and so is a check
+        // box (its box and caption); a button is as wide as its caption; any other field without
         // one takes what is available.
         let w = match c.w {
             Some(w) => w,
@@ -74,11 +75,14 @@ impl Layouter<'_> {
                     Value::Line { edge, .. } => (edge.thickness.clamp(0.1, 20.0) + c.margin.horizontal()).min(avail_w),
                     _ => self.natural_width(&d.value, &ctx.font, &ctx.para).map_or(avail_w, |t| (t + c.margin.horizontal()).min(avail_w)),
                 },
+                // A button keeps its caption's width even where less is available (a table
+                // column narrower than the cell holding it), as other viewers draw it: squeezed,
+                // its caption would wrap letter by letter and the button run down the page (#5436).
                 Node::Field(f) if f.ui == Ui::Button => f
                     .caption
                     .as_ref()
                     .and_then(|cap| self.natural_width(&cap.value, &ctx.font.apply(&cap.font), &outer_para.apply(&cap.para)))
-                    .map_or(avail_w, |t| (t + c.margin.horizontal() + f.ui_margin.horizontal()).min(avail_w)),
+                    .map_or(avail_w, |t| t + c.margin.horizontal() + f.ui_margin.horizontal()),
                 Node::Field(f) if f.ui == Ui::CheckButton => (self.check_width(f, ctx) + c.margin.horizontal()).min(avail_w),
                 Node::Field(_) => avail_w,
             },

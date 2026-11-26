@@ -8056,3 +8056,48 @@ fn xfa_line_without_width_is_vertical_and_without_height_is_horizontal() {
         lines[5]
     );
 }
+
+/// A form whose table has a narrow first column (18pt) holding, in its footer row, a flowed
+/// cell that gives itself 81pt and a button without a width ("Add service", as on Minnesota
+/// DHS forms; #5436), with a text field after the table.
+fn narrow_cell_button_form() -> String {
+    r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/></pageArea></pageSet>
+ <subform name="body" layout="tb" w="540pt">
+  <subform name="table" layout="table" columnWidths="18pt 300pt">
+   <subform name="row" layout="row">
+    <field name="n" h="20pt"><ui><textEdit/></ui></field>
+    <field name="service" h="20pt"><ui><textEdit/></ui></field>
+   </subform>
+   <subform name="foot" layout="row">
+    <subform name="sfAdd" layout="tb" w="81pt">
+     <field name="btnAdd" minH="11pt"><ui><button/></ui>
+      <caption><value><text>Add service</text></value><font typeface="Helvetica" size="9pt"/></caption>
+      <margin leftInset="6pt" rightInset="6pt" topInset="5pt" bottomInset="4pt"/>
+     </field>
+    </subform>
+    <draw w="300pt" h="20pt"><value><text>Grand total</text></value></draw>
+   </subform>
+  </subform>
+  <field name="after" w="300pt" h="20pt"><ui><textEdit/></ui></field>
+ </subform>
+</subform></template>
+</xdp:xdp>"#
+        .to_string()
+}
+
+#[test]
+fn a_button_in_a_narrow_table_cell_keeps_its_caption_width() {
+    // A button without a width is as wide as its caption (XFA 3.3, "Text Layout with Growable
+    // Width", p. 278), also in a table cell narrower than that: drawn at its column's width, it
+    // used to be squeezed to the column, its caption wrapping letter by letter and the button
+    // running down over what follows the table (#5436).
+    let form = layout_xml(&narrow_cell_button_form()).unwrap();
+    let all: Vec<&Widget> = form.pages.iter().flat_map(widgets).collect();
+    let find = |name: &str| all.iter().find(|w| w.name == name).map(|w| w.rect).unwrap_or_else(|| panic!("no {name} in {all:?}"));
+    let (button, after) = (find("btnAdd"), find("after"));
+    assert!(button.w > 18.0, "the button {button:?} is squeezed into its 18pt column");
+    assert!(button.w > button.h, "the button {button:?} is taller than wide: its caption wraps");
+    assert!(button.bottom() <= after.y + 0.01, "the button {button:?} runs into the field after the table {after:?}");
+}
