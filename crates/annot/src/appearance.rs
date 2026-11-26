@@ -392,9 +392,13 @@ struct AppearanceDrawing {
 }
 
 impl AppearanceDrawing {
+    /// Initialize an appearance drawing buffer and configure its graphics state for opacity and blend mode.
     fn new(context: &AppearanceContext<'_>) -> Self {
         let mut drawing = Self::default();
-        if let Some(gs) = ext_gstate(context.opacity, context.subtype == b"Highlight") {
+        if let Some(gs) = ext_gstate(
+            context.opacity,
+            context.subtype == b"Highlight" || (context.subtype == b"Ink" && context.dict.name(b"IT") == Some(b"FreehandHighlight")),
+        ) {
             drawing.resources.set(b"ExtGState".to_vec(), Object::Dict(gs));
             drawing.content.push_str("/GS0 gs\n");
         }

@@ -773,8 +773,9 @@ pub(super) fn interpret(
     // `Some(properties)`: read `/ActualText`, looking named property lists up in `properties`.
     logical_text: Option<&Dict>,
 ) -> Result<Vec<Shown>, EditError> {
-    let fonts_res = resources.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
-    let states = resources.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
+    let (mut held_fonts, mut held_states, none) = (None, None, Dict::new());
+    let fonts_res = super::resource_dict(doc, resources, b"Font", &mut held_fonts).unwrap_or(&none);
+    let states = super::resource_dict(doc, resources, b"ExtGState", &mut held_states).unwrap_or(&none);
     let mut out: Vec<Shown> = Vec::new();
     let mut ts = carry.ts.clone();
     let mut at_bt = (0usize, ts.clone());
@@ -881,8 +882,12 @@ pub(super) fn interpret(
                 if let Some(name) = op.name(0) {
                     select_gs(&mut ts.ext_gstate, name);
                 }
-                let params = op.name(0).and_then(|name| states.get(name)).map(|p| doc.resolve(p));
-                if let Some(params) = params.as_deref().and_then(Object::as_dict) {
+                let mut held = None;
+                let params = match op.name(0).and_then(|name| states.get(name)) {
+                    Some(p) => super::dict_in_place(doc, p, &mut held),
+                    None => None,
+                };
+                if let Some(params) = params {
                     ts.gs.apply(doc, params);
                     // `/LW` sets the line width as `w` does (ISO 32000-2 §8.4.5).
                     let lw = params.get(b"LW").and_then(|w| doc.resolve(w).as_f64()).filter(|w| w.is_finite());

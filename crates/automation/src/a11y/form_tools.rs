@@ -76,12 +76,13 @@ impl Automation {
         let name = a.str("field")?;
         let doc = self.doc(a)?;
         let field = doc.form.iter().find(|f| f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;
+        // A field with no widget (one only scripts or calculations use) has nothing to focus.
+        let widgets = field.widgets.len();
         let widget = a.opt_int("widget")?.unwrap_or(1);
-        let widget = usize::try_from(widget)
-            .ok()
-            .and_then(|w| w.checked_sub(1))
-            .filter(|w| *w < field.widgets.len().max(1))
-            .ok_or_else(|| ToolError::InvalidArgs(format!("widget must be 1 to {} for {name:?}", field.widgets.len().max(1))))?;
+        let widget = usize::try_from(widget).ok().and_then(|w| w.checked_sub(1)).filter(|w| *w < widgets).ok_or_else(|| match widgets {
+            0 => ToolError::InvalidArgs(format!("{name:?} has no widget to focus")),
+            n => ToolError::InvalidArgs(format!("widget must be 1 to {n} for {name:?}")),
+        })?;
         let id = doc.id;
         let crossing = !a.opt_bool("within_group")?.unwrap_or(false);
         let changed = self.session.field_focus_crossing(id, name, widget, focus, crossing).map_err(failed)?;

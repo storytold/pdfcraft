@@ -140,7 +140,7 @@ fn on_link(cx: &PageCx<'_>, p: Pos2) -> bool {
 /// clear; not while drawing freehand, where it would cover the next stroke (#429); and not while a
 /// comment is moved, resized or drawn.
 pub(crate) fn describe(cx: &PageCx<'_>, view: &mut DocView) {
-    let freehand = matches!(cx.tool, QuickTool::Comment(CommentTool::Ink | CommentTool::Eraser));
+    let freehand = matches!(cx.tool, QuickTool::Comment(CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser));
     if matches!(cx.tool, QuickTool::Fill(_)) || freehand || view.comments.gesture.is_some() {
         return;
     }
@@ -343,7 +343,7 @@ impl Gestures<'_> {
         {
             let p = clamp_to(page_rect, p);
             let u = cx.to_user(p);
-            if matches!(*tool, CommentTool::Ink | CommentTool::Eraser) {
+            if matches!(*tool, CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser) {
                 let last = points.last().map(|l| cx.to_screen(*l)).unwrap_or(p);
                 if last.distance(p) >= 1.5 {
                     points.push(u);
@@ -369,7 +369,7 @@ impl Gestures<'_> {
         // A quick press/release does not start an egui drag, but Acrobat's Draw tool treats
         // it as a one-point ink stroke (a dot). The appearance uses round line caps, so a
         // single PDF point is visible and remains editable like any other drawing.
-        if tool == CommentTool::Ink
+        if matches!(tool, CommentTool::Ink | CommentTool::FreehandHighlight)
             && resp.clicked()
             && over_page
             && let Some(p) = pointer

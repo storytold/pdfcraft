@@ -33,6 +33,16 @@ pub(crate) fn grow(r: [f64; 4], by: f64) -> [f64; 4] {
     [r[0] - by, r[1] - by, r[2] + by, r[3] + by]
 }
 
+/// Tight bounding box of ink strokes, including Bezier control points for strokes with three or
+/// more points (matching [`appearance::smooth_segments`]).
+pub(crate) fn ink_bounds(strokes: &[Vec<[f64; 2]>]) -> Option<[f64; 4]> {
+    let controls = strokes.iter().filter(|s| s.len() > 2).flat_map(|s| {
+        let pts: Vec<(f64, f64)> = s.iter().map(|p| (p[0], p[1])).collect();
+        appearance::smooth_segments(&pts).into_iter().flat_map(|[a, b, _]| [[a.0, a.1], [b.0, b.1]])
+    });
+    bounds(strokes.iter().flatten().copied().chain(controls))
+}
+
 pub(crate) fn ending_draws(ending: LineEnding) -> bool {
     ending != LineEnding::None
 }
@@ -87,17 +97,11 @@ pub(crate) fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotEr
             let pad = half + if ending_draws(*start) || ending_draws(*end) { appearance::arrow_size(style.width) } else { 0.0 };
             grow(bounds([*from, *to].into_iter()).unwrap_or_default(), pad + 1.0)
         }
-        Shape::Ink { strokes } | Shape::Signature { strokes } => {
+        Shape::Ink { strokes } | Shape::FreehandHighlight { strokes } | Shape::Signature { strokes } => {
             if strokes.iter().all(Vec::is_empty) || !strokes.iter().flatten().all(|p| finite(p)) {
                 return Err(bad("drawing (no points)"));
             }
-            // Strokes of three or more points are drawn as curves, which stay within their
-            // points and control points.
-            let controls = strokes.iter().filter(|s| s.len() > 2).flat_map(|s| {
-                let pts: Vec<(f64, f64)> = s.iter().map(|p| (p[0], p[1])).collect();
-                appearance::smooth_segments(&pts).into_iter().flat_map(|[a, b, _]| [[a.0, a.1], [b.0, b.1]])
-            });
-            grow(bounds(strokes.iter().flatten().copied().chain(controls)).unwrap_or_default(), half + 1.0)
+            grow(ink_bounds(strokes).unwrap_or_default(), half + 1.0)
         }
         Shape::Polygon { vertices, cloud } => {
             let b = bounds(vertices.iter().copied())
@@ -164,6 +168,7 @@ fn subject(shape: &Shape) -> &'static str {
         Shape::Oval { .. } => "Oval",
         Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. } => "Arrow",
         Shape::Line { .. } => "Line",
+        Shape::FreehandHighlight { .. } => "Freehand Highlight",
         Shape::Ink { .. } => "Pencil",
         Shape::TextBox { .. } => "Text Box",
         Shape::Typewriter { .. } => "Typewriter",
@@ -292,10 +297,13 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 }
             }
         }
-        Shape::Ink { strokes } | Shape::Signature { strokes } => {
+        Shape::Ink { strokes } | Shape::FreehandHighlight { strokes } | Shape::Signature { strokes } => {
             d.set(b"C".to_vec(), rgb(style.color));
             let list = strokes.iter().filter(|s| !s.is_empty()).map(|s| num_array(&s.concat())).collect();
             d.set(b"InkList".to_vec(), Object::Array(list));
+            if matches!(&new.shape, Shape::FreehandHighlight { .. }) {
+                d.set(b"IT".to_vec(), Object::name("FreehandHighlight"));
+            }
             border(&mut d);
         }
         Shape::Polygon { vertices, cloud } => {

@@ -2149,6 +2149,27 @@ fn comments_through_tools() {
     save_and_reopen_comments(&dir, &mut a, doc);
 }
 
+#[test]
+fn freehand_highlight_through_tools() {
+    let dir = workdir("freehand-highlight");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "comment_add",
+        json!({ "doc": doc, "page": 1, "type": "freehand_highlight", "width": 100,
+        "strokes": [[[20, 100], [120, 100]]] }),
+    );
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["count"], 1);
+    assert_eq!(list["comments"][0]["type"], "Ink");
+    assert_eq!(list["comments"][0]["intent"], "FreehandHighlight");
+    assert_eq!(list["comments"][0]["color"], "#FFF000");
+    let undone = ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(undone["undone"], "Add freehand highlight");
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 0);
+}
+
 fn add_comment_examples(a: &mut Automation, doc: u64) -> String {
     // "Page 2" sits at y = 150 (user space) = 150 from the top of the 300 pt page.
     let hl = ok(a, "comment_add", json!({ "doc": doc, "page": 2, "type": "highlight", "find": "page 2", "contents": "check", "author": "Ada" }));
@@ -6630,10 +6651,12 @@ fn optimizing_through_tools() {
     let reduced = ok(&mut a, "doc_reduce", json!({ "doc": doc, "path": "reduced.pdf" }));
     assert!(reduced["bytes_after"].as_u64().unwrap() < reduced["bytes_before"].as_u64().unwrap());
     assert_eq!(reduced["written"], true);
+    assert_eq!(reduced["images_refused"], 0);
     assert_eq!(std::fs::metadata(dir.join("reduced.pdf")).unwrap().len(), reduced["bytes_after"].as_u64().unwrap());
 
     // Target PDF 1.4 (disables object streams) and PDF 2.0 (with object_streams toggled off).
     let v14 = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "v14.pdf", "compatibility": "1.4" }));
+    assert_eq!(v14["images_refused"], 0);
     assert_eq!((v14["pdf_version"].as_str(), v14["object_streams"].as_bool()), (Some("1.4"), Some(false)), "{v14}");
     let v14_bytes = std::fs::read(dir.join("v14.pdf")).unwrap();
     assert!(v14_bytes.starts_with(b"%PDF-1.4\n") && !v14_bytes.windows(7).any(|w| w == b"/ObjStm"));
@@ -8288,6 +8311,46 @@ fn xfa_focus_scripts_run_through_form_focus() {
     ] {
         assert!(a.call("form_focus", &bad).is_err(), "{bad}");
     }
+}
+
+/// form_focus refuses a field with no widget, which nothing can focus, instead of reporting a
+/// focus change that ran nothing.
+#[test]
+fn form_focus_refuses_a_field_with_no_widget() {
+    let dir = workdir("focus-no-widget");
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [60 60 200 80] /P 3 0 R >>",
+        "<< /FT /Tx /T (total) /V (3) >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("total.pdf"), bytes).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "total.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert!(fields["fields"].as_array().unwrap().iter().any(|f| f["name"] == "total"), "the field without a widget is listed: {fields}");
+    for args in [json!({ "doc": doc, "field": "total", "event": "enter" }), json!({ "doc": doc, "field": "total", "event": "enter", "widget": 1 })] {
+        let e = err(&mut a, "form_focus", args.clone()).to_string();
+        assert!(e.contains("\"total\" has no widget to focus"), "{args}: {e}");
+    }
+    assert_eq!(
+        ok(&mut a, "form_focus", json!({ "doc": doc, "field": "name", "event": "enter" }))["changed"],
+        false,
+        "a field with a widget still takes it"
+    );
 }
 
 /// A dynamic XFA form's scripts run on open, on fills and for buttons through the tools, with undo,

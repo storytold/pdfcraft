@@ -1,5 +1,22 @@
 use super::*;
 
+#[test]
+fn freehand_highlight_and_draw_accept_widths_up_to_100() {
+    assert_eq!(CommentTool::FreehandHighlight.group(), CommentTool::Highlight.group());
+    assert_eq!(GROUPS.len(), 3);
+    let mut prefs = CommentPrefs::default();
+    assert_eq!(prefs.style(CommentTool::FreehandHighlight).width, 14.0);
+    assert_eq!(prefs.style(CommentTool::FreehandHighlight).opacity, 0.35);
+    for tool in [CommentTool::Ink, CommentTool::FreehandHighlight] {
+        prefs.set_width(tool, 75.0);
+        assert_eq!(prefs.style(tool).width, 75.0);
+        prefs.set_width(tool, 200.0);
+        assert_eq!(prefs.style(tool).width, 100.0);
+        prefs.set_width(tool, f64::NAN);
+        assert_eq!(prefs.style(tool).width, 100.0);
+    }
+}
+
 /// A selected line is drawn where it is going: moved by its body (both ends follow the
 /// pointer), with an end dragged (that end alone), and as released until the page is drawn.
 #[test]

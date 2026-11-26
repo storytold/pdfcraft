@@ -173,6 +173,217 @@ fn fax_images_decode_with_their_parameters() {
     assert!(behind(&[Object::Int(5), fax], &[null, own], coded.clone()).is_err(), "a /Filter entry that isn't a name");
 }
 
+/// Images that share a `/JBIG2Globals` stream of the file decode it once a document: it is kept
+/// for the next, in every clone. A globals stream edited since is read afresh (the kept one is the
+/// file's), and objects added in memory aren't kept.
+#[test]
+fn shared_jbig2_globals_are_read_once() {
+    let bits = [0b1111_1000, 0, 0b1111_1000, 0, 0b1111_1000, 0];
+    let coded = pdfcraft_filters::encode_jbig2_generic(&bits, 10, 3).unwrap();
+    let mut doc = Document::new_empty();
+    let mut d = Dict::new();
+    d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    let skipped = [0, 0, 0, 0, 0x3E, 0, 0, 0, 0, 0, 4, 0, 0, 0, 1];
+    let globals = doc.add(Object::Stream(Stream::from_raw(d, pdfcraft_filters::encode_flate(&skipped))));
+    let image = |doc: &mut Document| {
+        let mut d = Dict::new();
+        d.set(b"Width".to_vec(), Object::Int(10));
+        d.set(b"Height".to_vec(), Object::Int(3));
+        d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+        let mut parms = Dict::new();
+        parms.set(b"JBIG2Globals".to_vec(), Object::Ref(globals));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        doc.add(Object::Stream(Stream::from_raw(d, coded.clone())))
+    };
+    let (a, b) = (image(&mut doc), image(&mut doc));
+    let stream = |doc: &Document, r: ObjRef| match &*doc.get(r) {
+        Object::Stream(s) => s.clone(),
+        _ => panic!("not a stream"),
+    };
+    assert_eq!(doc.decoded_image(&stream(&doc, a)).unwrap(), bits);
+    assert!(doc.jbig2_globals.lock().unwrap().is_empty(), "an object added in memory isn't kept");
+
+    // The same objects read from a file, the catalog holding on to the images (a full save may
+    // number them anew).
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Images".to_vec(), Object::Array(vec![Object::Ref(a), Object::Ref(b)]))).unwrap();
+    let file = crate::write_full(&doc, &crate::SaveOptions::default()).unwrap();
+    let mut doc = Document::open(Arc::new(file)).unwrap();
+    let images = doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"Images").unwrap().as_array().unwrap().clone();
+    let (a, b) = (images[0].as_ref().unwrap(), images[1].as_ref().unwrap());
+    let parms = stream(&doc, a).dict.get(b"DecodeParms").unwrap().as_dict().unwrap().clone();
+    let globals = parms.reference(b"JBIG2Globals").unwrap();
+    let clone = doc.clone();
+    assert_eq!(doc.decoded_image(&stream(&doc, a)).unwrap(), bits);
+    assert_eq!(doc.jbig2_globals.lock().unwrap().len(), 1, "kept");
+    let kept = doc.jbig2_globals.lock().unwrap()[&globals.num].clone();
+    assert_eq!(clone.decoded_image(&stream(&clone, b)).unwrap(), bits, "the clone's other image");
+    let shared = clone.jbig2_globals.lock().unwrap()[&globals.num].clone();
+    assert!(Arc::ptr_eq(&kept, &shared), "the clone uses the one kept, not a second decode");
+    doc.set(globals, Object::Stream(Stream::from_raw(Dict::new(), b"not JBIG2".to_vec())));
+    assert!(doc.decoded_image(&stream(&doc, b)).is_err(), "the edited globals are read afresh");
+    assert_eq!(clone.decoded_image(&stream(&clone, b)).unwrap(), bits, "the clone keeps the file's");
+}
+
+/// A JBIG2 image's size is read as given directly, as every caller reads it first, and an image
+/// with neither is an error, not an image of no rows.
+#[test]
+fn a_jbig2_image_needs_its_size_given_directly() {
+    let coded = pdfcraft_filters::encode_jbig2_generic(&[0xFF, 0xFF], 8, 2).unwrap();
+    let mut doc = Document::new_empty();
+    let size = doc.add(Object::Int(2));
+    let image = |width: Object, height: Object| {
+        let mut d = Dict::new();
+        d.set(b"Width".to_vec(), width);
+        d.set(b"Height".to_vec(), height);
+        d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+        doc.decoded_image(&Stream::from_raw(d, coded.clone()))
+    };
+    assert!(image(Object::Int(8), Object::Int(2)).is_ok());
+    assert!(image(Object::Ref(size), Object::Int(2)).is_err(), "/Width by reference");
+    assert!(image(Object::Int(8), Object::Ref(size)).is_err(), "/Height by reference");
+}
+
+/// A document that kept globals of 64 MiB keeps no more, and the images past that still read:
+/// three streams of 22 MiB, shared by three images, are two kept and one decoded each time.
+#[test]
+fn kept_jbig2_globals_are_bounded_in_total() {
+    let bits = [0b1111_1000, 0, 0b1111_1000, 0, 0b1111_1000, 0];
+    let coded = pdfcraft_filters::encode_jbig2_generic(&bits, 10, 3).unwrap();
+    let length = 22 * 1024 * 1024;
+    let mut skipped = vec![0, 0, 0, 0, 0x3E, 0, 0];
+    skipped.extend_from_slice(&u32::try_from(4 + length).unwrap().to_be_bytes());
+    skipped.extend_from_slice(&[0, 0, 0, 1]);
+    skipped.resize(skipped.len() + length, 0);
+    let mut doc = Document::new_empty();
+    let mut images = Vec::new();
+    for _ in 0..3 {
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        let globals = doc.add(Object::Stream(Stream::from_raw(d, pdfcraft_filters::encode_flate(&skipped))));
+        let mut d = Dict::new();
+        d.set(b"Width".to_vec(), Object::Int(10));
+        d.set(b"Height".to_vec(), Object::Int(3));
+        d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+        let mut parms = Dict::new();
+        parms.set(b"JBIG2Globals".to_vec(), Object::Ref(globals));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        images.push(Object::Ref(doc.add(Object::Stream(Stream::from_raw(d, coded.clone())))));
+    }
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Images".to_vec(), Object::Array(images))).unwrap();
+    let doc = Document::open(Arc::new(crate::write_full(&doc, &crate::SaveOptions::default()).unwrap())).unwrap();
+    let images = doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"Images").unwrap().as_array().unwrap().clone();
+    for image in &images {
+        let Object::Stream(s) = &*doc.get(image.as_ref().unwrap()) else { panic!("not a stream") };
+        assert_eq!(doc.decoded_image(s).unwrap(), bits, "every image reads");
+    }
+    let kept = doc.jbig2_globals.lock().unwrap();
+    assert_eq!(kept.len(), 2, "two fit in 64 MiB, a third doesn't");
+    assert!(kept.values().all(|g| g.capacity() == g.len()), "what is kept holds no more than it counts");
+}
+
+/// Globals whose `/DecodeParms` are given by reference aren't kept: that's another object, so
+/// editing it changes what they decode to while the stream itself, the key kept by, stays the same.
+#[test]
+fn jbig2_globals_with_parameters_by_reference_are_read_afresh() {
+    let bits = [0b1111_1000, 0, 0b1111_1000, 0, 0b1111_1000, 0];
+    let coded = pdfcraft_filters::encode_jbig2_generic(&bits, 10, 3).unwrap();
+    let skipped = [0, 0, 0, 0, 0x3E, 0, 0, 0, 0, 0, 4, 0, 0, 0, 1];
+    let params = pdfcraft_filters::Params { predictor: 12, colors: 1, bits_per_component: 8, columns: 15, early_change: 1 };
+    let mut doc = Document::new_empty();
+    let mut parms = Dict::new();
+    parms.set(b"Predictor".to_vec(), Object::Int(12));
+    parms.set(b"Columns".to_vec(), Object::Int(15));
+    let parms = doc.add(Object::Dict(parms));
+    let mut d = Dict::new();
+    d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    d.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    let predicted = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, &skipped).unwrap();
+    let globals = doc.add(Object::Stream(Stream::from_raw(d, predicted)));
+    let mut d = Dict::new();
+    d.set(b"Width".to_vec(), Object::Int(10));
+    d.set(b"Height".to_vec(), Object::Int(3));
+    d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+    let mut image_parms = Dict::new();
+    image_parms.set(b"JBIG2Globals".to_vec(), Object::Ref(globals));
+    d.set(b"DecodeParms".to_vec(), Object::Dict(image_parms));
+    let image = doc.add(Object::Stream(Stream::from_raw(d, coded)));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Image".to_vec(), Object::Ref(image))).unwrap();
+    let mut doc = Document::open(Arc::new(crate::write_full(&doc, &crate::SaveOptions::default()).unwrap())).unwrap();
+    let image = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Image").unwrap();
+    let stream = |doc: &Document| match &*doc.get(image) {
+        Object::Stream(s) => s.clone(),
+        _ => panic!("not a stream"),
+    };
+    assert_eq!(doc.decoded_image(&stream(&doc)).unwrap(), bits);
+    assert!(doc.jbig2_globals.lock().unwrap().is_empty(), "not kept");
+    let globals = stream(&doc).dict.get(b"DecodeParms").unwrap().as_dict().unwrap().reference(b"JBIG2Globals").unwrap();
+    let Object::Stream(g) = &*doc.get(globals) else { panic!("not a stream") };
+    let parms = g.dict.reference(b"DecodeParms").unwrap();
+    doc.set(parms, Object::Dict(Dict::new()));
+    assert!(doc.decoded_image(&stream(&doc)).is_err(), "without the predictor they read otherwise");
+}
+
+/// A JBIG2 image reads through its decoder, behind other filters too, with the `/JBIG2Globals` of
+/// its own `/DecodeParms` (a dictionary or its place in an array, /Crypt counting, by reference
+/// too): globals that can't be read are an error, and ones at another filter's place aren't its
+/// own, nor are those of a lone dictionary when other filters come first. Its page has to be its
+/// /Width × /Height, and fit the bound.
+#[test]
+fn jbig2_images_decode_with_their_globals() {
+    // 10 × 3: the first five samples of each row white, the rest black.
+    let bits = [0b1111_1000, 0, 0b1111_1000, 0, 0b1111_1000, 0];
+    let coded = pdfcraft_filters::encode_jbig2_generic(&bits, 10, 3).unwrap();
+    let hex = coded.iter().map(|b| format!("{b:02x}")).chain([">".to_string()]).collect::<String>().into_bytes();
+    let mut doc = Document::new_empty();
+    // An extension segment (ISO/IEC 14492 7.4.14), which a decoder skips, Flate-encoded; and data
+    // that isn't JBIG2.
+    let globals = |doc: &mut Document, data: &[u8]| {
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        let globals = doc.add(Object::Stream(Stream::from_raw(d, pdfcraft_filters::encode_flate(data))));
+        let mut parms = Dict::new();
+        parms.set(b"JBIG2Globals".to_vec(), Object::Ref(globals));
+        Object::Dict(parms)
+    };
+    let (good, bad) = (globals(&mut doc, &[0, 0, 0, 0, 0x3E, 0, 0, 0, 0, 0, 4, 0, 0, 0, 1]), globals(&mut doc, b"not JBIG2"));
+    let indirect = Object::Ref(doc.add(bad.clone()));
+    let image = |filters: &[&str], parms: Option<Object>, data: &[u8], (width, height): (i64, i64), max: usize| {
+        let mut d = Dict::new();
+        d.set(b"Width".to_vec(), Object::Int(width));
+        d.set(b"Height".to_vec(), Object::Int(height));
+        d.set(b"Filter".to_vec(), Object::Array(filters.iter().map(|f| Object::name(f)).collect()));
+        if let Some(p) = parms {
+            d.set(b"DecodeParms".to_vec(), p);
+        }
+        doc.decoded_image_within(&Stream::from_raw(d, data.to_vec()), max)
+    };
+    let jbig2 = ["JBIG2Decode"];
+    let full = (10, 3);
+    assert_eq!(image(&jbig2, None, &coded, full, MAX_DECODED).unwrap(), bits);
+    assert_eq!(image(&jbig2, Some(good.clone()), &coded, full, MAX_DECODED).unwrap(), bits, "globals it skips");
+    for parms in [bad.clone(), Object::Array(vec![bad.clone()]), indirect.clone(), Object::Array(vec![indirect])] {
+        let e = image(&jbig2, Some(parms.clone()), &coded, full, MAX_DECODED).unwrap_err();
+        assert!(e.to_string().contains("JBIG2"), "{parms:?}: {e}");
+    }
+    let behind = ["ASCIIHexDecode", "JBIG2Decode"];
+    assert_eq!(image(&behind, None, &hex, full, MAX_DECODED).unwrap(), bits, "behind ASCIIHexDecode");
+    assert!(image(&behind, Some(Object::Array(vec![Object::Null, bad.clone()])), &hex, full, MAX_DECODED).is_err(), "its own globals");
+    assert_eq!(image(&behind, Some(Object::Array(vec![bad.clone(), Object::Null])), &hex, full, MAX_DECODED).unwrap(), bits, "another's");
+    assert_eq!(image(&behind, Some(bad.clone()), &hex, full, MAX_DECODED).unwrap(), bits, "a lone dictionary, the first filter's");
+    let after_crypt = ["Crypt", "JBIG2Decode"];
+    assert!(image(&after_crypt, Some(Object::Array(vec![Object::Null, bad.clone()])), &coded, full, MAX_DECODED).is_err(), "after /Crypt");
+    assert_eq!(image(&after_crypt, Some(Object::Array(vec![bad, Object::Null])), &coded, full, MAX_DECODED).unwrap(), bits, "/Crypt's");
+
+    for size in [(11, 3), (9, 3), (10, 2), (10, 4)] {
+        assert!(image(&jbig2, None, &coded, size, MAX_DECODED).is_err(), "a page other than {size:?}");
+    }
+    assert_eq!(image(&jbig2, None, &coded, full, 6).unwrap(), bits, "the page within the bound");
+    assert!(image(&jbig2, None, &coded, full, 5).is_err(), "the page past the bound");
+}
+
 #[test]
 fn a_missing_file_id_is_derived_from_the_encryption_seed() {
     let mut doc = Document::new_empty();

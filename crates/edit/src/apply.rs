@@ -7,9 +7,25 @@ use super::place::{
 };
 use super::{Document, EditError, Object, added, backdrop, helvetica_width};
 
+/// Commit one complete mark operation only after every selected page succeeds. The snapshot
+/// shares original bytes, cross-references, caches and unchanged objects; only the overlay table
+/// and document metadata are copied. Dropping a failed stage also drops removed marks, changed
+/// page/resources/backdrop dictionaries and new objects, including the allocation cursor.
+fn apply_mark_transaction(doc: &mut Document, apply: impl FnOnce(&mut Document) -> Result<(), EditError>) -> Result<(), EditError> {
+    let mut staged = doc.clone();
+    apply(&mut staged)?;
+    *doc = staged;
+    Ok(())
+}
+
 /// Add a header and footer to `pages` (0-based). With `replace`, existing headers and footers on
-/// those pages are removed first (Acrobat's Replace Existing).
+/// those pages are removed first (Acrobat's Replace Existing). The whole call is atomic:
+/// on error, the document (including earlier selected pages) is unchanged.
 pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replace: bool, cx: &Context) -> Result<(), EditError> {
+    apply_mark_transaction(doc, |staged| add_header_footer_in_place(staged, pages, hf, replace, cx))
+}
+
+fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replace: bool, cx: &Context) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
     if hf.text.iter().all(|t| t.trim().is_empty()) {
@@ -121,8 +137,13 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
     Ok(())
 }
 
-/// Add a text watermark to `pages`.
+/// Add a text or picture watermark to `pages`. All selected pages, including mark replacement,
+/// form one transaction; on error, the document is unchanged.
 pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replace: bool) -> Result<(), EditError> {
+    apply_mark_transaction(doc, |staged| add_watermark_in_place(staged, pages, wm, replace))
+}
+
+fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, replace: bool) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
     let text = wm.text.trim();
@@ -201,8 +222,13 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
 
 /// Add a solid-colour background behind the content of `pages`. With `bg.replace_backdrop`, a
 /// white backdrop a page paints itself is replaced first, so the background shows (see
-/// [`backdrop`]); a picture backdrop (a scan) still hides it.
+/// [`backdrop`]); a picture backdrop (a scan) still hides it. All selected pages, including
+/// replacement and backdrop edits, form one transaction; on error, the document is unchanged.
 pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, replace: bool) -> Result<(), EditError> {
+    apply_mark_transaction(doc, |staged| add_background_in_place(staged, pages, bg, replace))
+}
+
+fn add_background_in_place(doc: &mut Document, pages: &[usize], bg: &Background, replace: bool) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
     if replace {

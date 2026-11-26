@@ -54,6 +54,9 @@ pub(crate) use state::{EditorFocus, PageCx};
 /// Acrobat's selection blue for annotation frames and handles (11-visual-spec §5).
 const SELECT_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
+/// Maximum stroke thickness offered by commenting controls, in PDF points.
+pub const MAX_LINE_WIDTH: f64 = 100.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CommentTool {
     Note,
@@ -63,6 +66,7 @@ pub enum CommentTool {
     StrikeOut,
     Squiggly,
     Ink,
+    FreehandHighlight,
     Line,
     Arrow,
     Rectangle,
@@ -80,7 +84,15 @@ pub enum CommentTool {
 /// The quick-bar flyout groups, in Acrobat's order: Comment ▸, Highlight ▸, Draw ▸.
 pub const GROUPS: [&[CommentTool]; 3] = [
     &[CommentTool::Note, CommentTool::TextBox, CommentTool::Callout, CommentTool::Attach],
-    &[CommentTool::Highlight, CommentTool::Underline, CommentTool::StrikeOut, CommentTool::Squiggly, CommentTool::Caret, CommentTool::ReplaceText],
+    &[
+        CommentTool::Highlight,
+        CommentTool::FreehandHighlight,
+        CommentTool::Underline,
+        CommentTool::StrikeOut,
+        CommentTool::Squiggly,
+        CommentTool::Caret,
+        CommentTool::ReplaceText,
+    ],
     &[
         CommentTool::Ink,
         CommentTool::Line,
@@ -94,7 +106,8 @@ pub const GROUPS: [&[CommentTool]; 3] = [
     ],
 ];
 
-pub const ALL: [CommentTool; 19] = [
+pub const ALL: [CommentTool; 20] = [
+    CommentTool::FreehandHighlight,
     CommentTool::Eraser,
     CommentTool::ReplaceText,
     CommentTool::Attach,
@@ -117,6 +130,7 @@ pub const ALL: [CommentTool; 19] = [
 ];
 
 impl CommentTool {
+    /// The command registry identifier (`"comment.*"`) corresponding to this tool.
     pub fn command(self) -> &'static str {
         match self {
             Self::Note => "comment.note",
@@ -125,6 +139,7 @@ impl CommentTool {
             Self::Underline => "comment.underline",
             Self::StrikeOut => "comment.strikeout",
             Self::Squiggly => "comment.squiggly",
+            Self::FreehandHighlight => "comment.freehand_highlight",
             Self::Ink => "comment.ink",
             Self::Line => "comment.line",
             Self::Arrow => "comment.arrow",
@@ -141,10 +156,12 @@ impl CommentTool {
         }
     }
 
+    /// Resolve a [`CommentTool`] from its command registry identifier.
     pub fn from_command(id: &str) -> Option<Self> {
         ALL.into_iter().find(|t| t.command() == id)
     }
 
+    /// User-facing label for this commenting tool.
     pub fn label(self) -> &'static str {
         match self {
             Self::Note => "Add a sticky note",
@@ -153,6 +170,7 @@ impl CommentTool {
             Self::Underline => "Underline",
             Self::StrikeOut => "Strikethrough",
             Self::Squiggly => "Squiggly underline",
+            Self::FreehandHighlight => "Freehand-Highlight",
             Self::Ink => "Draw",
             Self::Line => "Line",
             Self::Arrow => "Arrow",
@@ -169,6 +187,7 @@ impl CommentTool {
         }
     }
 
+    /// Lucide icon name for this commenting tool.
     pub fn icon(self) -> &'static str {
         match self {
             Self::Note => "message-square-plus",
@@ -177,6 +196,7 @@ impl CommentTool {
             Self::Underline => "underline",
             Self::StrikeOut => "strikethrough",
             Self::Squiggly => "spline",
+            Self::FreehandHighlight => "highlighter",
             Self::Ink => "pencil",
             Self::Line => "minus",
             Self::Arrow => "move-right",
@@ -209,7 +229,7 @@ impl CommentTool {
 
     /// Tools that draw with a drag gesture.
     pub fn draws(self) -> bool {
-        matches!(self, Self::Ink | Self::Line | Self::Arrow | Self::Rectangle | Self::Oval | Self::Eraser)
+        matches!(self, Self::Ink | Self::FreehandHighlight | Self::Line | Self::Arrow | Self::Rectangle | Self::Oval | Self::Eraser)
     }
 
     /// Tools that place points one click at a time (double-click or Enter finishes).
@@ -240,6 +260,7 @@ impl CommentTool {
             Self::Highlight | Self::Underline | Self::StrikeOut | Self::Squiggly => {
                 Shape::TextMarkup { kind: self.markup().unwrap_or(Markup::Highlight), quads: Vec::new() }
             }
+            Self::FreehandHighlight => Shape::FreehandHighlight { strokes: Vec::new() },
             Self::Ink => Shape::Ink { strokes: Vec::new() },
             Self::Line => Shape::Line { from: [0.0; 2], to: [0.0; 2], start: LineEnding::None, end: LineEnding::None },
             Self::Arrow => Shape::Line { from: [0.0; 2], to: [0.0; 2], start: LineEnding::None, end: LineEnding::OpenArrow },
@@ -318,9 +339,10 @@ impl CommentPrefs {
         }
     }
 
+    /// Clamp and store the stroke width (`tool.min_width()..=MAX_LINE_WIDTH`) for `tool`.
     pub fn set_width(&mut self, tool: CommentTool, w: f64) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
-            s.width = w.clamp(tool.min_width(), 12.0);
+            s.width = if w.is_finite() { w.clamp(tool.min_width(), MAX_LINE_WIDTH) } else { s.width };
         }
     }
 
@@ -381,6 +403,7 @@ pub fn tool_for(a: &Annotation) -> Option<CommentTool> {
         ("StrikeOut", Some("StrikeOutTextEdit")) => CommentTool::ReplaceText,
         ("StrikeOut", _) => CommentTool::StrikeOut,
         ("Squiggly", _) => CommentTool::Squiggly,
+        ("Ink", Some("FreehandHighlight")) => CommentTool::FreehandHighlight,
         ("Ink", _) => CommentTool::Ink,
         ("Line", _) => CommentTool::Line,
         ("Square", _) => CommentTool::Rectangle,
