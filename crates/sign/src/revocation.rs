@@ -2,6 +2,8 @@
 //! status lookup for evidence embedded in a DSS or supplied by the caller. Never fetches:
 //! the transport and the choice of evidence stay with the caller.
 
+use std::collections::HashSet;
+
 use crate::der::Tlv;
 #[cfg(test)]
 use crate::der::tag;
@@ -144,7 +146,8 @@ impl CertificateList {
 /// The CRLs that can revoke a delegated OCSP responder certified by one issuer, at one time.
 /// Each list is authenticated once here, however many OCSP responses are then checked.
 pub struct ResponderCrls<'a> {
-    lists: Vec<&'a CertificateList>,
+    /// The revoked serials of the kept lists, without a leading zero byte.
+    serials: HashSet<&'a [u8]>,
     complete: bool,
 }
 
@@ -153,25 +156,26 @@ impl<'a> ResponderCrls<'a> {
     /// `complete` says whether `crls` is all of the evidence: when a cap left some unread, a
     /// list that would revoke the responder may be among them.
     pub fn new(crls: &'a [CertificateList], issuer: &Certificate, at: Time, complete: bool) -> Self {
-        let lists = crls
+        let serials = crls
             .iter()
             .filter(|l| {
                 l.issuer_raw == issuer.subject.raw
                     && valid_in_window(l.this_update, l.next_update, at)
                     && verify_signature(&l.tbs, &l.sig_alg, &l.signature, &issuer.public_key)
             })
+            .flat_map(|l| l.revoked.iter().map(|(serial, _)| strip(serial)))
             .collect();
-        ResponderCrls { lists, complete }
+        ResponderCrls { serials, complete }
     }
 
     /// No CRLs, and none left unread.
     pub fn none() -> Self {
-        ResponderCrls { lists: Vec::new(), complete: true }
+        ResponderCrls { serials: HashSet::new(), complete: true }
     }
 
     /// Whether one of the lists names `cert`, which the same issuer certified.
     fn revokes(&self, cert: &Certificate) -> bool {
-        self.lists.iter().any(|l| l.revoked.iter().any(|(serial, _)| strip(serial) == strip(&cert.serial)))
+        self.serials.contains(strip(&cert.serial))
     }
 }
 
