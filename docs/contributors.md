@@ -22,7 +22,7 @@ the AI models named in `Co-Authored-By` trailers.
 
 ## In PdfCraft
 
-- The About window is the `Dialog::About` arm in `crates/ui-egui/src/dialogs.rs` (Help ▸ About, `help.about`).
+- The About window is the hosted About opened by `open_about` in `crates/ui-egui/src/dialogs/about.rs` (Help ▸ About, `help.about`).
 
 ## Credit yourself
 
