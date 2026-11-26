@@ -614,9 +614,7 @@ impl Document {
         if let Some(purview) = self.purview()
             && purview.protected
         {
-            return (purview.rights.owner || purview.rights.edit || purview.rights.document_edit)
-                && self.editable()
-                && self.permissions().is_none_or(|p| p.assemble());
+            return purview.rights.can_edit() && self.editable() && self.permissions().is_none_or(|p| p.assemble());
         }
         self.editable() && self.permissions().is_none_or(|p| p.assemble())
     }

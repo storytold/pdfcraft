@@ -186,10 +186,39 @@ fn read_callback(listener: &TcpListener) -> Result<(AuthorizationCode, CsrfToken
 }
 
 fn parse_callback(stream: &mut TcpStream) -> Result<(AuthorizationCode, CsrfToken), PurviewAuthError> {
-    stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| PurviewAuthError::Callback(e.to_string()))?;
-    let mut request = [0_u8; 4096];
-    let read = stream.read(&mut request).map_err(|e| PurviewAuthError::Callback(e.to_string()))?;
-    let text = String::from_utf8_lossy(&request[..read]);
+    const MAX_REQUEST_LINE: usize = 16 * 1024;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut request = Vec::with_capacity(1024);
+    let mut buffer = [0_u8; 1024];
+    let mut terminated = false;
+    while request.len() <= MAX_REQUEST_LINE {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(PurviewAuthError::Callback("authorization callback timed out while reading the request".into()));
+        }
+        stream.set_read_timeout(Some(remaining)).map_err(|e| PurviewAuthError::Callback(e.to_string()))?;
+        let available = MAX_REQUEST_LINE.saturating_add(1).saturating_sub(request.len()).min(buffer.len());
+        if available == 0 {
+            break;
+        }
+        let read = match stream.read(&mut buffer[..available]) {
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(PurviewAuthError::Callback(error.to_string())),
+        };
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        if request.windows(2).any(|window| window == b"\r\n") || request.contains(&b'\n') {
+            terminated = true;
+            break;
+        }
+    }
+    if !terminated {
+        return Err(PurviewAuthError::Callback("authorization callback exceeded the request-line limit or ended early".into()));
+    }
+    let text = std::str::from_utf8(&request).map_err(|_| PurviewAuthError::Callback("authorization callback was not valid UTF-8".into()))?;
     let first = text.lines().next().unwrap_or_default();
     let target = first.split_whitespace().nth(1).unwrap_or("/");
     let full = format!("http://localhost{target}");
@@ -334,5 +363,24 @@ mod tests {
         assert!(base64url_decode("Zg==").is_none());
         assert!(base64url_decode("A").is_none());
         assert!(base64url_decode(&"A".repeat(1024 * 1024 + 1)).is_none());
+    }
+
+    #[test]
+    fn authorization_callback_waits_for_a_segmented_request_line() {
+        use std::io::Write as _;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let writer = std::thread::spawn(move || {
+            let mut client = TcpStream::connect(address).unwrap();
+            client.write_all(b"GET /?code=code&sta").unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            client.write_all(b"te=state HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+        });
+        let (mut server, _) = listener.accept().unwrap();
+        let (code, state) = parse_callback(&mut server).unwrap();
+        writer.join().unwrap();
+        assert_eq!(code.secret(), "code");
+        assert_eq!(state.secret(), "state");
     }
 }

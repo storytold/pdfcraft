@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use pdfcraft_engine::Edit;
 use pdfcraft_purview::{PurviewAccount, PurviewDocument, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights, PurviewStatus};
-use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::{PdfCraftApp, RecoveryStore};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -493,6 +494,39 @@ fn escape_dismisses_the_pending_purview_sign_in() {
 }
 
 #[test]
+fn cancelling_a_purview_recovery_puts_the_snapshot_back_on_offer() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-purview-recovery-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let store = RecoveryStore::new(&dir);
+    let mut crashed = PdfCraftApp::new();
+    crashed.enable_recovery(store.clone());
+    crashed.open_bytes("Recovered.pdf", Some("/docs/Recovered.pdf".into()), FIXTURE.to_vec()).unwrap();
+    assert!(crashed.apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    crashed.autosave_now();
+    drop(crashed);
+
+    let recoverable = store.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.enable_recovery(recoverable);
+        app.session.set_purview_provider(Arc::new(TestPurviewProvider::signed_out_for_pfile()));
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label("Recover unsaved documents?");
+    h.get_by_label("Recover").click();
+    crate::support::wait_until(&mut h, "Purview recovery prompt", |app| app.purview_signin_prompt.is_some());
+    assert!(h.state().recoverable.is_empty());
+    h.key_press(egui::Key::Escape);
+    crate::support::wait_until(&mut h, "recovery returned to offer", |app| !app.recoverable.is_empty());
+    assert!(h.state().purview_signin_prompt.is_none());
+    assert_eq!(h.state().recoverable.len(), 1);
+    drop(h);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn protect_menu_mip_entry_opens_signed_out_account_gate() {
     let mut h = harness_closed(TestPurviewProvider::signed_out());
     let ctx = h.ctx.clone();
@@ -962,7 +996,7 @@ fn protected_attachments_cannot_open_as_unprotected_documents_without_export_rig
     };
     let document = PurviewDocument {
         protected: true,
-        rights: PurviewRights { view: true, edit: true, extract: true, ..Default::default() },
+        rights: PurviewRights { view: true, document_edit: true, extract: true, ..Default::default() },
         ..Default::default()
     };
     let mut h = harness_with_document(TestPurviewProvider::signed_in_with_document(ada.clone(), vec![ada], document));

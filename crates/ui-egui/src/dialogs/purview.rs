@@ -281,7 +281,12 @@ impl PdfCraftApp {
 
     pub(crate) fn purview_pass(&mut self, ctx: &egui::Context) {
         if self.dialogs.take::<PurviewDialog>().is_some() {
-            self.purview_signin_prompt = None;
+            if let Some(prompt) = self.purview_signin_prompt.take()
+                && let Some(meta) = prompt.recovered
+                && !self.recoverable.iter().any(|item| item.key == meta.key)
+            {
+                self.recoverable.push(meta);
+            }
             return;
         }
         let view = PurviewView::read(self);

@@ -268,15 +268,14 @@ hdiutil_retry create create -srcfolder "$STAGE" -volname "PdfCraft" -fs HFS+ -fo
 sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
 # The app inside the image must still pass --strict, so a makehybrid-style regression can't ship.
-MOUNT="$WORK/dmg-check"
-rm -rf "$MOUNT"
-mkdir -p "$MOUNT"
+MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/pdfcraft-dmg-check.XXXXXX")"
 hdiutil_retry attach attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG" >/dev/null
 if ! codesign --verify --strict --deep --verbose=2 "$MOUNT/PdfCraft.app"; then
   hdiutil_retry detach detach "$MOUNT" >/dev/null || true
   exit 1
 fi
 hdiutil_retry detach detach "$MOUNT" >/dev/null
+rmdir "$MOUNT"
 if [[ "$NOTARIZE" = 1 ]]; then
   notarize "$DMG"
   stapler_retry staple "$DMG"

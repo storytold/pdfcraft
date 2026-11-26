@@ -79,6 +79,7 @@ impl<'a> Recipe<'a> {
         // It keeps the caller's JavaScript preference, set before any open runs open-time scripts.
         let mut session = Session::new();
         session.set_javascript(self.javascript);
+        session.set_purview_provider(Arc::new(pdfcraft_purview::NativePurviewProvider::new(None)));
         let mut input = Vec::new();
         std::fs::File::open(path).map_err(failed)?.take(MAX_INPUT + 1).read_to_end(&mut input).map_err(failed)?;
         if input.len() as u64 > MAX_INPUT {
@@ -86,6 +87,11 @@ impl<'a> Recipe<'a> {
         }
         let name = path.file_name().and_then(std::ffi::OsStr::to_str).ok_or_else(|| failed("input name is not UTF-8"))?;
         let mut bytes = Arc::new(input);
+        if self.steps.first() != Some(&"convert")
+            && path.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+        {
+            bytes = session.convert_to_pdf(name, &bytes)?.1;
+        }
         let mut log = Vec::new();
         for step in &self.steps {
             let before = bytes.len();

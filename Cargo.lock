@@ -6272,7 +6272,6 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-engine",
  "pdfcraft-platform",
- "pdfcraft-preflight",
  "pdfcraft-purview",
  "pdfcraft-render",
  "serde_json",

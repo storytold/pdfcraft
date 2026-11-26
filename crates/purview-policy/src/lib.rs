@@ -94,7 +94,7 @@ impl PurviewRights {
     }
 
     pub fn can_save(&self) -> bool {
-        self.owner || self.save || self.edit || self.document_edit
+        self.owner || self.save || self.edit
     }
 
     pub fn can_copy(&self) -> bool {
@@ -106,11 +106,11 @@ impl PurviewRights {
     }
 
     pub fn can_edit(&self) -> bool {
-        self.owner || self.edit || self.document_edit
+        self.owner || self.document_edit
     }
 
     pub fn can_comment(&self) -> bool {
-        self.owner || self.comment || self.edit || self.document_edit
+        self.owner || self.comment || self.document_edit
     }
 
     pub fn can_export(&self) -> bool {
@@ -293,6 +293,16 @@ mod tests {
         let save_only = PurviewRights { save: true, view: true, ..PurviewRights::default() };
         assert!(save_only.can_save());
         assert!(!save_only.can_edit());
+
+        let sdk_edit = PurviewRights { edit: true, view: true, ..PurviewRights::default() };
+        assert!(sdk_edit.can_save(), "the SDK EDIT right saves the protected document");
+        assert!(!sdk_edit.can_edit(), "the SDK EDIT right does not grant DOCEDIT");
+        assert!(!sdk_edit.can_comment());
+
+        let doc_edit = PurviewRights { document_edit: true, view: true, ..PurviewRights::default() };
+        assert!(doc_edit.can_edit());
+        assert!(doc_edit.can_comment());
+        assert!(!doc_edit.can_save(), "DOCEDIT alone is not the SDK Save right");
     }
 
     #[test]

@@ -13,9 +13,41 @@ enum Office {
 }
 
 impl Session {
+    fn source_bytes(&self, name: &str, bytes: &Arc<Vec<u8>>, export: bool) -> Result<Arc<Vec<u8>>, EditError> {
+        let Some(provider) = self.purview.as_ref() else {
+            return Ok(bytes.clone());
+        };
+        let opened = match provider.inspect(name, bytes) {
+            Ok(Some(opened)) => opened,
+            Ok(None) => return Ok(bytes.clone()),
+            Err(error) => return Err(EditError::Source(format!("{name}: {error}"))),
+        };
+        let protected = opened.document.protected;
+        let permitted = !export || !protected || opened.document.rights.can_export();
+        provider.close(opened.handle);
+        if !permitted {
+            return Err(EditError::Protection(format!("{name}: Microsoft Purview rights do not allow exporting or combining unprotected content")));
+        }
+        Ok(opened.bytes)
+    }
+
+    /// Inspect a source through Microsoft Purview for a read-only command. The resulting bytes
+    /// are authorized for viewing, but are not automatically eligible for export.
+    pub fn source_view_bytes(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
+        self.source_bytes(name, bytes, false)
+    }
+
+    /// Ask Microsoft Purview for an exportable plaintext working copy before a source file is
+    /// converted, combined, inserted or otherwise copied into a new PDF. The SDK handle is
+    /// disposable here: subsequent operations use the authorized in-memory bytes.
+    pub(crate) fn source_export_bytes(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
+        self.source_bytes(name, bytes, true)
+    }
+
     /// The page count of another PDF (Replace Pages, Insert Pages dialogs).
     pub fn page_count_of(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<usize, EditError> {
-        Ok(pdfcraft_organize::page_count(&open_source(name, bytes)?)?)
+        let bytes = self.source_export_bytes(name, bytes)?;
+        Ok(pdfcraft_organize::page_count(&open_source(name, &bytes)?)?)
     }
 
     /// A new blank document (Create ▸ Blank page).
@@ -65,7 +97,8 @@ impl Session {
     }
 
     fn convert(&self, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
-        let Some(kind) = source_kind(name, bytes) else {
+        let bytes = self.source_export_bytes(name, bytes)?;
+        let Some(kind) = source_kind(name, &bytes) else {
             return Err(EditError::Source(format!(
                 "{name}: this file type can't be converted; use a PDF, an image, a .txt file or a Word, Excel or PowerPoint file"
             )));
@@ -78,10 +111,10 @@ impl Session {
         let title = name.rsplit_once('.').map_or(name, |(s, _)| s);
         // Image decoders read untrusted bytes: a panic in one must not take the app down.
         let created = guard(|| match kind {
-            SourceKind::Pdf => open_source(name, bytes).map(|_| bytes.clone()),
+            SourceKind::Pdf => open_source(name, &bytes).map(|_| bytes.clone()),
             SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
-            SourceKind::Text => self.create_from_text(title, &decode_text(bytes)),
-            SourceKind::Office => office_to_pdf(name, bytes),
+            SourceKind::Text => self.create_from_text(title, &decode_text(&bytes)),
+            SourceKind::Office => office_to_pdf(name, &bytes),
         })
         .map_err(|_| EditError::Source(format!("{name}: the file could not be read")))?;
         Ok((kind, created?))
@@ -104,19 +137,21 @@ impl Session {
     }
 
     fn insert_source_with(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<(usize, Arc<Vec<u8>>), EditError> {
-        if !matches!(source_kind(name, bytes), Some(SourceKind::Pdf)) {
-            let (_, pdf) = self.convert(name, bytes, office)?;
+        let bytes = self.source_export_bytes(name, bytes)?;
+        if !matches!(source_kind(name, &bytes), Some(SourceKind::Pdf)) {
+            let (_, pdf) = self.convert(name, &bytes, office)?;
             return Ok((self.page_count_of(name, &pdf)?, pdf));
         }
-        let src = crate::sources::open_source_into(name, bytes, self.cos(dest)?)?;
-        Ok((pdfcraft_organize::page_count(&src)?, bytes.clone()))
+        let src = crate::sources::open_source_into(name, &bytes, self.cos(dest)?)?;
+        Ok((pdfcraft_organize::page_count(&src)?, bytes))
     }
 
     /// The page count of a PDF for Replace Pages in `dest`, checked as the replace itself checks
     /// it: as with [`Self::insert_source`], a file under `dest`'s own protection that withholds
     /// only page extraction is accepted (#5081).
     pub fn replace_source(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>) -> Result<usize, EditError> {
-        Ok(pdfcraft_organize::page_count(&crate::sources::open_source_into(name, bytes, self.cos(dest)?)?)?)
+        let bytes = self.source_export_bytes(name, bytes)?;
+        Ok(pdfcraft_organize::page_count(&crate::sources::open_source_into(name, &bytes, self.cos(dest)?)?)?)
     }
 
     /// A file for Combine as PDF bytes: an image, text or Office file is converted; a PDF is
@@ -133,12 +168,13 @@ impl Session {
     }
 
     fn as_pdf_with(&self, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<Arc<Vec<u8>>, EditError> {
-        let pdf = match source_kind(name, bytes) {
+        let bytes = self.source_export_bytes(name, bytes)?;
+        let pdf = match source_kind(name, &bytes) {
             Some(SourceKind::Pdf) => true,
             Some(SourceKind::Image | SourceKind::Text | SourceKind::Office) => false,
             None => name.to_ascii_lowercase().ends_with(".pdf"),
         };
-        if pdf { Ok(bytes.clone()) } else { self.convert(name, bytes, office).map(|(_, pdf)| pdf) }
+        if pdf { Ok(bytes) } else { self.convert(name, &bytes, office).map(|(_, pdf)| pdf) }
     }
 
     /// Reduce File Size: Acrobat's defaults (colour and grey images above 225 ppi to 150 ppi,
@@ -316,7 +352,13 @@ impl Session {
 
     /// Combine whole files, in order, into new PDF bytes (one bookmark per file).
     pub fn combine(&self, sources: &[(String, Arc<Vec<u8>>)]) -> Result<Arc<Vec<u8>>, EditError> {
-        let docs = sources.iter().map(|(n, b)| open_source(n, b)).collect::<Result<Vec<_>, _>>()?;
+        let docs = sources
+            .iter()
+            .map(|(name, bytes)| {
+                let bytes = self.source_export_bytes(name, bytes)?;
+                open_source(name, &bytes)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let named: Vec<(&str, &pdfcraft_cos::Document)> = sources.iter().map(|(n, _)| n.as_str()).zip(docs.iter()).collect();
         let out = pdfcraft_organize::combine(&named)?;
         self.write_new(&out)
@@ -343,6 +385,7 @@ impl Session {
         let mut added = false;
         for source in sources {
             let (title, bytes, range) = source?;
+            let bytes = self.source_export_bytes(&title, &bytes)?;
             let doc = open_source(&title, &bytes)?;
             let range = range.as_deref().map(str::trim).filter(|r| !r.is_empty());
             let pages = match range {
@@ -374,8 +417,13 @@ impl Session {
     /// (whole files; page ranges are the combine's to apply). A source that cannot be opened
     /// previews as nothing — its row already says why it cannot be combined.
     pub fn combine_field_conflicts(&self, sources: &[CombineSource], passwords: &[Option<&str>]) -> Vec<Vec<(String, String)>> {
-        let docs: Vec<Option<pdfcraft_cos::Document>> =
-            sources.iter().enumerate().map(|(i, (n, b, _))| open_source_with(n, b, passwords.get(i).copied().flatten()).ok()).collect();
+        let docs: Vec<Option<pdfcraft_cos::Document>> = sources
+            .iter()
+            .enumerate()
+            .map(|(i, (name, bytes, _))| {
+                self.source_export_bytes(name, bytes).and_then(|bytes| open_source_with(name, &bytes, passwords.get(i).copied().flatten())).ok()
+            })
+            .collect();
         let refs: Vec<&pdfcraft_cos::Document> = docs.iter().filter_map(Option::as_ref).collect();
         let mut opened = pdfcraft_organize::combine_field_conflicts(&refs).into_iter();
         // One preview per source, in step with it: a file that cannot be opened has none.
@@ -392,7 +440,10 @@ impl Session {
         let docs = sources
             .iter()
             .enumerate()
-            .map(|(i, (n, b, _))| open_source_with(n, b, passwords.get(i).copied().flatten()))
+            .map(|(i, (name, bytes, _))| {
+                let bytes = self.source_export_bytes(name, bytes)?;
+                open_source_with(name, &bytes, passwords.get(i).copied().flatten())
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let mut pages = Vec::with_capacity(docs.len());
         for ((name, _, range), d) in sources.iter().zip(&docs) {
@@ -439,7 +490,8 @@ impl Session {
             let at = match known {
                 Some(at) => at,
                 None => {
-                    docs.push(open_source_with(name, bytes, passwords.get(i).copied().flatten())?);
+                    let bytes = self.source_export_bytes(name, bytes)?;
+                    docs.push(open_source_with(name, &bytes, passwords.get(i).copied().flatten())?);
                     keys.push(key);
                     docs.len() - 1
                 }

@@ -254,9 +254,7 @@ static std::string rights_line(const std::shared_ptr<mip::ProtectionHandler>& pr
     auto check = [&](const std::string& right) -> std::string {
         return protection->AccessCheck(right) ? "1" : "0";
     };
-    const bool save_right =
-        protection->AccessCheck(mip::rights::Edit()) ||
-        protection->AccessCheck(mip::rights::DocumentEdit());
+    const bool save_right = protection->AccessCheck(mip::rights::Edit());
     return check(mip::rights::Owner()) + "\t" +
         check(mip::rights::View()) + "\t" +
         check(mip::rights::Edit()) + "\t" +

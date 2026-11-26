@@ -3038,9 +3038,12 @@ struct TestProtectedProvider {
     original: Arc<Vec<u8>>,
     protected_output: Arc<Vec<u8>>,
     original_working: Arc<Vec<u8>>,
+    rights: crate::PurviewRights,
     published_working: std::sync::Mutex<Option<Arc<Vec<u8>>>>,
     mutation_input: std::sync::Mutex<Option<TestMutationInput>>,
     mutation_calls: std::sync::atomic::AtomicUsize,
+    inspect_calls: std::sync::atomic::AtomicUsize,
+    close_calls: std::sync::atomic::AtomicUsize,
 }
 
 impl crate::PurviewProvider for TestProtectedProvider {
@@ -3069,6 +3072,7 @@ impl crate::PurviewProvider for TestProtectedProvider {
     }
 
     fn inspect(&self, _name: &str, bytes: &Arc<Vec<u8>>) -> Result<Option<crate::PurviewOpen>, crate::PurviewError> {
+        self.inspect_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let working = if bytes == &self.original {
             self.original_working.clone()
         } else if bytes == &self.protected_output {
@@ -3080,11 +3084,7 @@ impl crate::PurviewProvider for TestProtectedProvider {
             handle: 1,
             original: bytes.clone(),
             bytes: working,
-            document: crate::PurviewDocument {
-                protected: true,
-                rights: crate::PurviewRights { owner: true, view: true, edit: true, save: true, ..Default::default() },
-                ..Default::default()
-            },
+            document: crate::PurviewDocument { protected: true, rights: self.rights.clone(), ..Default::default() },
         }))
     }
 
@@ -3127,7 +3127,9 @@ impl crate::PurviewProvider for TestProtectedProvider {
         Ok(self.protected_output.clone())
     }
 
-    fn close(&self, _handle: u64) {}
+    fn close(&self, _handle: u64) {
+        self.close_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 fn protected_session_for_test() -> (Session, DocId, Arc<TestProtectedProvider>) {
@@ -3139,14 +3141,82 @@ fn protected_session_with_working_for_test(working: Vec<u8>) -> (Session, DocId,
         original: Arc::new(b"synthetic protected original".to_vec()),
         protected_output: Arc::new(b"synthetic protected output".to_vec()),
         original_working: Arc::new(working),
+        rights: crate::PurviewRights { owner: true, view: true, edit: true, save: true, ..Default::default() },
         published_working: std::sync::Mutex::new(None),
         mutation_input: std::sync::Mutex::new(None),
         mutation_calls: std::sync::atomic::AtomicUsize::new(0),
+        inspect_calls: std::sync::atomic::AtomicUsize::new(0),
+        close_calls: std::sync::atomic::AtomicUsize::new(0),
     });
     let mut session = Session::new().with_clock(|| 1_700_000_000);
     session.set_purview_provider(provider.clone());
     let id = session.open("protected.pdf", None, provider.original.clone(), None).unwrap();
     (session, id, provider)
+}
+
+fn protected_source_provider_for_test(working: Vec<u8>, rights: crate::PurviewRights) -> Arc<TestProtectedProvider> {
+    Arc::new(TestProtectedProvider {
+        original: Arc::new(b"synthetic protected source".to_vec()),
+        protected_output: Arc::new(b"synthetic protected result".to_vec()),
+        original_working: Arc::new(working),
+        rights,
+        published_working: std::sync::Mutex::new(None),
+        mutation_input: std::sync::Mutex::new(None),
+        mutation_calls: std::sync::atomic::AtomicUsize::new(0),
+        inspect_calls: std::sync::atomic::AtomicUsize::new(0),
+        close_calls: std::sync::atomic::AtomicUsize::new(0),
+    })
+}
+
+#[test]
+fn purview_export_sources_use_decrypted_bytes_and_close_the_temporary_handle() {
+    let working = fixture(2);
+    let provider = protected_source_provider_for_test(working.clone(), crate::PurviewRights { view: true, export: true, ..Default::default() });
+    let mut session = Session::new();
+    session.set_purview_provider(provider.clone());
+
+    let (_, converted) = session.convert_to_pdf("protected.pfile", &provider.original).unwrap();
+    assert_eq!(converted.as_slice(), working);
+    let combined = session.combine(&[("protected.pfile".into(), provider.original.clone()), ("ordinary.pdf".into(), Arc::new(working))]).unwrap();
+    let reopened = pdfcraft_cos::Document::open(combined).unwrap();
+    assert_eq!(pdfcraft_model::pages(&reopened).len(), 4);
+    assert_eq!(provider.inspect_calls.load(std::sync::atomic::Ordering::Relaxed), 3);
+    assert_eq!(provider.close_calls.load(std::sync::atomic::Ordering::Relaxed), 2);
+}
+
+#[test]
+fn purview_export_sources_fail_closed_without_export_rights() {
+    let provider = protected_source_provider_for_test(fixture(1), crate::PurviewRights { view: true, extract: true, ..Default::default() });
+    let mut session = Session::new();
+    session.set_purview_provider(provider.clone());
+    assert!(matches!(session.convert_to_pdf("protected.pfile", &provider.original), Err(EditError::Protection(_))));
+    assert!(matches!(session.combine(&[("protected.pfile".into(), provider.original.clone())]), Err(EditError::Protection(_))));
+
+    let id = session.open("target.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    let edit = crate::Edit::InsertPagesFrom {
+        name: "protected.pfile".into(),
+        bytes: provider.original.clone(),
+        pages: None,
+        at: 1,
+        field_conflicts: Default::default(),
+    };
+    assert!(matches!(session.apply(id, edit), Err(EditError::Protection(_))));
+    assert_eq!(provider.inspect_calls.load(std::sync::atomic::Ordering::Relaxed), 4);
+    assert_eq!(provider.close_calls.load(std::sync::atomic::Ordering::Relaxed), 3);
+}
+
+#[test]
+fn purview_label_changes_discard_history_that_could_restore_old_security() {
+    let (mut session, id) = session_with(1);
+    session.apply(id, crate::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    assert!(!session.get(id).unwrap().editor.as_ref().unwrap().undo.is_empty());
+    let provider = protected_source_provider_for_test(fixture(1), crate::PurviewRights::default());
+    session.set_purview_provider(provider);
+
+    session.purview_apply_label(id, "label", None).unwrap();
+    let editor = session.get(id).unwrap().editor.as_ref().unwrap();
+    assert!(editor.undo.is_empty());
+    assert!(editor.redo.is_empty());
 }
 
 #[test]

@@ -43,7 +43,7 @@ pub(crate) fn check_purview_permission(edit: &Edit, rights: &crate::PurviewRight
         | Edit::ImportBookmarks { .. }
         | Edit::BookmarksFromStructure
         | Edit::NumberPages { .. } => {
-            if rights.owner || rights.edit || rights.document_edit {
+            if rights.can_edit() {
                 Ok(())
             } else {
                 denied("page changes")
@@ -55,7 +55,7 @@ pub(crate) fn check_purview_permission(edit: &Edit, rights: &crate::PurviewRight
         | Edit::SetFieldImageTarget { .. }
         | Edit::ApplyScriptChanges { .. }
         | Edit::XfaEvent { .. } => {
-            if rights.owner || rights.edit || rights.document_edit {
+            if rights.can_edit() {
                 Ok(())
             } else {
                 denied("filling in form fields")

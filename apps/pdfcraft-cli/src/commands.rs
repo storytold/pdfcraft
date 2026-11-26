@@ -7,7 +7,7 @@ use super::{Arc, CliError, ImageFormat, PageRenderer, Path, PathBuf, RenderConfi
 /// Largest input file read into memory (512 MiB, as automation's `doc_open` reads).
 pub(crate) const MAX_INPUT: u64 = 512 * 1024 * 1024;
 
-fn purview_session() -> pdfcraft_engine::Session {
+pub(crate) fn purview_session() -> pdfcraft_engine::Session {
     let mut session = pdfcraft_engine::Session::new();
     session.set_purview_provider(Arc::new(pdfcraft_purview::NativePurviewProvider::new(None)));
     session
@@ -33,38 +33,34 @@ pub(crate) fn info(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args, INFO_OPTIONS).first().ok_or("info: missing file")?;
     let bytes = read(path)?;
     let password = flag(args, "--password");
-    // The renderer takes only the user password of R2–R4 files; `Session::open` takes either.
-    let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
-    let mut info = inspect(bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
+    let mut session = purview_session();
+    session.set_javascript(false);
+    let view_bytes = session.source_view_bytes(path, &bytes).map_err(|error| error.to_string())?;
+    let file_size = bytes.len();
+    let render_password = pdfcraft_engine::render_password_for(view_bytes.clone(), password);
+    // Inspect the original PDF before XFA is laid out; the session below provides the dynamic
+    // layout separately, exactly as the desktop app shows it.
+    let mut info = inspect(view_bytes, render_password.as_deref()).map_err(|e| e.to_string())?;
+    let id = session.open(path, Some(path.to_string()), bytes, password).map_err(|e| e.to_string())?;
+    let document = session.get(id).ok_or("info: the document could not be opened")?;
     let pdf_pages = info.pages.len();
     let acroform_fields = info.fields.len();
     // The document as the app opens it: the notes about damage repaired while opening, which the
     // app shows in Document Properties, and for a dynamic XFA form the laid-out pages and fields.
     // Inspection runs none of the document's scripts: an XFA form's initialize and calculate
     // scripts, which the app runs on opening, are left alone, as with JavaScript turned off.
-    let mut session = purview_session();
-    session.set_javascript(false);
-    let opened = session.open("info.pdf", None, bytes.clone(), password).ok().and_then(|id| session.get(id));
     // Dynamic XFA forms: say what laying the template out gives (what the app shows).
-    let xfa_layout = opened.filter(|_| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)).and_then(|d| {
-        d.xfa.as_ref().map(|x| {
-            info = d.info.clone();
-            // The in-memory layout is an appended revision, not the file being inspected.
-            info.file_size = bytes.len();
-            serde_json::json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings })
-        })
+    let xfa_layout = (info.xfa == Some(pdfcraft_render::Xfa::Dynamic)).then_some(document.xfa.as_ref()).flatten().map(|x| {
+        info = document.info.clone();
+        // The in-memory layout is an appended revision, not the file being inspected.
+        info.file_size = file_size;
+        serde_json::json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings })
     });
     // What the document declares as a standard, as the Standards panel reads it, and the notes
     // Document Properties shows, which include what the app repaired after reading the objects (a
     // page tree rebuilt from the pages found by scanning), both from the session's own reading. A
-    // file the app cannot open is read once more for what the object reader declares and repaired.
     // A file that declares nothing leaves the standards null and empty.
-    let (declared, repairs) = match opened {
-        Some(d) => (d.standards(), d.repair_log()),
-        None => pdfcraft_cos::Document::open_with_password(bytes.clone(), password)
-            .map(|cos| (pdfcraft_preflight::declared(&cos), cos.repair_log().to_vec()))
-            .unwrap_or_default(),
-    };
+    let (declared, repairs) = (document.standards(), document.repair_log());
     let json = serde_json::json!({
         "file": path,
         "pdf_version": info.pdf_version,
@@ -111,21 +107,20 @@ pub(crate) fn text(args: &[String]) -> Result<(), CliError> {
         }
     }
     let password = flag(args, "--password");
-    let mut bytes = read(path)?;
+    let mut session = purview_session();
+    let id = session.open(path, Some(path.to_string()), read(path)?, password).map_err(|error| format!("text: {error}"))?;
+    let document = session.get(id).ok_or("text: the document could not be opened")?;
+    document
+        .check_copying()
+        .map_err(|_| "text: the document's permissions don't allow copying its text; pass the owner password with --password to extract it")?;
+    let mut bytes = document.bytes.clone();
+    let render_password = document.password.clone();
     // The renderer takes only the user password of R2–R4 files; `Session::open` takes either.
     // Worked out from the file as read: `bytes` may become the session's display copy below.
-    let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
     // Printing the text is copying it, so ask what `text_extract` asks (#1645): without the
     // permissions password, a document that doesn't allow copying gives no text.
-    let mut session = purview_session();
-    if let Some(doc) = session.open(path, None, bytes.clone(), password).ok().and_then(|id| session.get(id)) {
-        // The engine's hint is about editing in the app; on the command line the way in is
-        // `--password`.
-        doc.check_copying()
-            .map_err(|_| "text: the document's permissions don't allow copying its text; pass the owner password with --password to extract it")?;
-        if doc.xfa.is_some() {
-            bytes = doc.display.clone();
-        }
+    if document.xfa.is_some() {
+        bytes = document.display.clone();
     }
     let mut r = PageRenderer::new(bytes.clone(), RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() });
     // A document the renderer could not open (wrong or missing password, unparseable file) has
@@ -398,26 +393,17 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
     // The app renders a display copy that draws comments missing their /AP streams and the state
     // of named-layer signatures (here with no trusted certificates); the CLI must agree with it
     // (and with independent viewers), while keeping the file it reads intact.
-    let bytes = read(path)?;
     let password = flag(args, "--password");
-    // The renderer takes only the user password of R2–R4 files; `Session::open` and the display
-    // copy take either.
-    let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
     // A page image is an image taken out of the document, as a snapshot or Export is in the app:
     // like `text`, it needs the document to allow copying (or the permissions password).
     let mut session = purview_session();
-    if let Some(doc) = session.open(path, None, bytes.clone(), password).ok().and_then(|id| session.get(id)) {
-        doc.check_copying().map_err(
-            |_| "render: the document's permissions don't allow copying its pages as images; pass the owner password with --password to render it",
-        )?;
-    }
-    let display = if inspect(bytes.clone(), render_password.as_deref()).is_ok_and(|info| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)) {
-        let mut session = purview_session();
-        let id = session.open(path, None, bytes, password).map_err(|e| e.to_string())?;
-        session.get(id).ok_or("render: the document could not be opened")?.display.clone()
-    } else {
-        pdfcraft_engine::display_bytes_for(bytes, password)
-    };
+    let id = session.open(path, Some(path.to_string()), read(path)?, password).map_err(|error| format!("render: {error}"))?;
+    let document = session.get(id).ok_or("render: the document could not be opened")?;
+    document.check_copying().map_err(
+        |_| "render: the document's permissions don't allow copying its pages as images; pass the owner password with --password to render it",
+    )?;
+    let render_password = document.password.clone();
+    let display = document.display.clone();
     let mut r =
         PageRenderer::new(display, RenderConfig { password: render_password.as_deref().map(Arc::from), reject_oversize: true, ..Default::default() });
     let p = r.render(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });
