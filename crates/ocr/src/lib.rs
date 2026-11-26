@@ -41,7 +41,7 @@ pub use ocrs::{
 pub use page_layout::{Rect, Region, RegionKind, analyze_page};
 pub use pdfcraft_fonts::TextPlan;
 pub use pdfcraft_fonts::helvetica_width;
-pub use synthesis::{Decimal, Paragraph, ParagraphKind, synthesize};
+pub use synthesis::{Decimal, Paragraph, ParagraphKind, synthesize, synthesize_with_rects};
 
 /// Hard cap on either side of an image any code in this crate will touch, in pixels; larger
 /// images are rejected with [`OcrError::ImageTooLarge`] instead of being processed.

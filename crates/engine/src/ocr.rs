@@ -918,9 +918,15 @@ impl OcrSteps {
         if settings.skip_text_pages && !settings.force_ocr && !existing.is_empty() && has_own_text(r, page, [info.width, info.height]) {
             return Err(skip("the page already contains text"));
         }
-        // A scan is read at its own resolution (enlarging it only blurs the letters), at
-        // most the chosen one.
+        // A scan is read at its own resolution at most the chosen one, but a low-resolution
+        // page is then ENLARGED before recognition (the Lanczos policy): 72-dpi letters are
+        // too small for the recognisers, and declaring a finer resolution adds no pixels.
         let scale = self.job.render_scale(page);
+        let resolution = if scale * 72.0 < 150.0 {
+            pdfcraft_ocr::resolution::ResolutionPolicy::UpscaleLanczos { factor: 3 }
+        } else {
+            pdfcraft_ocr::resolution::ResolutionPolicy::Native
+        };
         let shot = r.render(RenderRequest { page, scale, ..Default::default() });
         if let Some(e) = shot.error {
             return Err(skip(&e));
@@ -950,7 +956,7 @@ impl OcrSteps {
                 deskew: settings.deskew,
                 denoise: settings.denoise,
                 binarize: settings.binarize,
-                resolution: pdfcraft_ocr::resolution::ResolutionPolicy::Native,
+                resolution,
             },
         )
         .map_err(|e| skip(&e.to_string()))?;

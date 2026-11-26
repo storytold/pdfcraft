@@ -170,6 +170,12 @@ fn joins_row(line: Rect, word: Rect) -> bool {
     if !(height.is_finite() && height > 0.0) {
         return false;
     }
+    // Baselines must agree as well as boxes: two printed lines with tight leading overlap
+    // vertically, and overlap alone interleaves their words into one garbled line.
+    let centre = |r: Rect| (r.top + r.bottom) / 2.0;
+    if (centre(line) - centre(word)).abs() > 0.5 * height {
+        return false;
+    }
     let overlap = line.bottom.min(word.bottom) - line.top.max(word.top);
     if overlap < 0.5 * height {
         return false;
@@ -334,7 +340,7 @@ const BLOCK_GAP: f32 = 0.75;
 
 /// Two words sit on one line when the gap between them is at most this many line heights across;
 /// a wider gap (a gutter, a right-aligned column) starts another line.
-const WORD_GAP: f32 = 1.2;
+const WORD_GAP: f32 = 4.0;
 
 /// Lines of one block share at least this much of the narrower one's width; blocks side by side
 /// (columns, a name against its role) do not, and stay apart.

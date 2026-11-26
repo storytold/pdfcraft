@@ -40,6 +40,17 @@ fn push_text(p: &mut Paragraph, text: &str, props: CharProps) {
     p.push_text(&text, &props);
 }
 
+/// A footer paragraph whose only content is the page-number field.
+fn page_number_paragraph() -> Paragraph {
+    let mut p = Paragraph::new();
+    // push_object appends the U+FFFC placeholder AND the object (push_text would strip it).
+    p.push_object(
+        InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+        &CharProps::default(),
+    );
+    p
+}
+
 /// A table: its grid from the column edges, ruled where the PDF draws rules, one paragraph per
 /// cell.
 pub(crate) fn table(t: &Table) -> craft_wordmodel::Table {
@@ -190,6 +201,8 @@ struct Builder<'a> {
     /// the page ends.
     header: Option<u32>,
     footer: Option<u32>,
+    /// Synthesized (OCR) pages get a real page-number field in a footer part.
+    page_fields: bool,
     /// The page (0-based) being built, and the pages that lost a picture to a limit or to a
     /// picture that couldn't be prepared.
     page: usize,
@@ -224,6 +237,7 @@ impl<'a> Builder<'a> {
             points,
             header: None,
             footer: None,
+            page_fields: pages.iter().any(|page| page.ocr),
             page: 0,
             omitted: Vec::new(),
         }
@@ -334,6 +348,18 @@ impl<'a> Builder<'a> {
     /// End a page: its section ends here, with the header and footer its own lines made, and the
     /// next page's starts on a new page.
     fn end_page(&mut self, mut sec: SectionProps) {
+        if self.sections && self.page_fields {
+            match self.footer {
+                Some(part) => {
+                    if let Some(stored) = self.doc.parts.get_mut(&part) {
+                        stored.blocks.push(craft_wordmodel::para_block(page_number_paragraph()));
+                    }
+                }
+                None => {
+                    self.footer = Some(self.doc.add_part(PartKind::Footer, vec![craft_wordmodel::para_block(page_number_paragraph())]));
+                }
+            }
+        }
         sec.headers.default = self.header.take();
         sec.footers.default = self.footer.take();
         let mut p = Paragraph::new();
@@ -343,6 +369,9 @@ impl<'a> Builder<'a> {
     }
 
     fn finish(mut self, mut last: SectionProps) -> Document {
+        if self.sections && self.page_fields && self.footer.is_none() {
+            self.footer = Some(self.doc.add_part(PartKind::Footer, vec![craft_wordmodel::para_block(page_number_paragraph())]));
+        }
         last.headers.default = self.header.take();
         last.footers.default = self.footer.take();
         self.doc.last_section = last;

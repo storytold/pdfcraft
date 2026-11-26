@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use pdfcraft_cos::ObjRef;
-use pdfcraft_ocr::{Word, analyze_page, synthesize};
+use pdfcraft_ocr::{Word, analyze_page, synthesize_with_rects};
 
 pub use pdfcraft_compare::{Change, Comparison, Kind, Side};
 // How far Office export reads into form XObjects; `OfficeExport::truncated_pages` lists the pages
@@ -252,32 +252,29 @@ fn synthesized_page(
         return Vec::new();
     }
     let regions = analyze_page(&words, (info.width, info.height), None);
-    let paragraphs = synthesize(&regions);
+    let paragraphs = synthesize_with_rects(&regions);
     let mut sizes: Vec<f64> = blocks.iter().filter(|b| usable(b)).map(|b| b.size * unit).collect();
     sizes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let body = sizes.get(sizes.len() / 2).copied().unwrap_or(12.0).max(1.0);
     paragraphs
         .iter()
         .enumerate()
-        .map(|(order, paragraph)| {
-            let rect = regions.get(order).map(|r| [f64::from(r.rect.left), f64::from(r.rect.top), f64::from(r.rect.right), f64::from(r.rect.bottom)]);
-            pdfcraft_export::Block {
-                text: paragraph.text.clone(),
-                rect: rect.unwrap_or([0.0, 0.0, f64::from(info.width), f64::from(info.height)]),
-                size: body,
-                bold: paragraph.bold,
-                italic: false,
-                color: [0.0, 0.0, 0.0],
-                rotation: 0.0,
-                space_around: [false, false],
-                kind: paragraph.kind,
-                order,
-                metrics: pdfcraft_export::Metrics {
-                    indent_left: paragraph.indent_left,
-                    indent_first: paragraph.indent_first,
-                    line_spacing: paragraph.line_spacing,
-                },
-            }
+        .map(|(order, (paragraph, rect))| pdfcraft_export::Block {
+            text: paragraph.text.clone(),
+            rect: [f64::from(rect.left), f64::from(rect.top), f64::from(rect.right), f64::from(rect.bottom)],
+            size: body,
+            bold: paragraph.bold,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            space_around: [false, false],
+            kind: paragraph.kind,
+            order,
+            metrics: pdfcraft_export::Metrics {
+                indent_left: paragraph.indent_left,
+                indent_first: paragraph.indent_first,
+                line_spacing: paragraph.line_spacing,
+            },
         })
         .collect()
 }

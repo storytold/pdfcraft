@@ -96,7 +96,7 @@ const CENTRE_SHARE: f32 = 0.10;
 
 /// A line ending more than this many line heights before the column's right edge ends its
 /// paragraph: the next line opens a new one.
-const SHORT_LINE: f32 = 2.0;
+const SHORT_LINE: f32 = 0.75;
 
 /// Lines more than this many line heights apart are separate paragraphs even when their kinds
 /// would merge (a blank line between them).
@@ -104,17 +104,68 @@ const LINE_GAP: f32 = 1.2;
 
 /// Synthesizes `regions` — one page's, or a document's in reading order — into paragraphs.
 pub fn synthesize(regions: &[Region]) -> Vec<Paragraph> {
+    synthesize_with_rects(regions).into_iter().map(|(paragraph, _)| paragraph).collect()
+}
+
+/// [`synthesize`], with each paragraph's source region's box. Every paragraph comes from
+/// exactly one region (flowing merges lines within a region, never across regions), so the
+/// box is exact — an exporter need not guess geometry by zipping indices, which scrambles
+/// reading order as soon as two regions merge or split.
+pub fn synthesize_with_rects(regions: &[Region]) -> Vec<(Paragraph, crate::page_layout::Rect)> {
     let mut ordered: Vec<&Region> = regions.iter().collect();
     ordered.sort_by_key(|region| region.order);
     let lines: Vec<Vec<Placed>> = ordered.iter().map(|region| placed_lines(&region.lines)).collect();
     let frame = Frame::of(&ordered, &lines);
-    let mut builder = Builder { frame: &frame, out: Vec::new(), after_point_label: false, sections: Vec::new() };
+    let mut builder = Builder {
+        frame: &frame,
+        rect: crate::page_layout::Rect::new(0.0, 0.0, 0.0, 0.0),
+        out: Vec::new(),
+        rects: Vec::new(),
+        after_point_label: false,
+        sections: Vec::new(),
+    };
+    // Flowing text is grouped across region boundaries: layout splits regions on gutters and
+    // width changes, and treating each as its own paragraph shatters wrapped body text into
+    // one-line fragments. Block regions (headers, captions, signatures, exhibits) still end the
+    // flowing run before them.
+    let mut pending: Vec<Placed> = Vec::new();
+    let mut pending_rect: Option<crate::page_layout::Rect> = None;
     for (region, placed) in ordered.iter().zip(&lines) {
-        builder.add_region(region.kind, placed);
+        if block_kind(region.kind).is_some() {
+            if !pending.is_empty() {
+                builder.rect = pending_rect.take().unwrap_or(region.rect);
+                builder.flowing(&pending);
+                pending.clear();
+            }
+            builder.rect = region.rect;
+            builder.add_region(region.kind, placed);
+        } else {
+            pending.extend(placed.iter().cloned());
+            pending_rect = Some(match pending_rect {
+                Some(rect) => rect.union(region.rect),
+                None => region.rect,
+            });
+        }
     }
-    assign_levels(&mut builder.out, &builder.sections);
-    letter_points(&mut builder.out);
-    builder.out
+    pending.sort_by(|a, b| a.top.total_cmp(&b.top).then(a.left.total_cmp(&b.left)));
+    if !pending.is_empty() {
+        if let Some(rect) = pending_rect {
+            builder.rect = rect;
+        }
+        builder.flowing(&pending);
+    }
+    let mut paired: Vec<(usize, Paragraph, crate::page_layout::Rect)> =
+        builder.out.into_iter().zip(builder.rects).enumerate().map(|(i, (p, r))| (i, p, r)).collect();
+    paired.sort_by(|a, b| a.2.top.total_cmp(&b.2.top).then(a.2.left.total_cmp(&b.2.left)));
+    let position = |old: usize| paired.iter().position(|(i, _, _)| *i == old).unwrap_or(old);
+    let sections: Vec<(usize, f32)> = builder.sections.iter().map(|(i, h)| (position(*i), *h)).collect();
+    let mut paragraphs: Vec<Paragraph> = paired.iter().map(|(_, paragraph, _)| paragraph.clone()).collect();
+    assign_levels(&mut paragraphs, &sections);
+    letter_points(&mut paragraphs);
+    for ((_, paragraph, _), updated) in paired.iter_mut().zip(paragraphs) {
+        *paragraph = updated;
+    }
+    paired.into_iter().map(|(_, paragraph, rect)| (paragraph, rect)).collect()
 }
 
 /// One line of a page: its text and the box its words occupy.
@@ -215,9 +266,11 @@ impl Frame {
         self.width() > 0.0 && (line.centre() - self.centre()).abs() <= CENTRE_SHARE * self.width()
     }
 
-    /// Whether the line ends its paragraph: it stops short of the column's right edge.
+    /// Whether the line ends its paragraph: it stops well short of the column's right edge.
+    /// The slack is a SHARE of the column, not a fixed number of points: recognised boxes vary
+    /// by more than a fixed slack allows, and a fixed one makes every wrapped line look final.
     fn short(&self, line: &Placed) -> bool {
-        self.width() > 0.0 && line.right < self.right - SHORT_LINE * line.height()
+        self.width() > 0.0 && line.right < self.left + SHORT_LINE * self.width()
     }
 }
 
@@ -396,6 +449,8 @@ fn numbered_text(lines: &[Placed]) -> String {
 /// The paragraphs being built, in reading order, and the state the next line needs.
 struct Builder<'a> {
     frame: &'a Frame,
+    rect: crate::page_layout::Rect,
+    rects: Vec<crate::page_layout::Rect>,
     out: Vec<Paragraph>,
     /// The paragraph just built was a point label, so the next heading is that point's heading.
     after_point_label: bool,
@@ -413,7 +468,9 @@ impl Builder<'_> {
         };
         // A block ends whatever point label came before it, even when it holds no lines.
         self.after_point_label = false;
-        for line in lines {
+        let mut sorted: Vec<Placed> = lines.to_vec();
+        sorted.sort_by(|a, b| a.top.total_cmp(&b.top).then(a.left.total_cmp(&b.left)));
+        for line in &sorted {
             self.push(block, line.text.clone(), None, std::slice::from_ref(line));
         }
     }
@@ -465,6 +522,7 @@ impl Builder<'_> {
         let (indent_left, indent_first, line_spacing) = geometry(self.frame, lines);
         let bold = matches!(kind, ParagraphKind::SectionHeading { .. } | ParagraphKind::PointHeading { .. } | ParagraphKind::PointLabel);
         self.out.push(Paragraph { kind, text, number, bold, indent_left, indent_first, line_spacing });
+        self.rects.push(self.rect);
         self.after_point_label = kind == ParagraphKind::PointLabel;
     }
 }

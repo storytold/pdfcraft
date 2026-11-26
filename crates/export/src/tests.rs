@@ -1963,3 +1963,12 @@ fn checked_rtf_reports_omitted_pictures_once_per_page_without_dropping_text() {
     assert!(output.contains("Surviving last-page text"));
     assert_eq!(output, crate::rtf_with_title(&pages, "Partial"));
 }
+
+#[test]
+fn ocr_sections_carry_a_page_field_in_a_real_footer() {
+    let mut page = typed_page(vec![typed_block(ParagraphKind::Body, "Body text.", 700.0)]);
+    page.ocr = true;
+    let bytes = docx(std::slice::from_ref(&page), "Fields");
+    let footer = part(&bytes, "word/footer1.xml");
+    assert!(footer.contains("PAGE"), "no PAGE field in the footer part: {footer}");
+}
