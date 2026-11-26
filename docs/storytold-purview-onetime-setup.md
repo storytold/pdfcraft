@@ -145,6 +145,172 @@ Prepare these values:
 Do not use an Azure subscription, Virtual Machine, daemon service identity or confidential
 client secret for the desktop sign-in flow.
 
+## Optional prerequisite: workforce tenant and External ID external tenant
+
+For PdfCraft's Purview/MIP integration, **do not create an External ID external tenant merely
+to obtain the public App ID**. The required application registration belongs in Storytold's
+normal Microsoft Entra workforce tenant and is configured for accounts in any organizational
+directory. A customer signs in with the identity in the customer's own workforce tenant; tenant
+consent creates the enterprise-application/service-principal object there.
+
+Microsoft distinguishes:
+
+| Tenant | Purpose in this design | Required for PdfCraft Purview |
+|---|---|---|
+| Storytold workforce tenant | Storytold employees, internal business resources, and the home tenant for the multitenant public/native Craft App ID | Yes |
+| External collaboration in the Storytold workforce tenant | B2B guest access for partners/vendors who need Storytold or Microsoft 365 resources | Only when those partners need collaboration access |
+| Customer workforce tenant | The customer's employees, Microsoft 365/Purview licenses, labels, policies, recipients, and consent | Yes, for that customer's Purview content |
+| Microsoft Entra External ID external tenant | A separate CIAM directory for customers/consumers of Storytold-owned web, API, or mobile experiences; local, social, OTP, or federated customer sign-in | No |
+
+An external tenant is a separate identity boundary, not an extension or subdirectory of the
+Storytold workforce tenant. Its customer accounts do not automatically receive Microsoft 365
+single sign-on, Purview licenses, label policy, or rights to protected documents. The optional
+external-tenant app uses a different App ID and, for this POC, must not replace
+`PDFCRAFT_PURVIEW_APP_ID`. Do not assume one IPIA, consent record, token authority, or user
+directory covers both identities.
+
+```mermaid
+flowchart LR
+    SWF[Storytold workforce tenant] -->|owns public/native registration| MIP[Storytold Craft MIP App ID]
+    MIP -->|customer tenant consent and delegated tokens| CWF[Customer workforce tenant]
+    CWF --> P[Purview licenses, labels, policies and rights]
+
+    EXT[Optional External ID external tenant] --> CAPP[Separate customer/consumer app]
+    SWF -.->|optional OIDC federation bridge| CAPP
+```
+
+### When the external tenant is useful
+
+Create one only when Storytold needs a distinct customer identity directory for a
+customer-facing product, for example:
+
+- A public website or customer portal with self-service sign-up.
+- Local email/password, email one-time-passcode, or social identity sign-in.
+- Customer-profile data and lifecycle management separate from employees.
+- A branded hosted sign-in, embedded native authentication, or custom sign-in UX.
+- Workforce employees authenticating to that customer application through a deliberate
+  federation provider.
+
+Do not create an external tenant solely to make the Craft app “multitenant.” The public/native
+Craft registration already uses any organizational directory, and each customer's workforce
+tenant remains authoritative for Purview authorization.
+
+If the actual goal is to give partners/vendors access to Storytold's own Microsoft 365, Teams,
+line-of-business, or SaaS resources, use **External ID B2B collaboration in the Storytold
+workforce tenant** instead of an external tenant. B2B creates managed guest objects in the
+workforce directory; the partner continues to authenticate with its home identity provider.
+
+### Create an optional external tenant
+
+Prerequisites:
+
+- A person with at least the Entra **Tenant Creator** role, scoped to the Azure subscription or
+  resource group used for tenant creation.
+- An Azure subscription, unless Microsoft offers and the owner accepts the current first-time
+  30-day trial tenant.
+- A permanent country/region choice. Microsoft currently treats the country/region as
+  non-changeable after creation.
+- A tenant owner, support owner, data-residency decision, billing owner, and retention/deletion
+  procedure.
+
+Procedure:
+
+1. In the Microsoft Entra admin center, select **Entra ID** → **Overview** → **Manage tenants**.
+2. Select **Create** → **External** → **Continue**.
+3. Choose the free trial only for the approved trial scenario; otherwise select **Use Azure
+   Subscription**.
+4. Enter an external customer-facing tenant name and domain, choose country/region, and review
+   any available Go-Local data-residency option.
+5. Select the subscription and resource group that will own billing/resource linkage.
+6. Review and create the tenant. Record its tenant ID, primary domain, subscription/resource
+   group, owner, and support contacts. Tenant creation can take up to 30 minutes.
+7. Use **Directories + subscriptions** to switch to the external tenant.
+
+The external tenant is now available, but no directory synchronization or application sharing
+with the workforce tenant has occurred.
+
+### Register and connect a customer app to the external tenant
+
+Inside the external tenant:
+
+1. Register the customer application for its real platform and choose the current
+   Microsoft-hosted, embedded-native, or bring-your-own-UX authentication approach.
+2. Configure the external-tenant public/client or confidential-client settings. Never place a
+   confidential-client secret in a desktop, mobile, browser, or distributed application.
+3. Create a sign-up/sign-in user flow.
+4. Configure only the customer sign-in methods, claims, terms, and identity providers the
+   product requires.
+5. Add the application to the user flow, then test customer sign-up, sign-in, reset, MFA, consent,
+   account lifecycle, and token claims.
+
+Use a separate server-side federation registration if Storytold workforce employees should use
+their existing business accounts in the external tenant:
+
+1. In the **Storytold workforce tenant**, register an identity-provider application for the
+   external tenant. Select **Accounts in this organizational directory only**.
+2. Add these Web redirect URIs, replacing the placeholders with the external tenant values:
+
+   - `https://<tenant-subdomain>.ciamlogin.com/<external-tenant-id>/federation/oauth2`
+   - `https://<tenant-subdomain>.ciamlogin.com/<tenant-subdomain>.onmicrosoft.com/federation/oauth2`
+   - If a verified custom external-tenant domain is later configured, add Microsoft's
+     corresponding documented federation redirect for that domain.
+
+3. Create a client secret for this **server-side federation bridge only** and store it in the
+   approved secret store. Do not put it in PdfCraft, source, CI logs, packages, or a public
+   desktop/mobile client.
+4. Add delegated Microsoft Graph `email`, `openid`, `profile`, and `User.Read`; grant workforce
+   tenant admin consent when policy requires it.
+5. Record the bridge App ID and workforce tenant ID.
+6. In the **external tenant**, add the Storytold workforce tenant as a custom OpenID Connect
+   identity provider:
+   - Well-known endpoint:
+     `https://login.microsoftonline.com/organizations/v2.0/.well-known/openid-configuration`
+   - Issuer:
+     `https://login.microsoftonline.com/<workforce-tenant-id>/v2.0`, or the documented
+     `onmicrosoft.com`-domain issuer
+   - Client ID: the workforce federation bridge App ID
+   - Client authentication: `client_secret`
+   - Client secret: the bridge secret
+   - Scope: `openid profile`
+   - Response type: `code`
+7. Add this identity provider to the external-tenant user flow. If issuer/provider settings are
+   later changed, remove and re-add the provider in the user flow and retest.
+8. Test with a workforce user. Authentication and workforce Conditional Access/MFA occur in the
+   workforce tenant; an external-tenant user object is created or linked when self-registration
+   succeeds. External ID does not currently trust the workforce tenant's completed MFA, so its
+   own MFA policy may prompt again. Do not assume the workforce directory, groups, or Purview
+   authorization are copied into the external tenant.
+
+Multiple workforce tenants can be separate identity providers in one external tenant. That is an
+explicit federation design, not the same behavior as the Craft public/native multitenant App ID.
+
+### Purview recipients are still workforce identities
+
+An external-tenant customer identity does not by itself become a licensed Microsoft 365/Purview
+principal in a resource tenant. For protected files:
+
+- External recipients that already have an Entra workforce home tenant authenticate there.
+  Cross-tenant access settings can allow or block the Microsoft Rights Management Services
+  resource (`00000012-0000-0000-c000-000000000000`), and the resource tenant's Conditional Access
+  policy still applies.
+- Recipients without an eligible organizational account may need a B2B guest object in the
+  resource/customer workforce tenant. The protecting tenant owns that invitation and policy.
+- The label/document owner must grant rights to the resolved recipient. Authentication never
+  grants document access by itself.
+
+Therefore, never substitute the external-tenant App ID or token for PdfCraft's multitenant
+public/native MIP identity. If the product later needs both CIAM and Purview, keep two explicit
+identity flows and test the account/account-tenant boundary between them.
+
+Official Microsoft guidance:
+
+- [Microsoft Entra External ID overview](https://learn.microsoft.com/en-us/entra/external-id/external-identities-overview)
+- [B2B collaboration in a workforce tenant](https://learn.microsoft.com/en-us/entra/external-id/what-is-b2b)
+- [Create an external tenant](https://learn.microsoft.com/en-us/entra/external-id/customers/how-to-create-external-tenant-portal)
+- [Plan an External ID deployment](https://learn.microsoft.com/en-us/entra/external-id/customers/concept-planning-your-solution)
+- [Federate a Microsoft Entra workforce tenant into an external tenant](https://learn.microsoft.com/en-us/entra/external-id/customers/how-to-entra-id-federation-customers)
+- [Entra configuration for Purview-encrypted content](https://learn.microsoft.com/en-us/purview/encryption-azure-ad-configuration)
+
 ## Step 1: Create the Storytold app registration
 
 Open the [Microsoft Entra admin center](https://entra.microsoft.com).
@@ -668,6 +834,25 @@ Review at least when:
 
 If Storytold creates a separate app ID, update Microsoft and the IPIA, not only the source code.
 
+### Optional external-tenant maintenance
+
+If Storytold creates the separate External ID tenant:
+
+- Assign primary/backup tenant and billing owners; review access and critical contacts.
+- Track the external-tenant region, subscription, resource group, and data-residency decision as
+  immutable setup evidence.
+- Rotate the confidential federation-bridge secret before expiration without copying it into a
+  public client. Update the external tenant's OIDC provider, then test the complete user flow.
+- Retest user flows after changing identity providers, claims, issuer, redirect URIs, MFA, or
+  Conditional Access.
+- Review the external tenant's customer account deletion/retention, support, and billing/MAU
+  controls independently from the workforce tenant.
+- Keep the external customer-app inventory distinct from the public/native MIP App ID and IPIA
+  record.
+- If external recipients need Purview content, review workforce-tenant B2B, cross-tenant access,
+  Microsoft Rights Management Services permissions, label policy, and recipient rights in the
+  resource tenant. Reauthentication in the CIAM app does not refresh Purview authorization.
+
 ### Certificate and package maintenance
 
 - Renew Windows Authenticode certificates before expiration.
@@ -695,6 +880,8 @@ No customer maintenance should require changing PdfCraft's Storytold app ID.
 | Protected PDF is detected but sign-in fails | Public client registration, redirect, app ID or authority misconfigured | Storytold Engineering and Entra security |
 | App is not available in another tenant | App registration is single-tenant or customer has no consent | Change to multitenant and grant customer consent if required |
 | Admin consent is blocked | Tenant policy or permission is application-only or extra privilege is being requested | Reduce permissions and follow delegated consent guidance |
+| External-tenant users cannot see workforce SSO | The external tenant's workforce OIDC provider or user flow is missing/stale | Reconfigure the separate federation bridge, issuer, redirect, claims, and user-flow assignment |
+| An External ID app identity cannot obtain Purview labels | The external-tenant app/token is being substituted for the workforce/MIP identity | Use the Storytold public/native MIP App ID and authenticate in the user's eligible workforce tenant |
 | Labels are missing after sign-in | Label policy is not published, account is out of scope or licensing/policy propagation is incomplete | Customer Purview administrator |
 | Protected PDF opens as plain with no rights | SDK/helper unavailable or app build lacks `mip-sdk` | Storytold Engineering |
 | Copy/print/edit unexpectedly denied | Rights in the publishing license are restrictive | Document/policy owner |
