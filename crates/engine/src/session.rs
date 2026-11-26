@@ -24,11 +24,54 @@ mod files;
 mod save;
 mod view;
 
+type PasswordValues = Vec<(String, String)>;
+
 fn check_purview_label_mutation(document: &Document) -> Result<(), EditError> {
     if document.purview().is_some_and(|state| state.protected) {
         return Err(EditError::Protection("changing labels or protection on a Microsoft Purview-protected document is not yet supported".into()));
     }
     Ok(())
+}
+
+fn restore_session_passwords(
+    cos: &mut pdfcraft_cos::Document,
+    values: &[(String, String)],
+    is_xfa: bool,
+    template: Option<&pdfcraft_xfa::model::Template>,
+) -> Result<Vec<String>, EditError> {
+    pdfcraft_forms::restore_password_values(cos, values).map_err(|error| EditError::Reopen(error.to_string()))?;
+    if !values.is_empty() && is_xfa { xfa_sync_datasets(cos, template, &mut None).map_err(EditError::Reopen) } else { Ok(Vec::new()) }
+}
+
+fn purview_mutation_input(document: &Document) -> Result<(Arc<Vec<u8>>, PasswordValues), EditError> {
+    let editor = document.editor.as_ref().ok_or_else(|| EditError::ReadOnly("this Microsoft Purview document could not be edited".into()))?;
+    if editor.cos.output_handler().is_some() {
+        return Err(EditError::Protection(
+            "ordinary PDF password protection and Microsoft Purview labels cannot be composed in the same save".into(),
+        ));
+    }
+    if document.is_signed() {
+        return Err(EditError::Protection("Microsoft Purview label changes on digitally signed PDFs are not supported".into()));
+    }
+    let typed = pdfcraft_forms::password_values(&editor.cos);
+    let clean = writable(&editor.cos)?;
+    let bytes = match clean {
+        std::borrow::Cow::Borrowed(_) => document.bytes.clone(),
+        std::borrow::Cow::Owned(clean) => Arc::new(
+            guard(|| write_full(&clean, &SaveOptions::default())).map_err(EditError::Write)?.map_err(|error| EditError::Write(error.to_string()))?,
+        ),
+    };
+    Ok((bytes, typed))
+}
+
+fn purview_mutation_result(
+    document: &Document,
+    bytes: &Arc<Vec<u8>>,
+    typed: &[(String, String)],
+) -> Result<(pdfcraft_cos::Document, Vec<String>), EditError> {
+    let mut cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), None).map_err(|error| EditError::Reopen(error.to_string()))?;
+    let warnings = restore_session_passwords(&mut cos, typed, document.info.xfa.is_some(), document.xfa_template.as_deref())?;
+    Ok((cos, warnings))
 }
 
 impl Session {
@@ -93,25 +136,21 @@ impl Session {
     pub fn purview_apply_label(&mut self, id: DocId, label_id: &str, justification: Option<&str>) -> Result<(), EditError> {
         let document = self.get(id).ok_or(EditError::NoDocument)?;
         check_purview_label_mutation(document)?;
-        if document.editor.as_ref().is_some_and(|editor| editor.cos.output_handler().is_some()) {
-            return Err(EditError::Protection(
-                "ordinary PDF password protection and Microsoft Purview labels cannot be composed in the same save".into(),
-            ));
-        }
+        let (working, typed) = purview_mutation_input(document)?;
         let provider = self.purview.clone().ok_or(EditError::Protection("Microsoft Purview support is not configured".into()))?;
         let state = document.purview.clone().unwrap_or(crate::PurviewDocumentState {
             handle: 0,
-            original: document.bytes.clone(),
+            original: working.clone(),
             document: crate::PurviewDocument::default(),
             provider: provider.clone(),
         });
-        let working = document.bytes.clone();
         let opened = state
             .provider
-            .apply_label(state.handle, &state.original, &working, label_id, justification)
+            .apply_label(state.handle, &working, &working, label_id, justification)
             .map_err(|error| EditError::Protection(error.to_string()))?;
-        let cos = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), None).map_err(|error| EditError::Reopen(error.to_string()))?;
+        let (cos, warnings) = purview_mutation_result(document, &opened.bytes, &typed)?;
         let document = self.doc_mut(id)?;
+        note_warnings(&mut document.xfa_warnings, &warnings);
         let provider = state.provider.clone();
         if let Some(editor) = document.editor.as_mut() {
             editor.cos = cos;
@@ -129,20 +168,14 @@ impl Session {
     pub fn purview_remove_label(&mut self, id: DocId, justification: Option<&str>) -> Result<(), EditError> {
         let document = self.get(id).ok_or(EditError::NoDocument)?;
         check_purview_label_mutation(document)?;
-        if document.editor.as_ref().is_some_and(|editor| editor.cos.output_handler().is_some()) {
-            return Err(EditError::Protection(
-                "ordinary PDF password protection and Microsoft Purview labels cannot be composed in the same save".into(),
-            ));
-        }
+        let (working, typed) = purview_mutation_input(document)?;
         let state =
             document.purview.clone().ok_or_else(|| EditError::Invalid("This document is not Microsoft Purview-labeled or protected".into()))?;
-        let working = document.bytes.clone();
-        let opened = state
-            .provider
-            .remove_label(state.handle, &state.original, &working, justification)
-            .map_err(|error| EditError::Protection(error.to_string()))?;
-        let cos = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), None).map_err(|error| EditError::Reopen(error.to_string()))?;
+        let opened =
+            state.provider.remove_label(state.handle, &working, &working, justification).map_err(|error| EditError::Protection(error.to_string()))?;
+        let (cos, warnings) = purview_mutation_result(document, &opened.bytes, &typed)?;
         let document = self.doc_mut(id)?;
+        note_warnings(&mut document.xfa_warnings, &warnings);
         let provider = state.provider.clone();
         if let Some(editor) = document.editor.as_mut() {
             editor.cos = cos;
@@ -160,18 +193,13 @@ impl Session {
     pub fn purview_remove_protection(&mut self, id: DocId) -> Result<(), EditError> {
         let document = self.get(id).ok_or(EditError::NoDocument)?;
         check_purview_label_mutation(document)?;
-        if document.editor.as_ref().is_some_and(|editor| editor.cos.output_handler().is_some()) {
-            return Err(EditError::Protection(
-                "ordinary PDF password protection and Microsoft Purview protection cannot be composed in the same save".into(),
-            ));
-        }
+        let (working, typed) = purview_mutation_input(document)?;
         let state =
             document.purview.clone().ok_or_else(|| EditError::Invalid("This document is not Microsoft Purview-labeled or protected".into()))?;
-        let working = document.bytes.clone();
-        let opened =
-            state.provider.remove_protection(state.handle, &state.original, &working).map_err(|error| EditError::Protection(error.to_string()))?;
-        let cos = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), None).map_err(|error| EditError::Reopen(error.to_string()))?;
+        let opened = state.provider.remove_protection(state.handle, &working, &working).map_err(|error| EditError::Protection(error.to_string()))?;
+        let (cos, warnings) = purview_mutation_result(document, &opened.bytes, &typed)?;
         let document = self.doc_mut(id)?;
+        note_warnings(&mut document.xfa_warnings, &warnings);
         let provider = state.provider.clone();
         if let Some(editor) = document.editor.as_mut() {
             editor.cos = cos;

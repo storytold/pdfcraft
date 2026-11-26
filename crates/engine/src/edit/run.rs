@@ -11,7 +11,10 @@ use pdfcraft_content::Matrix;
 pub(crate) fn check_purview_permission(edit: &Edit, rights: &crate::PurviewRights) -> Result<(), EditError> {
     let denied = |operation: &'static str| Err(EditError::NotPermitted(operation));
     match edit {
-        Edit::Protect(_) | Edit::RemoveProtection | Edit::ConvertPdfA { .. } => {
+        Edit::Protect(_) | Edit::RemoveProtection => Err(EditError::Protection(
+            "ordinary PDF password protection and Microsoft Purview protection cannot be composed in the same document".into(),
+        )),
+        Edit::ConvertPdfA { .. } => {
             if rights.can_change_security() {
                 Ok(())
             } else {

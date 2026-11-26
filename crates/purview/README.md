@@ -14,6 +14,9 @@ are verified, while optimization, digital signing and label/protection changes o
 until protection can be retained and tested against a live tenant.
 A configured default label is not applied automatically; a required label must be selected and
 applied before saving.
+Typed PDF and XFA password-field values remain session-only: label operations stage a sanitized
+copy and saves restore those values only in memory. A sanitized label operation may rewrite the
+working PDF to avoid retaining password values in earlier revisions.
 
 ## Native and dependency boundary
 

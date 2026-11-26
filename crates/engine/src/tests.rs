@@ -3030,11 +3030,14 @@ fn protect_for_test(session: &mut Session, id: DocId, rights: crate::PurviewRigh
     original
 }
 
+type TestMutationInput = (Arc<Vec<u8>>, Arc<Vec<u8>>);
+
 struct TestProtectedProvider {
     original: Arc<Vec<u8>>,
     protected_output: Arc<Vec<u8>>,
     original_working: Arc<Vec<u8>>,
     published_working: std::sync::Mutex<Option<Arc<Vec<u8>>>>,
+    mutation_input: std::sync::Mutex<Option<TestMutationInput>>,
     mutation_calls: std::sync::atomic::AtomicUsize,
 }
 
@@ -3090,23 +3093,25 @@ impl crate::PurviewProvider for TestProtectedProvider {
     fn apply_label(
         &self,
         _handle: u64,
-        _original: &Arc<Vec<u8>>,
+        original: &Arc<Vec<u8>>,
         working: &Arc<Vec<u8>>,
         _label_id: &str,
         _justification: Option<&str>,
     ) -> Result<crate::PurviewOpen, crate::PurviewError> {
         self.mutation_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *self.mutation_input.lock().unwrap() = Some((original.clone(), working.clone()));
         Ok(crate::PurviewOpen { handle: 1, original: working.clone(), bytes: working.clone(), document: Default::default() })
     }
 
     fn remove_label(
         &self,
         _handle: u64,
-        _original: &Arc<Vec<u8>>,
+        original: &Arc<Vec<u8>>,
         working: &Arc<Vec<u8>>,
         _justification: Option<&str>,
     ) -> Result<crate::PurviewOpen, crate::PurviewError> {
         self.mutation_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *self.mutation_input.lock().unwrap() = Some((original.clone(), working.clone()));
         Ok(crate::PurviewOpen { handle: 1, original: working.clone(), bytes: working.clone(), document: Default::default() })
     }
 
@@ -3124,11 +3129,16 @@ impl crate::PurviewProvider for TestProtectedProvider {
 }
 
 fn protected_session_for_test() -> (Session, DocId, Arc<TestProtectedProvider>) {
+    protected_session_with_working_for_test(fixture(1))
+}
+
+fn protected_session_with_working_for_test(working: Vec<u8>) -> (Session, DocId, Arc<TestProtectedProvider>) {
     let provider = Arc::new(TestProtectedProvider {
         original: Arc::new(b"synthetic protected original".to_vec()),
         protected_output: Arc::new(b"synthetic protected output".to_vec()),
-        original_working: Arc::new(fixture(1)),
+        original_working: Arc::new(working),
         published_working: std::sync::Mutex::new(None),
+        mutation_input: std::sync::Mutex::new(None),
         mutation_calls: std::sync::atomic::AtomicUsize::new(0),
     });
     let mut session = Session::new().with_clock(|| 1_700_000_000);
@@ -3268,6 +3278,97 @@ fn purview_protected_label_mutations_fail_closed_before_calling_the_provider() {
     assert!(matches!(s.purview_remove_protection(id), Err(EditError::Protection(_))));
     assert_eq!(provider.mutation_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
     assert!(s.get(id).unwrap().purview().unwrap().protected);
+}
+
+#[test]
+fn purview_nested_password_security_edits_are_rejected() {
+    let (mut session, id, _) = protected_session_for_test();
+    for edit in [Edit::Protect(protection(Some("open"), Some("owner"))), Edit::RemoveProtection] {
+        let nested = Edit::Batch { label: "outer".into(), edits: vec![Edit::Batch { label: "inner".into(), edits: vec![edit] }] };
+        assert!(matches!(session.apply(id, nested), Err(EditError::Protection(message)) if message.contains("cannot be composed")));
+        assert!(!session.get(id).unwrap().dirty);
+    }
+}
+
+#[test]
+fn purview_save_after_undo_republishes_the_displayed_state() {
+    let (mut session, id, provider) = protected_session_for_test();
+    session.apply(id, Edit::SetInfo { key: "Title".into(), value: "saved title".into() }).unwrap();
+    let saved = session.save_bytes(id).unwrap();
+    session.mark_saved(id, saved, None).unwrap();
+    session.undo(id).unwrap();
+    assert_eq!(session.get(id).unwrap().info_value("Title"), None);
+
+    session.save_bytes(id).unwrap();
+    let working = provider.published_working.lock().unwrap().clone().unwrap();
+    let reopened = pdfcraft_cos::Document::open(working).unwrap();
+    assert_eq!(pdfcraft_organize::info(&reopened, "Title"), None, "save must publish the undone document, not the last saved title");
+}
+
+#[test]
+fn purview_label_mutations_do_not_stage_typed_password_fields() {
+    let (_, _, provider) = protected_session_for_test();
+    for (fixture, field_name) in [
+        (String::from_utf8(form_fixture()).unwrap().replace("/T (name)", "/T (name) /Ff 8192").into_bytes(), "name"),
+        (pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::fields_template("")), "pin"),
+    ] {
+        let mut session = Session::new().with_clock(|| 1_700_000_000);
+        session.set_purview_provider(provider.clone());
+        let id = session.open("form.pdf", None, Arc::new(fixture), None).unwrap();
+        let name = session.get(id).unwrap().form.iter().find(|field| field.name.contains(field_name)).unwrap().name.clone();
+        session.apply(id, Edit::SetFieldValue { name: name.clone(), value: FieldValue::Text("poc_secret".into()) }).unwrap();
+        for apply in [true, false] {
+            if apply {
+                session.purview_apply_label(id, "label", None).unwrap();
+            } else {
+                session.purview_remove_label(id, None).unwrap();
+            }
+            let (original, working) = provider.mutation_input.lock().unwrap().clone().unwrap();
+            assert!(!appears_in_pdf(&original, "poc_secret"), "the SDK original must not contain a typed password");
+            assert!(!appears_in_pdf(&working, "poc_secret"), "the SDK working file must not contain a typed password");
+            assert_eq!(session.get(id).unwrap().form.iter().find(|field| field.name == name).unwrap().value, ["poc_secret"]);
+        }
+        let saved = provider.mutation_input.lock().unwrap().as_ref().unwrap().1.clone();
+        session.mark_saved(id, saved, None).unwrap();
+        assert_eq!(session.get(id).unwrap().form.iter().find(|field| field.name == name).unwrap().value, ["poc_secret"]);
+        assert!(!session.get(id).unwrap().dirty);
+    }
+}
+
+#[test]
+fn purview_labeling_does_not_rewrite_a_digitally_signed_pdf() {
+    let (_, _, provider) = protected_session_for_test();
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let signer = sign::pkcs12::open(&p12, "test").unwrap();
+    let mut session = Session::new().with_clock(|| 1_800_000_000);
+    let id = session.open("form.pdf", None, Arc::new(form_fixture()), None).unwrap();
+    let signed = session.sign(id, &signer, SignOptions::default()).unwrap();
+    let signed_id = session.open("signed.pdf", None, signed, None).unwrap();
+    session.set_purview_provider(provider.clone());
+    assert!(
+        matches!(session.purview_apply_label(signed_id, "label", None), Err(EditError::Protection(message)) if message.contains("digitally signed"))
+    );
+    assert_eq!(provider.mutation_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[test]
+fn purview_rebase_keeps_typed_passwords_only_in_memory() {
+    for (fixture, field_name) in [
+        (String::from_utf8(form_fixture()).unwrap().replace("/T (name)", "/T (name) /Ff 8192").into_bytes(), "name"),
+        (pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::fields_template("")), "pin"),
+    ] {
+        let (mut session, id, provider) = protected_session_with_working_for_test(fixture);
+        let name = session.get(id).unwrap().form.iter().find(|field| field.name.contains(field_name)).unwrap().name.clone();
+        session.apply(id, Edit::SetFieldValue { name: name.clone(), value: FieldValue::Text("poc_secret".into()) }).unwrap();
+        let saved = session.save_bytes(id).unwrap();
+        let working = provider.published_working.lock().unwrap().clone().unwrap();
+        assert!(!appears_in_pdf(&working, "poc_secret"));
+        session.mark_saved(id, saved, None).unwrap();
+        assert_eq!(session.get(id).unwrap().form.iter().find(|field| field.name == name).unwrap().value, ["poc_secret"]);
+        assert!(!session.get(id).unwrap().dirty);
+        session.save_bytes(id).unwrap();
+        assert!(!appears_in_pdf(&provider.published_working.lock().unwrap().clone().unwrap(), "poc_secret"));
+    }
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use super::{
     Arc, DocId, Document, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, StatusCaptions, TrustStore,
-    display_bytes, display_config, guard, render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
+    display_bytes, display_config, guard, render_threads, restore_session_passwords, signatures_of, writable, write_full, write_incremental,
 };
 
 fn inspect_protected_output(state: &crate::PurviewDocumentState, name: &str, bytes: &Arc<Vec<u8>>) -> Result<crate::PurviewOpen, EditError> {
@@ -55,6 +55,7 @@ impl Session {
         let on_saved = Arc::ptr_eq(editor.cos.bytes(), &editor.saved);
         if let Some(purview) = doc.purview.as_ref()
             && !editor.cos.is_modified()
+            && on_saved
         {
             return Ok(purview.original.clone());
         }
@@ -151,10 +152,13 @@ impl Session {
         let doc = self.doc_mut(id)?;
         let mut renumbered = false;
         if let Some(editor) = doc.editor.as_mut() {
+            let typed = pdfcraft_forms::password_values(&editor.cos);
             if let Some(purview) = doc.purview.as_ref() {
                 if let Some(opened) = purview_rebase {
-                    let working = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), editor.keys.reopen.as_deref())
+                    let mut working = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), editor.keys.reopen.as_deref())
                         .map_err(|error| EditError::Reopen(error.to_string()))?;
+                    let warnings = restore_session_passwords(&mut working, &typed, doc.info.xfa.is_some(), doc.xfa_template.as_deref())?;
+                    super::note_warnings(&mut doc.xfa_warnings, &warnings);
                     editor.cos = working;
                     editor.saved = opened.bytes.clone();
                     editor.saved_keys = editor.keys.clone();
@@ -167,8 +171,10 @@ impl Session {
                     doc.purview = Some(state);
                     renumbered = false;
                 } else {
-                    let working = pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref())
+                    let mut working = pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref())
                         .map_err(|error| EditError::Reopen(error.to_string()))?;
+                    let warnings = restore_session_passwords(&mut working, &typed, doc.info.xfa.is_some(), doc.xfa_template.as_deref())?;
+                    super::note_warnings(&mut doc.xfa_warnings, &warnings);
                     editor.cos = working;
                     editor.saved = bytes.clone();
                     editor.saved_keys = editor.keys.clone();
@@ -182,7 +188,6 @@ impl Session {
                 // password when known, so saving never downgrades this session's rights).
                 let keys = editor.keys.clone();
                 // The saved file carries no Password-field values (#3943, #3944); the open document keeps them.
-                let typed = pdfcraft_forms::password_values(&editor.cos);
                 // An incremental save keeps the old byte prefix and its object identities. A
                 // rewrite can reuse the same numbers for unrelated fields and icons.
                 let preserves_objects = bytes.starts_with(editor.saved.as_slice()) || bytes.starts_with(editor.cos.bytes().as_slice());
@@ -193,11 +198,8 @@ impl Session {
                     crate::js::replace_runtime(&mut doc.js_runtime);
                 }
                 editor.cos = reopened;
-                pdfcraft_forms::restore_password_values(&mut editor.cos, &typed).map_err(|e| EditError::Reopen(e.to_string()))?;
-                if !typed.is_empty() && doc.info.xfa.is_some() {
-                    let mut datasets = None;
-                    let _ = xfa_sync_datasets(&mut editor.cos, doc.xfa_template.as_deref(), &mut datasets);
-                }
+                let warnings = restore_session_passwords(&mut editor.cos, &typed, doc.info.xfa.is_some(), doc.xfa_template.as_deref())?;
+                super::note_warnings(&mut doc.xfa_warnings, &warnings);
                 editor.saved = bytes;
                 editor.saved_keys = keys;
                 editor.unsaved_file = false;

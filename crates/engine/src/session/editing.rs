@@ -169,11 +169,6 @@ impl Session {
             && purview.document.protected
         {
             check_purview_permission(&edit, &purview.document.rights)?;
-            if matches!(edit, Edit::Protect(_) | Edit::RemoveProtection) {
-                return Err(EditError::Protection(
-                    "ordinary PDF password protection and Microsoft Purview protection cannot be composed in the same document".into(),
-                ));
-            }
         }
         if let Some(p) = editor.cos.permissions() {
             check_permission(&edit, &p)?;
