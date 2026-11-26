@@ -59,7 +59,7 @@ pub fn som_to_path(som: &str) -> DataPath {
 }
 
 // Template lookup uses the original spelling. Only names used in the XML data tree are cleaned.
-fn som_segments(som: &str) -> impl Iterator<Item = (&str, usize)> {
+pub(super) fn som_segments(som: &str) -> impl Iterator<Item = (&str, usize)> {
     som.split('.').filter_map(|seg| {
         let seg = seg.trim();
         if seg.is_empty() || seg.starts_with('#') || seg.starts_with('$') {

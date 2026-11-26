@@ -221,11 +221,19 @@ pub fn read_values_with(doc: &Document, tpl: Option<&Template>, fields: &[FieldD
 /// shown in its own pattern; only fields the data mentions.
 fn values_at(doc: &Document, tpl: Option<&Template>, fields: &[FieldDatum]) -> Vec<(String, FieldData)> {
     let Ok(Some(p)) = crate::read_packets(doc) else { return Vec::new() };
-    let Some(data) = parse_datasets(&p.xdp) else { return Vec::new() };
+    let bindings: Vec<_> = fields
+        .iter()
+        .map(|f| {
+            let som = som_of(doc, f);
+            let path = path_of(tpl, &som);
+            (f, som, path)
+        })
+        .collect();
+    let names: Vec<_> = bindings.iter().map(|(_, som, path)| (path, som.as_str())).collect();
+    let repaired = super::merge::recover_names(&p.xdp, super::merge::Within::Xdp, &names);
+    let Some(data) = parse_datasets(repaired.as_deref().unwrap_or(&p.xdp)) else { return Vec::new() };
     let mut out = Vec::new();
-    for f in fields {
-        let som = som_of(doc, f);
-        let path = path_of(tpl, &som);
+    for (f, som, path) in bindings {
         let Some(text) = data.value_at(&path) else { continue };
         let text = text.as_str();
         let value = match &f.data {

@@ -1828,6 +1828,43 @@ fn unicode_xfa_field_names_write_and_read_back_as_data_element_names() {
 }
 
 #[test]
+fn legacy_unicode_dataset_spelling_is_read_and_migrated_on_save() {
+    for (nodes, expected, stale) in
+        [("<Stra_e keep='yes'>old value</Stra_e>", "old value", false), ("<Stra_e>stale</Stra_e><Straße>current</Straße>", "current", true)]
+    {
+        let data = format!("<form1><page1>{nodes}</page1></form1>");
+        let mut doc = Document::open(Arc::new(crate::fixtures::static_shell(&data))).unwrap();
+        let mut fields = static_fields("", false);
+        fields.truncate(1);
+        fields[0].name = "form1[0].page1[0].Straße[0]".into();
+        assert_eq!(read_values(&doc, &fields), vec![(fields[0].name.clone(), FieldData::Text(expected.into()))]);
+        fields[0].data = FieldData::Text("edited".into());
+        write_datasets(&mut doc, &fields).unwrap();
+        let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let reopened = Document::open(Arc::new(bytes)).unwrap();
+        let xml = read_packets(&reopened).unwrap().unwrap().xdp;
+        assert_eq!(xml.matches("<Straße").count(), 1);
+        assert_eq!(xml.contains("<Stra_e"), stale);
+        assert!(xml.contains(if stale { "<Stra_e>stale</Stra_e>" } else { "keep='yes'" }));
+        assert_eq!(read_values(&reopened, &fields), vec![(fields[0].name.clone(), FieldData::Text("edited".into()))]);
+    }
+}
+
+#[test]
+fn legacy_unicode_picture_renames_the_existing_indexed_nodes() {
+    let xml = fields_template("<form><Gr_ppe><Foto_Stra_e>first</Foto_Stra_e><Foto_Stra_e/></Gr_ppe></form>");
+    let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+    let path = som_to_path("form[0].Grüppe[0].Foto_Straße[1]");
+    let result = write_data_image(&mut doc, &path, "image/gif", TINY_GIF, None).unwrap();
+    assert!(result.written && result.warnings.is_empty(), "{result:?}");
+    let packet = read_packets(&doc).unwrap().unwrap().xdp;
+    assert_eq!(packet.matches("<Foto_Straße").count(), 2);
+    assert!(packet.contains("<Grüppe><Foto_Straße>first</Foto_Straße>"));
+    assert!(packet.contains("<Foto_Straße xfa:contentType=\"image/gif\">R0lG"));
+    assert!(!packet.contains("Gr_ppe") && !packet.contains("Foto_Stra_e"));
+}
+
+#[test]
 fn nested_width_less_subforms_lay_out_in_polynomial_time() {
     // Regression: a container without a width measured its content once for its width and
     // again for its height, at every level: 2^depth measurements. Two children per level make
