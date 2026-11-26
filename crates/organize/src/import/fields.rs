@@ -446,6 +446,9 @@ pub(super) fn import_dr_fonts(dst: &mut Document, src: &Document, copier: &mut C
     // can never collide with another alias's kept name, whichever field comes first.
     let mut taken: Vec<Vec<u8>> = fonts.iter().map(|(k, _)| k.clone()).collect();
     taken.extend(wanted.iter().map(|n| n.as_bytes().to_vec()));
+    // Names existing destination fields resolve their edits through even though `/DR` lacks
+    // them: taking such a name for an incoming font would silently change those fields' face.
+    let effective = effective_field_aliases(dst);
     let mut map: HashMap<String, String> = HashMap::new();
     let mut pending: Vec<(String, Object)> = Vec::new();
     for name in wanted {
@@ -460,14 +463,16 @@ pub(super) fn import_dr_fonts(dst: &mut Document, src: &Document, copier: &mut C
             }
             // The name is taken by a different face: hand the imported font a fresh one.
             Some(_) => {
-                let mut n = 1;
-                let new = loop {
-                    let candidate = format!("{name}-{n}");
-                    if !taken.iter().any(|t| t.as_slice() == candidate.as_bytes()) {
-                        break candidate;
-                    }
-                    n += 1;
-                };
+                let new = fresh_alias(&name, &taken);
+                taken.push(new.clone().into_bytes());
+                map.insert(name.clone(), new.clone());
+                pending.push((new, entry.clone()));
+            }
+            // The name is free in the `/DR`, but an existing destination field falls back to it
+            // (its effective `/DA` selects it, or the reader's built-in `/Helv` applies): give
+            // the imported font a fresh one too, or that field's next edit would draw Courier.
+            None if effective.contains(name.as_bytes()) => {
+                let new = fresh_alias(&name, &taken);
                 taken.push(new.clone().into_bytes());
                 map.insert(name.clone(), new.clone());
                 pending.push((new, entry.clone()));
@@ -491,6 +496,71 @@ pub(super) fn import_dr_fonts(dst: &mut Document, src: &Document, copier: &mut C
     rewrite_da(dst, fields, &map)
 }
 
+/// A document's AcroForm dictionary, resolved and cloned.
+fn acroform_dict(doc: &Document) -> Option<Dict> {
+    let catalog = doc.get(doc.root()?).as_dict().cloned()?;
+    let form_ref = catalog.get(b"AcroForm")?;
+    doc.resolve(form_ref).as_dict().cloned()
+}
+
+/// A document's AcroForm-level default appearance string, resolved and cloned.
+fn acroform_da(doc: &Document) -> Option<PdfString> {
+    acroform_dict(doc)?.get(b"DA").map(|d| doc.resolve(d)).and_then(|d| d.as_string().cloned())
+}
+
+/// The first free `name-N` variant in `taken`.
+fn fresh_alias(name: &str, taken: &[Vec<u8>]) -> String {
+    let mut n = 1;
+    loop {
+        let candidate = format!("{name}-{n}");
+        if !taken.iter().any(|t| t.as_slice() == candidate.as_bytes()) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// The aliases existing destination fields resolve an edit through even though `/DR` may lack
+/// them: the name each field's effective `/DA` selects (its own, an inherited one, or the
+/// AcroForm default), or the reader's built-in `/Helv` when nothing else applies. A name taken
+/// for an incoming font under one of these would silently change those fields' face.
+fn effective_field_aliases(dst: &Document) -> HashSet<Vec<u8>> {
+    let mut out = HashSet::new();
+    let Some(form) = acroform_dict(dst) else { return out };
+    let form_da = form.get(b"DA").map(|d| dst.resolve(d)).and_then(|d| d.as_string().cloned());
+    let roots = form.get(b"Fields").map(|f| dst.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
+    let mut stack: Vec<(ObjRef, Option<PdfString>)> = roots.iter().filter_map(Object::as_ref).map(|r| (r, None)).collect();
+    let mut seen = HashSet::new();
+    while let Some((r, inherited)) = stack.pop() {
+        if !seen.insert(r) {
+            continue;
+        }
+        let Some(d) = dst.get(r).as_dict().cloned() else { continue };
+        let da = d.get(b"DA").map(|o| dst.resolve(o)).and_then(|o| o.as_string().cloned()).or(inherited);
+        match &da {
+            Some(da) => {
+                for name in da_font_names(da.to_text().as_bytes()) {
+                    out.insert(name.into_bytes());
+                }
+            }
+            None => {
+                if let Some(form_da) = &form_da {
+                    for name in da_font_names(form_da.to_text().as_bytes()) {
+                        out.insert(name.into_bytes());
+                    }
+                } else {
+                    out.insert(b"Helv".to_vec());
+                }
+            }
+        }
+        if let Some(kids) = d.get(b"Kids").map(|k| dst.resolve(k)).and_then(|k| k.as_array().cloned()) {
+            let kids: Vec<ObjRef> = kids.iter().filter_map(Object::as_ref).collect();
+            stack.extend(kids.into_iter().map(|k| (k, da.clone())));
+        }
+    }
+    out
+}
+
 /// A document's AcroForm `/DR /Font` dictionary, resolved and cloned.
 fn dr_fonts(doc: &Document) -> Option<Dict> {
     let catalog = doc.get(doc.root()?).as_dict().cloned()?;
@@ -499,15 +569,6 @@ fn dr_fonts(doc: &Document) -> Option<Dict> {
     let dr_ref = form.get(b"DR")?;
     let dr = doc.resolve(dr_ref).as_dict()?.clone();
     doc.resolve(dr.get(b"Font")?).as_dict().cloned()
-}
-
-/// A document's AcroForm-level default appearance string, resolved and cloned.
-fn acroform_da(doc: &Document) -> Option<PdfString> {
-    let catalog = doc.get(doc.root()?).as_dict().cloned()?;
-    let form_ref = catalog.get(b"AcroForm")?;
-    let form = doc.resolve(form_ref).as_dict()?.clone();
-    let da = form.get(b"DA")?;
-    doc.resolve(da).as_string().cloned()
 }
 
 /// Give every imported field root that lacks its own `/DA` the source AcroForm's default
