@@ -101,8 +101,12 @@ impl PdfCraftApp {
     /// update ready.
     #[cfg(not(target_arch = "wasm32"))]
     fn answer_update_check(&mut self, ctx: &egui::Context, clean: bool) {
-        let Some(DialogResult::Ok(choice)) = self.dialogs.take::<UpdateCheckDialog>() else {
-            return;
+        let choice = match self.dialogs.take::<UpdateCheckDialog>() {
+            Some(DialogResult::Ok(choice)) => choice,
+            // The dialog host sends Cancel when it closes a dialog from outside (for example,
+            // Escape). Consume it as Close so the last non-idle status doesn't reopen it.
+            Some(DialogResult::Cancel) => CheckChoice::Close,
+            _ => return,
         };
         match choice {
             CheckChoice::Close => self.updater.dismiss_status(),
