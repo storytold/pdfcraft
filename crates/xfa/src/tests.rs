@@ -1771,6 +1771,124 @@ fn static_forms_read_their_values_from_the_datasets() {
 }
 
 #[test]
+fn unicode_xfa_field_names_write_and_read_back_as_data_element_names() {
+    let combining = "name\u{0301}2";
+    let cases =
+        [("Straße", "Hauptstraße 5"), ("Société", "École"), ("氏名", "佐藤花子"), (combining, "decomposed name"), ("a:b", "sanitized consistently")];
+    let xdp = format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+ <subform name="form" layout="tb">
+  <pageSet><pageArea name="page"><contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/></pageArea></pageSet>
+  <subform name="body" layout="tb">
+   <field name="Straße" w="108pt" h="18pt"><ui><textEdit/></ui></field>
+   <field name="Société" w="108pt" h="18pt"><ui><textEdit/></ui></field>
+   <field name="氏名" w="108pt" h="18pt"><ui><textEdit/></ui></field>
+   <field name="{combining}" w="108pt" h="18pt"><ui><textEdit/></ui></field>
+   <field name="a:b" w="108pt" h="18pt"><ui><textEdit/></ui></field>
+  </subform>
+ </subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><body/></form></xfa:data></xfa:datasets>
+</xdp:xdp>"#
+    );
+    let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let mut fields = field_data(&doc);
+    fields.retain(|f| cases.iter().any(|(name, _)| *name == f.name));
+    assert_eq!(fields.len(), cases.len(), "{fields:?}");
+    for field in &mut fields {
+        let (_, value) = cases.iter().find(|(name, _)| *name == field.name).unwrap();
+        field.data = FieldData::Text((*value).into());
+    }
+
+    let write = write_datasets(&mut doc, &fields).unwrap();
+    assert!(write.written && write.warnings.is_empty(), "{write:?}");
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let reopened = Document::open(Arc::new(saved)).unwrap();
+    let packets = read_packets(&reopened).unwrap().unwrap();
+    let (template, _) = parse(&packets.xdp).unwrap();
+    let data = parse_datasets(&packets.xdp).unwrap();
+    for (name, value) in cases {
+        let som = format!("form[0].body[0].{name}[0]");
+        assert!(crate::data::template_field(&template, &som).is_some(), "template field {som}");
+        let path = som_to_path(&som);
+        assert_eq!(data.text_at(&path), Some(value), "{name:?}");
+        let node = data.get(&path).unwrap();
+        let expected_name = if name == "a:b" { "a_b" } else { name };
+        assert_eq!(node.name, expected_name, "{name:?}");
+    }
+
+    let mut reopened_fields = field_data(&reopened);
+    reopened_fields.retain(|f| cases.iter().any(|(name, _)| *name == f.name));
+    let values = read_values(&reopened, &reopened_fields);
+    for (name, value) in cases {
+        assert!(values.contains(&(name.into(), FieldData::Text(value.into()))), "{name:?} {values:?}");
+    }
+}
+
+#[test]
+fn legacy_unicode_dataset_spelling_is_read_and_migrated_on_save() {
+    for (nodes, expected, stale) in
+        [("<Stra_e keep='yes'>old value</Stra_e>", "old value", false), ("<Stra_e>stale</Stra_e><Straße>current</Straße>", "current", true)]
+    {
+        let data = format!("<form1><page1>{nodes}</page1></form1>");
+        let mut doc = Document::open(Arc::new(crate::fixtures::static_shell(&data))).unwrap();
+        let mut fields = static_fields("", false);
+        fields.truncate(1);
+        fields[0].name = "form1[0].page1[0].Straße[0]".into();
+        assert_eq!(read_values(&doc, &fields), vec![(fields[0].name.clone(), FieldData::Text(expected.into()))]);
+        fields[0].data = FieldData::Text("edited".into());
+        write_datasets(&mut doc, &fields).unwrap();
+        let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let reopened = Document::open(Arc::new(bytes)).unwrap();
+        let xml = read_packets(&reopened).unwrap().unwrap().xdp;
+        assert_eq!(xml.matches("<Straße").count(), 1);
+        assert_eq!(xml.contains("<Stra_e"), stale);
+        assert!(xml.contains(if stale { "<Stra_e>stale</Stra_e>" } else { "keep='yes'" }));
+        assert_eq!(read_values(&reopened, &fields), vec![(fields[0].name.clone(), FieldData::Text("edited".into()))]);
+    }
+}
+
+#[test]
+fn legacy_names_follow_each_bound_som_segment() {
+    for area in [false, true] {
+        let mark = '\u{301}';
+        let parent = format!("_{mark}a");
+        let child = format!("{mark}a");
+        let wrap = |inner: String| if area { format!(r#"<area name="layout">{inner}</area>"#) } else { inner };
+        let field = wrap(format!(r#"<field name="{child}"><ui><textEdit/></ui></field>"#));
+        let xdp = format!(
+            r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form"><subform name="{parent}">{field}</subform></subform></template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><__a><_a>saved</_a></__a></form></xfa:data></xfa:datasets></xdp:xdp>"#
+        );
+        let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+        let mut fields = static_fields("", false);
+        fields.truncate(1);
+        let layout = if area { "layout[0]." } else { "" };
+        fields[0].name = format!("form[0].{parent}[0].{layout}{child}[0]");
+        assert_eq!(read_values(&doc, &fields), vec![(fields[0].name.clone(), FieldData::Text("saved".into()))]);
+        fields[0].data = FieldData::Text("edited".into());
+        write_datasets(&mut doc, &fields).unwrap();
+        let xml = read_packets(&doc).unwrap().unwrap().xdp;
+        assert!(xml.contains(&format!("<form><{parent}><{parent}>edited</{parent}></{parent}></form>")), "{xml}");
+    }
+}
+
+#[test]
+fn legacy_unicode_picture_renames_the_existing_indexed_nodes() {
+    let xml = fields_template("<form><Gr_ppe><Foto_Stra_e>first</Foto_Stra_e><Foto_Stra_e/></Gr_ppe></form>");
+    let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+    let path = som_to_path("form[0].Grüppe[0].Foto_Straße[1]");
+    let result = write_data_image(&mut doc, &path, "image/gif", TINY_GIF, None).unwrap();
+    assert!(result.written && result.warnings.is_empty(), "{result:?}");
+    let packet = read_packets(&doc).unwrap().unwrap().xdp;
+    assert_eq!(packet.matches("<Foto_Straße").count(), 2);
+    assert!(packet.contains("<Grüppe><Foto_Straße>first</Foto_Straße>"));
+    assert!(packet.contains("<Foto_Straße xfa:contentType=\"image/gif\">R0lG"));
+    assert!(!packet.contains("Gr_ppe") && !packet.contains("Foto_Stra_e"));
+}
+
+#[test]
 fn nested_width_less_subforms_lay_out_in_polynomial_time() {
     // Regression: a container without a width measured its content once for its width and
     // again for its height, at every level: 2^depth measurements. Two children per level make
@@ -4504,15 +4622,15 @@ fn imported_data_is_written_with_the_packets_own_prefix_and_never_leaves_it_unre
     let r = write_data_image(&mut doc3, &path, "image/gif", TINY_GIF, None).unwrap();
     assert!(!r.written && r.warnings.iter().any(|w| w.contains("structured")), "{r:?}");
     assert!(crate::read_packets(&doc3).unwrap().unwrap().xdp.contains("<note>keep me</note>"));
-    // A field name XML can't hold is written under the same cleaned name the values use.
+    // Unicode XML name characters keep their exact spelling in a newly written data element.
     let odd = fields_template("").replace("name=\"photo\"", "name=\"Foto_Straße\"");
     let mut doc4 = Document::open(Arc::new(shell(&odd))).unwrap();
     render_into(&mut doc4).unwrap();
     let r = write_data_image(&mut doc4, &som_to_path("form[0].page1[0].Foto_Straße[0]"), "image/gif", TINY_GIF, None).unwrap();
     assert!(r.written, "{r:?}");
     let xdp = crate::read_packets(&doc4).unwrap().unwrap().xdp;
-    assert_eq!(xdp.matches("<Foto_Stra_e").count(), 1, "{xdp}");
-    assert!(xdp.contains("<Foto_Stra_e xfa:contentType=\"image/gif\">R0lG"), "{xdp}");
+    assert_eq!(xdp.matches("<Foto_Straße").count(), 1, "{xdp}");
+    assert!(xdp.contains("<Foto_Straße xfa:contentType=\"image/gif\">R0lG"), "{xdp}");
     // What is not this form's data is refused: an SVG, an XDP without datasets, an XDP whose
     // config has a <data> element before the datasets, a data document with another root.
     let mut doc = Document::open(Arc::new(shell(&fields_template("<form><page1><country>JP</country></page1></form>")))).unwrap();

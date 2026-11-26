@@ -118,7 +118,7 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
         match op {
             DataOp::Value { path, text } if !path.is_empty() => {
                 // An empty value clears an existing node and needs no new one.
-                run.push(Want { som: path_som(path), path: path.clone(), text: text.clone(), ensure: false });
+                run.push(Want { raw_names: Vec::new(), som: path_som(path), path: path.clone(), text: text.clone(), ensure: false });
             }
             DataOp::Instances { parent, name, count } => {
                 let done = queued.entry((parent, name.as_str())).or_insert(0);
@@ -146,7 +146,7 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
                     *done += 1;
                     let mut path = parent.clone();
                     path.push((name.clone(), k));
-                    run.push(Want { som: format!("{name}[{k}]"), path, text: String::new(), ensure: true });
+                    run.push(Want { raw_names: Vec::new(), som: format!("{name}[{k}]"), path, text: String::new(), ensure: true });
                 }
             }
             DataOp::Remove(path) if !path.is_empty() => {

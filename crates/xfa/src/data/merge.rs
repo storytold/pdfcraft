@@ -7,6 +7,7 @@ use super::{DataPath, HashMap, MAX_NODES, XFA_DATA_NS};
 /// What a rewrite of the datasets packet does.
 #[derive(Clone, Copy)]
 pub(super) enum Op<'a> {
+    Legacy(&'a [(&'a DataPath, &'a [String])]),
     /// Put these values in (adding nodes as needed).
     Values(&'a [Want]),
     /// Take the node at this path out.
@@ -106,7 +107,7 @@ fn xfa_prefix(n: crate::xml::Node) -> Option<String> {
 fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merged {
     let wants: &[Want] = match op {
         Op::Values(w) => w,
-        Op::Remove(_) | Op::ReplaceData(_) | Op::Picture(..) => &[],
+        _ => &[],
     };
     // Fresh data, where none exists yet (declared with the `xfa` prefix).
     let fresh_children = |warnings: &mut Vec<String>| match op {
@@ -142,7 +143,7 @@ fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merg
     let mut edits = Vec::new();
     let mut data = None;
     match datasets {
-        None if matches!(op, Op::Remove(_) | Op::Picture(..)) => return Merged::Unchanged,
+        None if matches!(op, Op::Legacy(_) | Op::Remove(_) | Op::Picture(..)) => return Merged::Unchanged,
         None if within == Within::Xdp => {
             let root = parsed.root_element();
             let children = fresh_children(warnings);
@@ -160,7 +161,7 @@ fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merg
         }
         Some(ds) => match ds.children().find(|n| is(n, "data")) {
             Some(d) => data = Some(d),
-            None if matches!(op, Op::Remove(_) | Op::Picture(..)) => return Merged::Unchanged,
+            None if matches!(op, Op::Legacy(_) | Op::Remove(_) | Op::Picture(..)) => return Merged::Unchanged,
             None => {
                 let prefix = qname(src, &ds.range()).and_then(|q| q.split_once(':')).map(|(p, _)| format!("{p}:")).unwrap_or_default();
                 let children = fresh_children(warnings);
@@ -177,6 +178,7 @@ fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merg
     }
     if let Some(data) = data {
         match op {
+            Op::Legacy(paths) => rename_legacy(src, data, paths, &mut edits),
             Op::Values(w) => merge_values(src, data, w, &mut edits, warnings),
             Op::ReplaceData(nodes) => {
                 // Everything between the start and end tags; `<xfa:data/>` opens up. Written
@@ -307,6 +309,82 @@ fn mark_data_group_edit(src: &str, node: crate::xml::Node) -> Option<Edit> {
         }
     };
     Some(Edit { start: at, end: at, text })
+}
+
+/// Recover names written by the ASCII-only writer. Both reads and updates use this pass;
+/// reads use the repaired XML in memory, while updates merge values into the repaired packet.
+pub(super) fn recover_names(text: &str, within: Within, paths: &[(&DataPath, &[String])]) -> Option<String> {
+    if paths.iter().all(|(p, _)| p.iter().all(|(name, _)| name.is_ascii())) {
+        return None;
+    }
+    match merge(text, within, Op::Legacy(paths), &mut Vec::new()) {
+        Merged::Changed(xml) => Some(xml),
+        _ => None,
+    }
+}
+
+fn rename_legacy(src: &str, root: crate::xml::Node, paths: &[(&DataPath, &[String])], edits: &mut Vec<Edit>) {
+    type Children = HashMap<String, Vec<crate::xml::NodeId>>;
+    let mut index: HashMap<crate::xml::NodeId, Children> = HashMap::new();
+    let mut claims = HashMap::new();
+    let tree = root.document();
+    for &(path, raw_names) in paths {
+        let mut parent = root.id();
+        for (depth, (name, idx)) in path.iter().enumerate() {
+            let children = index.entry(parent).or_insert_with(|| {
+                let mut by = Children::new();
+                if let Some(node) = tree.get_node(parent) {
+                    for child in node.children().filter(|c| c.is_element()) {
+                        by.entry(child.tag_name().name().into()).or_default().push(child.id());
+                    }
+                }
+                by
+            });
+            let actual = if children.contains_key(name) {
+                name.clone()
+            } else if !name.is_ascii() {
+                // The new writer prefixes certain leading characters with '_'. Use the
+                // original SOM spelling when available before applying the old writer's rule.
+                let raw = raw_names.get(depth).unwrap_or(name);
+                let mut old: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.') { c } else { '_' }).collect();
+                if !old.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+                    old.insert(0, '_');
+                }
+                old
+            } else {
+                break;
+            };
+            let Some(siblings) = children.get(&actual) else { break };
+            // A lossy spelling shared by multiple requested fields is ambiguous. Leave
+            // the original packet intact instead of assigning another field's data.
+            let claim = claims.entry((parent, actual)).or_insert(name);
+            if *claim != name {
+                return;
+            }
+            let Some(child) = siblings.get(*idx) else { break };
+            parent = *child;
+        }
+    }
+    for ((parent, old), new) in claims {
+        if old == *new {
+            continue;
+        }
+        // Rename the whole same-name sibling group to preserve occurrence indices.
+        for id in &index[&parent][&old] {
+            let Some(node) = tree.get_node(*id) else { continue };
+            let range = node.range();
+            let Some(qualified) = qname(src, &range) else { continue };
+            let prefix = qualified.len() - old.len();
+            let start = range.start + 1 + prefix;
+            edits.push(Edit { start, end: start + old.len(), text: new.clone() });
+            if !src[..range.end].ends_with("/>")
+                && let Some(pos) = src[range.clone()].rfind("</")
+            {
+                let start = range.start + pos + 2 + prefix;
+                edits.push(Edit { start, end: start + old.len(), text: new.clone() });
+            }
+        }
+    }
 }
 
 /// The edits that put `wants` into the `data` element.
@@ -448,6 +526,14 @@ fn merge_values(src: &str, data: crate::xml::Node, wants: &[Want], edits: &mut V
 pub(super) fn merge_all(text: &str, within: Within, ops: &[Op], warnings: &mut Vec<String>) -> Option<String> {
     let mut current: Option<String> = None;
     for op in ops {
+        if let Op::Values(wants) = op
+            && wants.iter().any(|w| w.path.iter().any(|(n, _)| !n.is_ascii()))
+        {
+            let paths: Vec<_> = wants.iter().map(|w| (&w.path, w.raw_names.as_slice())).collect();
+            if let Some(xml) = recover_names(current.as_deref().unwrap_or(text), within, &paths) {
+                current = Some(xml);
+            }
+        }
         match merge(current.as_deref().unwrap_or(text), within, *op, warnings) {
             Merged::Changed(t) => current = Some(t),
             Merged::Unchanged => {}
