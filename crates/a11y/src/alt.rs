@@ -27,6 +27,8 @@ pub enum AltError {
     TooLarge,
     #[error("the figure's content may be in a damaged or unreadable content stream, or after the damage, so nothing was changed")]
     Damaged,
+    #[error("the structure tree has more than {limit} tags, the most PdfCraft reads, so the page of figure {0} is unknown and nothing was changed", limit = MAX_STRUCTURE_ELEMENTS)]
+    PastLimit(u32),
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
 }
@@ -556,7 +558,19 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
     let d = check_figure(doc, obj)?;
     let ids: HashSet<i64> = mcids(doc, &d).into_iter().collect();
     let pages = pdfcraft_model::pages(doc);
-    let pg = d.get(b"Pg").and_then(Object::as_ref).or_else(|| elements(doc).list.into_iter().find(|e| e.object == obj).and_then(|e| e.page));
+    let pg = match d.get(b"Pg").and_then(Object::as_ref) {
+        Some(pg) => Some(pg),
+        None => {
+            let walked = elements(doc);
+            match walked.list.into_iter().find(|e| e.object == obj) {
+                Some(e) => e.page,
+                // Its page would be inherited from a tag the walk never reached; removing it
+                // from the tree alone would leave its content pointing at it.
+                None if walked.truncated => return Err(AltError::PastLimit(obj.num)),
+                None => None,
+            }
+        }
+    };
     if let Some(page) = pg.and_then(|p| pages.iter().find(|x| x.obj == p)).filter(|_| !ids.is_empty()) {
         let streams = decode_page_streams(doc, &page.dict).ok_or(AltError::TooLarge)?;
         match artifact_marked_content(doc, page, streams, &ids, false)? {
