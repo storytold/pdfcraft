@@ -39,7 +39,7 @@ pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static T
     let title = if from_all_tools { tl!(g.label) } else { tl!("Edit") }.to_string();
     let mut commands = Vec::new();
     if from_all_tools {
-        commands.push(HeaderCommand::new(IconId::new("chevron-left"), "tools.all"));
+        commands.push(HeaderCommand::new(IconId::new("chevron_left"), "tools.all"));
     }
     commands.push(HeaderCommand::new(IconId::new("settings"), "app.preferences"));
     let shown = Panel::new(title).titled().commands(commands).actions([HeaderAction::Close]).show(ui, |ui, _| {

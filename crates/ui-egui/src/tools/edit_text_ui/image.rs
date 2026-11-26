@@ -745,13 +745,13 @@ pub(crate) fn picture_menu(ui: &mut egui::Ui, session: &mut PageSession, menu: &
         Ccw,
         Cw,
     }
-    let mut picks = vec![(Pick::Note, "message-square", tl!("Add a sticky note here"))];
+    let mut picks = vec![(Pick::Note, IconId::new("note"), tl!("Add a sticky note here"))];
     if raster {
-        picks.push((Pick::Crop, "crop", tl!("Crop")));
+        picks.push((Pick::Crop, IconId::new("crop"), tl!("Crop")));
     }
-    picks.push((Pick::Ccw, "rotate-ccw", tl!("Rotate Counterclockwise")));
-    picks.push((Pick::Cw, "rotate-cw", tl!("Rotate Clockwise")));
-    let icons: Vec<MenuIcon<'_>> = picks.iter().map(|(_, name, label)| MenuIcon::new(IconId::new(name), *label)).collect();
+    picks.push((Pick::Ccw, IconId::new("rotate_ccw"), tl!("Rotate Counterclockwise")));
+    picks.push((Pick::Cw, IconId::new("rotate_cw"), tl!("Rotate Clockwise")));
+    let icons: Vec<MenuIcon<'_>> = picks.iter().map(|(_, icon, label)| MenuIcon::new(icon.clone(), *label)).collect();
     if let Some(picked) = MenuIconRow::new(tl!("Picture"), &icons).show(ui).picked.and_then(|i| picks.get(i)) {
         match picked.0 {
             Pick::Note => action = Some(ImageAction::AddComment(page, hit)),

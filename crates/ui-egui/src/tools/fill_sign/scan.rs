@@ -290,10 +290,10 @@ impl ScanTabState {
         Row::new().show(ui, |ui, _| {
             choose = clicked(&Button::new(tl!("Choose photo…")).icon(craft::behavior::IconId::new("camera")).show(ui));
             if self.scan.is_some() {
-                if clicked(&IconButton::new(craft::behavior::IconId::new("rotate-ccw")).label(tl!("Rotate counterclockwise")).show(ui)) {
+                if clicked(&IconButton::new(craft::behavior::IconId::new("rotate_ccw")).label(tl!("Rotate counterclockwise")).show(ui)) {
                     turn = Some(Turn::CounterClockwise);
                 }
-                if clicked(&IconButton::new(craft::behavior::IconId::new("rotate-cw")).label(tl!("Rotate clockwise")).show(ui)) {
+                if clicked(&IconButton::new(craft::behavior::IconId::new("rotate_cw")).label(tl!("Rotate clockwise")).show(ui)) {
                     turn = Some(Turn::Clockwise);
                 }
             }

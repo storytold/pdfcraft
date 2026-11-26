@@ -1638,25 +1638,24 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, img: &pdfcraft_engine::AddedImage) 
                 let (cx, cy, w, h) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0, r[2] - r[0], r[3] - r[1]);
                 i.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
             };
-            let button =
-                |ui: &mut egui::Ui, icon: &'static str, label: &str| IconButton::new(IconId::new(icon)).label(label.to_string()).show(ui).clicks > 0;
-            if button(ui, "rotate-ccw", tl!("Rotate counterclockwise")) {
+            let button = |ui: &mut egui::Ui, icon: IconId, label: &str| IconButton::new(icon).label(label.to_string()).show(ui).clicks > 0;
+            if button(ui, IconId::new("rotate_ccw"), tl!("Rotate counterclockwise")) {
                 turn(&mut i, 1);
                 out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
             }
-            if button(ui, "rotate-cw", tl!("Rotate clockwise")) {
+            if button(ui, IconId::new("rotate_cw"), tl!("Rotate clockwise")) {
                 turn(&mut i, 3);
                 out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
             }
-            if button(ui, FLIP_HORIZONTAL_ICON, tl!("Flip horizontal")) {
+            if button(ui, IconId::new(FLIP_HORIZONTAL_ICON), tl!("Flip horizontal")) {
                 i.flip_h = !i.flip_h;
                 out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
             }
-            if button(ui, FLIP_VERTICAL_ICON, tl!("Flip vertical")) {
+            if button(ui, IconId::new(FLIP_VERTICAL_ICON), tl!("Flip vertical")) {
                 i.flip_v = !i.flip_v;
                 out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
             }
-            if button(ui, "replace", tl!("Replace image")) {
+            if button(ui, IconId::new("replace"), tl!("Replace image")) {
                 out = Some(ImageAction::Replace);
             }
         });

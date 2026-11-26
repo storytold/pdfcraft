@@ -106,23 +106,23 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 (_, 0) => tl!("Remove").to_string(),
                 (_, k) => crate::i18n::fmt(tl!("Remove {n} files"), &[("n", &k.to_string())]),
             };
-            if IconButton::new(IconId::new("chevron-up")).label(tl!("Move up")).enabled(can_up).show(ui).clicked() {
+            if IconButton::new(IconId::new("chevron_up")).label(tl!("Move up")).enabled(can_up).show(ui).clicked() {
                 action = Some(RowAction::MoveUp);
             }
-            if IconButton::new(IconId::new("chevron-down")).label(tl!("Move down")).enabled(can_down).show(ui).clicked() {
+            if IconButton::new(IconId::new("chevron_down")).label(tl!("Move down")).enabled(can_down).show(ui).clicked() {
                 action = Some(RowAction::MoveDown);
             }
             if IconButton::new(IconId::new("trash-2")).label(remove).enabled(count > 0 || pages_picked > 0).show(ui).clicked() {
                 action = Some(RowAction::Remove);
             }
             let locked = app.combine_draft.iter().zip(&selected).any(|(f, s)| *s && f.lock.is_some());
-            if Button::new(tl!("Unlock…")).icon(IconId::new("lock-open")).enabled(locked).show(ui).clicked() {
+            if Button::new(tl!("Unlock…")).icon(IconId::new("lock_open")).enabled(locked).show(ui).clicked() {
                 action = Some(RowAction::Unlock(None));
             }
-            IconButton::command(IconId::new("undo-2"), "edit.undo").enabled(app.combine_can_undo(true)).show(ui);
-            IconButton::command(IconId::new("redo-2"), "edit.redo").enabled(app.combine_can_undo(false)).show(ui);
+            IconButton::command(IconId::new("undo"), "edit.undo").enabled(app.combine_can_undo(true)).show(ui);
+            IconButton::command(IconId::new("redo"), "edit.redo").enabled(app.combine_can_undo(false)).show(ui);
             let views = [
-                Entry::new(CombineView::Grid, tl!("Grid view")).icon(IconId::new("layout-grid")),
+                Entry::new(CombineView::Grid, tl!("Grid view")).icon(IconId::new("layout_grid")),
                 Entry::new(CombineView::List, tl!("List view")).icon(IconId::new("list")),
             ];
             Segmented::new(tl!("View"), Bind::bound(&mut app.combine_view), &views).show(ui);
@@ -132,7 +132,7 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             if grid && n > 0 {
                 // Every file as its pages, or all as cards again.
                 let can_expand = app.combine_draft.iter_mut().any(|f| !app.combine_tab.expanded.contains(&f.id) && expandable(f));
-                if IconButton::new(IconId::new("maximize-2")).label(tl!("Expand all")).enabled(can_expand).show(ui).clicked() {
+                if IconButton::new(IconId::new("maximize_2")).label(tl!("Expand all")).enabled(can_expand).show(ui).clicked() {
                     action = Some(RowAction::ExpandAll(true));
                 }
                 let can_collapse = !app.combine_tab.expanded.is_empty();
@@ -223,9 +223,9 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 #[cfg(not(target_arch = "wasm32"))]
 fn add_files(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let entries = [
-        Entry::new(AddHow::Files, tl!("Add files…")).icon(IconId::new("file-plus")),
+        Entry::new(AddHow::Files, tl!("Add files…")).icon(IconId::new("new_file")),
         Entry::new(AddHow::Folder, tl!("Add folder…")).icon(IconId::new("folder")),
-        Entry::new(AddHow::Subfolders, tl!("Add folder and subfolders…")).icon(IconId::new("folder-open")),
+        Entry::new(AddHow::Subfolders, tl!("Add folder and subfolders…")).icon(IconId::new("folder_open")),
     ];
     let out = SplitButton::new(tl!("Add files…"), &entries).arrow_label(tl!("More ways to add files")).icon(IconId::new("plus")).show(ui);
     if out.response.clicked() {
@@ -254,7 +254,7 @@ fn add_open_documents(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     // `None` is every open document.
     let mut entries: Vec<Entry<Option<usize>>> = vec![Entry::new(None, tl!("All open documents"))];
     entries.extend(open.iter().map(|(i, name)| Entry::new(Some(*i), name.clone())));
-    let opener = Button::new(tl!("Add open documents")).icon(IconId::new("file-plus")).enabled(!open.is_empty()).show(ui);
+    let opener = Button::new(tl!("Add open documents")).icon(IconId::new("new_file")).enabled(!open.is_empty()).show(ui);
     let picked = Menu::new(tl!("Add open documents")).opened_by(&opener, Trigger::Click).pick(ui, &entries).picked;
     match picked {
         Some(Some(i)) => app.add_open_documents(&[i]),

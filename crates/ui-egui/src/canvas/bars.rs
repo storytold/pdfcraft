@@ -56,10 +56,10 @@ pub(super) enum Notice {
     LockSignatures,
 }
 
-/// One page notice bar with the icon named `icon`.
-fn bar(_tone: Tone, icon: &'static str, text: String) -> Bar<'static> {
+/// One page notice bar with the icon `icon`.
+fn bar(_tone: Tone, icon: IconId, text: String) -> Bar<'static> {
     // Production paints every notice bar on the soft accent surface, whatever it warns of; the icon says which kind.
-    Bar::new(Tone::Info, text).layout(NoticeLayout::Bar).icon(NoticeIcon::Custom(IconId::new(icon).into()))
+    Bar::new(Tone::Info, text).layout(NoticeLayout::Bar).icon(NoticeIcon::Custom(icon.into()))
 }
 
 /// The notices above the pages, one after another: a file changed on disk first, then what a historical
@@ -88,7 +88,7 @@ pub(super) fn notices(
     if view.disk_changed {
         let out = bar(
             Tone::Info,
-            "rotate-cw",
+            IconId::new("rotate_cw"),
             tl!("This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.")
                 .to_string(),
         )
@@ -114,7 +114,7 @@ pub(super) fn notices(
                 &[("rev", &snap.revision.to_string()), ("from", &snap.from)],
             )
         };
-        let out = bar(Tone::Info, "clock", text).action(NoticeAction::new(tl!("Close").to_string())).show(ui);
+        let out = bar(Tone::Info, IconId::new("clock"), text).action(NoticeAction::new(tl!("Close").to_string())).show(ui);
         if out.action == Some(0) {
             return Some(Notice::Close);
         }
@@ -129,7 +129,7 @@ pub(super) fn notices(
     // A signature just placed with Fill & Sign is a comment others can move (#2149): offer to
     // lock it into the page now. `lock_offer` is false for a digitally signed document.
     if lock_offer && !view.lock_offer_dismissed {
-        let out = bar(Tone::Info, "lock", tl!("Signature added. Others can move it until it's locked.").to_string())
+        let out = bar(Tone::Info, IconId::new("lock"), tl!("Signature added. Others can move it until it's locked.").to_string())
             .action(NoticeAction::new(tl!("Lock now").to_string()).default_action())
             .dismiss()
             .show(ui);
@@ -141,8 +141,9 @@ pub(super) fn notices(
         }
     }
     if let Some((icon, tone, template, arg)) = signed {
-        let out =
-            bar(tone, icon, crate::i18n::fmt(tl!(template), &[("by", &arg)])).action(NoticeAction::new(tl!("Signature panel").to_string())).show(ui);
+        let out = bar(tone, IconId::new(icon), crate::i18n::fmt(tl!(template), &[("by", &arg)]))
+            .action(NoticeAction::new(tl!("Signature panel").to_string()))
+            .show(ui);
         return (out.action == Some(0)).then_some(Notice::Signatures);
     }
     if view.notice_dismissed {
@@ -167,17 +168,17 @@ pub(super) fn notices(
             text.push_str(chars.as_str());
             text.push('.');
         }
-        Some(("text-cursor-input", Tone::Info, text, true))
+        Some((IconId::new("text-cursor-input"), Tone::Info, text, true))
     } else if info.xfa == Some(pdfcraft_render::Xfa::Dynamic) {
         Some((
-            "triangle-alert",
+            IconId::new("triangle-alert"),
             Tone::Warn,
             tl!("This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.").to_string(),
             false,
         ))
     } else if info.xfa == Some(pdfcraft_render::Xfa::Static) {
         Some((
-            "text-cursor-input",
+            IconId::new("text-cursor-input"),
             Tone::Info,
             tl!("XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.").to_string(),
             true,
@@ -185,7 +186,7 @@ pub(super) fn notices(
     } else if info.fields.iter().any(|f| f.kind != pdfcraft_render::FieldKind::PushButton) {
         // Push buttons alone (LaTeX `animate` frames, navigation buttons) leave nothing to fill in.
         Some((
-            "text-cursor-input",
+            IconId::new("text-cursor-input"),
             Tone::Info,
             crate::i18n::fmt(tl!("This document contains {n} interactive form fields."), &[("n", &info.fields.len().to_string())]),
             true,
@@ -194,21 +195,26 @@ pub(super) fn notices(
         None
     };
     let msg = if scripts_off {
-        Some(("triangle-alert", Tone::Info, crate::js_ui::scripts_off_notice(), true))
+        Some((IconId::new("triangle-alert"), Tone::Info, crate::js_ui::scripts_off_notice(), true))
     } else if secured {
         // A secured form still says what it is, and keeps Highlight fields: the security
         // sentence follows the form's.
         let security = tl!("This document is secured. Some changes are restricted by its security settings.");
         Some(match form {
             Some((icon, tone, text, fields)) => (icon, tone, format!("{text} {security}"), fields),
-            None => ("lock", Tone::Info, security.to_string(), false),
+            None => (IconId::new("lock"), Tone::Info, security.to_string(), false),
         })
     } else if form.is_some() {
         form
     } else if repaired {
-        Some(("bandage", Tone::Info, tl!("This file was damaged and has been repaired. Saving keeps the repaired version.").to_string(), false))
+        Some((
+            IconId::new("bandage"),
+            Tone::Info,
+            tl!("This file was damaged and has been repaired. Saving keeps the repaired version.").to_string(),
+            false,
+        ))
     } else if !info.warnings.is_empty() {
-        Some(("triangle-alert", Tone::Warn, info.warnings[0].clone(), false))
+        Some((IconId::new("triangle-alert"), Tone::Warn, info.warnings[0].clone(), false))
     } else {
         None
     };
@@ -274,7 +280,7 @@ fn cut_pages_bar(view: &mut DocView, ui: &mut egui::Ui) {
             &[("n", &n.to_string()), ("page", &page)],
         )
     };
-    if bar(Tone::Warn, "triangle-alert", text).dismiss().show(ui).dismissed {
+    if bar(Tone::Warn, IconId::new("triangle-alert"), text).dismiss().show(ui).dismissed {
         view.cut_notice_dismissed.extend(cut);
     }
 }

@@ -97,15 +97,15 @@ fn heading(info: &DocInfo, page: Option<usize>) -> String {
 }
 
 /// The icon a field kind shows.
-fn kind_icon(kind: &FieldKind) -> &'static str {
+fn kind_icon(kind: &FieldKind) -> IconId {
     match kind {
-        FieldKind::Text => "text-cursor-input",
-        FieldKind::CheckBox => "check-circle-2",
-        FieldKind::Radio => "circle",
-        FieldKind::PushButton | FieldKind::Unknown => "square",
-        FieldKind::Combo => "chevron-down",
-        FieldKind::List => "list",
-        FieldKind::Signature => "signature",
+        FieldKind::Text => IconId::new("text-cursor-input"),
+        FieldKind::CheckBox => IconId::new("check-circle-2"),
+        FieldKind::Radio => IconId::new("circle"),
+        FieldKind::PushButton | FieldKind::Unknown => IconId::new("square"),
+        FieldKind::Combo => IconId::new("chevron_down"),
+        FieldKind::List => IconId::new("list"),
+        FieldKind::Signature => IconId::new("signature"),
     }
 }
 
@@ -169,7 +169,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
                 let page = if let FieldRow::Page(p) = &row.key { *p } else { None };
                 return ListRow::new(heading(info, page)).section_heading();
             };
-            let mut list_row = ListRow::new(field.name.clone()).icon(IconSpec::svg(IconId::new(kind_icon(&field.kind)))).tooltip(field_tip(field));
+            let mut list_row = ListRow::new(field.name.clone()).icon(IconSpec::svg(kind_icon(&field.kind))).tooltip(field_tip(field));
             if let Some(value) = &field.value {
                 list_row = list_row.optional(value.clone());
             }
@@ -177,8 +177,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
                 // Each arrow names the field it moves.
                 let named = |tip: &str| format!("{}: {}", tl!(tip), field.name);
                 list_row = list_row
-                    .trailing_part(EARLIER, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron-up"))), named("Earlier in tab order"))
-                    .trailing_part(LATER, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron-down"))), named("Later in tab order"));
+                    .trailing_part(EARLIER, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron_up"))), named("Earlier in tab order"))
+                    .trailing_part(LATER, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron_down"))), named("Later in tab order"));
             }
             list_row
         },

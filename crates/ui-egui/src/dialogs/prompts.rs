@@ -90,7 +90,7 @@ impl PdfCraftApp {
         };
         let mut prompt = StandardPrompt::custom(crate::i18n::fmt(template, &[("who", tl!(pending.origin.noun()))]))
             .title(title)
-            .icon(IconId::new("external-link"))
+            .icon(IconId::new("open"))
             .button(PromptChoice::Proceed, open)
             .button(PromptChoice::Cancel, tl!("Cancel"))
             .default_choice(PromptChoice::Cancel)

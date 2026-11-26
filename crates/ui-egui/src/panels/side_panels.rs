@@ -492,10 +492,10 @@ impl DockPanels<PanelId> for Panels<'_> {
                 if self.app.left == LeftPanel::CalculationOrder {
                     crate::calc_order_ui::header(ui);
                 } else if crate::organize_panel::showing(self.app) {
-                    IconButton::command(IconSpec::svg(IconId::new("chevron-left")), CommandRef::new("tools.all")).show(ui);
+                    IconButton::command(IconSpec::svg(IconId::new("chevron_left")), CommandRef::new("tools.all")).show(ui);
                     IconButton::command(IconSpec::svg(IconId::new("close")), CommandRef::new("page.organize")).label(tl!("Close panel")).show(ui);
                 } else if self.app.left == LeftPanel::AllTools {
-                    IconButton::command(IconSpec::svg(IconId::new("maximize-2")), CommandRef::new("tools.expand")).show(ui);
+                    IconButton::command(IconSpec::svg(IconId::new("maximize_2")), CommandRef::new("tools.expand")).show(ui);
                 }
             }
             PanelId::Bookmarks => super::bookmarks::header(self.app, ui),

@@ -21,11 +21,11 @@ use craft::theme::ModeChoice;
 const CATALOG_ONLY: &[(&str, &str, &str)] = &[
     ("app.theme", "Switch theme", "moon"),
     ("home.unpin_tool", "Unpin tool", "pin-off"),
-    ("form.calculation_order.back", "Back to Prepare a form", "chevron-left"),
+    ("form.calculation_order.back", "Back to Prepare a form", "chevron_left"),
     // Labels distinct from the Combine grid's Expand and Collapse, which can show beside them.
-    ("tools.expand", "Expand all tools", "maximize-2"),
+    ("tools.expand", "Expand all tools", "maximize_2"),
     ("tools.collapse", "Collapse all tools", "minimize-2"),
-    ("tools.all", "Back to all tools", "layout-grid"),
+    ("tools.all", "Back to all tools", "layout_grid"),
     // The rail's button names the side it moves the rail to.
     ("view.rail.left", "Dock navigation rail on Left", "panel-left"),
     ("view.rail.right", "Dock navigation rail on Right", "panel-right"),
@@ -33,7 +33,7 @@ const CATALOG_ONLY: &[(&str, &str, &str)] = &[
     ("bookmark.paste", "Paste bookmarks", "clipboard-paste"),
     ("bookmark.expand_all", "Expand all bookmarks", "chevrons-down"),
     ("bookmark.collapse_all", "Collapse all bookmarks", "chevrons-up"),
-    ("bookmark.expand_level", "Expand top-level bookmarks", "chevron-down"),
+    ("bookmark.expand_level", "Expand top-level bookmarks", "chevron_down"),
     ("layers.reset_visibility", "Reset to Initial Visibility", "layers"),
     (PANEL, "Side panel", "panel-right"),
     (DOCUMENT, "Switch to document", "file"),
