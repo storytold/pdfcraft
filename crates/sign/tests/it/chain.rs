@@ -436,14 +436,16 @@ fn a_delegated_responder_must_be_valid_and_unrevoked() {
     let no_eku = issue("Responder Without EKU", Some(&r), FOREVER, &[key_usage(DIGITAL_SIGNATURE)]);
     assert_eq!(check(&no_eku, &[]), RevocationStatus::Unknown);
 
-    // Expired, and not yet valid, when it produced the response.
+    // Expired, and not yet valid, at the validation time.
     let expired = responder("Expired Responder", (2020, 2025), &[]);
     assert_eq!(check(&expired, &[]), RevocationStatus::Unknown);
     assert_eq!(check(&responder("Future Responder", (2027, 2040), &[]), &[]), RevocationStatus::Unknown);
-    // Validity is judged when the response was produced, not at the validation time: the
-    // same expired responder counts for a response it produced while it was valid.
+    // producedAt is the responder's own claim: a retired key backdating it to when the
+    // certificate was valid still proves nothing.
     let earlier = Time { year: 2025, month: 1, day: 1, hour: 12, minute: 0, second: 0 };
-    assert_eq!(check_when(&expired, earlier, &[], true), revoked);
+    assert_eq!(check_when(&expired, earlier, &[], true), RevocationStatus::Unknown);
+    // Valid at the validation time, but not yet when it says it produced the response.
+    assert_eq!(check_when(&responder("Recent Responder", (2025, 2040), &[]), earlier, &[], true), RevocationStatus::Unknown);
 
     // Revoked by a CRL from the same evidence: untrusted, unless it says not to check it.
     let revoked_responder = responder("Revoked Responder", FOREVER, &[]);
@@ -455,8 +457,8 @@ fn a_delegated_responder_must_be_valid_and_unrevoked() {
     // A CRL issued after the validation time still says the responder was revoked in May.
     let later = (Time { year: 2026, month: 12, day: 1, hour: 12, minute: 0, second: 0 }, time(2027));
     assert_eq!(check(&revoked_responder, &[crl_revoking_in(&r, &revoked_responder.cert.serial, later)]), RevocationStatus::Unknown);
-    // A revocation after the response was produced does not take back what it signed then.
-    assert_eq!(check_when(&revoked_responder, earlier, &[crl_revoking(&r, &revoked_responder.cert.serial)], true), revoked);
+    // Nor can a revoked key escape its revocation by backdating producedAt before it.
+    assert_eq!(check_when(&revoked_responder, earlier, &[crl_revoking(&r, &revoked_responder.cert.serial)], true), RevocationStatus::Unknown);
 
     // When a cap left CRLs unread, a delegate cannot be shown unrevoked; the issuer answering
     // for itself, or a delegate that says not to check it, still counts.
