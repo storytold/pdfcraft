@@ -589,13 +589,37 @@ fn fold_number_char(c: char) -> char {
     }
 }
 
+/// `text` as the matchers of numbers read it, one character for one: compatibility digits as
+/// ASCII digits, and a dash variant as `-` where a hyphen could join two groups of one number,
+/// straight after a digit or a bracket and straight before a digit or `(` ("800–851–3420",
+/// "+7(903)‑123‑45‑67"). Those are the places [`digit_run`] takes a hyphen.
+///
+/// A dash variant anywhere else stays as it is. One set off by spaces ("0761 8852 – 0") stands
+/// between two things, and no matcher takes a hyphen there; read as `-` it would only make the
+/// number before it the head of a longer run and the number after it the tail of one, which
+/// the matchers refuse, and hide numbers that are found without it.
+fn fold_numbers(text: &[char]) -> Vec<char> {
+    let mut folded: Vec<char> = text.iter().copied().map(fold_number_char).collect();
+    for i in 0..folded.len() {
+        if folded[i] != '-' || text[i] == '-' {
+            continue;
+        }
+        let after = i.checked_sub(1).and_then(|p| folded.get(p)).is_some_and(|c| c.is_ascii_digit() || matches!(c, '(' | ')'));
+        let before = folded.get(i + 1).is_some_and(|c| c.is_ascii_digit() || *c == '(');
+        if !(after && before) {
+            folded[i] = text[i];
+        }
+    }
+    folded
+}
+
 /// Character ranges of `text` matching `pattern`.
 pub fn find(pattern: Pattern, text: &[char]) -> Vec<Range<usize>> {
     // The numeric patterns read a copy with dash and digit variants folded, one character for
     // one, so the ranges they return still index `text` (and so the same glyphs).
     let folded: Vec<char>;
     let text = if matches!(pattern, Pattern::Phone | Pattern::CreditCard | Pattern::Ssn) {
-        folded = text.iter().copied().map(fold_number_char).collect();
+        folded = fold_numbers(text);
         &folded
     } else {
         text
@@ -843,6 +867,33 @@ mod tests {
         // Folding keeps the rules: a full-width digit glued to either end of an SSN makes it part of
         // a longer number.
         assert_eq!(found(Pattern::Ssn, "\u{FF11}321-54-9876 and 321-54-9876\u{FF11}"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_dash_variant_that_joins_no_groups_is_left_as_it_is() {
+        // Set off by spaces, a dash stands between two things. Read as a hyphen it would make
+        // the number before it the head of a longer run, and the number would go unfound.
+        for dash in ['\u{2013}', '\u{2014}', '\u{2212}', '\u{FF0D}'] {
+            for text in [format!("Tel.: 0761 8852 {dash} 0"), format!("Fax: 0761 8852 {dash}666"), format!("Tel.: 0761 8852{dash} 0")] {
+                assert_eq!(found(Pattern::Phone, &text), ["0761 8852"], "{text}");
+            }
+            let card = format!("Card 4111 1111 1111 1111 {dash} 12");
+            assert_eq!(found(Pattern::CreditCard, &card), ["4111 1111 1111 1111"], "{card}");
+        }
+        // The same holds after a full stop, and for a dash that is doubled.
+        assert_eq!(found(Pattern::Phone, "Tel. 0761 8852.\u{2013}0 and 0761 8852\u{2013}\u{2013}0"), ["0761 8852", "0761 8852"]);
+        // Straight between two groups it is a hyphen: the number is found whole, and a longer run
+        // of digit groups is still no phone number.
+        assert_eq!(found(Pattern::Phone, "Tel.: 0761 8852\u{2013}0"), ["0761 8852\u{2013}0"]);
+        assert_eq!(
+            found(Pattern::Phone, "(202) 690\u{2013}7890 and +7(903)\u{2011}123\u{2011}45\u{2011}67"),
+            ["(202) 690\u{2013}7890", "+7(903)\u{2011}123\u{2011}45\u{2011}67"]
+        );
+        assert_eq!(found(Pattern::Phone, "Vol. 43 (1995) 1987\u{2013}1999"), Vec::<String>::new());
+        // Both in one line: the number's own dashes join its groups, the spaced one ends it.
+        assert_eq!(found(Pattern::Phone, "Call 800\u{2013}851\u{2013}3420 \u{2013} 5"), ["800\u{2013}851\u{2013}3420"]);
+        // A hyphen joins a group to a bracketed one on either side.
+        assert_eq!(found(Pattern::Phone, "Call 1\u{2011}(800)\u{2011}555\u{2011}1234"), ["1\u{2011}(800)\u{2011}555\u{2011}1234"]);
     }
 
     #[test]
