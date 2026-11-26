@@ -441,8 +441,9 @@ impl Automation {
 
     pub(crate) fn accessibility_figures(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
-        let list: Vec<Value> = doc
-            .figures()
+        let listing = doc.figure_listing();
+        let list: Vec<Value> = listing
+            .items
             .iter()
             .map(|f| {
                 // Top-left-origin points on the displayed page.
@@ -455,7 +456,7 @@ impl Automation {
                 json!({ "figure": f.obj.num, "page": f.page.map(|p| p + 1), "alt": f.alt, "rect": rect })
             })
             .collect();
-        Ok(json!({ "count": list.len(), "figures": list }))
+        Ok(with_warnings(json!({ "count": list.len(), "figures": list, "truncated": listing.truncated }), truncation_warning(listing.truncated)))
     }
 
     pub(crate) fn accessibility_set_alt(&mut self, a: &Args) -> Result<Value> {
@@ -490,9 +491,9 @@ impl Automation {
             .opt_int("max_depth")?
             .map(|d| usize::try_from(d).map_err(|_| ToolError::InvalidArgs("max_depth must be 0 or more".into())))
             .transpose()?;
-        let matching: Vec<_> = self
-            .doc(a)?
-            .tags()
+        let listing = self.doc(a)?.tag_listing();
+        let matching: Vec<_> = listing
+            .items
             .into_iter()
             .filter(|t| types.as_ref().is_none_or(|ty| ty.contains(&t.kind.as_str())))
             .filter(|t| pages.as_ref().is_none_or(|p| t.page.is_some_and(|page| p.contains(&page))))
@@ -513,7 +514,10 @@ impl Automation {
                 })
             })
             .collect();
-        Ok(json!({ "count": count, "tags": tags, "next": next }))
+        Ok(with_warnings(
+            json!({ "count": count, "tags": tags, "next": next, "truncated": listing.truncated }),
+            truncation_warning(listing.truncated),
+        ))
     }
 
     pub(crate) fn accessibility_tag_content(&self, a: &Args) -> Result<Value> {
@@ -599,6 +603,12 @@ impl Automation {
         let ((), out) = self.session.with_own_js_output(id, |s| s.apply(id, edit)).map_err(failed)?;
         Ok(out.errors)
     }
+}
+
+/// The warning for a listing cut short at the structure tree's tag limit.
+fn truncation_warning(truncated: bool) -> Vec<String> {
+    let limit = pdfcraft_engine::a11y::MAX_STRUCTURE_ELEMENTS;
+    if truncated { vec![format!("the structure tree has more than {limit} tags; only the first {limit} were read")] } else { Vec::new() }
 }
 
 /// `out` with `warnings` added to its `warnings` list (made when it has none).

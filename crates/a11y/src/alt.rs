@@ -38,6 +38,8 @@ pub enum ArtifactError {
     Untagged,
     #[error("object {0} is not a reachable indirect structure tag")]
     NotATag(u32),
+    #[error("the structure tree has more than {limit} tags, the most PdfCraft reads, and object {0} is not among them", limit = MAX_STRUCTURE_ELEMENTS)]
+    PastLimit(u32),
     #[error("the tag has child structure elements; mark a leaf tag instead")]
     HasChildren,
     #[error("the tag has no direct marked content")]
@@ -89,17 +91,39 @@ pub(crate) struct Element {
     pub depth: usize,
 }
 
+/// The most structure elements the walk reads; a larger tree is read only this far.
+pub const MAX_STRUCTURE_ELEMENTS: usize = 1_000_000;
+
+/// The structure elements the walk reached, in document order. `truncated` is set when the tree
+/// has more than the walk reads, so an element missing from `list` may still be in the tree.
+#[derive(Default)]
+pub(crate) struct Elements {
+    pub list: Vec<Element>,
+    pub truncated: bool,
+}
+
+/// A list read from the structure tree. When `truncated` is set, the tree has more than
+/// [`MAX_STRUCTURE_ELEMENTS`] tags and the list stops there.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Listing<T> {
+    pub items: Vec<T>,
+    pub truncated: bool,
+}
+
 /// Indirect structure elements in document order, with their page and hierarchy.
-pub(crate) fn elements(doc: &Document) -> Vec<Element> {
-    let Some(root) = tree_root(doc) else { return Vec::new() };
+pub(crate) fn elements(doc: &Document) -> Elements {
+    walk(doc, MAX_STRUCTURE_ELEMENTS)
+}
+
+/// [`elements`], reading at most `cap` elements.
+pub(crate) fn walk(doc: &Document, cap: usize) -> Elements {
+    let Some(root) = tree_root(doc) else { return Elements::default() };
     let mut out = Vec::new();
+    let mut truncated = false;
     let mut seen = HashSet::new();
     let mut stack: Vec<(Object, Option<ObjRef>, Option<ObjRef>, usize)> =
         root.get(b"K").map(|k| vec![(k.clone(), None, None, 0)]).unwrap_or_default();
     while let Some((k, pg, parent, depth)) = stack.pop() {
-        if out.len() > 1_000_000 {
-            break;
-        }
         match k {
             Object::Array(a) => stack.extend(a.into_iter().rev().map(|x| (x, pg, parent, depth))),
             Object::Ref(r) => {
@@ -114,6 +138,10 @@ pub(crate) fn elements(doc: &Document) -> Vec<Element> {
                 }
                 let Some(d) = target.as_dict().cloned() else { continue };
                 if d.contains(b"S") {
+                    if out.len() >= cap {
+                        truncated = true;
+                        break;
+                    }
                     let pg = d.get(b"Pg").and_then(Object::as_ref).or(pg);
                     if let Some(kids) = d.get(b"K") {
                         stack.push((kids.clone(), pg, Some(r), depth.saturating_add(1)));
@@ -131,7 +159,7 @@ pub(crate) fn elements(doc: &Document) -> Vec<Element> {
             _ => {}
         }
     }
-    out
+    Elements { list: out, truncated }
 }
 
 /// The marked-content ids an element owns directly.
@@ -318,11 +346,19 @@ pub(crate) fn content_bboxes(doc: &Document, page: &Dict, ids: &HashSet<i64>) ->
 
 /// The figures, in document order.
 pub fn figures(doc: &Document) -> Vec<Figure> {
-    let Some(root) = tree_root(doc) else { return Vec::new() };
+    figure_listing(doc).items
+}
+
+/// The figures, in document order, and whether the structure tree was too large to read whole.
+pub fn figure_listing(doc: &Document) -> Listing<Figure> {
+    let Some(root) = tree_root(doc) else { return Listing { items: Vec::new(), truncated: false } };
     let role_map = root.get(b"RoleMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
     let pages = pdfcraft_model::pages(doc);
     let index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
-    let figures: Vec<(Element, Option<usize>)> = elements(doc)
+    let walked = elements(doc);
+    let truncated = walked.truncated;
+    let figures: Vec<(Element, Option<usize>)> = walked
+        .list
         .into_iter()
         .filter(|e| e.dict.name(b"S").is_some_and(|s| standard(doc, &role_map, s) == b"Figure"))
         .map(|e| {
@@ -338,7 +374,7 @@ pub fn figures(doc: &Document) -> Vec<Figure> {
     }
     let bounds: HashMap<usize, HashMap<i64, [f64; 4]>> =
         wanted.into_iter().filter_map(|(p, ids)| Some((p, content_bboxes(doc, &pages.get(p)?.dict, &ids)))).collect();
-    figures
+    let items = figures
         .into_iter()
         .map(|(e, page)| {
             let alt = e.dict.get(b"Alt").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text()));
@@ -346,7 +382,8 @@ pub fn figures(doc: &Document) -> Vec<Figure> {
             let bbox = on_page.and_then(|b| mcids(doc, &e.dict).iter().filter_map(|id| b.get(id)).fold(None, |acc, b| Some(union(acc, *b))));
             Figure { obj: e.object, page, alt, bbox }
         })
-        .collect()
+        .collect();
+    Listing { items, truncated }
 }
 
 fn check_figure(doc: &Document, obj: ObjRef) -> Result<Dict, AltError> {
@@ -519,7 +556,7 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
     let d = check_figure(doc, obj)?;
     let ids: HashSet<i64> = mcids(doc, &d).into_iter().collect();
     let pages = pdfcraft_model::pages(doc);
-    let pg = d.get(b"Pg").and_then(Object::as_ref).or_else(|| elements(doc).into_iter().find(|e| e.object == obj).and_then(|e| e.page));
+    let pg = d.get(b"Pg").and_then(Object::as_ref).or_else(|| elements(doc).list.into_iter().find(|e| e.object == obj).and_then(|e| e.page));
     if let Some(page) = pg.and_then(|p| pages.iter().find(|x| x.obj == p)).filter(|_| !ids.is_empty()) {
         let streams = decode_page_streams(doc, &page.dict).ok_or(AltError::TooLarge)?;
         match artifact_marked_content(doc, page, streams, &ids, false)? {
@@ -557,7 +594,9 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
 pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), ArtifactError> {
     tree_root(doc).ok_or(ArtifactError::Untagged)?;
     let elements = elements(doc);
-    let Some(element) = elements.iter().find(|e| e.object == obj) else { return Err(ArtifactError::NotATag(obj.num)) };
+    let Some(element) = elements.list.iter().find(|e| e.object == obj) else {
+        return Err(if elements.truncated { ArtifactError::PastLimit(obj.num) } else { ArtifactError::NotATag(obj.num) });
+    };
     if has_child_structure(doc, &element.dict) {
         return Err(ArtifactError::HasChildren);
     }

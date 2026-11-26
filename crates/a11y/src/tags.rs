@@ -93,6 +93,8 @@ impl TagProperty {
 pub enum TagError {
     #[error("object {0} is not a reachable indirect structure tag")]
     NotATag(ObjRef),
+    #[error("the structure tree has more than {limit} tags, the most PdfCraft reads, and object {0} is not among them", limit = alt::MAX_STRUCTURE_ELEMENTS)]
+    PastLimit(ObjRef),
     #[error("a tag type must be a nonempty PDF name using letters, digits, colon, period, underscore or hyphen")]
     InvalidType,
     #[error("tag property text is too long (maximum 65536 bytes)")]
@@ -120,11 +122,12 @@ pub fn move_tag(doc: &mut Document, object: ObjRef, anchor: ObjRef, placement: T
         return Err(TagError::NotSiblings);
     }
     let reachable = alt::elements(doc);
-    let Some(obj_elem) = reachable.iter().find(|e| e.object == object) else {
-        return Err(TagError::NotSiblings);
+    let missing = |r| if reachable.truncated { TagError::PastLimit(r) } else { TagError::NotSiblings };
+    let Some(obj_elem) = reachable.list.iter().find(|e| e.object == object) else {
+        return Err(missing(object));
     };
-    let Some(anc_elem) = reachable.iter().find(|e| e.object == anchor) else {
-        return Err(TagError::NotSiblings);
+    let Some(anc_elem) = reachable.list.iter().find(|e| e.object == anchor) else {
+        return Err(missing(anchor));
     };
     if obj_elem.parent != anc_elem.parent {
         return Err(TagError::NotSiblings);
@@ -178,11 +181,27 @@ fn tag_type_name(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
     d.get(b"S").map(|s| doc.resolve(s)).and_then(|s| s.as_name().map(<[u8]>::to_vec))
 }
 
+/// The reachable tag `object`, or why it cannot be read.
+fn find_tag(doc: &Document, object: ObjRef) -> Result<alt::Element, TagError> {
+    let walked = alt::elements(doc);
+    let truncated = walked.truncated;
+    walked.list.into_iter().find(|e| e.object == object).ok_or(if truncated { TagError::PastLimit(object) } else { TagError::NotATag(object) })
+}
+
 /// List reachable, indirect tags in structure-tree order.
 pub fn tags(doc: &Document) -> Vec<TagInfo> {
+    tag_listing(doc).items
+}
+
+/// List reachable, indirect tags in structure-tree order, and whether the tree was too large to
+/// read whole.
+pub fn tag_listing(doc: &Document) -> alt::Listing<TagInfo> {
     let pages = pdfcraft_model::pages(doc);
     let page_index: std::collections::HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
-    alt::elements(doc)
+    let walked = alt::elements(doc);
+    let truncated = walked.truncated;
+    let items = walked
+        .list
         .into_iter()
         .filter_map(|e| {
             Some(TagInfo {
@@ -199,14 +218,15 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
                 page: e.page.and_then(|p| page_index.get(&p).copied()),
             })
         })
-        .collect()
+        .collect();
+    alt::Listing { items, truncated }
 }
 
 /// List marked-content references directly owned by an indirect tag.
 /// Returns `ContentLimit` rather than a partial list beyond 65,536 marks or 512 child/reference
 /// levels. Child structure elements do not count as direct marks.
 pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>, TagError> {
-    let Some(element) = alt::elements(doc).into_iter().find(|e| e.object == object) else { return Err(TagError::NotATag(object)) };
+    let element = find_tag(doc, object)?;
     let pages = pdfcraft_model::pages(doc);
     let page_index: std::collections::HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let mut marks = Vec::new();
@@ -389,9 +409,7 @@ fn set_table_attribute(doc: &mut Document, object: ObjRef, key: &[u8], value: Op
 /// a header cell's scope are Table attributes ([`TagProperty::Summary`], [`TagProperty::Scope`]),
 /// set only on tags of that type after the role map.
 pub fn set_tag_property(doc: &mut Document, object: ObjRef, property: TagProperty, value: Option<&str>) -> Result<(), TagError> {
-    let Some(element) = alt::elements(doc).into_iter().find(|e| e.object == object) else {
-        return Err(TagError::NotATag(object));
-    };
+    let element = find_tag(doc, object)?;
     // ActualText may intentionally contain leading or trailing whitespace; preserve it.
     let value = value.filter(|s| !s.is_empty());
     if value.is_some_and(|s| s.len() > 65_536) {
@@ -488,6 +506,26 @@ mod tests {
         );
         let th_marks = tag_content(&doc, ObjRef::new(8, 0)).unwrap();
         assert_eq!(th_marks, [TagContentItem { page: Some(0), mcid: 0, text: "Hello".into() }]);
+    }
+
+    #[test]
+    fn a_walk_cut_short_at_its_limit_says_so() {
+        let doc = pdf(&[
+            "<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(),
+            "<< /Type /StructTreeRoot /K 3 0 R >>".into(),
+            "<< /S /Document /P 2 0 R /K [4 0 R 5 0 R 6 0 R] >>".into(),
+            "<< /S /P /P 3 0 R >>".into(),
+            "<< /S /P /P 3 0 R >>".into(),
+            "<< /S /P /P 3 0 R >>".into(),
+        ]);
+        let whole = alt::walk(&doc, usize::MAX);
+        assert!(!whole.truncated, "a tree read whole is not flagged");
+        let cut = alt::walk(&doc, whole.list.len() - 1);
+        assert!(cut.truncated, "a walk that drops a tag says so");
+        assert!(cut.list.len() < whole.list.len());
+        let exact = alt::walk(&doc, whole.list.len());
+        assert!(!exact.truncated, "a limit the tree just fits in drops nothing");
+        assert_eq!(exact.list.len(), whole.list.len());
     }
 
     #[test]

@@ -458,9 +458,19 @@ impl Document {
         self.editor.as_ref().map(|e| a11y::figures(&e.cos)).unwrap_or_default()
     }
 
+    /// [`Self::figures`], and whether the structure tree was too large to read whole.
+    pub fn figure_listing(&self) -> a11y::Listing<a11y::Figure> {
+        self.editor.as_ref().map_or(a11y::Listing { items: Vec::new(), truncated: false }, |e| a11y::figure_listing(&e.cos))
+    }
+
     /// Reachable indirect structure tags, in document order.
     pub fn tags(&self) -> Vec<a11y::TagInfo> {
         self.editor.as_ref().map(|e| a11y::tags(&e.cos)).unwrap_or_default()
+    }
+
+    /// [`Self::tags`], and whether the structure tree was too large to read whole.
+    pub fn tag_listing(&self) -> a11y::Listing<a11y::TagInfo> {
+        self.editor.as_ref().map_or(a11y::Listing { items: Vec::new(), truncated: false }, |e| a11y::tag_listing(&e.cos))
     }
 
     /// Marked-content items directly owned by one reachable indirect structure tag.

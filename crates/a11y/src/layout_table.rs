@@ -19,6 +19,8 @@ const MAX_DEPTH: usize = 256;
 pub enum LayoutTableError {
     #[error("object {0} is not a reachable indirect structure tag")]
     NotATag(ObjRef),
+    #[error("the structure tree has more than {limit} tags, the most PdfCraft reads, and object {0} is not among them", limit = alt::MAX_STRUCTURE_ELEMENTS)]
+    PastLimit(ObjRef),
     #[error("the tag is not a table")]
     NotATable,
     #[error("the table has too many tags, or tags nested too deeply")]
@@ -157,8 +159,10 @@ impl Retag<'_> {
 /// Div and P elements as the module documentation says; returns how many elements changed. Tables
 /// nested in its cells stay tables.
 pub fn layout_table_to_blocks(doc: &mut Document, table: ObjRef) -> Result<usize, LayoutTableError> {
-    let Some(element) = alt::elements(doc).into_iter().find(|e| e.object == table) else {
-        return Err(LayoutTableError::NotATag(table));
+    let walked = alt::elements(doc);
+    let truncated = walked.truncated;
+    let Some(element) = walked.list.into_iter().find(|e| e.object == table) else {
+        return Err(if truncated { LayoutTableError::PastLimit(table) } else { LayoutTableError::NotATag(table) });
     };
     let role_map = alt::tree_root(doc).and_then(|r| r.get(b"RoleMap").map(|o| doc.resolve(o))).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
     let mut retag = Retag { doc: &*doc, role_map, queue: Vec::new(), changed: 0 };
