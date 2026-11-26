@@ -312,7 +312,9 @@ pub(crate) fn palette_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         choose = Some(*i);
                     }
                 }
-                CollectionEvent::Selection(SelectionChange::Toggle(PaletteKey::Stamp(i))) => choose = Some(i),
+                CollectionEvent::Selection(SelectionChange::Toggle(PaletteKey::Stamp(i))) | CollectionEvent::Activate(PaletteKey::Stamp(i)) => {
+                    choose = Some(i)
+                }
                 _ => {}
             }
         }

@@ -1,7 +1,7 @@
 use craft::behavior::{IconId, Selection};
 use craft::ui::buttons::IconButton;
 use craft::ui::contract::{
-    Bind, Entry, Outcome as _, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Trigger, clicked,
+    Bind, CollectionEvent, Entry, Outcome as _, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Trigger, clicked,
 };
 use craft::ui::display::{Shade, Text};
 use craft::ui::layout_components::{Row, Stack};
@@ -205,7 +205,7 @@ pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 _ => Selection::default(),
             };
             let before = selection.clone();
-            let _ = TileGrid::<usize>::new(tl!("Stamps").to_string())
+            let out = TileGrid::<usize>::new(tl!("Stamps").to_string())
                 .natural_height(true)
                 .justified()
                 // Pictures this high keep every strip, the last of a group included, at one size across the panel.
@@ -221,10 +221,13 @@ pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     let (label, by) = (kind.label().to_string(), tl!("By name at time, date").to_string());
                     Tile::new(label.clone()).thumb(ThumbAspect::new(6, 1), move |cx, rect| paint_chip(cx, rect, group, &label, &by, color))
                 });
-            if selection != before
-                && let Some(&at) = selection.items.first()
-                && let Some((_, kind)) = kinds.get(at)
-            {
+            let chosen = selection.items.first().copied().filter(|_| selection != before).or_else(|| {
+                out.response.events.into_iter().rev().find_map(|event| match event {
+                    CollectionEvent::Activate(at) => Some(at),
+                    _ => None,
+                })
+            });
+            if let Some((_, kind)) = chosen.and_then(|at| kinds.get(at)) {
                 app.quick_tool = crate::QuickTool::Stamp(*kind);
             }
             crate::stamps_ui::palette_section(app, ui);
