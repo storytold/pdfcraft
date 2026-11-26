@@ -686,8 +686,10 @@ fn paragraph_geometry(doc: &Document, page: &pdfcraft_model::Page, block: &TextB
     if !dx.is_finite() || !dy.is_finite() || style.width.is_some_and(|width| !width.is_finite()) {
         return Err(EditError::Invalid("the paragraph's position and width must be finite".into()));
     }
+    // A recognised phrase grows to the page's edge, not its margin: the scan put it where it is.
+    let margin = if block.invisible { 0.0 } else { 36.0 };
     let natural = if block.invisible || block.rows.len() == 1 {
-        (page.crop(doc)[2] - 36.0 - (block.rect[0] + dx)).max(block.rect[2] - block.rect[0])
+        (page.crop(doc)[2] - margin - (block.rect[0] + dx)).max(block.rect[2] - block.rect[0])
     } else {
         block.rect[2] - block.rect[0]
     };

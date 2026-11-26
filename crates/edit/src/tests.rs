@@ -9170,6 +9170,22 @@ fn default_width_subset_paragraph_keeps_its_rows_when_a_word_is_added() {
     }
 }
 
+/// #8475: a recognised phrase (invisible text over a scan) on a turned page sits where the scan put
+/// it, in a title-block cell at the page's corner as often as not, so it grows along its baseline
+/// to the page's edge, not just to the 36 pt margin that a page's own text keeps (#2578).
+#[test]
+fn a_turned_invisible_row_grows_to_the_page_edge_instead_of_wrapping() {
+    // Reading upwards from y = 680 on the 600 × 800 page: 120 pt to the edge, 84 to the margin.
+    // "SHEET 2 OF TEST" in Helvetica 12 is about 103 pt: past the margin, within the edge.
+    let mut doc = text_page("BT /F1 12 Tf 3 Tr 0 1 -1 0 300 680 Tm (SHEET 2 OF 2) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("SHEET 2 OF TEST"), &text::BlockStyle::default()).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!(lines.len(), 1, "one row, grown along the baseline: {lines:?}");
+    assert_eq!(lines[0].text.trim(), "SHEET 2 OF TEST");
+    assert!(lines[0].rect[3] > 800.0 - 36.0, "past the margin: {:?}", lines[0].rect);
+    assert!(lines[0].rect[3] <= 800.0 + 0.5, "within the page: {:?}", lines[0].rect);
+}
+
 /// #2578: a single turned row grows along its baseline only up to the page's 36 pt margin and wraps
 /// onto further rows from there, instead of running off the page.
 #[test]

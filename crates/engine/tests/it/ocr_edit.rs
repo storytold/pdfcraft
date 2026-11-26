@@ -79,6 +79,37 @@ fn editing_an_ocr_word_covers_the_scan_and_shows_the_new_text() {
     assert!(ink * 100 > px.len() * 3, "the new text shows in the scan's ink colour: {ink} of {}", px.len());
 }
 
+/// A title-block cell sits in the page's corner, on a page a scanner stored turned (#8475): the
+/// edited phrase grows along its line to the page's edge, as it does on an upright page, instead
+/// of wrapping onto a second row below the cell.
+#[test]
+fn a_phrase_in_the_corner_of_a_turned_page_grows_instead_of_wrapping() {
+    for degrees in [90, 180, 270] {
+        let (mut s, id) = scanned_with(vec![]);
+        s.apply(id, Edit::RotatePages { pages: vec![0], degrees }).unwrap();
+        let info = s.get(id).unwrap().info.pages[0].clone();
+        assert_eq!(i64::from(info.rotation), degrees);
+        // The cell's text on the displayed page: 55 pt wide, 6 pt tall, 25 pt from the right edge
+        // and 10 pt from the bottom. Its box comes in user space, as recognition leaves it.
+        let (w, h) = (info.width, info.height);
+        let (x0, x1, y0, y1) = (w - 80.0, w - 25.0, h - 16.0, h - 10.0);
+        let (o, br, tl) = (info.view_to_user(x0, y1), info.view_to_user(x1, y1), info.view_to_user(x0, y0));
+        let word = PlacedWord {
+            text: "SHEET 2 OF 2".into(),
+            origin: [f64::from(o[0]), f64::from(o[1])],
+            across: [f64::from(br[0] - o[0]), f64::from(br[1] - o[1])],
+            up: [f64::from(tl[0] - o[0]), f64::from(tl[1] - o[1])],
+            confidence: None,
+            source: "ocrs".into(),
+        };
+        s.apply(id, Edit::AddOcrText { page: 0, words: vec![word] }).unwrap();
+        s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "SHEET 2 OF TEST".into(), style: Default::default() }).unwrap();
+        let blocks = s.get(id).unwrap().text_blocks(0);
+        assert_eq!(blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["SHEET 2 OF TEST"], "{degrees}°");
+        assert_eq!(blocks[0].rows.len(), 1, "{degrees}°: one row, grown along the line: {:?}", blocks[0].rect);
+    }
+}
+
 #[test]
 fn an_explicit_colour_is_kept_for_the_new_text() {
     let (mut s, id) = scanned();
