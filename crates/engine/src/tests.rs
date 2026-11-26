@@ -12837,7 +12837,7 @@ fn validate_scripts_run_on_opening_after_the_calculations() {
     let log = s.get(id).unwrap().form.iter().find(|f| f.name == "log").map(|f| f.value.join("")).unwrap_or_default();
     let validated = "calc calculate|passes validate|fails validate|emptyFails validate|calc validate|root form:ready";
     assert!(log.contains(validated), "{log}");
-    assert_eq!(s.take_js_output(id).alerts, ["fails: its own message"], "only the failing field with a value says so");
+    assert_eq!(s.take_js_output(id).alerts, [crate::js::Message::plain("fails: its own message")], "only the failing field with a value says so");
 }
 
 /// An edit's two script runtimes share one field highlight: a change an XFA script makes reaches
