@@ -11,7 +11,7 @@ use crate::PdfCraftApp;
 impl PdfCraftApp {
     /// Replace the find bar's highlighted match (`all` false) or every match in the document, in
     /// view `i`, with its Replace field's text.
-    pub(crate) fn replace_found(&mut self, i: usize, all: bool) {
+    pub(crate) fn replace_found(&mut self, ctx: &egui::Context, i: usize, all: bool) {
         let Some(view) = self.views.get(i) else { return };
         let Some(find) = view.find.as_ref() else { return };
         if find.case_query.trim().is_empty() {
@@ -20,24 +20,24 @@ impl PdfCraftApp {
         let query = Replace {
             find: find.case_query.clone(),
             with: find.replacement.clone(),
-            case_sensitive: find.case_sensitive,
-            whole_words: find.whole_words,
+            case_sensitive: find.options.match_case,
+            whole_words: find.options.whole_word,
         };
         let Some(doc) = self.session.get(view.id) else { return };
         let (pages, which, found) = if all {
             // What the find bar holds on each page it has searched, so matches no paragraph
             // holds (a form field, a comment) are counted rather than lost.
-            let mut found: BTreeMap<usize, usize> = view.texts.keys().map(|p| (*p, 0)).collect();
-            for (p, _) in &find.matches {
-                let n = found.entry(*p).or_insert(0);
+            let mut found: BTreeMap<usize, usize> = view.session.texts.keys().map(|p| (*p, 0)).collect();
+            for m in find.matches.matches() {
+                let n = found.entry(m.page).or_insert(0);
                 *n = n.saturating_add(1);
             }
             ((0..doc.info.pages.len()).collect::<Vec<_>>(), Which::All, Some(found))
         } else {
             // The highlighted match, by where its first and last glyphs are drawn.
-            let Some((page, range)) = find.current.and_then(|c| find.matches.get(c)).cloned() else { return };
+            let Some((page, range)) = find.matches.current_match().map(|m| (m.page, m.range.clone())) else { return };
             let centre = |g: usize| {
-                view.texts.get(&page).and_then(|t| t.glyphs.get(g)).map(|g| [(g.rect[0] + g.rect[2]) / 2.0, (g.rect[1] + g.rect[3]) / 2.0])
+                view.session.texts.get(&page).and_then(|t| t.glyphs.get(g)).map(|g| [(g.rect[0] + g.rect[2]) / 2.0, (g.rect[1] + g.rect[3]) / 2.0])
             };
             let (Some(start), Some(end)) = (centre(range.start), centre(range.end.saturating_sub(1))) else { return };
             (vec![page], Which::At { page, start, end }, None)
@@ -50,7 +50,7 @@ impl PdfCraftApp {
             }
         };
         if let Some(edit) = plan.edit.clone()
-            && !self.apply_edit(edit)
+            && !self.apply_edit(ctx, edit)
         {
             return;
         }

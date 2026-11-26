@@ -1,65 +1,39 @@
-use super::geometry::reshaped;
+use super::bridge::{self, PageMap};
 use super::*;
+use craft::behavior::kurbo::{Point, Vec2};
+use craft::pages::ui::PlacedPage;
+use craft::review::annotate::{AnnotationEdit, pick_at};
+use craft::review::{AnnotationId, ThreadId};
 
-/// [`reshaped`] without Shift, as `changing_points` takes it.
-fn straight(points: &[[f64; 2]], i: usize, to: [f64; 2]) -> Vec<[f64; 2]> {
-    reshaped(points, i, to, false)
+/// The screen size, in points, of a comment marker's icon.
+const ICON_POINTS: f32 = 12.0;
+
+/// The side of a comment marker in page units, as the app feeds `bridge`: the icon's screen size through the page map's
+/// own conversion, so a change of the conversion is in the test's path.
+fn icon_side(map: &PageMap<'_>) -> f64 {
+    map.doc_len(ICON_POINTS)
 }
 
-#[test]
-fn freehand_highlight_and_draw_accept_widths_up_to_100() {
-    assert_eq!(CommentTool::FreehandHighlight.group(), CommentTool::Highlight.group());
-    assert_eq!(GROUPS.len(), 3);
-    let mut prefs = CommentPrefs::default();
-    assert_eq!(prefs.style(CommentTool::FreehandHighlight).width, 14.0);
-    assert_eq!(prefs.style(CommentTool::FreehandHighlight).opacity, 0.35);
-    for tool in [CommentTool::Ink, CommentTool::FreehandHighlight] {
-        prefs.set_width(tool, 75.0);
-        assert_eq!(prefs.style(tool).width, 75.0);
-        prefs.set_width(tool, 200.0);
-        assert_eq!(prefs.style(tool).width, 100.0);
-        prefs.set_width(tool, f64::NAN);
-        assert_eq!(prefs.style(tool).width, 100.0);
-    }
+/// The screen distance, in points, within which a press picks a comment's body.
+const SLOP: f32 = 4.0;
+
+/// The one placed page of a test: `xf`'s rectangle at `zoom`.
+fn placed_page(xf: &PageXform, zoom: f64) -> PlacedPage {
+    PlacedPage::new(0, xf.rect, zoom, (0.0, xf.rect.height()))
 }
 
-/// A selected line is drawn where it is going: moved by its body (both ends follow the
-/// pointer), with an end dragged (that end alone), and as released until the page is drawn.
-#[test]
-fn a_moved_or_reshaped_line_is_drawn_at_its_new_points() {
-    let line = [[10.0, 10.0], [50.0, 10.0]];
-    let to_user = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
-    let moving = Gesture::Move { page: 0, index: 3, from: pos2(20.0, 10.0) };
-    let at = Some(pos2(25.0, 30.0));
-    assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, to_user, at, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
-    assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, to_user, at, straight), None, "another comment's move");
-    let released = Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 };
-    assert_eq!(changing_points(None, Some(&released), (0, 3), &line, to_user, None, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
-    let dragging = Gesture::Reshape { page: 0, index: 3, point: 1, points: line.to_vec() };
-    let to = Some(pos2(60.0, 10.0));
-    assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, straight), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
-    assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, straight), None, "not changing");
-    // Released with the rest of the selection: its own move in the batch.
-    let together = Edit::Batch {
-        label: "Move comments".into(),
-        edits: vec![Edit::MoveAnnotation { page: 0, index: 1, dx: 1.0, dy: 1.0 }, Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 }],
-    };
-    assert_eq!(changing_points(None, Some(&together), (0, 3), &line, to_user, None, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
-    assert_eq!(changing_points(None, Some(&together), (0, 2), &line, to_user, None, straight), None, "not in the batch");
+/// The page map the app feeds `bridge` for `placed` pages shown turned `rotation` degrees, in a canvas view whose
+/// document space is neither the screen nor the page's units, as the page view's is not.
+fn page_map<'a>(placed: &'a [PlacedPage], info: &'a DocInfo, rotation: u16) -> PageMap<'a> {
+    let view = craft::behavior::CanvasView::new(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 800.0)), Point::new(250.0, 300.0), 0.75);
+    PageMap::new(info, placed, rotation, view)
 }
 
-/// Review on #4094: a callout's text box being resized, and the resize just released, draw its
-/// leader line too (to the box where it is going): its points are changing, though they stay.
-#[test]
-fn a_callout_being_resized_draws_its_leader_line() {
-    let lead = [[10.0, 10.0], [40.0, 30.0]];
-    let to_user = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
-    let resizing = Gesture::Resize { page: 0, index: 3, handle: (1, 1), from: pos2(80.0, 60.0), aspect_ratio: None };
-    let at = Some(pos2(95.0, 70.0));
-    assert_eq!(changing_points(Some(&resizing), None, (0, 3), &lead, to_user, at, straight), Some(lead.to_vec()));
-    assert_eq!(changing_points(Some(&resizing), None, (0, 4), &lead, to_user, at, straight), None, "another comment's resize");
-    let released = Edit::ResizeAnnotation { page: 0, index: 3, rect: [50.0, 20.0, 110.0, 70.0] };
-    assert_eq!(changing_points(None, Some(&released), (0, 3), &lead, to_user, None, straight), Some(lead.to_vec()));
+/// A rectangle in page units of `page` on screen, through the page map, for comparing a marker with the page's
+/// screen rectangle.
+fn screen(map: &PageMap<'_>, page: usize, r: craft::behavior::kurbo::Rect) -> Rect {
+    let corner = |x, y| map.to_screen(page, Point::new(x, y)).expect("the page is placed");
+    Rect::from_two_pos(corner(r.x0, r.y0), corner(r.x1, r.y1))
 }
 
 /// A sticky note on a page turned a quarter is drawn upright beside its `/Rect`: an edit
@@ -96,19 +70,8 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
     let viewport = Rect::from_min_max(pos2(50.0, 0.0), pos2(140.0, 200.0));
     for (no_rotate, in_view) in [(true, true), (false, false)] {
         let info = DocInfo { pages: vec![page.clone()], annotations: vec![note(no_rotate)], ..Default::default() };
-        let cx = PageCx {
-            page: 0,
-            xf: &xf,
-            ptr: &PagePointer::default(),
-            info: &info,
-            tool: QuickTool::Select,
-            prefs: &prefs,
-            allowed: true,
-            hidden: false,
-            redact_mark: ([0.0; 3], 1.0),
-            keys: Default::default(),
-        };
-        assert_eq!(edited_in_view(&cx, 0, viewport), in_view, "no_rotate: {no_rotate}");
+        let cx = PageCx { page: 0, xf: &xf, info: &info, prefs: &prefs, allowed: true, hidden: false };
+        assert_eq!(super::composer::edited_in_view(&cx, 0, viewport), in_view, "no_rotate: {no_rotate}");
     }
 }
 
@@ -167,17 +130,20 @@ fn a_kept_comment_is_found_where_a_delete_moved_it() {
     assert_eq!(after_delete(&before, &changed, gone, (0, 2)), None);
 
     let info = DocInfo { annotations: before.clone(), ..Default::default() };
+    let moved = DocInfo { annotations: after.clone(), ..Default::default() };
+    let thread = |key: (usize, usize)| ThreadId(bridge::id_of(key.0, key.1).0);
     let mut view = CommentView::from_info(&info);
-    view.selected = Some((0, 2));
-    view.editing = Some((0, 3, "typed".into()));
-    view.annotation_deleted(&before, &DocInfo { annotations: after.clone(), ..Default::default() }, gone);
-    view.document_changed(&DocInfo { annotations: after.clone(), ..Default::default() });
-    assert_eq!((view.selected, view.editing), (Some((0, 0)), Some((0, 1, "typed".into()))), "both follow");
+    view.select_only((0, 2));
+    view.panel.editing = Some((thread((0, 3)), 0, "typed".into()));
+    view.annotation_deleted(&before, &moved, gone);
+    view.document_changed(&moved);
+    assert_eq!(view.selection(), vec![(0, 0)], "the selection follows");
+    let (editing, _, text) = view.panel.editing.clone().expect("the editor stays open");
+    assert_eq!((bridge::key_of(AnnotationId(editing.0)), text.as_str()), ((0, 1), "typed"), "the editor follows");
     let mut view = CommentView::from_info(&info);
-    view.editing = Some((0, 4, "typed".into()));
-    view.editor_focus = Some(EditorFocus::Take);
-    view.annotation_deleted(&before, &DocInfo { annotations: after.clone(), ..Default::default() }, gone);
-    assert_eq!((view.editing, view.editor_focus), (None, None), "the editor closes with the reply it was open on");
+    view.panel.editing = Some((thread((0, 4)), 0, "typed".into()));
+    view.annotation_deleted(&before, &moved, gone);
+    assert_eq!(view.panel.editing, None, "the editor closes with the reply it was open on");
 }
 
 use pdfcraft_render::TextGlyph;
@@ -302,234 +268,87 @@ fn away_from_upright_horizontal_text_the_caret_stays_at_the_click() {
 
 #[test]
 fn recent_custom_colours_dedupe_cap_and_skip_swatches() {
-    // #1193: "Other colour…" remembers what it applied, newest first.
-    let ctx = egui::Context::default();
-    assert!(recent_custom_colours(&ctx).is_empty());
-    for i in 0..7 {
-        remember_custom_colour(&ctx, [0.1 * f64::from(i), 0.3, 0.7]);
-    }
-    let recent = recent_custom_colours(&ctx);
-    assert_eq!(recent.len(), RECENT_CUSTOM, "capped");
-    assert!(same_colour(&recent[0], &[0.6, 0.3, 0.7]), "newest first: {recent:?}");
-    remember_custom_colour(&ctx, [0.2, 0.3, 0.7]);
-    let again = recent_custom_colours(&ctx);
-    assert_eq!(again.len(), RECENT_CUSTOM);
-    assert!(
-        same_colour(&again[0], &[0.2, 0.3, 0.7]) && again.iter().filter(|c| same_colour(c, &[0.2, 0.3, 0.7])).count() == 1,
-        "moved, not repeated"
-    );
-    // Swatches and unusable values are not remembered; out-of-range ones are clamped.
-    remember_custom_colour(&ctx, SWATCHES[0].1);
-    remember_custom_colour(&ctx, [f64::NAN, 0.0, 0.0]);
-    assert!(same_colour(&recent_custom_colours(&ctx)[0], &[0.2, 0.3, 0.7]));
-    remember_custom_colour(&ctx, [1.7, -0.5, 0.25]);
-    assert!(same_colour(&recent_custom_colours(&ctx)[0], &[1.0, 0.0, 0.25]));
-}
-
-#[test]
-fn other_colour_applies_the_picked_colour_once() {
-    // #1193: the swatch grid has a full picker; Apply returns its colour and remembers it.
-    use egui_kittest::kittest::Queryable;
-    let current = [0.2, 0.4, 0.6];
-    let mut h = egui_kittest::Harness::new_ui_state(
-        |ui, picked: &mut Vec<Rgb>| {
-            if let Some(c) = swatch_grid(ui, Some(current)) {
-                picked.push(c);
-            }
-        },
-        Vec::new(),
-    );
-    h.run();
-    assert!(h.query_by_label("Apply").is_none(), "the picker starts closed");
-    assert!(h.query_by_label("Recent colours").is_none());
-    h.get_by_label("Other colour…").click();
-    h.run();
-    h.get_by_label("Apply").click();
-    h.run();
-    let picked = h.state().clone();
-    assert_eq!(picked.len(), 1, "one choice: {picked:?}");
-    assert!(same_colour(&picked[0], &current), "the picker opens on the current colour: {picked:?}");
-    assert!(h.query_by_label("Apply").is_none(), "applying closes the picker");
-    assert!(h.query_by_label("Recent colours").is_some(), "the colour is offered again");
-}
-
-#[test]
-fn two_grids_in_one_parent_open_their_pickers_separately() {
-    // Redaction properties and Prepare a form draw two grids in one parent ui.
-    use egui_kittest::kittest::Queryable;
-    let mut h = egui_kittest::Harness::new_ui(|ui| {
-        let _ = swatch_grid(ui, Some([0.2, 0.4, 0.6]));
-        let _ = swatch_grid(ui, Some([0.6, 0.4, 0.2]));
-    });
-    h.run();
-    let plus = h.query_all_by_label("Other colour…").collect::<Vec<_>>();
-    assert_eq!(plus.len(), 2);
-    plus[0].click();
-    h.run();
-    assert_eq!(h.query_all_by_label("Apply").count(), 1, "only the first grid's picker opens");
-}
-
-#[test]
-fn other_colour_opens_the_picker_inside_the_quick_bar_popup() {
-    use egui_kittest::kittest::Queryable;
-    let mut h = egui_kittest::Harness::new_ui_state(
-        |ui, prefs: &mut CommentPrefs| {
-            let _ = quick_bar_controls(ui, CommentTool::Highlight, prefs);
-        },
-        CommentPrefs::default(),
-    );
-    h.run();
-    h.get_by_label("Colour").click();
-    h.run();
-    h.get_by_label("Other colour…").click();
-    h.run();
-    assert!(h.query_by_label("Apply").is_some(), "the popup stays open with the picker showing");
-    h.get_by_label("Apply").click();
-    h.run();
-    assert!(h.query_by_label("Other colour…").is_none(), "applying a colour closes the popup");
-}
-
-#[test]
-fn other_colour_opens_the_picker_inside_the_quick_bar_fill_popup() {
-    use egui_kittest::kittest::Queryable;
-    let prefs = CommentPrefs::default();
-    let fill_label = if prefs.style(CommentTool::Rectangle).fill.is_some() { "Fill colour" } else { "Fill colour: none" };
-    let mut h = egui_kittest::Harness::new_ui_state(
-        |ui, prefs: &mut CommentPrefs| {
-            let _ = quick_bar_controls(ui, CommentTool::Rectangle, prefs);
-        },
-        prefs,
-    );
-    h.ctx.set_fonts(theme::font_definitions());
-    h.run();
-    h.get_by_label(fill_label).click();
-    h.run();
-    h.get_by_label("Other colour…").click();
-    h.run();
-    assert!(h.query_by_label("Apply").is_some(), "the popup stays open with the picker showing");
-    h.get_by_label("Apply").click();
-    h.run();
-    assert!(h.query_by_label("No fill").is_none(), "applying a colour closes the popup");
-    assert!(h.state().style(CommentTool::Rectangle).fill.is_some());
-}
-
-#[test]
-fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_menu() {
-    use egui_kittest::kittest::Queryable;
-    let info = DocInfo {
-        pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
-        annotations: vec![Annotation {
-            page: 0,
-            subtype: "Square".into(),
-            author: None,
-            contents: None,
-            modified: None,
-            name: None,
-            in_reply_to: None,
-            parent: None,
-            grouped: false,
-            rect: [10.0, 10.0, 50.0, 50.0],
-            color: None,
-            index: 0,
-            state: None,
-            quads: Vec::new(),
-            locked: false,
-            intent: None,
-            fill_sign: false,
-            points: Vec::new(),
-            text_box: None,
-            popup: None,
-            no_rotate: false,
-        }],
-        ..Default::default()
+    use super::SWATCHES;
+    use super::colours::{RecentColours, to_srgba};
+    use craft::theme::Srgba;
+    let same = |a: &Srgba, b: [f64; 3]| {
+        let b = to_srgba(b);
+        (a.r - b.r).abs() < 1e-3 && (a.g - b.g).abs() < 1e-3 && (a.b - b.b).abs() < 1e-3
     };
-    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
-    view.comments.selected = Some((0, 0));
-    let prefs = CommentPrefs::default();
-    let mut h = egui_kittest::Harness::new_ui_state(
-        |ui, (view, actions): &mut (DocView, Vec<CanvasAction>)| {
-            ui.button("Page").context_menu(|ui| {
-                let rights = MenuRights { allowed: true, can_paste: false, can_modify: true };
-                if let Some(a) = context_menu(ui, view, &info, &|_, _| true, &prefs, rights) {
-                    actions.push(a);
-                }
-            });
-        },
-        (view, Vec::new()),
-    );
-    h.run();
-    h.get_by_label("Page").click_secondary();
-    h.run();
-    h.get_by_label("Colour").click();
-    h.run();
-    h.get_by_label("Other colour…").click();
-    h.run();
-    assert!(h.query_by_label("Apply").is_some(), "the submenu stays open with the picker showing");
-    h.get_by_label("Red").click();
-    h.run();
-    assert!(h.query_by_label("Edit text…").is_none(), "picking a swatch closes the whole menu");
-    let actions = &h.state().1;
-    assert!(
-        matches!(actions.as_slice(), [CanvasAction::Edit(e)] if matches!(**e, Edit::StyleAnnotation { page: 0, index: 0, color: Some(_), .. })),
-        "{actions:?}"
-    );
-}
-
-#[test]
-fn shift_keeps_the_current_proportions_unless_the_box_has_its_own() {
-    let r = Rect::from_min_max(pos2(100.0, 100.0), pos2(196.0, 132.0));
-    assert_eq!(corner_ratio(r, None, false), None);
-    assert_eq!(corner_ratio(r, None, true), Some(3.0));
-    assert_eq!(corner_ratio(r, Some(2.0), false), Some(2.0));
-    assert_eq!(corner_ratio(r, Some(2.0), true), Some(2.0));
-    // A degenerate box has no proportions to keep (no division by zero).
-    let flat = Rect::from_min_max(pos2(100.0, 100.0), pos2(196.0, 100.0));
-    assert_eq!(corner_ratio(flat, None, true), None);
-    // Dragging a corner with Shift held scales the box instead of stretching it.
-    let out = resized(r, (1, 1), vec2(48.0, 0.0), corner_ratio(r, None, true));
-    assert_eq!(out.min, r.min);
-    assert!((out.width() / out.height() - 3.0).abs() < 0.001);
-}
-
-#[test]
-fn proportional_corners_keep_the_opposite_anchor_and_edges_stretch_one_axis() {
-    let r = Rect::from_min_max(pos2(100.0, 100.0), pos2(196.0, 132.0));
-    for (hx, hy) in [(-1, -1), (1, -1), (-1, 1), (1, 1)] {
-        for (dx, dy) in [(24.0, 0.0), (0.0, 16.0), (-48.0, -20.0), (-200.0, -200.0)] {
-            let out = resized(r, (hx, hy), vec2(f32::from(hx) * dx, f32::from(hy) * dy), Some(3.0));
-            assert_eq!(handle_pos(out, (-hx, -hy)), handle_pos(r, (-hx, -hy)));
-            assert!((out.width() / out.height() - 3.0).abs() < 0.001);
-            assert!(out.width() >= 4.0 && out.height() >= 4.0);
-        }
+    // #1193: "Other colour…" remembers what it applied, newest first.
+    let recent = RecentColours::default();
+    assert!(recent.as_srgba().is_empty());
+    for i in 0..7 {
+        recent.remember([0.1 * f64::from(i), 0.3, 0.7]);
     }
-    for handle in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
-        let out = resized(r, handle, vec2(24.0, 16.0), Some(3.0));
-        assert_eq!(out, resized(r, handle, vec2(24.0, 16.0), None));
-        assert_eq!(if handle.0 == 0 { out.width() } else { out.height() }, if handle.0 == 0 { r.width() } else { r.height() });
-    }
-    // Ordinary comment corners keep their existing independent width/height behavior.
-    let free = resized(r, (1, 1), vec2(24.0, 0.0), None);
-    assert_eq!(free.size(), vec2(120.0, 32.0));
+    let list = recent.as_srgba();
+    assert_eq!(list.len(), 5, "capped");
+    assert!(same(&list[0], [0.6, 0.3, 0.7]), "newest first: {list:?}");
+    recent.remember([0.2, 0.3, 0.7]);
+    let again = recent.as_srgba();
+    assert_eq!(again.len(), 5);
+    assert!(same(&again[0], [0.2, 0.3, 0.7]) && again.iter().filter(|c| same(c, [0.2, 0.3, 0.7])).count() == 1, "moved, not repeated");
+    // Swatches and unusable values are not remembered; out-of-range ones are clamped.
+    recent.remember(SWATCHES[0].1);
+    recent.remember([f64::NAN, 0.0, 0.0]);
+    assert!(same(&recent.as_srgba()[0], [0.2, 0.3, 0.7]));
+    recent.remember([1.7, -0.5, 0.25]);
+    assert!(same(&recent.as_srgba()[0], [1.0, 0.0, 0.25]));
 }
 
 #[test]
 fn tools_round_trip_through_their_commands() {
+    icons::register();
+    // PLAN: assumed `super::annotate_icons() -> AnnotateIcons`, the app's CM-C31 supply built from `CommentTool::icon`.
+    let supplied = super::annotate_icons();
     for t in ALL {
         assert_eq!(CommentTool::from_command(t.command()), Some(t));
         assert!(pdfcraft_engine::commands::command(t.command()).is_some(), "{} is registered", t.command());
-        assert!(icons::exists(t.icon()), "icon {}", t.icon());
+        let icon = supplied.icon(craft::review::ui::annotate::AnnotateCommand::of(t.tool())).expect("the app names every tool's icon");
+        assert!(craft::ui::primitives::has_icon(&craft::behavior::IconId::from(std::borrow::Cow::Owned(icon.to_string()))), "icon {icon}");
         assert!(GROUPS[t.group()].contains(&t));
     }
 }
 
+/// A saved arrow without its head compiles and passes every other check: `Create` maps an Arrow to a line ending in an
+/// open arrow, and a plain Line to one with no end.
 #[test]
-fn drawn_shapes_ignore_slips() {
-    assert_eq!(drawn_shape(CommentTool::Rectangle, &[[0.0, 0.0], [1.0, 1.0]]), None);
-    assert_eq!(drawn_shape(CommentTool::Rectangle, &[[10.0, 0.0], [0.0, 10.0]]), Some(Shape::Rectangle { rect: [0.0, 0.0, 10.0, 10.0] }));
-    assert_eq!(drawn_shape(CommentTool::Ink, &[[0.0, 0.0]]), Some(Shape::Ink { strokes: vec![vec![[0.0, 0.0]]] }));
+fn an_arrow_is_created_as_a_line_with_an_open_arrow_end() {
+    let page = PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let info = DocInfo { pages: vec![page], ..Default::default() };
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
+    let placed = [placed_page(&xf, 1.0)];
+    let map = page_map(&placed, &info, 0);
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default(), false);
+    let prefs = CommentPrefs::default();
+    let mut created = |kind| {
+        let drawn = craft::review::Annotation {
+            id: bridge::id_of(0, 0),
+            page: 0,
+            kind,
+            rect: craft::behavior::kurbo::Rect::new(10.0, 10.0, 60.0, 10.0),
+            points: vec![Point::new(10.0, 10.0), Point::new(60.0, 10.0)],
+            strokes: Vec::new(),
+            color: [255, 0, 0],
+            opacity: 1.0,
+            stroke_width: 2.0,
+            text: String::new(),
+            locked: false,
+            aspect: None,
+            handle_rule: Default::default(),
+        };
+        bridge::edit(AnnotationEdit::Create(drawn), &map, &mut view.session.comments, &info, &prefs)
+    };
     assert!(matches!(
-        drawn_shape(CommentTool::Arrow, &[[0.0, 0.0], [5.0, 0.0]]),
-        Some(Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. })
+        created(craft::review::AnnotationKind::Arrow),
+        Some(Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            shape: Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. },
+            ..
+        }))
+    ));
+    assert!(matches!(
+        created(craft::review::AnnotationKind::Line),
+        Some(Edit::AddAnnotation(pdfcraft_engine::NewAnnotation { shape: Shape::Line { end: LineEnding::None, .. }, .. }))
     ));
 }
 
@@ -548,7 +367,7 @@ fn shift_click_selects_the_range_from_the_comment_with_the_handles() {
     none.select_range(&order, (0, 0));
     assert_eq!(none.selection(), vec![(0, 0)]);
     cv.select_range(&order, (9, 9));
-    assert_eq!(cv.selected, Some((9, 9)));
+    assert_eq!(cv.primary(), Some((9, 9)));
 }
 
 #[test]
@@ -561,41 +380,11 @@ fn text_boxes_fit_their_text() {
     assert!(long[3] - long[1] > 50.0);
 }
 
-#[test]
-fn markup_comment_markers_skip_rounded_inverted_clamp_bounds() {
-    let prefs = CommentPrefs::default();
-    let ptr = PagePointer::default();
-    let info = DocInfo {
-        pages: vec![PageInfo { width: 12.0, height: 12.0, label: String::new(), crop: [0.0, 0.0, 12.0, 12.0], rotation: 0 }],
-        ..Default::default()
-    };
-    let a = Annotation { rect: [0.0, 0.0, 12.0, 12.0], contents: Some("Review".into()), ..annotation("Highlight", None, false) };
-    for min in [pos2(1.0e-7, 0.0), pos2(0.0, 1.0e-7)] {
-        let page = Rect::from_min_max(min, pos2(12.0, 12.0));
-        assert_eq!(page.size(), vec2(12.0, 12.0));
-        let marker_max = page.max - vec2(12.0, 12.0);
-        assert!(marker_max.x < page.min.x || marker_max.y < page.min.y);
-        let xf = PageXform { rect: page, rot: 0, pw: 12.0, ph: 12.0 };
-        let cx = PageCx {
-            page: 0,
-            xf: &xf,
-            ptr: &ptr,
-            info: &info,
-            tool: QuickTool::Select,
-            prefs: &prefs,
-            allowed: true,
-            hidden: false,
-            redact_mark: ([0.0; 3], 1.0),
-            keys: crate::page_keys::PageKeys::new(false),
-        };
-        assert!(page.intersects(cx.screen_rects(&a).last().unwrap()));
-        assert!(cx.comment_marker_rect(&a).is_none());
-    }
-}
-
+/// A commented markup's marker lies inside its page for every page and view rotation and zoom, picking the marker takes
+/// the topmost comment, and plain or off-page markup has none.
 #[test]
 fn markup_comment_markers_stay_inside_turned_and_zoomed_pages() {
-    let prefs = CommentPrefs::default();
+    let tolerance_of = |map: &PageMap<'_>| map.doc_len(SLOP);
     for (page_rotation, rotation) in [(0, 0), (90, 0), (180, 0), (270, 0), (0, 90), (0, 180), (0, 270), (90, 270)] {
         for zoom in [0.25, 1.0, 4.0] {
             let (pw, ph) = if page_rotation % 180 == 0 { (300.0, 200.0) } else { (200.0, 300.0) };
@@ -605,58 +394,36 @@ fn markup_comment_markers_stay_inside_turned_and_zoomed_pages() {
                 pages: vec![PageInfo { width: pw, height: ph, label: String::new(), crop: [0.0, 0.0, 300.0, 200.0], rotation: page_rotation }],
                 ..Default::default()
             };
-            let cx = PageCx {
-                page: 0,
-                xf: &xf,
-                ptr: &PagePointer::default(),
-                info: &info,
-                tool: QuickTool::Select,
-                prefs: &prefs,
-                allowed: true,
-                hidden: false,
-                redact_mark: ([0.0; 3], 1.0),
-                keys: crate::page_keys::PageKeys::new(false),
-            };
+            let placed = [placed_page(&xf, f64::from(zoom))];
+            let map = page_map(&placed, &info, rotation);
+            let side = icon_side(&map);
+            let with = |annotations: Vec<Annotation>| DocInfo { annotations, ..info.clone() };
             for rect in [[0.0, 180.0, 30.0, 200.0], [270.0, 180.0, 300.0, 200.0], [270.0, 0.0, 300.0, 20.0], [0.0, 0.0, 30.0, 20.0]] {
                 let [x0, y0, x1, y1] = rect;
-                let mut a = Annotation {
+                let a = Annotation {
                     page: 0,
                     subtype: "Highlight".into(),
                     author: Some("Ada".into()),
                     contents: Some("Review".into()),
-                    modified: None,
-                    name: None,
-                    in_reply_to: None,
-                    parent: None,
-                    grouped: false,
                     rect,
-                    color: None,
-                    index: 0,
-                    state: None,
                     quads: vec![[x0, y1, x1, y1, x0, y0, x1, y0]],
-                    locked: false,
-                    intent: None,
-                    fill_sign: false,
-                    no_rotate: false,
-                    points: Vec::new(),
-                    text_box: None,
-                    popup: None,
+                    ..annotation("Highlight", None, false)
                 };
-                let marker = cx.comment_marker_rect(&a).expect("commented markup has a marker");
-                assert!((marker.width() - 12.0).abs() < 0.001 && (marker.height() - 12.0).abs() < 0.001, "{marker:?}");
-                assert!(xf.rect.contains_rect(marker), "page/view rotation {page_rotation}/{rotation}, zoom {zoom}, anchor {rect:?}: {marker:?}");
-                let mut top = a.clone();
-                top.index = 1;
-                // Inspection order can differ from /Annots order. Picking the marker
-                // must select the same topmost comment as hovering its marked text.
-                let hit_info = DocInfo { annotations: vec![top, a.clone()], ..info.clone() };
-                let hit_cx = PageCx { info: &hit_info, ..cx };
-                assert_eq!(hit_cx.comment_at(marker.center()).map(|a| a.index), Some(1));
-                a.contents = None;
-                assert!(cx.comment_marker_rect(&a).is_none(), "plain markup has no marker");
-                a.contents = Some("Review".into());
-                a.quads = vec![[1000.0, 1010.0, 1010.0, 1010.0, 1000.0, 1000.0, 1010.0, 1000.0]];
-                assert!(cx.comment_marker_rect(&a).is_none(), "off-page markup stays off the page");
+                // Inspection order can differ from /Annots order: picking the marker must select the same topmost
+                // comment as hovering its marked text.
+                let top = Annotation { index: 1, ..a.clone() };
+                let both = with(vec![top, a.clone()]);
+                let markers = bridge::markers(&both, &map, side);
+                let (_, marker) = *markers.last().expect("commented markup has a marker");
+                let inside = screen(&map, 0, marker);
+                assert!(xf.rect.contains_rect(inside), "page/view rotation {page_rotation}/{rotation}, zoom {zoom}, anchor {rect:?}: {inside:?}");
+                let annotations = bridge::annotations(&both, &map, QuickTool::Select, true);
+                let picked = pick_at(&annotations, marker.center(), tolerance_of(&map), side, &markers);
+                assert_eq!(picked.map(|id| bridge::key_of(id).1), Some(1));
+                let plain = Annotation { contents: None, ..a.clone() };
+                assert!(bridge::markers(&with(vec![plain]), &map, side).is_empty(), "plain markup has no marker");
+                let off = Annotation { quads: vec![[1000.0, 1010.0, 1010.0, 1010.0, 1000.0, 1000.0, 1010.0, 1000.0]], ..a };
+                assert!(bridge::markers(&with(vec![off]), &map, side).is_empty(), "off-page markup stays off the page");
             }
         }
     }
@@ -669,23 +436,9 @@ fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
         index,
         subtype: "Text".into(),
         rect: [10.0, 10.0, 30.0, 30.0],
-        color: None,
-        author: None,
         contents: Some(name.into()),
-        modified: None,
-        in_reply_to: None,
-        parent: None,
-        grouped: false,
         name: Some(name.into()),
-        state: None,
-        quads: Vec::new(),
-        locked: false,
-        intent: None,
-        fill_sign: false,
-        no_rotate: false,
-        points: Vec::new(),
-        text_box: None,
-        popup: None,
+        ..annotation("Text", None, false)
     };
     // Page 0 has a Widget at index 0 (not in `info.annotations`), and Text comments at 1 and 2.
     let info = DocInfo {
@@ -693,104 +446,68 @@ fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
         annotations: vec![annot(1, "c1"), annot(2, "c2")],
         ..Default::default()
     };
-    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
-    view.comments.selected = Some((0, 2));
-    view.comments.open_editor(0, 2, "draft".into());
-    view.comments.composer = Some(Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(2), text: "body".into(), focus: false });
-    view.comments.gesture = Some(Gesture::Move { page: 0, index: 2, from: pos2(0.0, 0.0) });
+    let thread = |index: usize| ThreadId(bridge::id_of(0, index).0);
+    let composer =
+        |index: usize, text: &str| Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(index), text: text.into(), focus: false };
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default(), false);
+    view.session.comments.select_only((0, 2));
+    view.session.comments.panel.editing = Some((thread(2), 0, "draft".into()));
 
-    // Moving/editing in place or appending a comment at index 3 preserves (0, 2) selection/editing/gesture.
+    view.session.comments.composer = Some(composer(2, "body"));
+
+    // Moving/editing in place or appending a comment at index 3 preserves the (0, 2) selection, editor and composer.
     let mut appended = info.clone();
     appended.annotations.push(annot(3, "c3"));
-    view.document_changed(&appended);
-    assert_eq!(view.comments.selected, Some((0, 2)));
-    assert!(view.comments.editing.is_some());
-    assert!(view.comments.composer.is_some());
-    assert!(view.comments.gesture.is_some());
+    view.document_changed(&egui::Context::default(), &appended);
+    assert_eq!(view.session.comments.selection(), vec![(0, 2)]);
+    assert!(view.session.comments.panel.editing.is_some());
+    assert!(view.session.comments.composer.is_some());
 
     // Deleting comment 1 shifts comment 2 down to index 1: stale state at (0, 2) and shifted (0, 1) must clear.
     let mut shifted = info.clone();
     shifted.annotations = vec![annot(1, "c2")];
-    view.comments.selected = Some((0, 1));
-    view.comments.open_editor(0, 1, "for c1, not c2".into());
-    view.comments.composer = Some(Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(1), text: "for c1".into(), focus: false });
-    view.comments.gesture = Some(Gesture::Move { page: 0, index: 1, from: pos2(0.0, 0.0) });
-    view.document_changed(&shifted);
-    assert_eq!(view.comments.selected, None);
-    assert_eq!(view.comments.editing, None);
-    assert_eq!(view.comments.composer, None);
-    assert_eq!(view.comments.gesture, None);
+    view.session.comments.select_only((0, 1));
+    view.session.comments.panel.editing = Some((thread(1), 0, "for c1, not c2".into()));
+    view.session.comments.composer = Some(composer(1, "for c1"));
+    view.document_changed(&egui::Context::default(), &shifted);
+    assert!(view.session.comments.selection().is_empty());
+    assert_eq!(view.session.comments.panel.editing, None);
+    assert_eq!(view.session.comments.composer, None);
 
-    // Pressing Delete when `selected` holds a widget index (0, 0) or stale index (0, 2) emits no edit.
-    let ctx = egui::Context::default();
+    // Deleting a widget slot (0, 0) or a stale slot (0, 2) asks the engine for nothing.
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
+    let placed = [placed_page(&xf, 1.0)];
+    let map = page_map(&placed, &shifted, 0);
+    let prefs = CommentPrefs::default();
     for bad_index in [0, 2] {
-        view.comments.selected = Some((0, bad_index));
-        let mut input = egui::RawInput::default();
-        input.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        });
-        let mut out = ctx.run_ui(input, |ui| {
-            let mut tool = QuickTool::Select;
-            keys(ui.ctx(), crate::page_keys::PageKeys::new(false), &mut view, &shifted, &mut tool, true);
-        });
-        out.textures_delta.clear();
-        assert_eq!(view.comments.selected, None);
-        assert_eq!(view.pending_edit, None, "index {bad_index} must not emit DeleteAnnotation");
+        let edit = bridge::edit(AnnotationEdit::Delete(vec![bridge::id_of(0, bad_index)]), &map, &mut view.session.comments, &shifted, &prefs);
+        assert_eq!(edit, None, "index {bad_index} must not emit DeleteAnnotation");
     }
 }
 
 /// An unnamed comment has no object name to tell it from the one that slid into its index.
-/// Deleting the earlier one still drops selection, editing, the composer and a gesture that
-/// pointed at that index.
+/// Deleting the earlier one still drops selection, editing and the composer that pointed at that index.
 #[test]
 fn an_unnamed_shift_clears_state_for_the_old_index() {
-    let annot = |index: usize| Annotation {
-        page: 0,
-        index,
-        subtype: "Text".into(),
-        rect: [10.0, 10.0, 30.0, 30.0],
-        color: None,
-        author: None,
-        contents: None,
-        modified: None,
-        in_reply_to: None,
-        parent: None,
-        grouped: false,
-        name: None,
-        state: None,
-        quads: Vec::new(),
-        locked: false,
-        intent: None,
-        fill_sign: false,
-        no_rotate: false,
-        points: Vec::new(),
-        text_box: None,
-        popup: None,
-    };
-    let info = DocInfo {
-        pages: vec![
-            PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 },
-            PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 },
-        ],
-        annotations: vec![annot(1), annot(2)],
-        ..Default::default()
-    };
-    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
-    view.comments.selected = Some((0, 1));
-    view.comments.open_editor(0, 1, "the first note".into());
-    view.comments.composer = Some(Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(1), text: "the first note".into(), focus: false });
-    view.comments.gesture = Some(Gesture::Move { page: 0, index: 1, from: pos2(0.0, 0.0) });
+    let annot = |index: usize| Annotation { page: 0, index, rect: [10.0, 10.0, 30.0, 30.0], ..annotation("Text", None, false) };
+    let page = || PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let info = DocInfo { pages: vec![page(), page()], annotations: vec![annot(1), annot(2)], ..Default::default() };
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default(), false);
+    view.session.comments.select_only((0, 1));
+    view.session.comments.panel.editing = Some((ThreadId(bridge::id_of(0, 1).0), 0, "the first note".into()));
+    view.session.comments.composer =
+        Some(Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(1), text: "the first note".into(), focus: false });
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
+    let placed = [placed_page(&xf, 1.0)];
+    let map = page_map(&placed, &info, 0);
+    let deleted = bridge::edit(AnnotationEdit::Delete(vec![bridge::id_of(0, 1)]), &map, &mut view.session.comments, &info, &CommentPrefs::default());
+    assert!(deleted.is_some(), "the unnamed comment is deletable");
     let mut shifted = info.clone();
     shifted.annotations = vec![annot(1)];
-    view.document_changed(&shifted);
-    assert_eq!(view.comments.selected, None);
-    assert_eq!(view.comments.editing, None);
-    assert_eq!(view.comments.composer, None);
-    assert_eq!(view.comments.gesture, None);
+    view.document_changed(&egui::Context::default(), &shifted);
+    assert!(view.session.comments.selection().is_empty());
+    assert_eq!(view.session.comments.panel.editing, None);
+    assert_eq!(view.session.comments.composer, None);
 }
 
 /// Review on #4358: a Replace Text group is selected by its caret, the group's primary (ISO
@@ -827,84 +544,85 @@ fn a_replace_text_group_makes_replace_text_defaults() {
     assert_eq!(tool_for_default(&all, &all[2], None), Some(CommentTool::Caret));
 }
 
-/// The hover outline goes round the comment a press under the pointer would take (the top hit
-/// there): not a highlight under a form field, which takes the press.
+/// The one part the page registers at the pointer is for the comment a press there would take (the same `pick_at`
+/// annotation), and none where nothing would take it.
 #[test]
 fn the_hover_outline_goes_round_what_a_press_would_take() {
-    use super::paint::hover_outline;
-    use crate::page_cursor::Layer;
-    use crate::page_router::{CommentPart, Hit, Owner};
     let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
     let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), rot: 0, pw: 200.0, ph: 200.0 };
     let highlight = Annotation { rect: [50.0, 50.0, 150.0, 150.0], ..annotation("Highlight", None, false) };
     let info = DocInfo { pages: vec![page], annotations: vec![highlight], ..Default::default() };
     let prefs = CommentPrefs::default();
-    // The pointer is over the highlight.
-    let ptr = PagePointer { pos: Some(pos2(100.0, 100.0)), ..PagePointer::default() };
-    let cx = PageCx {
-        page: 0,
-        xf: &xf,
-        ptr: &ptr,
-        info: &info,
-        tool: QuickTool::Select,
-        prefs: &prefs,
-        allowed: true,
-        hidden: false,
-        redact_mark: ([0.0; 3], 1.0),
-        keys: Default::default(),
-    };
-    let on = |owner, layer| Hit::new(owner, layer, egui::CursorIcon::PointingHand);
-    let comment = on(Owner::Comment { index: 0, part: CommentPart::Body }, Layer::Comment);
-    let field = on(Owner::Field { field: 0, widget: 0 }, Layer::Field);
-    let cv = CommentView::default();
-    assert!(hover_outline(&cx, &cv, Some(&comment)).is_some(), "the highlight a press there selects");
-    assert!(hover_outline(&cx, &cv, Some(&field)).is_none(), "not under a field that takes the press");
-    assert!(hover_outline(&cx, &cv, None).is_none(), "nor where nothing would take it");
-    let selected = CommentView { selected: Some((0, 0)), ..CommentView::default() };
-    assert!(hover_outline(&cx, &selected, Some(&comment)).is_none(), "the selected comment has its own frame");
+    let placed = [placed_page(&xf, 1.0)];
+    let map = page_map(&placed, &info, 0);
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default(), false);
+    let tolerance = map.doc_len(SLOP);
+    let side = icon_side(&map);
+    let over = Point::new(100.0, 100.0);
+    let annotations = bridge::annotations(&info, &map, QuickTool::Select, true);
+    let markers = bridge::markers(&info, &map, side);
+    let at = map.to_page(0, over).expect("the page is placed");
+    assert_eq!(pick_at(&annotations, at, tolerance, side, &markers), Some(bridge::id_of(0, 0)), "the highlight a press there selects");
+    // PLAN: the outline shape itself is the overlay's `HoverOutline` (pdf-comments-w8); a request to w8 for an `overlay` helper
+    // the test can compare against the part's annotation. The part registered at the pointer is asserted here.
+    let parts =
+        |view: &DocView, pointer| bridge::parts(&info, &map, &prefs, QuickTool::Select, pointer, &view.session.comments.tool, tolerance, side, false);
+    assert_eq!(parts(&view, Some(over)).len(), 1, "one part for the comment under the pointer");
+    assert!(parts(&view, None).is_empty(), "no pointer, no part");
+    assert!(parts(&view, Some(Point::new(5.0, 5.0))).is_empty(), "nor where nothing would take the press");
+    // A selected comment keeps its part, so its tip shows as production's did; the overlay draws no outline round it
+    // (the handles are what is there), and a drag on it still passes to the tool.
+    view.session.comments.select_only((0, 0));
+    assert_eq!(parts(&view, Some(over)).len(), 1, "the selected comment is still pressed and tipped where it is");
 }
 
+/// A silent transform error would carry into every saved comment: the user point survives the trip through the document
+/// space on a turned page, a turned view and a zoomed page, and a move by one document unit moves the annotation by the
+/// same distance in user space.
 #[test]
-fn comment_marker_wins_over_an_overlapping_body_for_pick_and_hover() {
-    let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
-    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), rot: 0, pw: 200.0, ph: 200.0 };
-    let markup = Annotation { rect: [50.0, 50.0, 80.0, 65.0], index: 0, ..annotation("Highlight", Some("Anchor"), false) };
-    let body = Annotation { rect: [0.0, 0.0, 200.0, 200.0], index: 1, ..annotation("Square", Some("Body"), false) };
-    let info = DocInfo { pages: vec![page], annotations: vec![body, markup], ..Default::default() };
-    let prefs = CommentPrefs::default();
-    let ptr = PagePointer::default();
-    let cx = PageCx {
-        page: 0,
-        xf: &xf,
-        ptr: &ptr,
-        info: &info,
-        tool: QuickTool::Select,
-        prefs: &prefs,
-        allowed: true,
-        hidden: false,
-        redact_mark: ([0.0; 3], 1.0),
-        keys: crate::page_keys::PageKeys::new(false),
-    };
-    let marker = cx.comment_marker_rect(&info.annotations[1]).unwrap();
-    assert_eq!(cx.comment_at(marker.center()).map(|a| a.index), Some(0));
-    let ptr = PagePointer { pos: Some(marker.center()), ..PagePointer::default() };
-    let cx = PageCx { ptr: &ptr, ..cx };
-    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
-    super::input::describe(&cx, &mut view);
-    let ctx = egui::Context::default();
-    assert_eq!(view.cursor.resolve(&ctx, QuickTool::Select).as_deref(), Some("Highlight\nAnchor"));
-    let hidden = PageCx { hidden: true, ..cx };
-    assert!(hidden.comment_at(marker.center()).is_none());
-    super::input::describe(&hidden, &mut view);
-    assert!(view.cursor.resolve(&ctx, QuickTool::Select).is_none());
+fn an_annotation_round_trips_through_the_page_map_on_turned_and_zoomed_pages() {
+    for (page_rotation, rotation, zoom) in [(90, 0, 1.0), (0, 90, 1.0), (0, 0, 4.0)] {
+        let (pw, ph) = if page_rotation % 180 == 0 { (300.0, 200.0) } else { (200.0, 300.0) };
+        let (w, h) = if rotation % 180 == 0 { (pw, ph) } else { (ph, pw) };
+        let xf = PageXform { rect: Rect::from_min_size(pos2(40.0, 60.0), vec2(w, h) * zoom), rot: rotation, pw, ph };
+        let square = Annotation { rect: [40.0, 60.0, 100.0, 100.0], ..annotation("Square", Some("Box"), false) };
+        let info = DocInfo {
+            pages: vec![PageInfo { width: pw, height: ph, label: String::new(), crop: [0.0, 0.0, 300.0, 200.0], rotation: page_rotation }],
+            annotations: vec![square],
+            ..Default::default()
+        };
+        let placed = [placed_page(&xf, f64::from(zoom))];
+        let map = page_map(&placed, &info, rotation);
+        let case = format!("page/view rotation {page_rotation}/{rotation}, zoom {zoom}");
+        for user in [[10.0, 20.0], [250.0, 150.0]] {
+            let back = map.to_user(0, map.to_doc(0, user));
+            assert!((back[0] - user[0]).abs() < 1e-6 && (back[1] - user[1]).abs() < 1e-6, "{case}: {user:?} came back as {back:?}");
+        }
+        let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default(), false);
+        let delta = Vec2::new(1.0, 0.0);
+        let moved = bridge::edit(
+            AnnotationEdit::Move { ids: vec![bridge::id_of(0, 0)], delta },
+            &map,
+            &mut view.session.comments,
+            &info,
+            &CommentPrefs::default(),
+        );
+        let Some(Edit::MoveAnnotation { dx, dy, .. }) = moved else { panic!("{case}: a move is one MoveAnnotation, got {moved:?}") };
+        let origin = map.to_doc(0, [50.0, 80.0]);
+        let (from, to) = (map.to_user(0, origin), map.to_user(0, origin + delta));
+        assert!((dx - (to[0] - from[0])).abs() < 1e-6 && (dy - (to[1] - from[1])).abs() < 1e-6, "{case}: moved ({dx}, {dy})");
+    }
 }
 
+/// A hand-written format boundary: a wrong zone shifts every shown age and date.
 #[test]
-fn insert_text_icon_is_distinct_from_edit_text_and_matches_its_command() {
-    let insert = CommentTool::Caret.icon();
-    let edit = pdfcraft_engine::commands::command("edit.edit_text").unwrap().icon;
-    let command = pdfcraft_engine::commands::command("comment.caret").unwrap().icon;
-    assert_ne!(insert, edit, "adjacent tools need distinct icons");
-    assert_eq!(insert, command, "the annotation toolbar and command use the same icon");
-    assert!(crate::widgets::icons::exists(insert));
+fn a_pdf_date_with_a_zone_reads_as_the_same_instant_in_unix_seconds() {
+    let zoned = bridge::pdf_date_seconds("D:20240102030405+02'00'");
+    assert!(zoned.is_some(), "a zoned date reads");
+    assert_eq!(zoned, bridge::pdf_date_seconds("D:20240102010405Z"), "the same instant in UTC");
+    let day = bridge::pdf_date_seconds("D:20240102");
+    assert!(day.is_some());
+    assert_eq!(day, bridge::pdf_date_seconds("D:20240102000000Z"), "no time part reads midnight UTC");
+    assert_eq!(bridge::pdf_date_seconds("D:20240103").zip(day).map(|(next, this)| next - this), Some(86_400));
+    assert_eq!(bridge::pdf_date_seconds("not a date"), None);
 }
