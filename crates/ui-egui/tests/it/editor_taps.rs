@@ -8,6 +8,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
 
+use crate::support::AppHarness as _;
 use crate::support::input::touch_tap;
 
 /// A PDF of `objects`, numbered from 1 with the catalog first.
@@ -59,13 +60,16 @@ fn text_pdf() -> Vec<u8> {
 
 /// The app with `pdf` open at 150 % and its first frames run.
 fn open(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("test.pdf", None, pdf).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "test.pdf", None, pdf).unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app
+        }
     });
     for _ in 0..30 {
         h.run_steps(2);
@@ -104,7 +108,7 @@ fn value(h: &Harness<'_, PdfCraftApp>, name: &str) -> Vec<String> {
 
 /// The field whose editor or list is open.
 fn focus(h: &Harness<'_, PdfCraftApp>) -> Option<String> {
-    h.state().views[0].forms.focus.as_ref().map(|f| f.name.clone())
+    h.state().views[0].session.forms.focus.as_ref().map(|f| f.name.clone())
 }
 
 /// The Green row of the list box: the second, rows being 11.5 pt under a 2 pt inset.
@@ -184,12 +188,16 @@ const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "Jun
 
 /// Adds a date field `due` at x 40..160, y 240..260, its calendar under it.
 fn add_date_field(h: &mut Harness<'_, PdfCraftApp>) {
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
-        page: 0,
-        rect: [40.0, 240.0, 160.0, 260.0],
-        kind: pdfcraft_engine::NewField::Date,
-        name: Some("due".into()),
-    });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(
+        &ctx_h,
+        pdfcraft_engine::Edit::AddField {
+            page: 0,
+            rect: [40.0, 240.0, 160.0, 260.0],
+            kind: pdfcraft_engine::NewField::Date,
+            name: Some("due".into()),
+        },
+    );
     h.run_steps(4);
 }
 
@@ -200,6 +208,17 @@ fn next_month(h: &Harness<'_, PdfCraftApp>) -> (String, String) {
     (format!("{} {ny}", MONTHS[(nm - 1) as usize]), format!("{nm:02}/15/{ny}"))
 }
 
+/// The middle of the calendar's next-month button.
+fn next_month_button(h: &Harness<'_, PdfCraftApp>) -> egui::Pos2 {
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Next").rect().center()
+}
+
+/// The middle of the 15th's cell on the calendar page titled `heading` ("Month Year"): a day is named by its date.
+fn fifteenth(h: &Harness<'_, PdfCraftApp>, heading: &str) -> egui::Pos2 {
+    let (month, year) = heading.split_once(' ').expect("month and year");
+    h.get_by(|n| n.label().is_some_and(|l| l != heading && l.contains(month) && l.contains("15") && l.contains(year))).rect().center()
+}
+
 #[test]
 fn mouse_click_on_a_date_fields_calendar_keeps_it_open() {
     // Control for the tap below.
@@ -208,11 +227,11 @@ fn mouse_click_on_a_date_fields_calendar_keeps_it_open() {
     let (heading, picked) = next_month(&h);
     let p = field(&h, "due").center();
     mouse_click(&mut h, p);
-    let next = h.get_by_label("›").rect().center();
+    let next = next_month_button(&h);
     mouse_click(&mut h, next);
     assert_eq!(focus(&h).as_deref(), Some("due"), "a click on the calendar's next month leaves the field open");
     h.get_by_label(&heading);
-    let day = h.get_by_label("15").rect().center();
+    let day = fifteenth(&h, &heading);
     mouse_click(&mut h, day);
     assert_eq!(value(&h, "due"), [picked], "and a click on a day picks it");
 }
@@ -224,11 +243,11 @@ fn touch_tap_on_a_date_fields_calendar_keeps_it_open() {
     let (heading, picked) = next_month(&h);
     let p = field(&h, "due").center();
     touch_tap(&mut h, p);
-    let next = h.get_by_label("›").rect().center();
+    let next = next_month_button(&h);
     touch_tap(&mut h, next);
     assert_eq!(focus(&h).as_deref(), Some("due"), "a tap on the calendar's next month leaves the field open, as a click does");
     h.get_by_label(&heading);
-    let day = h.get_by_label("15").rect().center();
+    let day = fifteenth(&h, &heading);
     touch_tap(&mut h, day);
     assert_eq!(value(&h, "due"), [picked], "and a tap on a day picks it");
 }
@@ -306,20 +325,19 @@ fn touch_tap_on_a_radio_button_keeps_the_group_focused() {
 
 /// Opens the line of `text_pdf` for typing with Edit text.
 fn edit_paragraph(h: &mut Harness<'_, PdfCraftApp>) {
-    assert!(h.state_mut().execute("edit.edit_text"));
+    assert!(h.execute("edit.edit_text"));
     h.run_steps(2);
     let r = h.state().views[0].page_screen_rect(0).expect("page on screen");
     let k = r.width() / 300.0;
     let p = r.min + egui::vec2(60.0 * k, (400.0 - 304.0) * k);
     mouse_click(h, p);
-    assert!(h.state().views[0].line_editor.is_some(), "the paragraph opens for typing");
-    let input = egui::Id::unique(("edit-text-line-input", h.state().views[0].place()));
-    assert!(h.ctx.memory(|m| m.has_focus(input)), "with the keyboard");
+    assert!(h.state().views[0].session.line_editor.is_some(), "the paragraph opens for typing");
+    assert!(h.ctx.egui_wants_keyboard_input(), "with the keyboard");
 }
 
 /// The open paragraph's line spacing, if a paragraph is open.
 fn line_spacing(h: &Harness<'_, PdfCraftApp>) -> Option<f64> {
-    h.state().views[0].line_editor.as_ref().map(|e| e.extras.line_spacing)
+    h.state().views[0].session.line_editor.as_ref().map(|e| e.extras.line_spacing)
 }
 
 #[test]
