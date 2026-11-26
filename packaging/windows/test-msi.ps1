@@ -255,6 +255,15 @@ $printCommand = Read-Row 'SELECT `Value`, `Component_`, `Root` FROM `Registry` W
 Assert-Equal $printCommand[0] '"[#PdfcraftExe]" --print "%1"' 'PDF print verb command'
 Assert-Equal $printCommand[1] 'PdfcraftApp' 'PDF print verb component'
 Assert-Equal $printCommand[2] '-1' 'PDF print verb context-sensitive root'
+# #1080: Explorer is told the associations changed (SHCNE_ASSOCCHANGED) after install/uninstall,
+# without ever failing setup. 34 = exe in a directory; 64 = ignore its exit code.
+$notify = Read-Row 'SELECT `Type`, `Source`, `Target` FROM `CustomAction` WHERE `Action` = ''NotifyAssociationsChanged''' 3
+Assert-Equal $notify[0] '98' 'Association notify action type'
+Assert-Equal $notify[1] 'SystemFolder' 'Association notify directory'
+if ($notify[2] -notmatch 'SHChangeNotify\(0x8000000,0,0,0\)' -or $notify[2].Length -gt 255) { throw "Association notify command: '$($notify[2])'" }
+$after = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''NotifyAssociationsChanged''' 1
+$finalize = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''InstallFinalize''' 1
+if ([int] $after[0] -le [int] $finalize[0]) { throw 'Association notify must run after InstallFinalize' }
 
 # "Combine files in PdfCraft" (#585): in the PDF menu's component, so the one switch covers both
 # verbs. Each selected file starts `pdfcraft --combine "<file>"` (Document), and the running
