@@ -6,6 +6,8 @@ use super::*;
 
 #[path = "mark_transaction_tests.rs"]
 mod mark_transactions;
+#[path = "paragraph_grouping_tests.rs"]
+mod paragraph_grouping;
 
 /// Three pages: an upright page with content that leaves the graphics state changed (an
 /// unbalanced `cm`), a page rotated 90° and one with inherited, shared resources.
@@ -724,6 +726,173 @@ fn flattening_fields_drops_the_ones_on_no_page() {
     let fields = doc.resolve(af.as_dict().unwrap().get(b"Fields").unwrap());
     let left: Vec<pdfcraft_cos::ObjRef> = fields.as_array().unwrap().iter().filter_map(|f| f.as_ref()).collect();
     assert_eq!(left, [pdfcraft_cos::ObjRef::new(7, 0)], "only the hidden field on the page stays");
+}
+
+/// #2670: flattening form fields drops removed fields from `/AcroForm /CO` (calculation order)
+/// and removes `/CO` once empty, and drops `/SigFlags` once no signature fields remain.
+#[test]
+fn flattening_fields_cleans_calculation_order_and_sigflags() {
+    let page = stream("", " ");
+    // Test 1: both fields flattened -> /Fields becomes empty, /CO and /SigFlags are removed.
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO [5 0 R] /SigFlags 1 >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc) /Rect [10 10 150 40] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig) /Rect [10 50 150 80] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 2);
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict = af.as_dict().unwrap();
+    let fields = doc.resolve(af_dict.get(b"Fields").unwrap());
+    assert_eq!(fields.as_array().unwrap().len(), 0, "no fields remain");
+    assert!(!af_dict.contains(b"CO"), "empty calculation order was removed");
+    assert!(!af_dict.contains(b"SigFlags"), "SigFlags was removed with no signature fields");
+
+    // Test 2: one field flattened, one surviving field -> /CO retains surviving field, SigFlags kept.
+    // The signature field has no appearance but is signed (a value), so it stays (#1794, #4017).
+    let mut doc2 = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO [5 0 R 6 0 R] /SigFlags 1 >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc1) /Rect [10 10 150 40] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig_undrawable) /V << /Type /Sig >> /Rect [10 50 150 80] /F 4 >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    assert_eq!(flatten(&mut doc2, &[0], false, true).unwrap(), 1, "only calc1 with appearance is drawn");
+    let doc2 = reopen(&doc2);
+    let root2 = doc2.root().unwrap();
+    let af2 = doc2.resolve(doc2.get(root2).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict2 = af2.as_dict().unwrap();
+    let co2 = doc2.resolve(af_dict2.get(b"CO").unwrap());
+    let co_refs: Vec<pdfcraft_cos::ObjRef> = co2.as_array().unwrap().iter().filter_map(|f| f.as_ref()).collect();
+    assert_eq!(co_refs, [pdfcraft_cos::ObjRef::new(6, 0)], "only surviving field remains in /CO");
+    assert!(af_dict2.contains(b"SigFlags"), "SigFlags kept because signature field survived");
+}
+
+/// #2670: removing an emptied `/CO` or an unneeded `/SigFlags` drops the key only. Both may be
+/// indirect objects that something else also refers to, and those references must still resolve.
+#[test]
+fn flattening_keeps_shared_calculation_order_and_sigflags_objects() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO 9 0 R /SigFlags 8 0 R >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc) /Rect [10 10 150 40] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (kept) /V (Ada) /Ff 8 0 R /Order 9 0 R /Rect [10 50 150 80] /F 4 >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>
+stream
+
+endstream",
+        "3",
+        "[5 0 R]",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "only calc is drawn; kept has no appearance");
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict = af.as_dict().unwrap();
+    assert!(!af_dict.contains(b"CO"), "the emptied calculation order was removed");
+    assert!(!af_dict.contains(b"SigFlags"), "SigFlags was removed with no signature field left");
+    let kept = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
+    let kept = kept.as_dict().unwrap();
+    assert_eq!(doc.resolve(kept.get(b"Ff").unwrap()).as_int(), Some(3), "the shared /SigFlags object still resolves");
+    assert!(doc.resolve(kept.get(b"Order").unwrap()).as_array().is_some(), "the shared /CO array still resolves");
+}
+
+/// #2670: a calculation order that loses some fields but not all is shortened for the form alone.
+/// Its indirect array may be shared, and the other references must still see the whole list.
+#[test]
+fn flattening_shortens_a_shared_calculation_order_without_changing_it() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO 8 0 R >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc) /Rect [10 10 150 40] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (kept) /V (Ada) /Order 8 0 R /Rect [10 50 150 80] /F 4 >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>
+stream
+
+endstream",
+        "[5 0 R 6 0 R]",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "only calc is drawn; kept has no appearance");
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let co = doc.resolve(af.as_dict().unwrap().get(b"CO").expect("one field is left in the calculation order"));
+    let co: Vec<_> = co.as_array().unwrap().iter().map(|o| o.as_ref()).collect();
+    assert_eq!(co, [Some(pdfcraft_cos::ObjRef::new(6, 0))], "the form's order keeps only the field that is left");
+    let kept = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
+    let order = doc.resolve(kept.as_dict().unwrap().get(b"Order").unwrap());
+    assert_eq!(order.as_array().map(|a| a.len()), Some(2), "the shared array still lists both fields");
+}
+
+/// #2670: a signature field kept deeper than the pruning cutoff still counts as left, so it keeps
+/// its `/CO` entry and the form keeps `/SigFlags`.
+#[test]
+fn flattening_keeps_a_deep_signature_field_in_the_calculation_order_and_sigflags() {
+    let levels = 66;
+    let page = stream("", " ");
+    // 5: the flattened widget; 6…: the chain; then the signed widget at its end, on the page.
+    let leaf = 6 + levels;
+    let mut objs: Vec<String> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO [5 0 R {leaf} 0 R] /SigFlags 3 >> >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R {leaf} 0 R] >>"),
+        page,
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc) /Rect [10 10 150 40] /F 4 /AP << /N {} 0 R >> >>", leaf + 1),
+    ];
+    for i in 0..levels {
+        objs.push(format!("<< /T (n{i}) /Kids [{} 0 R] >>", 7 + i));
+    }
+    objs.push("<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig) /V << /Type /Sig >> /Rect [10 50 150 80] /F 4 >>".into());
+    objs.push("<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream".into());
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let mut doc = build(&objs);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "only calc is drawn; the signed field has no appearance");
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict = af.as_dict().unwrap();
+    let co = doc.resolve(af_dict.get(b"CO").expect("the deep field stays in the calculation order"));
+    let co: Vec<_> = co.as_array().unwrap().iter().filter_map(|o| o.as_ref()).collect();
+    assert_eq!(co, [pdfcraft_cos::ObjRef::new(leaf as u32, 0)]);
+    assert!(af_dict.contains(b"SigFlags"), "the deep signature field is still there");
+}
+
+/// #2670: flattening every page takes a field on no page out of its kept parent's `/Kids`. Nothing
+/// is drawn and `/Fields` keeps its length, but `/CO` and `/SigFlags` still lose that field.
+#[test]
+fn flattening_cleans_the_calculation_order_and_sigflags_of_an_orphan_under_a_kept_parent() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /CO [6 0 R 7 0 R] /SigFlags 1 >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [6 0 R] >>",
+        &page,
+        "<< /FT /Tx /T (parent) /Kids [6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /V (Ada) /Rect [10 10 150 40] /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (orphan) /Parent 5 0 R /Rect [10 50 150 80] /F 4 >>",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 0, "the kept widget has no appearance to draw");
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict = af.as_dict().unwrap();
+    let co = doc.resolve(af_dict.get(b"CO").expect("the kept widget stays in the calculation order"));
+    let co: Vec<_> = co.as_array().unwrap().iter().filter_map(|o| o.as_ref()).collect();
+    assert_eq!(co, [pdfcraft_cos::ObjRef::new(6, 0)], "the orphan left the calculation order");
+    assert!(!af_dict.contains(b"SigFlags"), "no signature field is left");
 }
 
 /// #1794: a form field whose widget has no usable appearance (none stored, or none for its
@@ -9590,12 +9759,13 @@ fn japanese_paragraphs_wrap_between_characters_without_closing_marks_at_a_row_st
 
 #[test]
 fn rewritten_paragraph_is_drawn_after_backgrounds_between_its_rows() {
-    // Each row has its own background box drawn immediately before its BT..ET, as cards and
-    // highlighted headings exported from LibreOffice or browsers do (#2377).
-    let card = "0 0.45 0.25 rg 60 696 240 16 re f BT /F1 10 Tf 1 1 1 rg 64 700 Td (SEMINARIO ONLINE) Tj ET \
-                0 0.45 0.25 rg 60 668 240 24 re f BT /F1 16 Tf 1 1 1 rg 64 674 Td (Dalla teoria alla pratica:) Tj ET \
-                0 0.45 0.25 rg 60 632 240 32 re f BT /F1 24 Tf 1 1 1 rg 64 640 Td (gestire con metodo) Tj ET \
-                0 0.45 0.25 rg 60 596 240 32 re f BT /F1 24 Tf 1 1 1 rg 64 604 Td (un progetto complesso) Tj ET";
+    // Layered paragraph-wide backgrounds still paint between rows (#2377), but every row has
+    // the same container membership. Compatible size changes retain the mixed-style rewrite
+    // without asking the grouping heuristic to merge independent panels or headings.
+    let card = "0 0.45 0.25 rg 60 540 240 180 re f BT /F1 16 Tf 1 1 1 rg 64 700 Td (SEMINARIO ONLINE) Tj ET \
+                0 0.45 0.25 rg 60 540 240 180 re f BT /F1 20 Tf 1 1 1 rg 64 674 Td (Dalla teoria alla pratica:) Tj ET \
+                0 0.45 0.25 rg 60 540 240 180 re f BT /F1 24 Tf 1 1 1 rg 64 640 Td (gestire con metodo) Tj ET \
+                0 0.45 0.25 rg 60 540 240 180 re f BT /F1 24 Tf 1 1 1 rg 64 604 Td (un progetto complesso) Tj ET";
     let shown_at = |ops: &[pdfcraft_content::Op], needle: &str| {
         ops.iter()
             .position(|op| {
@@ -9608,6 +9778,13 @@ fn rewritten_paragraph_is_drawn_after_backgrounds_between_its_rows() {
     // 1. Editing the title rows emits all rewritten rows after all four background fills.
     let mut doc = text_page(card);
     assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 1);
+    let source_ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+    let source_fills: Vec<usize> = source_ops.iter().enumerate().filter_map(|(i, op)| op.is("f").then_some(i)).collect();
+    assert_eq!(source_fills.len(), 4);
+    for (row, needle) in ["SEMINARIO", "pratica:", "metodo", "complesso"].iter().enumerate() {
+        let shown = shown_at(&source_ops, needle);
+        assert!(source_fills[row] < shown && source_fills.get(row + 1).is_none_or(|next| shown < *next), "backgrounds must stay interleaved");
+    }
     let edited = "SEMINARIO ONLINE\nDalla teoria alla pratica:\ngestire con criterio\nun progetto nuovo";
     text::rewrite_block(&mut doc, 0, 0, Some(edited), &text::BlockStyle::default()).unwrap();
     let doc = reopen(&doc);
@@ -9643,6 +9820,9 @@ fn rewritten_paragraph_is_drawn_after_backgrounds_between_its_rows() {
     let wrapped_edit = "SEMINARIO ONLINE\nDalla teoria alla pratica:\ngestire con criterio e metodo approfondito\nun progetto complesso";
     text::rewrite_block(&mut doc, 0, 0, Some(wrapped_edit), &text::BlockStyle::default()).unwrap();
     let doc = reopen(&doc);
+    let wrapped = text::text_blocks(&doc, 0).unwrap();
+    assert!(wrapped[0].rows.len() > 4, "the long edit must wrap and push the suffix row down");
+    assert_eq!(wrapped[0].text, wrapped_edit.replace('\n', " "));
     let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
     let last_fill = ops.iter().rposition(|op| op.is("f")).unwrap();
     assert!(
@@ -9652,8 +9832,8 @@ fn rewritten_paragraph_is_drawn_after_backgrounds_between_its_rows() {
 
     // 4. Single-style paragraph path across a CTM change between rows, with movement, underline,
     // and a trailing unrelated line sharing the second row's BT..ET.
-    let cross_ctm = "0.9 0.9 0.2 rg 60 696 240 18 re f BT /F1 12 Tf 0 0 0 rg 64 700 Td (First highlighted row) Tj ET \
-                     q 1 0 0 1 10 12 cm 0.9 0.9 0.2 rg 50 668 240 18 re f \
+    let cross_ctm = "0.9 0.9 0.2 rg 60 676 240 38 re f BT /F1 12 Tf 0 0 0 rg 64 700 Td (First highlighted row) Tj ET \
+                     q 1 0 0 1 10 12 cm 0.9 0.9 0.2 rg 50 664 240 38 re f \
                      BT /F1 12 Tf 0 0 0 rg 54 672 Td (Second highlighted row) Tj 246 -40 Td (Side footer) Tj ET Q";
     let mut doc = text_page(cross_ctm);
     let para = text::text_blocks(&doc, 0).unwrap().into_iter().position(|b| b.text.starts_with("First highlighted")).unwrap();
@@ -10867,6 +11047,225 @@ fn reading_keeps_dotted_leader_entries_whole_and_in_order() {
     );
 }
 
+/// #3803: Tesseract and PDFium write invisible (`3 Tr`) OCR layers in a `/Glyphless` CIDFontType2
+/// whose `/ToUnicode` and `/W` cover Latin text while `/CIDToGIDMap` maps every CID to GID 1 (a
+/// solid rectangle). Rewriting such text as visible (`0 Tr`) must substitute a real font rather
+/// than drawing the replacement in `/Glyphless` rectangles.
+#[test]
+fn editing_glyphless_ocr_text_substitutes_a_visible_font() {
+    let mut one_glyph_ttf = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let count = u16::from_be_bytes(one_glyph_ttf[4..6].try_into().unwrap()) as usize;
+    let loca_rec = (0..count).map(|i| 12 + i * 16).find(|i| &one_glyph_ttf[*i..*i + 4] == b"loca").unwrap();
+    let loca_off = u32::from_be_bytes(one_glyph_ttf[loca_rec + 8..loca_rec + 12].try_into().unwrap()) as usize;
+    let loca_len = u32::from_be_bytes(one_glyph_ttf[loca_rec + 12..loca_rec + 16].try_into().unwrap()) as usize;
+    one_glyph_ttf[loca_off..loca_off + 8].fill(0);
+    for chunk in one_glyph_ttf[loca_off + 8..loca_off + loca_len].as_chunks_mut::<4>().0 {
+        *chunk = 4u32.to_be_bytes();
+    }
+
+    let make_page = |content: &str, base: &str| {
+        let mut doc = text_page(content);
+        let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &one_glyph_ttf)));
+        let cid_to_gid = doc.add(Object::Stream(Stream::flate(Dict::new(), &[0, 1].repeat(256))));
+        let cmap = b"1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfrange <0000> <00FF> <0000> endbfrange";
+        let unicode = doc.add(Object::Stream(Stream::flate(Dict::new(), cmap)));
+        let descriptor = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("FontDescriptor")),
+            (b"FontName".to_vec(), Object::name(base)),
+            (b"Flags".to_vec(), Object::Int(5)),
+            (b"FontBBox".to_vec(), Object::Array([0, -207, 500, 718].map(Object::Int).to_vec())),
+            (b"Ascent".to_vec(), Object::Int(718)),
+            (b"Descent".to_vec(), Object::Int(-207)),
+            (b"FontFile2".to_vec(), Object::Ref(program)),
+        ]);
+        let cid_font = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("CIDFontType2")),
+            (b"BaseFont".to_vec(), Object::name(base)),
+            (b"CIDToGIDMap".to_vec(), Object::Ref(cid_to_gid)),
+            (b"DW".to_vec(), Object::Int(500)),
+            (b"W".to_vec(), Object::Array(vec![Object::Int(32), Object::Array(vec![Object::Int(285)])])),
+            (b"FontDescriptor".to_vec(), Object::Dict(descriptor)),
+        ]);
+        let font = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("Type0")),
+            (b"BaseFont".to_vec(), Object::name(base)),
+            (b"Encoding".to_vec(), Object::name("Identity-H")),
+            (b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(cid_font)])),
+            (b"ToUnicode".to_vec(), Object::Ref(unicode)),
+        ]);
+        let p = pdfcraft_model::pages(&doc)[0].obj;
+        let fonts = Dict::from_iter([(b"F0".to_vec(), Object::Dict(font))]);
+        doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(fonts))])))).unwrap();
+        doc
+    };
+
+    // Single-line OCR paragraph (rewrite_block_from path) and replace_line path.
+    let single = "BT 3 Tr 0.055 Tw -0.581 Tc 100 Tz /F0 15.75 Tf 1 0 0 1 114.75 568.8 Tm \
+                  [<0044> -27 <0065> -23 <0020> -22 <006B> -29 <0069> -28 <006E> -27 <0064> -29 <0065> -23 <0072> -28 <0065> -23 <006E>] TJ ET";
+    for base in ["Glyphless", "CustomOCR"] {
+        let mut doc = make_page(single, base);
+        assert!(text::text_editor_fonts(&doc, 0).unwrap().iter().all(|f| f.choice_only), "{base} must not be loaded into the inline editor");
+        let before = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].text, "De kinderen");
+        assert!(before[0].invisible);
+
+        let edit = text::replace_block(&mut doc, 0, 0, "De Kinderen").unwrap();
+        assert_eq!(edit.substituted.as_deref(), Some("Helvetica"), "{base} must substitute Helvetica instead of drawing in /F0");
+        let after = text::text_blocks(&reopen(&doc), 0).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].text, "De Kinderen");
+        assert!(!after[0].invisible, "the edited OCR paragraph is now visible");
+        assert_eq!(after[0].base_font, "Helvetica");
+
+        let mut line_doc = make_page(single, base);
+        let line_edit = text::replace_line(&mut line_doc, 0, 0, "De Kinderen").unwrap();
+        assert_eq!(line_edit.substituted.as_deref(), Some("Helvetica"), "{base} replace_line must also substitute");
+        assert_eq!(text::text_lines(&reopen(&line_doc), 0).unwrap()[0].base_font, "Helvetica");
+    }
+
+    // Multi-run OCR phrase on one row with slightly different OCR font sizes (rewrite_styled_block
+    // path): both runs switch to the visible substitute font and keep calibrated widths without
+    // stretching spaces to 200%.
+    let multi_run = "BT 3 Tr /F0 15.75 Tf 1 0 0 1 114.75 568.8 Tm <004400650020006B0069006E0064006500720065006E> Tj ET \
+                     BT 3 Tr /F0 15.5 Tf 1 0 0 1 205.0 568.8 Tm <006B0075006E006E0065006E> Tj ET";
+    let mut doc = make_page(multi_run, "Glyphless");
+    let before_lines = text::text_lines(&doc, 0).unwrap();
+    let before = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].lines.len(), 2, "two runs on one OCR row");
+    let edit = text::replace_block(&mut doc, 0, 0, "De kinderen Kunnen").unwrap();
+    assert_eq!(edit.substituted.as_deref(), Some("Helvetica"));
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.trim()).collect::<Vec<_>>(), ["De kinderen", "Kunnen"]);
+    for line in &lines {
+        assert_eq!(line.base_font, "Helvetica", "every run must use the visible substitute font: {line:?}");
+    }
+    let old_w = before_lines[0].rect[2] - before_lines[0].rect[0];
+    let new_w = lines[0].rect[2] - lines[0].rect[0];
+    assert!((new_w - old_w).abs() < 5.0, "calibrated first run keeps its width ({old_w} -> {new_w}): {lines:?}");
+    assert!(lines[1].rect[0] >= lines[0].rect[2] - 1.0, "calibrated first run does not stretch into the second: {lines:?}");
+    let blocks = text::text_blocks(&reopen(&doc), 0).unwrap();
+    assert!(!blocks[0].invisible, "the whole rewritten paragraph is visible");
+
+    // High WinAnsi characters on a glyphless OCR line also use the Helvetica substitute rather
+    // than /F0, and explicitly selecting the glyphless resource is refused.
+    let mut win_ansi_doc = make_page(single, "Glyphless");
+    let win_edit = text::replace_block(&mut win_ansi_doc, 0, 0, "De kinderen € — café").unwrap();
+    assert_eq!(win_edit.substituted.as_deref(), Some("Helvetica"));
+    assert_eq!(text::text_blocks(&reopen(&win_ansi_doc), 0).unwrap()[0].text, "De kinderen € — café");
+
+    let mut explicit = make_page(single, "Glyphless");
+    let explicit_err =
+        text::rewrite_block(&mut explicit, 0, 0, Some("De Kinderen"), &BlockStyle { resource: Some("F0".into()), ..Default::default() });
+    assert!(explicit_err.is_err(), "explicitly selecting a glyphless font resource must be refused");
+
+    // Legitimate whitespace-only subsets and 1-glyph subsets with intentional CID aliases remain
+    // exposed to the inline editor and accepted when explicitly selected as a resource.
+    let mut zero_glyph_ttf = one_glyph_ttf.clone();
+    zero_glyph_ttf[loca_off..loca_off + loca_len].fill(0);
+    let mut ws_doc = text_page("BT /F0 12 Tf 1 0 0 1 72 700 Tm <0001> Tj /WS 12 Tf ( ) Tj ET");
+    let ws_prog = ws_doc.add(Object::Stream(Stream::flate(Dict::new(), &zero_glyph_ttf)));
+    let ws_desc = Dict::from_iter([(b"FontName".to_vec(), Object::name("ABCDEF+SpaceOnly")), (b"FontFile2".to_vec(), Object::Ref(ws_prog))]);
+    let ws_font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("TrueType")),
+        (b"BaseFont".to_vec(), Object::name("ABCDEF+SpaceOnly")),
+        (b"Encoding".to_vec(), Object::name("WinAnsiEncoding")),
+        (b"FirstChar".to_vec(), Object::Int(32)),
+        (b"LastChar".to_vec(), Object::Int(32)),
+        (b"Widths".to_vec(), Object::Array(vec![Object::Int(250)])),
+        (b"FontDescriptor".to_vec(), Object::Dict(ws_desc)),
+    ]);
+    let alias_prog = ws_doc.add(Object::Stream(Stream::flate(Dict::new(), &one_glyph_ttf)));
+    let alias_map = ws_doc.add(Object::Stream(Stream::flate(Dict::new(), &[0, 0, 0, 1, 0, 1, 0, 1])));
+    let alias_tu = ws_doc.add(Object::Stream(Stream::flate(Dict::new(), b"2 beginbfchar <0001> <0041> <0002> <0061> endbfchar")));
+    let alias_desc = Dict::from_iter([(b"FontName".to_vec(), Object::name("ABCDEF+AliasOne")), (b"FontFile2".to_vec(), Object::Ref(alias_prog))]);
+    let alias_cid = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("CIDFontType2")),
+        (b"BaseFont".to_vec(), Object::name("ABCDEF+AliasOne")),
+        (b"CIDToGIDMap".to_vec(), Object::Ref(alias_map)),
+        (b"W".to_vec(), Object::Array(vec![Object::Int(1), Object::Array(vec![Object::Int(600), Object::Int(600)])])),
+        (b"FontDescriptor".to_vec(), Object::Dict(alias_desc)),
+    ]);
+    let alias_font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type0")),
+        (b"BaseFont".to_vec(), Object::name("ABCDEF+AliasOne")),
+        (b"Encoding".to_vec(), Object::name("Identity-H")),
+        (b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(alias_cid)])),
+        (b"ToUnicode".to_vec(), Object::Ref(alias_tu)),
+    ]);
+    let p = pdfcraft_model::pages(&ws_doc)[0].obj;
+    let fonts = Dict::from_iter([(b"F0".to_vec(), Object::Dict(alias_font)), (b"WS".to_vec(), Object::Dict(ws_font))]);
+    ws_doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(fonts))])))).unwrap();
+    let editor_resources: Vec<_> = text::text_editor_fonts(&ws_doc, 0).unwrap().into_iter().map(|f| f.resource).collect();
+    assert!(editor_resources.contains(&"F0".to_string()) && editor_resources.contains(&"WS".to_string()), "{editor_resources:?}");
+    let mut ws_only = ws_doc.clone();
+    text::rewrite_block(&mut ws_only, 0, 0, Some(" "), &BlockStyle { resource: Some("WS".into()), ..Default::default() }).unwrap();
+    text::rewrite_block(&mut ws_doc, 0, 0, Some("Aa"), &BlockStyle { resource: Some("F0".into()), ..Default::default() }).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&ws_doc), 0).unwrap()[0].text, "Aa");
+}
+
+/// Same-face generated subsets share a source line; TJ adjustment must survive a style edit.
+#[test]
+fn split_subset_source_keeps_calibrated_advance() {
+    let mut doc = text_page("BT /A 12 Tf 72 700 Td [<01> -100] TJ /B 12 Tf <01> Tj ET BT /F1 13 Tf 1 0 0 1 85.2 700 Tm (X) Tj ET");
+    let mut fonts = Dict::new();
+    // AA sorts before B and encodes B too, but its unrelated face must not supply metrics.
+    for (name, unicode, face, width) in
+        [("A", "0041", "SyntheticSubset", 500), ("AA", "0042", "OtherFace", 900), ("B", "0042", "SyntheticSubset", 500)]
+    {
+        let cmap = format!("1 begincodespacerange <01> <FF> endcodespacerange 1 beginbfchar <01> <{unicode}> endbfchar");
+        let tu = doc.add(Object::Stream(Stream::flate(Dict::new(), cmap.as_bytes())));
+        let proc = doc.add(Object::Stream(Stream::flate(Dict::new(), b"500 0 d0 0 0 400 700 re f")));
+        let font = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("Type3")),
+            (b"Name".to_vec(), Object::name("PCJapanese")),
+            (b"BaseFont".to_vec(), Object::name(face)),
+            (b"FontBBox".to_vec(), Object::Array([0, 0, 500, 700].map(Object::Int).to_vec())),
+            (b"FontMatrix".to_vec(), Object::Array([0.001, 0.0, 0.0, 0.001, 0.0, 0.0].map(Object::Real).to_vec())),
+            (b"FirstChar".to_vec(), Object::Int(1)),
+            (b"LastChar".to_vec(), Object::Int(1)),
+            (b"Widths".to_vec(), Object::Array(vec![Object::Int(width)])),
+            (
+                b"Encoding".to_vec(),
+                Object::Dict(Dict::from_iter([(b"Differences".to_vec(), Object::Array(vec![Object::Int(1), Object::name("g01")]))])),
+            ),
+            (b"CharProcs".to_vec(), Object::Dict(Dict::from_iter([(b"g01".to_vec(), Object::Ref(proc))]))),
+            (b"ToUnicode".to_vec(), Object::Ref(tu)),
+        ]);
+        fonts.set(name.as_bytes().to_vec(), Object::Dict(font));
+    }
+    fonts.set(
+        b"F1".to_vec(),
+        Object::Dict(Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("Type1")),
+            (b"BaseFont".to_vec(), Object::name("Helvetica")),
+        ])),
+    );
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| d.set(b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(fonts))])))).unwrap();
+    let before = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(before[0].text, "AB");
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    assert_eq!(blocks[0].lines.len(), 2);
+    let original_width = before[0].rect[2] - before[0].rect[0];
+    for (draft, factor) in [("ABX", 1.0), ("ABAX", 1.5)] {
+        let mut edited = doc.clone();
+        text::rewrite_block(&mut edited, 0, 0, Some(draft), &BlockStyle { color: Some([0.0, 0.0, 1.0]), ..Default::default() }).unwrap();
+        let after = text::text_lines(&reopen(&edited), 0).unwrap();
+        let width = after[0].rect[2] - after[0].rect[0];
+        assert!((width - original_width * factor).abs() < 0.01, "{draft}: original {original_width}, rewritten {width}; {after:?}");
+    }
+}
+
 #[cfg(test)]
 mod proptests {
     use super::*;
@@ -10999,6 +11398,53 @@ fn noop_arrange_is_not_ok_without_change() {
     let r = arrange(&mut doc, 0, 1, images::ArrangeOrder::BringToFront);
     let after = write_incremental(&doc, &SaveOptions::default()).unwrap();
     assert!(r.is_err() || before != after, "Ok with no change");
+}
+
+/// Bring to front on an at-limit image that shares its only content unit with paint
+/// already before it is a no-op, so it is refused instead of rebuilding the same placement.
+#[test]
+fn arrange_front_image_in_single_shared_unit_is_refused() {
+    let mut doc = image_page_with("q 0 0 10 10 re f 100 0 0 100 50 50 cm /Im0 Do Q");
+    let before = page_content_bytes(&doc, 0);
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+#[test]
+fn arrange_front_image_in_single_shared_unit_moves_past_following_paint() {
+    let mut doc = image_page_with("q 100 0 0 100 50 50 cm /Im0 Do 0 0 10 10 re f Q");
+    assert!(
+        arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_ok(),
+        "an image before following paint in one shared unit can be brought to front"
+    );
+    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(s.find("re f").unwrap() < s.rfind("/Im0 Do").unwrap(), "{s}");
+    let mut doc = image_page_with("q q 100 0 0 100 50 50 cm /Im0 Do Q q 50 50 10 10 re f Q Q");
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_ok(), "separate inner units inside a page wrapper can be reordered");
+    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(s.find("re f").unwrap() < s.rfind("/Im0 Do").unwrap(), "{s}");
+    let mut doc = image_page_with("q 0 0 10 10 re f 100 0 0 100 50 50 cm /Im0 Do Q");
+    let before = page_content_bytes(&doc, 0);
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringForward).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+#[test]
+fn arrange_backward_in_single_shared_unit_moves_before_paint_and_refuses_without_it() {
+    for order in [images::ArrangeOrder::SendToBack, images::ArrangeOrder::SendBackward] {
+        let mut doc = image_page_with("q q 0 0 10 10 re f 100 0 0 100 50 50 cm /Im0 Do Q Q");
+        arrange(&mut doc, 0, 0, order).unwrap();
+        let doc = reopen(&doc);
+        let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        assert!(s.find("/Im0 Do").unwrap() < s.find("re f").unwrap(), "{order:?}: {s}");
+        assert_eq!(images::page_images(&doc, 0).unwrap()[0].rect, [50.0, 50.0, 150.0, 150.0]);
+    }
+    for order in [images::ArrangeOrder::SendToBack, images::ArrangeOrder::SendBackward] {
+        let mut doc = image_page_with("q q 100 0 0 100 50 50 cm /Im0 Do 0 0 10 10 re f Q Q");
+        let before = page_content_bytes(&doc, 0);
+        assert!(arrange(&mut doc, 0, 0, order).is_err(), "{order:?}");
+        assert_eq!(page_content_bytes(&doc, 0), before);
+    }
 }
 
 /// Cropping a turned image keeps the requested upright box in user space, rather than expanding
@@ -13960,6 +14406,19 @@ fn remove_crop_refuses_an_unmarked_author_clip_without_changes() {
     let mut doc = image_page_with("q 50 50 8 8 re W n 10 0 0 10 50 50 cm /Im0 Do Q");
     let before = page_content_bytes(&doc, 0);
     assert!(remove_crop(&mut doc, 0, 0).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+/// A PdfCraft crop marker whose clip is written as `W q Q n` is still recorded on the image, but
+/// scope detection does not treat that path as a removable crop. The error says the crop cannot
+/// be removed, not that none exists.
+#[test]
+fn remove_crop_reports_a_recorded_crop_it_cannot_strip() {
+    let mut doc = image_page_with("q /PdfCraftImageCrop MP 100 100 50 50 re W q Q n 200 0 0 100 100 100 cm /Im0 Do Q");
+    assert!(images::page_images(&doc, 0).unwrap()[0].has_editor_crop());
+    let before = page_content_bytes(&doc, 0);
+    let err = remove_crop(&mut doc, 0, 0).unwrap_err().to_string();
+    assert!(err.contains("cannot be safely removed") && !err.contains("has no PdfCraft crop"), "{err}");
     assert_eq!(page_content_bytes(&doc, 0), before);
 }
 
