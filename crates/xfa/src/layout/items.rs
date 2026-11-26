@@ -139,6 +139,10 @@ pub struct Widget {
     pub h_align: HAlign,
     pub multiline: bool,
     pub max_chars: Option<usize>,
+    /// A comb field and its effective number of cells after applying max_chars and the default.
+    pub comb_cells: Option<usize>,
+    /// The bottom widget edge's colour and thickness, independent of whether it is visible.
+    pub comb_border: Option<crate::model::CombBorder>,
     pub read_only: bool,
     pub border: WidgetBorder,
     /// The field's value: saved (bound) values for choice lists, newline-separated when several.

@@ -125,6 +125,14 @@ impl Edge {
     }
 }
 
+/// The colour and thickness that an XFA comb field takes from its bottom widget edge. Edge
+/// presence is deliberately not part of this style: hidden edges still set the comb dividers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CombBorder {
+    pub color: Color,
+    pub thickness: f64,
+}
+
 /// One corner of a border: how far it rounds the box (`radius`), and whether the curve goes
 /// into the box (`inverted`) rather than around it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -632,6 +640,8 @@ pub struct Field {
     /// Choice lists: how the list opens.
     pub choice: ChoiceList,
     pub max_chars: Option<usize>,
+    /// The <comb> widget's numberOfCells; zero uses max_chars, or one when neither is set.
+    pub comb_cells: Option<usize>,
     pub tooltip: Option<String>,
     pub access: Access,
     /// The edit picture clause (`<ui>…<picture>`), e.g. `date{YYYY-MM-DD}`.
@@ -662,9 +672,21 @@ pub struct Field {
 }
 
 impl Field {
+    /// The effective number of comb cells after applying numberOfCells, maxChars and the default.
+    pub fn effective_comb_cells(&self) -> Option<usize> {
+        self.comb_cells.map(|cells| if cells == 0 { self.max_chars.unwrap_or(1) } else { cells })
+    }
+
+    /// The bottom edge's appearance for a comb field, even when the edge itself is hidden.
+    pub fn comb_border(&self) -> Option<CombBorder> {
+        self.comb_cells?;
+        let edge = self.ui_border.as_ref()?.edges[2];
+        Some(CombBorder { color: edge.color, thickness: edge.thickness.clamp(0.0, 12.0) })
+    }
+
     /// Whether the text can determine this field's height.
     pub(crate) fn grows_with_text(&self) -> bool {
-        self.ui == Ui::TextEdit && self.multiline && self.common.h.is_none()
+        self.ui == Ui::TextEdit && self.multiline && self.comb_cells.is_none() && self.common.h.is_none()
     }
 
     /// Whether a page break may split the field (XFA 3.3 pp. 291–292): text splits between its

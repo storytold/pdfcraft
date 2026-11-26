@@ -798,6 +798,10 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         Some(_) => Ui::Unknown,
     };
     let value_el = child(n, "value");
+    let comb_cells = ui_el
+        .filter(|_| matches!(kind, Ui::TextEdit | Ui::NumericEdit | Ui::DateTimeEdit))
+        .and_then(|e| child(e, "comb"))
+        .map(|c| c.attribute("numberOfCells").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(0));
     let max_chars = value_el
         .and_then(|v| child(v, "text"))
         .and_then(|t| t.attribute("maxChars"))
@@ -844,6 +848,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         item_values,
         choice,
         max_chars,
+        comb_cells,
         tooltip: child(n, "assist").and_then(|a| child(a, "toolTip")).map(text_of).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
         access: match n.attribute("access") {
             Some("readOnly") => Access::ReadOnly,

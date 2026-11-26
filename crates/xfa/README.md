@@ -25,6 +25,8 @@ that warning and keeps the existing layout and accepted widget values.
   margins, borders (edge order rules), captions with reserves, check-button items, pictures,
   rich text (`exData` XHTML: paragraphs, `br`, bold/italic/underline/size spans, embedded fields),
   text-field limits (`text/maxChars` and `exData/maxLength`, carried into AcroForm `/MaxLen`),
+  comb cells (`ui` `comb/numberOfCells`, falling back to `text/maxChars` or one, carried into
+  the AcroForm Comb flag and `/MaxLen` for dynamic forms and matching static XFA fields),
   required fields and exclusion groups (`<validate nullTest="error">`), inline JPEG, PNG and GIF images, lines, rectangles, occurrences, `breakBefore`/`breakAfter`, overflow
   leaders, `columnWidths` and `colSpan`.
 - **Prototypes** (`proto`, XFA 3.3 chapter 6, "Prototypes"): before parsing, every `use` and

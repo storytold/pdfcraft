@@ -166,6 +166,8 @@ impl Layouter<'_> {
         // A choice list's default is a saved value too.
         let template_default = f.value.plain().map(|v| f.saved_value(v.trim())).filter(|v| !v.is_empty());
         let plain_value = data_value.clone().or_else(|| template_default.clone());
+        let comb_cells = f.effective_comb_cells();
+        let max_chars = comb_cells.or(f.max_chars);
         let (kind, rect, border, value, tooltip) = match f.ui {
             Ui::CheckButton => {
                 let s = f.check_size.unwrap_or(10.0).min(ui.w.max(1.0)).min(ui.h.max(1.0));
@@ -259,15 +261,17 @@ impl Layouter<'_> {
             tooltip,
             face,
             h_align,
-            multiline: f.multiline,
-            max_chars: f.max_chars,
+            multiline: f.multiline && comb_cells.is_none(),
+            max_chars,
+            comb_cells,
+            comb_border: f.comb_border(),
             read_only,
             border,
             value,
             default: template_default,
             action,
             items,
-            no_scroll: f.no_scroll,
+            no_scroll: f.no_scroll && comb_cells.is_none(),
             // `push` sets where it shows.
             views: Views::ALL,
             required: f.required,

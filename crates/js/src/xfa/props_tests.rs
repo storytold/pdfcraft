@@ -144,6 +144,24 @@ fn unspecified_properties_read_as_the_spec_defaults() {
     }
 }
 
+/// Scripts can read numberOfCells from each comb-capable edit widget.
+#[test]
+fn comb_cell_counts_are_script_accessible_for_edit_widgets() {
+    for widget in ["textEdit", "numericEdit", "dateTimeEdit"] {
+        let field = node(
+            "comb",
+            XfaKind::Field,
+            &[("name", "comb")],
+            vec![p("ui", &[], vec![p(widget, &[], vec![p("comb", &[("numberOfCells", "7")], vec![])])])],
+        );
+        let root =
+            XfaNode { name: "form1".into(), som: "form1[0]".into(), kind: Some(XfaKind::Subform), children: vec![field], ..Default::default() };
+        let out = go_on(&root, &format!("this.ui.{widget}.comb.numberOfCells"), "comb");
+        assert_eq!(out.error, None, "{widget}: {out:?}");
+        assert_eq!(out.result.as_deref(), Some("7"), "{widget}: {out:?}");
+    }
+}
+
 /// What the template writes is what scripts read, and is specified.
 #[test]
 fn specified_properties_read_as_the_template_writes_them() {

@@ -8603,6 +8603,69 @@ fn an_xfa_form_without_fields_that_forbids_dynamic_rendering_keeps_its_pages() {
     assert!(doc.bytes.len() > plain.len() && doc.bytes.starts_with(&plain[..]), "the layout is a revision");
 }
 
+/// A dynamic XFA comb field writes the PDF Comb flag and its cell count as /MaxLen.
+#[test]
+fn dynamic_xfa_comb_fields_write_the_comb_flag_and_max_len() {
+    let xdp = pdfcraft_xfa::fixtures::template(0)
+        .replace("<textEdit><border>", "<textEdit multiLine=\"1\" hScrollPolicy=\"off\"><comb numberOfCells=\"0\"/><border>");
+    let original = Arc::new(pdfcraft_xfa::fixtures::shell(&xdp));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("dynamic-comb.pdf", None, original, None).expect("opens");
+    let doc = s.get(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(doc.bytes.clone()).unwrap();
+    let field = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.max_len == Some(30)).unwrap();
+    assert!(field.is_comb());
+    assert_eq!(field.max_len, Some(30));
+    assert!(!field.has(pdfcraft_forms::flags::MULTILINE));
+    assert!(!field.has(pdfcraft_forms::flags::DO_NOT_SCROLL));
+}
+
+/// XFA comb dividers use the bottom widget edge even when it is hidden, apart from the outer
+/// border, and run the full height at equal cell intervals.
+#[test]
+fn dynamic_xfa_comb_dividers_use_the_hidden_bottom_edge_for_full_height_lines() {
+    let xdp = pdfcraft_xfa::fixtures::template(0).replace(
+        "<textEdit><border><edge presence=\"hidden\"/><edge presence=\"hidden\"/><edge/><edge presence=\"hidden\"/></border></textEdit>",
+        "<textEdit><comb numberOfCells=\"4\"/><border><edge thickness=\"1pt\"><color value=\"200,0,0\"/></edge><edge presence=\"hidden\"/><edge presence=\"hidden\" thickness=\"2.25pt\"><color value=\"0,0,255\"/></edge><edge presence=\"hidden\"/></border></textEdit>",
+    );
+    let original = Arc::new(pdfcraft_xfa::fixtures::shell(&xdp));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("dynamic-comb-edges.pdf", None, original, None).expect("opens");
+    let doc = s.get(id).unwrap();
+    let mut cos = pdfcraft_cos::Document::open(doc.bytes.clone()).unwrap();
+    let field = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name.contains("familyName")).unwrap();
+    assert!(field.is_comb());
+    assert_eq!(field.max_len, Some(4));
+    assert!(
+        pdfcraft_forms::set_value(&mut cos, &field.name, &pdfcraft_forms::FieldValue::Text("ABCDE".into())).is_err(),
+        "the effective cell count limits the accepted value"
+    );
+    pdfcraft_forms::set_value(&mut cos, &field.name, &pdfcraft_forms::FieldValue::Text("ABCD".into())).expect("fits four cells");
+    let field = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name.contains("familyName")).unwrap();
+    let appearance = normal_appearance(&cos, field.widgets[0].obj.num);
+    let text_positions: Vec<f64> = appearance
+        .lines()
+        .filter(|line| line.contains(" Tm (") && line.ends_with(" Tj"))
+        .map(|line| line.split_whitespace().nth(4).unwrap().parse::<f64>().unwrap())
+        .collect();
+    assert_eq!(text_positions.len(), 4, "one shown character per cell: {appearance}");
+    let cell_width = (field.widgets[0].rect[2] - field.widgets[0].rect[0]) / 4.0;
+    for pair in text_positions.windows(2) {
+        assert!(((pair[1] - pair[0]) - cell_width).abs() < 0.01, "characters occupy equal-width cells: {text_positions:?}");
+    }
+    let divider_block = appearance.split("0 0 1 RG\n2.25 w\n").nth(1).expect("bottom edge colour and width").split("S\n").next().unwrap();
+    let lines: Vec<&str> = divider_block.lines().filter(|line| line.ends_with(" l")).collect();
+    assert_eq!(lines.len(), 3, "one divider between each pair of four cells: {appearance}");
+    let width = field.widgets[0].rect[2] - field.widgets[0].rect[0];
+    let height = field.widgets[0].rect[3] - field.widgets[0].rect[1];
+    for (i, line) in lines.iter().enumerate() {
+        let values: Vec<f64> = line.split_whitespace().filter_map(|v| v.parse().ok()).collect();
+        assert_eq!(values.len(), 4, "{line}");
+        assert!((values[0] - width * (i + 1) as f64 / 4.0).abs() < 0.001, "equal cell widths: {line}");
+        assert!(values[1].abs() < 0.001 && (values[3] - height).abs() < 0.001, "full-height line: {line}, height {height}");
+    }
+}
+
 /// A static XFA form's fields take their values from the datasets on opening, and edits are
 /// written back there.
 #[test]
@@ -8632,6 +8695,106 @@ fn static_xfa_forms_take_their_values_from_the_datasets_and_write_them_back() {
     assert_eq!(d2.form.iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap().value, vec!["Grace".to_string()]);
     assert!(!d2.dirty);
     assert!(!d2.info.warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "nothing was rewritten");
+}
+
+/// A static XFA comb updates an existing field's flags, limit and appearance without laying out pages.
+#[test]
+fn static_xfa_comb_fields_update_existing_widgets() {
+    let template = r#"<subform name="form1" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/></pageArea></pageSet>
+ <subform name="page1" layout="tb"><field name="name" presence="hidden" w="3in" h="0.3in"><ui><textEdit multiLine="1" hScrollPolicy="off"><comb numberOfCells="0"/><border><edge thickness="1pt"><color value="200,0,0"/></edge><edge presence="hidden"/><edge presence="hidden" thickness="2.25pt"><color value="0,0,255"/></edge><edge presence="hidden"/></border></textEdit></ui><value><text maxChars="5"/></value></field></subform>
+</subform>"#;
+    let bytes = pdfcraft_xfa::fixtures::static_shell_with_template(template, "<form1><page1><name>Ada</name></page1></form1>");
+    let mut source = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+    let field = pdfcraft_forms::fields(&source).into_iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap();
+    let invalid = pdfcraft_forms::flags::MULTILINE | pdfcraft_forms::flags::DO_NOT_SCROLL | pdfcraft_forms::flags::RICH_TEXT;
+    source
+        .update_dict(field.obj, |d| {
+            d.set(b"Ff".to_vec(), pdfcraft_cos::Object::Int(i64::from(invalid)));
+            d.set(b"MaxLen".to_vec(), pdfcraft_cos::Object::Int(99));
+        })
+        .unwrap();
+    let original = Arc::new(pdfcraft_cos::write_incremental(&source, &pdfcraft_cos::SaveOptions::default()).unwrap());
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("static-comb.pdf", None, original, None).expect("opens");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.xfa, Some(pdfcraft_render::Xfa::Static));
+    assert!(doc.xfa.is_none(), "static page layout is preserved");
+    let cos = pdfcraft_cos::Document::open(doc.bytes.clone()).unwrap();
+    let field = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap();
+    assert!(field.is_comb());
+    assert_eq!(field.max_len, Some(5), "zero cells fall back to maxChars");
+    assert_eq!(field.value, vec!["Ada"]);
+    assert!(!field.has(pdfcraft_forms::flags::MULTILINE));
+    assert!(!field.has(pdfcraft_forms::flags::DO_NOT_SCROLL));
+    assert!(!field.has(pdfcraft_forms::flags::RICH_TEXT));
+    let appearance = normal_appearance(&cos, field.widgets[0].obj.num);
+    assert!(appearance.contains("0 0 1 RG\n2.25 w\n"), "the hidden XFA bottom edge styles static dividers: {appearance}");
+    assert!(appearance.contains("45.6 0 m 45.6 20 l"), "static dividers run the widget's full height: {appearance}");
+}
+
+/// A stored text value may be longer than the template's comb count. Opening preserves it.
+/// Signed forms retain their comb settings while the existing dataset synchronization still runs.
+#[test]
+fn static_xfa_comb_open_preserves_existing_values_and_signed_bytes() {
+    use pdfcraft_cos::{Dict, Object, PdfString};
+    let template = r#"<subform name="form1"><subform name="page1"><field name="name"><ui><textEdit><comb numberOfCells="3"/></textEdit></ui></field></subform></subform>"#;
+    for (signed, data) in [(false, ""), (true, ""), (true, "<form1><page1><name>updated</name></page1></form1>")] {
+        let bytes = pdfcraft_xfa::fixtures::static_shell_with_template(template, data);
+        let mut source = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+        let fields = pdfcraft_forms::fields(&source);
+        let name = fields.iter().find(|f| f.kind == pdfcraft_forms::FieldKind::Text).unwrap().obj;
+        source.update_dict(name, |d| d.set(b"V".to_vec(), PdfString::literal(b"123456".to_vec()))).unwrap();
+        if signed {
+            let widget = fields.iter().find(|f| f.obj != name).unwrap().obj;
+            let mut signature = Dict::new();
+            signature.set(b"Type".to_vec(), Object::name("Sig"));
+            signature.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![1], hex: true }));
+            let value = source.add(Object::Dict(signature));
+            source
+                .update_dict(widget, |d| {
+                    d.set(b"FT".to_vec(), Object::name("Sig"));
+                    d.set(b"V".to_vec(), Object::Ref(value));
+                })
+                .unwrap();
+        }
+        assert_eq!(pdfcraft_sign::has_signatures(&source), signed);
+        let original = Arc::new(pdfcraft_cos::write_incremental(&source, &pdfcraft_cos::SaveOptions::default()).unwrap());
+        let mut session = Session::new();
+        let id = session.open("comb.pdf", None, original.clone(), None).unwrap();
+        let doc = session.get(id).unwrap();
+        let field = doc.form.iter().find(|f| f.kind == pdfcraft_forms::FieldKind::Text).unwrap();
+        assert_eq!(field.value, vec![if data.is_empty() { "123456" } else { "updated" }]);
+        assert_eq!(field.is_comb(), !signed);
+        if signed {
+            assert_eq!(field.max_len, None);
+            let cos = pdfcraft_cos::Document::open(doc.bytes.clone()).unwrap();
+            assert!(!cos.get(field.widgets[0].obj).as_dict().unwrap().contains(pdfcraft_xfa::COMB_BORDER_KEY));
+            if data.is_empty() {
+                assert!(doc.bytes == original, "without dataset changes the signed form keeps its original bytes");
+            }
+        } else {
+            assert_eq!(field.max_len, Some(3));
+        }
+    }
+}
+
+/// Applying XFA data is atomic: an overlong comb value must not leave other fields changed when
+/// the batch fails.
+#[test]
+fn rejected_xfa_dataset_values_do_not_leave_partial_field_mutations() {
+    let template = r#"<subform name="form1" layout="tb">
+ <subform name="page1" layout="tb"><field name="name" w="3in" h="0.3in"><ui><textEdit><comb numberOfCells="3"/></textEdit></ui><value><text maxChars="3"/></value></field>
+ <field name="agree" w="0.2in" h="0.2in"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items></field></subform>
+</subform>"#;
+    let bytes = pdfcraft_xfa::fixtures::static_shell_with_template(template, "<form1><page1><name>TooLong</name><agree>1</agree></page1></form1>");
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+    xfa_apply_static_comb_fields(&mut doc).expect("comb properties apply");
+    let before = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let result = xfa_values_from_datasets(&mut doc);
+    assert!(result.is_err(), "the value over the three-cell limit rejects the data batch: {result:?}");
+    let after = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    assert_eq!(after, before, "a rejected data batch leaves no partial field mutation");
 }
 
 /// A static XFA exclusion group laid out as a radio group with `/Opt [(1) (2)]` and on states
