@@ -164,40 +164,27 @@ impl Session {
         let pixels = crate::camera_clean::apply(&out.rgb, out.width, out.height, look, level)
             .ok_or_else(|| EditError::Invalid("the straightened page could not be cleaned up".into()))?;
         // Black and white is lossless (PNG): JPEG would smear grey around every letter.
-        let mut encoded = Vec::new();
-        let (name, written) = match &pixels {
+        let (name, format, img) = match pixels {
             crate::camera_clean::Pixels::Rgb(rgb) => (
                 "camera.jpg",
-                image::ImageEncoder::write_image(
-                    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, QUALITY),
-                    rgb,
-                    out.width,
-                    out.height,
-                    image::ExtendedColorType::Rgb8,
-                ),
+                craft_image_codecs::Format::Jpeg,
+                craft_image_codecs::Image::from_u8(out.width, out.height, craft_image_codecs::ChannelLayout::Rgb, rgb),
             ),
             crate::camera_clean::Pixels::Grey(grey) if look == crate::camera_clean::Look::BlackWhite => (
                 "camera.png",
-                image::ImageEncoder::write_image(
-                    image::codecs::png::PngEncoder::new(&mut encoded),
-                    grey,
-                    out.width,
-                    out.height,
-                    image::ExtendedColorType::L8,
-                ),
+                craft_image_codecs::Format::Png,
+                craft_image_codecs::Image::from_u8(out.width, out.height, craft_image_codecs::ChannelLayout::Gray, grey),
             ),
             crate::camera_clean::Pixels::Grey(grey) => (
                 "camera.jpg",
-                image::ImageEncoder::write_image(
-                    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, QUALITY),
-                    grey,
-                    out.width,
-                    out.height,
-                    image::ExtendedColorType::L8,
-                ),
+                craft_image_codecs::Format::Jpeg,
+                craft_image_codecs::Image::from_u8(out.width, out.height, craft_image_codecs::ChannelLayout::Gray, grey),
             ),
         };
-        written.map_err(|e| EditError::Invalid(format!("the straightened page could not be encoded: {e}")))?;
+        let img = img.map_err(|e| EditError::Invalid(format!("the straightened page could not be encoded: {e}")))?;
+        let opts = craft_image_codecs::EncodeOptions { jpeg_quality: QUALITY, ..Default::default() };
+        let encoded = craft_image_codecs::encode(&img, format, &opts)
+            .map_err(|e| EditError::Invalid(format!("the straightened page could not be encoded: {e}")))?;
         // One device pixel per `k` points keeps the page's physical size.
         let dpi = (k * 72.0).clamp(1.0, 1200.0);
         let bytes = self.create_from_images_with_resolution(&[(name.into(), encoded)], ImageResolution::Dpi(dpi))?;
