@@ -6837,6 +6837,27 @@ fn recognize_text_reads_the_euro_sign() {
     assert!(text.contains("€250"), "{text}");
 }
 
+/// The ocrs alphabet has no `±`, `Ø` or `°`: a drawing's tolerance block reads with them all the
+/// same, from the ink under the characters the model names instead (#8300).
+#[test]
+fn recognize_text_reads_tolerance_symbols() {
+    if !ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "FRACTIONAL ± 1/16\"\nANGULAR ± 1/2°\nCAPACITY: Ø1-1/4\"\n.000 ± .005").unwrap();
+    let id = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(id).unwrap()).png(0, 300.0).unwrap();
+    let scan = s.create_from_images(&[("scan.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    s.recognize_text(id, &[], ocr::OcrSettings::default()).unwrap();
+    let text = page_texts(&s, id)[0].replace(' ', "");
+    for want in ["±1/16", "±1/2°", "Ø1-1/4", "±.005"] {
+        assert!(text.contains(want), "{want} in {text:?}");
+    }
+}
+
 const SYNTHETIC_SCAN_DPI: f64 = 300.0;
 
 /// A scan of the OCR sentence at the source page's physical size, without a text layer.

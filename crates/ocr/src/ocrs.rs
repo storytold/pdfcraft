@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use rten_imageproc::{RectF, RotatedRect};
 
-use super::{Line, MAX_PIXELS, MAX_SIDE, OcrError, OcrImage, RecognizeOptions, Recognizer, Word};
+use super::{Line, MAX_PIXELS, MAX_SIDE, OcrError, OcrImage, RecognizeOptions, Recognizer, Word, symbols};
 
 /// The validated byte length of a `width` × `height` RGBA raster, with the same caps
 /// [`OcrImage::new`] applies: zero sides are empty, sides over [`MAX_SIDE`] or totals over
@@ -189,22 +189,14 @@ impl Ocr {
         let found = self.detect_words(&rgb, width, height, &input)?;
         let mut lines = self.engine.find_text_lines(&input, &found);
         let before: Vec<Option<RectF>> = lines.iter_mut().map(|l| pad_line(l)).collect();
+        let upright: Vec<bool> = lines.iter().map(|l| is_upright(l)).collect();
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
-        use ocrs::TextItem;
+        let gray = gray_reader(&rgb, width, height);
         Ok(read
             .into_iter()
-            .zip(before)
-            .filter_map(|(line, before)| line.map(|l| (l, before)))
-            .map(|(line, before)| Line {
-                words: line
-                    .words()
-                    .map(|w| {
-                        let r = w.bounding_rect();
-                        Word::new(w.to_string(), clip([r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32], before), "ocrs")
-                    })
-                    .filter(|w| !w.text.trim().is_empty())
-                    .collect(),
-            })
+            .zip(before.into_iter().zip(upright))
+            .filter_map(|(line, (before, upright))| line.map(|l| (l, before, upright)))
+            .map(|(line, before, upright)| read_line(&line, before, upright, &gray))
             .filter(|l| !l.words.is_empty())
             .collect())
     }
@@ -242,6 +234,60 @@ impl Ocr {
         }
         Ok(words)
     }
+}
+
+/// Whether a found line reads left to right on an upright page (its up axis within about 10°
+/// of vertical): the symbol check reads glyphs by rows and columns, so a line on its side is
+/// taken as read.
+fn is_upright(line: &[RotatedRect]) -> bool {
+    line.first().is_some_and(|r| {
+        let up = r.up_axis();
+        up.x.abs() <= 0.18 * up.length()
+    })
+}
+
+/// The grey value at an image pixel of `rgb` (1 or 3 bytes per pixel), 255 (paper) outside it.
+fn gray_reader(rgb: &[u8], width: u32, height: u32) -> impl Fn(i64, i64) -> u8 + '_ {
+    let area = (width as usize).saturating_mul(height as usize).max(1);
+    let channels = if rgb.len() == area * 3 { 3 } else { 1 };
+    move |x, y| {
+        if x < 0 || y < 0 || x >= i64::from(width) || y >= i64::from(height) {
+            return 255;
+        }
+        let o = (y as usize * width as usize + x as usize) * channels;
+        match rgb.get(o..o + channels) {
+            Some([g]) => *g,
+            Some([r, g, b]) => ((299 * u32::from(*r) + 587 * u32::from(*g) + 114 * u32::from(*b)) / 1000) as u8,
+            _ => 255,
+        }
+    }
+}
+
+/// The words of a recognised line, each clipped to the line found (`before`) and, on an upright
+/// line, checked for the tolerance symbols the model cannot name (`symbols`).
+fn read_line(line: &ocrs::TextLine, before: Option<RectF>, upright: bool, gray: &dyn Fn(i64, i64) -> u8) -> Line {
+    use ocrs::TextItem;
+    let words: Vec<ocrs::TextWord<'_>> = line.words().collect();
+    let read = |i: usize, w: &ocrs::TextWord<'_>| {
+        let r = w.bounding_rect();
+        let mut rect = clip([r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32], before);
+        let mut text = w.to_string();
+        if upright && let Some(line_box) = before {
+            let chars: Vec<symbols::ReadChar> =
+                w.chars().iter().map(|c| symbols::ReadChar { ch: c.char, left: c.rect.left() as f32, right: c.rect.right() as f32 }).collect();
+            let next = words.get(i + 1);
+            let next_left = next.map(|n| n.bounding_rect().left() as f32);
+            let next_digit = next.and_then(|n| n.chars().first()).is_some_and(|c| c.char.is_ascii_digit() || c.char == '.');
+            if let Some(fix) = symbols::repair_word(&chars, line_box.top(), line_box.bottom(), next_left, next_digit, gray) {
+                text = fix.text;
+                if let Some(right) = fix.right {
+                    rect[2] = rect[2].max(right);
+                }
+            }
+        }
+        Word::new(text, rect, "ocrs")
+    };
+    Line { words: words.iter().enumerate().map(|(i, w)| read(i, w)).filter(|w| !w.text.trim().is_empty()).collect() }
 }
 
 /// The detection model's input size, (width, height) pixels, if its input is an NCHW image of a
