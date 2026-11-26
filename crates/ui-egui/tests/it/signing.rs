@@ -319,7 +319,8 @@ fn an_id_that_expired_with_the_dialog_open_signs_nothing() {
     let id = DigitalId { key, certificate: certificate.clone(), chain: Vec::new(), friendly_name: None };
     let p12 = dir.join("old.p12");
     std::fs::write(&p12, pkcs12::write(&id, "secret12").unwrap()).unwrap();
-    assert!(h.state_mut().execute("sign.certify_invisible"));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().execute(&ctx_h, "sign.certify_invisible"));
     h.run_steps(2);
     let entry = h.state_mut().add_digital_id(&p12.to_string_lossy(), &certificate);
     {
@@ -838,7 +839,8 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
 #[test]
 fn typing_a_letter_moves_the_picker_selection() {
     let mut h = harness(dir());
-    h.state_mut().start_signing(0, None, None, None);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().start_signing(&ctx_h, 0, None, None, None);
     for name in ["Zeca", "Nora", "Ana", "Nádia"] {
         h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
             path: format!("/ids/{name}.p12"),
@@ -874,7 +876,8 @@ fn typing_a_letter_moves_the_picker_selection() {
 #[test]
 fn typing_a_letter_keeps_a_removal_waiting_for_its_answer() {
     let mut h = harness(dir());
-    h.state_mut().start_signing(0, None, None, None);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().start_signing(&ctx_h, 0, None, None, None);
     for name in ["Ana", "Nora"] {
         h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
             path: format!("/ids/{name}.p12"),
@@ -901,7 +904,8 @@ fn typing_a_letter_keeps_a_removal_waiting_for_its_answer() {
 #[test]
 fn typing_a_letter_scrolls_to_the_selected_id() {
     let mut h = harness(dir());
-    h.state_mut().start_signing(0, None, None, None);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().start_signing(&ctx_h, 0, None, None, None);
     for name in ('a'..='z').map(|c| format!("{c} signer")) {
         h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
             path: format!("/ids/{name}.p12"),
