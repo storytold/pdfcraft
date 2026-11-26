@@ -1327,6 +1327,85 @@ fn limited_search_stops_after_the_requested_matches() {
     assert_eq!(text.find_opts_limited("o", false, false, 10), vec![0..1, 1..2, 2..3, 3..4]);
 }
 
+fn tall(t: &str, x0: f32, y0: f32, x1: f32, h: f32) -> TextGlyph {
+    let rect = [x0, y0, x1, y0 + h];
+    TextGlyph { text: t.into(), rect, quad: [[x0, y0], [x1, y0], [x1, rect[3]], [x0, rect[3]]], direction: [1.0, 0.0] }
+}
+
+/// #3172: blanks drawn over big digits must not show inside the number, and the word gap next to big digits follows
+/// the glyphs it lies between.
+#[test]
+fn blanks_under_a_number_and_a_word_gap_next_to_big_digits() {
+    // Big dark digits, then a smaller sentence drawn over them with blanks where the digits sit.
+    let mut v = Vec::new();
+    for (t, x) in [("5", 0.0), ("0", 6.0), ("1", 100.0), ("4", 106.0)] {
+        v.push(tall(t, x, 3.0, x + 6.0, 34.0));
+    }
+    for (t, x) in [("F", 16.5), ("R", 22.5), (" ", 100.0), (" ", 106.0), ("C", 130.0), ("D", 136.0)] {
+        v.push(tall(t, x, 6.0, x + 6.0, 28.0));
+    }
+    assert_eq!(layout(v).plain_text(), "50 FR 14 CD");
+}
+
+/// #3172: a word break on the covered blank that opens an overprinted run moves to the run's next glyph.
+#[test]
+fn a_covered_leading_blank_keeps_the_word_break_of_its_run() {
+    let v = vec![
+        g("1", 0.0, 10.0, 6.0),
+        // " X" drawn over the "1": the blank is covered, and "X" sits right behind it.
+        g(" ", 0.0, 10.0, 6.0),
+        g("X", 6.0, 10.0, 12.0),
+    ];
+    assert_eq!(layout(v).plain_text(), "1 X");
+}
+
+/// #3172: a superscript keeps the line's word-gap threshold, not its own smaller height's, so a small gap before it is
+/// no word break.
+#[test]
+fn a_superscript_close_to_its_host_takes_no_space() {
+    let v = vec![g("a", 0.0, 10.0, 6.0), g("x", 6.0, 10.0, 12.0), tall("2", 13.2, 7.0, 16.8, 6.0)];
+    assert_eq!(layout(v).plain_text(), "ax2");
+}
+
+/// #3172: a combining mark is measured by its cluster's base. Its own small box would shrink the word-gap threshold
+/// next to it, so a close letter after "á" read as a new word (noted in review).
+#[test]
+fn a_letter_close_after_a_combining_mark_takes_no_space() {
+    let v = vec![
+        g("x", 0.0, 10.0, 6.0),
+        g("a", 6.0, 10.0, 12.0),
+        tall("\u{301}", 10.0, 19.0, 12.0, 1.0),
+        g("b", 13.0, 10.0, 19.0),
+        g("y", 19.0, 10.0, 25.0),
+    ];
+    assert_eq!(layout(v).plain_text(), "xa\u{301}by");
+}
+
+/// #3172: a superscript too small for the sub- and superscript test (under half its host's height) still keeps the
+/// line's word-gap threshold next to its host: its height says no more about that gap (noted in review).
+#[test]
+fn a_tiny_superscript_close_to_its_host_takes_no_space() {
+    let v = vec![g("a", 0.0, 10.0, 6.0), g("b", 6.0, 10.0, 12.0), tall("2", 13.0, 9.5, 15.4, 4.0)];
+    assert_eq!(layout(v).plain_text(), "ab2");
+}
+
+/// #3172: only another run's ink drops a blank. A space its own run's letter is kerned over is still that run's word
+/// break, even on a line where another run overprints elsewhere.
+#[test]
+fn a_blank_its_own_letters_overlap_stays_a_word_break() {
+    let v = vec![
+        // "A B" with the space pulled back under the "A", and the "B" kerned close: the space is the only word break.
+        g("A", 0.0, 10.0, 6.0),
+        g(" ", 2.0, 10.0, 8.0),
+        g("B", 6.5, 10.0, 12.5),
+        // A word far right, then a run drawn back over the "B", so the line's runs collide.
+        g("Q", 200.0, 10.0, 206.0),
+        g("1", 7.5, 10.0, 13.5),
+    ];
+    let text = layout(v).plain_text();
+    assert!(text.starts_with("A B"), "{text:?}");
+}
+
 fn word(v: &mut Vec<TextGlyph>, s: &str, x: f32, y: f32, advance: f32) {
     for (i, c) in s.chars().enumerate() {
         let x0 = x + i as f32 * advance;
