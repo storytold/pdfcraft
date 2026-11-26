@@ -366,7 +366,7 @@ fn an_issuer_with_an_unprocessed_critical_extension_does_not_vouch() {
 // ── delegated OCSP responders (RFC 6960 §4.2.2.2) ──────────────────────────────────────────────
 
 use pdfcraft_sign::keys::DigestAlg;
-use pdfcraft_sign::revocation::{CertificateList, OcspResponse, RevocationStatus};
+use pdfcraft_sign::revocation::{CertificateList, OcspResponse, ResponderCrls, RevocationStatus};
 
 fn day(month: u32) -> Time {
     Time { year: 2026, month, day: 1, hour: 12, minute: 0, second: 0 }
@@ -417,7 +417,10 @@ fn a_delegated_responder_must_be_valid_and_unrevoked() {
         issue(cn, Some(&r), valid, &exts)
     };
     let revoked = RevocationStatus::Revoked { at: day(5) };
-    let check = |resp: &Party, crls: &[CertificateList]| delegated_ocsp(&signer.cert, &r, resp).check_with_crls(&signer.cert, &r.cert, at, crls);
+    let check_some = |resp: &Party, crls: &[CertificateList], complete: bool| {
+        delegated_ocsp(&signer.cert, &r, resp).check_with_crls(&signer.cert, &r.cert, at, &ResponderCrls::new(crls, &r.cert, at, complete))
+    };
+    let check = |resp: &Party, crls: &[CertificateList]| check_some(resp, crls, true);
 
     // Controls: a current delegate answers; one without the OCSP-signing purpose does not.
     // (`issue` takes the serial from the name's length: the good and the revoked one differ.)
@@ -437,4 +440,10 @@ fn a_delegated_responder_must_be_valid_and_unrevoked() {
     assert_eq!(check(&unchecked, &[crl_revoking(&r, &unchecked.cert.serial)]), revoked);
     // A CRL that revokes someone else leaves the responder alone.
     assert_eq!(check(&good, &[crl_revoking(&r, &revoked_responder.cert.serial)]), revoked);
+
+    // When a cap left CRLs unread, a delegate cannot be shown unrevoked; the issuer answering
+    // for itself, or a delegate that says not to check it, still counts.
+    assert_eq!(check_some(&good, &[crl_revoking(&r, &revoked_responder.cert.serial)], false), RevocationStatus::Unknown);
+    assert_eq!(check_some(&unchecked, &[], false), revoked);
+    assert_eq!(check_some(&r, &[], false), revoked);
 }

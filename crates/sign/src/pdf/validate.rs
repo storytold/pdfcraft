@@ -498,7 +498,7 @@ enum DssRevocation {
 /// certificate is revoked (which invalidates the signature), or whether a cap kept the check from
 /// reading all of the evidence.
 fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Option<Time>, info: &mut SignatureInfo) -> DssRevocation {
-    use crate::revocation::{CertificateList, OcspResponse, RevocationStatus};
+    use crate::revocation::{CertificateList, OcspResponse, ResponderCrls, RevocationStatus};
     let (Some(signer), Some(at)) = (signer, *at) else { return DssRevocation::NotRevoked };
     let Some(root) = doc.root() else { return DssRevocation::NotRevoked };
     let Some(dss) = doc.get(root).as_dict().and_then(|c| c.get(b"DSS").cloned()).map(|d| doc.resolve(&d)).and_then(|d| d.as_dict().cloned()) else {
@@ -528,11 +528,13 @@ fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Optio
     }
     let mut cut = crls.cut;
     if revoked.is_none() {
+        // Authenticated once for every response; a cap on the CRLs leaves a delegate unproven.
+        let responder_crls = ResponderCrls::new(&lists, issuer, at, !crls.cut);
         let mut ocsps = DssEvidence::new(doc, &dss, b"OCSPs");
         for r in ocsps.by_ref() {
             let Ok(resp) = OcspResponse::parse(&r) else { continue };
             sources.push("OCSP");
-            match resp.check_with_crls(signer, issuer, at, &lists) {
+            match resp.check_with_crls(signer, issuer, at, &responder_crls) {
                 RevocationStatus::Revoked { at } => {
                     revoked = Some(at);
                     break;

@@ -141,6 +141,40 @@ impl CertificateList {
     }
 }
 
+/// The CRLs that can revoke a delegated OCSP responder certified by one issuer, at one time.
+/// Each list is authenticated once here, however many OCSP responses are then checked.
+pub struct ResponderCrls<'a> {
+    lists: Vec<&'a CertificateList>,
+    complete: bool,
+}
+
+impl<'a> ResponderCrls<'a> {
+    /// Keep the lists in `crls` that `issuer` issued and signed and whose window covers `at`.
+    /// `complete` says whether `crls` is all of the evidence: when a cap left some unread, a
+    /// list that would revoke the responder may be among them.
+    pub fn new(crls: &'a [CertificateList], issuer: &Certificate, at: Time, complete: bool) -> Self {
+        let lists = crls
+            .iter()
+            .filter(|l| {
+                l.issuer_raw == issuer.subject.raw
+                    && valid_in_window(l.this_update, l.next_update, at)
+                    && verify_signature(&l.tbs, &l.sig_alg, &l.signature, &issuer.public_key)
+            })
+            .collect();
+        ResponderCrls { lists, complete }
+    }
+
+    /// No CRLs, and none left unread.
+    pub fn none() -> Self {
+        ResponderCrls { lists: Vec::new(), complete: true }
+    }
+
+    /// Whether one of the lists names `cert`, which the same issuer certified.
+    fn revokes(&self, cert: &Certificate) -> bool {
+        self.lists.iter().any(|l| l.revoked.iter().any(|(serial, _)| strip(serial) == strip(&cert.serial)))
+    }
+}
+
 // ── OCSP BasicOCSPResponse ──────────────────────────────────────────────────────────────────
 
 /// One `CertID` (RFC 6960 §4.1.1): hashes of the issuer's name and key, and the serial.
@@ -325,13 +359,14 @@ impl OcspResponse {
     /// issuer and valid at `at`; the response signature and CertID must match, and `at` must
     /// fall inside the response window.
     pub fn check(&self, cert: &Certificate, issuer: &Certificate, at: Time) -> RevocationStatus {
-        self.check_with_crls(cert, issuer, at, &[])
+        self.check_with_crls(cert, issuer, at, &ResponderCrls::none())
     }
 
     /// [`check`](Self::check), where a delegated responder must also be valid at `at` and not
     /// revoked by any of `crls` (the CRLs that came with the response), unless it carries
-    /// id-pkix-ocsp-nocheck (RFC 6960 §4.2.2.2.1).
-    pub fn check_with_crls(&self, cert: &Certificate, issuer: &Certificate, at: Time, crls: &[CertificateList]) -> RevocationStatus {
+    /// id-pkix-ocsp-nocheck (RFC 6960 §4.2.2.2.1). When `crls` is not complete, such a
+    /// responder cannot be shown unrevoked, so its answer counts for nothing.
+    pub fn check_with_crls(&self, cert: &Certificate, issuer: &Certificate, at: Time, crls: &ResponderCrls) -> RevocationStatus {
         // Who signed the response? The issuer identified by responderID, or a delegated,
         // embedded responder identified the same way. Which of the two it is comes from that
         // choice, never from the embedded certificate's names, which anyone can copy.
@@ -365,9 +400,7 @@ impl OcspResponse {
             if !responder.valid_at(at) {
                 return RevocationStatus::Unknown;
             }
-            if !responder.has_extension(OCSP_NOCHECK)
-                && crls.iter().any(|l| matches!(l.check(responder, issuer, at), RevocationStatus::Revoked { .. }))
-            {
+            if !responder.has_extension(OCSP_NOCHECK) && (!crls.complete || crls.revokes(responder)) {
                 return RevocationStatus::Unknown;
             }
         }
