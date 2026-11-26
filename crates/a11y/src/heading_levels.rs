@@ -21,8 +21,10 @@ pub struct TextBlock {
 /// The heading level of each block, in document order: `Some(1)` to `Some(6)`, or `None` for a
 /// block that is not a heading. A heading's level is at most one deeper than the heading before.
 pub fn heading_levels(blocks: &[TextBlock]) -> Vec<Option<u8>> {
-    let evidence: Vec<Evidence> =
-        blocks.iter().map(|b| Evidence { size: b.size, bold: b.bold, lines: b.lines, chars: b.chars, letters: b.letters }).collect();
+    let evidence: Vec<Evidence> = blocks
+        .iter()
+        .map(|b| Evidence { size: b.size, bold: b.bold, lines: b.lines, chars: b.chars, letters: b.letters, ..Evidence::default() })
+        .collect();
     roles(&evidence).into_iter().map(|role| role.strip_prefix('H').and_then(|n| n.parse().ok())).collect()
 }
 
