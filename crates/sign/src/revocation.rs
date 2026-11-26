@@ -90,28 +90,35 @@ fn crl_entry_may_be_lifted(tbs: &[u8], serial: &[u8]) -> bool {
     not_permanent(reason())
 }
 
-/// Whether the revoked status of SingleResponse number `index` in the signed `ResponseData`
-/// may not be a permanent revocation (see [`not_permanent`]).
-fn ocsp_revocation_may_be_lifted(tbs: &[u8], index: usize) -> bool {
-    let reason = || -> Result<Option<u64>, SignError> {
-        let fields = Tlv::parse_all(tbs)?.children()?;
-        // [0] version, responderID and producedAt come first; the responses are the SEQUENCE
-        // after the time.
-        let Some(time) = fields.iter().position(|t| t.tag == tag::UTC_TIME || t.tag == tag::GENERALIZED_TIME) else { return Err(bad_reason()) };
-        let Some(list) = fields.get(time + 1) else { return Err(bad_reason()) };
-        let Some(single) = list.children()?.into_iter().nth(index) else { return Err(bad_reason()) };
+/// For each of the `count` SingleResponses in the signed `ResponseData`, in order, whether its
+/// revoked status may not be a permanent revocation (see [`not_permanent`]). Each flag is read
+/// at parse time and kept with its response, so it stays with the entry it was read from.
+fn ocsp_revocations_may_be_lifted(tbs: &[u8], count: usize) -> Vec<bool> {
+    // RevokedInfo ::= SEQUENCE { revocationTime, revocationReason [0] EXPLICIT CRLReason OPTIONAL },
+    // carried under the IMPLICIT [1] tag. Anything after the time other than that one field
+    // cannot be read.
+    let reason = |single: &Tlv| -> Result<Option<u64>, SignError> {
         let s = single.children()?;
         let Some(info) = s.get(1).filter(|t| t.tag == tag::ctx(1)) else { return Ok(None) };
-        // RevokedInfo ::= SEQUENCE { revocationTime, revocationReason [0] EXPLICIT CRLReason OPTIONAL },
-        // carried under the IMPLICIT [1] tag. Anything after the time other than that one
-        // field cannot be read.
         match info.children()?.as_slice() {
             [_] => Ok(None),
             [_, r] if r.tag == tag::ctx(0) => Ok(Some(r.inner()?.enumerated()?)),
             _ => Err(bad_reason()),
         }
     };
-    not_permanent(reason())
+    let singles = || -> Result<Vec<bool>, SignError> {
+        let fields = Tlv::parse_all(tbs)?.children()?;
+        // [0] version, responderID and producedAt come first; the responses are the SEQUENCE
+        // after the time.
+        let Some(time) = fields.iter().position(|t| t.tag == tag::UTC_TIME || t.tag == tag::GENERALIZED_TIME) else { return Err(bad_reason()) };
+        let Some(list) = fields.get(time + 1) else { return Err(bad_reason()) };
+        let singles = list.children()?;
+        if singles.len() != count {
+            return Err(bad_reason());
+        }
+        Ok(singles.iter().map(|s| not_permanent(reason(s))).collect())
+    };
+    singles().unwrap_or_else(|_| vec![true; count])
 }
 
 /// Verify `signature` over the raw `signed` bytes with `key`, where the signature's algorithm
@@ -256,6 +263,9 @@ pub struct SingleResponse {
     status: CertStatus,
     pub this_update: Time,
     pub next_update: Option<Time>,
+    /// The signed reason, read when the response was parsed, says a revoked status may be a
+    /// hold or a removal rather than a permanent revocation.
+    may_be_lifted: bool,
 }
 
 enum ResponderId {
@@ -282,10 +292,12 @@ impl OcspResponse {
             shared::ResponderId::ByName(v) => ResponderId::ByName(v),
             shared::ResponderId::ByKey(v) => ResponderId::ByKey(v),
         };
+        let lifted = ocsp_revocations_may_be_lifted(&parsed.tbs, parsed.responses.len());
         let responses = parsed
             .responses
             .into_iter()
-            .map(|response| {
+            .zip(lifted)
+            .map(|(response, may_be_lifted)| {
                 let (id, status, this_update, next_update) = response.into_parts();
                 let hash_alg = match id.hash_alg {
                     craft_pkcs7::DigestAlg::Sha1 => DigestAlg::Sha1,
@@ -307,7 +319,7 @@ impl OcspResponse {
                     shared::CertStatus::Revoked(at) => CertStatus::Revoked(at),
                     shared::CertStatus::Unknown => CertStatus::Unknown,
                 };
-                SingleResponse { cert_id, status, this_update, next_update }
+                SingleResponse { cert_id, status, this_update, next_update, may_be_lifted }
             })
             .collect();
         Ok(Self {
@@ -393,7 +405,11 @@ impl OcspResponse {
             };
             let this_update = s.get(2).ok_or_else(|| bad("SingleResponse"))?.time()?;
             let next_update = s.get(3).filter(|t| t.tag == tag::ctx(0)).map(|t| t.inner().and_then(|g| g.time())).transpose()?;
-            responses.push(SingleResponse { cert_id, status, this_update, next_update });
+            responses.push(SingleResponse { cert_id, status, this_update, next_update, may_be_lifted: false });
+        }
+        let lifted = ocsp_revocations_may_be_lifted(tbs.raw, responses.len());
+        for (r, lifted) in responses.iter_mut().zip(lifted) {
+            r.may_be_lifted = lifted;
         }
         Ok(OcspResponse { tbs: tbs.raw.to_vec(), sig_alg: alg.raw.to_vec(), signature, responder_id, responses, responder_cert })
     }
@@ -437,18 +453,18 @@ impl OcspResponse {
             return RevocationStatus::Unknown;
         }
         // Find the SingleResponse for this certificate: the CertID hashes must recompute.
-        let index = self.responses.iter().position(|r| {
+        let single = self.responses.iter().find(|r| {
             let name_hash = r.cert_id.hash_alg.digest(&[&cert.issuer.raw]);
             let key_hash = r.cert_id.hash_alg.digest(&[&issuer.public_key.key_bits()]);
             name_hash == r.cert_id.issuer_name_hash && key_hash == r.cert_id.issuer_key_hash && strip(&r.cert_id.serial) == strip(&cert.serial)
         });
-        let Some((index, single)) = index.and_then(|i| Some((i, self.responses.get(i)?))) else { return RevocationStatus::Unknown };
+        let Some(single) = single else { return RevocationStatus::Unknown };
         // A response produced after `at`, as long-term validation evidence is, still proves a
         // revocation it dates at or before `at`, unless it is a hold or a removal, neither of
         // which is permanent.
         if let CertStatus::Revoked(t) = single.status
             && t <= at
-            && !ocsp_revocation_may_be_lifted(&self.tbs, index)
+            && !single.may_be_lifted
         {
             return RevocationStatus::Revoked { at: t };
         }

@@ -480,6 +480,23 @@ fn later_evidence_of_a_hold_proves_nothing() {
     assert_eq!(check_ocsp(&mistagged), RevocationStatus::Unknown);
     // With no reason at all, the revocation stands.
     assert_eq!(check_ocsp(&der::tlv(tag::ctx(1), &before.encode())), RevocationStatus::Revoked { at: before });
+    // The reason stays with its own entry: another certificate's permanent revocation listed
+    // first, then dropped from the public list, must not stand in for this one's hold.
+    let single = |serial: &[u8], reason| {
+        let cert_id = der::seq(&[
+            &DigestAlg::Sha1.algorithm(),
+            &der::octets(&DigestAlg::Sha1.digest(&[&issuer.issuer.raw])),
+            &der::octets(&DigestAlg::Sha1.digest(&[&issuer.public_key.key_bits()])),
+            &der::uint(serial),
+        ]);
+        der::seq(&[&cert_id, &ocsp_revoked_with_reason(before, reason), &this.encode(), &der::tlv(tag::ctx(0), &next.encode())])
+    };
+    let other = single(&[0x7f, 0x01], key_compromise);
+    let both = [other, single(&issuer.serial, hold)].concat();
+    let responder_id = der::tlv(tag::ctx(1), &issuer.subject.raw);
+    let mut response = OcspResponse::parse(&signed_ocsp(&id.key, &responder_id, None, &both, this)).unwrap();
+    response.responses.remove(0);
+    assert_eq!(response.check(issuer, issuer, at), RevocationStatus::Unknown);
 }
 
 /// Issue #159: `.p12` files that aren't clean DER still open — trailing
