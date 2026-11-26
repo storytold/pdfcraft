@@ -169,14 +169,16 @@ pub(crate) fn drawn_side(listed: usize, index: usize) -> Option<usize> {
 
 /// The `<corner>` children of a border or rectangle, top-left, top-right, bottom-right then
 /// bottom-left, the ones not listed drawn as [`drawn_side`] picks, as edges are. Without any,
-/// the corners are square.
+/// the corners are square. A corner is a right angle unless its `join` is `round`, and has its
+/// own line (presence, thickness, colour and stroke, read as an edge's).
 fn parse_corners(n: XmlNode) -> [Corner; 4] {
     let given: Vec<Corner> = children(n, "corner")
         .take(4)
         .map(|c| Corner {
-            presence: Presence::parse(c.attribute("presence")),
             radius: attr_measure(c, "radius").filter(|r| r.is_finite()).unwrap_or(0.0).max(0.0),
+            round: c.attribute("join") == Some("round"),
             inverted: c.attribute("inverted") == Some("1"),
+            line: parse_edge(c),
         })
         .collect();
     std::array::from_fn(|i| drawn_side(given.len(), i).and_then(|k| given.get(k).copied()).unwrap_or_default())
