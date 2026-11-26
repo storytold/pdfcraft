@@ -699,7 +699,7 @@ fn edits_update_view_data_and_mark_dirty() {
 
 /// A font of an Adobe CJK collection that a PDF does not embed is drawn with an installed face on
 /// the viewer's pool only. An export of the same page, which can be saved, has nothing drawn with
-/// an installed font (AGENTS.md §1.2, §1.4). Skipped where no such face is installed.
+/// an installed font (licences.md; docs/development.md "Fonts and attribution"). Skipped where no such face is installed.
 #[test]
 fn installed_cjk_fonts_draw_in_the_viewer_but_not_in_an_export() {
     let content = "BT /F1 40 Tf 5 15 Td <7E419AD45B57> Tj ET";
@@ -986,7 +986,7 @@ fn undo_to_the_opened_file_is_not_dirty() {
     let opened = Arc::new(fixture(2));
     let id = session.open("existing.pdf", None, opened.clone(), None).unwrap();
     assert!(!session.get(id).unwrap().dirty);
-    assert!(session.autosave_snapshots().is_empty());
+    assert!(session.recovery_snapshot(id).is_none());
 
     session.apply(id, Edit::DeletePages { pages: vec![0] }).unwrap();
     assert_eq!(session.get(id).unwrap().info.pages.len(), 1);
@@ -995,7 +995,7 @@ fn undo_to_the_opened_file_is_not_dirty() {
     assert!(!document.dirty, "the opened bytes are the saved version");
     assert_eq!(document.bytes, opened);
     assert_eq!(document.info.pages.len(), 2);
-    assert!(session.autosave_snapshots().is_empty(), "nothing unsaved to recover");
+    assert!(session.recovery_snapshot(id).is_none(), "nothing unsaved to recover");
 
     session.redo(id).unwrap();
     assert!(session.get(id).unwrap().dirty);
@@ -1199,6 +1199,98 @@ fn reset_layers_returns_to_the_files_visibility() {
     // What the eye sees is not an edit: Undo still undoes the insert.
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Insert pages from b.pdf"));
     assert!(!s.reset_layers(DocId(999)));
+}
+
+/// #7411: a full Save As renumbers the objects (the layer groups move from 9 and 10 to the lowest
+/// free numbers); the open document keeps the layer the user hid hidden, and the other shown.
+#[test]
+fn a_full_save_as_keeps_the_layer_choices_of_the_open_document() {
+    let content = b"/OC /R BDC 1 0 0 rg 10 10 40 80 re f EMC /OC /B BDC 0 0 1 rg 110 10 40 80 re f EMC";
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [9 0 R 10 0 R] /D << /BaseState /ON /Order [9 0 R 10 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Properties << /R 9 0 R /B 10 0 R >> >> >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+    ];
+    // Objects 5 to 8 are not used, so a rewrite closes the gap.
+    objs.extend((5..=8).map(|_| b"null".to_vec()));
+    objs.push(b"<< /Type /OCG /Name (Red rectangle) >>".to_vec());
+    objs.push(b"<< /Type /OCG /Name (Blue rectangle) >>".to_vec());
+    let mut s = Session::new();
+    let id = s.open("layers.pdf", None, Arc::new(pdf_of_objects(&objs)), None).unwrap();
+    let colours = |s: &Session| {
+        let page = render_page(s, id);
+        let px = page.rgba.as_chunks::<4>().0;
+        let red = px.iter().filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60).count();
+        let blue = px.iter().filter(|p| p[2] > 200 && p[0] < 60 && p[1] < 60).count();
+        (red, blue)
+    };
+    let hidden = |s: &Session| s.get(id).unwrap().info.layers.iter().map(|l| (l.name.clone(), l.visible)).collect::<Vec<_>>();
+    let (red, blue) = colours(&s);
+    assert!(red > 100 && blue > 100, "both layers show as the file opens: {red} red, {blue} blue");
+    assert!(s.set_layer_visible(id, 0, false));
+    assert_eq!(colours(&s).0, 0, "the red rectangle is hidden");
+    let before = s.get(id).unwrap().info.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+
+    let saved = s.save_full_bytes(id).unwrap();
+    s.mark_saved(id, saved, Some("/tmp/out/layers.pdf".into())).unwrap();
+
+    let after = s.get(id).unwrap().info.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+    assert_ne!(before, after, "the rewrite renumbered the layer groups");
+    assert_eq!(hidden(&s), [("Red rectangle".to_string(), false), ("Blue rectangle".to_string(), true)]);
+    let (red, blue) = colours(&s);
+    assert_eq!(red, 0, "the page is still drawn without the red rectangle");
+    assert!(blue > 100, "and with the blue one: {blue}");
+}
+
+/// #7411: undo history survives the full Save As, whose renumbering the restored graph does not
+/// share. Undo and redo carry the user's layer choices over by name, so the layer hidden before the
+/// save stays hidden in the layer list and in the pixels, and the renderer's overrides name the
+/// numbers the restored graph has.
+#[test]
+fn undo_and_redo_after_a_full_save_as_keep_the_hidden_layer_hidden() {
+    let content = b"/OC /R BDC 1 0 0 rg 10 10 40 80 re f EMC /OC /B BDC 0 0 1 rg 110 10 40 80 re f EMC";
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [9 0 R 10 0 R] /D << /BaseState /ON /Order [9 0 R 10 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Properties << /R 9 0 R /B 10 0 R >> >> >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+    ];
+    objs.extend((5..=8).map(|_| b"null".to_vec()));
+    objs.push(b"<< /Type /OCG /Name (Red rectangle) >>".to_vec());
+    objs.push(b"<< /Type /OCG /Name (Blue rectangle) >>".to_vec());
+    let mut s = Session::new();
+    let id = s.open("layers.pdf", None, Arc::new(pdf_of_objects(&objs)), None).unwrap();
+    let colours = |s: &Session| {
+        let page = render_page(s, id);
+        let px = page.rgba.as_chunks::<4>().0;
+        let red = px.iter().filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60).count();
+        let blue = px.iter().filter(|p| p[2] > 200 && p[0] < 60 && p[1] < 60).count();
+        (red, blue)
+    };
+    let layers = |s: &Session| s.get(id).unwrap().info.layers.iter().map(|l| (l.name.clone(), l.visible)).collect::<Vec<_>>();
+    let ids = |s: &Session| s.get(id).unwrap().info.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 180 }).unwrap();
+    assert!(s.set_layer_visible(id, 0, false));
+    let saved = s.save_full_bytes(id).unwrap();
+    s.mark_saved(id, saved, Some("/tmp/out/layers.pdf".into())).unwrap();
+    let saved_ids = ids(&s);
+    let expect_red_hidden = |s: &Session, step: &str| {
+        assert_eq!(layers(s), [("Red rectangle".to_string(), false), ("Blue rectangle".to_string(), true)], "{step}: the layer list");
+        let (red, blue) = colours(s);
+        assert_eq!((red, blue > 100), (0, true), "{step}: the pixels show the blue rectangle only");
+    };
+    expect_red_hidden(&s, "after the save");
+
+    s.undo(id).unwrap();
+    assert_ne!(ids(&s), saved_ids, "undo brings back the numbers from before the save");
+    expect_red_hidden(&s, "after undo");
+    s.redo(id).unwrap();
+    assert_eq!(ids(&s), saved_ids, "redo brings back the numbers the save wrote");
+    expect_red_hidden(&s, "after redo");
+    // Choices made after the trip still apply to the numbers now in use.
+    assert!(s.set_layer_visible(id, 0, true));
+    assert!(colours(&s).0 > 100, "the red rectangle shows again when asked for");
 }
 
 #[test]
@@ -2195,47 +2287,49 @@ fn render_password_for_recovers_the_user_password_of_older_revisions() {
 #[test]
 fn autosave_snapshots_only_changed_documents() {
     let (mut s, id) = session_with(2);
-    assert!(!s.has_pending_autosave());
-    assert!(s.autosave_snapshots().is_empty(), "clean documents are not snapshotted");
+    let entry = |s: &Session| s.autosave_docs().find(|(d, ..)| *d == id).unwrap();
+    assert!(!entry(&s).2);
+    assert!(s.recovery_snapshot(id).is_none(), "clean documents are not snapshotted");
     s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
-    assert!(s.has_pending_autosave());
-    assert!(s.has_pending_autosave(), "checking a deadline must not consume a snapshot");
-    let snaps = s.autosave_snapshots();
-    assert!(!s.has_pending_autosave());
-    assert_eq!(snaps.len(), 1);
-    assert_eq!(snaps[0].bytes, s.get(id).unwrap().bytes, "the working file");
-    assert!(s.autosave_snapshots().is_empty(), "nothing new since the last snapshot");
+    let (_, first, dirty) = entry(&s);
+    assert!(dirty);
+    let snap = s.recovery_snapshot(id).unwrap();
+    assert_eq!(snap.bytes, s.get(id).unwrap().bytes, "the working file");
+    assert_eq!(entry(&s).1, first, "taking a snapshot marks nothing");
     s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
-    assert_eq!(s.autosave_snapshots().len(), 1);
+    assert_ne!(entry(&s).1, first, "an edit is a new generation");
+    let second = entry(&s).1;
     s.undo(id).unwrap();
     assert!(s.get(id).unwrap().dirty, "the rotation is still unsaved");
-    assert_eq!(s.autosave_snapshots().len(), 1, "undo that leaves unsaved work is a change");
+    assert!(entry(&s).2 && entry(&s).1 != second, "undo that leaves unsaved work is a change");
+    assert!(s.recovery_snapshot(id).is_some());
     s.undo(id).unwrap();
     assert!(!s.get(id).unwrap().dirty, "undo back to the opened file is saved");
-    assert!(s.autosave_snapshots().is_empty(), "a clean document needs no recovery");
+    assert!(s.recovery_snapshot(id).is_none(), "a clean document needs no recovery");
     let saved = s.save_bytes(id).unwrap();
     s.mark_saved(id, saved, None).unwrap();
-    assert!(s.autosave_snapshots().is_empty(), "saved documents need no recovery");
+    assert!(!entry(&s).2 && s.recovery_snapshot(id).is_none(), "saved documents need no recovery");
 }
 
 #[test]
 fn autosave_snapshots_a_new_unsaved_document_once() {
     let (mut s, clean) = session_with(1);
     let id = s.open_new("Untitled.pdf", Arc::new(fixture(1))).unwrap();
-    let snaps = s.autosave_snapshots();
-    assert_eq!(snaps.len(), 1, "the new document is unsaved work");
-    assert_eq!(snaps[0].doc, id);
-    assert!(snaps.iter().all(|x| x.doc != clean), "the clean document stays out");
-    assert!(s.autosave_snapshots().is_empty(), "nothing new since the last snapshot");
+    let dirty: Vec<(DocId, u64)> = s.autosave_docs().filter(|d| d.2).map(|d| (d.0, d.1)).collect();
+    assert_eq!(dirty.len(), 1, "the new document is unsaved work");
+    assert_eq!(dirty[0].0, id);
+    assert!(s.recovery_snapshot(clean).is_none(), "the clean document stays out");
+    assert_eq!(s.recovery_snapshot(id).unwrap().doc, id);
     s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
-    assert_eq!(s.autosave_snapshots().len(), 1, "a later edit is snapshotted again");
+    let after = s.autosave_docs().find(|d| d.0 == id).unwrap().1;
+    assert_ne!(after, dirty[0].1, "a later edit is a new generation");
 }
 
 #[test]
 fn recovered_documents_reopen_unsaved_at_their_original_path() {
     let (mut s, id) = session_with(2);
     s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
-    let snap = s.autosave_snapshots().remove(0);
+    let snap = s.recovery_snapshot(id).unwrap();
     // A new session after a crash.
     let mut s2 = Session::new();
     let rid = s2.open(snap.name.clone(), None, snap.bytes.clone(), None).unwrap();
@@ -2244,7 +2338,7 @@ fn recovered_documents_reopen_unsaved_at_their_original_path() {
     assert!(d.dirty);
     assert_eq!(d.path.as_deref(), Some("/docs/report.pdf"));
     assert_eq!(d.info.pages.len(), 1, "the edit survived");
-    assert!(s2.autosave_snapshots().is_empty(), "already in the recovery store");
+    assert!(s2.autosave_docs().any(|(d, _, dirty)| d == rid && dirty), "listed as unsaved work");
 }
 
 fn outline_titles(items: &[pdfcraft_render::OutlineItem]) -> Vec<String> {
@@ -2470,6 +2564,165 @@ fn headings_in_two_columns_are_two_bookmarks() {
     let style = s.get(id).unwrap().text_styles()[0].style.clone();
     s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style] }).unwrap();
     assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Untitled→0[Left heading→1,Right heading→1]"]);
+}
+
+/// #7415: a heading's bookmark goes to the top of the heading as displayed. The same heading is
+/// shown at the same place on four pages turned 0, 90, 180 and 270 degrees; on a quarter turn the
+/// displayed top is a user-space x, so it is the destination's `left` and `top` stays unspecified.
+#[test]
+fn style_bookmarks_go_to_the_displayed_heading_top_on_turned_pages() {
+    // (rotation, media box, text matrix): each shows "Birch Survey" at 90 pt from the left and
+    // 130 pt (baseline) from the top of a 400 x 600 displayed page.
+    let pages = [
+        (0, "0 0 400 600", "1 0 0 1 90 470"),
+        (90, "0 0 600 400", "0 1 -1 0 130 90"),
+        (180, "0 0 400 600", "-1 0 0 -1 310 130"),
+        (270, "0 0 600 400", "0 -1 1 0 470 310"),
+    ];
+    let mut pdf =
+        pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R 9 0 R] /Count 4 >>");
+    for (i, (rotate, media, tm)) in pages.iter().enumerate() {
+        let content = format!("BT /F1 20 Tf {tm} Tm (Birch Survey) Tj ET");
+        pdf = pdf
+            .obj(format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [{media}] /Rotate {rotate} /Resources << /Font << /F1 11 0 R >> >> /Contents {} 0 R >>",
+                4 + 2 * i
+            ))
+            .stream("", &content);
+    }
+    let bytes = pdf.obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>").build();
+    let mut s = Session::new();
+    let id = s.open("turned.pdf", None, Arc::new(bytes), None).unwrap();
+    let style = s.get(id).unwrap().text_styles()[0].style.clone();
+    s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style] }).unwrap();
+    let doc = s.get(id).unwrap();
+    let kids = &doc.info.outline[0].children;
+    assert_eq!(kids.len(), 4);
+    // The displayed top of the heading, from the upright page.
+    let top_of_heading = {
+        let cos = pdfcraft_cos::Document::open(doc.bytes.clone()).unwrap();
+        let line = &pdfcraft_edit::text_lines(&cos, 0).unwrap()[0];
+        600.0 - line.rect[1].max(line.rect[3]) as f32
+    };
+    assert!((110.0..115.0).contains(&top_of_heading), "{top_of_heading}");
+    for (i, kid) in kids.iter().enumerate() {
+        let page = &doc.info.pages[i];
+        assert_eq!(page.rotation, pages[i].0);
+        let [want_left, want_top] = page.xyz_for_view(None, Some(top_of_heading));
+        match kid.view {
+            pdfcraft_render::DestView::Xyz { left, top, zoom: None } => {
+                let near = |got: Option<f32>, want: Option<f32>| match (got, want) {
+                    (None, None) => true,
+                    (Some(g), Some(w)) => (g - w).abs() < 1.0,
+                    _ => false,
+                };
+                assert!(near(left, want_left) && near(top, want_top), "rotate {}: got {left:?} {top:?}, want {want_left:?} {want_top:?}", pages[i].0);
+            }
+            ref v => panic!("{v:?}"),
+        }
+    }
+}
+
+/// #7415: on a turned page the headings are read in displayed order (top to bottom), a heading
+/// set on two lines is one bookmark, and each goes to the top of its first displayed line. One
+/// layout (two headings and a two-line heading, written to the file out of order) on pages turned
+/// 0, 90, 180 and 270 degrees must give the same bookmarks at the same displayed tops, with and
+/// without a crop box whose origin is not the page's.
+#[test]
+fn style_bookmarks_read_and_join_headings_as_displayed_on_turned_pages() {
+    for cropped in [false, true] {
+        let (mut s, id) = turned_headings_session(cropped);
+        let style = s.get(id).unwrap().text_styles()[0].style.clone();
+        s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style] }).unwrap();
+        check_turned_headings(&s, id, cropped);
+        // The destinations survive a save and reopen (`/XYZ left null` on the quarter turns).
+        let bytes = s.save_bytes(id).unwrap();
+        let mut s2 = Session::new();
+        let id2 = s2.open("saved.pdf", None, bytes, None).unwrap();
+        check_turned_headings(&s2, id2, cropped);
+    }
+}
+
+/// A document of four pages turned 0, 90, 180 and 270, each showing the same three headings at the
+/// same displayed places on a displayed page of 400 x 600 (or 600 x 600 with `cropped`, where
+/// the crop box does not start at the page's origin), written in an order that is not reading order.
+fn turned_headings_session(cropped: bool) -> (Session, DocId) {
+    // Displayed baselines (x, y from the top).
+    let lines = [("Gamma Three", 50.0, 450.0), ("Beta Cont", 50.0, 274.0), ("Alpha One", 50.0, 100.0), ("Beta Two", 50.0, 250.0)];
+    // (rotation, page boxes, text matrix prefix, user position of a displayed (x, y)).
+    type Place = fn(f64, f64) -> (f64, f64);
+    let plain: [(i32, &str, &str, Place); 4] = [
+        (0, "/MediaBox [0 0 400 600]", "1 0 0 1", |x, y| (x, 600.0 - y)),
+        (90, "/MediaBox [0 0 600 400]", "0 1 -1 0", |x, y| (y, x)),
+        (180, "/MediaBox [0 0 400 600]", "-1 0 0 -1", |x, y| (400.0 - x, y)),
+        (270, "/MediaBox [0 0 600 400]", "0 -1 1 0", |x, y| (600.0 - y, 400.0 - x)),
+    ];
+    let boxes = "/MediaBox [0 0 700 700] /CropBox [50 40 650 640]";
+    let crop: [(i32, &str, &str, Place); 4] = [
+        (0, boxes, "1 0 0 1", |x, y| (50.0 + x, 640.0 - y)),
+        (90, boxes, "0 1 -1 0", |x, y| (50.0 + y, 40.0 + x)),
+        (180, boxes, "-1 0 0 -1", |x, y| (650.0 - x, 40.0 + y)),
+        (270, boxes, "0 -1 1 0", |x, y| (650.0 - y, 640.0 - x)),
+    ];
+    let mut pdf =
+        pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R 9 0 R] /Count 4 >>");
+    for (i, (rotate, boxes, prefix, place)) in (if cropped { crop } else { plain }).iter().enumerate() {
+        let content: String = lines
+            .iter()
+            .map(|(text, x, y)| {
+                let (ux, uy) = place(*x, *y);
+                format!("BT /F1 20 Tf {prefix} {ux} {uy} Tm ({text}) Tj ET\n")
+            })
+            .collect();
+        pdf = pdf
+            .obj(format!(
+                "<< /Type /Page /Parent 2 0 R {boxes} /Rotate {rotate} /Resources << /Font << /F1 11 0 R >> >> /Contents {} 0 R >>",
+                4 + 2 * i
+            ))
+            .stream("", &content);
+    }
+    let bytes = pdf.obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>").build();
+    let mut s = Session::new();
+    let id = s.open("turned.pdf", None, Arc::new(bytes), None).unwrap();
+    (s, id)
+}
+
+/// The bookmarks of [`turned_headings_session`] after "from text styles": displayed order, the
+/// two-line heading joined, each at the displayed top of its first line.
+fn check_turned_headings(s: &Session, id: DocId, cropped: bool) {
+    let doc = s.get(id).unwrap();
+    let kids = &doc.info.outline[0].children;
+    let titles: Vec<_> = kids.iter().map(|k| k.title.as_str()).collect();
+    let per_page = ["Alpha One", "Beta Two Beta Cont", "Gamma Three"];
+    assert_eq!(titles, per_page.repeat(4), "displayed order, the two-line heading joined (cropped: {cropped})");
+    // The displayed tops of the three headings, from the text of the upright page.
+    let cos = pdfcraft_cos::Document::open(doc.bytes.clone()).unwrap();
+    let upright = &doc.info.pages[0];
+    let mut found: Vec<_> =
+        pdfcraft_edit::text_lines(&cos, 0).unwrap().into_iter().map(|l| upright.user_to_view(0.0, l.rect[3].max(l.rect[1]) as f32)[1]).collect();
+    found.sort_by(f32::total_cmp);
+    // Alpha, Beta Two (the upper line of its heading), Gamma: three of the four lines.
+    let tops = [found[0], found[1], found[3]];
+    for (i, kid) in kids.iter().enumerate() {
+        let (page, n) = (&doc.info.pages[i / 3], i % 3);
+        let [want_left, want_top] = page.xyz_for_view(None, Some(tops[n]));
+        let near = |got: Option<f32>, want: Option<f32>| match (got, want) {
+            (None, None) => true,
+            (Some(g), Some(w)) => (g - w).abs() < 1.0,
+            _ => false,
+        };
+        match kid.view {
+            pdfcraft_render::DestView::Xyz { left, top, .. } => {
+                assert!(
+                    near(left, want_left) && near(top, want_top),
+                    "rotate {} {} (cropped: {cropped}): got {left:?} {top:?}, want {want_left:?} {want_top:?}",
+                    page.rotation,
+                    kid.title
+                )
+            }
+            ref v => panic!("{v:?}"),
+        }
+    }
 }
 
 /// `style` at another size.
@@ -2965,9 +3218,8 @@ fn password_field_values_are_kept_in_memory_but_written_to_no_file() {
     assert!(!appears_in_pdf(&saved, "*******"), "the typed length is not kept in the appearance");
     assert!(!appears_in_pdf(&s.save_full_bytes(id).unwrap(), "hunter2"), "a full rewrite");
     assert!(!appears_in_pdf(&s.reduced_bytes(id).unwrap().0, "hunter2"), "Reduce File Size");
-    let snaps = s.autosave_snapshots();
-    assert_eq!(snaps.len(), 1);
-    assert!(!appears_in_pdf(&snaps[0].bytes, "hunter2"), "the recovery snapshot");
+    let snap = s.recovery_snapshot(id).expect("the document has unsaved work");
+    assert!(!appears_in_pdf(&snap.bytes, "hunter2"), "the recovery snapshot");
     // New files built from its pages too (#3943 review): Extract copies the fields of the pages it
     // takes, and Split writes each part the same way.
     let extracted = s.extract(id, &[0]).unwrap();
@@ -3031,16 +3283,16 @@ fn need_appearances_form() -> Vec<u8> {
         "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 11 0 R 12 0 R 15 0 R] >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada Lovelace) /Rect [20 250 180 270] /P 3 0 R /AP << /N 8 0 R >> >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (town) /V <FEFF0050006C007A00650148> /Rect [20 200 180 220] /P 3 0 R /AP << /N 9 0 R >> >>".into(),
-        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (city) /V <FEFF00420072006E006F00200159> /Rect [20 150 180 170] /P 3 0 R /AP << /N 10 0 R >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (city) /V <FEFF00420072006E006F00205317> /Rect [20 150 180 170] /P 3 0 R /AP << /N 10 0 R >> >>".into(),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
         stream("/Tx BMC EMC"),
         stream("/Tx BMC EMC"),
         stream("/Tx BMC BT /Helv 10 Tf 2 5 Td (Brno r) Tj ET EMC"),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (street) /V (Main Street) /Rect [20 100 180 120] /P 3 0 R >>".into(),
-        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (river) /V <FEFF004F0159006500630068> /Rect [20 50 180 70] /P 3 0 R /AP << /N 13 0 R >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (river) /V <FEFF004F5317006500630068> /Rect [20 50 180 70] /P 3 0 R /AP << /N 13 0 R >> >>".into(),
         "<< /Type /XObject /Subtype /Form /BBox [0 0 160 20] /Resources << /XObject << /Bg 14 0 R >> >> /Length 10 >>\nstream\nq /Bg Do Q\nendstream".into(),
         stream("0.9 g 0 0 160 20 re f"),
-        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (lake) /V <FEFF004F0159006500630068> /Rect [20 20 180 40] /P 3 0 R /AP << /N 16 0 R >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (lake) /V <FEFF004F5317006500630068> /Rect [20 20 180 40] /P 3 0 R /AP << /N 16 0 R >> >>".into(),
         "<< /Type /XObject /Subtype /Form /BBox [0 0 160 20] /Resources << /XObject << /Fm 17 0 R >> >> /Length 10 >>\nstream\nq /Fm Do Q\nendstream".into(),
         stream("BT /Helv 10 Tf 2 5 Td (Orech) Tj ET"),
     ];
@@ -3070,7 +3322,8 @@ fn normal_appearance(doc: &pdfcraft_cos::Document, num: u32) -> String {
 
 /// #5939 review: the first signature removes `/NeedAppearances`, so the fields are drawn from
 /// their values first; without that, `name` and `town` would show their empty placeholders. A
-/// field whose own appearance draws its value keeps it rather than get a `?` for `ř`.
+/// field whose own appearance draws its value keeps it rather than get a `?` for `北`, which no
+/// font PdfCraft draws with has; `ň` is drawn from the bundled Inter face (#6822).
 #[test]
 fn the_first_signature_draws_the_fields_need_appearances_left_to_the_viewer() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
@@ -3082,7 +3335,8 @@ fn the_first_signature_draws_the_fields_need_appearances_left_to_the_viewer() {
     let doc = pdfcraft_cos::Document::open(signed.clone()).unwrap();
     assert!(!pdfcraft_forms::need_appearances(&doc));
     assert!(normal_appearance(&doc, 4).contains("(Ada Lovelace) Tj"), "{}", normal_appearance(&doc, 4));
-    assert!(normal_appearance(&doc, 5).contains("(Plze?) Tj"), "{}", normal_appearance(&doc, 5));
+    let town = normal_appearance(&doc, 5);
+    assert!(town.contains("(Plze) Tj") && town.contains("/PCLa") && !town.contains('?'), "{town}");
     assert!(normal_appearance(&doc, 6).contains("(Brno r) Tj"), "{}", normal_appearance(&doc, 6));
     assert!(normal_appearance(&doc, 11).contains("(Main Street) Tj"), "{}", normal_appearance(&doc, 11));
     // Its own appearance only paints a background, so `river` gets the drawing, `?` and all.
@@ -3162,10 +3416,9 @@ fn xfa_password_field_values_are_not_saved_in_datasets_or_widgets() {
         assert!(!appears_in_pdf(&s.save_full_bytes(id).unwrap(), leak), "save_full_bytes leaked {leak}");
         assert!(!appears_in_pdf(&s.reduced_bytes(id).unwrap().0, leak), "reduced_bytes leaked {leak}");
     }
-    let snaps = s.autosave_snapshots();
-    assert_eq!(snaps.len(), 1);
+    let snap = s.recovery_snapshot(id).expect("the document has unsaved work");
     for leak in ["hunter2", "secret1", "*******"] {
-        assert!(!appears_in_pdf(&snaps[0].bytes, leak), "autosave snapshot leaked {leak}");
+        assert!(!appears_in_pdf(&snap.bytes, leak), "autosave snapshot leaked {leak}");
     }
 
     // Reopening the saved file in a new session leaves the password field empty (it does not
@@ -7442,6 +7695,17 @@ fn detecting_fields_on_a_printed_form() {
     let f = &d.form[0];
     assert!(f.widgets[0].rect[0] > 72.0 + 20.0, "{:?}", f.widgets[0].rect);
     assert!(s.detect_fields(id, &[]).is_empty(), "nothing left to detect");
+
+    // #2943: a "label, box, label, box" line names each check box after the label before it.
+    let labels_pdf = paper_form_with(
+        595,
+        842,
+        "BT /F1 10 Tf 100 534 Td (Monsieur) Tj ET 146 532 11 10 re S BT /F1 10 Tf 180 534 Td (Madame) Tj ET 222 532 11 10 re S",
+    );
+    let labels_id = s.open("labels.pdf", None, Arc::new(labels_pdf), None).unwrap();
+    let found = s.detect_fields(labels_id, &[]);
+    let names: Vec<&str> = found.iter().map(|(_, c)| c.name.as_str()).collect();
+    assert_eq!(names, ["Monsieur", "Madame"], "{found:?}");
 }
 
 /// #294, #2831: a detected field sits on a line or box the page already draws, so it gets no border
@@ -7466,18 +7730,11 @@ fn detected_fields_have_no_border_or_fill() {
     assert!(look.border.is_some() && look.fill.is_some(), "{look:?}");
 }
 
-/// A printed form, 420 × 300 pt: a title, a label with a rule to write on, a box with a small
-/// label in its corner, an empty box with its label above, and two check boxes.
-fn paper_form() -> Vec<u8> {
-    let content = "BT /F1 14 Tf 30 270 Td (Gewerbe-Ummeldung) Tj ET \
-        BT /F1 10 Tf 30 230 Td (Name:) Tj ET 0.75 w 80 228 m 380 228 l S \
-        1 w 30 150 350 50 re S BT /F1 7 Tf 34 191 Td (Anschrift) Tj ET \
-        BT /F1 8 Tf 30 124 Td (Telefon) Tj ET 30 90 350 30 re S \
-        30 50 10 10 re S BT /F1 9 Tf 46 51 Td (Haupt) Tj ET 150 50 10 10 re S BT /F1 9 Tf 166 51 Td (Zweig) Tj ET";
+fn paper_form_with(w: u32, h: u32, content: &str) -> Vec<u8> {
     let objs = [
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>").into_bytes(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
     ];
@@ -7496,6 +7753,20 @@ fn paper_form() -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
+}
+
+/// A printed form, 420 × 300 pt: a title, a label with a rule to write on, a box with a small
+/// label in its corner, an empty box with its label above, and two check boxes.
+fn paper_form() -> Vec<u8> {
+    paper_form_with(
+        420,
+        300,
+        "BT /F1 14 Tf 30 270 Td (Gewerbe-Ummeldung) Tj ET \
+        BT /F1 10 Tf 30 230 Td (Name:) Tj ET 0.75 w 80 228 m 380 228 l S \
+        1 w 30 150 350 50 re S BT /F1 7 Tf 34 191 Td (Anschrift) Tj ET \
+        BT /F1 8 Tf 30 124 Td (Telefon) Tj ET 30 90 350 30 re S \
+        30 50 10 10 re S BT /F1 9 Tf 46 51 Td (Haupt) Tj ET 150 50 10 10 re S BT /F1 9 Tf 166 51 Td (Zweig) Tj ET",
+    )
 }
 
 /// How the paper form was scanned.
@@ -11603,7 +11874,7 @@ fn undo_never_makes_an_unsaved_document_clean() {
     s.apply(new, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
     s.undo(new).unwrap();
     assert!(s.get(new).unwrap().dirty, "a new document is unsaved until it is saved");
-    assert_eq!(s.autosave_snapshots().len(), 1, "and still needs recovery");
+    assert!(s.recovery_snapshot(new).is_some(), "and still needs recovery");
     s.revert(new).unwrap();
     assert!(s.get(new).unwrap().dirty, "Revert goes back to the created bytes, which aren't saved anywhere");
 
@@ -15183,6 +15454,39 @@ fn mixed_widget_icons_are_normalized_with_history_and_save() {
         }
     }
 }
+/// #7409: a form-data file whose only known value the form refuses imports nothing, and says which
+/// field refused it; the document, its Undo and its Redo stay as they were. A file with other
+/// values that took still imports them, and the repair log names the field that refused.
+#[test]
+fn form_data_the_form_refuses_is_reported_and_leaves_the_document_alone() {
+    let (mut s, id) = session_with(1);
+    let combo = NewField::Combo { options: vec!["A".into(), "B".into()], editable: false };
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 250.0, 180.0, 272.0], kind: combo, name: Some("Choice".into()) }).unwrap();
+    let notes = NewField::Text { multiline: false };
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 210.0, 180.0, 232.0], kind: notes, name: Some("Notes".into()) }).unwrap();
+    let choose =
+        |s: &mut Session, v: &str| s.apply(id, Edit::SetFieldValue { name: "Choice".into(), value: FieldValue::Choice(vec![v.into()]) }).unwrap();
+    choose(&mut s, "A");
+    choose(&mut s, "B");
+    s.undo(id).unwrap();
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_default();
+    let import = |s: &mut Session, xml: &str| s.apply(id, Edit::ImportData { name: "data.xml".into(), bytes: Arc::new(xml.as_bytes().to_vec()) });
+    let (undo, redo) = (s.get(id).unwrap().can_undo().map(String::from), s.get(id).unwrap().can_redo().map(String::from));
+    assert!(redo.is_some());
+
+    let err = import(&mut s, "<fields><Choice>INVALID</Choice></fields>").unwrap_err();
+    assert!(err.to_string().contains("nothing was imported") && err.to_string().contains("\"Choice\""), "{err}");
+    let doc = s.get(id).unwrap();
+    assert_eq!((doc.can_undo().map(String::from), doc.can_redo().map(String::from)), (undo, redo), "no Import step, Redo kept");
+    assert_eq!(value(&s, "Choice"), vec!["A".to_string()]);
+
+    // Some values took: the file imports, and the refused field is named in the repair log.
+    import(&mut s, "<fields><Choice>INVALID</Choice><Notes>hello</Notes></fields>").unwrap();
+    assert_eq!((value(&s, "Choice"), value(&s, "Notes")), (vec!["A".to_string()], vec!["hello".to_string()]));
+    let log = s.get(id).unwrap().repair_log().to_vec();
+    assert!(log.iter().any(|l| l.contains("refused") && l.contains("\"Choice\"") && !l.contains("Notes")), "{log:?}");
+}
+
 /// A comment imported or pasted without the appearance its file carried (unreadable there) is
 /// said in the repair log, which the interface shows and the tools return.
 #[test]

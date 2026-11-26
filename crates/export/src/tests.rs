@@ -120,10 +120,14 @@ fn docx_is_a_word_package() {
 
 #[test]
 fn word_does_not_invent_borders_for_aligned_invoice_fields() {
-    let xml = part(&docx(&[table_page()], "Invoice"), "word/document.xml");
-    assert!(xml.contains("<w:tbl>"));
-    assert!(!xml.contains("w:val=\"single\""), "text alignment is not evidence of a border: {xml}");
-    assert!(xml.contains("<w:insideH w:val=\"nil\"/>"));
+    let tables = docx_tables(&docx(&[table_page()], "Invoice"));
+    assert_eq!(tables.len(), 1);
+    let single = |b: &Option<craft_wordmodel::props::Border>| b.is_some_and(|b| b.style == craft_wordmodel::props::BorderStyle::Single);
+    let cells = tables[0].rows.iter().flat_map(|r| &r.cells).filter_map(|c| c.props.borders);
+    let table = tables[0].props.borders.into_iter();
+    for b in table.chain(cells) {
+        assert!(![b.top, b.left, b.bottom, b.right, b.between, b.inside_v].iter().any(single), "text alignment is not evidence of a border: {b:?}");
+    }
 }
 
 #[test]
@@ -141,28 +145,71 @@ fn word_table_cell_widths_follow_the_columns_they_span() {
         ],
         ruled: None,
     };
-    let xml = docx_table(&table);
-    assert!(xml.contains("<w:gridCol w:w=\"1000\"/><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"3000\"/>"), "{xml}");
-    let widths: Vec<Vec<&str>> =
-        xml.split("<w:tr>").skip(1).map(|row| row.split("<w:tcW w:w=\"").skip(1).map(|cell| cell.split('"').next().unwrap()).collect()).collect();
-    assert_eq!(widths, vec![vec!["1000", "2000", "3000"], vec!["1000", "5000"], vec!["3000", "3000"], vec!["6000"], vec!["1000", "0", "0"]]);
+    let t = crate::as_word::table(&table);
+    assert_eq!(t.grid, [50.0, 100.0, 150.0]);
+    let widths: Vec<Vec<f32>> = t.rows.iter().map(|r| r.cells.iter().map(|c| c.props.width.unwrap_or(0.0)).collect()).collect();
+    // A short row is padded to the grid with cells as wide as the columns they fill.
+    assert_eq!(widths, vec![vec![50.0, 100.0, 150.0], vec![50.0, 250.0], vec![150.0, 150.0], vec![300.0], vec![50.0, 100.0, 150.0]]);
+}
+
+/// The tables a Word document holds, read back through craft-docx.
+fn docx_tables(d: &[u8]) -> Vec<craft_wordmodel::Table> {
+    craft_docx::read(d)
+        .unwrap()
+        .body
+        .iter()
+        .filter_map(|b| if let craft_wordmodel::Block::Table(t) = &**b { Some(t.clone()) } else { None })
+        .collect()
+}
+
+/// The paragraphs of a document's body (not inside tables).
+fn body_paragraphs(doc: &craft_wordmodel::Document) -> Vec<&craft_wordmodel::Paragraph> {
+    doc.body.iter().filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p) } else { None }).collect()
+}
+
+/// The objects in the body's paragraphs, in order.
+fn body_objects(doc: &craft_wordmodel::Document) -> Vec<&craft_wordmodel::InlineObject> {
+    body_paragraphs(doc).into_iter().flat_map(|p| &p.objects).collect()
+}
+
+/// A shape's text, from the story it holds.
+fn shape_text(doc: &craft_wordmodel::Document, o: &craft_wordmodel::InlineObject) -> String {
+    let craft_wordmodel::InlineObject::Shape { story: Some(id), .. } = o else { return String::new() };
+    doc.parts
+        .get(id)
+        .map(|part| part.blocks.iter().filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p.plain_text()) } else { None }).collect())
+        .unwrap_or_default()
+}
+
+/// A floating object's placement.
+fn float_of(o: &craft_wordmodel::InlineObject) -> Option<&craft_wordmodel::para::Float> {
+    match o {
+        craft_wordmodel::InlineObject::Shape { float, .. } | craft_wordmodel::InlineObject::Image { float, .. } => Some(float),
+        _ => None,
+    }
 }
 
 #[test]
 fn word_keeps_a_page_with_a_clear_image_and_big_title_in_flow() {
     // page() has a picture between paragraphs and a 24 pt title over 11 pt body text, but
     // nothing overlaps: it must stay flowing paragraphs with the image inline.
-    let xml = part(&docx(&[page()], "Report"), "word/document.xml");
-    assert!(!xml.contains("position:absolute"), "nothing overlaps, so nothing floats: {xml}");
-    assert!(xml.contains("<wp:inline>"), "the picture stays inline: {xml}");
-    assert!(xml.contains("<w:pStyle w:val=\"Heading1\"/>"), "the title stays a heading: {xml}");
-    let (title, body) = (xml.find(">Annual Report</w:t>"), xml.find(">Body text after the picture"));
-    assert!(title.is_some() && body.is_some() && title < body, "reading order kept: {xml}");
+    let doc = craft_docx::read(&docx(&[page()], "Report")).unwrap();
+    let objects = body_objects(&doc);
+    assert!(objects.iter().all(|o| !matches!(o, craft_wordmodel::InlineObject::Shape { .. })), "nothing overlaps, so nothing floats: {objects:?}");
+    assert!(
+        objects.iter().any(|o| matches!(o, craft_wordmodel::InlineObject::Image { float, .. } if float.wrap == craft_wordmodel::para::Wrap::Inline)),
+        "the picture stays inline: {objects:?}"
+    );
+    let paras = body_paragraphs(&doc);
+    let title = paras.iter().position(|p| p.plain_text() == "Annual Report");
+    let body = paras.iter().position(|p| p.plain_text().starts_with("Body text after the picture"));
+    assert_eq!(title.and_then(|i| paras[i].props.style.as_deref()), Some("Heading1"), "the title stays a heading");
+    assert!(title.is_some() && body.is_some() && title < body, "reading order kept");
     // The same page with the picture moved over the body text floats.
     let mut over = page();
     over.images[0].rect = [72.0, 380.0, 272.0, 530.0];
-    let xml = part(&docx(&[over], "Report"), "word/document.xml");
-    assert!(xml.contains("position:absolute"), "an image over text floats: {xml}");
+    let doc = craft_docx::read(&docx(&[over], "Report")).unwrap();
+    assert!(body_objects(&doc).iter().any(|o| matches!(o, craft_wordmodel::InlineObject::Shape { .. })), "an image over text floats the page");
 }
 
 #[test]
@@ -179,18 +226,23 @@ fn word_overlap_does_not_consume_invoice_body_space() {
         space_around: [false; 2],
     });
     p.images = page().images;
-    let xml = part(&docx(&[p], "Invoice"), "word/document.xml");
-    assert!(xml.contains("position:absolute"), "overlapping text must float: {xml}");
-    assert!(!xml.contains("<wp:inline>"), "images must not displace invoice text");
-    assert!(!xml.contains("<w:tbl>"), "the source text boxes must keep their positions");
-    assert_eq!(xml.matches(">DRAFT</w:t>").count(), 1);
-    assert_eq!(xml.matches("w:type=\"page\"").count(), 0);
-    assert!(xml.contains("margin-left:72.000pt;margin-top:160.000pt"), "Meter field keeps its source position: {xml}");
-    let watermark = xml.split(">DRAFT</w:t>").next().unwrap().rsplit("<v:rect ").next().unwrap();
-    assert!(watermark.contains("z-index:-2"), "watermark is behind foreground graphics");
-    // The picture is a DrawingML anchor behind the text (a VML rectangle shows no picture in Word).
-    assert!(!xml.contains("<v:imagedata"), "{xml}");
-    assert!(xml.contains("<wp:anchor ") && xml.contains("behindDoc=\"1\"") && xml.contains("<a:blip r:embed=\"rIdImg1\"/>"), "{xml}");
+    let d = docx(&[p], "Invoice");
+    let doc = craft_docx::read(&d).unwrap();
+    use craft_wordmodel::para::{Anchor, Wrap};
+    assert!(doc.body.iter().all(|b| !matches!(&**b, craft_wordmodel::Block::Table(_))), "the source text boxes keep their positions");
+    let objects = body_objects(&doc);
+    let shape = |text: &str| objects.iter().copied().find(|o| shape_text(&doc, o) == text);
+    let draft = shape("DRAFT").and_then(float_of).expect("the watermark is a text box");
+    assert_eq!(objects.iter().filter(|o| shape_text(&doc, o) == "DRAFT").count(), 1);
+    let meter = shape("Meter").and_then(float_of).expect("Meter is a text box");
+    assert_eq!((meter.h_rel, meter.v_rel), (Anchor::Page, Anchor::Page));
+    assert_eq!((meter.x, meter.y), (72.0, 160.0), "the Meter field keeps its source position");
+    assert_eq!(meter.wrap, Wrap::InFrontOfText);
+    assert!(!body_paragraphs(&doc).iter().any(|p| p.text.contains(craft_wordmodel::para::PAGE_BREAK)), "no page breaks");
+    // The watermark is behind everything, and the picture, behind the text too, is drawn over it.
+    let picture = objects.iter().copied().find(|o| matches!(o, craft_wordmodel::InlineObject::Image { .. })).and_then(float_of).expect("the picture");
+    assert_eq!((draft.wrap, picture.wrap), (Wrap::BehindText, Wrap::BehindText), "images must not displace invoice text");
+    assert!(draft.z < picture.z && picture.z < meter.z, "{} < {} < {}", draft.z, picture.z, meter.z);
 }
 
 #[test]
@@ -200,12 +252,18 @@ fn word_rotated_pages_keep_separate_page_sizes_and_unique_shapes() {
     let mut second = p.clone();
     second.width = 400.0;
     second.height = 500.0;
-    let xml = part(&docx(&[p, second], "Two invoices"), "word/document.xml");
-    assert!(xml.contains("rotation:315.000"), "PDF y-up becomes Word y-down");
-    assert_eq!(xml.matches("<w:sectPr>").count(), 2);
-    assert!(xml.contains("<w:pgSz w:w=\"8000\" w:h=\"10000\"/>"));
-    assert_eq!(xml.matches("id=\"Text1\"").count(), 1);
-    assert_eq!(xml.matches(">Meter</w:t>").count(), 2);
+    let d = docx(&[p, second], "Two invoices");
+    let doc = craft_docx::read(&d).unwrap();
+    let meters: Vec<_> = body_objects(&doc).into_iter().filter(|o| shape_text(&doc, o) == "Meter").collect();
+    assert_eq!(meters.len(), 2);
+    assert!(meters.iter().all(|o| float_of(o).is_some_and(|f| (f.rot - 315.0).abs() < 0.01)), "PDF y-up becomes Word y-down");
+    let sizes: Vec<(f32, f32)> = doc.sections().iter().map(|(_, s)| (s.page_w, s.page_h)).collect();
+    assert_eq!(sizes, [(612.0, 792.0), (400.0, 500.0)]);
+    // Every drawing has an id of its own.
+    let xml = part(&d, "word/document.xml");
+    let ids: Vec<&str> = xml.split("<wp:docPr id=\"").skip(1).filter_map(|s| s.split('"').next()).collect();
+    let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
+    assert!(!ids.is_empty() && unique.len() == ids.len(), "{ids:?}");
 }
 
 /// #2992: pages that share a background colour get it as the Word document's page colour
@@ -214,11 +272,10 @@ fn word_rotated_pages_keep_separate_page_sizes_and_unique_shapes() {
 fn docx_keeps_a_shared_page_background() {
     let teal = Page { background: Some([0.0, 0.5, 0.5]), ..page() };
     let zip = docx(&[teal.clone(), teal.clone()], "Teal");
-    let xml = part(&zip, "word/document.xml");
-    assert!(xml.contains("<w:background w:color=\"008080\"/><w:body>"), "{xml}");
+    assert_eq!(craft_docx::read(&zip).unwrap().settings.page_color, Some(craft_wordmodel::Rgb(0, 128, 128)));
+    // Word shows the colour only when the settings say so.
+    assert!(part(&zip, "word/document.xml").contains("<w:background w:color=\"008080\""));
     assert!(part(&zip, "word/settings.xml").contains("<w:displayBackgroundShape/>"));
-    assert!(part(&zip, "[Content_Types].xml").contains("/word/settings.xml"));
-    assert!(part(&zip, "word/_rels/document.xml.rels").contains("Target=\"settings.xml\""));
     let other = Page { background: Some([1.0, 0.0, 0.0]), ..page() };
     for (pages, why) in [
         (vec![teal.clone(), other], "different colours"),
@@ -227,8 +284,8 @@ fn docx_keeps_a_shared_page_background() {
         (vec![page()], "none"),
     ] {
         let zip = docx(&pages, "Plain");
+        assert_eq!(craft_docx::read(&zip).unwrap().settings.page_color, None, "{why}");
         assert!(!part(&zip, "word/document.xml").contains("<w:background"), "{why}");
-        assert!(!zip.windows(b"word/settings.xml".len()).any(|w| w == b"word/settings.xml"), "{why}");
     }
 }
 
@@ -255,24 +312,30 @@ pub(crate) fn part(zip: &[u8], name: &str) -> String {
 #[test]
 fn word_and_html_take_the_documents_language() {
     let pages = [page()];
-    let styles = |lang| part(&docx_with_language(&pages, "Report", lang), "word/styles.xml");
-    let defaults = |lang: &str| format!("<w:docDefaults><w:rPrDefault><w:rPr>{lang}</w:rPr></w:rPrDefault></w:docDefaults>");
-    assert!(styles(Some("bg-BG")).contains(&defaults("<w:lang w:val=\"bg-BG\"/>")), "{}", styles(Some("bg-BG")));
-    assert!(styles(Some(" en-GB ")).contains("<w:lang w:val=\"en-GB\"/>"), "the tag is trimmed");
-    assert!(styles(Some("zh-Hant-TW")).contains(&defaults("<w:lang w:eastAsia=\"zh-Hant-TW\"/>")), "East Asian text");
-    assert!(styles(Some("ja")).contains("<w:lang w:eastAsia=\"ja\"/>"), "East Asian text");
-    assert!(styles(Some("ar-EG")).contains(&defaults("<w:lang w:bidi=\"ar-EG\"/>")), "right-to-left text");
-    assert!(styles(Some("HE")).contains("<w:lang w:bidi=\"HE\"/>"), "right-to-left text");
+    // The document default languages Word reads back: (Latin, East Asian, right-to-left).
+    let langs = |lang| {
+        let c = craft_docx::read(&docx_with_language(&pages, "Report", lang)).unwrap().styles.default_chr.clone();
+        (c.lang, c.lang_ea, c.lang_bidi)
+    };
+    let latin = |t: &str| (Some(t.to_string()), None, None);
+    let east_asian = |t: &str| (None, Some(t.to_string()), None);
+    let bidi = |t: &str| (None, None, Some(t.to_string()));
+    assert_eq!(langs(Some("bg-BG")), latin("bg-BG"));
+    assert_eq!(langs(Some(" en-GB ")), latin("en-GB"), "the tag is trimmed");
+    assert_eq!(langs(Some("zh-Hant-TW")), east_asian("zh-Hant-TW"), "East Asian text");
+    assert_eq!(langs(Some("ja")), east_asian("ja"), "East Asian text");
+    assert_eq!(langs(Some("ar-EG")), bidi("ar-EG"), "right-to-left text");
+    assert_eq!(langs(Some("HE")), bidi("HE"), "right-to-left text");
     // A script subtag decides over the language; private use names no script.
-    assert!(styles(Some("pa-Arab-PK")).contains("<w:lang w:bidi=\"pa-Arab-PK\"/>"), "Punjabi in Arabic script");
-    assert!(styles(Some("sr-Latn")).contains("<w:lang w:val=\"sr-Latn\"/>"), "Serbian in Latin script");
-    assert!(styles(Some("zh-Latn")).contains("<w:lang w:val=\"zh-Latn\"/>"), "Chinese in Latin script");
-    assert!(styles(Some("en-x-arab")).contains("<w:lang w:val=\"en-x-arab\"/>"), "private use");
-    assert!(styles(Some("az-Latn-x-arab")).contains("<w:lang w:val=\"az-Latn-x-arab\"/>"), "private use");
+    assert_eq!(langs(Some("pa-Arab-PK")), bidi("pa-Arab-PK"), "Punjabi in Arabic script");
+    assert_eq!(langs(Some("sr-Latn")), latin("sr-Latn"), "Serbian in Latin script");
+    assert_eq!(langs(Some("zh-Latn")), latin("zh-Latn"), "Chinese in Latin script");
+    assert_eq!(langs(Some("en-x-arab")), latin("en-x-arab"), "private use");
+    assert_eq!(langs(Some("az-Latn-x-arab")), latin("az-Latn-x-arab"), "private use");
     assert!(html_with_language(&pages, "Report", Some("bg-BG")).starts_with("<!DOCTYPE html>\n<html lang=\"bg-BG\">\n"));
     // A tag longer than 35 characters is still a tag.
     let long = "en-US-u-ca-gregory-nu-latn-co-phonebk";
-    assert!(styles(Some(long)).contains(&format!("<w:lang w:val=\"{long}\"/>")), "{long}");
+    assert_eq!(langs(Some(long)), latin(long), "{long}");
     assert!(html_with_language(&pages, "Report", Some(long)).contains(&format!("<html lang=\"{long}\">")), "{long}");
     let too_long = format!("en{}", "-abcdefgh".repeat(29));
     // Private use takes one-character subtags.
@@ -296,7 +359,7 @@ fn word_and_html_take_the_documents_language() {
         Some("1a-BG"),
         Some("\u{431}\u{433}-BG"),
     ] {
-        assert!(docx_with_language(&pages, "Report", lang) == docx(&pages, "Report"), "{lang:?}");
+        assert_eq!(langs(lang), (None, None, None), "{lang:?}");
         assert_eq!(html_with_language(&pages, "Report", lang), html(&pages, "Report"), "{lang:?}");
         assert_eq!(html_simple_with_language(&pages, "Report", lang), html_simple(&pages, "Report"), "{lang:?}");
     }
@@ -320,16 +383,19 @@ fn word_opens_text_with_control_characters_and_long_pages() {
         rotation: 0.0,
         space_around: [false; 2],
     });
-    let xml = part(&docx(&[p.clone()], "Receipt\u{1}"), "word/document.xml");
-    assert!(xml.contains(">Total 4.50\tGBP</w:t>"), "{xml}");
+    let d = docx(&[p.clone()], "Receipt\u{1}");
+    let xml = part(&d, "word/document.xml");
     assert!(!xml.chars().any(|c| !allowed(c)));
-    assert!(xml.contains("<w:pgSz w:w=\"12240\" w:h=\"31680\"/>"), "clamped to 22 in: {xml}");
-    assert!(xml.contains("<w:sz w:val=\"24\"/>"), "a non-finite size falls back to 12 pt");
+    let doc = craft_docx::read(&d).unwrap();
+    let total = body_paragraphs(&doc).into_iter().find(|p| p.plain_text().starts_with("Total")).expect("the receipt line");
+    assert_eq!(total.plain_text(), "Total 4.50\tGBP");
+    assert_eq!(total.runs.first().and_then(|r| r.props.size), Some(12.0), "a non-finite size falls back to 12 pt");
+    assert_eq!(doc.last_section.page_h, 1584.0, "clamped to 22 in");
     assert!(rtf(&[p]).contains("Total 4.50\\tab GBP"));
     // A narrow page keeps room for text: margins shrink.
     let narrow = Page { width: 100.0, height: 200.0, ..page() };
-    let xml = part(&docx(&[narrow], "Narrow"), "word/document.xml");
-    assert!(xml.contains("<w:pgMar w:top=\"500\" w:right=\"250\" w:bottom=\"500\" w:left=\"250\""), "{xml}");
+    let s = craft_docx::read(&docx(&[narrow], "Narrow")).unwrap().last_section;
+    assert_eq!([s.margin_top, s.margin_right, s.margin_bottom, s.margin_left], [25.0, 12.5, 25.0, 12.5]);
 }
 
 #[test]
@@ -388,50 +454,85 @@ fn rtf_escapes_and_sizes() {
         space_around: [false; 2],
     });
     let r = rtf(&[p]);
-    assert!(r.starts_with("{\\rtf1") && r.ends_with('}'));
+    assert!(r.starts_with("{\\rtf1") && r.trim_end().ends_with('}'));
     assert!(r.contains("Caf\\u233? \\{x\\}"), "escaped: {r}");
     let runs: Vec<_> = rtf_paras(&r).into_iter().flatten().collect();
     assert!(runs.contains(&("Annual Report".into(), true, false, Some(48))), "{runs:?}");
     assert!(runs.contains(&("Café {x}".into(), false, true, Some(20))), "{runs:?}");
 }
 
-/// A page break starts the next page's first paragraph, and stands in a paragraph of its own
-/// before a table, rather than in the table's first cell.
-#[test]
-fn rtf_page_breaks_stay_out_of_tables() {
-    let r = rtf(&[page(), table_page(), page()]);
-    let back = craft_rtf::read(r.as_bytes()).unwrap();
-    let first_cell = back.blocks.iter().find_map(|b| match b {
-        craft_rtf::Block::Table(t) => t.rows.first().and_then(|row| row.first()).map(|c| c.paras.iter().map(|p| p.text()).collect::<String>()),
-        craft_rtf::Block::Para(_) => None,
-    });
-    assert_eq!(first_cell.as_deref(), Some("Meter"), "{r}");
-    let texts: Vec<String> = back.blocks.iter().map(|b| if let craft_rtf::Block::Para(p) = b { p.text() } else { "<table>".into() }).collect();
-    let table = texts.iter().position(|t| t == "<table>");
-    assert_eq!(table.and_then(|i| i.checked_sub(1)).and_then(|i| texts.get(i)).map(String::as_str), Some("\u{000C}"), "{texts:?}");
-    assert_eq!(texts.iter().filter(|t| t.starts_with('\u{000C}')).count(), 2, "one break before each later page: {texts:?}");
+/// The RTF read back into the word model: each section's page size (points) and the text of its
+/// blocks, tables as `<table:first cell>`.
+fn rtf_sections(r: &str) -> Vec<([f32; 2], Vec<String>)> {
+    let doc = craft_rtf::doc::import(r.as_bytes()).unwrap();
+    let mut out: Vec<([f32; 2], Vec<String>)> = Vec::new();
+    let mut texts = Vec::new();
+    for b in &doc.body {
+        match &**b {
+            craft_wordmodel::Block::Para(p) => {
+                if !p.plain_text().is_empty() || !p.objects.is_empty() {
+                    texts.push(if p.objects.is_empty() { p.plain_text() } else { "<picture>".into() });
+                }
+                if let Some(s) = &p.section {
+                    out.push(([s.page_w, s.page_h], std::mem::take(&mut texts)));
+                }
+            }
+            craft_wordmodel::Block::Table(t) => {
+                let first = t
+                    .rows
+                    .first()
+                    .and_then(|r| r.cells.first())
+                    .map(|c| {
+                        c.blocks
+                            .iter()
+                            .filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p.plain_text()) } else { None })
+                            .collect::<String>()
+                    })
+                    .unwrap_or_default();
+                texts.push(format!("<table:{}>", first.trim()));
+            }
+        }
+    }
+    out.push(([doc.last_section.page_w, doc.last_section.page_h], texts));
+    out
 }
 
-/// Empty and image-only pages still occupy a page when pictures are omitted from RTF.
+/// Each page is a section of its own, so it starts a new page, and a table on a page is in that
+/// page's section rather than after a break character in its first cell.
 #[test]
-fn rtf_preserves_breaks_for_pages_without_text() {
+fn rtf_pages_are_sections_and_tables_stay_on_theirs() {
+    let r = rtf(&[page(), table_page(), page()]);
+    let sections = rtf_sections(&r);
+    assert_eq!(sections.len(), 3, "{sections:?}");
+    assert!(sections[1].1.first().is_some_and(|t| t == "<table:Meter>"), "{sections:?}");
+    assert!(!r.contains("\\page"), "sections break the pages: {r}");
+}
+
+/// Empty and image-only pages still occupy a page; each keeps its own size.
+#[test]
+fn rtf_keeps_pages_without_text() {
     let mut blank = page();
     blank.blocks.clear();
     blank.images.clear();
     blank.rules.clear();
     let mut image_only = page();
     image_only.blocks.clear();
+    let mut small = blank.clone();
+    small.width = 400.0;
+    small.height = 500.0;
     for pages in [
         vec![blank.clone(), blank.clone(), page()],
         vec![page(), blank.clone(), blank.clone()],
         vec![page(), blank.clone(), blank.clone(), table_page()],
-        vec![blank.clone(), blank.clone(), blank],
+        vec![blank.clone(), blank.clone(), blank.clone()],
         vec![page(), image_only.clone(), image_only.clone(), page()],
         vec![page(), image_only],
+        vec![page(), small, blank],
     ] {
         let r = rtf(&pages);
-        let breaks = rtf_paras(&r).iter().flatten().map(|run| run.0.matches(craft_rtf::PAGE_BREAK).count()).sum::<usize>();
-        assert_eq!(breaks, pages.len() - 1, "{r}");
+        let sizes: Vec<[f32; 2]> = rtf_sections(&r).iter().map(|s| s.0).collect();
+        let want: Vec<[f32; 2]> = pages.iter().map(|p| [p.width as f32, p.height as f32]).collect();
+        assert_eq!(sizes, want, "{r}");
     }
 }
 
@@ -493,16 +594,19 @@ fn grid_text_becomes_a_real_table_in_every_format() {
     assert!(d.windows(b"word/document.xml".len()).any(|w| w == b"word/document.xml"));
     let (tables, _) = tables(&p.blocks, &p.rules);
     assert_eq!(tables.len(), 1);
-    let table_xml = docx_table(&tables[0]);
-    assert!(table_xml.contains("<w:tblGrid>"));
-    assert!(table_xml.contains("<w:gridSpan w:val=\"2\"/>"), "{table_xml}");
-    assert_eq!(table_xml.matches("<w:tr>").count(), 4);
+    let read = docx_tables(&d);
+    assert_eq!(read.len(), 1, "{read:?}");
+    assert_eq!(read[0].grid.len(), 3, "a three-column grid");
+    assert_eq!(read[0].rows.len(), 4);
+    assert!(read[0].rows.iter().any(|r| r.cells.first().is_some_and(|c| c.props.span == 2)), "Totals spans two columns: {:?}", read[0]);
 
     let r = rtf(std::slice::from_ref(&p));
     assert!(r.contains("\\trowd"), "{r}");
     assert_eq!(r.matches("\\row").count(), 4);
-    // Each cell ends at its last column's right edge; "Totals" spans two columns, so it ends at
-    // the second of the three.
+    // Each cell ends at its last column's right edge, measured from the left margin (`\cellx`):
+    // the columns start at x = 72, 232 and 392 and the table ends at 496, so 160, 160 and 104 pt
+    // wide. "Totals" spans two columns, so it ends at the second edge, and its row is padded to
+    // the grid with an empty cell.
     let back = craft_rtf::read(r.as_bytes()).unwrap();
     let rows: Vec<Vec<(i32, String)>> = back
         .blocks
@@ -511,8 +615,8 @@ fn grid_text_becomes_a_real_table_in_every_format() {
         .flat_map(|t| &t.rows)
         .map(|row| row.iter().map(|c| (c.right, c.paras.iter().map(|p| p.text()).collect())).collect())
         .collect();
-    assert_eq!(rows.first().map(|r| r.iter().map(|c| c.0).collect::<Vec<_>>()), Some(vec![4640, 7840, 9920]), "{rows:?}");
-    assert!(rows.contains(&vec![(7840, "Totals".to_string())]), "{rows:?}");
+    assert_eq!(rows.first().map(|r| r.iter().map(|c| c.0).collect::<Vec<_>>()), Some(vec![3200, 6400, 8480]), "{rows:?}");
+    assert!(rows.contains(&vec![(6400, "Totals".to_string()), (8480, String::new())]), "{rows:?}");
 
     let pt = pptx(std::slice::from_ref(&p), "Bill");
     assert!(pt.starts_with(b"PK"));
@@ -736,17 +840,14 @@ fn word_pictures_resolve_to_media_in_the_package() {
             p.blocks[0].rect = [72.0, 700.0, 300.0, 760.0];
         }
         let zip = docx(&[p], "T");
-        let xml = part(&zip, "word/document.xml");
-        assert_eq!(xml.contains("<wp:anchor "), placed, "{xml}");
-        let rels = part(&zip, "word/_rels/document.xml.rels");
-        let embed = xml.split("r:embed=\"").nth(1).and_then(|r| r.split('"').next()).unwrap();
-        let rel = rels.split(&format!("Id=\"{embed}\"")).nth(1).unwrap();
-        assert!(rel.contains("relationships/image\""), "{rels}");
-        let target = rel.split("Target=\"").nth(1).and_then(|t| t.split('"').next()).unwrap();
-        assert_eq!(target, "media/image1.jpg");
-        assert!(zip.windows(21).any(|w| w == b"word/media/image1.jpg"));
-        assert!(part(&zip, "[Content_Types].xml").contains("Extension=\"jpg\" ContentType=\"image/jpeg\""));
-        assert!(xml.matches("<wp:docPr ").count() == 1 && !xml.contains("<v:imagedata"));
+        let doc = craft_docx::read(&zip).unwrap();
+        let pictures: Vec<_> = body_objects(&doc).into_iter().filter(|o| matches!(o, craft_wordmodel::InlineObject::Image { .. })).collect();
+        assert_eq!(pictures.len(), 1);
+        let craft_wordmodel::InlineObject::Image { media, float, .. } = pictures[0] else { panic!("not a picture") };
+        assert_eq!(float.wrap != craft_wordmodel::para::Wrap::Inline, placed);
+        // The picture resolves to the JPEG's bytes in the package, which has a type for it.
+        assert_eq!(doc.media.get(media).map(|b| b.to_vec()), Some(vec![0xFF, 0xD8, 0xFF, 0xD9]), "{:?}", doc.media.keys().collect::<Vec<_>>());
+        assert!(part(&zip, "[Content_Types].xml").contains("image/jpeg"));
     }
 }
 
@@ -757,8 +858,11 @@ fn word_export_bounds_the_number_of_pictures_and_skips_empty_ones() {
     p.images = vec![Image { bytes: [].as_slice().into(), ..one.clone() }];
     p.images.extend(std::iter::repeat_n(one, MAX_MEDIA + 10));
     let zip = docx(&[p], "T");
-    let rels = part(&zip, "word/_rels/document.xml.rels");
-    assert_eq!(rels.matches("relationships/image\"").count(), MAX_MEDIA);
+    let doc = craft_docx::read(&zip).unwrap();
+    let placed = body_objects(&doc).into_iter().filter(|o| matches!(o, craft_wordmodel::InlineObject::Image { .. })).count();
+    assert_eq!(placed, MAX_MEDIA, "at most MAX_MEDIA pictures, and none for the empty one");
+    // One picture drawn many times is one file in the package.
+    assert_eq!(doc.media.len(), 1);
 }
 
 /// The flowing paragraphs of a Word document (table cells left out), each as its runs' text
@@ -820,10 +924,20 @@ fn an_italic_word_stays_in_its_sentence() {
     );
     // The longest line is the slide's title; the sentence is one paragraph of the body.
     let pxml = part(&pptx(std::slice::from_ref(&p), "Opinion"), "ppt/slides/slide1.xml");
-    assert!(
-        pxml.contains("<a:p><a:r><a:rPr sz=\"1200\"></a:rPr><a:t>Before </a:t></a:r><a:r><a:rPr sz=\"1200\" i=\"1\"></a:rPr><a:t>Chevron </a:t></a:r><a:r><a:rPr sz=\"1200\"></a:rPr><a:t>after.</a:t></a:r></a:p>"),
-        "{pxml}"
-    );
+    let slide = craft_xml::parse(pxml.as_bytes()).expect("slide XML");
+    let paragraph = slide
+        .descendants()
+        .filter(|n| n.is("a:p"))
+        .find(|p| p.children("a:r").any(|r| r.child_text("a:t").as_deref() == Some("Before ")))
+        .expect("body paragraph");
+    let actual: Vec<_> = paragraph
+        .children("a:r")
+        .map(|r| {
+            let props = r.child("a:rPr").expect("run properties");
+            (r.child_text("a:t").expect("run text").into_owned(), props.attr_u32("sz"), props.flag("i", false))
+        })
+        .collect();
+    assert_eq!(actual, vec![("Before ".into(), Some(1200), false), ("Chevron ".into(), Some(1200), true), ("after.".into(), Some(1200), false)]);
 }
 
 /// #4158: the runs keep their order along the line whatever order the blocks come in, and the
@@ -1134,12 +1248,11 @@ fn a_ruled_table_gets_outer_borders_only_where_the_page_draws_them() {
     let (found, _) = tables(&blocks, &inside);
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].ruled, Some([false; 4]));
-    let xml = docx_table(&found[0]);
-    for edge in ["insideH", "insideV"] {
-        assert!(xml.contains(&format!("<w:{edge} w:val=\"single\"")), "{xml}");
-    }
-    for edge in ["top", "left", "bottom", "right"] {
-        assert!(xml.contains(&format!("<w:{edge} w:val=\"nil\"/>")), "{xml}");
+    let borders = crate::as_word::table(&found[0]).props.borders.unwrap();
+    let single = |b: Option<craft_wordmodel::props::Border>| b.is_some_and(|b| b.style == craft_wordmodel::props::BorderStyle::Single);
+    assert!(single(borders.between) && single(borders.inside_v), "{borders:?}");
+    for edge in [borders.top, borders.left, borders.bottom, borders.right] {
+        assert!(!single(edge), "{borders:?}");
     }
 
     let mut ruled_top = inside.clone();
@@ -1441,4 +1554,190 @@ fn shared_base64_keeps_padded_unwrapped_export_bytes() {
     assert_eq!(encoded.len(), 344);
     assert!(!encoded.contains(['\r', '\n']));
     assert!(encoded.ends_with("/w=="));
+}
+
+/// Each place a picture is drawn embeds it whole in the HTML, so the places count against the
+/// media limits: past them, pictures are left out instead of multiplying one into gigabytes.
+#[test]
+fn html_bounds_the_pictures_it_embeds() {
+    let mut p = page();
+    let one = p.images[0].clone();
+    p.images = std::iter::repeat_n(one, MAX_MEDIA + 10).collect();
+    for h in [html(std::slice::from_ref(&p), "Report"), html_simple(std::slice::from_ref(&p), "Report")] {
+        assert_eq!(h.matches("<img").count(), MAX_MEDIA);
+    }
+}
+
+/// RTF keeps a page's pictures, inline where they sit in the reading order (it left them out).
+#[test]
+fn rtf_keeps_pictures() {
+    let r = rtf(&[page()]);
+    assert!(r.contains(r"\pngblip"), "{r}");
+    let doc = craft_rtf::doc::import(r.as_bytes()).unwrap();
+    let pictures = doc
+        .body
+        .iter()
+        .filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p) } else { None })
+        .flat_map(|p| &p.objects)
+        .filter(|o| matches!(o, craft_wordmodel::InlineObject::Image { .. }))
+        .count();
+    assert_eq!(pictures, 1, "{r}");
+}
+
+/// Headings are Word's Heading 1 and 2 styles, which a word processor shows in its outline.
+#[test]
+fn rtf_headings_have_heading_styles() {
+    let r = rtf(&[page()]);
+    let doc = craft_rtf::doc::import(r.as_bytes()).unwrap();
+    let heading = doc.body.iter().find_map(|b| match &**b {
+        craft_wordmodel::Block::Para(p) if p.plain_text() == "Annual Report" => Some(p.props.style.clone()),
+        _ => None,
+    });
+    let style = heading.flatten().and_then(|id| doc.styles.styles.iter().find(|s| s.id == id).map(|s| s.para.outline_level));
+    assert_eq!(style, Some(Some(0)), "Annual Report is a level 1 heading: {r}");
+}
+
+/// The document's title goes into the RTF's information group, and PdfCraft is named as the
+/// application that wrote it.
+#[test]
+fn rtf_names_the_title_and_pdfcraft() {
+    let r = crate::rtf_with_title(&[page()], "Annual Report");
+    assert_eq!(craft_rtf::doc::import(r.as_bytes()).unwrap().core.title, "Annual Report", "{r}");
+    assert!(r.contains(r"{\*\generator PdfCraft;}") && !r.contains("WordCraft"), "{r}");
+}
+
+/// Two tables one under the other stay two tables: in RTF, rows that follow each other are one
+/// table, so a paragraph keeps them apart.
+#[test]
+fn rtf_keeps_tables_that_touch_apart() {
+    // Two grids on one page with nothing between them.
+    let mut one = table_page();
+    one.blocks.retain(|b| !b.text.starts_with("Notes"));
+    let mut lower = one.blocks.clone();
+    for b in &mut lower {
+        b.rect[1] -= 300.0;
+        b.rect[3] -= 300.0;
+    }
+    one.blocks.extend(lower);
+    let r = rtf(std::slice::from_ref(&one));
+    let (found, _) = tables(&one.blocks, &one.rules);
+    assert_eq!(found.len(), 2, "the page has two grids");
+    let read = craft_rtf::doc::import(r.as_bytes()).unwrap().body.iter().filter(|b| matches!(&***b, craft_wordmodel::Block::Table(_))).count();
+    assert_eq!(read, 2, "{r}");
+}
+
+/// A hard line ending in the text (LF, CR or CRLF) is a line break inside its paragraph or table
+/// cell, which RTF readers keep (storytold/pdfcraft#4723, by KyleKassen): they ignore a bare line
+/// ending as whitespace.
+#[test]
+fn rtf_keeps_hard_line_breaks_in_paragraphs_and_cells() {
+    let mut paragraph = page();
+    paragraph.blocks.truncate(1);
+    paragraph.blocks[0].text = "First\nSecond\r\nThird\rFourth".into();
+    paragraph.blocks[0].italic = true;
+    paragraph.images.clear();
+    let r = rtf(&[paragraph]);
+    let texts: Vec<String> = rtf_sections(&r).into_iter().flat_map(|s| s.1).collect();
+    assert_eq!(texts, ["First\nSecond\nThird\nFourth"], "one paragraph, four lines: {r}");
+
+    let mut table = table_page();
+    table.blocks[0].text = "Meter\nnumber".into();
+    table.blocks[4].text = "kWh\r\nunit".into();
+    let r = rtf(&[table]);
+    let back = craft_rtf::read(r.as_bytes()).unwrap();
+    let cells: Vec<String> = back
+        .blocks
+        .iter()
+        .filter_map(|b| if let craft_rtf::Block::Table(t) = b { Some(t) } else { None })
+        .flat_map(|t| t.rows.iter().flatten())
+        .map(|c| c.paras.iter().map(|p| p.text()).collect())
+        .collect();
+    assert!(cells.contains(&"Meter\nnumber".to_string()) && cells.contains(&"kWh\nunit".to_string()), "{cells:?}");
+}
+
+/// The Word export names PdfCraft as its application, its body font (Arial) in a font table that
+/// says it is a sans-serif, so a reader without it draws a like face.
+#[test]
+fn word_names_pdfcraft_and_its_fonts() {
+    let zip = docx(&[page()], "Report");
+    assert!(part(&zip, "docProps/app.xml").contains("<Application>PdfCraft</Application>"));
+    let fonts = part(&zip, "word/fontTable.xml");
+    assert!(fonts.contains(r#"<w:font w:name="Arial"><w:family w:val="swiss"/>"#), "{fonts}");
+    assert_eq!(craft_docx::read(&zip).unwrap().styles.default_chr.font.as_deref(), Some("Arial"));
+}
+
+/// A positioned page's text boxes have a VML fallback, which Word 2007 reads (it refuses a Word
+/// 2010 shape on its own).
+#[test]
+fn word_text_boxes_have_a_fallback_for_word_2007() {
+    let mut p = table_page();
+    p.blocks[0].rotation = 45.0;
+    let xml = part(&docx(&[p], "Rotated"), "word/document.xml");
+    let boxes = xml.matches("<wps:txbx>").count();
+    assert!(boxes > 0, "{xml}");
+    assert_eq!(xml.matches("<mc:Fallback>").count(), boxes, "{xml}");
+    assert!(xml.contains("<v:textbox"), "{xml}");
+}
+
+/// Rotated text is one text box turned with it, as wide as the text's run, not a column of
+/// letters: the W-4 draft's "DRAFT — DO NOT FILE" down its margin.
+#[test]
+fn word_rotated_text_is_a_turned_line() {
+    let mut p = page();
+    p.blocks.push(Block {
+        text: "DRAFT — DO NOT FILE".into(),
+        // Running up the left margin: 11 pt text turned a quarter, so its box is tall and narrow.
+        rect: [20.0, 200.0, 31.0, 330.0],
+        size: 11.0,
+        bold: false,
+        italic: false,
+        color: [0.0; 3],
+        rotation: 90.0,
+        space_around: [false; 2],
+    });
+    let doc = craft_docx::read(&docx(&[p], "Draft")).unwrap();
+    let objects = body_objects(&doc);
+    let draft = objects.iter().copied().find(|o| shape_text(&doc, o) == "DRAFT — DO NOT FILE").expect("the margin text");
+    let craft_wordmodel::InlineObject::Shape { w, h, float, .. } = draft else { panic!("not a shape") };
+    assert!((float.rot - 270.0).abs() < 0.01, "{}", float.rot);
+    assert!((*w - 130.0).abs() < 0.5 && (*h - 11.0).abs() < 0.5, "unturned, it is a line: {w} x {h}");
+}
+
+/// A line break or a tab inside a block's text stays one in its Word paragraph, in a table cell
+/// too (storytold/pdfcraft#5112 by KyleKassen made Word export write them).
+#[test]
+fn word_keeps_line_breaks_and_tabs_inside_paragraphs_and_cells() {
+    let mut p = page();
+    p.blocks.truncate(1);
+    p.blocks[0].text = "First\nSecond\r\nThird\tafter a tab".into();
+    p.images.clear();
+    let doc = craft_docx::read(&docx(&[p], "Breaks")).unwrap();
+    let texts: Vec<String> = body_paragraphs(&doc).iter().map(|p| p.plain_text()).filter(|t| !t.is_empty()).collect();
+    assert_eq!(texts, ["First\nSecond\nThird\tafter a tab"]);
+
+    let mut t = table_page();
+    t.blocks[0].text = "Meter\nnumber".into();
+    t.blocks[4].text = "kWh\tunit".into();
+    let tables = docx_tables(&docx(&[t], "Breaks"));
+    let cells: Vec<String> = tables
+        .iter()
+        .flat_map(|t| t.rows.iter().flat_map(|r| &r.cells))
+        .map(|c| c.blocks.iter().filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p.plain_text()) } else { None }).collect())
+        .collect();
+    assert!(cells.contains(&"Meter\nnumber".to_string()) && cells.contains(&"kWh\tunit".to_string()), "{cells:?}");
+}
+
+#[test]
+fn checked_rtf_reports_omitted_pictures_once_per_page_without_dropping_text() {
+    let mut first = page();
+    first.images[0].rotation = f64::NAN;
+    first.images.push(first.images[0].clone());
+    let clean = page();
+    let mut third = first.clone();
+    third.blocks[0].text = "Surviving last-page text".into();
+    let pages = [first, clean, third];
+    let (output, omitted) = crate::rtf_with_title_checked(&pages, "Partial");
+    assert_eq!(omitted, [0, 2]);
+    assert!(output.contains("Surviving last-page text"));
+    assert_eq!(output, crate::rtf_with_title(&pages, "Partial"));
 }
