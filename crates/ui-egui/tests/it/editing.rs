@@ -5514,7 +5514,7 @@ fn a_held_arrow_key_moves_the_picture_on_screen_before_release() {
     h.step();
     let held_picture = h.render().unwrap();
     let idle_ink = red(&held_picture, probe(end));
-    eprintln!("held without a repeat: red pixels at the new edge {idle_ink}");
+    assert!(idle_ink > 0, "the picture stays at the new edge between key repeats");
     let uncovered = egui::Rect::from_min_max(
         start.left_top() + egui::vec2(start.width() * 0.25, 8.0),
         egui::pos2(start.left() + start.width() * 0.4, start.center().y - 5.0),
