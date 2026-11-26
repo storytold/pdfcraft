@@ -15,13 +15,15 @@ const SCALE: f32 = 3.0;
 const MAX_PIXELS: f32 = 4_000_000.0;
 /// How far around the word (points) the paper is read.
 const RING: f32 = 4.0;
-/// How far a rule may lean across the area, as a fraction of its length, and still be read row by
-/// row: a scan is rarely off square by more than half a degree.
-const LEAN: f32 = 1.0 / 120.0;
+/// How far a rule may lean across the area, one pixel in this many of its length, and still be
+/// read row by row: a scan is rarely off square by more than half a degree.
+const LEAN: usize = 120;
 /// The least of a row (or column) that must be inked over its rule's length for it to be part of
 /// the rule's strip: the rows a leaning rule runs through, not the blank row beside it that the
-/// lean allowance reads.
+/// lean allowance reads. A rule one pixel thick leaning the most [`LEAN`] allows puts `LEAN`
+/// pixels on each row, whatever its length, so no row is asked for more than half of that.
 const ROW_INK: f32 = 0.2;
+const ROW_INK_LEANING: f32 = LEAN as f32 / 2.0;
 /// How far (pixels) a rule may stop short of the edge, or of the rule it meets, and still be read
 /// as reaching it: the halo a scanned junction leaves.
 const JUNCTION_GAP: usize = 2;
@@ -148,7 +150,7 @@ fn rule_strips(dark: &[bool], w: usize, h: usize) -> Vec<[usize; 4]> {
     }
     let at = |x: usize, y: usize| dark.get(y * w + x).copied().unwrap_or(false);
     // A rule may lean a little: a row is read together with the rows within `lean` of it.
-    let lean = |len: usize| ((len as f32 * LEAN / 2.0).ceil() as usize).max(1);
+    let lean = |len: usize| len.div_ceil(2 * LEAN).max(1);
     let (lean_y, lean_x) = (lean(w), lean(h));
     let row_inked = |x: usize, y: usize| (y.saturating_sub(lean_y)..=(y + lean_y).min(h - 1)).any(|yy| at(x, yy));
     let column_inked = |x: usize, y: usize| (x.saturating_sub(lean_x)..=(x + lean_x).min(w - 1)).any(|xx| at(xx, y));
@@ -188,28 +190,20 @@ fn lines(
 
 /// Where a rule runs at one position: the longest stretch of ink (the rules it crosses counting
 /// as ink) that starts at the edge or at a rule it meets, within [`JUNCTION_GAP`], and ends at
-/// the other, with [`MIN_RUN`] of ink of its own and [`ROW_INK`] of it on this very row, trimmed
-/// to that ink. `None` when there is no such stretch.
+/// the other, with [`MIN_RUN`] of ink of its own and [`ROW_INK`] of it on this very row. `None`
+/// when there is no such stretch.
 fn line(len: usize, inked: impl Fn(usize) -> bool, own: impl Fn(usize) -> bool, anchors: &[[usize; 2]]) -> Option<[usize; 2]> {
     let in_anchor = |j: usize| anchors.iter().any(|[a0, a1]| (*a0..*a1).contains(&j));
     let starts_anchored = |s: usize| s <= JUNCTION_GAP || in_anchor(s) || anchors.iter().any(|[_, a1]| *a1 <= s && s - a1 <= JUNCTION_GAP);
     let ends_anchored = |e: usize| e + JUNCTION_GAP >= len || in_anchor(e - 1) || anchors.iter().any(|[a0, _]| *a0 >= e && a0 - e <= JUNCTION_GAP);
     let own_run = ((MIN_RUN * len as f32).ceil() as usize).max(3);
+    let row_ink = |run: usize| (ROW_INK * run as f32).min(ROW_INK_LEANING);
     runs(len, |j| inked(j) || in_anchor(j))
         .into_iter()
         .filter(|[s, e]| starts_anchored(*s) && ends_anchored(*e))
         .filter(|[s, e]| (*s..*e).filter(|&j| inked(j) && !in_anchor(j)).count() >= own_run)
-        .filter(|[s, e]| (*s..*e).filter(|&j| own(j)).count() as f32 >= ROW_INK * (e - s) as f32)
-        .filter_map(|run| trimmed(run, &own))
+        .filter(|[s, e]| (*s..*e).filter(|&j| own(j)).count() as f32 >= row_ink(e - s))
         .max_by_key(|[s, e]| e - s)
-}
-
-/// `[start, end)` without the leading and trailing indexes where `keep` fails, or `None` when
-/// nothing is left.
-fn trimmed([start, end]: [usize; 2], keep: impl Fn(usize) -> bool) -> Option<[usize; 2]> {
-    let first = (start..end).find(|&i| keep(i))?;
-    let last = (start..end).rev().find(|&i| keep(i))?;
-    Some([first, last + 1])
 }
 
 /// The stretches `[start, end)` of `0..n` where `is` holds.
@@ -287,6 +281,14 @@ mod tests {
             g.rect(x, y, x + 1, y + 3);
         }
         assert_eq!(g.strips(), [[0, 9, 240, 15]], "one strip over the rows it runs through");
+
+        // A rule one pixel thick, leaning the most that is allowed, across a long area: each row
+        // holds only 1 / LEAN of its pixels, however long the area.
+        let mut g = Grid::new(720, 40);
+        for x in 0..720 {
+            g.rect(x, 10 + x / 120, x + 1, 11 + x / 120);
+        }
+        assert_eq!(g.strips(), [[0, 11, 720, 15]], "the rows that see all of it, over its whole length");
     }
 
     #[test]
@@ -319,12 +321,12 @@ mod tests {
         g.rect(0, 20, 200, 23);
         // Down from the rule to the bottom edge; up from the top edge to the rule; and down from
         // the rule after the halo of a scanned junction. A divider that touches the rule runs
-        // through the rule's rows too: they are its ink as much as the rule's.
+        // through the rule's rows and halo too: they are its ink as much as the rule's.
         g.rect(50, 23, 53, 80);
         g.rect(120, 0, 123, 20);
         g.rect(150, 25, 153, 80);
         g.letters(60, 30, 110, 60);
-        assert_eq!(g.strips(), [[0, 19, 200, 24], [49, 19, 54, 80], [119, 0, 124, 24], [149, 24, 154, 80]]);
+        assert_eq!(g.strips(), [[0, 19, 200, 24], [49, 18, 54, 80], [119, 0, 124, 25], [149, 24, 154, 80]]);
 
         // A stroke of lettering that touches the rule, and a stub that meets nothing, are not dividers.
         let mut g = Grid::new(200, 80);
@@ -343,13 +345,6 @@ mod tests {
         g.rect(6, 0, 9, 84);
         g.rect(12, 12, 192, 72);
         assert_eq!(g.strips(), [[0, 5, 204, 10], [5, 0, 10, 84]]);
-    }
-
-    #[test]
-    fn a_strip_is_trimmed_to_what_is_inked() {
-        assert_eq!(trimmed([2, 8], |i| (4..6).contains(&i)), Some([4, 6]));
-        assert_eq!(trimmed([2, 8], |_| true), Some([2, 8]));
-        assert_eq!(trimmed([2, 8], |_| false), None);
     }
 
     #[test]
