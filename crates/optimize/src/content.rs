@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use pdfcraft_content::{Op, parse};
+use pdfcraft_content::{Op, ops as read};
 use pdfcraft_cos::{Document, ImageBudget, MAX_PAGE_DECODED, ObjRef, Object, Stream, serialize};
 use pdfcraft_filters::{Filter, Params};
 
@@ -19,6 +19,8 @@ const WORK_PER_BYTE: u64 = 16;
 const MAX_SAVE_DEPTH: usize = 1024;
 /// Deepest array or dictionary operand written.
 const MAX_OPERAND_DEPTH: u8 = 32;
+/// Most operators, and most operands, read from one stream; a stream with more is left as it is.
+const MAX_OPS: usize = 2_000_000;
 
 /// The operators of ISO 32000-2 Annex A. A stream with any other is left as it is.
 const KNOWN: &[&[u8]] = &[
@@ -150,15 +152,15 @@ fn compact(s: &Stream, budget: &mut ImageBudget) -> Outcome {
     if !budget.spend(u64::try_from(data.len()).unwrap_or(u64::MAX).saturating_mul(WORK_PER_BYTE)) {
         return Outcome::Unreadable;
     }
-    let parsed = parse(&data);
-    if parsed.skipped > 0 || parsed.ambiguous_images > 0 {
-        return Outcome::Unreadable;
-    }
-    if !rewritable(&parsed.ops) || has_lone_sign(&data) {
+    let ops = match read_all(&data, MAX_OPS) {
+        Ok(ops) => ops,
+        Err(outcome) => return outcome,
+    };
+    if !rewritable(&ops) || has_odd_number(&data) {
         return Outcome::Kept;
     }
-    let Some(keep) = redundant(&parsed.ops) else { return Outcome::Kept };
-    let kept: Vec<&Op> = parsed.ops.iter().zip(&keep).filter(|(_, k)| **k).map(|(op, _)| op).collect();
+    let Some(keep) = redundant(&ops) else { return Outcome::Kept };
+    let kept: Vec<&Op> = ops.iter().zip(&keep).filter(|(_, k)| **k).map(|(op, _)| op).collect();
     let Some(out) = write(&kept, data.first().is_some_and(|b| is_ws(*b))) else { return Outcome::Kept };
     if !reads_back(&out, &kept) {
         return Outcome::Kept;
@@ -168,11 +170,30 @@ fn compact(s: &Stream, budget: &mut ImageBudget) -> Outcome {
     let new = if chain.is_empty() { Stream::from_raw(dict, out.clone()) } else { Stream::flate(dict, &out) };
     match (stored_len(&new), stored_len(s)) {
         (Some(after), Some(before)) if after < before => {
-            let counts = Counts { ops_removed: parsed.ops.len().saturating_sub(kept.len()), bytes_before: data.len(), bytes_after: out.len() };
+            let counts = Counts { ops_removed: ops.len().saturating_sub(kept.len()), bytes_before: data.len(), bytes_after: out.len() };
             Outcome::Compacted(new, counts)
         }
         _ => Outcome::Kept,
     }
+}
+
+/// Every operator of `data`, unless some bytes can't be read for certain ([`Outcome::Unreadable`])
+/// or there are more than `max` operators or operands ([`Outcome::Kept`]).
+fn read_all(data: &[u8], max: usize) -> Result<Vec<Op>, Outcome> {
+    let mut reader = read(data);
+    let mut ops = Vec::new();
+    let mut operands = 0usize;
+    for op in reader.by_ref() {
+        operands = operands.saturating_add(op.operands.len());
+        if ops.len() >= max || operands > max {
+            return Err(Outcome::Kept);
+        }
+        ops.push(op);
+    }
+    if reader.skipped() > 0 || reader.ambiguous_images() > 0 {
+        return Err(Outcome::Unreadable);
+    }
+    Ok(ops)
 }
 
 /// The filters of `s`, when its data is in the file, only general-purpose filters with direct
@@ -210,35 +231,72 @@ fn rewritable_filters(s: &Stream) -> Option<Vec<(Filter, Params)>> {
     (parms_ok && chain.len() == names.len()).then_some(chain)
 }
 
-/// Whether every operator is one this knows and writes: no inline image, no unknown operator, no
-/// reference among the operands, and `q` and `Q` without operands.
+/// Whether every operator is one this knows and writes: no inline image or a part of one, no
+/// unknown operator, no reference among the operands, and `q` and `Q` without operands.
 fn rewritable(ops: &[Op]) -> bool {
     ops.iter().all(|op| {
         op.inline.is_none()
+            && !matches!(op.op.as_slice(), b"BI" | b"ID" | b"EI")
             && KNOWN.contains(&op.op.as_slice())
             && !(matches!(op.op.as_slice(), b"q" | b"Q") && !op.operands.is_empty())
             && op.operands.iter().all(|o| !matches!(o, Object::Ref(_) | Object::Stream(_)))
     })
 }
 
-/// Whether `data` may hold a token of signs alone (`-`, `+-`), which the parser reads as 0 and
-/// other readers may not. Strings and names are not told apart, so this may refuse a stream that
-/// has none.
-fn has_lone_sign(data: &[u8]) -> bool {
-    let boundary = |b: Option<&u8>| b.is_none_or(|b| is_ws(*b) || is_delim(*b));
+/// Whether `data` holds a token that starts like a number but isn't one by §7.3.3 (`-`, `1.2.3`,
+/// `1e5`, `.`, `--5`): the parser reads those leniently, so writing them as it read them would
+/// change what another reader sees, and reading the result back can't tell. Comments, strings
+/// and names are skipped.
+fn has_odd_number(data: &[u8]) -> bool {
     let mut i = 0;
     while let Some(&b) = data.get(i) {
-        if matches!(b, b'-' | b'+') && boundary(i.checked_sub(1).and_then(|p| data.get(p))) {
-            let run = data.get(i..).map_or(0, |rest| rest.iter().take_while(|c| matches!(c, b'-' | b'+')).count());
-            if boundary(data.get(i.saturating_add(run))) {
-                return true;
+        let rest = data.get(i..).unwrap_or_default();
+        let len = match b {
+            b'%' => rest.iter().position(|c| matches!(c, b'\r' | b'\n')).unwrap_or(rest.len()),
+            b'(' => literal_len(rest),
+            b'<' if rest.get(1) == Some(&b'<') => 2,
+            b'<' => rest.iter().position(|c| *c == b'>').map_or(rest.len(), |p| p.saturating_add(1)),
+            b'/' => rest.iter().skip(1).take_while(|c| is_regular(**c)).count().saturating_add(1),
+            _ if is_regular(b) => {
+                let token = rest.iter().take_while(|c| is_regular(**c)).count();
+                if matches!(b, b'+' | b'-' | b'.' | b'0'..=b'9') && !is_number(rest.get(..token).unwrap_or_default()) {
+                    return true;
+                }
+                token
             }
-            i = i.saturating_add(run);
-        } else {
-            i = i.saturating_add(1);
-        }
+            _ => 1,
+        };
+        i = i.saturating_add(len.max(1));
     }
     false
+}
+
+/// The length of the literal string `s` starts with, balanced parentheses and escapes included.
+fn literal_len(s: &[u8]) -> usize {
+    let mut depth = 0usize;
+    let mut i = 0;
+    while let Some(&c) = s.get(i) {
+        match c {
+            b'\\' => i = i.saturating_add(1),
+            b'(' => depth = depth.saturating_add(1),
+            b')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return i.saturating_add(1);
+                }
+            }
+            _ => {}
+        }
+        i = i.saturating_add(1);
+    }
+    s.len()
+}
+
+/// Whether `t` is an integer or real as §7.3.3 writes them: a sign at most, digits, and at most
+/// one period, with a digit somewhere.
+fn is_number(t: &[u8]) -> bool {
+    let body = t.strip_prefix(b"+").or_else(|| t.strip_prefix(b"-")).unwrap_or(t);
+    body.iter().any(u8::is_ascii_digit) && body.iter().all(|c| c.is_ascii_digit() || *c == b'.') && body.iter().filter(|c| **c == b'.').count() <= 1
 }
 
 /// Which operators to keep, or `None` when `q` nests deeper than this tracks.
@@ -399,7 +457,8 @@ impl Out {
 }
 
 /// The shortest text that reads back as `r` exactly, without an exponent (§7.3.3 has none): a
-/// whole number in the integer range as an integer, others without the leading zero.
+/// whole number in the integer range as an integer, others as reals, without the leading zero.
+/// A whole number beyond that range keeps a period, so no reader takes it for an integer.
 fn real(r: f64) -> Option<String> {
     if !r.is_finite() {
         return None;
@@ -408,7 +467,10 @@ fn real(r: f64) -> Option<String> {
         // Whole and within ±2³¹−1, so the conversion is exact.
         return Some(format!("{}", r as i64));
     }
-    let s = r.to_string();
+    let mut s = r.to_string();
+    if !s.contains('.') {
+        s.push('.');
+    }
     Some(if let Some(rest) = s.strip_prefix("0.") {
         format!(".{rest}")
     } else if let Some(rest) = s.strip_prefix("-0.") {
@@ -420,11 +482,10 @@ fn real(r: f64) -> Option<String> {
 
 /// Whether `out` reads back as exactly the operators `kept`, operands compared by value.
 fn reads_back(out: &[u8], kept: &[&Op]) -> bool {
-    let again = parse(out);
-    again.skipped == 0
-        && again.ambiguous_images == 0
-        && again.ops.len() == kept.len()
-        && again.ops.iter().zip(kept).all(|(a, b)| a.op == b.op && a.inline.is_none() && same_all(&a.operands, &b.operands))
+    !has_odd_number(out)
+        && read_all(out, MAX_OPS).is_ok_and(|again| {
+            again.len() == kept.len() && again.iter().zip(kept).all(|(a, b)| a.op == b.op && a.inline.is_none() && same_all(&a.operands, &b.operands))
+        })
 }
 
 fn same_all(a: &[Object], b: &[Object]) -> bool {
@@ -464,7 +525,7 @@ mod tests {
     use pdfcraft_cos::Dict;
 
     fn kept(src: &str) -> Vec<Vec<u8>> {
-        let ops = parse(src.as_bytes()).ops;
+        let ops = read_all(src.as_bytes(), MAX_OPS).ok().unwrap();
         let keep = redundant(&ops).unwrap();
         ops.iter().zip(keep).filter(|(_, k)| *k).map(|(o, _)| o.op.clone()).collect()
     }
@@ -495,17 +556,36 @@ mod tests {
 
     #[test]
     fn numbers_are_written_shorter_and_read_back_exactly() {
-        for r in [0.5, -0.25, 0.1, 1.0 / 3.0, 612.000_1, -0.000_001, 3.0, -0.0, 1e12 + 0.5, 4e9] {
+        for r in [0.5, -0.25, 0.1, 1.0 / 3.0, 612.000_1, -0.000_001, 3.0, -0.0, 1e12 + 0.5, 4e9, -1e15] {
             let text = real(r).unwrap();
             let mut full = Vec::new();
             serialize(&Object::Real(r), &mut full);
             assert!(text.len() <= full.len(), "{r}: {text}");
             assert!(!text.contains('e'), "{text}");
-            let back = parse(format!("{text} w").as_bytes()).ops.first().and_then(|o| o.num(0));
+            assert!(is_number(text.as_bytes()), "{text}");
+            let back = read(format!("{text} w").as_bytes()).next().and_then(|o| o.num(0));
             assert_eq!(back, Some(r), "{text}");
         }
+        assert_eq!(real(4e9).as_deref(), Some("4000000000."), "beyond the integer range it stays a real");
         assert!(real(0.5).unwrap().len() < "0.5".len(), "the leading zero goes");
         assert!(real(f64::NAN).is_none());
+    }
+
+    #[test]
+    fn tokens_that_only_look_like_numbers_are_found_outside_strings_and_names() {
+        for odd in ["1.2.3", "1e5", "1.5e3", ".", "-.", "--5", "1.5-3", "-", "+-", "4E9"] {
+            assert!(has_odd_number(format!("0 0 m {odd} w").as_bytes()), "{odd}");
+        }
+        let fine = "% 1.2.3 in a comment\n(1e5 (2.3.4) \\) .) Tj <0A1e5> Tj /1.2.3 Do << /K -.5 >> BDC 1. .5 -3 +4 w d0 T* EMC";
+        assert!(!has_odd_number(fine.as_bytes()));
+    }
+
+    #[test]
+    fn a_stream_with_more_operators_than_the_cap_is_left_as_it_is() {
+        assert!(read_all(b"n n n", 3).is_ok());
+        assert!(matches!(read_all(b"n n n n", 3), Err(Outcome::Kept)));
+        assert!(matches!(read_all(b"1 2 3 4 m", 3), Err(Outcome::Kept)), "operands count too");
+        assert!(matches!(read_all(b"n ) n", 3), Err(Outcome::Unreadable)));
     }
 
     #[test]

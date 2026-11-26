@@ -5910,6 +5910,10 @@ fn content_streams_it_cannot_be_sure_of_are_left_as_they_are() {
         ("inline image", raw(format!("{pad} BI /W 1 /H 1 /BPC 8 /CS /G ID \x00 EI"))),
         ("unreadable bytes", raw(format!("{pad} ) 1 w"))),
         ("lone sign", raw(format!("{pad} 0 - m"))),
+        ("two periods", raw(format!("{pad} 1.2.3 w"))),
+        ("an exponent", raw(format!("{pad} 1e5 w"))),
+        ("a sign inside", raw(format!("{pad} 1.5-3 w"))),
+        ("a stray EI", raw(format!("{pad} EI"))),
         ("reference operand", raw(format!("{pad} 4 0 R w"))),
         ("image filter", with("Filter", Object::name("DCTDecode"), raw(pad.clone()))),
         ("crypt filter", with("Filter", Object::Array(vec![Object::name("Crypt")]), raw(pad.clone()))),
@@ -5924,6 +5928,44 @@ fn content_streams_it_cannot_be_sure_of_are_left_as_they_are() {
     let (mut doc, c) = with_content(raw(pad.clone()));
     assert_eq!(optimize(&mut doc, &settings).unwrap().content_streams, 1);
     assert!(stream(&doc, c).raw.len() < pad.len());
+}
+
+/// A stream under a chain of general filters, or Flate with a predictor, is compacted and stored
+/// with Flate alone, and decodes to what it drew.
+#[test]
+fn content_under_other_general_filters_is_compacted_to_flate() {
+    let pad = "0.50 g   0 0 m   10 10 l   S   ".repeat(10);
+    let hex: Vec<u8> = pad.bytes().flat_map(|b| format!("{b:02X}").into_bytes()).chain(*b">").collect();
+    let mut chain = Dict::new();
+    chain.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode")]));
+    let mut predicted = Dict::new();
+    predicted.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    let mut parms = Dict::new();
+    parms.set(b"Predictor".to_vec(), Object::Int(12));
+    parms.set(b"Columns".to_vec(), Object::Int(1));
+    predicted.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+    // PNG Up rows of one byte: each row is the filter byte 2 and the difference from the row above.
+    let mut rows = Vec::new();
+    let mut above = 0u8;
+    for b in pad.bytes() {
+        rows.extend([2, b.wrapping_sub(above)]);
+        above = b;
+    }
+    let settings = Settings { optimize_content: true, flate_unencoded: false, ..Settings::default() };
+    for (label, s) in [
+        ("ASCIIHex", Stream::from_raw(chain, hex)),
+        ("Flate with a predictor", Stream::from_raw(predicted, pdfcraft_filters::encode_flate(&rows).to_vec())),
+    ] {
+        assert_eq!(content_ops(&s.decoded_strict().unwrap()), content_ops(pad.as_bytes()), "{label}: the fixture decodes");
+        let (mut doc, c) = with_content(s);
+        assert_eq!(optimize(&mut doc, &settings).unwrap().content_streams, 1, "{label}");
+        let new = stream(&doc, c);
+        assert_eq!(new.dict.name(b"Filter"), Some(&b"FlateDecode"[..]), "{label}");
+        assert!(new.dict.get(b"DecodeParms").is_none(), "{label}");
+        let ops = content_ops(&new.decoded_strict().unwrap());
+        assert_eq!(ops.iter().filter(|(op, _)| op == b"g").count(), 1, "{label}: the repeated grey went");
+        assert_eq!(ops.iter().filter(|(op, _)| op == b"S").count(), 10, "{label}");
+    }
 }
 
 /// Page contents split into pieces are read as one stream: when one piece can't be read (here
