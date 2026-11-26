@@ -29,6 +29,11 @@ pub use fallback::strip_subset_tag;
 use regions::{alignment_frame, existing_gap, group_blocks, is_centred, rewrite_changed_words, rewrite_styled_block, row_sources, source_row_step};
 pub use session::TextSession;
 
+#[path = "text_containers.rs"]
+mod containers;
+#[path = "text_row_style.rs"]
+mod row_style;
+
 mod blocks;
 mod editor;
 mod fallback;
@@ -112,6 +117,7 @@ pub struct TextLine {
     scope: Option<usize>,
     /// The layers and graphics state parameters it is drawn in; see [`Paint`].
     paint: Paint,
+    containers: Vec<usize>,
     /// Right-to-left `/ActualText` already supplies typing order; glyph text still needs bidi
     /// recovery. Left-to-right ActualText (e.g. a Latin ligature) joins its line as usual.
     logical_order: bool,
