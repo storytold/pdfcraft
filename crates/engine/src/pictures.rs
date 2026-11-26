@@ -57,3 +57,76 @@ pub(crate) fn mark_source(doc: &mut pdfcraft_cos::Document, f: &MarkFile) -> Res
         Ok(pdfcraft_edit::MarkSource { xobject, size, image: true })
     }
 }
+
+/// A 3D model's poster: the picture in `file` brought into `doc` and fitted inside `rect`
+/// (user space), keeping its shape, and centred. It is drawn in user space and not counter-rotated
+/// (unlike a stamp), so on a page with `/Rotate` it turns with the page, as the model does.
+pub(crate) fn model_poster(doc: &mut pdfcraft_cos::Document, rect: [f64; 4], file: &MarkFile) -> Result<pdfcraft_annot::PosterPicture, EditError> {
+    let src = mark_source(doc, file)?;
+    let (sw, sh) = src.size;
+    if !(sw.is_finite() && sh.is_finite() && sw > 0.0 && sh > 0.0) {
+        return Err(EditError::Source(format!("{}: the poster has no area", file.name)));
+    }
+    Ok(pdfcraft_annot::PosterPicture { xobject: src.xobject, image: src.image, size: (sw, sh), at: fit_picture(rect, sw, sh) })
+}
+
+/// The dimensions of an image from its bytes (JPEG, PNG, TIFF), without decoding the full raster.
+pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    match craft_image_codecs::detect(bytes)? {
+        craft_image_codecs::Format::Tiff => {
+            let info = craft_image_codecs::tiff_info(bytes).ok()?;
+            let page = info.default_page().and_then(|i| info.pages.get(i))?;
+            let (w, h) = (page.width, page.height);
+            if (5..=8).contains(&craft_image_codecs::tiff_orientation(bytes)) { Some((h, w)) } else { Some((w, h)) }
+        }
+        craft_image_codecs::Format::Png => {
+            if bytes.get(12..16)? != b"IHDR" {
+                return None;
+            }
+            let w = u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?);
+            let h = u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?);
+            (w > 0 && h > 0).then_some((w, h))
+        }
+        craft_image_codecs::Format::Jpeg => {
+            let (w, h) = pdfcraft_xfa::image::size(bytes)?;
+            if (5..=8).contains(&pdfcraft_create::jpeg_exif_orientation(bytes)) { Some((h, w)) } else { Some((w, h)) }
+        }
+        _ => craft_image_codecs::probe_size(bytes).ok(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn phone_jpeg(w: u32, h: u32, orientation: u8) -> Vec<u8> {
+        let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgb, [20u8; 3].repeat((w * h) as usize)).unwrap();
+        let jpeg = craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &craft_image_codecs::EncodeOptions::default()).unwrap();
+        let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
+        exif.extend_from_slice(&[orientation, 0, 0, 0, 0, 0, 0, 0]);
+        let mut out = jpeg[..2].to_vec();
+        out.extend_from_slice(&[0xff, 0xe1]);
+        out.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+        out.extend_from_slice(&exif);
+        out.extend_from_slice(&jpeg[2..]);
+        out
+    }
+
+    #[test]
+    fn jpeg_exif_orientation_swaps_dimensions_for_quarter_turns() {
+        let turned_6 = phone_jpeg(60, 20, 6);
+        assert_eq!(image_dimensions(&turned_6), Some((20, 60)));
+
+        let turned_8 = phone_jpeg(60, 20, 8);
+        assert_eq!(image_dimensions(&turned_8), Some((20, 60)));
+
+        let upright_1 = phone_jpeg(60, 20, 1);
+        assert_eq!(image_dimensions(&upright_1), Some((60, 20)));
+    }
+
+    #[test]
+    fn invalid_inputs_return_none() {
+        assert_eq!(image_dimensions(&[]), None);
+        assert_eq!(image_dimensions(b"not an image"), None);
+    }
+}

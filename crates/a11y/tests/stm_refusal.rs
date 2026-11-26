@@ -407,15 +407,17 @@ fn artifact_inline_parent_does_not_become_a_removable_indirect_ancestor() {
     }
 }
 
+/// Main checks the parent before it reads the page, so a tag with both a missing `/P` and
+/// content missing from its page is refused for its parent, with nothing changed.
 #[test]
-fn artifact_missing_page_content_precedes_invalid_parent_without_mutation() {
+fn artifact_invalid_parent_precedes_missing_page_content_without_mutation() {
     let mut doc = page_owned("11 0 R", &["<< /Type /MCR /MCID 1 /Pg 3 0 R >>"]);
     doc.update_dict(ObjRef::new(7, 0), |dict| {
         dict.remove(b"P");
     })
     .unwrap();
     let mut doc = Document::open(Arc::new(pdfcraft_cos::write_incremental(&doc, &Default::default()).unwrap())).unwrap();
-    assert_artifact_refusal_preserves(&mut doc, &pdfcraft_a11y::ArtifactError::ContentNotFound);
+    assert_artifact_refusal_preserves(&mut doc, &pdfcraft_a11y::ArtifactError::NoParent);
 }
 
 #[test]
