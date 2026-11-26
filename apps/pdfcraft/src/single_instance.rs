@@ -63,8 +63,6 @@ pub enum Claim {
 /// [`Server::connect`]. The intake exists before the window does, so files that a launch hands
 /// over at once are kept until the UI takes them.
 pub struct Server {
-    /// Feeds `intake`; the socket thread keeps a clone.
-    sender: IntakeSender,
     /// The window's context, set by [`Server::connect`]; a batch that arrives earlier wakes nothing.
     ctx: Arc<OnceLock<egui::Context>>,
     /// Handed out once by [`Server::connect`].
@@ -72,8 +70,9 @@ pub struct Server {
 }
 
 impl Server {
+    /// The server and the sender that feeds its intake, for the socket thread.
     #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
-    fn new() -> Self {
+    fn new() -> (Self, IntakeSender) {
         let ctx: Arc<OnceLock<egui::Context>> = Arc::default();
         let woken = Arc::clone(&ctx);
         let wake = Wake::new(move || {
@@ -82,7 +81,7 @@ impl Server {
             }
         });
         let (intake, sender) = FileIntake::new(wake);
-        Self { sender, ctx, intake: Mutex::new(Some(intake)) }
+        (Self { ctx, intake: Mutex::new(Some(intake)) }, sender)
     }
 
     /// The intake the UI drains every frame. Files that arrived before the window existed are in
@@ -334,8 +333,7 @@ fn hand_off(stream: &UnixStream, files: &[String], combine: bool) -> std::io::Re
 /// Accept launches on a background thread for as long as the process runs.
 #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
 fn serve(listener: UnixListener) -> Claim {
-    let server = Server::new();
-    let sender = server.sender.clone();
+    let (server, sender) = Server::new();
     let started = std::thread::Builder::new().name("single-instance".into()).spawn(move || {
         for stream in listener.incoming() {
             let result = stream.and_then(|s| receive(&s, &sender));
