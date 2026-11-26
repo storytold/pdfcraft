@@ -241,7 +241,7 @@ fn unbound_data(doc: &Document) -> Option<usize> {
     let data = crate::script::data_of(doc)?;
     let tpl = crate::script::template_of(doc).ok()?;
     let bound: std::collections::HashSet<crate::data::DataPath> =
-        crate::script::fields_by_som(doc).keys().map(|som| crate::data::data_path(&tpl, som)).collect();
+        crate::script::fields_by_som(doc).keys().map(|som| crate::data::bound_data_path(&tpl, Some(&data), som)).collect();
     fn walk(
         n: &crate::data::DataNode,
         path: &mut crate::data::DataPath,
