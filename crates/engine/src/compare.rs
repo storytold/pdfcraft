@@ -272,10 +272,12 @@ fn synthesized_page(blocks: &[pdfcraft_edit::TextBlock], info: &pdfcraft_render:
         let centre = |r: [f32; 4]| (r[1] + r[3]) / 2.0;
         let new_line = match lines.last() {
             None => true,
-            Some(line) => {
-                let first = line.words.first().expect("line has a word");
-                let height = (word.rect[3] - word.rect[1]).max(1.0);
-                (centre(word.rect) - centre(first.rect)).abs() > 0.6 * height
+            Some(line) => match line.words.first() {
+                None => true,
+                Some(first) => {
+                    let height = (word.rect[3] - word.rect[1]).max(1.0);
+                    (centre(word.rect) - centre(first.rect)).abs() > 0.6 * height
+                }
             }
         };
         if new_line {
