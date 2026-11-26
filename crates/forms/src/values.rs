@@ -324,15 +324,21 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             {
                 return invalid(format!("{:?} takes at most {max} characters", f.name));
             }
-            // Thai this build can't draw is refused (before any script runs), rather than stored
-            // and drawn as `?`.
-            if let Some(why) = appearance::thai_refusal(doc, f, t) {
+            // Arabic, Hebrew or Thai this build can't draw is refused (before any script runs),
+            // rather than stored and drawn as `?`.
+            if let Some(why) = appearance::script_refusal(doc, f, t) {
                 return invalid(format!("{:?} can't take this text: {why}", f.name));
             }
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
             let t = &f.actions.keystroke(&f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
             let (t, refresh_field) = if resetting { (t.clone(), false) } else { scripting::accept(doc, f, t, scripts)? };
+            // A Keystroke or Validate action can replace what was typed: the value it leaves is
+            // held to the same check before it is stored. (What a script already changed in
+            // other fields stays, as when a script rejects the value itself.)
+            if let Some(why) = appearance::script_refusal(doc, f, &t) {
+                return invalid(format!("{:?} can't take this text: {why}", f.name));
+            }
             let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
             doc.update_dict(f.obj, |d| {
                 if t.is_empty() && !shadow {
@@ -431,6 +437,8 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             // Each option once in both `/V` and `/I`: a reader that finds them differ (a repeat in one)
             // goes by the export values alone and may pick another option sharing one.
             let mut seen = vec![false; f.options.len()];
+            // Text typed into an editable combo box that is none of its options: drawn as typed.
+            let mut typed: Vec<String> = Vec::new();
             match value {
                 FieldValue::ChoiceIndices(positions) => {
                     for &i in positions {
@@ -459,14 +467,26 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
                                     picked.push(i);
                                 }
                             }
-                            None if f.kind == FieldKind::Combo && f.has(flags::EDIT) => exports.push(v.clone()),
-                            None if f.options.is_empty() => exports.push(v.clone()),
+                            None if (f.kind == FieldKind::Combo && f.has(flags::EDIT)) || f.options.is_empty() => {
+                                typed.push(v.clone());
+                                exports.push(v.clone());
+                            }
                             None => {
                                 let opts: Vec<&str> = f.options.iter().map(|(_, d)| d.as_str()).collect();
                                 return invalid(format!("{:?} has no option {v:?} (options: {})", f.name, opts.join(", ")));
                             }
                         }
                     }
+                }
+            }
+            // A combo box draws its value as a text field does (the picked option's text, or what
+            // was typed), so Arabic, Hebrew or Thai this build can't draw is refused here too,
+            // rather than stored and drawn as `?`. A list box is not shaped: it draws `?` and
+            // reports it.
+            if f.kind == FieldKind::Combo {
+                let drawn = picked.iter().filter_map(|&i| f.options.get(i)).map(|(_, d)| d.as_str()).chain(typed.iter().map(String::as_str));
+                if let Some(why) = drawn.into_iter().find_map(|t| appearance::script_refusal(doc, f, t)) {
+                    return invalid(format!("{:?} can't take this text: {why}", f.name));
                 }
             }
             // /I lists option indices in ascending order, each once; /V keeps the caller's order.
@@ -683,7 +703,7 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
             None => appearance::field_appearance_drawn(doc, f, w, values, true),
         };
         undrawn |= missing.is_some();
-        // Thai glyphs are streams of their own.
+        // Shaped glyphs (Arabic, Hebrew, Thai) are streams of their own.
         pdfcraft_fonts::shaped_text::store_streams(doc, &mut stream.dict);
         let existing_ap = in_place
             .then(|| {

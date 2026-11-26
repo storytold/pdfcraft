@@ -508,7 +508,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 if matches!(turn, 90 | 180 | 270) {
                     d.set(b"PCTextRotate".to_vec(), Object::Int(turn));
                 }
-                let rect = fit_thai_ink(rect, turn, &new.contents, size, 2.0 + appearance::border_width(&d));
+                let rect = fit_shaped_ink(rect, turn, &new.contents, size, 2.0 + appearance::border_width(&d));
                 // An oval or a circle goes around the text box, its text wrapped as displayed:
                 // after `/PCTextRotate`, which swaps the box's sides on a quarter-turned page.
                 shape_text_box(&mut d, rect, style.border_shape, style.width);
@@ -540,11 +540,11 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
 }
 
 /// Text box `tb` (user space; its text upright on a page turned by `turn`), grown down as displayed
-/// until the ink of `text`'s Thai (stacked marks above its first line, descenders below its last)
-/// fits inside the padding `pad`, as the appearance lays it out at `size`. Other text, and a box
-/// tall enough already, keep the box they were given.
-fn fit_thai_ink(tb: [f64; 4], turn: i64, text: &str, size: f64, pad: f64) -> [f64; 4] {
-    if !text.chars().any(pdfcraft_fonts::shaped_text::is_thai) {
+/// until the ink of `text`'s shaped scripts (Thai stacked marks, Arabic and Hebrew marks above its
+/// first line, descenders below its last) fits inside the padding `pad`, as the appearance lays it
+/// out at `size`. Other text, and a box tall enough already, keep the box they were given.
+fn fit_shaped_ink(tb: [f64; 4], turn: i64, text: &str, size: f64, pad: f64) -> [f64; 4] {
+    if !pdfcraft_fonts::shaped_text::has_shaped_script(text) {
         return tb;
     }
     let [x0, y0, x1, y1] = normalize(tb);

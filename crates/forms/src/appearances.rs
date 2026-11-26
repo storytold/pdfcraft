@@ -77,7 +77,7 @@ pub fn with_field_appearances_cached(doc: &Document, cache: &mut FieldAppearance
             };
             let target = copy.get_or_insert_with(|| doc.clone());
             let mut stream = stream;
-            // Thai glyphs are streams of their own.
+            // Shaped glyphs (Arabic, Hebrew, Thai) are streams of their own.
             pdfcraft_fonts::shaped_text::store_streams(target, &mut stream.dict);
             let ap = target.add(Object::Stream(stream));
             let mut fresh = Dict::new();
