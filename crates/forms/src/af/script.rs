@@ -383,9 +383,12 @@ fn notation_text(src: &str) -> &str {
     }
 }
 
+/// The `/AA /C` JavaScript that stores `c`; `None` when it stores none (no calculation, or a
+/// blank custom script).
 pub fn calculate_js(c: &Calculate) -> Option<String> {
     match c {
         Calculate::None => None,
+        Calculate::Custom(js) => (!js.trim().is_empty()).then(|| js.clone()),
         Calculate::Simple { op, fields } => Some(format!(
             "AFSimple_Calculate({}, new Array({}));",
             js_str(op.code()),

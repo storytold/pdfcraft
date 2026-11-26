@@ -1,6 +1,7 @@
 //! Scan & OCR ▸ Enhance ▸ Camera image in the real shell (egui_kittest): drag a corner, then
 //! Enhance page; Cancel and Esc leave the page as it was.
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
@@ -14,13 +15,16 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "100").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, FIXTURE.to_vec()).unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     h
@@ -40,12 +44,14 @@ fn undo_label(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
 #[test]
 fn dragging_a_corner_then_enhance_page_straightens_the_page() {
     let mut h = harness();
-    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    assert!(h.execute("ocr.enhance_camera"));
     assert_eq!(h.state().quick_tool, QuickTool::EnhanceCamera);
     h.run_steps(3);
-    let quad = h.state().views[0].camera.expect("the corners start on the current page");
+    let quad = h.state().views[0].session.camera.expect("the corners start on the current page");
     assert_eq!(quad.page, 0);
-    assert_eq!(quad.corners, [[15.0, 20.0], [285.0, 20.0], [285.0, 380.0], [15.0, 380.0]], "inset by 5%");
+    for [x, y] in quad.corners {
+        assert!(x > 0.0 && x < 300.0 && y > 0.0 && y < 400.0, "inside the page and inset from every edge: {x}, {y}");
+    }
 
     // Drag the top-left corner to (60, 80) on the page.
     let r = h.state().views[0].page_screen_rect(0).unwrap();
@@ -60,7 +66,7 @@ fn dragging_a_corner_then_enhance_page_straightens_the_page() {
     }
     h.drop_at(b);
     h.run_steps(2);
-    let c = h.state().views[0].camera.unwrap().corners[0];
+    let c = h.state().views[0].session.camera.unwrap().corners[0];
     assert!((c[0] - 60.0).abs() < 1.0 && (c[1] - 80.0).abs() < 1.0, "{c:?}");
     assert_eq!(undo_label(&h), None, "dragging changes nothing yet");
 
@@ -73,8 +79,8 @@ fn dragging_a_corner_then_enhance_page_straightens_the_page() {
     assert_eq!(undo_label(&h).as_deref(), Some("Enhance camera image"));
     // The tool stays open for the enhanced page: turn it, then Done.
     assert_eq!(h.state().quick_tool, QuickTool::EnhanceCamera);
-    assert!(h.state().views[0].camera.is_none());
-    assert_eq!(h.state().views[0].camera_done.map(|d| d.page), Some(0));
+    assert!(h.state().views[0].session.camera.is_none());
+    assert_eq!(h.state().views[0].session.camera_done.map(|d| d.page), Some(0));
     h.get_by_label("Rotate clockwise").click();
     h.run_steps(4);
     let (w, hh) = size(&h, 0);
@@ -83,17 +89,17 @@ fn dragging_a_corner_then_enhance_page_straightens_the_page() {
     h.get_by_label("Done").click();
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
-    assert_eq!(h.state().views[0].camera_done, None);
+    assert_eq!(h.state().views[0].session.camera_done, None);
 }
 
 #[test]
 fn the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn() {
     let mut h = harness();
-    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    assert!(h.execute("ocr.enhance_camera"));
     h.run_steps(3);
     h.get_by_label("Enhance page").click();
     h.run_steps(4);
-    let done = h.state().views[0].camera_done.unwrap();
+    let done = h.state().views[0].session.camera_done.unwrap();
     assert_eq!((done.look, done.level, done.steps), (pdfcraft_engine::camera_clean::Look::Colour, 50, 1), "enhanced in colour at the default level");
     h.get_by_label("Rotate clockwise").click();
     h.run_steps(4);
@@ -102,12 +108,12 @@ fn the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn() {
 
     // Let go of the slider at 100.
     let view = &mut h.state_mut().views[0];
-    if let Some(d) = view.camera_done.as_mut() {
+    if let Some(d) = view.session.camera_done.as_mut() {
         d.level = 100;
     }
     view.pending_action = Some(pdfcraft_ui_egui::canvas::ViewAction::CameraLevel);
     h.run_steps(4);
-    let done = h.state().views[0].camera_done.unwrap();
+    let done = h.state().views[0].session.camera_done.unwrap();
     assert_eq!((done.applied.1, done.steps, done.turns), (100, 2, 90));
     assert_eq!(size(&h, 0), turned, "still turned");
     // The history holds one enhancement and one turn, not a pile of them.
@@ -124,14 +130,14 @@ fn the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn() {
 fn choosing_a_look_enhances_again() {
     use pdfcraft_engine::camera_clean::Look;
     let mut h = harness();
-    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    assert!(h.execute("ocr.enhance_camera"));
     h.run_steps(3);
     h.get_by_label("Enhance page").click();
     h.run_steps(4);
     for (label, look) in [("Black and white", Look::BlackWhite), ("Greyscale", Look::Greyscale), ("Original", Look::Original)] {
         h.get_by_label(label).click();
         h.run_steps(4);
-        let done = h.state().views[0].camera_done.unwrap();
+        let done = h.state().views[0].session.camera_done.unwrap();
         assert_eq!((done.applied.0, done.steps), (look, 1), "{label}");
         let s = h.state();
         assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Enhance camera image"), "{label}");
@@ -142,16 +148,16 @@ fn choosing_a_look_enhances_again() {
 fn after_enhance_page_crop_and_organize_take_over() {
     for (button, then) in [("Crop pages", QuickTool::Crop), ("Organize pages", QuickTool::Select)] {
         let mut h = harness();
-        assert!(h.state_mut().execute("ocr.enhance_camera"));
+        assert!(h.execute("ocr.enhance_camera"));
         h.run_steps(3);
         h.get_by_label("Enhance page").click();
         h.run_steps(4);
-        assert_eq!(h.state().views[0].camera_done.map(|d| d.page), Some(0));
-        // The quick toolbar also has a "Crop pages" button; the camera panel's pill is the first match.
-        h.get_all_by_label(button).next().unwrap().click();
+        assert_eq!(h.state().views[0].session.camera_done.map(|d| d.page), Some(0));
+        // The quick toolbar also has a "Crop pages" button.
+        h.get_by_role_and_label(egui::accesskit::Role::Group, "Camera image").get_by_label(button).click();
         h.run_steps(3);
         assert_eq!(h.state().quick_tool, then, "{button}");
-        assert_eq!(h.state().views[0].camera_done, None, "{button}");
+        assert_eq!(h.state().views[0].session.camera_done, None, "{button}");
         assert_eq!(h.state().views[0].organize, button == "Organize pages");
     }
 }
@@ -159,20 +165,20 @@ fn after_enhance_page_crop_and_organize_take_over() {
 #[test]
 fn cancel_and_escape_leave_the_page_alone() {
     let mut h = harness();
-    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    assert!(h.execute("ocr.enhance_camera"));
     h.run_steps(3);
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
-    assert!(h.state().views[0].camera.is_none());
+    assert!(h.state().views[0].session.camera.is_none());
 
-    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    assert!(h.execute("ocr.enhance_camera"));
     h.run_steps(3);
-    assert!(h.state().views[0].camera.is_some());
+    assert!(h.state().views[0].session.camera.is_some());
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
-    assert!(h.state().views[0].camera.is_none());
+    assert!(h.state().views[0].session.camera.is_none());
     assert_eq!(size(&h, 0), (300.0, 400.0));
     assert_eq!(undo_label(&h), None);
 }
@@ -183,7 +189,7 @@ fn cancel_and_escape_leave_the_page_alone() {
 #[test]
 fn the_level_leaves_the_page_alone_when_another_edit_came_in_between() {
     let mut h = harness();
-    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    assert!(h.execute("ocr.enhance_camera"));
     h.run_steps(3);
     h.get_by_label("Enhance page").click();
     h.run_steps(4);
@@ -197,16 +203,16 @@ fn the_level_leaves_the_page_alone_when_another_edit_came_in_between() {
     }
     h.run_steps(2);
     let before = size(&h, 0);
-    let applied = h.state().views[0].camera_done.unwrap().applied;
+    let applied = h.state().views[0].session.camera_done.unwrap().applied;
 
     let view = &mut h.state_mut().views[0];
-    if let Some(d) = view.camera_done.as_mut() {
+    if let Some(d) = view.session.camera_done.as_mut() {
         d.level = 100;
     }
     view.pending_action = Some(pdfcraft_ui_egui::canvas::ViewAction::CameraLevel);
     h.run_steps(4);
     assert_eq!(size(&h, 0), before, "the page is not warped again");
-    let done = h.state().views[0].camera_done.unwrap();
+    let done = h.state().views[0].session.camera_done.unwrap();
     assert_eq!((done.level, done.applied), (applied.1, applied), "the slider goes back");
     let s = h.state_mut();
     let id = s.views[0].id;

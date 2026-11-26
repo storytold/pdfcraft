@@ -452,6 +452,20 @@ fn forbidden_actions_chained_behind_allowed_ones_are_found_and_removed() {
         build(&["<< /Type /Catalog /Pages 2 0 R >>", pages, page, &link(&format!("<< /S /GoTo /D [3 0 R /Fit] /Next {js} >>"))], ""),
         // `/Next` refers to an array that holds the action directly.
         build(&["<< /Type /Catalog /Pages 2 0 R >>", pages, page, &link("<< /S /GoTo /D [3 0 R /Fit] /Next 5 0 R >>"), &format!("[{js}]")], ""),
+        // `/Next` refers to the action itself, which carries `/P` and `/K` as a structure
+        // element would: those keys must not exempt it.
+        build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                pages,
+                page,
+                &link("<< /S /GoTo /D [3 0 R /Fit] /Next 5 0 R >>"),
+                "<< /S /JavaScript /JS (app.alert(1)) /P 3 0 R /K 0 >>",
+            ],
+            "",
+        ),
+        // A `/Next` array refers to the action.
+        build(&["<< /Type /Catalog /Pages 2 0 R >>", pages, page, &link("<< /S /GoTo /D [3 0 R /Fit] /Next [5 0 R] >>"), js], ""),
     ];
     for (i, mut doc) in cases.into_iter().enumerate() {
         let found = messages(&verify(&doc, Level::A2b)).contains(&"A JavaScript action isn't allowed");
@@ -493,6 +507,199 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
         doc.set(pdfcraft_cos::ObjRef::new(2, 0), Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), &profile)));
         assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
     }
+}
+
+/// A widget the form reader finds by its field is an annotation whether or not it writes
+/// `/Type /Annot`: conversion takes its additional actions off all the same.
+#[test]
+fn a_widget_without_a_type_loses_its_additional_actions() {
+    let pages = "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>";
+    let page = "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>";
+    let widget = "<< /Subtype /Widget /Rect [0 0 10 10] /F 4 /T (f) /AA << /K << /S /JavaScript /JS (1) >> >> >>";
+    let mut doc = build(&["<< /Type /Catalog /Pages 2 0 R >>", pages, page, widget], "");
+    convert(&mut doc, Level::A2b).unwrap();
+    let w = doc.get(pdfcraft_cos::ObjRef::new(4, 0));
+    assert!(w.as_dict().is_some_and(|d| d.get(b"AA").is_none()), "{w:?}");
+}
+
+/// Forbidden annotations on one page are taken off it in one pass, all of them.
+#[test]
+fn forbidden_annotations_leave_their_page_together() {
+    let n = 300;
+    let annots: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 4)).collect();
+    let page = format!("<< /Type /Page /Parent 2 0 R /Annots [{} 2 0 R] >>", annots.join(" "));
+    let mut objs =
+        vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string(), "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(), page];
+    objs.extend((0..n).map(|_| "<< /Type /Annot /Subtype /Sound /Rect [0 0 0 0] /P 3 0 R >>".to_string()));
+    let refs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let mut doc = build(&refs, "");
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.fixed.iter().any(|f| f.starts_with(&format!("{n}: removed multimedia"))), "{:?}", r.fixed);
+    let left = pdfcraft_model::pages(&doc)[0].dict.get(b"Annots").and_then(|a| doc.resolve(a).as_array().map(Vec::len));
+    assert_eq!(left, Some(1));
+}
+
+/// Content that can't be read may draw in DeviceCMYK: convert then adds no sRGB output intent.
+#[test]
+fn convert_adds_no_srgb_intent_when_colour_could_not_all_be_read() {
+    let mut doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << >> >>",
+            // A /Filter that isn't a name can't be decoded: the content isn't read.
+            "<< /Length 9 /Filter 5 >>\nstream\nnot flate\nendstream",
+        ],
+        "",
+    );
+    convert(&mut doc, Level::A2b).unwrap();
+    assert!(declared(&doc).output_intents.is_empty());
+}
+
+/// A `/Next` chain of arrays alone (each array naming the next) still reaches the chain limit,
+/// so the walk's work is bounded however the arrays are linked.
+#[test]
+fn an_array_only_next_chain_is_too_deeply_chained() {
+    let mut doc = Document::new_empty();
+    let mut next = Object::Array(Vec::new());
+    for _ in 0..2 * MAX_ACTION_CHAIN {
+        next = Object::Array(vec![Object::Ref(doc.add(next))]);
+    }
+    let mut action = Dict::new();
+    action.set(b"S".to_vec(), Object::name("URI"));
+    action.set(b"Next".to_vec(), Object::Ref(doc.add(next)));
+    assert_eq!(chain_forbidden(&doc, &action).as_deref(), Some("too deeply chained"));
+    // A short chain of arrays is read through.
+    let mut short = Object::Array(Vec::new());
+    for _ in 0..10 {
+        short = Object::Array(vec![Object::Ref(doc.add(short))]);
+    }
+    action.set(b"Next".to_vec(), Object::Ref(doc.add(short)));
+    assert_eq!(chain_forbidden(&doc, &action), None);
+}
+
+/// A direct `/Next` array wider than the chain limit is refused as soon as it is charged, and a
+/// `/Next` that reaches its array through a reference alias is read through it.
+#[test]
+fn a_wide_direct_next_array_is_refused_and_an_alias_is_followed() {
+    let uri = || {
+        let mut d = Dict::new();
+        d.set(b"S".to_vec(), Object::name("URI"));
+        d
+    };
+    let mut action = uri();
+    action.set(b"Next".to_vec(), Object::Array((0..=MAX_ACTION_CHAIN).map(|_| Object::Dict(uri())).collect()));
+    let doc = Document::new_empty();
+    assert_eq!(chain_forbidden(&doc, &action).as_deref(), Some("too deeply chained"));
+    // `/Next` -> 1 0 R -> 2 0 R -> [ << /S /JavaScript >> ]
+    let mut doc = Document::new_empty();
+    let mut js = Dict::new();
+    js.set(b"S".to_vec(), Object::name("JavaScript"));
+    let list = doc.add(Object::Array(vec![Object::Dict(js)]));
+    let alias = doc.add(Object::Ref(list));
+    let mut action = uri();
+    action.set(b"Next".to_vec(), Object::Ref(alias));
+    assert_eq!(chain_forbidden(&doc, &action).as_deref(), Some("JavaScript"));
+}
+
+/// Every distinct output intent is declared, past eight; an identifier longer than any real one
+/// keeps its start.
+#[test]
+fn every_output_intent_is_declared_with_its_identifier_cut_to_the_bound() {
+    let long = "x".repeat(4 * MAX_IDENTIFIER_BYTES);
+    let intents: Vec<String> = (0..9)
+        .map(|i| {
+            format!("<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier ({}) >>", if i == 8 { long.clone() } else { format!("c{i}") })
+        })
+        .collect();
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R /OutputIntents [{}] >>", intents.join(" "));
+    let doc = build(&[catalog.as_str(), "<< /Type /Pages /Kids [] /Count 0 >>"], "");
+    let d = declared(&doc);
+    assert_eq!(d.output_intents.len(), 9);
+    assert_eq!(d.output_intents[8].len(), MAX_IDENTIFIER_BYTES);
+}
+
+#[test]
+fn typeless_annotations_indexed_cmyk_and_indirect_filter_elements_are_handled() {
+    // Annotations in /Annots that omit optional /Type /Annot and /P (while keeping required /Subtype
+    // and /Rect), whether indirect or direct dictionaries, are still verified and fixed by convert.
+    // A malformed /Annots dictionary without /Type /Annot and without /Rect is not treated as an
+    // annotation or destructively removed by convert.
+    let mut doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 8 0 R << /Subtype /Movie /Rect [60 10 70 30] >> << /Subtype /Sound >> << /Subtype /Sound /Rect null >> << /Subtype /Sound /Rect 9 0 R >>] >>",
+            "<< /Subtype /Text /Rect [10 10 30 30] /P 3 0 R /AP << /N 7 0 R >> >>",
+            "<< /Subtype /Sound /Rect [50 10 60 30] >>",
+            "<< /Subtype /Widget /FT /Tx /T (f) /Rect [70 10 90 30] /F 4 /AA << /E << /S /URI /URI (https://example.com) >> >> /AP << /N 7 0 R >> >>",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 0 >>\nstream\n\nendstream",
+            "<< /Subtype /Movie >>",
+            "null",
+        ],
+        "",
+    );
+    let issues = verify(&doc, Level::A2b);
+    let msgs = messages(&issues);
+    assert!(msgs.contains(&"A Text annotation isn't set to print, or is hidden"), "{msgs:#?}");
+    assert!(msgs.contains(&"Sound annotations aren't allowed"), "{msgs:#?}");
+    assert!(msgs.contains(&"Movie annotations aren't allowed"), "{msgs:#?}");
+    assert!(msgs.contains(&"A Widget annotation has additional actions"), "{msgs:#?}");
+    assert!(!msgs.contains(&"A form field has additional actions"), "{msgs:#?}");
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.remaining.is_empty(), "{:#?}", r.remaining);
+    // The two /Rect-bearing forbidden annotations (5 0 R and the inline /Movie with /Rect) were
+    // removed, while the /Rect-less or null-/Rect dictionaries (8 0 R and the inline /Sound
+    // entries) without /Type /Annot are left untouched rather than destructively stripped.
+    assert_eq!(&*doc.get(ObjRef::new(5, 0)), &Object::Null);
+    assert!(doc.get(ObjRef::new(8, 0)).as_dict().is_some());
+    let page_annots = doc.get(ObjRef::new(3, 0)).as_dict().and_then(|d| d.get(b"Annots")).and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(page_annots.len(), 6, "{page_annots:#?}");
+    assert!(page_annots.iter().any(|entry| entry.as_ref() == Some(ObjRef::new(8, 0))));
+    assert_eq!(page_annots.iter().filter(|entry| entry.as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Sound"))).count(), 3);
+
+    // Indexed and Separation colour spaces over DeviceCMYK on image XObjects or /ColorSpace resources count as CMYK.
+    let indexed_img = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>",
+            "<< /Length 7 >>\nstream\n/Im0 Do\nendstream",
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace [/Indexed /DeviceCMYK 0 <00000000>] /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream",
+        ],
+        "",
+    );
+    assert!(uses_cmyk(&indexed_img));
+
+    let res_cmyk = drawing("/CS0 cs 0 sc 0 0 10 10 re f", "/ColorSpace << /CS0 [/Indexed /DeviceCMYK 0 <00000000>] >>", &[]);
+    assert!(uses_cmyk(&res_cmyk));
+    let pattern_cmyk = drawing("0 0 10 10 re f", "/ColorSpace << /CS0 [/Pattern /DeviceCMYK] >>", &[]);
+    assert!(uses_cmyk(&pattern_cmyk));
+    let chained_cs = drawing("0 0 10 10 re f", "/ColorSpace << /CS0 5 0 R >>", &["6 0 R", "[7 0 R 8 0 R]", "/Pattern", "/DeviceCMYK"]);
+    assert!(uses_cmyk(&chained_cs));
+
+    // An indirect filter name inside a /Filter array or the /LZW abbreviation is still checked for LZWDecode.
+    let indirect_lzw = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+            "<< /Filter [5 0 R] /Length 0 >>\nstream\n\nendstream",
+            "/LZWDecode",
+        ],
+        "",
+    );
+    assert!(messages(&verify(&indirect_lzw, Level::A2b)).contains(&"A stream uses LZW compression"));
+    let abbrev_lzw = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+            "<< /Filter /LZW /Length 0 >>\nstream\n\nendstream",
+        ],
+        "",
+    );
+    assert!(messages(&verify(&abbrev_lzw, Level::A2b)).contains(&"A stream uses LZW compression"));
 }
 
 /// PDF/A-2 6.1.13 holds a file to the implementation limits of ISO 32000-1 Annex C (Table C.1):
