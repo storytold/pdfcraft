@@ -1921,3 +1921,5 @@ fn checker_reports_each_untagged_annotation_without_copying_shared_dictionaries(
     let found = content::page_rule(&doc, Rule::TaggedAnnotations, &pages, &[0], &Default::default(), false);
     assert_eq!(found.len(), 2, "the popup is skipped, each listed text annotation reported");
 }
+
+mod untagged;

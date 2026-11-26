@@ -384,7 +384,7 @@ fn content_entries(doc: &Document, page: &Dict) -> Vec<Object> {
 
 /// How much of a content stream decoded.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Read {
+pub(crate) enum Read {
     Whole,
     /// Damaged partway: the data is what decoded before the damage. What follows it is unknown,
     /// the syntax the later streams start in too.
@@ -394,11 +394,11 @@ enum Read {
 }
 
 /// A `/Contents` entry and, for a stream, the stream, its decoded data and how much of it decoded.
-type DecodedStream = (Object, Option<(Stream, Vec<u8>, Read)>);
+pub(crate) type DecodedStream = (Object, Option<(Stream, Vec<u8>, Read)>);
 
 /// Decode the page's content streams within the page decode budget. `None` when a stream is
 /// rejected because the budget is exhausted.
-fn decode_page_streams(doc: &Document, page: &Dict) -> Option<Vec<DecodedStream>> {
+pub(crate) fn decode_page_streams(doc: &Document, page: &Dict) -> Option<Vec<DecodedStream>> {
     let entries = content_entries(doc, page);
     let mut streams = Vec::with_capacity(entries.len());
     let mut budget = DecodeBudget::page();
@@ -481,6 +481,18 @@ fn artifact_marked_content(
     if read.iter().zip(&decoded).zip(&spliced).any(|((read, old), new)| *read != Read::Whole && *old != new.as_slice()) {
         return Ok(Marked::Damaged);
     }
+    write_streams(doc, page.obj, streams, spliced)?;
+    Ok(Marked::Done)
+}
+
+/// Point the page at its content streams with `spliced` as their data, one entry per decoded
+/// stream: a stream whose data changes becomes a new object, and every other entry stays.
+pub(crate) fn write_streams(
+    doc: &mut Document,
+    page: ObjRef,
+    streams: Vec<DecodedStream>,
+    spliced: Vec<Vec<u8>>,
+) -> Result<(), pdfcraft_cos::CosError> {
     let mut spliced = spliced.into_iter();
     let mut next = Vec::with_capacity(streams.len());
     for (entry, stream) in streams {
@@ -509,8 +521,8 @@ fn artifact_marked_content(
         [one] => one.clone(),
         _ => Object::Array(next),
     };
-    doc.update_dict(page.obj, |p| p.set(b"Contents".to_vec(), contents))?;
-    Ok(Marked::Done)
+    doc.update_dict(page, |p| p.set(b"Contents".to_vec(), contents))?;
+    Ok(())
 }
 
 /// Decorative figure: its marked content on the page becomes an artifact, and the element

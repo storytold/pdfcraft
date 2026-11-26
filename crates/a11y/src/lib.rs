@@ -22,6 +22,8 @@ mod layout_table;
 mod report;
 mod structure;
 mod tags;
+mod untagged;
+mod untagged_wraps;
 
 #[cfg(test)]
 thread_local! {
@@ -46,6 +48,7 @@ pub use headings::{Heading, headings};
 pub use layout_table::{LayoutTableError, layout_table_to_blocks};
 pub use report::{REPORT_WORDS, report_html};
 pub use tags::{TagContentItem, TagError, TagInfo, TagPlacement, TagProperty, move_tag, set_tag_property, tag_content, tags};
+pub use untagged::{MarkedPage, SkippedPage, UntaggedArtifacts, UntaggedError, mark_untagged_artifacts, plan_untagged_artifacts};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Category {

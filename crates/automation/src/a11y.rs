@@ -557,6 +557,20 @@ impl Automation {
         Ok(with_warnings(self.accessibility_tags(a)?, warnings))
     }
 
+    /// Mark the untagged content of tagged pages as artifacts, in one undo step when anything
+    /// changes; reports what was marked, the pages skipped and what was left, with the
+    /// document's summary under `document`.
+    pub(crate) fn accessibility_mark_untagged_artifact(&mut self, a: &Args) -> Result<Value> {
+        let pages = a.opt_ints("pages")?.map(|_| self.pages(a, "pages")).transpose()?.unwrap_or_default();
+        let doc = self.doc(a)?;
+        let (id, plan) = (doc.id, doc.untagged_artifacts(&pages).map_err(|e| failed(e.to_string()))?);
+        let warnings =
+            if plan.sequences > 0 { self.apply_with_warnings(id, pdfcraft_engine::Edit::MarkUntaggedArtifact { pages })? } else { Vec::new() };
+        let mut out = untagged_json(&plan);
+        out["document"] = crate::summary(self.doc(a)?);
+        Ok(with_warnings(out, warnings))
+    }
+
     pub(crate) fn accessibility_layout_table_to_blocks(&mut self, a: &Args) -> Result<Value> {
         let object = u32::try_from(a.int("object")?).map_err(|_| ToolError::InvalidArgs("object must be a positive tag object number".into()))?;
         if object == 0 {
@@ -599,6 +613,19 @@ impl Automation {
         let ((), out) = self.session.with_own_js_output(id, |s| s.apply(id, edit)).map_err(failed)?;
         Ok(out.errors)
     }
+}
+
+/// What marking untagged content as artifacts did, with 1-based pages.
+fn untagged_json(r: &pdfcraft_engine::a11y::UntaggedArtifacts) -> Value {
+    let page = |p: usize| p.saturating_add(1);
+    json!({
+        "changed": r.sequences > 0,
+        "sequences": r.sequences,
+        "items": r.items,
+        "pages": r.marked.iter().map(|m| json!({ "page": page(m.page), "sequences": m.sequences, "items": m.items })).collect::<Vec<_>>(),
+        "skipped": r.skipped.iter().map(|s| json!({ "page": page(s.page), "reason": s.reason })).collect::<Vec<_>>(),
+        "notes": r.notes,
+    })
 }
 
 /// `out` with `warnings` added to its `warnings` list (made when it has none).

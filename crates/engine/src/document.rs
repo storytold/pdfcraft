@@ -468,6 +468,11 @@ impl Document {
         self.editor.as_ref().map(|e| a11y::tag_content(&e.cos, object)).unwrap_or_else(|| Ok(Vec::new()))
     }
 
+    /// What `Edit::MarkUntaggedArtifact` would do to `pages` (0-based; empty is every page).
+    pub fn untagged_artifacts(&self, pages: &[usize]) -> Result<a11y::UntaggedArtifacts, a11y::UntaggedError> {
+        self.editor.as_ref().map(|e| a11y::plan_untagged_artifacts(&e.cos, pages)).unwrap_or_else(|| Ok(a11y::UntaggedArtifacts::default()))
+    }
+
     /// The edit that fixes `rule`, for the rules with an automatic fix: the document language
     /// (`value` is the language), the title (`value` replaces it; else the current title or the
     /// file name) and the tab order.
