@@ -898,7 +898,10 @@ pub fn refresh_value(live: &mut FormNode, tpl: &Template, data: Option<&DataNode
     Some(changed)
 }
 
-/// The data tree of a document's datasets packet.
+/// The data tree of a document's datasets packet. When the packets are an array, only the datasets packet is read.
 pub fn data_of(doc: &Document) -> Option<DataNode> {
+    if let Some(text) = crate::packets::datasets_packet_text(doc) {
+        return crate::data::parse_datasets_packet(&text);
+    }
     crate::read_packets(doc).ok().flatten().and_then(|p| parse_datasets(&p.xdp))
 }

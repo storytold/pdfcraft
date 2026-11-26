@@ -29,7 +29,7 @@ pub fn parse_datasets(xdp: &str) -> Option<DataNode> {
 /// read inside an element declaring them when it doesn't parse alone, and the datasets element in
 /// the XFA data namespace is preferred over another with the same local name. Reading the packet
 /// any other way could miss the values the writer put in it.
-pub(super) fn parse_datasets_packet(text: &str) -> Option<DataNode> {
+pub(crate) fn parse_datasets_packet(text: &str) -> Option<DataNode> {
     if crate::xml_nesting_depth(text) > crate::MAX_XML_DEPTH {
         return None;
     }
