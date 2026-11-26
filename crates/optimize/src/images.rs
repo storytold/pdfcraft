@@ -813,30 +813,59 @@ fn process(
     }
     let px = pixels(doc, s, n, budget)?;
     let px = if (nw, nh) != (w, h) { resample(&px, n, w, h, nw, nh)? } else { px };
-    let new = image_stream(d, &px, n, (nw, nh), settings.compression, was_dct, predictor)?;
-    // A soft mask must keep the image's dimensions: resample it with the image (lossless).
-    let mut smask = None;
-    if let Some(mr) = d.reference(b"SMask") {
-        let mobj = doc.get(mr);
-        let Object::Stream(m) = &*mobj else { return None };
-        if (nw, nh) != (w, h) {
-            if m.dict.int(b"BitsPerComponent") != Some(8) || m.dict.contains(b"Matte") || m.dict.contains(b"Decode") {
-                return None;
-            }
-            let (mw, mh) = (u32::try_from(m.dict.int(b"Width")?).ok()?, u32::try_from(m.dict.int(b"Height")?).ok()?);
-            let mpx = pixels(doc, m, 1, budget)?;
-            let mpx = resample(&mpx, 1, mw, mh, nw, nh)?;
-            smask = Some((mr, image_stream(&m.dict, &mpx, 1, (nw, nh), Compression::Flate, false, predictor)?));
-        }
+    let mask = resampled_mask(doc, d, (w, h), (nw, nh), budget)?;
+    let build = |predictor| {
+        let new = image_stream(d, &px, n, (nw, nh), settings.compression, was_dct, predictor)?;
+        let smask = match &mask {
+            Some((r, m, mpx)) => Some((*r, image_stream(m, mpx, 1, (nw, nh), Compression::Flate, false, predictor)?)),
+            None => None,
+        };
+        Some((new, smask))
+    };
+    let first = build(predictor)?;
+    if smaller(doc, s, &first)? {
+        return Some(first);
     }
-    // Smaller as stored, counting the dictionaries: a predicted stream's /DecodeParms among them.
+    // Predicted output that isn't smaller may still lose to plain Flate, as `Auto` would find.
+    let predicted = predict::is_predicted(&first.0) || first.1.as_ref().is_some_and(|(_, m)| predict::is_predicted(m));
+    let plain = (predictor == FlatePredictor::Png && predicted).then(|| build(FlatePredictor::Off)).flatten()?;
+    smaller(doc, s, &plain)?.then_some(plain)
+}
+
+/// A soft mask must keep the image's dimensions: resampled to `(nw, nh)` with the image
+/// (lossless), it is returned with its dictionary and samples. `Some(None)` when the image has no
+/// mask or keeps its size; `None` when the mask can't be resampled, and the image stays.
+fn resampled_mask(
+    doc: &Document,
+    d: &Dict,
+    (w, h): (u32, u32),
+    (nw, nh): (u32, u32),
+    budget: &mut ImageBudget,
+) -> Option<Option<(ObjRef, Dict, Vec<u8>)>> {
+    let Some(mr) = d.reference(b"SMask") else { return Some(None) };
+    let mobj = doc.get(mr);
+    let Object::Stream(m) = &*mobj else { return None };
+    if (nw, nh) == (w, h) {
+        return Some(None);
+    }
+    if m.dict.int(b"BitsPerComponent") != Some(8) || m.dict.contains(b"Matte") || m.dict.contains(b"Decode") {
+        return None;
+    }
+    let (mw, mh) = (u32::try_from(m.dict.int(b"Width")?).ok()?, u32::try_from(m.dict.int(b"Height")?).ok()?);
+    let mpx = pixels(doc, m, 1, budget)?;
+    Some(Some((mr, m.dict.clone(), resample(&mpx, 1, mw, mh, nw, nh)?)))
+}
+
+/// Whether the replacement `(new, smask)` is smaller as stored than image `s` and the soft mask
+/// it resamples, counting the dictionaries: a predicted stream's /DecodeParms among them.
+fn smaller(doc: &Document, s: &Stream, (new, smask): &(Stream, Option<(ObjRef, Stream)>)) -> Option<bool> {
     let old_mask = smask.as_ref().map_or(Some(0), |(r, _)| match &*doc.get(*r) {
         Object::Stream(m) => crate::stored_len(m),
         _ => Some(0),
     });
     let before = crate::stored_len(s)?.checked_add(old_mask?)?;
-    let after = crate::stored_len(&new)?.checked_add(smask.as_ref().map_or(Some(0), |(_, m)| crate::stored_len(m))?)?;
-    (after < before).then_some((new, smask))
+    let after = crate::stored_len(new)?.checked_add(smask.as_ref().map_or(Some(0), |(_, m)| crate::stored_len(m))?)?;
+    Some(after < before)
 }
 
 /// Whether colour space `cs` has one colour component, so a 1-bit image in it has one bit per
@@ -1751,9 +1780,9 @@ fn decide(doc: &Document, r: ObjRef, ppi: f64, defaults: bool, settings: &Settin
     // A dithered scan, say, downsampled and JPEG-compressed: the smaller wins, counting a soft
     // mask resampled with it.
     let smask_len = |smask: Option<&(ObjRef, Stream)>| match smask {
-        Some((_, m)) => Some(m.raw.len()),
+        Some((_, m)) => Some(crate::stored_len(m).unwrap_or(0)),
         None => s.dict.reference(b"SMask").map(|m| match &*doc.get(m) {
-            Object::Stream(m) => m.raw.len(),
+            Object::Stream(m) => crate::stored_len(m).unwrap_or(0),
             _ => 0,
         }),
     };

@@ -747,6 +747,35 @@ fn eight_bit_black_and_white_with_a_soft_mask_counts_the_mask() {
     }
 }
 
+/// The soft masks are compared as stored, dictionaries included: the 640 × 800 mask above, under
+/// which packing wins, with a /DecodeParms entry larger than packing's lead. Packed, the image
+/// keeps that dictionary; resampled by the grey settings, the mask is written without it, and wins.
+#[test]
+fn eight_bit_black_and_white_with_a_soft_mask_counts_the_mask_as_stored() {
+    let (w, h, (mw, mh)) = (1200u32, 1500u32, (640u32, 800u32));
+    let mut doc = Document::new_empty();
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let noise: Vec<u8> = (0..mw * mh)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 24) as u8
+        })
+        .collect();
+    let mut parms = Dict::new();
+    parms.set(b"Note".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(vec![b'a'; 600_000])));
+    let mask = mono_image(&mut doc, mw, mh, &noise, None, &[("BitsPerComponent", 8.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    doc.update_dict(mask, |d| d.set(b"DecodeParms".to_vec(), Object::Dict(parms))).unwrap();
+    let grey = [("BitsPerComponent", 8.into()), ("ColorSpace", Object::name("DeviceGray")), ("SMask", Object::Ref(mask))];
+    let img = mono_image(&mut doc, w, h, &eight_bit(&bilevel(w, h, false), w, h), None, &grey);
+    page(&mut doc, &[("A", img)], "q 288 0 0 360 20 400 cm /A Do Q");
+    optimize(&mut doc, &Settings::default()).unwrap();
+    let s = stream(&doc, img);
+    assert_eq!((s.dict.int(b"BitsPerComponent"), s.dict.name(b"Filter")), (Some(8), Some(&b"DCTDecode"[..])), "{:?}", s.dict);
+    assert!(!stream(&doc, mask).dict.contains(b"DecodeParms"));
+}
+
 /// Eight-bit grey images of only black and white (as some scanners and converters write scans)
 /// become one-bit Group 4, losslessly: the page looks the same, an inverting decode array
 /// included. Not touched by this: a grey image with any other shade, an indexed image (its samples
@@ -6002,6 +6031,26 @@ fn a_prediction_that_gains_less_than_its_dictionary_keeps_the_original() {
     let report = optimize(&mut doc, &Settings { flate_predictor: FlatePredictor::Png, ..Settings::default() }).unwrap();
     let after = stream(&doc, img);
     assert_eq!((report.images_predicted, after.dict.get(b"Filter").cloned(), after.raw.to_vec()), (0, None, px));
+}
+
+/// A prediction that isn't smaller as stored gives way to plain Flate when that is: the same image
+/// with `/DL 0`, which re-encoding drops, is stored plain by `Png` as by `Auto`.
+#[test]
+fn a_prediction_that_isnt_smaller_gives_way_to_plain_flate_that_is() {
+    let (w, h) = (128, 32);
+    let px = near_noise(w, h, 120, 0);
+    let plain = Stream::flate(grey_image(w, h), &px);
+    let mut zip = plain.clone();
+    zip.dict.set(b"DL".to_vec(), Object::Int(0));
+    for predictor in [FlatePredictor::Png, FlatePredictor::Auto] {
+        let mut doc = Document::new_empty();
+        let img = doc.add(Object::Stream(zip.clone()));
+        page(&mut doc, &[("Im", img)], "q 122.88 0 0 30.72 36 36 cm /Im Do Q");
+        let report = optimize(&mut doc, &zip_settings(predictor)).unwrap();
+        let after = stream(&doc, img);
+        assert_eq!((report.images_predicted, after.dict.get(b"DL").cloned(), predicted(&after)), (0, None, false), "{predictor:?}");
+        assert_eq!(after.raw, plain.raw, "{predictor:?}");
+    }
 }
 
 #[test]
