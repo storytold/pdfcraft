@@ -1882,6 +1882,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let start = press.phase.start();
     let button = start.map(|start| start.button);
     let click = (presenting
+        && app.full_screen_click_turns
         && matches!(press.phase, PressPhase::Release { click: true, .. })
         && matches!(button, Some(PointerButton::Primary | PointerButton::Secondary)))
     .then(|| presenter::PresentClick {
@@ -1891,7 +1892,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
     // A click on a part (a link, a field, a note) is the part's (*Adobe Acrobat Help*, 2019, p. 65: the pointer stays
     // active "so that you can click links and open notes").
-    let cancels = body_out.link.is_some() || has_selection || (click.is_some() && body_out.over_part);
+    let cancels = !app.full_screen_click_turns || body_out.link.is_some() || has_selection || (click.is_some() && body_out.over_part);
     let click_turn = if presenting { view.session.presenter.click_turn(ui.ctx(), click, cancels, now, delay) } else { None };
     if let Some(forward) = body_out.turn.or(click_turn) {
         view.view.step(forward);

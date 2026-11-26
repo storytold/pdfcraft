@@ -81,6 +81,8 @@ pub struct Behavior {
     pub default_page_gaps: Option<bool>,
     /// Full screen fills the screen with one page at a time (off keeps the page display).
     pub full_screen_fill: Option<bool>,
+    /// Turn pages with mouse clicks in full screen.
+    pub full_screen_click_turns: Option<bool>,
     /// Esc leaves full screen (off leaves it to ⌘L / Ctrl+L only).
     pub full_screen_escape_exits: Option<bool>,
     pub units: Option<crate::units::Unit>,
@@ -579,6 +581,7 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
         Behavior {
             default_page_gaps: r.bool("default_page_gaps"),
             full_screen_fill: r.bool("full_screen_fill"),
+            full_screen_click_turns: r.bool("full_screen_click_turns"),
             full_screen_escape_exits: r.bool("full_screen_escape_exits"),
             units: r.typed("units"),
             always_default_view: r.bool("always_default_view"),

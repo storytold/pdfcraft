@@ -2783,31 +2783,34 @@ trailer << /Root 1 0 R >>
 /// the page, and a click beside it still turns.
 #[test]
 fn full_screen_click_on_a_field_fills_it_and_turns_no_page() {
-    let mut h = harness(&[]);
-    let ctx_h = h.ctx.clone();
-    h.state_mut().open_bytes(&ctx_h, "field.pdf", None, FIELD_PAGES.to_vec()).expect("opens");
-    h.run_steps(8);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
-    h.run_steps(6);
-    let n = h.state().views.len() - 1;
-    // Until page 1's raster is in, full screen veils it and a click turns the page; on a slow
-    // machine that takes more frames than the six above.
-    for _ in 0..600 {
-        if h.state().views[n].presentation_settled() {
-            break;
+    for turns in ["on", "off"] {
+        let mut h = harness(&[]);
+        h.set_option("full-screen-click-turns", turns).unwrap();
+        let ctx_h = h.ctx.clone();
+        h.state_mut().open_bytes(&ctx_h, "field.pdf", None, FIELD_PAGES.to_vec()).expect("opens");
+        h.run_steps(8);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+        h.run_steps(6);
+        let n = h.state().views.len() - 1;
+        // Until page 1's raster is in, full screen veils it and a click turns the page; on a slow
+        // machine that takes more frames than the six above.
+        for _ in 0..600 {
+            if h.state().views[n].presentation_settled() {
+                break;
+            }
+            h.run_steps(1);
         }
-        h.run_steps(1);
+        assert!(h.state().views[n].presentation_settled(), "page 1 is shown");
+        let r = h.state().views[n].page_screen_rect(0).expect("page 1 on screen");
+        let on_field = egui::pos2(r.left() + r.width() * 0.5, r.top() + r.height() * (400.0 - 120.0) / 400.0);
+        click_with(&mut h, on_field, Modifiers::NONE);
+        h.run_steps(8);
+        assert_eq!(h.state().views[n].current(), 0, "no page turned");
+        assert!(h.ctx.egui_wants_keyboard_input(), "the field is open for typing");
+        click_with(&mut h, egui::pos2(r.center().x, r.top() + 20.0), Modifiers::NONE);
+        h.run_steps(4);
+        assert_eq!(h.state().views[n].current(), usize::from(turns == "on"), "a click beside the field obeys the preference");
     }
-    assert!(h.state().views[n].presentation_settled(), "page 1 is shown");
-    let r = h.state().views[n].page_screen_rect(0).expect("page 1 on screen");
-    let on_field = egui::pos2(r.left() + r.width() * 0.5, r.top() + r.height() * (400.0 - 120.0) / 400.0);
-    click_with(&mut h, on_field, Modifiers::NONE);
-    h.run_steps(8);
-    assert_eq!(h.state().views[n].current(), 0, "no page turned");
-    assert!(h.ctx.egui_wants_keyboard_input(), "the field is open for typing");
-    click_with(&mut h, egui::pos2(r.center().x, r.top() + 20.0), Modifiers::NONE);
-    h.run_steps(4);
-    assert_eq!(h.state().views[n].current(), 1, "a click beside the field turns the page");
 }
 
 /// Shift+Ctrl+Page Down or Down Arrow goes to the last page, and Shift+Ctrl+Page Up or Up Arrow
@@ -2959,6 +2962,63 @@ fn escape_leaves_full_screen_mid_transition_and_stops_the_display_time() {
         h.run_steps(30);
         assert_eq!(h.state().views[0].current(), 1, "no page turns by itself after leaving (mid-transition: {mid_transition})");
     }
+}
+
+#[test]
+fn full_screen_mouse_clicks_can_be_disabled_in_preferences() {
+    use crate::support::input::one_frame;
+    use egui::accesskit::{Role, Toggled};
+    use egui_kittest::kittest::NodeT as _;
+
+    let mut h = harness(&[]);
+    assert!(h.execute("app.preferences"));
+    h.run_steps(3);
+    h.get_by_label("Full screen fills the screen with one page at a time");
+    let label = "Turn pages with mouse clicks in full screen";
+    assert!(h.query_by_role_and_label(Role::CheckBox, label).is_some(), "Full Screen offers a preference for mouse-click page turns");
+    assert_eq!(h.get_by_role_and_label(Role::CheckBox, label).accesskit_node().toggled(), Some(Toggled::True));
+    h.get_by_label(label).scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label(label).focus();
+    h.run_steps(1);
+    assert!(h.get_by_role_and_label(Role::CheckBox, label).is_focused());
+    h.key_press(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::CheckBox, label).accesskit_node().toggled(), Some(Toggled::False));
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+
+    let saved = serde_json::to_string(&h.state().settings_snapshot()).unwrap();
+    let mut restarted = crate::control::new_app();
+    restarted.apply_settings(&serde_json::from_str(&saved).unwrap());
+    assert!(!restarted.full_screen_click_turns, "the preference survives writing and reading settings");
+    let mut legacy = crate::control::new_app();
+    legacy.apply_settings(&PdfCraftSettings::default());
+    assert!(legacy.full_screen_click_turns, "settings without the key keep click turns enabled");
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(6);
+    assert!(h.state().full_screen());
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current(), 1);
+    let at = rect(&h, 1).expect("the middle page is on screen").center();
+    for button in [egui::PointerButton::Primary, egui::PointerButton::Secondary] {
+        one_frame(&mut h, [egui::Event::PointerMoved(at)]);
+        for pressed in [true, false] {
+            one_frame(&mut h, [egui::Event::PointerButton { pos: at, button, pressed, modifiers: Modifiers::NONE }]);
+        }
+        h.run_steps(6);
+        assert_eq!(h.state().views[0].current(), 1, "mouse button {button:?} does not turn the page");
+    }
+    h.key_press(Key::PageDown);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current(), 2, "keyboard page turns still work");
+    let at = rect(&h, 2).expect("the last page is on screen").center();
+    one_frame(&mut h, [egui::Event::PointerMoved(at)]);
+    one_frame(&mut h, [wheel(MouseWheelUnit::Line, 1.0, TouchPhase::Move)]);
+    h.run_steps(6);
+    assert_eq!(h.state().views[0].current(), 1, "wheel page turns still work");
 }
 
 /// Every way full screen moves: forward (→, Space, Enter, Page Down, a click), back (←, Backspace,
