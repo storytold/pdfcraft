@@ -2788,8 +2788,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.insert"]
 tools = ["page_insert_file"]
-evidence = ["crates/organize/src/tests.rs::inserting_pages_from_another_file_is_an_incremental_edit", "crates/organize/src/tests.rs::inserting_a_file_brings_its_bookmarks_under_one_named_after_it", "crates/automation/tests/it/automation.rs::inserting_a_file_brings_its_bookmarks", "crates/ui-egui/tests/it/editing.rs::inserting_a_file_goes_after_the_selection_and_undoes", "crates/ui-egui/tests/it/editing.rs::plus_between_pages_inserts_picked_files_there_in_order"]
-notes = "After the selection (toolbar, File menu) or at any gap of the page grid (a + between pages and at both ends); several files at once, in order; images and .txt files are converted first; the inserted pages end up selected. The file's bookmarks come along, collapsed under one named after the file, placed among the document's bookmarks where the pages went (as Combine does per file). The page_insert_file tool takes PDFs only. Missing: choosing which pages of the file to insert in the app; the file's tags (structure tree) are not merged."
+evidence = ["crates/organize/src/tests.rs::inserting_pages_from_another_file_is_an_incremental_edit", "crates/organize/src/tests.rs::inserting_a_file_brings_its_bookmarks_under_one_named_after_it", "crates/automation/tests/it/automation.rs::inserting_a_file_brings_its_bookmarks", "crates/ui-egui/tests/it/editing.rs::inserting_a_file_goes_after_the_selection_and_undoes", "crates/ui-egui/tests/it/editing.rs::plus_between_pages_inserts_picked_files_there_in_order", "crates/engine/tests/insert_attachments.rs::inserted_catalog_attachments_follow_native_undo_redo"]
+notes = "After the selection (toolbar, File menu) or at any gap of the page grid (a + between pages and at both ends); several files at once, in order; images and .txt files are converted first; the inserted pages end up selected. The file's bookmarks come along, collapsed under one named after the file, placed among the document's bookmarks where the pages went (as Combine does per file). Catalog attachments are merged with the document's existing attachments in the same undo step; colliding names are suffixed without changing their encoding. The page_insert_file tool takes PDFs only. Missing: choosing which pages of the file to insert in the app; the file's tags (structure tree) are not merged."
 
 [[feature]]
 id = "organize.insert-from-clipboard"
@@ -3171,9 +3171,9 @@ tier = "P1"
 milestone = "M4"
 status = "shipped"
 commands = []
-tools = []
-evidence = ["crates/organize/src/tests.rs::combine_nests_source_bookmarks_and_keeps_attachments"]
-notes = ""
+tools = ["doc_combine", "page_insert_file"]
+evidence = ["crates/organize/src/tests.rs::combine_nests_source_bookmarks_and_keeps_attachments", "crates/engine/tests/insert_attachments.rs::inserted_catalog_attachments_follow_native_undo_redo", "crates/engine/tests/insert_attachments.rs::inserting_into_a_document_without_attachments_retains_other_names"]
+notes = "Also preserved by Insert from File, including native undo/redo and existing destination name trees. This covers catalog EmbeddedFiles, not PDF 2.0 associated-file relationships (AF)."
 
 [[feature]]
 id = "organize.field-name-conflicts"

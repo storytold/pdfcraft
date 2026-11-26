@@ -264,6 +264,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-10-16 (M4, Insert from File):** Catalog attachments come along with inserted pages in the same undo step. Existing attachments and destination name trees stay; duplicate UTF-16 keys keep their encoding. Generated engine regressions cover save/undo/redo and failed-batch rollback. Estimates unchanged.
 
 - **2026-11-18 (M7, #7687):** PDF-page watermarks clip the source CropBox to MediaBox before sizing and rotating the imported form. Synthetic geometry and save/reopen render regressions cover oversized and partially overlapping crops; estimates unchanged.
 
