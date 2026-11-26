@@ -372,9 +372,10 @@ fn day(month: u32) -> Time {
     Time { year: 2026, month, day: 1, hour: 12, minute: 0, second: 0 }
 }
 
-/// An OCSP response saying `cert` (issued by `issuer`) was revoked in May, signed by the
-/// delegated `responder`, which is named by key hash and embedded.
-fn delegated_ocsp(cert: &Certificate, issuer: &Party, responder: &Party) -> OcspResponse {
+/// An OCSP response saying `cert` (issued by `issuer`) was revoked in May, current from
+/// `produced` (its producedAt and thisUpdate) through July, signed by the delegated
+/// `responder`, which is named by key hash and embedded.
+fn delegated_ocsp(cert: &Certificate, issuer: &Party, responder: &Party, produced: Time) -> OcspResponse {
     let cert_id = der::seq(&[
         &DigestAlg::Sha1.algorithm(),
         &der::octets(&DigestAlg::Sha1.digest(&[&issuer.cert.subject.raw])),
@@ -382,9 +383,9 @@ fn delegated_ocsp(cert: &Certificate, issuer: &Party, responder: &Party) -> Ocsp
         &der::uint(&cert.serial),
     ]);
     let revoked = der::tlv(tag::ctx(1), &day(5).encode());
-    let single = der::seq(&[&cert_id, &revoked, &day(6).encode(), &der::tlv(tag::ctx(0), &day(7).encode())]);
+    let single = der::seq(&[&cert_id, &revoked, &produced.encode(), &der::tlv(tag::ctx(0), &day(7).encode())]);
     let by_key = der::tlv(tag::ctx(2), &der::octets(&DigestAlg::Sha1.digest(&[&responder.cert.public_key.key_bits()])));
-    let tbs = der::seq(&[&by_key, &day(6).encode(), &der::seq(&[&single])]);
+    let tbs = der::seq(&[&by_key, &produced.encode(), &der::seq(&[&single])]);
     let alg = responder.key.signature_algorithm(DigestAlg::Sha256);
     let sig = responder.key.sign(DigestAlg::Sha256, &tbs).unwrap();
     let basic = der::seq(&[&tbs, &alg, &der::bit_string(&sig), &der::explicit(0, &der::seq(&[&responder.cert.raw]))]);
@@ -393,11 +394,16 @@ fn delegated_ocsp(cert: &Certificate, issuer: &Party, responder: &Party) -> Ocsp
     OcspResponse::parse(&resp).unwrap()
 }
 
-/// A CRL from `issuer` revoking `serial` in May, current through July.
+/// A CRL from `issuer` revoking `serial` in May, current from June through July.
 fn crl_revoking(issuer: &Party, serial: &[u8]) -> CertificateList {
+    crl_revoking_in(issuer, serial, (day(6), day(7)))
+}
+
+/// A CRL from `issuer` revoking `serial` in May, current through the `window` given.
+fn crl_revoking_in(issuer: &Party, serial: &[u8], window: (Time, Time)) -> CertificateList {
     let alg = issuer.key.signature_algorithm(DigestAlg::Sha256);
     let entries = der::seq(&[&der::seq(&[&der::uint(serial), &day(5).encode()])]);
-    let tbs = der::seq(&[&der::int(1), &alg, &issuer.name.raw, &day(6).encode(), &day(7).encode(), &entries]);
+    let tbs = der::seq(&[&der::int(1), &alg, &issuer.name.raw, &window.0.encode(), &window.1.encode(), &entries]);
     let sig = issuer.key.sign(DigestAlg::Sha256, &tbs).unwrap();
     CertificateList::parse(&der::seq(&[&tbs, &alg, &der::bit_string(&sig)])).unwrap()
 }
@@ -417,9 +423,10 @@ fn a_delegated_responder_must_be_valid_and_unrevoked() {
         issue(cn, Some(&r), valid, &exts)
     };
     let revoked = RevocationStatus::Revoked { at: day(5) };
-    let check_some = |resp: &Party, crls: &[CertificateList], complete: bool| {
-        delegated_ocsp(&signer.cert, &r, resp).check_with_crls(&signer.cert, &r.cert, at, &ResponderCrls::new(crls, &r.cert, at, complete))
+    let check_when = |resp: &Party, produced: Time, crls: &[CertificateList], complete: bool| {
+        delegated_ocsp(&signer.cert, &r, resp, produced).check_with_crls(&signer.cert, &r.cert, at, &ResponderCrls::new(crls, &r.cert, complete))
     };
+    let check_some = |resp: &Party, crls: &[CertificateList], complete: bool| check_when(resp, at, crls, complete);
     let check = |resp: &Party, crls: &[CertificateList]| check_some(resp, crls, true);
 
     // Controls: a current delegate answers; one without the OCSP-signing purpose does not.
@@ -429,9 +436,14 @@ fn a_delegated_responder_must_be_valid_and_unrevoked() {
     let no_eku = issue("Responder Without EKU", Some(&r), FOREVER, &[key_usage(DIGITAL_SIGNATURE)]);
     assert_eq!(check(&no_eku, &[]), RevocationStatus::Unknown);
 
-    // Expired, and not yet valid, at the validation time.
-    assert_eq!(check(&responder("Expired Responder", (2020, 2025), &[]), &[]), RevocationStatus::Unknown);
+    // Expired, and not yet valid, when it produced the response.
+    let expired = responder("Expired Responder", (2020, 2025), &[]);
+    assert_eq!(check(&expired, &[]), RevocationStatus::Unknown);
     assert_eq!(check(&responder("Future Responder", (2027, 2040), &[]), &[]), RevocationStatus::Unknown);
+    // Validity is judged when the response was produced, not at the validation time: the
+    // same expired responder counts for a response it produced while it was valid.
+    let earlier = Time { year: 2025, month: 1, day: 1, hour: 12, minute: 0, second: 0 };
+    assert_eq!(check_when(&expired, earlier, &[], true), revoked);
 
     // Revoked by a CRL from the same evidence: untrusted, unless it says not to check it.
     let revoked_responder = responder("Revoked Responder", FOREVER, &[]);
@@ -440,6 +452,11 @@ fn a_delegated_responder_must_be_valid_and_unrevoked() {
     assert_eq!(check(&unchecked, &[crl_revoking(&r, &unchecked.cert.serial)]), revoked);
     // A CRL that revokes someone else leaves the responder alone.
     assert_eq!(check(&good, &[crl_revoking(&r, &revoked_responder.cert.serial)]), revoked);
+    // A CRL issued after the validation time still says the responder was revoked in May.
+    let later = (Time { year: 2026, month: 12, day: 1, hour: 12, minute: 0, second: 0 }, time(2027));
+    assert_eq!(check(&revoked_responder, &[crl_revoking_in(&r, &revoked_responder.cert.serial, later)]), RevocationStatus::Unknown);
+    // A revocation after the response was produced does not take back what it signed then.
+    assert_eq!(check_when(&revoked_responder, earlier, &[crl_revoking(&r, &revoked_responder.cert.serial)], true), revoked);
 
     // When a cap left CRLs unread, a delegate cannot be shown unrevoked; the issuer answering
     // for itself, or a delegate that says not to check it, still counts.

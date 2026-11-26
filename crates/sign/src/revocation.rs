@@ -2,7 +2,7 @@
 //! status lookup for evidence embedded in a DSS or supplied by the caller. Never fetches:
 //! the transport and the choice of evidence stay with the caller.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use crate::der::Tlv;
 #[cfg(test)]
@@ -46,6 +46,15 @@ fn strip(b: &[u8]) -> &[u8] {
 
 fn valid_in_window(this: Time, next: Option<Time>, at: Time) -> bool {
     at >= this && next.is_none_or(|n| at <= n)
+}
+
+/// `producedAt` from a signed OCSP `ResponseData`, after the optional version and the
+/// responderID (RFC 6960 §4.2.1).
+fn produced_at(tbs: &[u8]) -> Option<Time> {
+    let fields = Tlv::parse_all(tbs).ok()?.children().ok()?;
+    let mut f = fields.into_iter().skip_while(|t| t.tag == crate::der::tag::ctx(0));
+    f.next()?;
+    f.next()?.time().ok()
 }
 
 /// Verify `signature` over the raw `signed` bytes with `key`, where the signature's algorithm
@@ -143,39 +152,43 @@ impl CertificateList {
     }
 }
 
-/// The CRLs that can revoke a delegated OCSP responder certified by one issuer, at one time.
-/// Each list is authenticated once here, however many OCSP responses are then checked.
+/// The CRLs that can revoke a delegated OCSP responder certified by one issuer. Each list is
+/// authenticated once here, however many OCSP responses are then checked.
 pub struct ResponderCrls<'a> {
-    /// The revoked serials of the kept lists, without a leading zero byte.
-    serials: HashSet<&'a [u8]>,
+    /// The revoked serials of the kept lists, without a leading zero byte, each with the
+    /// earliest revocation date the lists give it.
+    revoked: HashMap<&'a [u8], Time>,
     complete: bool,
 }
 
 impl<'a> ResponderCrls<'a> {
-    /// Keep the lists in `crls` that `issuer` issued and signed and whose window covers `at`.
-    /// `complete` says whether `crls` is all of the evidence: when a cap left some unread, a
-    /// list that would revoke the responder may be among them.
-    pub fn new(crls: &'a [CertificateList], issuer: &Certificate, at: Time, complete: bool) -> Self {
-        let serials = crls
-            .iter()
-            .filter(|l| {
-                l.issuer_raw == issuer.subject.raw
-                    && valid_in_window(l.this_update, l.next_update, at)
-                    && verify_signature(&l.tbs, &l.sig_alg, &l.signature, &issuer.public_key)
-            })
-            .flat_map(|l| l.revoked.iter().map(|(serial, _)| strip(serial)))
-            .collect();
-        ResponderCrls { serials, complete }
+    /// Keep the lists in `crls` that `issuer` issued and signed. No window is required: a
+    /// list records revocations up to when it was issued, whenever it is read, and each
+    /// response is checked at the time it was produced. `complete` says whether `crls` is all
+    /// of the evidence: when a cap left some unread, a list that would revoke the responder
+    /// may be among them.
+    pub fn new(crls: &'a [CertificateList], issuer: &Certificate, complete: bool) -> Self {
+        let mut revoked: HashMap<&'a [u8], Time> = HashMap::new();
+        let signed =
+            crls.iter().filter(|l| l.issuer_raw == issuer.subject.raw && verify_signature(&l.tbs, &l.sig_alg, &l.signature, &issuer.public_key));
+        for (serial, at) in signed.flat_map(|l| l.revoked.iter()) {
+            let earliest = revoked.entry(strip(serial)).or_insert(*at);
+            if *at < *earliest {
+                *earliest = *at;
+            }
+        }
+        ResponderCrls { revoked, complete }
     }
 
     /// No CRLs, and none left unread.
     pub fn none() -> Self {
-        ResponderCrls { serials: HashSet::new(), complete: true }
+        ResponderCrls { revoked: HashMap::new(), complete: true }
     }
 
-    /// Whether one of the lists names `cert`, which the same issuer certified.
-    fn revokes(&self, cert: &Certificate) -> bool {
-        self.serials.contains(strip(&cert.serial))
+    /// Whether one of the lists says `cert`, which the same issuer certified, was revoked at
+    /// or before `at`.
+    fn revokes(&self, cert: &Certificate, at: Time) -> bool {
+        self.revoked.get(strip(&cert.serial)).is_some_and(|t| *t <= at)
     }
 }
 
@@ -227,6 +240,8 @@ enum ResponderId {
 /// responses, and the delegated responder's certificate when it is embedded.
 pub struct OcspResponse {
     tbs: Vec<u8>,
+    /// When the responder signed the response (`producedAt`), read from the signed `tbs`.
+    produced_at: Option<Time>,
     sig_alg: Vec<u8>,
     signature: Vec<u8>,
     responder_id: ResponderId,
@@ -271,6 +286,7 @@ impl OcspResponse {
             })
             .collect();
         Ok(Self {
+            produced_at: produced_at(&parsed.tbs),
             tbs: parsed.tbs,
             sig_alg: parsed.sig_alg,
             signature: parsed.signature,
@@ -324,7 +340,7 @@ impl OcspResponse {
             t if t == tag::ctx(2) => ResponderId::ByKey(Tlv::parse_all(rid.value)?.expect(tag::OCTET_STRING, "byKey responderID")?.value.to_vec()),
             _ => return Err(bad("responderID")),
         };
-        let _produced_at = f.next().ok_or_else(|| bad("ResponseData"))?.time()?;
+        let produced_at = Some(f.next().ok_or_else(|| bad("ResponseData"))?.time()?);
         let mut responses = Vec::new();
         for single in f.next().ok_or_else(|| bad("ResponseData"))?.children()? {
             let s = single.children()?;
@@ -355,7 +371,7 @@ impl OcspResponse {
             let next_update = s.get(3).filter(|t| t.tag == tag::ctx(0)).map(|t| t.inner().and_then(|g| g.time())).transpose()?;
             responses.push(SingleResponse { cert_id, status, this_update, next_update });
         }
-        Ok(OcspResponse { tbs: tbs.raw.to_vec(), sig_alg: alg.raw.to_vec(), signature, responder_id, responses, responder_cert })
+        Ok(OcspResponse { tbs: tbs.raw.to_vec(), produced_at, sig_alg: alg.raw.to_vec(), signature, responder_id, responses, responder_cert })
     }
 
     /// Check `cert` (issued by `issuer`) at `at`. The responder must be the issuer itself, or
@@ -366,10 +382,11 @@ impl OcspResponse {
         self.check_with_crls(cert, issuer, at, &ResponderCrls::none())
     }
 
-    /// [`check`](Self::check), where a delegated responder must also be valid at `at` and not
-    /// revoked by any of `crls` (the CRLs that came with the response), unless it carries
-    /// id-pkix-ocsp-nocheck (RFC 6960 §4.2.2.2.1). When `crls` is not complete, such a
-    /// responder cannot be shown unrevoked, so its answer counts for nothing.
+    /// [`check`](Self::check), where a delegated responder must also have been valid when it
+    /// produced the response, and not revoked by then according to any of `crls` (the CRLs
+    /// that came with the response), unless it carries id-pkix-ocsp-nocheck (RFC 6960
+    /// §4.2.2.2.1). When `crls` is not complete, such a responder cannot be shown unrevoked,
+    /// so its answer counts for nothing.
     pub fn check_with_crls(&self, cert: &Certificate, issuer: &Certificate, at: Time, crls: &ResponderCrls) -> RevocationStatus {
         // Who signed the response? The issuer identified by responderID, or a delegated,
         // embedded responder identified the same way. Which of the two it is comes from that
@@ -399,12 +416,15 @@ impl OcspResponse {
             if !responder.extended_key_usage.as_ref().is_some_and(|e| e.iter().any(|o| o == EKU_OCSP_SIGNING)) {
                 return RevocationStatus::Unknown;
             }
-            // Its certificate must be valid when the answer is used, and not revoked by the
-            // evidence beside it: an expired or revoked responder key proves nothing.
-            if !responder.valid_at(at) {
+            // Its certificate must have been valid, and not revoked by the evidence beside it,
+            // when it signed the answer: an expired or revoked responder key proves nothing.
+            // That time is `producedAt`, not `at`: evidence is often gathered long after the
+            // signing, by a responder certified since.
+            let Some(produced) = self.produced_at else { return RevocationStatus::Unknown };
+            if !responder.valid_at(produced) {
                 return RevocationStatus::Unknown;
             }
-            if !responder.has_extension(OCSP_NOCHECK) && (!crls.complete || crls.revokes(responder)) {
+            if !responder.has_extension(OCSP_NOCHECK) && (!crls.complete || crls.revokes(responder, produced)) {
                 return RevocationStatus::Unknown;
             }
         }

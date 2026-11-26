@@ -529,7 +529,7 @@ fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Optio
     let mut cut = crls.cut;
     if revoked.is_none() {
         // Authenticated once for every response; a cap on the CRLs leaves a delegate unproven.
-        let responder_crls = ResponderCrls::new(&lists, issuer, at, !crls.cut);
+        let responder_crls = ResponderCrls::new(&lists, issuer, !crls.cut);
         let mut ocsps = DssEvidence::new(doc, &dss, b"OCSPs");
         for r in ocsps.by_ref() {
             let Ok(resp) = OcspResponse::parse(&r) else { continue };
