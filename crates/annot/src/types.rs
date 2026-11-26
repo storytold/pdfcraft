@@ -429,6 +429,8 @@ pub enum Shape {
         line: Option<String>,
         /// Draw the resolved line over the picture's lower edge instead of adding a band.
         line_over_picture: bool,
+        /// Text anchor as fractions of the displayed picture bounds from its top-left.
+        line_position: [f64; 2],
     },
     /// A redaction mark (§12.5.6.23) over quadrilaterals (text) or one rectangle as a quad
     /// (areas, pages). `overlay` is the text shown on the box once applied, drawn with `look`.

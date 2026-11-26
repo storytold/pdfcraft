@@ -899,9 +899,27 @@ impl Automation {
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
         let template = a.opt_str("line")?;
         let line_over_picture = a.opt_bool("line_over_picture")?.unwrap_or(false);
+        let line_position = [a.opt_num("line_x")?.unwrap_or(0.5), a.opt_num("line_y")?.unwrap_or(0.9)];
+        if line_position.iter().any(|v| !(0.0..=1.0).contains(v)) {
+            return Err(ToolError::InvalidArgs("line_x and line_y must be from 0 to 1".into()));
+        }
         if line_over_picture && template.is_none_or(|s| s.trim().is_empty()) {
             return Err(ToolError::InvalidArgs("line_over_picture requires a non-empty line".into()));
         }
+        let date_format = a.opt_str("date_format")?;
+        if let Some(format) = date_format {
+            pdfcraft_engine::dates::check_date_format(format).map_err(ToolError::InvalidArgs)?;
+        }
+        let session = self.session();
+        let line = template.filter(|s| !s.trim().is_empty()).map(|s| {
+            if let Some(format) = date_format {
+                let date = session.today_text(Some(format), session.date_language()).unwrap_or_default();
+                let time = session.stamp_line("{time}", &author);
+                pdfcraft_engine::Session::stamp_line_with_date_time(s, &author, &date, &time)
+            } else {
+                session.stamp_line(s, &author)
+            }
+        });
         let edit = Edit::AddCustomStamp {
             page,
             rect,
@@ -911,8 +929,9 @@ impl Automation {
                 bytes: std::sync::Arc::new(bytes),
                 page: a.opt_int("file_page")?.unwrap_or(1).max(1) as usize - 1,
             },
-            line: template.filter(|s| !s.trim().is_empty()).map(|s| self.session().stamp_line(s, &author)),
+            line,
             line_over_picture,
+            line_position,
             author: author.clone(),
         };
         self.apply(a, edit)

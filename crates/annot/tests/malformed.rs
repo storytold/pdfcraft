@@ -607,6 +607,7 @@ fn unvalidated_stamp_size_and_signature_contours_are_rewritten_silently_in_the_f
                 size: (1e300, f64::NAN),
                 line: None,
                 line_over_picture: false,
+                line_position: [0.5, 0.9],
             },
             style: Style::default(),
             contents: String::new(),

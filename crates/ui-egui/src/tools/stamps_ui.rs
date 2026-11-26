@@ -47,6 +47,16 @@ pub struct CustomStamp {
     /// Place the resolved line over the image's lower edge. Older saved stamps keep the band.
     #[serde(default)]
     pub line_over_picture: bool,
+    /// A date pattern for `{date}`; `None` keeps the original stamp date style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date_format: Option<String>,
+    /// Overlay text anchor in normalized picture coordinates, from top-left.
+    #[serde(default = "default_line_position")]
+    pub line_position: [f64; 2],
+}
+
+fn default_line_position() -> [f64; 2] {
+    [0.5, 0.9]
 }
 
 /// The line a new dynamic custom stamp offers: what the built-in dynamic stamps write.
@@ -60,6 +70,9 @@ const NAME: &str = "name";
 const DYNAMIC: &str = "dynamic";
 const LINE: &str = "line";
 const LINE_OVER_PICTURE: &str = "line_over_picture";
+const DATE_FORMAT: &str = "date_format";
+const LINE_X: &str = "line_x";
+const LINE_Y: &str = "line_y";
 
 mod b64 {
     use std::sync::Arc;
@@ -156,6 +169,7 @@ impl<'a> StampTool<'a> {
                 author: self.author.clone(),
                 line: self.line.clone(),
                 line_over_picture: stamp.line_over_picture,
+                line_position: stamp.line_position,
             }),
         }
     }
@@ -223,6 +237,8 @@ fn create_params(
     author: String,
     date: String,
     time: String,
+    today: (i64, u32, u32),
+    language: String,
 ) -> Vec<Param> {
     let categories = categories.to_vec();
     vec![
@@ -245,6 +261,27 @@ fn create_params(
         })
         .visible_when(DYNAMIC, true),
         Param::new(LINE_OVER_PICTURE, tl!("Place line over picture"), ParamKind::bool(false)).visible_when(DYNAMIC, true),
+        Param::custom(LINE_X, tl!("Horizontal position"), |ui, fields, _| {
+            let mut value = fields.text(LINE_X).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.5).clamp(0.0, 1.0);
+            let response = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).text(tl!("Horizontal position")));
+            fields.set(LINE_X, value.to_string());
+            response
+        })
+        .visible_when(LINE_OVER_PICTURE, true),
+        Param::custom(LINE_Y, tl!("Vertical position"), |ui, fields, _| {
+            let mut value = fields.text(LINE_Y).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.9).clamp(0.0, 1.0);
+            let response = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).text(tl!("Vertical position")));
+            fields.set(LINE_Y, value.to_string());
+            response
+        })
+        .visible_when(LINE_OVER_PICTURE, true),
+        Param::custom(DATE_FORMAT, tl!("Date format"), |ui, fields, _| {
+            let mut value = fields.text(DATE_FORMAT).unwrap_or("mmm d, yyyy").to_owned();
+            let shown = TextField::new(tl!("Date format"), Bind::bound(&mut value)).limit(pdfcraft_engine::dates::MAX_DATE_FORMAT_CHARS).show(ui);
+            fields.set(DATE_FORMAT, value);
+            shown.response
+        })
+        .visible_when(DYNAMIC, true),
         Param::read_only_text("hint", "", tl!("{name}, {date} and {time} become your name, the date and the time."))
             .full_width()
             .visible_when(DYNAMIC, true),
@@ -253,7 +290,12 @@ fn create_params(
             let dynamic = fields.bool(DYNAMIC).unwrap_or(false);
             let overlay = dynamic && fields.bool(LINE_OVER_PICTURE).unwrap_or(false);
             let template = fields.text(LINE).unwrap_or_default();
-            let filled = pdfcraft_engine::Session::stamp_line_with_date_time(template, &author, &date, &time);
+            let format = fields.text(DATE_FORMAT).unwrap_or("mmm d, yyyy");
+            let formatted_date = pdfcraft_engine::dates::check_date_format(format)
+                .ok()
+                .and_then(|fmt| pdfcraft_engine::dates::date_language(&language).map(|lang| pdfcraft_engine::dates::format_day(fmt, today, lang)))
+                .unwrap_or_else(|| date.clone());
+            let filled = pdfcraft_engine::Session::stamp_line_with_date_time(template, &author, &formatted_date, &time);
             let source = egui::vec2(preview_size[0] as f32, preview_size[1] as f32);
             let natural = if dynamic && !overlay {
                 let (w, h) = pdfcraft_engine::custom_stamp_size((f64::from(source.x), f64::from(source.y)), Some(&filled));
@@ -266,7 +308,7 @@ fn create_params(
             let canvas = natural * scale;
             let band = if dynamic { canvas.y * pdfcraft_engine::CUSTOM_LINE_BAND as f32 } else { 0.0 };
             let picture_height = canvas.y - if overlay { 0.0 } else { band };
-            let (rect, response) = ui.allocate_exact_size(canvas, egui::Sense::hover());
+            let (rect, response) = ui.allocate_exact_size(canvas, if overlay { egui::Sense::drag() } else { egui::Sense::hover() });
             let picture_rect =
                 egui::Rect::from_min_size(egui::pos2(rect.center().x - picture.x / 2.0, rect.min.y + (picture_height - picture.y) / 2.0), picture);
             let painter = ui.painter().with_clip_rect(rect);
@@ -277,8 +319,34 @@ fn create_params(
                 if width > canvas.x - 4.0 && width > 0.0 {
                     text_size *= ((canvas.x - 4.0) / width).max(0.0);
                 }
-                let at = egui::pos2(rect.center().x, rect.max.y - band / 2.0);
+                let mut position = [0.5_f32, 0.9_f32];
+                if overlay {
+                    if let Some(x) = fields.text(LINE_X).and_then(|v| v.parse::<f32>().ok()) {
+                        position[0] = x.clamp(0.0, 1.0);
+                    }
+                    if let Some(y) = fields.text(LINE_Y).and_then(|v| v.parse::<f32>().ok()) {
+                        position[1] = y.clamp(0.0, 1.0);
+                    }
+                    if response.dragged() {
+                        if let Some(pointer) = response.interact_pointer_pos() {
+                            position = [
+                                ((pointer.x - rect.min.x) / rect.width()).clamp(0.0, 1.0),
+                                ((pointer.y - rect.min.y) / rect.height()).clamp(0.0, 1.0),
+                            ];
+                            fields.set(LINE_X, position[0].to_string());
+                            fields.set(LINE_Y, position[1].to_string());
+                        }
+                    }
+                }
+                let at = if overlay {
+                    egui::pos2(rect.min.x + rect.width() * position[0], rect.min.y + rect.height() * position[1])
+                } else {
+                    egui::pos2(rect.center().x, rect.max.y - band / 2.0)
+                };
                 painter.text(at, egui::Align2::CENTER_CENTER, &filled, egui::FontId::proportional(text_size), egui::Color32::from_gray(51));
+                if overlay {
+                    ui.label(tl!("Drag the date on the preview to position it"));
+                }
                 ui.label(crate::i18n::fmt(tl!("Preview: {line}"), &[("line", &filled)]));
             }
             response
@@ -290,7 +358,10 @@ fn create_params(
 /// Whether the dialog's values make a stamp: a category and a name, and a line when one is asked for.
 fn fields_ok(fields: &DialogFields) -> bool {
     let filled = |key: &str| fields.text(key).is_some_and(|t| !t.trim().is_empty());
-    filled(CATEGORY) && filled(NAME) && (!fields.bool(DYNAMIC).unwrap_or(false) || filled(LINE))
+    filled(CATEGORY)
+        && filled(NAME)
+        && (!fields.bool(DYNAMIC).unwrap_or(false)
+            || (filled(LINE) && fields.text(DATE_FORMAT).is_some_and(|f| pdfcraft_engine::dates::check_date_format(f).is_ok())))
 }
 
 /// A row of the palette's list: a category heading or a stamp.
@@ -434,16 +505,35 @@ impl PdfCraftApp {
         });
         let category = self.custom_stamps.last().map(|s| s.category.clone()).unwrap_or_else(|| "My stamps".into());
         let existing = categories(&self.custom_stamps);
-        let fields = DialogFields::from_pairs([(CATEGORY, category), (NAME, name), (LINE, DEFAULT_LINE.to_owned())]);
+        let fields = DialogFields::from_pairs([
+            (CATEGORY, category),
+            (NAME, name),
+            (LINE, DEFAULT_LINE.to_owned()),
+            (DATE_FORMAT, "mmm d, yyyy".to_owned()),
+            (LINE_X, "0.5".to_owned()),
+            (LINE_Y, "0.9".to_owned()),
+        ]);
         let shown_file = file.clone();
         let author = self.comment_prefs.author.clone();
         let date = self.session.stamp_line("{date}", "");
         let time = self.session.stamp_line("{time}", "");
+        let today = self.session.today();
+        let language = self.session.date_language().unwrap_or(crate::i18n::current().code()).to_owned();
         let dialog = HostedParamDialog::new(ctx, DIALOG_KEY, fields, move |fields| {
             ParamDialog::new(
                 DIALOG_KEY,
                 tl!("Create Custom Stamp"),
-                create_params(&shown_file, &existing, preview.clone(), preview_size, author.clone(), date.clone(), time.clone()),
+                create_params(
+                    &shown_file,
+                    &existing,
+                    preview.clone(),
+                    preview_size,
+                    author.clone(),
+                    date.clone(),
+                    time.clone(),
+                    today,
+                    language.clone(),
+                ),
             )
             .ok_enabled(fields_ok(fields))
             .values(Bind::bound(fields))
@@ -472,6 +562,8 @@ impl PdfCraftApp {
         let text = |key: &str| fields.text(key).unwrap_or_default().trim().to_string();
         let line = fields.bool(DYNAMIC).unwrap_or(false).then(|| text(LINE)).filter(|l| !l.is_empty());
         let line_over_picture = line.is_some() && fields.bool(LINE_OVER_PICTURE).unwrap_or(false);
+        let date_format = line.as_ref().map(|_| text(DATE_FORMAT));
+        let line_position = [LINE_X, LINE_Y].map(|key| fields.text(key).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.5).clamp(0.0, 1.0));
         self.custom_stamps.push(CustomStamp {
             category: text(CATEGORY),
             name: text(NAME),
@@ -480,6 +572,8 @@ impl PdfCraftApp {
             data: d.data,
             line,
             line_over_picture,
+            date_format,
+            line_position,
         });
         self.quick_tool = QuickTool::CustomStamp(self.custom_stamps.len() - 1);
     }

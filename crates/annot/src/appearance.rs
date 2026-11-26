@@ -1278,6 +1278,12 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
         // picture fills the whole rectangle, so it forms the line's background.
         let line = d.get(b"PCByLine").and_then(Object::as_string).map(PdfString::to_text).filter(|l| !l.trim().is_empty());
         let line_over_picture = line.is_some() && matches!(d.get(b"PCLineOverPicture"), Some(Object::Bool(true)));
+        let line_position = nums(d, b"PCLinePosition")
+            .and_then(|p| match p.as_slice() {
+                [x, y] if x.is_finite() && y.is_finite() => Some([x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)]),
+                _ => None,
+            })
+            .unwrap_or([0.5, 0.9]);
         let turn = picture_turn(d);
         // A lined stamp on a quarter-turned page is laid out in its displayed box (the
         // rectangle with its sides swapped) and turned into `/Rect` by the `/Matrix` below.
@@ -1313,8 +1319,12 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
                 size *= ((w - 4.0) / tw).max(0.0);
             }
             let tw = text_width(l, size);
-            let ty = y0 + (band - size * 0.72) / 2.0;
-            content.extend(format!("BT\n0.2 0.2 0.2 rg\n/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(size), n(x0 + (w - tw) / 2.0), n(ty)).bytes());
+            let (tx, ty) = if line_over_picture {
+                (x0 + w * line_position[0] - tw / 2.0, y0 + h * (1.0 - line_position[1]) - size * 0.35)
+            } else {
+                (x0 + (w - tw) / 2.0, y0 + (band - size * 0.72) / 2.0)
+            };
+            content.extend(format!("BT\n0.2 0.2 0.2 rg\n/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(size), n(tx), n(ty)).bytes());
             content.extend(literal(&win_ansi(l)));
             content.extend_from_slice(b" Tj\nET\n");
             let mut f = Dict::new();

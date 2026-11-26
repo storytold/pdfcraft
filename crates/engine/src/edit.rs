@@ -184,6 +184,8 @@ pub enum Edit {
         line: Option<String>,
         /// Draw `line` over the picture rather than under it.
         line_over_picture: bool,
+        /// Text anchor as fractions of the displayed picture bounds from its top-left.
+        line_position: [f64; 2],
     },
     /// Rich Media ▸ Add 3D: a U3D or PRC `model` as a 3D annotation in `rect` on `page`, named
     /// `name` (its alternate description). Its poster is the picture in `poster` (a PDF page or an

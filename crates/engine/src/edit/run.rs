@@ -652,7 +652,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
             note_skipped(doc, &report);
         }
-        Edit::AddCustomStamp { page, rect, name, file, author, line, line_over_picture } => {
+        Edit::AddCustomStamp { page, rect, name, file, author, line, line_over_picture, line_position } => {
             let src = mark_source(doc, file)?;
             let line = line.as_deref().map(str::trim).filter(|l| !l.is_empty()).map(|l| l.chars().take(crate::MAX_STAMP_LINE).collect::<String>());
             let picture = (src.size.0.max(1.0), src.size.1.max(1.0));
@@ -677,6 +677,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 size: picture,
                 line,
                 line_over_picture: *line_over_picture,
+                line_position: *line_position,
             };
             let style = pdfcraft_annot::Style::default_for(&shape);
             let new = NewAnnotation { page: *page, shape, style, contents: name.clone(), author: author.clone() };

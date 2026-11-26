@@ -240,6 +240,7 @@ impl SignatureImage {
                 author: author.into(),
                 line: None,
                 line_over_picture: false,
+                line_position: [0.5, 0.9],
             }],
         })
     }
