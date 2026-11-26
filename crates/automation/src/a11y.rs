@@ -215,9 +215,15 @@ impl Automation {
         let id = self.doc(a)?.id;
         let warnings = self.apply_with_warnings(id, pdfcraft_engine::Edit::AutoTagText)?;
         let tags = self.accessibility_tags(a)?;
+        // Apply refuses a document that already has tags, so every figure now is one it wrote.
+        let figures = self.doc(a)?.figures().len();
         let out = json!({
-            "tags": tags["tags"], "count": tags["count"],
-            "note": "Text objects were tagged as headings (H1-H6, by size and weight against the body text) or paragraphs. Review heading roles, reading order and remaining accessibility findings manually.",
+            "tags": tags["tags"], "count": tags["count"], "figures": figures,
+            "note": format!(
+                "Text objects were tagged as headings (H1-H6, by size and weight against the body text) or paragraphs. \
+                 {figures} image(s) were tagged Figure without alternate text: describe each with accessibility_set_alt, or mark it decorative. \
+                 Review heading roles, reading order and remaining accessibility findings manually."
+            ),
         });
         Ok(with_warnings(out, warnings))
     }
