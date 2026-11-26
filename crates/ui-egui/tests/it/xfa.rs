@@ -118,11 +118,17 @@ fn ordinary_forms_and_documents_have_no_xfa_notice() {
 
 /// Click the centre of a field's widget.
 fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
+    click_widget(h, name, 0);
+}
+
+/// Click widget `widget` (0-based: a radio button of the group, or a copy of the field) of the
+/// field named `name`.
+fn click_widget(h: &mut Harness<'static, PdfCraftApp>, name: &str, widget: usize) {
     let p = {
         let s = h.state();
         let doc = s.session.get(s.views[0].id).unwrap();
         let f = doc.form.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("no field {name}"));
-        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, widget).expect("on screen").center()
     };
     h.hover_at(p);
     h.run_steps(1);
@@ -130,6 +136,59 @@ fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
     h.run_steps(1);
     h.drop_at(p);
     h.run_steps(4);
+}
+
+/// Clicking an XFA check box or radio button in the app runs its click script after its change
+/// script; the script's message shows. The radio group keeps the focus, so its exits wait until
+/// the focus leaves it.
+#[test]
+fn xfa_check_box_and_radio_clicks_run_their_click_scripts_in_the_app() {
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::toggle_template()));
+    crate::support::settle(&mut h);
+    // What the scripts have written to the form's log field so far.
+    let log = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "log").and_then(|f| f.value.first().cloned()).unwrap_or_default()
+    };
+    click_field(&mut h, "agree");
+    assert_eq!(log(&h), "change 1;click 1;", "console: {:?}", h.state().js_console.log);
+    assert!(h.query_by_label_contains("Agreed").is_some(), "the click script's message shows");
+    // The second radio button of the group.
+    click_widget(&mut h, "answer", 1);
+    assert!(log(&h).ends_with("group click;no click;"), "{}", log(&h));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    assert!(log(&h).ends_with("group click;no click;no exit;group exit;"), "the exits once the focus leaves: {}", log(&h));
+}
+
+/// Clicking a check box or radio button in the app moves the focus to it before changing it, and
+/// its exit waits until the focus leaves, in the order another viewer runs on a synthetic form:
+/// a check box clicked twice runs its exit once, as the focus leaves; a radio group runs a
+/// button's exit as the focus moves to the other button, and its own only as the focus leaves
+/// the group.
+#[test]
+fn xfa_check_box_and_radio_exits_wait_for_the_focus_to_leave_in_the_app() {
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::toggle_focus_template()));
+    crate::support::settle(&mut h);
+    let log = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "log").and_then(|f| f.value.first().cloned()).unwrap_or_default()
+    };
+    let group = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        doc.form.iter().find(|f| f.kind == pdfcraft_engine::FormFieldKind::Radio).map(|f| f.name.clone()).expect("the radio group")
+    };
+    click_field(&mut h, "cb");
+    click_field(&mut h, "cb");
+    assert_eq!(log(&h), "cb enter 0|cb change 1|cb click 1|cb change 0|cb click 0", "console: {:?}", h.state().js_console.log);
+    click_widget(&mut h, &group, 0);
+    click_widget(&mut h, &group, 1);
+    click_field(&mut h, "after");
+    assert_eq!(
+        log(&h),
+        "cb enter 0|cb change 1|cb click 1|cb change 0|cb click 0|cb exit 0|grp enter|r1 enter|grp change 1|r1 change|grp click 1|r1 click|r1 exit|r2 enter|grp change 2|r2 change|grp click 2|r2 click|r2 exit|grp exit"
+    );
 }
 
 /// Clicking an XFA button in the app runs its click script: one adds a row, another shows its

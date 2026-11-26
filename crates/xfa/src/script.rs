@@ -8,7 +8,7 @@ use std::sync::Arc;
 use pdfcraft_cos::{Dict, Document, Object, PdfString};
 
 use crate::data::{DataNode, data_path, parse_datasets};
-use crate::model::{Access, Field, Node, Presence, Props, Script, SomIndices, Template};
+use crate::model::{Access, Field, Node, Presence, Props, Script, SomIndices, Template, Ui};
 use crate::{Report, XfaError};
 
 /// Private key on the AcroForm: presence scripts set, by SOM path.
@@ -490,12 +490,15 @@ pub fn has_scripts(tpl: &Template) -> bool {
     any(&tpl.root.scripts) || walk(&tpl.root.children, 1) || tpl.root.page_set.as_ref().is_some_and(|ps| ps.areas.iter().any(|a| walk(&a.items, 1)))
 }
 
-/// Does any field of the template (in the body, an exclusion group or a master page) have an
-/// `enter` or `exit` script? Forms without one have nothing to run when the focus moves.
+/// Does any field or exclusion group of the template (in the body or on a master page) have an
+/// `enter` or `exit` script, or a list box a `validate` one? Forms without one have nothing to
+/// run when the focus moves.
 pub fn has_focus_scripts(tpl: &Template) -> bool {
-    /// Has field `f` a non-blank enter or exit script?
+    /// Has field `f` a non-blank enter or exit script, or is it a list box with a validate
+    /// script (which runs as the focus leaves it)?
     fn field(f: &Field) -> bool {
         f.scripts.iter().any(|s| matches!(s.activity.as_str(), "enter" | "exit") && !s.text.trim().is_empty())
+            || (f.ui == Ui::ChoiceList && f.choice.list_box && f.validate.as_ref().is_some_and(|v| !v.text.trim().is_empty()))
     }
     /// Has any field among `nodes` (and their containers, `depth` levels down) one?
     fn walk(nodes: &[Node], depth: usize) -> bool {
@@ -504,7 +507,11 @@ pub fn has_focus_scripts(tpl: &Template) -> bool {
                 Node::Subform(sf) => walk(&sf.children, depth + 1),
                 Node::Area(a) => walk(&a.children, depth + 1),
                 Node::Field(f) => field(f),
-                Node::ExclGroup(g) => g.fields.iter().any(field),
+                // An exclusion group's own enter and exit scripts count as well as its buttons'.
+                Node::ExclGroup(g) => {
+                    g.scripts.iter().any(|s| matches!(s.activity.as_str(), "enter" | "exit") && !s.text.trim().is_empty())
+                        || g.fields.iter().any(field)
+                }
                 Node::Draw(_) => false,
             })
     }

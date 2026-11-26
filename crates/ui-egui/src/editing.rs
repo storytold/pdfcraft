@@ -17,6 +17,16 @@ pub use save::SaveTarget;
 #[cfg(test)]
 use save::unredacted_file_name;
 
+/// The edit queued on `v` sets the check box or radio group the focus is on (a click, Space or
+/// an arrow on it), rather than committing what was typed into a field.
+fn sets_the_focused_toggle(v: &crate::DocView) -> bool {
+    use pdfcraft_engine::FieldValue;
+    matches!(
+        (&v.session.pending_edit, &v.session.forms.focus),
+        (Some(Edit::SetFieldValue { name, value: FieldValue::Check(_) | FieldValue::Radio(_) }), Some(f)) if *name == f.name
+    )
+}
+
 /// Text typed into a new text box that isn't added to the page yet.
 fn new_text_typed(v: &crate::DocView) -> bool {
     v.session.content.draft.as_ref().is_some_and(|d| d.index.is_none() && !d.text.trim().is_empty())
@@ -511,6 +521,14 @@ impl PdfCraftApp {
         let generation = |app: &Self| app.views.get(i).and_then(|v| app.session.get(v.id)).map(|d| d.edit_generation());
         let before = generation(self);
         let queued = self.views.get(i).is_some_and(|v| v.session.pending_edit.is_some());
+        // A click (or Space, or an arrow) on a check box or radio button moves the focus to it
+        // before it changes it: the field left runs its exit and this one its enter, then its
+        // change and click scripts, as another viewer orders them. A value typed into the field
+        // the focus left is taken before the focus scripts run instead (its change runs that
+        // field's exit).
+        if self.views.get(i).is_some_and(sets_the_focused_toggle) {
+            self.run_focus_scripts(ctx, i);
+        }
         let applied = self.apply_queued_edit(ctx, i) && other_applied;
         // A click's Mouse Up waits on the edit it queued (a check box's toggle, a list's pick):
         // when that was refused, the click did nothing and its Mouse Up doesn't run either.
@@ -816,13 +834,16 @@ impl PdfCraftApp {
         let id = view.id;
         let edited = view.session.forms.focus.clone();
         use pdfcraft_engine::js::FieldFocus;
+        // From one radio button of a group to another, the focus stays in the group: its own enter
+        // and exit scripts don't run.
+        let crossing = !matches!((&left, &now), (Some((a, _, _)), Some((b, _, _))) if a == b);
         for ((name, obj, widget), focus) in [left.map(|l| (l, FieldFocus::Exit)), now.map(|n| (n, FieldFocus::Enter))].into_iter().flatten() {
             // The edited field's value before this script, to tell its untouched draft from typing:
             // the exit of the field left may have changed it already, and the draft with it.
             let before: Option<(String, Vec<String>)> = edited.as_ref().and_then(|e| {
                 crate::forms_ui::focused_field(e, &self.session.get(id)?.form).map(|f| (crate::forms_ui::draft_text(f), f.value.clone()))
             });
-            match self.session.field_focus_target(id, &name, obj.map(pdfcraft_engine::js::field_object_id), widget, focus) {
+            match self.session.field_focus_target(id, &name, obj.map(pdfcraft_engine::js::field_object_id), widget, focus, crossing) {
                 Ok(changed) => {
                     if changed
                         && let Some(info) = self.session.get(id).map(|d| d.info.clone())
@@ -1424,6 +1445,33 @@ mod revert_draft_tests {
             list_open: false,
             calendar_open: false,
         }
+    }
+
+    /// The focus moving into a radio group, between its buttons and out of it runs the group's own
+    /// enter and exit scripts only when it crosses the group: moving between two buttons of it
+    /// runs theirs alone.
+    #[test]
+    fn the_focus_crossing_a_radio_group_runs_its_own_scripts() {
+        let ctx = egui::Context::default();
+        let mut app = PdfCraftApp::for_unit_tests();
+        app.open_bytes(&ctx, "group.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::group_focus_template())).unwrap();
+        let i = app.active.unwrap();
+        let id = app.views[i].id;
+        let group =
+            app.session.get(id).unwrap().form.iter().find(|f| f.kind == pdfcraft_engine::FormFieldKind::Radio).map(|f| f.name.clone()).unwrap();
+        let log = |app: &PdfCraftApp| {
+            app.session.get(id).unwrap().form.iter().find(|f| f.name == "log").and_then(|f| f.value.first().cloned()).unwrap_or_default()
+        };
+        let focus_on = |app: &mut PdfCraftApp, widget: Option<usize>| {
+            app.views[i].session.forms.focus = widget.map(|widget| Focus { name: group.clone(), widget, ..focus("") });
+            app.process_pending_edits(&ctx);
+        };
+        focus_on(&mut app, Some(0));
+        assert_eq!(log(&app), "grp enter|r1 enter");
+        focus_on(&mut app, Some(1));
+        assert_eq!(log(&app), "grp enter|r1 enter|r1 exit|r2 enter", "between its buttons the group's scripts don't run");
+        focus_on(&mut app, None);
+        assert_eq!(log(&app), "grp enter|r1 enter|r1 exit|r2 enter|r2 exit|grp exit");
     }
 
     fn app() -> PdfCraftApp {

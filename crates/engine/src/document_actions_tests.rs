@@ -374,6 +374,6 @@ fn focus_on_a_field_sharing_a_name_runs_that_fields_script() {
     let mut s = Session::new();
     let id = s.open("dup.pdf", None, Arc::new(pdf_of(&objs)), None).unwrap();
     let second = crate::js::field_object_id(pdfcraft_cos::ObjRef::new(7, 0));
-    assert!(s.field_focus_target(id, "dup", Some(second), 0, FieldFocus::Enter).unwrap());
+    assert!(s.field_focus_target(id, "dup", Some(second), 0, FieldFocus::Enter, true).unwrap());
     assert_eq!(log(&s, id), "second;");
 }

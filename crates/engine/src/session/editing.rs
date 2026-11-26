@@ -247,7 +247,7 @@ impl Session {
         // An XFA form's scripts answer the change: exit and validate scripts of the field, then
         // every calculation (and a reset recalculates). They read the data, so it is brought up
         // to date first. The fields whose exit scripts ran are noted once the edit is kept.
-        let mut exited: Vec<String> = Vec::new();
+        let mut left = xfa::FocusLeft::default();
         if let Some(tpl) = cx.xfa.clone() {
             if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
                 let datasets = &mut cx.xfa_datasets;
@@ -281,8 +281,11 @@ impl Session {
                     relaid: false,
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
-                // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run, &mut exited))
+                // only those). The values before the edit tell a click from a value set again.
+                let before: std::collections::HashMap<String, Vec<String>> =
+                    doc.form.iter().filter(|f| changed.contains(&f.name)).map(|f| (f.name.clone(), f.value.clone())).collect();
+                let focus = doc.xfa_focus.clone();
+                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &before, focus.as_deref(), &mut run, &mut left))
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;
@@ -382,7 +385,8 @@ impl Session {
         // Only this edit's exits are skipped on the next focus loss: one an earlier change ran is
         // no reason to skip a later one.
         doc.xfa_exited.clear();
-        doc.xfa_exited.extend(exited);
+        doc.xfa_exited.extend(left.exited);
+        doc.xfa_unvalidated.extend(left.unvalidated);
         if !cx.xfa_removed.is_empty() {
             let removed: Vec<String> = cx.xfa_removed.iter().map(|n| format!("{XFA_REMOVED_PREFIX}{n}")).collect();
             doc.xfa_warnings.retain(|w| w.starts_with(XFA_REMOVED_PREFIX));
@@ -432,6 +436,7 @@ impl Session {
         }
         // The change whose exit ran is undone (or redone without its scripts): skip no exit.
         doc.xfa_exited.clear();
+        doc.xfa_unvalidated.clear();
         doc.generation += 1;
         Ok(label)
     }
@@ -469,6 +474,7 @@ impl Session {
         }
         // The change whose exit ran is undone (or redone without its scripts): skip no exit.
         doc.xfa_exited.clear();
+        doc.xfa_unvalidated.clear();
         doc.generation += 1;
         Ok(label)
     }

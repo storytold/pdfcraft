@@ -5,8 +5,9 @@ use super::{
     Arc, BTreeSet, Context, HostHooks, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Realm, RefCell, Source, js_string,
 };
 
-/// Longest script, in bytes.
-pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;
+/// Longest script, in bytes: a longer one is refused when it runs, and the script tools refuse to
+/// install one.
+pub const MAX_SCRIPT_BYTES: usize = 256 * 1024;
 
 /// Largest width or precision accepted by `util.printf`.
 pub(crate) const MAX_PRINTF_WIDTH_PRECISION: usize = 4096;

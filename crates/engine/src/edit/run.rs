@@ -796,7 +796,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 time_scale: cx.xfa_time_scale,
                 relaid: false,
             };
-            let ran = if matches!(activity.as_str(), "enter" | "exit") {
+            let ran = if matches!(activity.as_str(), "enter" | "exit" | "validate") {
                 xfa::on_focus(doc, &tpl, som, activity, &mut run).map(|changes| changes.is_empty())
             } else {
                 xfa::on_event(doc, &tpl, som, activity, &mut run).map(|()| false)
@@ -917,6 +917,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::replace_line(doc, *page, *line, text)?;
         }
         Edit::SetFieldScript { name, event, script } => {
+            check_script_length(script.as_deref())?;
             pdfcraft_forms::set_field_script(doc, name, event, script.as_deref())?;
             if let Some(js) = cx.js.as_mut() {
                 js.invalidate_calculations();
@@ -930,7 +931,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_preflight::convert(doc, *level).map_err(|e| EditError::Invalid(e.to_string()))?;
         }
         Edit::RemoveStandardId { standard } => pdfcraft_organize::remove_standard_id(doc, *standard)?,
-        Edit::SetDocumentScript { name, script } => pdfcraft_forms::set_document_script(doc, name, script.as_deref())?,
+        Edit::SetDocumentScript { name, script } => {
+            check_script_length(script.as_deref())?;
+            pdfcraft_forms::set_document_script(doc, name, script.as_deref())?;
+        }
         Edit::AddOcrText { page, words } => {
             crate::ocr::layer::add_text(doc, *page, words)?;
         }
@@ -1181,6 +1185,17 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             doc.remove_encryption();
         }
         Edit::Batch { edits, .. } => run_batch(doc, edits, cx)?,
+    }
+    Ok(())
+}
+
+/// Refuse script text longer than the script engine runs ([`pdfcraft_js::MAX_SCRIPT_BYTES`]), so a
+/// tool or a batch can't install a script that would only be refused each time it runs.
+fn check_script_length(script: Option<&str>) -> Result<(), EditError> {
+    let Some(script) = script else { return Ok(()) };
+    let limit = pdfcraft_js::MAX_SCRIPT_BYTES;
+    if script.len() > limit {
+        return Err(EditError::Invalid(format!("the script is too long ({} KiB; the limit is {} KiB)", script.len() / 1024, limit / 1024)));
     }
     Ok(())
 }

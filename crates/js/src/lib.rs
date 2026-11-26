@@ -59,11 +59,11 @@ pub use model::{
     DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, DocInfo, Event, FieldState, FieldType, Limits, Message, MessageButtons,
     MessageIcon, Outcome, Panel, Request,
 };
+pub(crate) use run::CheckedCodeFromStrings;
 #[cfg(not(target_arch = "wasm32"))]
 use run::SCRIPT_STACK;
 use run::refuse;
-pub(crate) use run::{CheckedCodeFromStrings, MAX_SCRIPT_BYTES};
-pub use run::{run, run_shared, run_shared_calculations};
+pub use run::{MAX_SCRIPT_BYTES, run, run_shared, run_shared_calculations};
 
 pub mod formcalc;
 pub mod xfa;
