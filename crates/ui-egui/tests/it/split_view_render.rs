@@ -1,7 +1,6 @@
 //! Split view: an edit made after both views drew their frame (#3149) leaves neither showing the
 //! old page.
 
-use crate::support::AppHarness as _;
 use craft::ui::primitives::textures::TextureState; // PLAN: assumed facade path of `TextureState`
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
@@ -45,7 +44,6 @@ fn page_size(s: &PdfCraftApp, i: usize) -> Option<egui::Vec2> {
 /// The palette runs its command after the page area was drawn, as a dialog's OK does: the page
 /// turns after both views drew the old one. Both panes must end up drawing the turned page, never
 /// the stale portrait one.
-#[ignore = "known gap of the egui-to-craft port: see docs/port-known-gaps.md"]
 #[test]
 fn a_late_edit_turns_the_page_in_both_panes() {
     let mut h = harness();
@@ -58,9 +56,11 @@ fn a_late_edit_turns_the_page_in_both_panes() {
     wait(&mut h, "both panes drawn", |s| portrait(s, 0) && portrait(s, 1));
     let id = h.state().views[0].id;
     let rotation = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages[0].rotation;
-    h.set_option("palette", "rotate pages clockwise").unwrap();
-    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::K);
+    h.run_steps(3);
     assert!(h.state().palette_open);
+    h.event(egui::Event::Text("rotate pages clockwise".into()));
+    h.run_steps(2);
     h.key_press(Key::Enter);
     // Frame by frame, to look at the one that turned the page.
     for _ in 0..10 {

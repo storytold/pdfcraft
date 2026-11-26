@@ -264,8 +264,9 @@ pub(crate) fn layout_options() -> LayoutOptions<'static> {
     LayoutOptions::new(APP_NAME).label(&translate)
 }
 
-/// Whether a dialog, a prompt or the command palette holds the window: the one gate over commands
-/// and the menus.
+/// Whether a dialog, a prompt or the command palette holds the window: the gate over the menu bar's
+/// keys and the native menu. The command gate (`commands::catalog::command_input`) leaves the
+/// palette out, so the palette lists and runs the commands as the window under it has them.
 pub(crate) fn gated(app: &PdfCraftApp) -> bool {
     app.modal_open() || app.palette_open
 }
@@ -280,7 +281,7 @@ pub(crate) fn text_editing(ctx: &egui::Context) -> bool {
 impl PdfCraftApp {
     /// The app's menus for this frame, before the platform layout: every item's label, shortcut,
     /// enabled and checked state follow the item's command (`commands::catalog::command_input`). A
-    /// modal dialog doesn't grey anything here; that is the command gate's job ([`gated`]).
+    /// modal dialog doesn't grey anything here; the command gate there does.
     pub fn menu_bar(&self, ctx: &egui::Context) -> MenuBar {
         let mac = crate::commands::mac_shortcuts(ctx);
         let mut used: Vec<&str> = Vec::new();

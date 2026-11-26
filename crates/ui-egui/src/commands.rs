@@ -244,6 +244,13 @@ impl PdfCraftApp {
                     self.select_tool(ctx, g.id);
                 }
             }
+            // The palette's tool rows (`chrome::mode_bar`) name the group in a parameter.
+            "tool.group" => {
+                let group = fired.command.params.get("group").and_then(serde_json::Value::as_str).and_then(pdfcraft_engine::catalog::group);
+                if let Some(g) = group {
+                    self.select_tool(ctx, g.id);
+                }
+            }
             _ => return false,
         }
         true

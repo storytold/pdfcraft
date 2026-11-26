@@ -122,7 +122,10 @@ pub(crate) fn shared_catalog(mac: bool) -> Option<AppCatalog> {
 /// The command state for this frame: the gate, the catalog and a state row for every command. The rows go into the
 /// app's tracked states (`PdfCraftApp::command_states`) only when one changed, so the runtime reads them again only then.
 pub(crate) fn command_input(app: &mut PdfCraftApp, ctx: &egui::Context) -> CommandInput {
-    let gated = menus::gated(app);
+    // The dialogs and prompts `modal_open` counts gate every command. The palette doesn't: it lists and runs the
+    // commands as the window under it has them, closing before the pick runs, and its modal layer keeps the keys from
+    // them while it is open.
+    let gated = app.modal_open();
     // Edit ▸ Paste asks the platform for the clipboard in the pass the row is picked, as production's menu did, and
     // reaches the app with what it holds, as ⌘V does. Organize pastes its own picked pages and Prepare Form its own
     // fields, at once, as `run_fired` sends them.

@@ -464,6 +464,90 @@ fn the_pages_menu_comes_from_the_registry() {
     assert_eq!(app.session.get(app.views[0].id).unwrap().info.pages.len(), 2);
 }
 
+/// The palette runs what is picked in it, by Enter or by a click: a command's row is enabled as the window under the
+/// palette has it, since the palette closes before the command runs, and a tool's row opens that tool.
+#[test]
+fn the_palette_runs_what_is_picked_in_it() {
+    use egui_kittest::kittest::NodeT;
+    // Ctrl+K, type `query`, then Enter or a click on the row labelled `label`, which must be enabled.
+    fn pick(h: &mut Harness<'static, PdfCraftApp>, query: &str, label: &str, click: bool) {
+        h.key_press_modifiers(Modifiers::COMMAND, Key::K);
+        h.run_steps(3);
+        assert!(palette_open(h), "Ctrl+K opens the palette");
+        h.event(egui::Event::Text(query.into()));
+        h.run_steps(2);
+        {
+            let row = h.get_by(|n| n.role() == egui::accesskit::Role::ListBoxOption && n.label().is_some_and(|l| l.starts_with(label)));
+            assert!(!row.accesskit_node().is_disabled(), "the palette lists {label} enabled");
+            if click {
+                row.click();
+            } else {
+                h.key_press(Key::Enter);
+            }
+        }
+        h.run_steps(3);
+        assert!(!palette_open(h), "the palette closed with the pick of {label}");
+    }
+    let mut h = harness();
+    let id = h.state().views[0].id;
+    let rotation = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages[0].rotation;
+    pick(&mut h, "rotate pages clockwise", "Rotate pages clockwise", false);
+    assert_eq!(rotation(&h), 90, "Enter ran the command");
+    pick(&mut h, "rotate pages clockwise", "Rotate pages clockwise", true);
+    assert_eq!(rotation(&h), 180, "a click on the row ran it");
+    pick(&mut h, "redact a pdf", "Redact a PDF", false);
+    assert_eq!(h.state().left, pdfcraft_ui_egui::LeftPanel::Tool("redact"), "the tool's row opened the tool");
+}
+
+/// While the palette is open it holds the window: a shortcut runs no command under it, Ctrl+Z with nothing to undo in
+/// its field leaves the document's last edit alone, and the toolbar's buttons under it can't be pressed.
+#[test]
+fn the_open_palette_holds_the_window() {
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness();
+    let id = h.state().views[0].id;
+    let rotation = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages[0].rotation;
+    let print_disabled =
+        |h: &Harness<'static, PdfCraftApp>| h.get_by_role_and_label(egui::accesskit::Role::Button, "Print…").accesskit_node().is_disabled();
+    assert!(h.execute("page.rotate"));
+    h.run_steps(3);
+    assert_eq!(rotation(&h), 90);
+    assert!(!print_disabled(&h), "Print… is enabled with a document open");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::K);
+    h.run_steps(3);
+    assert!(palette_open(&h), "Ctrl+K opens the palette");
+    assert!(print_disabled(&h), "the toolbar's Print… is disabled under the palette");
+    for key in [Key::Z, Key::L, Key::Backslash] {
+        h.key_press_modifiers(Modifiers::COMMAND, key);
+        h.run_steps(3);
+    }
+    assert_eq!(rotation(&h), 90, "Ctrl+Z in the palette's field undid nothing in the document");
+    assert!(!h.state().full_screen(), "Ctrl+L left the window as it was");
+    assert_eq!(h.state().views.len(), 1, "Ctrl+\\ split no view");
+    assert!(palette_open(&h), "the palette is still open");
+}
+
+/// A dialog that opens over the open palette (as automation or a prompt can) disables the palette's rows: the command
+/// gate still counts dialogs, though no longer the palette itself.
+#[test]
+fn a_dialog_over_the_open_palette_disables_its_rows() {
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness();
+    let row_disabled = |h: &Harness<'static, PdfCraftApp>| {
+        let row =
+            h.get_by(|n| n.role() == egui::accesskit::Role::ListBoxOption && n.label().is_some_and(|l| l.starts_with("Rotate pages clockwise")));
+        row.accesskit_node().is_disabled()
+    };
+    h.key_press_modifiers(Modifiers::COMMAND, Key::K);
+    h.run_steps(3);
+    h.event(egui::Event::Text("rotate pages clockwise".into()));
+    h.run_steps(2);
+    assert!(!row_disabled(&h), "the row is enabled with no dialog open");
+    assert!(h.execute("app.preferences"));
+    h.run_steps(3);
+    assert!(row_disabled(&h), "Preferences over the palette disables the row");
+}
+
 /// Check that Open Recent lists a recorded file and opens it in a new active tab without replacing the
 /// original.
 #[test]
