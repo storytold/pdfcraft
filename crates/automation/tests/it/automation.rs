@@ -554,6 +554,68 @@ fn autotag_apply_tags_headings_by_size_across_pages() {
     assert_eq!(nesting["status"], "passed", "{check}");
 }
 
+/// #7065: Apply marks a running header and a numbered footer as pagination artifacts and lists
+/// them, and tags a body line that repeats mid-page like any other text.
+#[test]
+fn autotag_apply_marks_running_headers_and_footers_as_artifacts() {
+    let dir = workdir("autotag-running");
+    let page = |n: usize| {
+        format!(
+            "BT /FR 9 Tf 72 760 Td (Annual report) Tj ET BT /FR 11 Tf 72 640 Td (Body text on page {n} that runs long enough to set the body size) Tj ET \
+             BT /FR 11 Tf 72 400 Td (A body line repeated on every page) Tj ET BT /FR 9 Tf 300 30 Td (Page {n}) Tj ET"
+        )
+    };
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 612 792] /Resources << /Font << /FR 9 0 R >> >> >>".into(),
+    ];
+    objs.extend((6..9).map(|c| format!("<< /Type /Page /Parent 2 0 R /Contents {c} 0 R >>")));
+    objs.extend((1..4).map(|n| {
+        let content = page(n);
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len())
+    }));
+    objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into());
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("running.pdf"), bytes).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "running.pdf" }))["doc"].as_u64().unwrap();
+    let applied = ok(&mut a, "accessibility_autotag_apply", json!({ "doc": doc }));
+    let types: Vec<&str> = applied["tags"].as_array().unwrap().iter().map(|t| t["type"].as_str().unwrap()).collect();
+    assert_eq!(types, ["Document", "P", "P", "P", "P", "P", "P"], "only the body text is tagged: {applied}");
+    assert_eq!(applied["running_count"], 6);
+    let listed: Vec<(u64, &str, &str)> = applied["running_text"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["page"].as_u64().unwrap(), r["subtype"].as_str().unwrap(), r["text"].as_str().unwrap()))
+        .collect();
+    assert_eq!(listed[..2], [(1, "Header", "Annual report"), (1, "Footer", "Page 1")]);
+    assert_eq!(listed[5], (3, "Footer", "Page 3"));
+    assert!(applied["note"].as_str().unwrap().contains("6 text objects"), "{applied}");
+    let check = ok(&mut a, "accessibility_check", json!({ "doc": doc, "rules": ["tagged-content"] }));
+    let content = check["results"].as_array().unwrap().iter().find(|r| r["rule"] == "tagged-content").unwrap();
+    assert_eq!(content["status"], "passed", "{check}");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "tagged.pdf" }));
+    let reopened = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("tagged.pdf")).unwrap())).unwrap();
+    let first = pdfcraft_model::pages(&reopened).into_iter().next().unwrap();
+    let pdfcraft_cos::Object::Stream(stream) = &*reopened.resolve(first.dict.get(b"Contents").unwrap()) else { panic!("page content") };
+    let text = String::from_utf8(stream.decoded_strict().unwrap()).unwrap();
+    assert!(text.contains("/Artifact <</Type /Pagination/Subtype /Header>> BDC"), "{text}");
+    assert!(text.contains("/Artifact <</Type /Pagination/Subtype /Footer>> BDC"), "{text}");
+}
+
 #[test]
 fn autotag_form_fields_writes_reviewable_widget_tags() {
     let dir = workdir("autotag-form-fields");
@@ -14853,6 +14915,66 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap(), after);
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
+}
+
+/// #7687: an oversized source CropBox must not expose hidden artwork or change fit.
+#[test]
+fn pdf_watermark_uses_visible_source_crop_through_tools() {
+    use pdfcraft_cos::{Document, Object, SaveOptions, Stream, write_full};
+    use std::sync::Arc;
+    let dir = workdir("watermark-visible-crop");
+    let mut source = Document::open(Arc::new(fixture(2))).unwrap();
+    for (index, crop_right) in [100, 140].into_iter().enumerate() {
+        let page = pdfcraft_model::page_at(&source, index).unwrap().obj;
+        let content = source.add(Object::Stream(Stream::flate(
+            Default::default(),
+            b"1 0 0 rg 20 30 80 120 re f 0 0 1 rg 20 30 20 50 re f 1 0 1 rg 100 30 40 120 re f",
+        )));
+        source
+            .update_dict(page, |d| {
+                d.set(b"MediaBox".to_vec(), Object::Array(vec![20.into(), 30.into(), 100.into(), 150.into()]));
+                d.set(b"CropBox".to_vec(), Object::Array(vec![20.into(), 30.into(), crop_right.into(), 150.into()]));
+                d.set(b"Rotate".to_vec(), Object::Int(90));
+                d.set(b"Contents".to_vec(), Object::Ref(content));
+            })
+            .unwrap();
+    }
+    std::fs::write(dir.join("source.pdf"), write_full(&source, &SaveOptions::default()).unwrap()).unwrap();
+    let mut target = Document::open(Arc::new(fixture(3))).unwrap();
+    let first = pdfcraft_model::page_at(&target, 0).unwrap().obj;
+    target
+        .update_dict(first, |d| {
+            d.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 215.into(), 280.into()]));
+            d.set(b"CropBox".to_vec(), Object::Array(vec![24.into(), 18.into(), 184.into(), 258.into()]));
+        })
+        .unwrap();
+    std::fs::write(dir.join("a.pdf"), write_full(&target, &SaveOptions::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    for rotation in [0, 270] {
+        let mut rendered = Vec::new();
+        for source_page in [1, 2] {
+            let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+            if rotation != 0 {
+                ok(&mut a, "page_rotate", json!({"doc": doc, "pages": [1], "degrees": rotation}));
+            }
+            let untouched = a.call("page_render", &json!({"doc": doc, "page": 2, "dpi": 72})).unwrap();
+            ok(
+                &mut a,
+                "doc_watermark",
+                json!({"doc": doc, "pages": [1], "file": "source.pdf", "file_page": source_page,
+                "scale": 0.5, "rotation": 0, "opacity": 1, "offset_x": 22, "offset_y": 10}),
+            );
+            let path = format!("marked-{rotation}-{source_page}.pdf");
+            ok(&mut a, "doc_save", json!({"doc": doc, "path": path}));
+            let copy = ok(&mut a, "doc_open", json!({"path": path}))["doc"].as_u64().unwrap();
+            assert_eq!(a.call("page_render", &json!({"doc": copy, "page": 2, "dpi": 72})).unwrap(), untouched);
+            let (w, _, rgba) = a.render_pixels(copy, 1, 1.0).unwrap();
+            assert!(rgba.as_ref().as_chunks::<4>().0.iter().any(|p| p[0] > 240 && p[1] < 10 && p[2] < 10), "visible red artwork remains");
+            assert!(!rgba.as_ref().as_chunks::<4>().0.iter().any(|p| p[0] > 240 && p[1] < 10 && p[2] > 240), "hidden magenta stays clipped");
+            rendered.push((w, rgba.as_ref().to_vec()));
+        }
+        assert_eq!(rendered[0], rendered[1], "same displayed source gives identical saved watermark at target rotation {rotation}");
+    }
 }
 
 #[test]

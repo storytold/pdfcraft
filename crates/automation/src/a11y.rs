@@ -206,19 +206,31 @@ fn review_html(record: &Value) -> Result<String> {
     Ok(html)
 }
 
+/// Running headers and footers listed by `accessibility_autotag_apply`, at most.
+const MAX_RUNNING_LISTED: usize = 200;
+
 /// Tags in one page of `accessibility_tags`, by default and at most.
 const TAG_PAGE: usize = 200;
 const MAX_TAG_PAGE: usize = 1000;
 
 impl Automation {
     pub(crate) fn accessibility_autotag_apply(&mut self, a: &Args) -> Result<Value> {
-        let id = self.doc(a)?.id;
+        let doc = self.doc(a)?;
+        let id = doc.id;
+        // Read before applying: once tagged, the document is refused. A refusal here is Apply's too.
+        let running = doc.autotag_running_text().unwrap_or_default();
         let warnings = self.apply_with_warnings(id, pdfcraft_engine::Edit::AutoTagText)?;
         let tags = self.accessibility_tags(a)?;
-        let out = json!({
-            "tags": tags["tags"], "count": tags["count"],
-            "note": "Text objects were tagged as headings (H1-H6, by size and weight against the body text) or paragraphs. Review heading roles, reading order and remaining accessibility findings manually.",
-        });
+        let listed: Vec<Value> =
+            running.iter().take(MAX_RUNNING_LISTED).map(|r| json!({ "page": r.page + 1, "subtype": r.subtype, "text": r.text })).collect();
+        let note = format!(
+            "Text objects were tagged as headings (H1-H6, by size and weight against the body text) or paragraphs. \
+             {} text objects repeating at the top or bottom of the pages were marked as running header or footer artifacts \
+             instead (listed in running_text{}). Review heading roles, the running text, reading order and remaining accessibility findings manually.",
+            running.len(),
+            if running.len() > MAX_RUNNING_LISTED { format!(", first {MAX_RUNNING_LISTED}") } else { String::new() },
+        );
+        let out = json!({ "tags": tags["tags"], "count": tags["count"], "running_text": listed, "running_count": running.len(), "note": note });
         Ok(with_warnings(out, warnings))
     }
 
