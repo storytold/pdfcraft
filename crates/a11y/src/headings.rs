@@ -204,8 +204,26 @@ fn sub(doc: &Document, d: &Dict, key: &[u8]) -> Dict {
 /// Text-positioning operators alone don't break words: producers that place every glyph with its
 /// own `Td` (Chromium) would otherwise read as "C h a p t e r".
 pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
-    let res = sub(doc, page, b"Resources");
-    let (fonts, props) = (sub(doc, &res, b"Font"), sub(doc, &res, b"Properties"));
+    mcid_texts_in(doc, &sub(doc, page, b"Resources"), &page_content(doc, page))
+}
+
+/// [`mcid_texts`] for the marked content of a form XObject, which numbers its marked content on
+/// its own: the text each id shows in `form`'s content, read with its `/Resources`, or the page's
+/// when it has none. Empty when `form` isn't a stream or doesn't decode within a page's allowance.
+pub(crate) fn form_mcid_texts(doc: &Document, form: ObjRef, page: Option<&Dict>) -> HashMap<i64, String> {
+    let target = doc.get(form);
+    let Object::Stream(s) = &*target else { return HashMap::new() };
+    let Ok(data) = pdfcraft_cos::DecodeBudget::page().decode(s) else { return HashMap::new() };
+    let res = match s.dict.get(b"Resources") {
+        Some(_) => sub(doc, &s.dict, b"Resources"),
+        None => page.map(|p| sub(doc, p, b"Resources")).unwrap_or_default(),
+    };
+    mcid_texts_in(doc, &res, &data)
+}
+
+/// The text each marked-content id shows in decoded `content` drawn with resources `res`.
+fn mcid_texts_in(doc: &Document, res: &Dict, content: &[u8]) -> HashMap<i64, String> {
+    let (fonts, props) = (sub(doc, res, b"Font"), sub(doc, res, b"Properties"));
     let mut metrics: HashMap<Vec<u8>, std::rc::Rc<Metrics>> = HashMap::new();
     // Built once per font object, however many resource names alias it.
     let mut by_font: HashMap<ObjRef, std::rc::Rc<Metrics>> = HashMap::new();
@@ -221,7 +239,7 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
     let mut saved: Vec<(TextState, Matrix, Matrix)> = Vec::new();
     let mut unsaved = 0usize;
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
-    for op in pdfcraft_content::parse(&page_content(doc, page)).ops {
+    for op in pdfcraft_content::parse(content).ops {
         crate::count_mark_reads(1);
         let id = stack.last().copied().flatten();
         match op.op.as_slice() {

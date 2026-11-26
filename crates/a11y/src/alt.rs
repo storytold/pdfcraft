@@ -134,22 +134,85 @@ pub(crate) fn elements(doc: &Document) -> Vec<Element> {
     out
 }
 
-/// The marked-content ids an element owns directly.
-fn mcids(doc: &Document, d: &Dict) -> Vec<i64> {
+/// Marked content a structure element owns: the content stream holding it, `None` for the page's
+/// own content or else the form XObject (or other stream) an MCR's `/Stm` names, and its
+/// marked-content id there. A form numbers its marked content on its own (ISO 32000-2 §14.7.5.1),
+/// so the same id in a form and on the page is different content belonging to different elements.
+pub(crate) type ContentRef = (Option<ObjRef>, i64);
+
+/// One mark an element owns directly: the page it is on (the MCR's `/Pg`, else the element's)
+/// and the stream and id of the marked content there.
+type OwnedMark = (Option<ObjRef>, ContentRef);
+
+/// Stands for a `/Stm` that isn't a reference: no object has number 0, so content looked up there
+/// is never found, rather than being taken for the page's.
+const UNREADABLE_STM: ObjRef = ObjRef::new(0, 0);
+
+/// The stream an MCR's `/Stm` names, as written; `None` without one.
+pub(crate) fn mcr_stm(m: &Dict) -> Option<ObjRef> {
+    match m.get(b"Stm") {
+        None | Some(Object::Null) => None,
+        Some(o) => Some(o.as_ref().unwrap_or(UNREADABLE_STM)),
+    }
+}
+
+/// Whether `stm` is a `/Stm` that isn't a reference (see [`UNREADABLE_STM`]), which names no
+/// stream: content looked up there is never found.
+pub(crate) fn stm_unreadable(stm: Option<ObjRef>) -> bool {
+    stm == Some(UNREADABLE_STM)
+}
+
+/// The streams a page's `/Contents` names. An MCR whose `/Stm` names one of them refers to the
+/// page's own content.
+pub(crate) fn page_streams(doc: &Document, page: Option<&Dict>) -> HashSet<ObjRef> {
+    let refs = |items: &[Object]| items.iter().filter_map(Object::as_ref).collect::<HashSet<_>>();
+    match page.and_then(|p| p.get(b"Contents")) {
+        Some(Object::Ref(r)) => match &*doc.get(*r) {
+            Object::Array(a) => refs(a),
+            _ => HashSet::from([*r]),
+        },
+        Some(Object::Array(a)) => refs(a),
+        _ => HashSet::new(),
+    }
+}
+
+/// The stream content an MCR's `stm` names is in, given the page's own `streams`.
+pub(crate) fn content_stream(stm: Option<ObjRef>, streams: &HashSet<ObjRef>) -> Option<ObjRef> {
+    stm.filter(|r| !streams.contains(r))
+}
+
+/// The marked content an element owns directly, with each mark's effective page (`page` unless an
+/// MCR sets `/Pg` of its own) and whether its `/Stm` is one of that page's own streams.
+fn mcids(
+    doc: &Document,
+    d: &Dict,
+    page: Option<ObjRef>,
+    pages: &[pdfcraft_model::Page],
+    streams: &mut HashMap<ObjRef, HashSet<ObjRef>>,
+) -> Vec<OwnedMark> {
     let mut out = Vec::new();
     let mut push = |o: &Object| match &*doc.resolve(o) {
-        Object::Int(n) => out.push(*n),
+        Object::Int(n) => out.push((page, (None, *n))),
         Object::Dict(m) if m.name(b"Type") == Some(b"MCR") => {
-            if let Some(n) = m.get(b"MCID").and_then(Object::as_int) {
-                out.push(n)
+            if let Some(n) = m.get(b"MCID").and_then(|n| doc.resolve(n).as_int()) {
+                let pg = m.get(b"Pg").and_then(Object::as_ref).or(page);
+                let stm = match (mcr_stm(m), pg) {
+                    (None, _) => None,
+                    (Some(s), Some(p)) => {
+                        let page_stms = streams.entry(p).or_insert_with(|| page_streams(doc, pages.iter().find(|x| x.obj == p).map(|x| &x.dict)));
+                        content_stream(Some(s), page_stms)
+                    }
+                    (Some(s), None) => Some(s),
+                };
+                out.push((pg, (stm, n)));
             }
         }
         _ => {}
     };
-    match d.get(b"K") {
-        Some(Object::Array(a)) => a.iter().for_each(&mut push),
-        Some(o) => push(o),
-        None => {}
+    let Some(k) = d.get(b"K") else { return out };
+    match &*doc.resolve(k) {
+        Object::Array(a) => a.iter().for_each(&mut push),
+        o => push(o),
     }
     out
 }
@@ -193,22 +256,39 @@ fn union(a: Option<[f64; 4]>, b: [f64; 4]) -> [f64; 4] {
     }
 }
 
+/// The overlap of `a` with `clip` (`a` as it is when there is no clip); `None` when `a` lies
+/// wholly outside `clip`, as a form's `/BBox` clips everything the form draws (ISO 32000-2 §8.10.1).
+fn intersect(a: [f64; 4], clip: Option<[f64; 4]>) -> Option<[f64; 4]> {
+    let Some(c) = clip else { return Some(a) };
+    let r = [a[0].max(c[0]), a[1].max(c[1]), a[2].min(c[2]), a[3].min(c[3])];
+    (r[0] <= r[2] && r[1] <= r[3]).then_some(r)
+}
+
+/// The box a form's `/BBox` clips its content to, transformed by the form's `/Matrix` and `top`.
+fn form_bbox(d: &Dict, m: &Matrix, top: &Matrix) -> Option<[f64; 4]> {
+    let bb: Vec<f64> = d.get(b"BBox").and_then(|b| b.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect())).unwrap_or_default();
+    match bb[..] {
+        [a, b, c, d] => Some(m.then(top).bbox([a, b, c, d])),
+        _ => None,
+    }
+}
+
 /// An open marked-content sequence while bounds are gathered: its id, when it is one of those asked
 /// for, and the bounds of what has been drawn in it so far.
 struct Mark {
-    id: Option<i64>,
+    id: Option<ContentRef>,
     drawn: Option<[f64; 4]>,
 }
 
-/// Adds `b` to what the innermost open sequence has drawn.
-fn draw(marks: &mut [Mark], b: [f64; 4]) {
-    if let Some(m) = marks.last_mut() {
+/// Adds `b`, clipped to `clip`, to what the innermost open sequence has drawn.
+fn draw(marks: &mut [Mark], b: [f64; 4], clip: Option<[f64; 4]>) {
+    if let (Some(m), Some(b)) = (marks.last_mut(), intersect(b, clip)) {
         m.drawn = Some(union(m.drawn, b));
     }
 }
 
 /// Closes the innermost open sequence: what it drew counts for its id and for the sequence around it.
-fn close(marks: &mut Vec<Mark>, matching: &mut usize, out: &mut HashMap<i64, [f64; 4]>) {
+fn close(marks: &mut Vec<Mark>, matching: &mut usize, out: &mut HashMap<ContentRef, [f64; 4]>) {
     let Some(m) = marks.pop() else { return };
     if m.id.is_some() {
         *matching = matching.saturating_sub(1);
@@ -218,7 +298,7 @@ fn close(marks: &mut Vec<Mark>, matching: &mut usize, out: &mut HashMap<i64, [f6
         let e = out.entry(id).or_insert(b);
         *e = union(Some(*e), b);
     }
-    draw(marks, b);
+    draw(marks, b, None);
 }
 
 /// The page-space box a `Do` operator paints: a form's transformed `/BBox`, or the unit square for an image.
@@ -227,93 +307,167 @@ fn xobject_bbox(doc: &Document, xobjects: &Dict, op: &pdfcraft_content::Op, top:
     let r = op.name(0).and_then(|n| xobjects.get(n)).and_then(Object::as_ref)?;
     Some(match &*doc.get(r) {
         Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form") => {
-            let bb: Vec<f64> =
-                s.dict.get(b"BBox").and_then(|b| b.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect())).unwrap_or_default();
-            let m = Matrix::from_operands(s.dict.get(b"Matrix").and_then(|m| m.as_array()).map(Vec::as_slice).unwrap_or(&[]))
-                .unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
-            match bb[..] {
-                [a, b, c, d] => m.then(top).bbox([a, b, c, d]),
-                _ => return None,
-            }
+            let m =
+                Matrix::from_operands(s.dict.get(b"Matrix").and_then(|m| m.as_array()).map(Vec::as_slice).unwrap_or(&[])).unwrap_or(Matrix::IDENTITY);
+            form_bbox(&s.dict, &m, top)?
         }
         _ => top.bbox([0.0, 0.0, 1.0, 1.0]),
     })
 }
 
+/// How deeply forms drawn from forms are followed when locating marked content in them.
+const MAX_FORM_DEPTH: usize = 16;
+
+fn sub_dict(doc: &Document, d: &Dict, key: &[u8]) -> Dict {
+    d.get(key).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default()
+}
+
 /// Where each of the marked content `ids` is drawn on a page (images, forms and paths), in one pass
-/// over the page. What a sequence draws counts for every sequence of `ids` around it too.
-pub(crate) fn content_bboxes(doc: &Document, page: &Dict, ids: &HashSet<i64>) -> HashMap<i64, [f64; 4]> {
-    let res = page.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
-    let xobjects = res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
-    let props = page_properties(doc, page);
+/// over the page. What a sequence draws counts for every sequence of `ids` around it too. Content a
+/// form XObject holds (an id with a stream) is found by following the form's `Do` on the page, with
+/// its `/Matrix` and the transformation in force there, through at most [`MAX_FORM_DEPTH`] forms
+/// and the page's decode and form allowance.
+pub(crate) fn content_bboxes(doc: &Document, page: &Dict, ids: &HashSet<ContentRef>) -> HashMap<ContentRef, [f64; 4]> {
+    let res = sub_dict(doc, page, b"Resources");
     #[cfg(test)]
     crate::BOUNDS_PASSES.with(|c| c.set(c.get() + 1));
-    let mut ctm = vec![Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])];
-    // The open marked-content sequences, and how many of them are one of `ids`.
-    let mut marks: Vec<Mark> = Vec::new();
-    let mut matching = 0usize;
-    let mut out = HashMap::new();
-    let mut path: Vec<(f64, f64)> = Vec::new();
-    for op in pdfcraft_content::parse(&page_content(doc, page)).ops {
-        crate::count_mark_reads(1);
-        let inside = matching > 0;
-        let top = ctm.last().copied().unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
-        match op.op.as_slice() {
-            b"q" => ctm.push(top),
-            b"Q" if ctm.len() > 1 => {
-                ctm.pop();
-            }
-            b"cm" => {
-                if let Some(m) = Matrix::from_operands(&op.operands)
-                    && let Some(t) = ctm.last_mut()
-                {
-                    *t = m.then(&top);
+    let mut bounds =
+        Bounds { doc, ids, in_forms: ids.iter().any(|(s, _)| s.is_some()), budget: DecodeBudget::page(), open: Vec::new(), out: HashMap::new() };
+    bounds.walk(&page_content(doc, page), &res, None, Matrix::IDENTITY, None);
+    bounds.out
+}
+
+/// One pass gathering where marked content is drawn, into forms as well as on the page.
+struct Bounds<'a> {
+    doc: &'a Document,
+    ids: &'a HashSet<ContentRef>,
+    /// Whether any of `ids` is in a stream of its own, so forms are worth entering.
+    in_forms: bool,
+    budget: DecodeBudget,
+    /// The forms being walked, outermost first: a form drawing itself isn't entered again.
+    open: Vec<ObjRef>,
+    out: HashMap<ContentRef, [f64; 4]>,
+}
+
+impl Bounds<'_> {
+    /// Walk the content of `stream` (`None` for the page's), drawn with `base` as its starting
+    /// transformation and clipped to `clip` (the enclosing forms' `/BBox`es).
+    fn walk(&mut self, content: &[u8], res: &Dict, stream: Option<ObjRef>, base: Matrix, clip: Option<[f64; 4]>) {
+        let doc = self.doc;
+        let xobjects = sub_dict(doc, res, b"XObject");
+        let props = sub_dict(doc, res, b"Properties");
+        let mut ctm = vec![base];
+        // The open marked-content sequences, and how many of them are one of `ids`.
+        let mut marks: Vec<Mark> = Vec::new();
+        let mut matching = 0usize;
+        let mut path: Option<[f64; 4]> = None;
+        for op in pdfcraft_content::parse(content).ops {
+            crate::count_mark_reads(1);
+            let inside = matching > 0;
+            let top = ctm.last().copied().unwrap_or(base);
+            match op.op.as_slice() {
+                b"q" => ctm.push(top),
+                b"Q" if ctm.len() > 1 => {
+                    ctm.pop();
                 }
-            }
-            b"BMC" => marks.push(Mark { id: None, drawn: None }),
-            b"BDC" => {
-                let id = bdc_mcid(doc, &props, &op).filter(|n| ids.contains(n));
-                matching += usize::from(id.is_some());
-                marks.push(Mark { id, drawn: None });
-            }
-            b"EMC" => close(&mut marks, &mut matching, &mut out),
-            b"m" | b"l" => {
-                if let Some([x, y]) = op.nums::<2>() {
-                    path.push(top.apply(x, y));
-                }
-            }
-            b"c" => {
-                if let Some([_, _, _, _, x, y]) = op.nums::<6>() {
-                    path.push(top.apply(x, y));
-                }
-            }
-            b"re" => {
-                if let Some([x, y, w, h]) = op.nums::<4>() {
-                    let b = top.bbox([x, y, x + w, y + h]);
-                    path.push((b[0], b[1]));
-                    path.push((b[2], b[3]));
-                }
-            }
-            b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" | b"n" => {
-                if inside && !matches!(op.op.as_slice(), b"n") {
-                    for (x, y) in &path {
-                        draw(&mut marks, [*x, *y, *x, *y]);
+                b"cm" => {
+                    if let Some(m) = Matrix::from_operands(&op.operands)
+                        && let Some(t) = ctm.last_mut()
+                    {
+                        *t = m.then(&top);
                     }
                 }
-                path.clear();
+                b"BMC" => marks.push(Mark { id: None, drawn: None }),
+                b"BDC" => {
+                    let id = bdc_mcid(doc, &props, &op).map(|n| (stream, n)).filter(|id| self.ids.contains(id));
+                    matching += usize::from(id.is_some());
+                    marks.push(Mark { id, drawn: None });
+                }
+                b"EMC" => close(&mut marks, &mut matching, &mut self.out),
+                b"m" | b"l" => {
+                    if let Some([x, y]) = op.nums::<2>() {
+                        let (x, y) = top.apply(x, y);
+                        path = Some(union(path, [x, y, x, y]));
+                    }
+                }
+                b"v" | b"y" => {
+                    if let Some([x1, y1, x2, y2]) = op.nums::<4>() {
+                        for (x, y) in [(x1, y1), (x2, y2)] {
+                            let (x, y) = top.apply(x, y);
+                            path = Some(union(path, [x, y, x, y]));
+                        }
+                    }
+                }
+                b"c" => {
+                    if let Some([x1, y1, x2, y2, x3, y3]) = op.nums::<6>() {
+                        for (x, y) in [(x1, y1), (x2, y2), (x3, y3)] {
+                            let (x, y) = top.apply(x, y);
+                            path = Some(union(path, [x, y, x, y]));
+                        }
+                    }
+                }
+                b"re" => {
+                    if let Some([x, y, w, h]) = op.nums::<4>()
+                        && let Some(b) = intersect(top.bbox([x, y, x + w, y + h]), clip)
+                    {
+                        path = Some(union(path, b));
+                    }
+                }
+                b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" | b"n" => {
+                    if let Some(b) = path.take()
+                        && inside
+                        && !matches!(op.op.as_slice(), b"n")
+                    {
+                        draw(&mut marks, b, clip);
+                    }
+                }
+                b"Do" => {
+                    if inside && let Some(unit) = xobject_bbox(doc, &xobjects, &op, &top) {
+                        draw(&mut marks, unit, clip);
+                    }
+                    self.enter(&xobjects, &op, &top, res, clip);
+                }
+                b"BI" if inside => draw(&mut marks, top.bbox([0.0, 0.0, 1.0, 1.0]), clip),
+                _ => {}
             }
-            b"Do" if inside => {
-                let Some(unit) = xobject_bbox(doc, &xobjects, &op, &top) else { continue };
-                draw(&mut marks, unit);
-            }
-            b"BI" if inside => draw(&mut marks, top.bbox([0.0, 0.0, 1.0, 1.0])),
-            _ => {}
+        }
+        while !marks.is_empty() {
+            close(&mut marks, &mut matching, &mut self.out);
         }
     }
-    while !marks.is_empty() {
-        close(&mut marks, &mut matching, &mut out);
+
+    /// Walk the form a `Do` draws, when marked content asked for may be in a form. A form without
+    /// `/Resources` takes those of the content drawing it, and its `/BBox` clips everything inside it.
+    fn enter(&mut self, xobjects: &Dict, op: &pdfcraft_content::Op, top: &Matrix, res: &Dict, clip: Option<[f64; 4]>) {
+        if !self.in_forms || self.open.len() >= MAX_FORM_DEPTH {
+            return;
+        }
+        let Some(r) = op.name(0).and_then(|n| xobjects.get(n)).and_then(Object::as_ref) else { return };
+        if self.open.contains(&r) {
+            return;
+        }
+        let target = self.doc.get(r);
+        let Object::Stream(s) = &*target else { return };
+        if s.dict.name(b"Subtype") != Some(b"Form") || !self.budget.enter_form() {
+            return;
+        }
+        let m = Matrix::from_operands(s.dict.get(b"Matrix").and_then(|m| m.as_array()).map(Vec::as_slice).unwrap_or(&[])).unwrap_or(Matrix::IDENTITY);
+        let clip = match form_bbox(&s.dict, &m, top) {
+            Some(bb) => match intersect(bb, clip) {
+                Some(c) => Some(c),
+                None => return,
+            },
+            None => clip,
+        };
+        let Ok(data) = self.budget.decode(s) else { return };
+        let form_res = match s.dict.get(b"Resources") {
+            Some(_) => sub_dict(self.doc, &s.dict, b"Resources"),
+            None => res.clone(),
+        };
+        self.open.push(r);
+        self.walk(&data, &form_res, Some(r), m.then(top), clip);
+        self.open.pop();
     }
-    out
 }
 
 /// The figures, in document order.
@@ -322,28 +476,32 @@ pub fn figures(doc: &Document) -> Vec<Figure> {
     let role_map = root.get(b"RoleMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
     let pages = pdfcraft_model::pages(doc);
     let index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
-    let figures: Vec<(Element, Option<usize>)> = elements(doc)
+    let mut streams: HashMap<ObjRef, HashSet<ObjRef>> = HashMap::new();
+    let figures: Vec<(Element, Option<usize>, Vec<ContentRef>)> = elements(doc)
         .into_iter()
         .filter(|e| e.dict.name(b"S").is_some_and(|s| standard(doc, &role_map, s) == b"Figure"))
         .map(|e| {
-            let page = e.page.and_then(|p| index.get(&p).copied());
-            (e, page)
+            let marks = mcids(doc, &e.dict, e.page, &pages, &mut streams);
+            let pg = marks.iter().find_map(|(p, _)| *p).or(e.page);
+            let page = pg.and_then(|p| index.get(&p).copied());
+            let owned = marks.into_iter().filter(|(p, _)| *p == pg).map(|(_, id)| id).collect();
+            (e, page, owned)
         })
         .collect();
-    let mut wanted: HashMap<usize, HashSet<i64>> = HashMap::new();
-    for (e, page) in &figures {
+    let mut wanted: HashMap<usize, HashSet<ContentRef>> = HashMap::new();
+    for (_, page, owned) in &figures {
         if let Some(p) = page {
-            wanted.entry(*p).or_default().extend(mcids(doc, &e.dict));
+            wanted.entry(*p).or_default().extend(owned.iter().copied());
         }
     }
-    let bounds: HashMap<usize, HashMap<i64, [f64; 4]>> =
+    let bounds: HashMap<usize, HashMap<ContentRef, [f64; 4]>> =
         wanted.into_iter().filter_map(|(p, ids)| Some((p, content_bboxes(doc, &pages.get(p)?.dict, &ids)))).collect();
     figures
         .into_iter()
-        .map(|(e, page)| {
+        .map(|(e, page, owned)| {
             let alt = e.dict.get(b"Alt").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text()));
             let on_page = page.and_then(|p| bounds.get(&p));
-            let bbox = on_page.and_then(|b| mcids(doc, &e.dict).iter().filter_map(|id| b.get(id)).fold(None, |acc, b| Some(union(acc, *b))));
+            let bbox = on_page.and_then(|b| owned.iter().filter_map(|id| b.get(id)).fold(None, |acc, b| Some(union(acc, *b))));
             Figure { obj: e.object, page, alt, bbox }
         })
         .collect()
@@ -425,28 +583,117 @@ fn marked_id(doc: &Document, props: &Dict, op: &pdfcraft_content::Op, ids: &Hash
     (op.op == b"BDC").then(|| bdc_mcid(doc, props, op)).flatten().filter(|n| ids.contains(n))
 }
 
-/// What [`artifact_marked_content`] did.
-#[derive(Debug, PartialEq)]
-enum Marked {
-    /// The streams holding the content were rewritten.
-    Done,
-    /// None of the content is on the page, or with `require_all` not all of it: nothing changed.
-    NotFound,
-    /// Some of it is, or may be, in a stream damaged partway or one that doesn't decode, neither of
-    /// which can be rewritten without losing what wasn't read, or after the damage: nothing changed.
-    Damaged,
+/// Point the MCR `item` at the stream that now holds the content of the one it names, when that
+/// stream was replaced on `page` (`el_page` is the enclosing element's page).
+fn remap_stm_item(
+    doc: &mut Document,
+    item: &mut Object,
+    el_page: Option<ObjRef>,
+    page: ObjRef,
+    new_of: &impl Fn(ObjRef) -> Option<ObjRef>,
+) -> Result<bool, pdfcraft_cos::CosError> {
+    let target = match item {
+        Object::Ref(r) => {
+            let Some(d) = doc.get(*r).as_dict().cloned() else { return Ok(false) };
+            if d.get(b"Pg").and_then(Object::as_ref).or(el_page) != Some(page) {
+                return Ok(false);
+            }
+            let Some(new) = d.get(b"Stm").and_then(Object::as_ref).and_then(new_of) else {
+                return Ok(false);
+            };
+            doc.update_dict(*r, |d| {
+                d.set(b"Stm".to_vec(), Object::Ref(new));
+            })?;
+            return Ok(true);
+        }
+        Object::Dict(d) => d,
+        _ => return Ok(false),
+    };
+    if target.get(b"Pg").and_then(Object::as_ref).or(el_page) != Some(page) {
+        return Ok(false);
+    }
+    let Some(new) = target.get(b"Stm").and_then(Object::as_ref).and_then(new_of) else { return Ok(false) };
+    target.set(b"Stm".to_vec(), Object::Ref(new));
+    Ok(true)
 }
 
-/// Turn the tag's marked-content blocks into artifacts, rewriting only the streams that
-/// contain them. Other content streams, and unknown entries on a rewritten stream, stay.
-/// With `require_all`, every id in `ids` must appear on the page before any stream is rewritten.
-fn artifact_marked_content(
-    doc: &mut Document,
-    page: &pdfcraft_model::Page,
-    streams: Vec<DecodedStream>,
-    ids: &HashSet<i64>,
-    require_all: bool,
-) -> Result<Marked, pdfcraft_cos::CosError> {
+/// Point every MCR on `page` that names a replaced stream at the stream that now holds its
+/// content. The page's `/Contents` no longer names the old stream, so without this a later
+/// operation would take that content for a form's and rewrite a stream nothing draws.
+fn remap_stms(doc: &mut Document, page: ObjRef, replaced: &[(ObjRef, ObjRef)]) -> Result<(), pdfcraft_cos::CosError> {
+    if replaced.is_empty() {
+        return Ok(());
+    }
+    let new_of = |old: ObjRef| replaced.iter().find(|(o, _)| *o == old).map(|(_, new)| *new);
+    for element in elements(doc) {
+        let Some(k) = element.dict.get(b"K").cloned() else { continue };
+        if let Object::Ref(r) = k
+            && let Some(mut items) = doc.get(r).as_array().cloned()
+        {
+            // An indirect `/K` array is a container: update its MCRs in place.
+            let mut changed = false;
+            for item in &mut items {
+                changed |= remap_stm_item(doc, item, element.page, page, &new_of)?;
+            }
+            if changed {
+                doc.set(r, Object::Array(items));
+            }
+            continue;
+        }
+        let array = matches!(k, Object::Array(_));
+        let mut items = match k {
+            Object::Array(items) => items,
+            one => vec![one],
+        };
+        let mut changed = false;
+        for item in &mut items {
+            changed |= remap_stm_item(doc, item, element.page, page, &new_of)?;
+        }
+        if changed {
+            let k = if array {
+                Object::Array(items)
+            } else {
+                match items.as_slice() {
+                    [one] => one.clone(),
+                    _ => Object::Null,
+                }
+            };
+            doc.update_dict(element.object, |d| d.set(b"K".to_vec(), k))?;
+        }
+    }
+    Ok(())
+}
+
+/// What all pages and forms rewritten in one artifact operation may decode and keep: a tag can
+/// reference many pages, so the per-page decode budget alone would let one edit retain a plan for
+/// every page.
+const MAX_REWRITE_BYTES: usize = 128 * 1024 * 1024;
+
+/// A `/Contents` entry and, when the stream changes, its dictionary and spliced bytes.
+type PlannedEntry = (Object, Option<(Dict, Vec<u8>)>);
+
+/// What planning an artifact rewrite of one page's content streams found.
+enum PageArtifact<'a> {
+    /// The page and the planned rewrite of each `/Contents` entry.
+    Ready(&'a pdfcraft_model::Page, Vec<PlannedEntry>),
+    /// None of the content is on the page, or with `require_all` not all of it.
+    NotFound,
+    /// Some of it is, or may be, in a stream damaged partway or one that doesn't decode, neither of
+    /// which can be rewritten without losing what wasn't read, or after the damage.
+    Damaged,
+    /// Decoding the page's streams took more than a page's allowance, or the operation's allowance.
+    TooLarge,
+}
+
+/// Plan turning the tag's marked-content blocks on `page` into artifacts, without changing the
+/// document. With `require_all`, every id in `ids` must appear on the page. `spent` counts the
+/// bytes decoded and retained across the whole operation, bounded by [`MAX_REWRITE_BYTES`].
+fn artifact_page<'a>(doc: &Document, page: &'a pdfcraft_model::Page, ids: &HashSet<i64>, require_all: bool, spent: &mut usize) -> PageArtifact<'a> {
+    let Some(streams) = decode_page_streams(doc, &page.dict) else { return PageArtifact::TooLarge };
+    let decoded_bytes: usize = streams.iter().filter_map(|(_, s)| s.as_ref().map(|(_, bytes, _)| bytes.len())).sum();
+    if spent.saturating_add(decoded_bytes) > MAX_REWRITE_BYTES {
+        return PageArtifact::TooLarge;
+    }
     let props = page_properties(doc, &page.dict);
     // The pieces are the streams, in order.
     let decoded: Vec<&[u8]> = streams.iter().filter_map(|(_, s)| s.as_ref().map(|(_, bytes, _)| bytes.as_slice())).collect();
@@ -463,7 +710,7 @@ fn artifact_marked_content(
             // after it takes them from around what wasn't read: that stream may end them itself.
             let (first, last) = pieces.pieces_of(&op);
             if damage.is_some_and(|d| last > d) || read.get(first..last).is_some_and(|r| r.iter().any(|r| *r != Read::Whole)) {
-                return Ok(Marked::Damaged);
+                return PageArtifact::Damaged;
             }
             found.insert(id);
             edits.push((op.span, b"/Artifact BMC".to_vec()));
@@ -472,67 +719,237 @@ fn artifact_marked_content(
     // Content not found may be past the damage, or in a stream that doesn't decode: whether it
     // is on the page isn't known.
     if found != *ids && read.iter().any(|r| *r != Read::Whole) {
-        return Ok(Marked::Damaged);
+        return PageArtifact::Damaged;
     }
     if if require_all { found != *ids } else { found.is_empty() } {
-        return Ok(Marked::NotFound);
+        return PageArtifact::NotFound;
     }
     let spliced = pieces.splice(edits);
     if read.iter().zip(&decoded).zip(&spliced).any(|((read, old), new)| *read != Read::Whole && *old != new.as_slice()) {
-        return Ok(Marked::Damaged);
+        return PageArtifact::Damaged;
     }
     let mut spliced = spliced.into_iter();
-    let mut next = Vec::with_capacity(streams.len());
+    let mut entries = Vec::with_capacity(streams.len());
+    let mut retained = 0usize;
     for (entry, stream) in streams {
         let Some((stream, old, _)) = stream else {
-            next.push(entry);
+            entries.push((entry, None));
             continue;
         };
         let Some(new) = spliced.next() else {
-            next.push(entry);
+            entries.push((entry, None));
             continue;
         };
         if new == old {
-            next.push(entry);
+            entries.push((entry, None));
             continue;
         }
-        let mut dict = stream.dict;
+        retained = retained.saturating_add(new.len());
+        entries.push((entry, Some((stream.dict, new))));
+    }
+    *spent = spent.saturating_add(decoded_bytes).saturating_add(retained);
+    if *spent > MAX_REWRITE_BYTES {
+        return PageArtifact::TooLarge;
+    }
+    PageArtifact::Ready(page, entries)
+}
+
+/// Write a planned page artifact rewrite, rewriting only the streams that contain the tag's
+/// marked content. Other content streams, and unknown entries on a rewritten stream, stay.
+fn write_page(doc: &mut Document, page: &pdfcraft_model::Page, entries: Vec<PlannedEntry>) -> Result<(), pdfcraft_cos::CosError> {
+    let mut next = Vec::with_capacity(entries.len());
+    let mut replaced = Vec::new();
+    for (entry, changed) in entries {
+        let Some((mut dict, new)) = changed else {
+            next.push(entry);
+            continue;
+        };
         dict.remove(b"Length");
         dict.remove(b"Filter");
         dict.remove(b"DecodeParms");
         let stream = Object::Stream(Stream::flate(dict, &new));
         // Splicing depends on this occurrence's neighbours. The original stream may also
         // appear elsewhere in this array or on another page, where it must stay unchanged.
-        next.push(Object::Ref(doc.add(stream)));
+        let replacement = doc.add(stream);
+        if let Some(old) = entry.as_ref() {
+            replaced.push((old, replacement));
+        }
+        next.push(Object::Ref(replacement));
     }
     let contents = match next.as_slice() {
         [one] => one.clone(),
         _ => Object::Array(next),
     };
     doc.update_dict(page.obj, |p| p.set(b"Contents".to_vec(), contents))?;
-    Ok(Marked::Done)
+    // An MCR may name the stream that was just replaced: point it at the stream that now holds
+    // that content, so a later operation finds the content the page draws.
+    remap_stms(doc, page.obj, &replaced)?;
+    Ok(())
 }
 
-/// Decorative figure: its marked content on the page becomes an artifact, and the element
-/// leaves the structure tree (and the parent tree).
-pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> {
-    let d = check_figure(doc, obj)?;
-    let ids: HashSet<i64> = mcids(doc, &d).into_iter().collect();
-    let pages = pdfcraft_model::pages(doc);
-    let pg = d.get(b"Pg").and_then(Object::as_ref).or_else(|| elements(doc).into_iter().find(|e| e.object == obj).and_then(|e| e.page));
-    if let Some(page) = pg.and_then(|p| pages.iter().find(|x| x.obj == p)).filter(|_| !ids.is_empty()) {
-        let streams = decode_page_streams(doc, &page.dict).ok_or(AltError::TooLarge)?;
-        match artifact_marked_content(doc, page, streams, &ids, false)? {
-            // The parent tree no longer points those ids at the figure.
-            Marked::Done => {
-                if let Some(key) = page.dict.get(b"StructParents").and_then(|o| doc.resolve(o).as_int()) {
-                    clear_parent_tree(doc, key, obj)?;
+/// The marked-content ids an element owns in one page's content, or in one form XObject stream
+/// (with the page its MCRs gave it).
+type PageMarks = (Option<ObjRef>, HashSet<i64>);
+type FormMarks = (ObjRef, Option<ObjRef>, HashSet<i64>);
+
+/// The marked content an element owns, split into the ids in each page's own content and, for each
+/// other stream an MCR's `/Stm` names, the ids in that stream with the page its MCRs gave it
+/// (in the order first referenced).
+fn split_by_stream(owned: &[OwnedMark]) -> (Vec<PageMarks>, Vec<FormMarks>) {
+    let mut pages: Vec<PageMarks> = Vec::new();
+    let mut page_index: HashMap<Option<ObjRef>, usize> = HashMap::new();
+    let mut forms: Vec<FormMarks> = Vec::new();
+    let mut form_index: HashMap<ObjRef, usize> = HashMap::new();
+    for (pg, (stream, id)) in owned {
+        match stream {
+            None => match page_index.get(pg).and_then(|i| pages.get_mut(*i)) {
+                Some((_, ids)) => {
+                    ids.insert(*id);
                 }
-            }
-            Marked::NotFound => {}
-            Marked::Damaged => return Err(AltError::Damaged),
+                None => {
+                    page_index.insert(*pg, pages.len());
+                    pages.push((*pg, HashSet::from([*id])));
+                }
+            },
+            Some(s) => match form_index.get(s).and_then(|i| forms.get_mut(*i)) {
+                Some((_, form_pg, ids)) => {
+                    *form_pg = form_pg.or(*pg);
+                    ids.insert(*id);
+                }
+                None => {
+                    form_index.insert(*s, forms.len());
+                    forms.push((*s, *pg, HashSet::from([*id])));
+                }
+            },
         }
     }
+    (pages, forms)
+}
+
+/// What making a tag's marked content in a form XObject an artifact would write.
+enum FormArtifact {
+    /// The form's new stream, and its `/StructParents` key, when it has one.
+    Ready(Stream, Option<i64>),
+    /// None of the content is in the form, or with `require_all` not all of it.
+    NotFound,
+    /// The form is damaged partway or doesn't decode: rewriting it would lose what wasn't read.
+    Damaged,
+    /// Decoding the form would take more than a page's allowance.
+    TooLarge,
+}
+
+/// The stream `form` (which an MCR's `/Stm` names) with its marked content `ids` made artifacts,
+/// without changing the document. Its named property lists are its own `/Resources`, or the
+/// page's when it has none.
+fn artifact_form(doc: &Document, form: ObjRef, page: Option<&Dict>, ids: &HashSet<i64>, require_all: bool, spent: &mut usize) -> FormArtifact {
+    let target = doc.get(form);
+    let Object::Stream(s) = &*target else { return FormArtifact::NotFound };
+    let mut budget = DecodeBudget::page();
+    let data = match budget.decode_with_damage(doc, s, usize::MAX) {
+        Ok((data, false)) => data,
+        Ok((_, true)) => return FormArtifact::Damaged,
+        Err(_) if budget.exhausted() => return FormArtifact::TooLarge,
+        Err(_) => return FormArtifact::Damaged,
+    };
+    if spent.saturating_add(data.len()) > MAX_REWRITE_BYTES {
+        return FormArtifact::TooLarge;
+    }
+    let props = match s.dict.get(b"Resources") {
+        Some(_) => sub_dict(doc, &sub_dict(doc, &s.dict, b"Resources"), b"Properties"),
+        None => page.map(|p| page_properties(doc, p)).unwrap_or_default(),
+    };
+    let pieces = pdfcraft_content::Pieces::join(&[data.as_slice()]);
+    let mut found = HashSet::new();
+    let mut edits = Vec::new();
+    for op in pieces.parse().ops {
+        if let Some(id) = marked_id(doc, &props, &op, ids) {
+            found.insert(id);
+            edits.push((op.span, b"/Artifact BMC".to_vec()));
+        }
+    }
+    if if require_all { found != *ids } else { found.is_empty() } {
+        return FormArtifact::NotFound;
+    }
+    let Some(new) = pieces.splice(edits).into_iter().next() else { return FormArtifact::NotFound };
+    *spent = spent.saturating_add(data.len()).saturating_add(new.len());
+    if *spent > MAX_REWRITE_BYTES {
+        return FormArtifact::TooLarge;
+    }
+    let mut dict = s.dict.clone();
+    dict.remove(b"Length");
+    dict.remove(b"Filter");
+    dict.remove(b"DecodeParms");
+    let key = s.dict.get(b"StructParents").and_then(|o| doc.resolve(o).as_int());
+    FormArtifact::Ready(Stream::flate(dict, &new), key)
+}
+
+/// Plan the artifact rewrite of every form holding some of a tag's content. Nothing changes.
+fn plan_forms(
+    doc: &Document,
+    pages: &[pdfcraft_model::Page],
+    forms: &[FormMarks],
+    require_all: bool,
+    spent: &mut usize,
+) -> Result<Vec<(ObjRef, Stream, Option<i64>)>, FormArtifact> {
+    let mut ready = Vec::with_capacity(forms.len());
+    for (form, pg, ids) in forms {
+        let page = pg.and_then(|r| pages.iter().find(|p| p.obj == r)).map(|p| &p.dict);
+        match artifact_form(doc, *form, page, ids, require_all, spent) {
+            FormArtifact::Ready(stream, key) => ready.push((*form, stream, key)),
+            FormArtifact::NotFound if !require_all => {}
+            other => return Err(other),
+        }
+    }
+    Ok(ready)
+}
+
+/// Write the planned form rewrites, each in place (the MCR names that object, wherever it is
+/// drawn), and take `obj` out of each form's parent-tree entry.
+fn write_forms(doc: &mut Document, ready: Vec<(ObjRef, Stream, Option<i64>)>, obj: ObjRef) -> Result<(), AltError> {
+    for (form, stream, key) in ready {
+        doc.set(form, Object::Stream(stream));
+        if let Some(key) = key {
+            clear_parent_tree(doc, key, obj)?;
+        }
+    }
+    Ok(())
+}
+
+/// Decorative figure: its marked content becomes an artifact, on the page and in any form XObject
+/// an MCR's `/Stm` names, and the element leaves the structure tree (and the parent tree). Nothing
+/// changes when some of it is in a stream that can't be rewritten whole.
+pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> {
+    let d = check_figure(doc, obj)?;
+    let pages = pdfcraft_model::pages(doc);
+    let pg = d.get(b"Pg").and_then(Object::as_ref).or_else(|| elements(doc).into_iter().find(|e| e.object == obj).and_then(|e| e.page));
+    let mut streams = HashMap::new();
+    let owned = mcids(doc, &d, pg, &pages, &mut streams);
+    let (page_ids, forms) = split_by_stream(&owned);
+    let mut spent = 0usize;
+    let forms = match plan_forms(doc, &pages, &forms, false, &mut spent) {
+        Ok(ready) => ready,
+        Err(FormArtifact::TooLarge) => return Err(AltError::TooLarge),
+        Err(_) => return Err(AltError::Damaged),
+    };
+    let mut page_work = Vec::new();
+    for (pg, ids) in page_ids {
+        if let Some(page) = pg.and_then(|r| pages.iter().find(|x| x.obj == r)) {
+            match artifact_page(doc, page, &ids, false, &mut spent) {
+                PageArtifact::Ready(page, entries) => page_work.push((page, entries)),
+                PageArtifact::NotFound => {}
+                PageArtifact::TooLarge => return Err(AltError::TooLarge),
+                PageArtifact::Damaged => return Err(AltError::Damaged),
+            }
+        }
+    }
+    for (page, entries) in page_work {
+        write_page(doc, page, entries)?;
+        // The parent tree no longer points those ids at the figure.
+        if let Some(key) = page.dict.get(b"StructParents").and_then(|o| doc.resolve(o).as_int()) {
+            clear_parent_tree(doc, key, obj)?;
+        }
+    }
+    write_forms(doc, forms, obj)?;
     // Out of its parent's kids.
     if let Some(parent) = d.get(b"P").and_then(Object::as_ref) {
         let kids = doc.get(parent).as_dict().and_then(|p| p.get(b"K").cloned());
@@ -561,24 +978,43 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     if has_child_structure(doc, &element.dict) {
         return Err(ArtifactError::HasChildren);
     }
-    let ids: HashSet<i64> = mcids(doc, &element.dict).into_iter().collect();
-    if ids.is_empty() {
+    let pages = pdfcraft_model::pages(doc);
+    let mut streams = HashMap::new();
+    let owned = mcids(doc, &element.dict, element.page, &pages, &mut streams);
+    if owned.is_empty() {
         return Err(ArtifactError::NoMarkedContent);
     }
-    let pages = pdfcraft_model::pages(doc);
-    let page_ref = element.page.ok_or(ArtifactError::NoPage)?;
-    let page = pages.iter().find(|page| page.obj == page_ref).ok_or(ArtifactError::NoPage)?;
+    // Content in a page's own streams needs that page; content in a form only the form.
+    let (page_ids, forms) = split_by_stream(&owned);
+    let mut spent = 0usize;
+    let mut page_work = Vec::with_capacity(page_ids.len());
+    for (pg, ids) in page_ids {
+        let page = pg.and_then(|r| pages.iter().find(|page| page.obj == r)).ok_or(ArtifactError::NoPage)?;
+        match artifact_page(doc, page, &ids, true, &mut spent) {
+            PageArtifact::Ready(page, entries) => page_work.push((page, entries)),
+            PageArtifact::NotFound => return Err(ArtifactError::ContentNotFound),
+            PageArtifact::TooLarge => return Err(ArtifactError::TooLarge),
+            PageArtifact::Damaged => return Err(ArtifactError::Damaged),
+        }
+    }
     let parent = element.dict.get(b"P").and_then(Object::as_ref).ok_or(ArtifactError::NoParent)?;
+    replacement_kids(doc, parent, obj)?;
+    // Every form is checked before anything is written, so a form missing some of the content, or
+    // one that can't be rewritten whole, leaves the document as it was.
+    let forms = match plan_forms(doc, &pages, &forms, true, &mut spent) {
+        Ok(ready) => ready,
+        Err(FormArtifact::TooLarge) => return Err(ArtifactError::TooLarge),
+        Err(FormArtifact::Damaged) => return Err(ArtifactError::Damaged),
+        Err(_) => return Err(ArtifactError::ContentNotFound),
+    };
+    for (page, entries) in page_work {
+        write_page(doc, page, entries)?;
+        if let Some(key) = page.dict.get(b"StructParents").and_then(|o| doc.resolve(o).as_int()) {
+            clear_parent_tree(doc, key, obj).map_err(|e| ArtifactError::ParentTree(e.to_string()))?;
+        }
+    }
+    write_forms(doc, forms, obj).map_err(|e| ArtifactError::ParentTree(e.to_string()))?;
     let replacement = replacement_kids(doc, parent, obj)?;
-    let streams = decode_page_streams(doc, &page.dict).ok_or(ArtifactError::TooLarge)?;
-    match artifact_marked_content(doc, page, streams, &ids, true)? {
-        Marked::Done => {}
-        Marked::NotFound => return Err(ArtifactError::ContentNotFound),
-        Marked::Damaged => return Err(ArtifactError::Damaged),
-    }
-    if let Some(key) = page.dict.get(b"StructParents").and_then(|o| doc.resolve(o).as_int()) {
-        clear_parent_tree(doc, key, obj).map_err(|e| ArtifactError::ParentTree(e.to_string()))?;
-    }
     doc.update_dict(parent, |p| p.set(b"K".to_vec(), replacement))?;
     // Keep the retired object valid if another object holds an out-of-tree reference to it.
     doc.update_dict(obj, |d| {
@@ -622,6 +1058,8 @@ fn clear_parent_tree(doc: &mut Document, key: i64, obj: ObjRef) -> Result<(), Al
     for [k, v] in nums.as_chunks_mut::<2>().0 {
         if k.as_int() == Some(key) {
             match &*v {
+                // The entry is the element itself rather than an array of them.
+                Object::Ref(r) if *r == obj => *v = Object::Null,
                 Object::Array(a) => *v = Object::Array(a.iter().map(|x| if x.as_ref() == Some(obj) { Object::Null } else { x.clone() }).collect()),
                 Object::Ref(r) => {
                     if let Some(a) = doc.get(*r).as_array().cloned() {
