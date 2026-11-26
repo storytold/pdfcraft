@@ -1406,6 +1406,32 @@ fn a_fake_bold_copy_at_the_end_of_a_pass_does_not_hide_the_run_end() {
     assert!(text.lines().any(|l| l == "WORLD"), "{text}");
 }
 
+/// A glyph redrawn five or more times in a row at its own place prints once: the copies past the
+/// four-glyph window still match the kept glyph they follow.
+#[test]
+fn many_copies_of_a_glyph_in_a_row_print_once() {
+    let mut v = Vec::new();
+    word(&mut v, "WOR", 10.0, 10.0, 6.0);
+    for _ in 0..7 {
+        v.push(g("L", 28.0, 10.0, 34.0));
+    }
+    v.push(g("D", 34.0, 10.0, 40.0));
+    assert_eq!(layout(v).plain_text(), "WORLD");
+}
+
+/// #3173: the far redraw check reaches as far as a redraw may sit vertically, for a tall, narrow
+/// glyph whose horizontal tolerance is much smaller than its vertical one.
+#[test]
+fn a_tall_narrow_glyph_redrawn_a_little_higher_is_dropped() {
+    let mut v = vec![em_box("|", 10.0, 100.0, 11.0, 140.0)];
+    for k in 0..50 {
+        word(&mut v, "xx", 100.0, 200.0 + 14.0 * k as f32, 6.0);
+    }
+    v.push(em_box("|", 10.0, 107.0, 11.0, 147.0));
+    let text = layout(v).plain_text();
+    assert_eq!(text.matches('|').count(), 1, "{text}");
+}
+
 /// #3173: a glyph kept in a cell does not hide the earlier glyph there that the redraw matches.
 #[test]
 fn a_redraw_is_matched_against_earlier_glyphs_of_the_same_cell() {

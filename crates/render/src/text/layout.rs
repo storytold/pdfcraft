@@ -237,6 +237,9 @@ fn glyphs_without_redraws(glyphs: &[TextGlyph]) -> Vec<bool> {
     };
     let mut latest: HashMap<(u64, i32, i32), usize> = HashMap::new();
     let mut older = vec![NONE; glyphs.len()];
+    // `next_kept[j]`: the kept glyph after kept glyph `j`, recorded when it is kept, so a dropped
+    // fake-bold copy does not count and no lookup rescans the dropped glyphs in between.
+    let mut next_kept = vec![NONE; glyphs.len()];
     let mut prev_kept: Option<usize> = None;
     for i in 0..glyphs.len() {
         let g = &glyphs[i];
@@ -247,13 +250,16 @@ fn glyphs_without_redraws(glyphs: &[TextGlyph]) -> Vec<bool> {
             let p = &glyphs[j];
             keep[j] && p.text == g.text && (p.rect[0] - g.rect[0]).abs() < dx && (p.rect[1] - g.rect[1]).abs() < h * 0.2
         };
-        let near = (i.saturating_sub(4)..i).rev().any(&same);
+        // The last kept glyph is checked too: copies of it drawn more than four times in a row
+        // are all past the window, and the far check is skipped for a glyph that follows it.
+        let near = (i.saturating_sub(4)..i).rev().any(&same) || prev_kept.is_some_and(&same);
         let (fp, cx, cy_) = (text_hash(&g.text), (g.rect[0] / cell).floor() as i32, (g.rect[1] / cell).floor() as i32);
-        // The glyph after a kept one is the next kept glyph: a dropped fake-bold copy does not count.
-        let next_kept = |j: usize| (j + 1..i).find(|&k| keep[k]).unwrap_or(i);
+        // The glyph after a kept one is the next kept glyph (or this one, while it has none).
+        let next_of = |j: usize| next_kept.get(j).copied().filter(|&k| k != NONE).unwrap_or(i);
         let mut far = false;
         if prev_kept.is_none_or(|p| !follows(p, i)) {
-            let reach = ((dx / cell).ceil() as i32).clamp(1, MAX_REDRAW_REACH);
+            // `same` takes a horizontal offset below `dx` and a vertical one below a fifth of the height.
+            let reach = ((dx.max(h * 0.2) / cell).ceil() as i32).clamp(1, MAX_REDRAW_REACH);
             let mut checks = REDRAW_CANDIDATES;
             'cells: for ox in -reach..=reach {
                 for oy in -reach..=reach {
@@ -263,7 +269,7 @@ fn glyphs_without_redraws(glyphs: &[TextGlyph]) -> Vec<bool> {
                             break 'cells;
                         }
                         checks -= 1;
-                        if same(j) && !follows(j, next_kept(j)) {
+                        if same(j) && !follows(j, next_of(j)) {
                             far = true;
                             break 'cells;
                         }
@@ -276,6 +282,9 @@ fn glyphs_without_redraws(glyphs: &[TextGlyph]) -> Vec<bool> {
             keep[i] = false;
         } else {
             older[i] = latest.insert((fp, cx, cy_), i).unwrap_or(NONE);
+            if let Some(slot) = prev_kept.and_then(|p| next_kept.get_mut(p)) {
+                *slot = i;
+            }
             prev_kept = Some(i);
         }
     }
