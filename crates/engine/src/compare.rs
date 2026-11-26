@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use pdfcraft_cos::ObjRef;
-use pdfcraft_ocr::{Word, analyze_page, synthesize_with_rects};
+use pdfcraft_ocr::{Line, Rect, Region, RegionKind, Word, analyze_page, synthesize_with_rects};
 
 pub use pdfcraft_compare::{Change, Comparison, Kind, Side};
 // How far Office export reads into form XObjects; `OfficeExport::truncated_pages` lists the pages
@@ -230,16 +230,14 @@ pub(crate) fn weight_and_slant(base_font: &str) -> (bool, bool) {
 /// (`visible_rect`), so cropped or rotated scans synthesize against the page as shown. Paragraph
 /// boxes come from their regions where the two line up; a paragraph whose regions merged keeps
 /// the first region's box rather than the page losing its synthesis.
-fn synthesized_page(
-    blocks: &[pdfcraft_edit::TextBlock],
-    info: &pdfcraft_render::PageInfo,
-    visible_rect: &dyn Fn([f64; 4]) -> [f64; 4],
-    unit: f64,
-) -> Vec<pdfcraft_export::Block> {
+fn synthesized_page(blocks: &[pdfcraft_edit::TextBlock], info: &pdfcraft_render::PageInfo, visible_rect: &dyn Fn([f64; 4]) -> [f64; 4], unit: f64) -> Vec<pdfcraft_export::Block> {
     let usable = |b: &pdfcraft_edit::TextBlock| {
         let r = b.rect;
         !b.text.trim().is_empty() && r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1]
     };
+    // The engine's own reading order is kept, not re-derived: layout re-sorts words by their
+    // boxes, which interleaves justified lines and caption columns. analyze_page is used for
+    // CLASSIFICATION only (which region kind each word belongs to).
     let words: Vec<Word> = blocks
         .iter()
         .filter(|b| usable(b))
@@ -251,7 +249,57 @@ fn synthesized_page(
     if words.is_empty() {
         return Vec::new();
     }
-    let regions = analyze_page(&words, (info.width, info.height), None);
+    let classified = analyze_page(&words, (info.width, info.height), None);
+    let mut kind = vec![RegionKind::Text; words.len()];
+    let mut free: Vec<usize> = (0..words.len()).rev().collect();
+    for region in &classified {
+        for line in &region.lines {
+            for word in &line.words {
+                if let Some(at) = free.iter().position(|i| words.get(*i) == Some(word)) {
+                    let i = free.remove(at);
+                    if let Some(slot) = kind.get_mut(i) {
+                        *slot = region.kind;
+                    }
+                }
+            }
+        }
+    }
+    // Lines are formed in the ORIGINAL block order: a new line starts when the next word's
+    // baseline leaves the current one (not when layout feels like re-ordering the page).
+    let mut lines: Vec<Line> = Vec::new();
+    let mut kinds: Vec<RegionKind> = Vec::new();
+    for (i, word) in words.iter().enumerate() {
+        let centre = |r: [f32; 4]| (r[1] + r[3]) / 2.0;
+        let new_line = match lines.last() {
+            None => true,
+            Some(line) => {
+                let first = line.words.first().expect("line has a word");
+                let height = (word.rect[3] - word.rect[1]).max(1.0);
+                (centre(word.rect) - centre(first.rect)).abs() > 0.6 * height
+            }
+        };
+        if new_line {
+            lines.push(Line { words: vec![word.clone()] });
+            kinds.push(kind[i]);
+        } else if let Some(line) = lines.last_mut() {
+            line.words.push(word.clone());
+        }
+    }
+    // Consecutive lines of one kind form a region, in that same original order.
+    let mut regions: Vec<Region> = Vec::new();
+    for (line, kind) in lines.into_iter().zip(kinds) {
+        let rect = line_rect(&line);
+        match regions.last_mut() {
+            Some(region) if region.kind == kind => {
+                region.rect = region.rect.union(rect);
+                region.lines.push(line);
+            }
+            _ => {
+                let order = regions.len();
+                regions.push(Region { kind, rect, lines: vec![line], order });
+            }
+        }
+    }
     let paragraphs = synthesize_with_rects(&regions);
     let mut sizes: Vec<f64> = blocks.iter().filter(|b| usable(b)).map(|b| b.size * unit).collect();
     sizes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -259,25 +307,32 @@ fn synthesized_page(
     paragraphs
         .iter()
         .enumerate()
-        .map(|(order, (paragraph, rect))| pdfcraft_export::Block {
-            text: paragraph.text.clone(),
-            rect: [f64::from(rect.left), f64::from(rect.top), f64::from(rect.right), f64::from(rect.bottom)],
-            size: body,
-            bold: paragraph.bold,
-            italic: false,
-            color: [0.0, 0.0, 0.0],
-            rotation: 0.0,
-            space_around: [false, false],
-            kind: paragraph.kind,
-            order,
-            metrics: pdfcraft_export::Metrics {
-                indent_left: paragraph.indent_left,
-                indent_first: paragraph.indent_first,
-                line_spacing: paragraph.line_spacing,
-            },
+        .map(|(order, (paragraph, rect))| {
+            pdfcraft_export::Block {
+                text: paragraph.text.clone(),
+                rect: [f64::from(rect.left), f64::from(rect.top), f64::from(rect.right), f64::from(rect.bottom)],
+                size: body,
+                bold: paragraph.bold,
+                italic: false,
+                color: [0.0, 0.0, 0.0],
+                rotation: 0.0,
+                space_around: [false, false],
+                kind: paragraph.kind,
+                order,
+                metrics: pdfcraft_export::Metrics {
+                    indent_left: paragraph.indent_left,
+                    indent_first: paragraph.indent_first,
+                    line_spacing: paragraph.line_spacing,
+                },
+            }
         })
         .collect()
 }
+
+fn line_rect(line: &Line) -> Rect {
+    line.words.iter().map(|w| Rect::new(w.rect[0], w.rect[1], w.rect[2], w.rect[3])).reduce(Rect::union).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0))
+}
+
 
 impl crate::Document {
     /// The pages as paragraphs and images (for Word, HTML and RTF export), including what

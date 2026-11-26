@@ -764,7 +764,13 @@ pub(crate) fn items_filtered(pages: &[Page], keep_image: impl Fn(&Page, &Image) 
             .collect();
         parts.extend(tables.into_iter().map(|t| (t.rect, body, Item::Table(t))));
         parts.extend(p.images.iter().filter(|im| keep_image(p, im)).map(|im| (im.rect, (im.rect[3] - im.rect[1]).max(body), Item::Img(im))));
-        out.extend(reading_order(p, parts));
+        // A synthesized page's paragraphs already carry the engine's reading order: keep it,
+        // because geometric re-sorting interleaves caption columns and centered openings.
+        if p.ocr {
+            out.extend(parts.into_iter().map(|(_, _, item)| item));
+        } else {
+            out.extend(reading_order(p, parts));
+        }
     }
     out
 }

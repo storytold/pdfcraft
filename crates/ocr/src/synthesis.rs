@@ -147,25 +147,16 @@ pub fn synthesize_with_rects(regions: &[Region]) -> Vec<(Paragraph, crate::page_
             });
         }
     }
-    pending.sort_by(|a, b| a.top.total_cmp(&b.top).then(a.left.total_cmp(&b.left)));
     if !pending.is_empty() {
         if let Some(rect) = pending_rect {
             builder.rect = rect;
         }
         builder.flowing(&pending);
     }
-    let mut paired: Vec<(usize, Paragraph, crate::page_layout::Rect)> =
-        builder.out.into_iter().zip(builder.rects).enumerate().map(|(i, (p, r))| (i, p, r)).collect();
-    paired.sort_by(|a, b| a.2.top.total_cmp(&b.2.top).then(a.2.left.total_cmp(&b.2.left)));
-    let position = |old: usize| paired.iter().position(|(i, _, _)| *i == old).unwrap_or(old);
-    let sections: Vec<(usize, f32)> = builder.sections.iter().map(|(i, h)| (position(*i), *h)).collect();
-    let mut paragraphs: Vec<Paragraph> = paired.iter().map(|(_, paragraph, _)| paragraph.clone()).collect();
-    assign_levels(&mut paragraphs, &sections);
+    let mut paragraphs = builder.out;
+    assign_levels(&mut paragraphs, &builder.sections);
     letter_points(&mut paragraphs);
-    for ((_, paragraph, _), updated) in paired.iter_mut().zip(paragraphs) {
-        *paragraph = updated;
-    }
-    paired.into_iter().map(|(_, paragraph, rect)| (paragraph, rect)).collect()
+    paragraphs.into_iter().zip(builder.rects).collect()
 }
 
 /// One line of a page: its text and the box its words occupy.
@@ -468,9 +459,7 @@ impl Builder<'_> {
         };
         // A block ends whatever point label came before it, even when it holds no lines.
         self.after_point_label = false;
-        let mut sorted: Vec<Placed> = lines.to_vec();
-        sorted.sort_by(|a, b| a.top.total_cmp(&b.top).then(a.left.total_cmp(&b.left)));
-        for line in &sorted {
+        for line in lines {
             self.push(block, line.text.clone(), None, std::slice::from_ref(line));
         }
     }
