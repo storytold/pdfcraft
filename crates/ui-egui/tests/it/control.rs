@@ -1034,6 +1034,12 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
         let selector = ok(&mut h, &c, "ui.inspect", json!({ "query": current }));
         let combo = selector["widgets"].as_array().unwrap().iter().find(|w| w["role"] == "ComboBox").expect("language selector");
         click_center(&mut h, &c, combo);
+        // The list scrolls: bring the language into view before clicking it, as a user scrolls to it.
+        h.query_all_by_role_and_label(egui::accesskit::Role::ListBoxOption, next)
+            .next()
+            .unwrap_or_else(|| panic!("{next} is offered in the language list"))
+            .scroll_to_me();
+        h.run_steps(3);
         ok(&mut h, &c, "ui.click", json!({ "label": next }));
         assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], code);
     }
