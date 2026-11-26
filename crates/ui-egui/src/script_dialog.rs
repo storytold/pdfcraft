@@ -299,6 +299,9 @@ fn menu(ui: &mut egui::Ui, items: &[MenuItem], answer: &mut Option<String>) {
 /// Consume the current prompt before replying so two UI events cannot resume it twice.
 fn reply_to_prompt(ctx: &egui::Context, pending: &mut Pending, answer: Option<String>, cancel: bool) {
     if let Some((prompt, reply)) = pending.prompt.take() {
+        if matches!(&prompt, Prompt::File) && pending.file_read.as_ref().is_some_and(|(serial, _)| *serial == pending.serial) {
+            pending.file_read = None;
+        }
         let answer = if cancel {
             match prompt {
                 Prompt::Alert(m) => Some(
@@ -705,7 +708,11 @@ mod review_tests {
                 let mut p = app.script_pending.take().unwrap();
                 app.session.discard_javascript(&p.run);
                 // The replacement realm shares the old worker's execution slot.
+                let (tx, rx) = std::sync::mpsc::channel();
+                p.file_read = Some((p.serial, rx));
                 reply_to_prompt(&ctx, &mut p, None, true);
+                assert!(p.file_read.is_none(), "cancelling releases even an unfinished read");
+                assert!(tx.send(Ok("cancelled".into())).is_err());
                 assert!(matches!(p.run.receiver.recv_timeout(Duration::from_secs(5)), Ok(InteractiveEvent::Complete(_))));
             }
         }
