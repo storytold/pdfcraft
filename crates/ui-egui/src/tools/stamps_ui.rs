@@ -228,6 +228,13 @@ fn categories(stamps: &[CustomStamp]) -> Vec<String> {
     c
 }
 
+#[derive(Clone)]
+struct StampPreviewDate {
+    fallback: String,
+    today: (i64, u32, u32),
+    language: String,
+}
+
 /// The dialog's rows over `file` and the existing `categories`.
 fn create_params(
     file: &str,
@@ -235,10 +242,8 @@ fn create_params(
     preview: Option<egui::TextureHandle>,
     preview_size: [usize; 2],
     author: String,
-    date: String,
+    date: StampPreviewDate,
     time: String,
-    today: (i64, u32, u32),
-    language: String,
 ) -> Vec<Param> {
     let categories = categories.to_vec();
     vec![
@@ -293,8 +298,10 @@ fn create_params(
             let format = fields.text(DATE_FORMAT).unwrap_or("mmm d, yyyy");
             let formatted_date = pdfcraft_engine::dates::check_date_format(format)
                 .ok()
-                .and_then(|fmt| pdfcraft_engine::dates::date_language(&language).map(|lang| pdfcraft_engine::dates::format_day(fmt, today, lang)))
-                .unwrap_or_else(|| date.clone());
+                .and_then(|fmt| {
+                    pdfcraft_engine::dates::date_language(&date.language).map(|lang| pdfcraft_engine::dates::format_day(fmt, date.today, lang))
+                })
+                .unwrap_or_else(|| date.fallback.clone());
             let filled = pdfcraft_engine::Session::stamp_line_with_date_time(template, &author, &formatted_date, &time);
             let source = egui::vec2(preview_size[0] as f32, preview_size[1] as f32);
             let natural = if dynamic && !overlay {
@@ -327,15 +334,13 @@ fn create_params(
                     if let Some(y) = fields.text(LINE_Y).and_then(|v| v.parse::<f32>().ok()) {
                         position[1] = y.clamp(0.0, 1.0);
                     }
-                    if response.dragged() {
-                        if let Some(pointer) = response.interact_pointer_pos() {
-                            position = [
-                                ((pointer.x - rect.min.x) / rect.width()).clamp(0.0, 1.0),
-                                ((pointer.y - rect.min.y) / rect.height()).clamp(0.0, 1.0),
-                            ];
-                            fields.set(LINE_X, position[0].to_string());
-                            fields.set(LINE_Y, position[1].to_string());
-                        }
+                    if response.dragged()
+                        && let Some(pointer) = response.interact_pointer_pos()
+                    {
+                        position =
+                            [((pointer.x - rect.min.x) / rect.width()).clamp(0.0, 1.0), ((pointer.y - rect.min.y) / rect.height()).clamp(0.0, 1.0)];
+                        fields.set(LINE_X, position[0].to_string());
+                        fields.set(LINE_Y, position[1].to_string());
                     }
                 }
                 let at = if overlay {
@@ -515,25 +520,17 @@ impl PdfCraftApp {
         ]);
         let shown_file = file.clone();
         let author = self.comment_prefs.author.clone();
-        let date = self.session.stamp_line("{date}", "");
+        let date = StampPreviewDate {
+            fallback: self.session.stamp_line("{date}", ""),
+            today: self.session.today(),
+            language: self.session.date_language().unwrap_or(crate::i18n::current().code()).to_owned(),
+        };
         let time = self.session.stamp_line("{time}", "");
-        let today = self.session.today();
-        let language = self.session.date_language().unwrap_or(crate::i18n::current().code()).to_owned();
         let dialog = HostedParamDialog::new(ctx, DIALOG_KEY, fields, move |fields| {
             ParamDialog::new(
                 DIALOG_KEY,
                 tl!("Create Custom Stamp"),
-                create_params(
-                    &shown_file,
-                    &existing,
-                    preview.clone(),
-                    preview_size,
-                    author.clone(),
-                    date.clone(),
-                    time.clone(),
-                    today,
-                    language.clone(),
-                ),
+                create_params(&shown_file, &existing, preview.clone(), preview_size, author.clone(), date.clone(), time.clone()),
             )
             .ok_enabled(fields_ok(fields))
             .values(Bind::bound(fields))

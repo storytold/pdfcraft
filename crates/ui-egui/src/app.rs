@@ -42,7 +42,7 @@ mod window;
 
 pub(crate) use clipboard::{ObjectClipMark, copy_refused, print_refused};
 pub(crate) use files::same_file;
-pub(crate) use prefs::{MAX_AUTHOR_CHARS, date_text_for_pdf};
+pub(crate) use prefs::{MAX_AUTHOR_CHARS, date_text, date_text_for_pdf};
 
 /// Where the update check asks for the newest release, in place of GitHub (tests).
 #[cfg(not(target_arch = "wasm32"))]

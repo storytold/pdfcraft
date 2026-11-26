@@ -1741,7 +1741,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         QuickTool::CustomStamp(i) => app.custom_stamps.get(i).and_then(|stamp| {
             let line = stamp.line.as_deref().filter(|line| !line.trim().is_empty())?;
             Some(if let Some(format) = stamp.date_format.as_deref() {
-                let date = app.date_text(Some(format)).unwrap_or_else(|_| app.session.stamp_line("{date}", ""));
+                let date = crate::app::date_text(&app.session, Some(format)).unwrap_or_else(|_| app.session.stamp_line("{date}", ""));
                 let time = app.session.stamp_line("{time}", "");
                 pdfcraft_engine::Session::stamp_line_with_date_time(line, &app.comment_prefs.author, &date, &time)
             } else {
