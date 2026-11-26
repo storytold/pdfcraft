@@ -8,7 +8,7 @@ use craft::behavior::{DisplayOrder, ItemSource, Selection, SelectionChange};
 use craft::host::PickRequest;
 use craft::theme::variant::Tone;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, CollectionEvent, SelectMode, Show, ShowCollection as _};
+use craft::ui::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show, ShowCollection as _};
 use craft::ui::display::Text;
 use craft::ui::list::{List, ListRow};
 use craft::ui::notices::Notice;
