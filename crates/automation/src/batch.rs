@@ -17,10 +17,15 @@ const MAX_INPUT: u64 = 512 * 1024 * 1024;
 struct Recipe<'a> {
     steps: Vec<&'a str>,
     images: optimize::ImageSettings,
+    mono: optimize::MonoSettings,
     ocr: ocr::OcrSettings,
+    /// The calling session's JavaScript preference, carried into each file's own session.
+    javascript: bool,
 }
 
 impl<'a> Recipe<'a> {
+    /// Read and validate `doc_batch`'s steps and settings, taking the JavaScript preference from
+    /// `auto`'s session.
     fn parse(auto: &Automation, args: &'a Args) -> Result<Self> {
         let steps = args.strs("steps")?;
         if steps.is_empty() || steps.len() > 3 {
@@ -38,12 +43,17 @@ impl<'a> Recipe<'a> {
             }
         }
         let mut images = optimize::ImageSettings::REDUCE;
+        let mut mono = optimize::MonoSettings::REDUCE;
         if let Some(ppi) = args.opt_num("ppi")? {
             if !(9.0..=1600.0).contains(&ppi) {
                 return Err(Args::wrong("ppi", "9 to 1600"));
             }
             images.target_ppi = ppi;
             images.above_ppi = ppi * 1.5;
+            // Black-and-white images keep Reduce File Size's higher resolution, at which text
+            // stays legible, and are never taken below a higher `ppi` asked for.
+            mono.target_ppi = mono.target_ppi.max(ppi);
+            mono.above_ppi = mono.target_ppi * 1.5;
         }
         if let Some(q) = args.opt_int("quality")? {
             if !(1..=100).contains(&q) {
@@ -54,7 +64,7 @@ impl<'a> Recipe<'a> {
         if args.opt_num("dpi")?.is_some_and(|dpi| !(72.0..=600.0).contains(&dpi)) {
             return Err(Args::wrong("dpi", "72 to 600"));
         }
-        Ok(Self { steps, images, ocr: auto.ocr_settings(args)? })
+        Ok(Self { steps, images, mono, ocr: auto.ocr_settings(args)?, javascript: auto.session.javascript() })
     }
 
     fn accepts(&self, path: &Path) -> bool {
@@ -62,9 +72,13 @@ impl<'a> Recipe<'a> {
         extension == "pdf" || (self.steps.contains(&"convert") && pdfcraft_engine::CONVERTIBLE.contains(&extension.as_str()))
     }
 
+    /// Run the recipe's steps on the file at `path` in a fresh session; returns the output bytes
+    /// and a report entry per step.
     fn process(&self, path: &Path) -> Result<(Arc<Vec<u8>>, Vec<Value>)> {
         // A fresh session per file bounds retained document state and never touches caller tabs.
+        // It keeps the caller's JavaScript preference, set before any open runs open-time scripts.
         let mut session = Session::new();
+        session.set_javascript(self.javascript);
         let mut input = Vec::new();
         std::fs::File::open(path).map_err(failed)?.take(MAX_INPUT + 1).read_to_end(&mut input).map_err(failed)?;
         if input.len() as u64 > MAX_INPUT {
@@ -78,8 +92,9 @@ impl<'a> Recipe<'a> {
             match *step {
                 "convert" => bytes = session.convert_to_pdf(name, &bytes)?.1,
                 "ocr" => {
-                    let engine = ocr::engine().map_err(failed)?;
-                    let result = ocr::recognize_file(name, bytes, None, self.ocr.clone(), &engine, |_, _| true).map_err(failed)?;
+                    let recognizers = ocr::recognizers(&self.ocr).map_err(failed)?;
+                    let result =
+                        ocr::recognize_file(name, bytes, None, self.ocr.clone(), &recognizers, self.javascript, |_, _| true).map_err(failed)?;
                     log.push(
                         json!({"step":"ocr","words":result.words(),"skipped_pages":result.pages.iter().filter(|p| p.skipped.is_some()).count()}),
                     );
@@ -88,7 +103,7 @@ impl<'a> Recipe<'a> {
                 }
                 "optimize" => {
                     let id = session.open(name, None, bytes.clone(), None).map_err(failed)?;
-                    let settings = optimize::Settings { color: self.images, gray: self.images, ..Default::default() };
+                    let settings = optimize::Settings { color: self.images, gray: self.images, mono: self.mono, ..Default::default() };
                     let (candidate, _) = session.optimized_bytes(id, &settings, &[])?;
                     session.close(id);
                     if candidate.len() < bytes.len() {
@@ -179,6 +194,7 @@ impl Automation {
         let recipe = Recipe::parse(self, args)?;
         let recursive = args.opt_bool("recursive")?.unwrap_or(false);
         let stop = args.opt_bool("stop_on_error")?.unwrap_or(false);
+        let dry_run = args.opt_bool("dry_run")?.unwrap_or(false);
         let paths = args.strs("paths")?;
         if paths.is_empty() || paths.len() > 1000 {
             return Err(Args::wrong("paths", "1 to 1000 files or folders"));
@@ -205,9 +221,39 @@ impl Automation {
         let mut files = discovery.skipped;
         let (mut completed, mut failed_count) = (0, 0);
         let mut stopped = false;
+        let mut planned_outputs: HashSet<PathBuf> = HashSet::new();
         for (path, relative) in discovery.files {
             if stopped || !recipe.accepts(&path) {
                 files.push(json!({"path":path.to_string_lossy(),"status":"skipped","reason":if stopped {"stopped after error"} else {"unsupported input extension"}}));
+                continue;
+            }
+            if dry_run {
+                let planned: Result<PathBuf> = (|| {
+                    let target = out.join(&relative).with_extension("pdf");
+                    let target = self.resolve(target.to_str().ok_or_else(|| failed("output path is not UTF-8"))?, true)?;
+                    if !target.starts_with(&out) {
+                        return Err(failed("output path leaves out_dir"));
+                    }
+                    let dir = target.parent().ok_or_else(|| failed("output has no parent"))?;
+                    let stem = target.file_stem().ok_or_else(|| failed("output has no stem"))?.to_string_lossy().into_owned();
+                    for n in 1..=10_000 {
+                        let candidate = if n == 1 { target.clone() } else { dir.join(format!("{stem} ({n}).pdf")) };
+                        if candidate.symlink_metadata().is_ok() || planned_outputs.contains(&candidate) {
+                            continue;
+                        }
+                        planned_outputs.insert(candidate.clone());
+                        return Ok(candidate);
+                    }
+                    Err(failed("all 10000 output names are occupied"))
+                })();
+                match planned {
+                    Ok(target) => files.push(json!({"path":path.to_string_lossy(),"status":"planned","output":target.to_string_lossy().replace('\\', "/"),"steps":recipe.steps})),
+                    Err(e) => {
+                        failed_count += 1;
+                        files.push(json!({"path":path.to_string_lossy(),"status":"error","error":e.to_string()}));
+                        stopped = stop;
+                    }
+                }
                 continue;
             }
             // Recheck confinement and links before reading a discovered file.
@@ -238,13 +284,13 @@ impl Automation {
                 }
             }
         }
-        let skipped = files.len().saturating_sub(completed + failed_count);
-        Ok(json!({"completed":completed,"failed":failed_count,"skipped":skipped,"stopped":stopped,"files":files}))
+        let skipped = files.iter().filter(|file| file["status"] == "skipped").count();
+        Ok(json!({"dry_run":dry_run,"completed":completed,"failed":failed_count,"skipped":skipped,"stopped":stopped,"files":files}))
     }
 }
 
 /// Publish atomically without replacing any existing name, even if another writer wins a race.
-fn publish(target: &Path, bytes: &[u8]) -> Result<PathBuf> {
+pub(crate) fn publish(target: &Path, bytes: &[u8]) -> Result<PathBuf> {
     let dir = target.parent().ok_or_else(|| failed("output has no parent"))?;
     std::fs::create_dir_all(dir).map_err(failed)?;
     let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(failed)?;
@@ -272,5 +318,21 @@ mod tests {
         assert!(discovery.walk(Path::new("absent"), Path::new(""), Path::new("output"), true, 0).unwrap_err().to_string().contains("10000"));
         discovery.visited = 0;
         assert!(discovery.walk(Path::new("absent"), Path::new(""), Path::new("output"), true, MAX_DEPTH + 1).unwrap_err().to_string().contains("64"));
+    }
+
+    #[test]
+    fn doc_batch_dry_run_lists_outputs_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("input")).unwrap();
+        let pdf = Session::new().create_from_text("Doc", "Hello").unwrap();
+        std::fs::write(dir.path().join("input/a.pdf"), &*pdf).unwrap();
+        let auto = Automation::new().with_root(dir.path()).unwrap();
+        let report = auto.doc_batch(&Args(&json!({"paths":["input"],"steps":["optimize"],"out_dir":"out","dry_run":true}))).unwrap();
+        assert_eq!(report["dry_run"], true, "{report}");
+        assert_eq!(report["completed"], 0, "{report}");
+        assert_eq!(report["failed"], 0, "{report}");
+        assert_eq!(report["files"][0]["status"], "planned", "{report}");
+        assert!(report["files"][0]["output"].as_str().unwrap().ends_with("out/a.pdf"), "{report}");
+        assert!(!dir.path().join("out").exists());
     }
 }

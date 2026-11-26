@@ -5,7 +5,7 @@ use pdfcraft_cos::{Document, Object};
 use super::*;
 
 /// A PDF from object bodies (object n = bodies[n - 1]) and extra trailer entries.
-fn pdf(bodies: &[String], trailer: &str) -> Document {
+pub(crate) fn pdf(bodies: &[String], trailer: &str) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, b) in bodies.iter().enumerate() {
@@ -21,7 +21,7 @@ fn pdf(bodies: &[String], trailer: &str) -> Document {
     Document::open(Arc::new(out)).unwrap()
 }
 
-fn stream(data: &str) -> String {
+pub(crate) fn stream(data: &str) -> String {
     format!("<< /Length {} >>\nstream\n{data}\nendstream", data.len())
 }
 
@@ -50,7 +50,7 @@ fn autotag_text_writes_marked_content_and_parent_tree_across_pages() {
         "",
     );
     let result = autotag_text(&mut doc).unwrap();
-    assert_eq!(result, AutoTagResult { pages: 2, paragraphs: 3 });
+    assert_eq!(result, AutoTagResult { pages: 2, paragraphs: 2, headings: 1, headers: 0, footers: 0 });
     let catalog = doc.get(doc.root().unwrap());
     let root = catalog.as_dict().unwrap().reference(b"StructTreeRoot").unwrap();
     let tree = doc.get(root);
@@ -62,14 +62,18 @@ fn autotag_text_writes_marked_content_and_parent_tree_across_pages() {
     assert_eq!(entries[2].as_int(), Some(1));
     assert_eq!(entries[1].as_array().unwrap().len(), 2);
     assert_eq!(entries[3].as_array().unwrap().len(), 1);
-    for page in pdfcraft_model::pages(&doc) {
+    // The 18 pt line stands out from the 12 pt body: a heading, the rest paragraphs.
+    let first_marks = ["/H1 <</MCID 0>> BDC", "/P <</MCID 0>> BDC"];
+    for (page, first) in pdfcraft_model::pages(&doc).iter().zip(first_marks) {
         let content = page.dict.get(b"Contents").unwrap();
         let stream = doc.resolve(content);
         let Object::Stream(stream) = &*stream else { panic!("marked page content") };
         let text = String::from_utf8(stream.decoded_strict().unwrap()).unwrap();
-        assert!(text.contains("/P <</MCID 0>> BDC"), "{text}");
+        assert!(text.contains(first), "{text}");
         assert!(text.contains("EMC"), "{text}");
     }
+    let kinds: Vec<String> = tags(&doc).iter().map(|t| t.kind.clone()).collect();
+    assert_eq!(kinds, ["Document", "H1", "P", "P"]);
     let report = check(&doc, &Options::default());
     assert_eq!(status(&report, Rule::TaggedPdf), Status::Passed);
     assert_eq!(status(&report, Rule::TaggedContent), Status::Passed);
@@ -79,15 +83,368 @@ fn autotag_text_writes_marked_content_and_parent_tree_across_pages() {
     assert_eq!(status(&check(&reopened, &Options::default()), Rule::TaggedContent), Status::Passed);
 }
 
+/// Three pages with a running header, a numbered footer and a body line repeated mid-page
+/// (#7065): the header and footer become pagination artifacts without MCIDs, the rest is tagged.
+fn running_text_pdf() -> Document {
+    let page = |n: usize| {
+        stream(&format!(
+            "BT /F1 9 Tf 72 760 Td (Annual report) Tj ET BT /F1 12 Tf 72 640 Td (Body text on page {n} that is long enough to set the body size) Tj ET \
+             BT /F1 12 Tf 72 400 Td (A body line repeated on every page) Tj ET BT /F1 9 Tf 300 30 Td (Page {n}) Tj ET"
+        ))
+    };
+    let leaf = |contents: usize| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R >>");
+    pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> >>".into(),
+            leaf(6),
+            leaf(7),
+            leaf(8),
+            page(1),
+            page(2),
+            page(3),
+            FONT.into(),
+        ],
+        "",
+    )
+}
+
 #[test]
-fn autotag_text_refuses_paint_and_does_not_modify_the_document() {
+fn autotag_text_marks_running_headers_and_footers_as_pagination_artifacts() {
+    let mut doc = running_text_pdf();
+    let found = running_text(&doc).unwrap();
+    let listed: Vec<(usize, &str, &str)> = found.iter().map(|r| (r.page, r.subtype, r.text.as_str())).collect();
+    assert_eq!(
+        listed,
+        [
+            (0, "Header", "Annual report"),
+            (0, "Footer", "Page 1"),
+            (1, "Header", "Annual report"),
+            (1, "Footer", "Page 2"),
+            (2, "Header", "Annual report"),
+            (2, "Footer", "Page 3")
+        ]
+    );
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!(result, AutoTagResult { pages: 3, paragraphs: 6, headings: 0, headers: 3, footers: 3 });
+    for page in pdfcraft_model::pages(&doc) {
+        let content = doc.resolve(page.dict.get(b"Contents").unwrap());
+        let Object::Stream(stream) = &*content else { panic!("marked page content") };
+        let text = String::from_utf8(stream.decoded_strict().unwrap()).unwrap();
+        // Each BDC in order: the artifact subtype, or the tag and its MCID.
+        let marks: Vec<String> = pdfcraft_content::parse(text.as_bytes())
+            .ops
+            .iter()
+            .filter(|op| op.op == b"BDC")
+            .map(|op| {
+                let d = op.operands.get(1).and_then(Object::as_dict).unwrap();
+                match op.name(0).unwrap() {
+                    b"Artifact" => {
+                        assert_eq!(d.name(b"Type"), Some(&b"Pagination"[..]));
+                        assert!(!d.contains(b"MCID"), "an artifact has no MCID");
+                        String::from_utf8(d.name(b"Subtype").unwrap().to_vec()).unwrap()
+                    }
+                    tag => format!("{} {}", String::from_utf8_lossy(tag), d.get(b"MCID").and_then(Object::as_int).unwrap()),
+                }
+            })
+            .collect();
+        assert_eq!(marks, ["Header", "P 0", "P 1", "Footer"], "{text}");
+    }
+    let kinds: Vec<String> = tags(&doc).iter().map(|t| t.kind.clone()).collect();
+    assert_eq!(kinds, ["Document", "P", "P", "P", "P", "P", "P"]);
+    assert_eq!(status(&check(&doc, &Options::default()), Rule::TaggedContent), Status::Passed);
+}
+
+/// Roles are assigned over the tagged text only: a running header before a heading does not
+/// shift the heading's role onto the next object.
+#[test]
+fn autotag_text_assigns_roles_past_running_headers() {
+    let body = "BT /F1 12 Tf 72 640 Td (Body text that is long enough to set the body size of the document) Tj ET";
+    let page = |extra: &str| stream(&format!("BT /F1 9 Tf 72 760 Td (Annual report) Tj ET {extra} {body}"));
+    let leaf = |contents: usize| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R >>");
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+            leaf(5),
+            leaf(6),
+            page("BT /F1 18 Tf 72 700 Td (Introduction) Tj ET"),
+            page(""),
+            FONT.into(),
+        ],
+        "",
+    );
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!((result.headers, result.headings, result.paragraphs), (2, 1, 2));
+    let kinds: Vec<String> = tags(&doc).iter().map(|t| t.kind.clone()).collect();
+    assert_eq!(kinds, ["Document", "H1", "P", "P"]);
+}
+
+/// A page whose only text is running text has nothing in the parent tree and gets no
+/// `StructParents`; the next tagged page takes the next key.
+#[test]
+fn autotag_text_gives_a_page_of_running_text_alone_no_struct_parents() {
+    let header = "BT /F1 9 Tf 72 760 Td (Annual report) Tj ET";
+    let leaf = |contents: usize| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R >>");
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+            leaf(5),
+            leaf(6),
+            stream(header),
+            stream(&format!("{header} BT /F1 12 Tf 72 640 Td (Body) Tj ET")),
+            FONT.into(),
+        ],
+        "",
+    );
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1, headings: 0, headers: 2, footers: 0 });
+    let keys: Vec<Option<i64>> = pdfcraft_model::pages(&doc).iter().map(|p| p.dict.get(b"StructParents").and_then(Object::as_int)).collect();
+    assert_eq!(keys, [None, Some(0)]);
+    assert_eq!(status(&check(&doc, &Options::default()), Rule::TaggedContent), Status::Passed);
+}
+
+/// A body line turned to run down from the top of each page starts in the header band but does
+/// not lie inside it: it is not running text.
+#[test]
+fn autotag_text_leaves_turned_text_that_runs_out_of_the_band_tagged() {
+    let body = "BT /F1 12 Tf 0 -1 1 0 72 760 Tm (A body line set turned so that it runs down the page) Tj ET";
+    let leaf = |contents: usize| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R >>");
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+            leaf(5),
+            leaf(6),
+            stream(body),
+            stream(body),
+            FONT.into(),
+        ],
+        "",
+    );
+    assert_eq!(running_text(&doc).unwrap(), []);
+}
+
+/// Turned body text whose negative character spacing brings each line's advance back to zero
+/// still has glyphs running down the page from the header band: it is not running text.
+#[test]
+fn autotag_text_leaves_turned_text_pulled_back_by_negative_spacing_tagged() {
+    // A is 12 units wide and advances 6 at Tc -6; B is 0 wide and advances -6. Thirty of each
+    // end where they began, but the A glyphs reach 186 units down from y 760.
+    let body = format!("BT /F1 12 Tf -6 Tc 0 -1 1 0 72 760 Tm ({}{}) Tj ET", "A".repeat(30), "B".repeat(30));
+    let font = "<< /Type /Font /Subtype /Type1 /BaseFont /HouseFont /FirstChar 65 /LastChar 66 /Widths [1000 0] >>";
+    let leaf = |contents: usize| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R >>");
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+            leaf(5),
+            leaf(6),
+            stream(&body),
+            stream(&body),
+            font.into(),
+        ],
+        "",
+    );
+    assert_eq!(running_text(&doc).unwrap(), []);
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!((result.headers, result.footers, result.paragraphs), (0, 0, 2));
+}
+
+#[test]
+fn autotag_text_leaves_a_single_page_header_tagged() {
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+            stream(
+                "BT /F1 9 Tf 72 760 Td (Annual report) Tj ET BT /F1 12 Tf 72 640 Td (Body text long enough to set the body size) Tj ET BT /F1 9 Tf 300 30 Td (1) Tj ET",
+            ),
+            FONT.into(),
+        ],
+        "",
+    );
+    assert_eq!(running_text(&doc).unwrap(), []);
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!((result.headers, result.footers, result.paragraphs), (0, 0, 3));
+}
+
+/// Page content behind a predictor whose `/DecodeParms` are given by reference is read through
+/// them: autotagging writes the text back as it was, marked, not with the predictor's tag bytes in
+/// it (a `\0` every eight bytes, which split `24` into `2 4`).
+#[test]
+fn autotag_text_reads_content_with_parameters_given_by_reference() {
+    use pdfcraft_cos::{Dict, ObjRef};
+    let mut content = b"BT /F1 24 Tf 72 700 Td (Hello World) Tj ET".to_vec();
+    content.resize(content.len().div_ceil(8) * 8, b' ');
+    // PNG rows of eight bytes, each tagged 0 (no prediction).
+    let rows: Vec<u8> = content.chunks(8).flat_map(|row| std::iter::once(0).chain(row.iter().copied())).collect();
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+            stream(""),
+            FONT.into(),
+        ],
+        "",
+    );
+    let parms: Dict = [(b"Predictor".to_vec(), Object::Int(12)), (b"Columns".to_vec(), Object::Int(8))].into_iter().collect();
+    let parms = doc.add(Object::Dict(parms));
+    let mut predicted = pdfcraft_cos::Stream::flate(Dict::new(), &rows);
+    predicted.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    doc.set(ObjRef::new(4, 0), predicted);
+    assert_eq!(autotag_text(&mut doc).unwrap(), AutoTagResult { pages: 1, paragraphs: 1, headings: 0, headers: 0, footers: 0 });
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let written = doc.resolve(page.dict.get(b"Contents").unwrap());
+    let Object::Stream(written) = &*written else { panic!("page content") };
+    let text = String::from_utf8_lossy(&written.decoded_strict().unwrap()).into_owned();
+    assert!(text.contains("/F1 24 Tf") && text.contains("(Hello World) Tj"), "{text}");
+}
+
+/// Autotagging refuses a page whose content it can't read whole, and says why: content past
+/// 16 MiB, or content that doesn't decode strictly, with the decoder's reason right after.
+#[test]
+fn autotag_text_says_why_it_cannot_read_a_page() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let reason = |content: Stream| {
+        let mut doc = pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+                stream(""),
+                FONT.into(),
+            ],
+            "",
+        );
+        doc.set(ObjRef::new(4, 0), content);
+        match autotag_text(&mut doc) {
+            Err(AutoTagError::Unsupported { reason, .. }) => reason,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(reason(Stream::from_raw(Dict::new(), vec![b' '; 17 << 20])), "decoding the content takes more than 16 MiB");
+    let mut corrupt = Stream::from_raw(Dict::new(), b"not zlib data".to_vec());
+    corrupt.dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    let why = reason(corrupt);
+    assert!(why.starts_with("content cannot be decoded strictly: FlateDecode: "), "{why}");
+}
+
+#[test]
+fn autotag_text_marks_vector_graphics_and_images_as_artifacts() {
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 7 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> >>".into(),
+            stream("0 0 200 200 m 200 0 l 200 200 l 0 200 l h f 10 10 50 50 re B BT /F1 12 Tf 20 100 Td (Hello) Tj ET q 20 0 0 20 80 80 cm /Im1 Do Q"),
+            FONT.into(),
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 8 0 R >>".into(),
+            stream("0 0 100 100 re S"),
+        ],
+        "",
+    );
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1, headings: 0, headers: 0, footers: 0 });
+    let report = check(&doc, &Options { rules: [Rule::TaggedPdf, Rule::TaggedContent].into(), pages: None });
+    assert_eq!(status(&report, Rule::TaggedPdf), Status::Passed);
+    assert_eq!(status(&report, Rule::TaggedContent), Status::Passed);
+    let bytes = pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let reopened = Document::open(Arc::new(bytes)).unwrap();
+    let reopened_report = check(&reopened, &Options { rules: [Rule::TaggedPdf, Rule::TaggedContent].into(), pages: None });
+    assert_eq!(status(&reopened_report, Rule::TaggedPdf), Status::Passed);
+    assert_eq!(status(&reopened_report, Rule::TaggedContent), Status::Passed);
+}
+
+#[test]
+fn autotag_artifacts_wrap_complete_paths_and_leave_unpainted_clips_outside() {
+    let content = "0 0 m 10 0 l 10 10 l h f 0 0 20 20 re W B 0 0 50 50 re W* n /Shade sh BT /F1 12 Tf (Text) Tj ET 3 3 5 5 re S";
     let mut doc = pdf(
         &[
             "<< /Type /Catalog /Pages 2 0 R >>".into(),
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
-            stream("BT /F1 12 Tf 20 100 Td (Hello) Tj ET 0 0 50 50 re f"),
+            stream(content),
             FONT.into(),
+        ],
+        "",
+    );
+    autotag_text(&mut doc).unwrap();
+    let bytes = pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let content = doc.resolve(page.dict.get(b"Contents").unwrap());
+    let Object::Stream(content) = &*content else { panic!("page stream") };
+    let ops = pdfcraft_content::parse(&content.decoded_strict().unwrap()).ops;
+    let names: Vec<&[u8]> = ops.iter().map(|op| op.op.as_slice()).collect();
+    assert_eq!(
+        names,
+        vec![
+            b"BMC".as_slice(),
+            b"m",
+            b"l",
+            b"l",
+            b"h",
+            b"f",
+            b"EMC",
+            b"BMC",
+            b"re",
+            b"W",
+            b"B",
+            b"EMC",
+            b"re",
+            b"W*",
+            b"n",
+            b"BMC",
+            b"sh",
+            b"EMC",
+            b"BDC",
+            b"BT",
+            b"Tf",
+            b"Tj",
+            b"ET",
+            b"EMC",
+            b"BMC",
+            b"re",
+            b"S",
+            b"EMC",
+        ]
+    );
+}
+
+#[test]
+fn autotag_rejects_text_interleaved_with_an_unfinished_path_atomically() {
+    for tail in ["10 10 l S", "n"] {
+        let mut doc = pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+                stream(&format!("0 0 m BT /F1 12 Tf (Text) Tj ET {tail}")),
+                FONT.into(),
+            ],
+            "",
+        );
+        let before = pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+        assert!(matches!(autotag_text(&mut doc), Err(AutoTagError::Unsupported { .. })));
+        assert_eq!(pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap(), before);
+    }
+}
+
+#[test]
+fn autotag_text_refuses_form_xobjects_and_does_not_modify_the_document() {
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Fm1 6 0 R >> >> >>".into(),
+            stream("BT /F1 12 Tf 20 100 Td (Hello) Tj ET /Fm1 Do"),
+            FONT.into(),
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Length 12 >>\nstream\n0 0 10 10 re f\nendstream".into(),
         ],
         "",
     );
@@ -1017,6 +1374,255 @@ fn named_property_lists_are_found_and_marked_decorative_like_inline_ones() {
     assert!(props.contains(b"P0") && props.contains(b"P1") && props.contains(b"Other"), "resources are left as they were");
 }
 
+#[test]
+fn mark_tag_artifact_finds_named_property_lists_and_indirect_mcrs() {
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    let mut doc = named_figures_doc();
+    let mcr = doc.add(Object::Dict([(b"Type".to_vec(), Object::name("MCR")), (b"MCID".to_vec(), Object::Int(0))].into_iter().collect::<Dict>()));
+    doc.update_dict(ObjRef::new(7, 0), |d| d.set(b"K".to_vec(), Object::Ref(mcr))).unwrap();
+    assert_eq!(figures(&doc)[0].bbox, Some([10.0, 150.0, 50.0, 170.0]), "indirect MCR is resolved for figure bounds");
+
+    for (tag, gone) in [(ObjRef::new(7, 0), "/P0"), (ObjRef::new(8, 0), "/P1")] {
+        mark_tag_artifact(&mut doc, tag).unwrap();
+        let pages = pdfcraft_model::pages(&doc);
+        let c = doc.resolve(pages[0].dict.get(b"Contents").unwrap());
+        let Object::Stream(c) = &*c else { panic!("one content stream") };
+        let text = String::from_utf8(c.decoded().unwrap()).unwrap();
+        assert!(text.contains("/Artifact BMC") && !text.contains(gone), "{text}");
+    }
+    assert_eq!(tags(&doc).into_iter().map(|t| t.object.num).collect::<Vec<_>>(), [6]);
+    let nums = doc.get(ObjRef::new(9, 0)).as_dict().and_then(|d| d.get(b"Nums").cloned());
+    assert_eq!(nums, Some(Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Null, Object::Null])])));
+    let r = check(&doc, &Options { rules: [Rule::FiguresAltText, Rule::TaggedContent].into(), pages: None });
+    assert_eq!(failed(&r), Vec::<Rule>::new(), "{:?}", r.results);
+}
+
+#[test]
+fn mark_tag_artifact_validates_parent_and_all_mcids_before_mutating_document() {
+    use pdfcraft_cos::{ObjRef, Object};
+
+    // Missing /P on the tag must fail before touching /Contents or /ParentTree.
+    let mut no_parent = figures_doc();
+    let before_contents = no_parent.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned();
+    let before_pt = no_parent.get(ObjRef::new(9, 0)).as_ref().clone();
+    no_parent
+        .update_dict(ObjRef::new(7, 0), |d| {
+            d.remove(b"P");
+        })
+        .unwrap();
+    assert_eq!(mark_tag_artifact(&mut no_parent, ObjRef::new(7, 0)), Err(ArtifactError::NoParent));
+    assert_eq!(no_parent.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), before_contents);
+    assert_eq!(*no_parent.get(ObjRef::new(9, 0)), before_pt);
+
+    // Duplicate entry in parent's /K must fail with AmbiguousParent before touching /Contents or /ParentTree.
+    let mut dup_parent = figures_doc();
+    dup_parent
+        .update_dict(ObjRef::new(6, 0), |d| {
+            d.set(b"K".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0)), Object::Ref(ObjRef::new(7, 0))]));
+        })
+        .unwrap();
+    assert_eq!(mark_tag_artifact(&mut dup_parent, ObjRef::new(7, 0)), Err(ArtifactError::AmbiguousParent));
+    assert_eq!(dup_parent.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), before_contents);
+    assert_eq!(*dup_parent.get(ObjRef::new(9, 0)), before_pt);
+
+    // Partial MCID match (MCID 0 present, MCID 99 absent) must fail with ContentNotFound in
+    // mark_tag_artifact without mutating /Contents, while mark_decorative still converts MCID 0.
+    let mut partial = figures_doc();
+    partial.update_dict(ObjRef::new(7, 0), |d| d.set(b"K".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(99)]))).unwrap();
+    assert_eq!(mark_tag_artifact(&mut partial, ObjRef::new(7, 0)), Err(ArtifactError::ContentNotFound));
+    assert_eq!(partial.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), before_contents);
+    assert_eq!(*partial.get(ObjRef::new(9, 0)), before_pt);
+    mark_decorative(&mut partial, ObjRef::new(7, 0)).unwrap();
+    assert_ne!(partial.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), before_contents);
+    assert_ne!(*partial.get(ObjRef::new(9, 0)), before_pt);
+
+    // When none of a figure's MCIDs appear on the page, mark_decorative leaves /Contents and /ParentTree untouched.
+    let mut absent = figures_doc();
+    absent.update_dict(ObjRef::new(7, 0), |d| d.set(b"K".to_vec(), Object::Int(99))).unwrap();
+    mark_decorative(&mut absent, ObjRef::new(7, 0)).unwrap();
+    assert_eq!(absent.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), before_contents);
+    assert_eq!(*absent.get(ObjRef::new(9, 0)), before_pt);
+}
+
+/// zlib data that reads as `readable` and is then damaged, with more of the stream after the
+/// damage: a stored block, then a block of the reserved type (RFC 1951 §3.2.3), then `rest`.
+fn damaged_flate(readable: &[u8], rest: &[u8]) -> pdfcraft_cos::Stream {
+    let len = u16::try_from(readable.len()).unwrap();
+    let mut raw = vec![0x78, 0x01, 0x00];
+    raw.extend_from_slice(&len.to_le_bytes());
+    raw.extend_from_slice(&(!len).to_le_bytes());
+    raw.extend_from_slice(readable);
+    raw.push(0x07);
+    raw.extend_from_slice(rest);
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), pdfcraft_cos::Object::name("FlateDecode"));
+    pdfcraft_cos::Stream::from_raw(dict, raw)
+}
+
+/// A tag's content in a stream damaged partway stays tagged: rewriting the stream from what
+/// decoded would lose what follows the damage. Nothing changes, the structure tree and the stream
+/// included. Content in a whole stream before a damaged one is marked, and the damaged one kept
+/// as stored.
+#[test]
+fn a_tags_content_in_a_stream_damaged_partway_is_not_rewritten() {
+    use pdfcraft_cos::{ObjRef, Object};
+    let content = b"/Figure << /MCID 0 >> BDC q 40 0 0 20 10 150 cm /Im Do Q EMC /Photo << /MCID 1 >> BDC 100 100 50 30 re f EMC\n";
+    let damaged = damaged_flate(content, b"0 0 1 rg 0 0 10 10 re f");
+    let mut doc = figures_doc();
+    doc.set(ObjRef::new(4, 0), damaged.clone());
+    let contents = |doc: &Document| doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned();
+    let state = |doc: &Document| (contents(doc), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0)), doc.get(ObjRef::new(4, 0)));
+    let before = state(&doc);
+    assert_eq!(figures(&doc).len(), 2, "read up to the damage");
+    assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::Damaged));
+    assert_eq!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::Damaged));
+    assert_eq!(state(&doc), before);
+
+    let mut doc = figures_doc();
+    let other = doc.add(damaged_flate(b"0 g\n", b"0 0 1 rg 0 0 10 10 re f"));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(other)])))
+        .unwrap();
+    mark_tag_artifact(&mut doc, ObjRef::new(7, 0)).unwrap();
+    let Some(Object::Array(list)) = contents(&doc) else { panic!("contents {:?}", contents(&doc)) };
+    assert_ne!(list.first(), Some(&Object::Ref(ObjRef::new(4, 0))), "the tag's stream is rewritten");
+    assert_eq!(list.get(1), Some(&Object::Ref(other)), "kept as stored");
+}
+
+/// What follows the damage is unknown, the syntax the next stream starts in too, so a tag's
+/// content in a stream after a damaged one stays tagged. Here a comment the damage leaves open
+/// runs on into the next stream, up to its first end of line, and a string starting there reads
+/// as operators, among them what looks like the figure's content: rewritten, it would change the
+/// string. Nothing changes, the structure tree included.
+#[test]
+fn a_tags_content_after_a_damaged_stream_is_not_rewritten() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let in_a_string = b"(a note\n/Figure << /MCID 0 >> BDC 0 g EMC\n) pop /Photo << /MCID 1 >> BDC 100 100 50 30 re f EMC";
+    for (damaged, after) in [(b"0 g\n".as_slice(), None), (b"0 g % a comment".as_slice(), Some(in_a_string.as_slice()))] {
+        let mut doc = figures_doc();
+        if let Some(after) = after {
+            doc.set(ObjRef::new(4, 0), Stream::from_raw(Dict::new(), after.to_vec()));
+        }
+        let first = doc.add(damaged_flate(damaged, b"\n0 0 1 rg 0 0 10 10 re f"));
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(ObjRef::new(4, 0))])))
+            .unwrap();
+        let state = |doc: &Document| {
+            (doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0)))
+        };
+        let before = state(&doc);
+        assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::Damaged), "{damaged:?}");
+        assert_eq!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::Damaged), "{damaged:?}");
+        assert_eq!(state(&doc), before, "{damaged:?}");
+    }
+}
+
+/// A page may split its content between an operator's operands and its keyword. When the operands
+/// of the figure's `BDC` end the stream before one damaged from its start or one that doesn't
+/// decode, the `BDC` the page reads is in what wasn't read: joined without it, those operands and
+/// the next tag's read as one `BDC`, which reaches into the stream after it. Neither marking
+/// changes anything, the structure tree included.
+#[test]
+fn a_tags_operands_before_a_stream_not_read_whole_are_not_rewritten() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let rest = b" BDC q 40 0 0 20 10 150 cm /Im Do Q EMC";
+    for damaged in [true, false] {
+        let mut doc = figures_doc();
+        doc.set(ObjRef::new(4, 0), Stream::from_raw(Dict::new(), b"/Figure << /MCID 0 >>".to_vec()));
+        let hidden = if damaged {
+            damaged_flate(b"", rest)
+        } else {
+            let filter = doc.add(Object::name("FlateDecode"));
+            let mut s = Stream::flate(Dict::new(), rest);
+            s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+            s
+        };
+        let hidden = doc.add(hidden);
+        let after = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"/Photo << /MCID 1 >> BDC 100 100 50 30 re f EMC".to_vec())));
+        let listed = Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(hidden), Object::Ref(after)]);
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), listed)).unwrap();
+        let state = |doc: &Document| {
+            (doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0)))
+        };
+        let before = state(&doc);
+        assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::Damaged), "damaged: {damaged}");
+        assert_eq!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::Damaged), "damaged: {damaged}");
+        assert_eq!(state(&doc), before, "damaged: {damaged}");
+    }
+}
+
+/// A tag's content not found on the page may be in a stream that doesn't decode: it isn't known
+/// to be off the page, so neither marking changes anything, the structure tree included.
+#[test]
+fn a_tags_content_not_found_beside_a_stream_that_does_not_decode_is_not_taken_for_absent() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let mut doc = figures_doc();
+    doc.update_dict(ObjRef::new(7, 0), |d| d.set(b"K".to_vec(), Object::Int(2))).unwrap();
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let other = doc.add(Object::Stream(Stream::from_raw(dict, b"/Figure << /MCID 2 >> BDC 0 g EMC".to_vec())));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(other), Object::Ref(ObjRef::new(4, 0))])))
+        .unwrap();
+    let state = |doc: &Document| {
+        (doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0)))
+    };
+    let before = state(&doc);
+    assert_eq!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::Damaged));
+    assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::Damaged));
+    assert_eq!(state(&doc), before);
+}
+
+/// A tag's content not found before the damage in a damaged stream may be past it: it isn't known
+/// to be off the page, so neither marking changes anything.
+#[test]
+fn a_tags_content_past_the_damage_is_not_taken_for_absent() {
+    use pdfcraft_cos::ObjRef;
+    let damaged =
+        damaged_flate(b"/Photo << /MCID 1 >> BDC 100 100 50 30 re f EMC\n", b"/Figure << /MCID 0 >> BDC q 40 0 0 20 10 150 cm /Im Do Q EMC");
+    let mut doc = figures_doc();
+    doc.set(ObjRef::new(4, 0), damaged);
+    let contents = |doc: &Document| doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned();
+    let before = (contents(&doc), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0)));
+    assert_eq!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::Damaged));
+    assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::Damaged));
+    assert_eq!((contents(&doc), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0))), before);
+}
+
+/// A page's `/StructParents` given by reference is read through it: the parent tree no longer
+/// points the marked content at the tag.
+#[test]
+fn struct_parents_given_by_reference_are_read() {
+    use pdfcraft_cos::{ObjRef, Object};
+    let by_reference = || {
+        let mut doc = figures_doc();
+        let key = doc.add(Object::Int(0));
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"StructParents".to_vec(), Object::Ref(key))).unwrap();
+        doc
+    };
+    let nums = |doc: &Document| doc.get(ObjRef::new(9, 0)).as_dict().and_then(|d| d.get(b"Nums").cloned());
+    let mut doc = by_reference();
+    mark_decorative(&mut doc, ObjRef::new(7, 0)).unwrap();
+    assert_eq!(nums(&doc), Some(Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Null, Object::Ref(ObjRef::new(8, 0))])])));
+    let mut doc = by_reference();
+    mark_tag_artifact(&mut doc, ObjRef::new(8, 0)).unwrap();
+    assert_eq!(nums(&doc), Some(Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Null])])));
+}
+
+/// A content stream that doesn't decode at all is kept as stored, and a tag in the page's other
+/// streams is still marked: only running past the decode budget refuses.
+#[test]
+fn a_tag_beside_a_stream_that_does_not_decode_is_marked() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let mut doc = figures_doc();
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let other = doc.add(Object::Stream(Stream::from_raw(dict, b"0 g".to_vec())));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(other), Object::Ref(ObjRef::new(4, 0))])))
+        .unwrap();
+    mark_tag_artifact(&mut doc, ObjRef::new(7, 0)).unwrap();
+    let contents = doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned();
+    let Some(Object::Array(list)) = contents else { panic!("contents {contents:?}") };
+    assert_eq!(list.first(), Some(&Object::Ref(other)), "kept as stored");
+}
+
 fn ref_(n: u32) -> Option<pdfcraft_cos::ObjRef> {
     Some(pdfcraft_cos::ObjRef::new(n, 0))
 }
@@ -1235,6 +1841,126 @@ fn headings_drawn_glyph_by_glyph_keep_their_words() {
     );
 }
 
+/// Inside a text object `q`/`Q` save and restore the text matrices (ISO 32000-2 §9.4.1, as
+/// corrected by the PDF Association's errata, issue 368), as the renderer does: a word whose
+/// glyphs continue after a `Q` stays one word.
+#[test]
+fn q_inside_a_text_object_restores_the_text_matrices() {
+    let doc = heading_page(&[
+        "BT /F1 20 Tf 72 700 Td (Chap) Tj q 0 -100 Td Q (ter One) Tj ET".into(),
+        "BT /F1 20 Tf 72 650 Td (Chap) Tj q 1 0 0 1 300 300 Tm Q (ter Two) Tj ET".into(),
+    ]);
+    let titles: Vec<String> = headings(&doc).into_iter().map(|h| h.title).collect();
+    assert_eq!(titles, ["Chapter One", "Chapter Two"]);
+}
+
+#[test]
+fn headings_naming_one_large_string_stop_decoding_it_at_the_allowance() {
+    let count = 100;
+    let kids = (0..count).map(|i| format!("{} 0 R", 8 + i)).collect::<Vec<_>>().join(" ");
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".to_string(),
+        stream("BT ET"),
+        "<< /Type /StructTreeRoot /K 6 0 R >>".to_string(),
+        format!("<< /S /Document /P 5 0 R /K [{kids}] >>"),
+        format!("({})", "a".repeat(512 << 10)),
+    ];
+    objects.extend((0..count).map(|_| "<< /S /H1 /P 6 0 R /Pg 3 0 R /ActualText 7 0 R >>".to_string()));
+    let (found, cut) = headings_with_truncation(&pdf(&objects, ""));
+    assert!(!found.is_empty() && found.len() < count, "{}", found.len());
+    assert!(cut, "headings whose title the allowance turned away were dropped unreported");
+}
+
+/// A title source too large for the allowance is passed over for the next one, and the heading
+/// it names is kept and not reported as missing.
+#[test]
+fn a_title_too_large_for_the_allowance_falls_back_without_truncation() {
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".to_string(),
+        stream("BT ET"),
+        "<< /Type /StructTreeRoot /K 6 0 R >>".to_string(),
+        "<< /S /Document /P 5 0 R /K [8 0 R] >>".to_string(),
+        format!("({})", "a".repeat((32 << 20) / 3 + 1)),
+        "<< /S /H1 /P 6 0 R /Pg 3 0 R /ActualText 7 0 R /Alt (Short) >>".to_string(),
+    ];
+    let (found, cut) = headings_with_truncation(&pdf(&objects, ""));
+    let titles: Vec<String> = found.into_iter().map(|h| h.title).collect();
+    assert_eq!((titles, cut), (vec!["Short".to_string()], false));
+}
+
+/// A tree of `count` H1 elements, each with its text and page.
+fn many_headings(count: usize) -> Vec<String> {
+    let kids: String = (0..count).map(|i| format!("{} 0 R ", i + 7)).collect();
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".to_string(),
+        stream("BT ET"),
+        "<< /Type /StructTreeRoot /K 6 0 R >>".to_string(),
+        format!("<< /S /Document /P 5 0 R /K [{kids}] >>"),
+    ];
+    objects.extend((0..count).map(|_| "<< /S /H1 /P 6 0 R /Pg 3 0 R /ActualText (Head) >>".to_string()));
+    objects
+}
+
+#[test]
+fn headings_past_the_cap_are_reported() {
+    let (at_cap, cut) = headings_with_truncation(&pdf(&many_headings(MAX_HEADINGS), ""));
+    assert_eq!((at_cap.len(), cut), (MAX_HEADINGS, false));
+    let (over, cut) = headings_with_truncation(&pdf(&many_headings(MAX_HEADINGS + 1), ""));
+    assert_eq!((over.len(), cut), (MAX_HEADINGS, true), "a heading past the cap was dropped unreported");
+}
+
+#[test]
+fn a_heading_nested_past_the_depth_limit_is_reported() {
+    let mut objs = headings_doc();
+    let (found, cut) = headings_with_truncation(&pdf(&objs, ""));
+    assert!(!found.is_empty() && !cut);
+    // Element 17 opens a chain of 300 sections, each holding the next, around one H1.
+    let first = objs.len() + 1;
+    objs[9] = format!("<< /S /Document /K [12 0 R {first} 0 R] >>");
+    objs.extend((1..=300).map(|i| format!("<< /S /Sect /K {} 0 R >>", first + i)));
+    objs.push("<< /S /H1 /Pg 3 0 R /ActualText (Deep) >>".into());
+    let (found, cut) = headings_with_truncation(&pdf(&objs, ""));
+    assert!(found.iter().all(|h| h.title != "Deep") && cut, "a heading too deep to reach was dropped unreported");
+}
+
+/// A branch too deep to walk is skipped, not the end of the walk: a heading after it is found.
+#[test]
+fn a_heading_after_a_branch_past_the_depth_limit_is_found() {
+    let mut objs = headings_doc();
+    let first = objs.len() + 1;
+    objs[9] = format!("<< /S /Document /K [{first} 0 R 12 0 R] >>");
+    objs.extend((1..=300).map(|i| format!("<< /S /Sect /K {} 0 R >>", first + i)));
+    objs.push("<< /S /H1 /Pg 3 0 R /ActualText (Deep) >>".into());
+    let (found, cut) = headings_with_truncation(&pdf(&objs, ""));
+    let titles: Vec<&str> = found.iter().map(|h| h.title.as_str()).collect();
+    assert_eq!((titles, cut), (vec!["Chapter One"], true), "the deep branch stopped the walk");
+}
+
+/// An H1 `sects + 1` elements down whose title is only its marked content.
+fn heading_under_sections(sects: usize) -> (Vec<Heading>, bool) {
+    let mut objs = headings_doc();
+    let first = objs.len() + 1;
+    objs[9] = format!("<< /S /Document /K {first} 0 R >>");
+    objs.extend((1..=sects).map(|i| format!("<< /S /Sect /K {} 0 R >>", first + i)));
+    objs.push("<< /S /H1 /Pg 3 0 R /K 0 >>".into());
+    headings_with_truncation(&pdf(&objs, ""))
+}
+
+/// Marked content past the depth limit is reported too: the H1 whose title it holds is lost.
+#[test]
+fn marked_content_past_the_depth_limit_is_reported() {
+    let (found, cut) = heading_under_sections(254);
+    assert_eq!((found.iter().map(|h| h.title.as_str()).collect::<Vec<_>>(), cut), (vec!["Chapter One"], false));
+    let (found, cut) = heading_under_sections(255);
+    assert!(found.is_empty() && cut, "a heading whose text was too deep was dropped unreported");
+}
+
 #[test]
 fn an_untagged_document_has_no_headings() {
     let mut objs = headings_doc();
@@ -1420,4 +2146,55 @@ fn marking_a_tag_artifact_refuses_content_past_the_decode_budget() {
     doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), contents.clone())).unwrap();
     assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::TooLarge));
     assert_eq!(doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents"), Some(&contents), "the page keeps its content");
+}
+
+#[test]
+fn autotag_text_refuses_pages_that_share_content_past_the_total_operator_allowance() {
+    // Each page is just under the per-page limit; sharing one stream makes the total 21 times it.
+    let content = format!("BT (a) Tj ET {}", "q Q ".repeat(49_990));
+    let pages = 21;
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", 4 + i)).collect();
+    let mut bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        format!("<< /Type /Pages /Kids [{}] /Count {pages} /MediaBox [0 0 200 200] >>", kids.join(" ")),
+        stream(&content),
+    ];
+    bodies.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R /Contents 3 0 R >>".to_string()));
+    let mut doc = pdf(&bodies, "");
+    let Err(AutoTagError::Unsupported { reason, .. }) = autotag_text(&mut doc) else { panic!("expected a refusal") };
+    assert!(reason.contains("too much content"), "{reason}");
+}
+
+#[test]
+fn autotag_form_fields_tags_widgets_of_a_shared_annots_array_once() {
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 7 0 R >>".into(),
+            "<< /Length 0 >>\nstream\n\nendstream".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 60 120 80] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 7 0 R >>".into(),
+            "[5 0 R 5 0 R]".into(),
+        ],
+        "",
+    );
+    assert_eq!(tag_form_fields(&mut doc).unwrap(), 1);
+}
+
+#[test]
+fn checker_reports_each_untagged_annotation_without_copying_shared_dictionaries() {
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 4 0 R 5 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Text /Rect [20 60 120 80] >>".into(),
+            "<< /Type /Annot /Subtype /Popup /Rect [20 60 120 80] >>".into(),
+        ],
+        "",
+    );
+    let pages = pdfcraft_model::pages(&doc);
+    let found = content::page_rule(&doc, Rule::TaggedAnnotations, &pages, &[0], &Default::default(), false);
+    assert_eq!(found.len(), 2, "the popup is skipped, each listed text annotation reported");
 }

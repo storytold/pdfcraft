@@ -1,0 +1,434 @@
+use std::collections::HashSet;
+
+use super::host::host;
+use super::instances::instance_manager;
+use super::model::{MAX_DEPTH, XfaDoc, XfaEffect, XfaEvent, clip, payload, reset_names};
+use super::nodes::{node_index, node_object, noop, resolve_som, resolver, sink};
+use super::{
+    Attribute, Context, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, data_object, function, js_string, platform, printd,
+    printf, printx, s, scand, text,
+};
+
+// ── xfa.host, xfa.layout, xfa.event, app, console ───────────────────────────────────────────
+
+/// Records effect `e` on the host, against the run's limits, as [`XHost::push`] does.
+fn effect(ctx: &mut Context, e: XfaEffect) -> JsResult<()> {
+    host(ctx)?.borrow_mut().push(e);
+    Ok(())
+}
+
+/// `event.target.exportDataObject(…)`: the document asks to open or save an attached file.
+fn export_data_object(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let (name, open) = data_object(args, ctx)?;
+    effect(ctx, XfaEffect::OpenAttachment { name, open })?;
+    Ok(JsValue::undefined())
+}
+
+/// `app.runtimeHighlight`: whether the viewer highlights form fields.
+fn runtime_highlight(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.highlight))
+}
+
+/// `app.runtimeHighlight = on`: asks the viewer to highlight form fields, or to stop.
+fn set_runtime_highlight(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let on = arg(args, 0).to_boolean();
+    let mut h = host(ctx)?.borrow_mut();
+    let e = XfaEffect::Highlight(on);
+    // Changed only when the request is kept: past the effect cap the script goes on reading the
+    // setting the viewer has.
+    if h.doc.highlight != on && h.reserve(&e, payload(&e)) {
+        h.doc.highlight = on;
+        h.record(e);
+    }
+    Ok(JsValue::undefined())
+}
+
+/// `xfa.host.messageBox(message, title, icon, buttons)`: records the message with its title,
+/// icon and buttons, its text and title cut to [`MAX_LINE`] characters, and returns 1.
+fn message_box(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let m = crate::globals::message_box_message(args, ctx)?;
+    effect(ctx, XfaEffect::MessageBox(m))?;
+    // Always OK for now: the viewer can't ask the user and run the script on with the answer
+    // yet (#4291).
+    Ok(JsValue::from(1.0))
+}
+
+/// `app.alert(cMsg, nIcon, nType, cTitle)` in an XFA form's script: the same message box, its
+/// arguments in `app.alert`'s order (or one object with those keys).
+fn app_alert(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let m = crate::globals::alert_message(args, ctx)?;
+    effect(ctx, XfaEffect::MessageBox(m))?;
+    // The OK button, as for `messageBox` (#4291).
+    Ok(JsValue::from(1.0))
+}
+
+/// `xfa.host.resetData(names)`: asks to reset the comma-separated fields, or every field when
+/// the list is empty.
+fn reset_data(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let list = text(&arg(args, 0), ctx)?;
+    effect(ctx, XfaEffect::ResetData(reset_names(&list)))?;
+    Ok(JsValue::undefined())
+}
+
+/// `xfa.host.print(…)`: asks to print; its arguments are ignored.
+fn print(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    effect(ctx, XfaEffect::Print)?;
+    Ok(JsValue::undefined())
+}
+
+/// `xfa.host.beep()` and `app.beep()`: ask to beep.
+fn beep(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    effect(ctx, XfaEffect::Beep)?;
+    Ok(JsValue::undefined())
+}
+
+/// `xfa.host.gotoURL(url)` and `app.launchURL(url)`: ask to open the URL.
+fn goto_url(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let u = text(&arg(args, 0), ctx)?;
+    effect(ctx, XfaEffect::LaunchUrl(u))?;
+    Ok(JsValue::undefined())
+}
+
+/// `xfa.host.setFocus(target)`: asks to focus the node, given as a node object or as a SOM
+/// expression resolved from the current node; an expression that names no node is passed on
+/// as written.
+fn set_focus(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let target = arg(args, 0);
+    let som = match target.as_object() {
+        Some(_) if node_index(&target, ctx).is_ok() => {
+            let i = node_index(&target, ctx)?;
+            host(ctx)?.borrow().nodes.get(i).map(|n| n.som.to_string()).unwrap_or_default()
+        }
+        _ => {
+            let expr = text(&target, ctx)?;
+            let h = host(ctx)?.borrow();
+            let found = resolve_som(&h, h.current, &expr);
+            found.first().and_then(|i| h.nodes.get(*i)).map(|n| n.som.to_string()).unwrap_or(expr)
+        }
+    };
+    effect(ctx, XfaEffect::SetFocus(som))?;
+    Ok(JsValue::undefined())
+}
+
+/// `app.execMenuItem(name)`: the effect for the request the shared menu table gives the name
+/// (Save opens Save As too); an unknown name does nothing.
+fn exec_menu_item(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let item = text(&arg(args, 0), ctx)?;
+    match crate::menu_item(&item) {
+        Some(crate::Request::SaveAs) => effect(ctx, XfaEffect::SaveAs)?,
+        Some(crate::Request::Print) => effect(ctx, XfaEffect::Print)?,
+        Some(crate::Request::ShowPanel(p)) => effect(ctx, XfaEffect::ShowPanel(p))?,
+        _ => {}
+    }
+    Ok(JsValue::undefined())
+}
+
+/// `recalculate(…)` on a node or on `xfa`: records a request to recalculate the form.
+pub(super) fn recalculate(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    effect(ctx, XfaEffect::Recalculate)?;
+    Ok(JsValue::undefined())
+}
+
+/// `xfa.layout.relayout()`, `relayoutPageArea()` and `remerge()`: record a request to lay the
+/// form out again.
+pub(super) fn relayout(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    effect(ctx, XfaEffect::Relayout)?;
+    Ok(JsValue::undefined())
+}
+
+/// `console.println(…)`: adds the line, cut to [`MAX_LINE`] characters, to the run's console
+/// output.
+fn console_println(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let m = clip(text(&arg(args, 0), ctx)?);
+    host(ctx)?.borrow_mut().print(m);
+    Ok(JsValue::undefined())
+}
+
+/// `xfa.host.response(…)` and `app.response(…)`: always return `null`, as for a canceled dialog.
+fn response(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::null())
+}
+
+/// `xfa.layout.page(…)`: the current page, 1-based, whatever the argument.
+fn layout_page(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.page as f64 + 1.0))
+}
+
+/// `xfa.layout.absPage(…)`: the current page, 0-based, whatever the argument.
+fn layout_page0(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.page as f64))
+}
+
+/// `xfa.layout.pageCount()` and `absPageCount()`: the document's page count.
+fn layout_page_count(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.page_count as f64))
+}
+
+/// The `xfa.layout` measures `h`, `w`, `x`, `y` and `pageSpan`: always 0.
+fn zero(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(0.0))
+}
+
+/// `xfa.resolveNode(som)`, or `xfa.resolveNodes(som)` when `many`, resolving from the node the
+/// script runs on.
+fn xfa_resolve(ctx: &mut Context, many: bool) -> JsResult<JsValue> {
+    let current = host(ctx)?.borrow().current;
+    resolver(ctx, current, many)
+}
+
+/// Defines the globals for one script on node `current`: `xfa` (`form`, `host`, `layout`, `event`,
+/// `resolveNode` and more; `xfa.event`'s target is that node), a separate global `event` whose
+/// target is a document offering `exportDataObject`, `app`, `console`, `util`, and the nodes in
+/// scope by name, with `_name` for each repeatable one's instance manager.
+pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current: usize) -> JsResult<()> {
+    let rw = Attribute::CONFIGURABLE;
+    let form = node_object(ctx, 0)?;
+    let this_node = node_object(ctx, current)?;
+    let host_obj = ObjectInitializer::new(ctx)
+        .function(NativeFunction::from_fn_ptr(message_box), js_string!("messageBox"), 4)
+        .function(NativeFunction::from_fn_ptr(reset_data), js_string!("resetData"), 1)
+        .function(NativeFunction::from_fn_ptr(print), js_string!("print"), 8)
+        .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 1)
+        .function(NativeFunction::from_fn_ptr(goto_url), js_string!("gotoURL"), 2)
+        .function(NativeFunction::from_fn_ptr(set_focus), js_string!("setFocus"), 1)
+        .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 4)
+        .function(NativeFunction::from_fn_ptr(noop), js_string!("openList"), 1)
+        .function(NativeFunction::from_fn_ptr(noop), js_string!("exportData"), 2)
+        .function(NativeFunction::from_fn_ptr(noop), js_string!("importData"), 1)
+        .function(NativeFunction::from_fn_ptr(noop), js_string!("pageDown"), 0)
+        .function(NativeFunction::from_fn_ptr(noop), js_string!("pageUp"), 0)
+        .function(NativeFunction::from_fn_ptr(noop), js_string!("getFocus"), 0)
+        .property(js_string!("currentPage"), JsValue::from(doc.page as f64), rw)
+        .property(js_string!("numPages"), JsValue::from(doc.page_count as f64), rw)
+        .property(js_string!("name"), s("Acrobat"), Attribute::READONLY)
+        .property(js_string!("appType"), s("Exchange-Pro"), Attribute::READONLY)
+        .property(js_string!("version"), s("11"), Attribute::READONLY)
+        .property(js_string!("variation"), s("Full"), Attribute::READONLY)
+        .property(js_string!("language"), s("en"), Attribute::READONLY)
+        .property(js_string!("platform"), s(platform()), Attribute::READONLY)
+        .property(js_string!("calculationsEnabled"), JsValue::from(true), rw)
+        .property(js_string!("validationsEnabled"), JsValue::from(true), rw)
+        .property(js_string!("title"), s(&doc.file_name), rw)
+        .build();
+    let layout = ObjectInitializer::new(ctx)
+        .function(NativeFunction::from_fn_ptr(layout_page), js_string!("page"), 1)
+        .function(NativeFunction::from_fn_ptr(layout_page0), js_string!("absPage"), 1)
+        .function(NativeFunction::from_fn_ptr(layout_page_count), js_string!("pageCount"), 0)
+        .function(NativeFunction::from_fn_ptr(layout_page_count), js_string!("absPageCount"), 0)
+        // On screen every page is a sheet of its own: the sheet is the page, counted from 0
+        // as absPage counts (a form shows `sheet(this) + 1` as the sheet number), and the
+        // sheet count is the page count.
+        .function(NativeFunction::from_fn_ptr(layout_page0), js_string!("sheet"), 1)
+        .function(NativeFunction::from_fn_ptr(layout_page_count), js_string!("sheetCount"), 0)
+        .function(NativeFunction::from_fn_ptr(relayout), js_string!("relayout"), 0)
+        .function(NativeFunction::from_fn_ptr(relayout), js_string!("relayoutPageArea"), 0)
+        .function(NativeFunction::from_fn_ptr(zero), js_string!("h"), 2)
+        .function(NativeFunction::from_fn_ptr(zero), js_string!("w"), 2)
+        .function(NativeFunction::from_fn_ptr(zero), js_string!("x"), 2)
+        .function(NativeFunction::from_fn_ptr(zero), js_string!("y"), 2)
+        .function(NativeFunction::from_fn_ptr(zero), js_string!("pageSpan"), 1)
+        .property(js_string!("ready"), JsValue::from(true), Attribute::READONLY)
+        .build();
+    // Two event objects, as in Acrobat's XFA scripting: `xfa.event`, whose target is the form
+    // node the event happened on, and Acrobat's own `event`, whose target is the document
+    // (`event.target.exportDataObject(…)` is how forms open their attached files).
+    let acrobat_doc =
+        ObjectInitializer::new(ctx).function(NativeFunction::from_fn_ptr(export_data_object), js_string!("exportDataObject"), 4).build();
+    let event_object = |ctx: &mut Context, target: JsValue| {
+        ObjectInitializer::new(ctx)
+            .property(js_string!("name"), s(&event.activity), Attribute::all())
+            .property(js_string!("newText"), s(&event.new_text), Attribute::all())
+            .property(js_string!("prevText"), s(&event.prev_text), Attribute::all())
+            .property(js_string!("fullText"), s(&event.new_text), Attribute::all())
+            .property(js_string!("change"), s(""), Attribute::all())
+            .property(js_string!("target"), target, Attribute::all())
+            .property(js_string!("selStart"), JsValue::from(0.0), Attribute::all())
+            .property(js_string!("selEnd"), JsValue::from(0.0), Attribute::all())
+            .property(js_string!("cancelAction"), JsValue::from(false), Attribute::all())
+            .property(js_string!("reenter"), JsValue::from(false), Attribute::all())
+            .property(js_string!("shift"), JsValue::from(false), Attribute::all())
+            .property(js_string!("modifier"), JsValue::from(false), Attribute::all())
+            .property(js_string!("keyDown"), JsValue::from(false), Attribute::all())
+            .property(js_string!("commitKey"), JsValue::from(0.0), Attribute::all())
+            .function(NativeFunction::from_fn_ptr(noop), js_string!("emit"), 0)
+            .function(NativeFunction::from_fn_ptr(noop), js_string!("reset"), 0)
+            .build()
+    };
+    let ev = event_object(ctx, this_node.clone());
+    let acrobat_ev = event_object(ctx, acrobat_doc.into());
+    let datasets = ObjectInitializer::new(ctx).property(js_string!("data"), form.clone(), rw).build();
+    let template = sink(ctx)?;
+    let resolve_one = xfa_resolve(ctx, false)?;
+    let resolve_many = xfa_resolve(ctx, true)?;
+    let xfa = ObjectInitializer::new(ctx)
+        .property(js_string!("form"), form.clone(), rw)
+        .property(js_string!("host"), host_obj, rw)
+        .property(js_string!("layout"), layout, rw)
+        .property(js_string!("event"), ev.clone(), rw)
+        .property(js_string!("datasets"), datasets, rw)
+        .property(js_string!("record"), form.clone(), rw)
+        .property(js_string!("template"), template, rw)
+        .property(js_string!("resolveNode"), resolve_one, rw)
+        .property(js_string!("resolveNodes"), resolve_many, rw)
+        .function(NativeFunction::from_fn_ptr(recalculate), js_string!("recalculate"), 1)
+        .function(NativeFunction::from_fn_ptr(relayout), js_string!("remerge"), 0)
+        .build();
+    ctx.register_global_property(js_string!("xfa"), xfa, rw)?;
+    ctx.register_global_property(js_string!("event"), acrobat_ev, rw)?;
+    ctx.register_global_property(js_string!("__xfa_this"), this_node, rw)?;
+    let highlight_get = function(ctx, NativeFunction::from_fn_ptr(runtime_highlight));
+    let highlight_set = function(ctx, NativeFunction::from_fn_ptr(set_runtime_highlight));
+    let app = ObjectInitializer::new(ctx)
+        .accessor(js_string!("runtimeHighlight"), Some(highlight_get), Some(highlight_set), rw)
+        .function(NativeFunction::from_fn_ptr(app_alert), js_string!("alert"), 4)
+        .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 1)
+        .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
+        .function(NativeFunction::from_fn_ptr(goto_url), js_string!("launchURL"), 2)
+        .function(NativeFunction::from_fn_ptr(exec_menu_item), js_string!("execMenuItem"), 1)
+        .function(NativeFunction::from_fn_ptr(noop), js_string!("setTimeOut"), 2)
+        .function(NativeFunction::from_fn_ptr(noop), js_string!("setInterval"), 2)
+        .function(NativeFunction::from_fn_ptr(noop), js_string!("clearTimeOut"), 1)
+        .function(NativeFunction::from_fn_ptr(noop), js_string!("clearInterval"), 1)
+        .property(js_string!("viewerType"), s("Exchange-Pro"), Attribute::READONLY)
+        .property(js_string!("viewerVariation"), s("Full"), Attribute::READONLY)
+        .property(js_string!("viewerVersion"), JsValue::from(24.0), Attribute::READONLY)
+        .property(js_string!("platform"), s(platform()), Attribute::READONLY)
+        .property(js_string!("language"), s("ENU"), Attribute::READONLY)
+        .build();
+    ctx.register_global_property(js_string!("app"), app, rw)?;
+    let console = ObjectInitializer::new(ctx)
+        .function(NativeFunction::from_fn_ptr(console_println), js_string!("println"), 1)
+        .function(NativeFunction::from_fn_ptr(noop), js_string!("show"), 0)
+        .function(NativeFunction::from_fn_ptr(noop), js_string!("hide"), 0)
+        .function(NativeFunction::from_fn_ptr(noop), js_string!("clear"), 0)
+        .build();
+    ctx.register_global_property(js_string!("console"), console, rw)?;
+    let util = ObjectInitializer::new(ctx)
+        .function(NativeFunction::from_fn_ptr(printf), js_string!("printf"), 1)
+        .function(NativeFunction::from_fn_ptr(printd), js_string!("printd"), 2)
+        .function(NativeFunction::from_fn_ptr(printx), js_string!("printx"), 2)
+        .function(NativeFunction::from_fn_ptr(scand), js_string!("scand"), 2)
+        .build();
+    ctx.register_global_property(js_string!("util"), util, rw)?;
+    // Unqualified names: the current node's children, its siblings, then each ancestor's
+    // children, the nearest first. Instance managers as `_name`.
+    let scopes: Vec<usize> = {
+        let h = host(ctx)?.borrow();
+        let mut out = vec![current];
+        let mut at = h.nodes.get(current).and_then(|n| n.parent);
+        let mut guard = 0;
+        while let Some(p) = at
+            && guard < MAX_DEPTH
+        {
+            out.push(p);
+            at = h.nodes.get(p).and_then(|n| n.parent);
+            guard += 1;
+        }
+        out
+    };
+    // Names that stay what JavaScript (or this host) means by them: a field called `Date`
+    // is reached as `this.parent.Date` or by resolveNode.
+    const RESERVED: &[&str] = &[
+        "xfa",
+        "event",
+        "app",
+        "console",
+        "util",
+        "this",
+        "__xfa_this",
+        "__xfa_src",
+        "eval",
+        "arguments",
+        "globalThis",
+        "window",
+        "undefined",
+        "NaN",
+        "Infinity",
+        "Object",
+        "Function",
+        "Array",
+        "Number",
+        "String",
+        "Boolean",
+        "Symbol",
+        "Date",
+        "RegExp",
+        "Error",
+        "TypeError",
+        "RangeError",
+        "SyntaxError",
+        "Math",
+        "JSON",
+        "Map",
+        "Set",
+        "WeakMap",
+        "WeakSet",
+        "Promise",
+        "Proxy",
+        "Reflect",
+        "parseInt",
+        "parseFloat",
+        "isNaN",
+        "isFinite",
+        "encodeURIComponent",
+        "decodeURIComponent",
+        "encodeURI",
+        "decodeURI",
+        "escape",
+        "unescape",
+        "BigInt",
+        "ArrayBuffer",
+        "DataView",
+        "Intl",
+    ];
+    let mut defined: HashSet<String> = RESERVED.iter().map(ToString::to_string).collect();
+    for scope in scopes {
+        let kids: Vec<(usize, String, bool)> = {
+            let h = host(ctx)?.borrow();
+            h.nodes
+                .get(scope)
+                .map(|n| n.children.iter().filter_map(|&c| h.nodes.get(c).map(|k| (c, k.name.to_string(), k.repeatable && !k.gone))).collect())
+                .unwrap_or_default()
+        };
+        for (c, name, repeatable) in kids {
+            if !is_identifier(&name) || defined.contains(&name) {
+                continue;
+            }
+            let obj = node_object(ctx, c)?;
+            ctx.register_global_property(JsString::from(name.as_str()), obj, rw)?;
+            if repeatable {
+                let im = instance_manager(ctx, scope, &name)?;
+                ctx.register_global_property(JsString::from(format!("_{name}").as_str()), im, rw)?;
+            }
+            defined.insert(name);
+        }
+    }
+    Ok(())
+}
+
+fn is_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+        && !matches!(
+            name,
+            "var"
+                | "let"
+                | "const"
+                | "function"
+                | "return"
+                | "if"
+                | "else"
+                | "for"
+                | "while"
+                | "new"
+                | "null"
+                | "true"
+                | "false"
+                | "undefined"
+                | "typeof"
+        )
+}
