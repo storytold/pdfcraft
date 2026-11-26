@@ -18,9 +18,24 @@ impl PdfCraftApp {
             for declined in &output.declined {
                 self.run_declined(declined);
             }
+            self.sync_host_locale();
             let commands = crate::commands::catalog::command_input(self, ctx);
             FrameInput::new(self.root_env(ctx)).commands(commands).host(self.host.clone())
         });
         self.last_frame_active = self.active_ids().map(|(_, id)| id);
+    }
+
+    fn sync_host_locale(&mut self) {
+        let Some(catalogs) = self.host.i18n() else { return };
+        let language = crate::i18n::Lang::from_pref(&self.language);
+        let date_language = self.session.date_language().unwrap_or(language.code());
+        if self.host_date_language.as_deref() != Some(date_language) {
+            catalogs.set_dates(craft_i18n::DateFormat::new(&craft_i18n::Region::from_tag(date_language)));
+            self.host_date_language = Some(date_language.to_string());
+        }
+        let lang = catalogs.from_code(language.code()).unwrap_or(craft_i18n::Lang::EN);
+        if self.host.lang() != lang {
+            self.host = std::sync::Arc::new(self.host.with_lang(lang));
+        }
     }
 }
