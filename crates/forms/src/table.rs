@@ -269,23 +269,28 @@ pub fn cell_name(pattern: &str, row: usize, column: usize, seq: usize) -> String
     if numbered {
         return out;
     }
+    substitute_isolated_n(&out, &row_number)
+}
+
+fn substitute_isolated_n(out: &str, row_number: &str) -> String {
     if out == "N" || out == "n" {
-        return row_number;
+        return row_number.to_string();
     }
     let chars: Vec<char> = out.chars().collect();
     let mut named = String::with_capacity(out.len() + row_number.len());
+    let mut numbered = false;
     for (i, &ch) in chars.iter().enumerate() {
         let after_separator = i.checked_sub(1).and_then(|p| chars.get(p)).is_some_and(|c| SEPARATORS.contains(c));
         let before_separator = chars.get(i + 1).is_none_or(|c| SEPARATORS.contains(c));
         if matches!(ch, 'N' | 'n') && after_separator && before_separator {
-            named.push_str(&row_number);
+            named.push_str(row_number);
             numbered = true;
         } else {
             named.push(ch);
         }
     }
     if !numbered {
-        named.push_str(&row_number);
+        named.push_str(row_number);
     }
     named
 }

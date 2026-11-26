@@ -1,6 +1,8 @@
-//! Clean up a straightened camera photo (Enhance ▸ Camera image ▸ enhancement level): even out
-//! the lighting so the paper turns white (room-light colour casts, a hand's shadow, darker
-//! edges go with it), then raise the contrast and drop isolated specks. Colour ink stays colour.
+//! Clean up a straightened camera photo (Enhance ▸ Camera image ▸ enhancement level) or a
+//! scanned page's picture (Enhance ▸ Scanned document, [`crate::scan_clean`]): even out the
+//! lighting so the paper turns white (room-light colour casts, a hand's shadow, darker edges and
+//! book gutters go with it), then raise the contrast and drop isolated specks. Colour ink stays
+//! colour.
 //!
 //! The paper's illumination is estimated per channel on a coarse grid of blocks, from each
 //! block's bright end (the paper, not the ink), smoothed into a continuous map and divided out.
@@ -8,6 +10,8 @@
 
 /// The strongest a level can be.
 pub const MAX_LEVEL: u8 = 100;
+/// The level from which [`clean`] also drops isolated specks.
+pub const DESPECKLE_FROM: u8 = 60;
 
 /// How an enhanced camera page looks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -66,34 +70,158 @@ pub fn apply(rgb: &[u8], width: u32, height: u32, look: Look, level: u8) -> Opti
             let even = clean(rgb, width, height, 50)?;
             let t = 0.45 + 0.4 * level.min(MAX_LEVEL) as f32 / MAX_LEVEL as f32;
             let mut grey: Vec<u8> = even.as_chunks::<3>().0.iter().map(|p| if (lum(p) as f32 / 255.0) < t { 0 } else { 255 }).collect();
-            despeckle_grey(&mut grey, w, h);
+            despeckle(&mut grey, 1, w, h);
             Pixels::Grey(grey)
         }
     })
 }
 
-/// Clean `rgb` (RGB8, `width` × `height`) at `level` (0 = unchanged … 100 = strongest).
-/// Returns `None` when the buffer doesn't match the size.
+/// Clean `rgb` (RGB8, `width` × `height`) at `level` (0 = unchanged … 100 = strongest), from
+/// [`DESPECKLE_FROM`] without isolated specks. Returns `None` when the buffer doesn't match the
+/// size.
 pub fn clean(rgb: &[u8], width: u32, height: u32, level: u8) -> Option<Vec<u8>> {
+    clean_samples(rgb, 3, width, height, CleanUp { level, edge_shadows: false, despeckle: level >= DESPECKLE_FROM })
+}
+
+/// What [`clean_samples`] does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CleanUp {
+    /// 0 (unchanged) … 100: even out the paper's illumination and raise the contrast, as
+    /// [`clean`]'s level.
+    pub level: u8,
+    /// Even out shadows along the picture's edges first (a book's gutter, a copier's dark edge):
+    /// lightened line by line to the paper beside them, within the outer fifth of each side.
+    pub edge_shadows: bool,
+    /// Drop isolated dark specks.
+    pub despeckle: bool,
+}
+
+/// [`clean`] for samples of `n` components (1: grey, 3: RGB), with each step chosen apart (each
+/// works at level 0 too). Returns `None` when `n` is neither or the buffer doesn't match the size.
+pub fn clean_samples(px: &[u8], n: usize, width: u32, height: u32, how: CleanUp) -> Option<Vec<u8>> {
     let (w, h) = (width as usize, height as usize);
-    if w == 0 || h == 0 || w.checked_mul(h)?.checked_mul(3)? != rgb.len() {
+    if !(n == 1 || n == 3) || w == 0 || h == 0 || w.checked_mul(h)?.checked_mul(n)? != px.len() {
         return None;
     }
-    let level = level.min(MAX_LEVEL);
-    if level == 0 {
-        return Some(rgb.to_vec());
+    let level = how.level.min(MAX_LEVEL);
+    let mut out = px.to_vec();
+    if how.edge_shadows {
+        even_edges(&mut out, n, w, h);
     }
+    if level > 0 {
+        out = even_out(&out, n, w, h, level);
+    }
+    if how.despeckle {
+        despeckle(&mut out, n, w, h);
+    }
+    Some(out)
+}
+
+/// The share of the width (and of the height) at each side where [`even_edges`] works.
+const EDGE_BAND: f32 = 0.2;
+/// The most [`even_edges`] lightens a line by; a darker line (a scanner's black border, a
+/// picture) is not taken for shadowed paper and stays as it is.
+const MAX_EDGE_GAIN: f32 = 3.0;
+
+/// Even out shadows that run along the picture's edges, in place: a book's gutter, a copier's
+/// dark border, a page that curved away from the glass. Within the outer [`EDGE_BAND`] of each
+/// side, each column (then each row) gets the paper's level along it (per channel, its 90th
+/// percentile, so the text across it doesn't count), and is lightened to the brightest paper of
+/// that band. The block grid of [`background`] is too coarse for such a narrow shadow: its
+/// blocks borrow the brighter paper next to them.
+fn even_edges(px: &mut [u8], n: usize, w: usize, h: usize) {
+    for vertical in [true, false] {
+        // Columns: lines across the width, each running down the height; rows the other way.
+        let (lines, along) = if vertical { (w, h) } else { (h, w) };
+        let band = ((lines as f32 * EDGE_BAND) as usize).min(lines / 2);
+        if band == 0 {
+            continue;
+        }
+        let at = |line: usize, i: usize| if vertical { i * w + line } else { line * w + i };
+        // The paper's level of every line in the bands and a few beyond them.
+        let reach = band.saturating_add(3).min(lines);
+        let measured = |line: usize| line < reach || line >= lines.saturating_sub(reach);
+        let mut level: Vec<Option<[f32; 3]>> = vec![None; lines];
+        let mut hist = [[0u32; 256]; 3];
+        for (line, slot) in level.iter_mut().enumerate().filter(|(line, _)| measured(*line)) {
+            hist.iter_mut().for_each(|hh| hh.fill(0));
+            for i in 0..along {
+                let p = at(line, i) * n;
+                for (c, hh) in hist.iter_mut().enumerate().take(n) {
+                    if let Some(v) = px.get(p + c)
+                        && let Some(count) = hh.get_mut(*v as usize)
+                    {
+                        *count += 1;
+                    }
+                }
+            }
+            let want = (along as f32 * 0.9) as u32;
+            *slot = Some(std::array::from_fn(|c| {
+                let mut seen = 0;
+                let v = hist.get(c).and_then(|hh| {
+                    hh.iter().position(|&count| {
+                        seen += count;
+                        seen > want
+                    })
+                });
+                v.unwrap_or(255) as f32 / 255.0
+            }));
+        }
+        // Smoothed: the median of five neighbouring lines (fewer at the very edge, centred all
+        // the same, so a gradient isn't shifted), so one odd line (a rule, a fold) doesn't stand
+        // out.
+        let smooth: Vec<Option<[f32; 3]>> = (0..lines)
+            .map(|line| {
+                level.get(line).copied().flatten()?;
+                let r = line.min(lines - 1 - line).min(2);
+                Some(std::array::from_fn(|c| {
+                    let mut near: Vec<f32> = (line - r..=line + r).filter_map(|l| level.get(l).copied().flatten()).map(|v| v[c]).collect();
+                    near.sort_by(f32::total_cmp);
+                    near.get(near.len() / 2).copied().unwrap_or(1.0)
+                }))
+            })
+            .collect();
+        // Each side's band, and the lines its paper is measured on (the band and a few beyond).
+        for (shadowed, measured) in [(0..band, 0..reach), (lines - band..lines, lines.saturating_sub(reach)..lines)] {
+            // The brightest paper there: what the shadow is lightened to.
+            let paper: [f32; 3] =
+                std::array::from_fn(|c| measured.clone().filter_map(|l| smooth.get(l).copied().flatten()).map(|v| v[c]).fold(0.0, f32::max));
+            for line in shadowed {
+                let Some(own) = smooth.get(line).copied().flatten() else { continue };
+                let gain: [f32; 3] = std::array::from_fn(|c| {
+                    let g = paper[c] / own[c].max(1e-3);
+                    if (1.0..=MAX_EDGE_GAIN).contains(&g) { g } else { 1.0 }
+                });
+                if gain.iter().take(n).all(|&g| g == 1.0) {
+                    continue;
+                }
+                for i in 0..along {
+                    let p = at(line, i) * n;
+                    for (c, g) in gain.iter().enumerate().take(n) {
+                        if let Some(v) = px.get_mut(p + c) {
+                            *v = (*v as f32 * g).round().clamp(0.0, 255.0) as u8;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The lighting evened out and the contrast raised at `level` (1–100); `px` holds `w` × `h`
+/// pixels of `n` components.
+fn even_out(px: &[u8], n: usize, w: usize, h: usize, level: u8) -> Vec<u8> {
     let k = level as f32 / MAX_LEVEL as f32;
-    let background = background(rgb, w, h);
+    let background = background(px, n, w, h);
     // Lighting is evened out fully from half strength on; contrast keeps growing to the top.
     let flatten = (2.0 * k).min(1.0);
     let white = 1.0 - 0.12 * k; // what reaches white
     let black = 0.30 * k; // what reaches black
-    let mut out = Vec::with_capacity(rgb.len());
-    for (i, px) in rgb.as_chunks::<3>().0.iter().enumerate() {
+    let mut out = Vec::with_capacity(px.len());
+    for (i, p) in px.chunks_exact(n).enumerate() {
         let (x, y) = (i % w, i / w);
         let bg = background.at(x, y);
-        for (c, &v) in px.iter().enumerate() {
+        for (c, &v) in p.iter().enumerate() {
             let v = v as f32 / 255.0;
             let b = bg.get(c).copied().unwrap_or(1.0).max(0.05);
             let even = (v / b).min(1.0);
@@ -102,10 +230,7 @@ pub fn clean(rgb: &[u8], width: u32, height: u32, level: u8) -> Option<Vec<u8>> 
             out.push((stretched * 255.0).round() as u8);
         }
     }
-    if level >= 60 {
-        despeckle(&mut out, w, h);
-    }
-    Some(out)
+    out
 }
 
 /// The paper's illumination: a grid of per-channel values, read back with bilinear
@@ -140,9 +265,10 @@ impl Background {
     }
 }
 
-/// Estimate the paper's illumination: per block, the 90th percentile of each channel (bright
-/// paper, not dark ink); blocks that are mostly ink borrow from their neighbours; then smoothed.
-fn background(rgb: &[u8], w: usize, h: usize) -> Background {
+/// Estimate the paper's illumination: per block, the 90th percentile of each of the `n` channels
+/// (bright paper, not dark ink); blocks that are mostly ink borrow from their neighbours; then
+/// smoothed. Channels past `n` stay white.
+fn background(px: &[u8], n: usize, w: usize, h: usize) -> Background {
     let block = (w.min(h) / 16).clamp(8, 128);
     let (cols, rows) = (w.div_ceil(block), h.div_ceil(block));
     let mut cells = Vec::with_capacity(cols * rows);
@@ -150,20 +276,20 @@ fn background(rgb: &[u8], w: usize, h: usize) -> Background {
     for by in 0..rows {
         for bx in 0..cols {
             hist.iter_mut().for_each(|hh| hh.fill(0));
-            let mut n = 0u32;
+            let mut count = 0u32;
             for y in by * block..((by + 1) * block).min(h) {
                 for x in bx * block..((bx + 1) * block).min(w) {
-                    if let Some(p) = rgb.get((y * w + x) * 3..(y * w + x) * 3 + 3) {
+                    if let Some(p) = px.get((y * w + x) * n..(y * w + x) * n + n) {
                         for (c, &v) in p.iter().enumerate() {
                             if let Some(slot) = hist.get_mut(c).and_then(|hh| hh.get_mut(v as usize)) {
                                 *slot += 1;
                             }
                         }
-                        n += 1;
+                        count += 1;
                     }
                 }
             }
-            let want = (n as f32 * 0.9) as u32;
+            let want = (count as f32 * 0.9) as u32;
             cells.push(std::array::from_fn(|c| {
                 let mut seen = 0;
                 let v = hist.get(c).and_then(|hh| {
@@ -219,19 +345,15 @@ fn background(rgb: &[u8], w: usize, h: usize) -> Background {
     Background { cols, rows, block: block as f32, cells }
 }
 
-/// [`despeckle`] for one grey byte per pixel.
-fn despeckle_grey(grey: &mut [u8], w: usize, h: usize) {
-    let mut rgb: Vec<u8> = grey.iter().flat_map(|&v| [v, v, v]).collect();
-    despeckle(&mut rgb, w, h);
-    for (g, p) in grey.iter_mut().zip(rgb.as_chunks::<3>().0.iter()) {
-        *g = p[0];
-    }
-}
-
-/// Lighten dark pixels with at most one dark neighbour (specks), in place.
-fn despeckle(rgb: &mut [u8], w: usize, h: usize) {
-    let lum = |p: &[u8; 3]| (p[0] as u32 * 299 + p[1] as u32 * 587 + p[2] as u32 * 114) / 1000;
-    let dark: Vec<bool> = rgb.as_chunks::<3>().0.iter().map(|p| lum(p) < 128).collect();
+/// Lighten dark pixels with at most one dark neighbour (specks), in place; `px` holds `w` × `h`
+/// pixels of `n` components (1 or 3).
+fn despeckle(px: &mut [u8], n: usize, w: usize, h: usize) {
+    let lum = |p: &[u8]| match p {
+        [r, g, b] => (*r as u32 * 299 + *g as u32 * 587 + *b as u32 * 114) / 1000,
+        [v, ..] => *v as u32,
+        [] => 255,
+    };
+    let dark: Vec<bool> = px.chunks_exact(n.max(1)).map(|p| lum(p) < 128).collect();
     let is_dark = |x: isize, y: isize| {
         x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && dark.get(y as usize * w + x as usize).copied().unwrap_or(false)
     };
@@ -243,7 +365,7 @@ fn despeckle(rgb: &mut [u8], w: usize, h: usize) {
             let neighbours =
                 (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy))).filter(|&(dx, dy)| (dx, dy) != (0, 0) && is_dark(x + dx, y + dy)).count();
             if neighbours <= 1
-                && let Some(p) = rgb.get_mut((y as usize * w + x as usize) * 3..(y as usize * w + x as usize) * 3 + 3)
+                && let Some(p) = px.get_mut((y as usize * w + x as usize) * n..(y as usize * w + x as usize) * n + n)
             {
                 p.fill(255);
             }
@@ -388,5 +510,40 @@ mod tests {
         assert_eq!(clean(&[], 0, 0, 50), None);
         assert_eq!(clean(&[0; 12], 2, 3, 50), None);
         assert_eq!(clean(&[9; 3], 1, 1, 255).map(|v| v.len()), Some(3));
+        let every = CleanUp { level: 100, edge_shadows: true, despeckle: true };
+        assert_eq!(clean_samples(&[0; 12], 2, 2, 3, every), None, "two components");
+        assert_eq!(clean_samples(&[0; 5], 1, 2, 3, every), None);
+        for (w, h) in [(1, 1), (1, 9), (9, 1), (2, 2), (5, 3)] {
+            assert_eq!(clean_samples(&vec![100; w * h], 1, w as u32, h as u32, every).map(|v| v.len()), Some(w * h));
+        }
+    }
+
+    #[test]
+    fn edge_shadows_lighten_shadowed_paper_but_not_a_black_border_or_the_middle() {
+        // Grey paper (200) with a shadow darkening the left 20 columns to 120, a black scanner
+        // border in the right 8 columns, and a dark block in the middle.
+        let (w, h) = (100usize, 60usize);
+        let mut grey = vec![200u8; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let v = if x >= w - 8 {
+                    5
+                } else if (40..60).contains(&x) && (20..40).contains(&y) {
+                    30
+                } else if x < 20 {
+                    120 + (80 * x / 20) as u8
+                } else {
+                    200
+                };
+                grey[y * w + x] = v;
+            }
+        }
+        let out = clean_samples(&grey, 1, w as u32, h as u32, CleanUp { level: 0, edge_shadows: true, despeckle: false }).unwrap();
+        for x in [0, 5, 19] {
+            assert!(out[30 * w + x].abs_diff(200) <= 3, "column {x}: {} → {}", grey[30 * w + x], out[30 * w + x]);
+        }
+        assert_eq!(out[30 * w + w - 3], 5, "a black border is no shadow");
+        assert_eq!(out[30 * w + 50], 30, "the middle is untouched");
+        assert_eq!(out[30 * w + 30], 200);
     }
 }

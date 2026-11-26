@@ -25,3 +25,17 @@ fn a_form_inherits_the_text_state_of_the_page_that_draws_it() {
     let r = apply(&mut doc, None).unwrap();
     assert_eq!((r.glyphs, r.forms_rewritten), (6, 1), "{r:?}");
 }
+
+/// `1 50 Ts` raises text by 50, the operand before the operator, as the renderer reads it; the
+/// surplus `1` before it is ignored. Reading the first operand put the glyphs 49 pt too low, so a
+/// mark over the text the page shows missed it.
+#[test]
+fn surplus_text_state_operands_do_not_move_the_glyphs() {
+    let mut doc = one_page(b"BT /F1 10 Tf 1 50 Ts 10 100 Td (SECRET) Tj ET", "", vec![]);
+    assert_eq!(under(&mut doc, 0, &[SECRET_AT_10_100]), 0, "nothing is drawn at y 100");
+    let raised = [5.0, 145.0, 45.0, 160.0];
+    assert_eq!(under(&mut doc, 0, &[raised]), 6);
+    mark(&mut doc, 0, &[raised], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 6);
+    assert!(!content(&doc, 0).contains("SECRET"));
+}

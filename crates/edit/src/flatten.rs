@@ -4,7 +4,8 @@
 //! Each visible annotation's normal appearance (for check boxes and radio buttons, the one its
 //! `/AS` selects) is drawn into the page with the matrix of ISO 32000-2 §12.5.5 (Algorithm 8.1:
 //! the appearance's bounding box, transformed by its `/Matrix`, mapped onto `/Rect`). Hidden
-//! annotations are left alone; links are kept (they have no ink and stay clickable). Flattened
+//! annotations and replies are left alone (a reply is not shown on the page: [`is_reply`]);
+//! links are kept (they have no ink and stay clickable). Flattened
 //! comments take their pop-ups and replies with them; flattened widgets are removed from the
 //! form's field tree. An annotation whose appearance cannot be drawn is not flattened: it stays
 //! as it is, so no comment or field value is lost with nothing in its place.
@@ -16,7 +17,23 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use crate::{EditError, check, n, page_list, place_tagged};
 
 const HIDDEN: i64 = 2;
+const NO_ROTATE: i64 = 16;
 const NO_VIEW: i64 = 32;
+
+/// A reply of type R: a markup annotation with an `/IRT` to the annotation it answers and an
+/// `/RT` other than `/Group` (R is the default, so a missing, unknown or malformed `/RT` reads as
+/// R, as the comment list reads it). It is shown in its comment's thread, never on the page
+/// ("Interactive PDF processors shall not display replies to an annotation individually", ISO
+/// 32000-2 Table 172), so flattening neither draws it nor builds it an appearance; it goes with
+/// its comment. A `/RT /Group` member is part of its group's look and is flattened as any other
+/// annotation. `/IRT` is a markup annotation's entry: a widget, link or pop-up with one is no
+/// reply, and is flattened (or kept) as it would be without. Keep in step with hayro-interpret's
+/// PdfCraft patch (81).
+fn is_reply(doc: &Document, d: &Dict) -> bool {
+    !matches!(d.name(b"Subtype"), Some(b"Widget" | b"Link" | b"Popup"))
+        && d.get(b"IRT").is_some_and(|o| doc.resolve(o).as_dict().is_some())
+        && d.get(b"RT").map(|o| doc.resolve(o)).as_deref().and_then(Object::as_name) != Some(b"Group")
+}
 
 fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {
     let o = doc.resolve(o?);
@@ -74,6 +91,28 @@ fn placement(doc: &Document, form: &Dict, rect: [f64; 4]) -> Option<[f64; 6]> {
     Some([sx, 0.0, 0.0, sy, rect[0] - x0 * sx, rect[1] - y0 * sy])
 }
 
+/// `m` followed by a turn of `degrees` (the page's /Rotate) about the upper-left corner of
+/// `rect`: a NoRotate annotation stays upright on a rotated page (ISO 32000-2 §12.5.3), its
+/// upper-left corner where it was, which is how MuPDF and Poppler draw it.
+fn upright(m: [f64; 6], degrees: i64, rect: [f64; 4]) -> [f64; 6] {
+    let (sin, cos) = match degrees.rem_euclid(360) {
+        90 => (1.0, 0.0),
+        180 => (0.0, -1.0),
+        270 => (-1.0, 0.0),
+        _ => return m,
+    };
+    let (px, py) = (rect[0], rect[3]);
+    let t = [cos, sin, -sin, cos, px - px * cos + py * sin, py - px * sin - py * cos];
+    [
+        m[0] * t[0] + m[1] * t[2],
+        m[0] * t[1] + m[1] * t[3],
+        m[2] * t[0] + m[3] * t[2],
+        m[2] * t[1] + m[3] * t[3],
+        m[4] * t[0] + m[5] * t[2] + t[4],
+        m[4] * t[1] + m[5] * t[3] + t[5],
+    ]
+}
+
 #[derive(Clone, Copy)]
 enum Which {
     /// Every comment and/or every form field.
@@ -113,6 +152,160 @@ fn xobject_name(existing: &Dict, pending: &Dict, n: &mut u32) -> String {
     }
 }
 
+/// Copy usable property resources, including inherited resources supplied by the page model.
+/// Invalid data must stay intact rather than being replaced while transferring membership.
+fn properties(doc: &Document, page: &Dict) -> Option<Dict> {
+    let Some(resources) = page.get(b"Resources") else { return Some(Dict::new()) };
+    let resources = doc.resolve(resources);
+    let Object::Dict(resources) = &*resources else { return None };
+    let Some(properties) = resources.get(b"Properties") else { return Some(Dict::new()) };
+    match &*doc.resolve(properties) {
+        Object::Dict(properties) => Some(properties.clone()),
+        _ => None,
+    }
+}
+
+/// Validate an ISO 32000-1 §8.11.2.2 `/VE` visibility expression within recursion depth 16
+/// and a shared node-visit `budget`.
+fn valid_ve(doc: &Document, expr: &Object, depth: usize, budget: &mut usize) -> bool {
+    if depth > 16 || *budget == 0 {
+        return false;
+    }
+    *budget -= 1;
+    let resolved = doc.resolve(expr);
+    if let Some(arr) = resolved.as_array() {
+        let [op, rest @ ..] = arr.as_slice() else { return false };
+        let op_obj = doc.resolve(op);
+        let Some(name) = op_obj.as_name() else { return false };
+        match (name, rest) {
+            (b"Not", [operand]) => valid_ve(doc, operand, depth + 1, budget),
+            (b"And" | b"Or", [_, ..]) => rest.iter().all(|o| valid_ve(doc, o, depth + 1, budget)),
+            _ => false,
+        }
+    } else if depth > 0 {
+        expr.as_ref().is_some_and(|r| matches!(&*doc.get(r), Object::Dict(d) if d.name(b"Type") == Some(b"OCG")))
+    } else {
+        false
+    }
+}
+
+/// Validate an `/OCMD` dictionary's `/P` policy and `/VE` visibility expression, if present.
+fn valid_ocmd(doc: &Document, d: &Dict) -> bool {
+    if let Some(p) = d.get(b"P")
+        && !matches!(doc.resolve(p).as_name(), Some(b"AllOn" | b"AnyOn" | b"AnyOff" | b"AllOff"))
+    {
+        return false;
+    }
+    if let Some(ve) = d.get(b"VE")
+        && !valid_ve(doc, ve, 0, &mut 4096)
+    {
+        return false;
+    }
+    true
+}
+
+/// Preserve the stored value, not a reconstructed membership dictionary. A direct inline
+/// dictionary lacks an indirect reference (ObjRef) to identify it in page resources, and an
+/// OCMD with a malformed or overly deep `/VE` expression stays on the annotation.
+fn transferable(doc: &Document, annotation: &Dict, usable_properties: bool) -> bool {
+    let Some(membership) = annotation.get(b"OC") else { return true };
+    if !usable_properties {
+        return false;
+    }
+    match &*doc.resolve(membership) {
+        Object::Dict(d) => match d.name(b"Type") {
+            Some(b"OCG") => membership.as_ref().is_some(),
+            Some(b"OCMD") => valid_ocmd(doc, d),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+#[derive(Default)]
+struct Retained {
+    refs: HashSet<ObjRef>,
+    inline: HashSet<usize>,
+}
+
+impl Retained {
+    fn contains(&self, index: usize, entry: &Object) -> bool {
+        self.inline.contains(&index) || entry.as_ref().is_some_and(|r| self.refs.contains(&r))
+    }
+
+    fn insert(&mut self, index: usize, entry: &Object) {
+        if let Some(r) = entry.as_ref() {
+            self.refs.insert(r);
+        } else {
+            self.inline.insert(index);
+        }
+    }
+}
+
+/// Retained annotations keep their replies and pop-ups, including transitive reply chains.
+///
+/// Retention is strictly downward (parent -> child/reply/popup). A non-transferable child does not
+/// keep its transferable parent, matching the engine invariant for undrawn children (#1794).
+fn retained_annotations(doc: &Document, list: &[Object], usable_properties: bool) -> Retained {
+    let mut children: HashMap<ObjRef, Vec<ObjRef>> = HashMap::new();
+    let mut inline_children: HashMap<ObjRef, Vec<usize>> = HashMap::new();
+    let mut pending = Vec::new();
+    let mut retained = Retained::default();
+    for (k, entry) in list.iter().enumerate() {
+        let object = doc.resolve(entry);
+        let Some(annotation) = object.as_dict() else { continue };
+        let not_transferable = !transferable(doc, annotation, usable_properties);
+        if let Some(reference) = entry.as_ref() {
+            if not_transferable {
+                pending.push(reference);
+            }
+            if let Some(parent) = annotation.reference(b"IRT") {
+                children.entry(parent).or_default().push(reference);
+            }
+            if annotation.name(b"Subtype") == Some(b"Popup")
+                && let Some(parent) = annotation.reference(b"Parent")
+            {
+                children.entry(parent).or_default().push(reference);
+            }
+        } else {
+            if not_transferable {
+                retained.inline.insert(k);
+            }
+            if let Some(parent) = annotation.reference(b"IRT") {
+                inline_children.entry(parent).or_default().push(k);
+            }
+            if annotation.name(b"Subtype") == Some(b"Popup")
+                && let Some(parent) = annotation.reference(b"Parent")
+            {
+                inline_children.entry(parent).or_default().push(k);
+            }
+        }
+    }
+    while let Some(current) = pending.pop() {
+        if !retained.refs.insert(current) {
+            continue;
+        }
+        if let Some(kids) = children.get(&current) {
+            pending.extend(kids.iter().copied());
+        }
+        if let Some(inline_kids) = inline_children.get(&current) {
+            retained.inline.extend(inline_kids.iter().copied());
+        }
+    }
+    retained
+}
+
+/// A Properties resource name that is not already on the page or in `pending`.
+fn property_name(existing: &Dict, pending: &Dict, n: &mut u64) -> Option<String> {
+    loop {
+        let name = format!("PCFlOC{n}");
+        *n = n.checked_add(1)?;
+        if !existing.contains(name.as_bytes()) && !pending.contains(name.as_bytes()) {
+            return Some(name);
+        }
+    }
+}
+
 /// Flatten comments and/or form fields on `pages`. Returns how many annotations were merged
 /// into page content.
 pub fn flatten(doc: &mut Document, pages: &[usize], comments: bool, fields: bool) -> Result<usize, EditError> {
@@ -134,10 +327,16 @@ pub fn flatten_fill_sign(doc: &mut Document, pages: &[usize]) -> Result<usize, E
 fn undrawn_on(doc: &Document, all: &[pdfcraft_model::Page], pages: &[usize], which: Which) -> Option<(usize, bool, char)> {
     for &i in pages {
         let list = all.get(i)?.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
-        for entry in &list {
+        let usable_properties = properties(doc, &all[i].dict).is_some();
+        let retained = retained_annotations(doc, &list, usable_properties);
+        for (k, entry) in list.iter().enumerate() {
+            if retained.contains(k, entry) {
+                continue;
+            }
             let Some(d) = doc.resolve(entry).as_dict().cloned() else { continue };
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-            if !selected(doc, &d, which) || flags & (HIDDEN | NO_VIEW) != 0 {
+            // A reply is never drawn into the page (`is_reply`), so its text can't bake in a `?`.
+            if !selected(doc, &d, which) || flags & (HIDDEN | NO_VIEW) != 0 || !transferable(doc, &d, usable_properties) || is_reply(doc, &d) {
                 continue;
             }
             let widget = d.name(b"Subtype") == Some(b"Widget");
@@ -151,6 +350,73 @@ fn undrawn_on(doc: &Document, all: &[pdfcraft_model::Page], pages: &[usize], whi
     None
 }
 
+/// Ensure comments without stored appearances have appearances generated before flattening.
+fn prepare_appearances(doc: &mut Document, list: &[Object], which: Which, retained: &HashSet<ObjRef>, usable_properties: bool) {
+    for entry in list {
+        let Some(r) = entry.as_ref() else { continue };
+        if retained.contains(&r) {
+            continue;
+        }
+        let d = doc.resolve(entry).as_dict().cloned().unwrap_or_default();
+        let subtype = d.name(b"Subtype").unwrap_or_default();
+        if subtype == b"Widget" || !selected(doc, &d, which) || !transferable(doc, &d, usable_properties) {
+            continue;
+        }
+        let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+        // A reply is not shown on the page (`is_reply`), so it gets no appearance either.
+        if flags & (HIDDEN | NO_VIEW) != 0 || is_reply(doc, &d) || appearance(doc, &d).is_some() {
+            continue;
+        }
+        // A subtype this build cannot draw fails here and is kept below, so the comment is not
+        // deleted with nothing drawn in its place. (Text the standard fonts can't draw was
+        // refused before anything changed: `undrawn_on`.)
+        let _ = pdfcraft_annot::set_appearance(doc, r);
+    }
+}
+
+/// Adds to `gone` and `gone_inline` the pop-ups and replies of what is in them, at any depth of
+/// the thread and in any order of `/Annots`, passing by the entries `stays` keeps. What points at
+/// each annotation (a pop-up by `/Parent`, a reply by `/IRT`) is gathered once, then followed
+/// from what went. `/Annots` should hold references (ISO 32000-2 Table 31), but a pop-up or
+/// reply written inline still goes with what it points at; nothing can point at it in turn.
+fn take_threads(
+    doc: &Document,
+    list: &[Object],
+    gone: &mut HashSet<ObjRef>,
+    gone_inline: &mut HashSet<usize>,
+    stays: impl Fn(usize, &Object) -> bool,
+) {
+    let mut pointing: HashMap<ObjRef, Vec<ObjRef>> = HashMap::new();
+    let mut pointing_inline: Vec<(ObjRef, usize)> = Vec::new();
+    for (k, entry) in list.iter().enumerate() {
+        if stays(k, entry) {
+            continue;
+        }
+        let r = entry.as_ref();
+        let obj = doc.resolve(entry);
+        let Some(d) = obj.as_dict() else { continue };
+        let popup_of = d.reference(b"Parent").filter(|_| d.name(b"Subtype") == Some(b"Popup"));
+        // Only a reply goes with what it answers: a `/RT /Group` member was drawn (and went) or
+        // stays, hidden or undrawable, as any annotation.
+        let reply_to = d.reference(b"IRT").filter(|_| is_reply(doc, d));
+        for p in popup_of.into_iter().chain(reply_to) {
+            match r {
+                Some(r) => pointing.entry(p).or_default().push(r),
+                None => pointing_inline.push((p, k)),
+            }
+        }
+    }
+    let mut follow: Vec<ObjRef> = gone.iter().copied().collect();
+    while let Some(p) = follow.pop() {
+        for &r in pointing.get(&p).into_iter().flatten() {
+            if gone.insert(r) {
+                follow.push(r);
+            }
+        }
+    }
+    gone_inline.extend(pointing_inline.into_iter().filter(|(p, _)| gone.contains(p)).map(|(_, k)| k));
+}
+
 /// Runs [`flatten_in`] on a copy of `doc` (unchanged objects are shared) and keeps it only on
 /// success, so a page refused part way leaves the pages before it as they were.
 fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize, EditError> {
@@ -158,6 +424,19 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
     let drawn = flatten_in(&mut work, pages, which)?;
     *doc = work;
     Ok(drawn)
+}
+
+/// `page` with what its own dictionary holds now, after an edit: re-reading this one page,
+/// where walking the whole page tree again for every flattened page would be quadratic.
+/// Inherited attributes stay as they were collected, under the page's own entries.
+fn refreshed(doc: &Document, page: &pdfcraft_model::Page) -> pdfcraft_model::Page {
+    let mut dict = page.dict.clone();
+    if let Some(own) = doc.get(page.obj).as_dict() {
+        for (k, v) in own.iter() {
+            dict.set(k.clone(), v.clone());
+        }
+    }
+    pdfcraft_model::Page { obj: page.obj, dict }
 }
 
 fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize, EditError> {
@@ -182,6 +461,10 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
         let Some(list) = annots_obj.as_ref().map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()) else { continue };
         let mut content = String::new();
         let mut xobjects = Dict::new();
+        let existing_properties = properties(doc, &page.dict);
+        let mut added_properties = Dict::new();
+        let mut retained = retained_annotations(doc, &list, existing_properties.is_some());
+        let mut property_n = 0u64;
         let mut name_n = 0u32;
         let existing_xo = page
             .dict
@@ -194,35 +477,26 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
         let mut gone_inline: HashSet<usize> = HashSet::new();
         // Selected, but nothing was drawn for it: it stays, pop-up and reply handling included.
         let mut undrawn: HashSet<ObjRef> = HashSet::new();
+        let rotation = page.dict.get(b"Rotate").map(|r| doc.resolve(r)).and_then(|r| r.as_int()).unwrap_or(0);
         // A viewer draws many comments from their dictionary even when the file stores no
         // appearance (notes, FreeText, ink, stamps…). Build the appearance it would show, so
         // flattening keeps a comment that still has ink on screen instead of deleting it.
-        for entry in &list {
-            let Some(r) = entry.as_ref() else { continue };
-            let d = doc.resolve(entry).as_dict().cloned().unwrap_or_default();
-            let subtype = d.name(b"Subtype").unwrap_or_default();
-            if subtype == b"Widget" || !selected(doc, &d, which) {
-                continue;
-            }
-            let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-            if flags & (HIDDEN | NO_VIEW) != 0 || appearance(doc, &d).is_some() {
-                continue;
-            }
-            // A subtype this build cannot draw fails here and is kept below, so the comment is
-            // not deleted with nothing drawn in its place. (Text the standard fonts can't draw
-            // was refused before anything changed: `undrawn_on`.)
-            let _ = pdfcraft_annot::set_appearance(doc, r);
-        }
+        prepare_appearances(doc, &list, which, &retained.refs, existing_properties.is_some());
         for (k, entry) in list.iter().enumerate() {
             let obj = doc.resolve(entry);
             let Some(d) = obj.as_dict() else { continue };
             let subtype = d.name(b"Subtype").unwrap_or_default();
             let widget = subtype == b"Widget";
+            if retained.contains(k, entry) || !transferable(doc, d, existing_properties.is_some()) {
+                retained.insert(k, entry);
+                continue;
+            }
             if !selected(doc, d, which) {
                 continue;
             }
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-            if flags & (HIDDEN | NO_VIEW) != 0 {
+            // Not on the page, so not drawn into it; a reply goes with its comment (below).
+            if flags & (HIDDEN | NO_VIEW) != 0 || is_reply(doc, d) {
                 continue;
             }
             let rect = nums(doc, d.get(b"Rect")).filter(|r| r.len() == 4).map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]);
@@ -230,8 +504,21 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
             if let (Some(ap), Some(rect)) = (appearance(doc, d), rect) {
                 let form = doc.get(ap).as_dict().cloned().unwrap_or_default();
                 if let Some(m) = placement(doc, &form, rect) {
+                    let m = if flags & NO_ROTATE != 0 { upright(m, rotation, rect) } else { m };
+                    if let Some(membership) = d.get(b"OC") {
+                        let Some(existing) = existing_properties.as_ref() else { continue };
+                        let Some(name) = property_name(existing, &added_properties, &mut property_n) else {
+                            retained.insert(k, entry);
+                            continue;
+                        };
+                        content.push_str(&format!("/OC /{name} BDC\n"));
+                        added_properties.set(name.into_bytes(), membership.clone());
+                    }
                     let name = xobject_name(&existing_xo, &xobjects, &mut name_n);
                     content.push_str(&format!("q {} {} {} {} {} {} cm /{name} Do Q\n", n(m[0]), n(m[1]), n(m[2]), n(m[3]), n(m[4]), n(m[5])));
+                    if d.contains(b"OC") {
+                        content.push_str("EMC\n");
+                    }
                     xobjects.set(name.into_bytes(), Object::Ref(ap));
                     drawn += 1;
                     drew = true;
@@ -269,19 +556,11 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
             continue;
         }
         // Pop-ups and replies of what was flattened go too, except a reply that stayed because
-        // it could not be drawn: its content would go with nothing in its place.
-        for entry in &list {
-            let Some(r) = entry.as_ref() else { continue };
-            if undrawn.contains(&r) {
-                continue;
-            }
-            let obj = doc.get(r);
-            let Some(d) = obj.as_dict() else { continue };
-            let points_at = |k: &[u8]| d.reference(k).is_some_and(|t| gone.contains(&t));
-            if points_at(b"Parent") && d.name(b"Subtype") == Some(b"Popup") || points_at(b"IRT") {
-                gone.insert(r);
-            }
-        }
+        // it could not be drawn (its content would go with nothing in its place) and what is
+        // retained with its thread.
+        take_threads(doc, &list, &mut gone, &mut gone_inline, |k, entry| {
+            entry.as_ref().is_some_and(|r| undrawn.contains(&r)) || retained.contains(k, entry)
+        });
         let kept: Vec<Object> = list
             .iter()
             .enumerate()
@@ -296,11 +575,18 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
                 xo.set(k.clone(), v.clone());
             }
             res.set(b"XObject".to_vec(), Object::Dict(xo));
+            if !added_properties.is_empty() {
+                let mut properties = existing_properties.unwrap_or_default();
+                for (key, value) in added_properties.iter() {
+                    properties.set(key.clone(), value.clone());
+                }
+                res.set(b"Properties".to_vec(), Object::Dict(properties));
+            }
             doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
-            let page = page_list(doc)[i].clone();
+            let page = refreshed(doc, &page);
             place_tagged(doc, &page, "Flattened", content.into_bytes(), false)?;
         }
-        let page_now = page_list(doc)[i].clone();
+        let page_now = refreshed(doc, &page);
         match page_now.dict.get(b"Annots").and_then(|a| a.as_ref()).filter(|r| doc.get(*r).as_array().is_some()) {
             Some(r) => doc.set(r, Object::Array(kept)),
             None => doc.update_dict(page.obj, |d| {
