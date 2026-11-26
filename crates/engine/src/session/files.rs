@@ -236,8 +236,9 @@ impl Session {
         // Table 22, bit 12 clear: only a low-level representation may be printed, so the pages
         // always go as pictures, at no more than the low resolution.
         let low_res = doc.permissions().is_some_and(|p| !p.print_high_quality()).then(|| print::Raster {
-            dpi: settings.raster.map_or(LOW_RESOLUTION_PRINT_DPI, |r| r.dpi.min(LOW_RESOLUTION_PRINT_DPI)),
-            grayscale: settings.raster.is_some_and(|r| r.grayscale),
+            dpi: settings.raster.as_ref().map_or(LOW_RESOLUTION_PRINT_DPI, |r| r.dpi.min(LOW_RESOLUTION_PRINT_DPI)),
+            grayscale: settings.raster.as_ref().is_some_and(|r| r.grayscale),
+            colour: settings.raster.as_ref().and_then(|r| r.colour.clone()),
         });
         // Print as image: the pages used become pictures first, then the picture document is
         // imposed in their place (its page k is the k-th distinct source page used).

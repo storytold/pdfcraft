@@ -9,7 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use pdfcraft_cos::{Dict, Document, MAX_DECODED, Object, XrefEntry};
+use pdfcraft_cos::{Dict, Document, MAX_DECODED, ObjRef, Object, XrefEntry};
 
 /// The categories, in Acrobat's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -91,6 +91,9 @@ const MAX_FORM_DEPTH: usize = 64;
 struct Audit<'a> {
     doc: &'a Document,
     owner: HashMap<u32, SpaceCategory>,
+    /// Resource dictionaries (by reference) already walked: one shared by many pages, forms or
+    /// appearances is walked once, as claiming is the same each time.
+    walked: HashSet<ObjRef>,
 }
 
 impl Audit<'_> {
@@ -124,6 +127,18 @@ impl Audit<'_> {
         o.map(|x| self.doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default()
     }
 
+    /// The resource dictionary `holder` points at (if it does), by kind: [`Self::resources`],
+    /// once per dictionary given by reference.
+    fn resources_of(&mut self, holder: Option<&Object>, depth: usize) {
+        if let Some(Object::Ref(r)) = holder
+            && !self.walked.insert(*r)
+        {
+            return;
+        }
+        let res = self.resolve_dict(holder);
+        self.resources(&res, depth);
+    }
+
     /// A resource dictionary, by kind; `depth` counts the form XObjects it is nested in.
     fn resources(&mut self, res: &Dict, depth: usize) {
         let xobjects = self.resolve_dict(res.get(b"XObject"));
@@ -135,8 +150,7 @@ impl Audit<'_> {
                     // A form: its own resources first, by kind, then the rest of it. Owning it
                     // first stops a form that draws itself.
                     self.owner.insert(r.num, SpaceCategory::XObjectForms);
-                    let inner = self.resolve_dict(s.dict.get(b"Resources"));
-                    self.resources(&inner, depth + 1);
+                    self.resources_of(s.dict.get(b"Resources"), depth + 1);
                     self.claim(&Object::Dict(s.dict.clone()), SpaceCategory::XObjectForms);
                 }
                 _ => self.claim(x, SpaceCategory::XObjectForms),
@@ -172,8 +186,7 @@ impl Audit<'_> {
                 _ => Vec::new(),
             };
             for dict in streams {
-                let res = self.resolve_dict(dict.get(b"Resources"));
-                self.resources(&res, 1);
+                self.resources_of(dict.get(b"Resources"), 1);
             }
         }
     }
@@ -216,19 +229,17 @@ fn object_stream(doc: &Document, num: u32) -> Option<u32> {
 /// Audit the space a document uses; `file_len` is the size of the file on disk (the rest is
 /// overhead).
 pub fn audit_space(doc: &Document, file_len: u64) -> Vec<SpaceUse> {
-    let mut a = Audit { doc, owner: HashMap::new() };
+    let mut a = Audit { doc, owner: HashMap::new(), walked: HashSet::new() };
     let cat = doc.root().and_then(|r| doc.get(r).as_dict().cloned()).unwrap_or_default();
     let pages = pdfcraft_model::pages(doc);
     // Order matters: the most specific owners first. Resources by kind before anything that
     // uses them: a content stream's dictionary may point at what it draws (PdfCraft's /PCAdded
     // records an added image), and form fields and comments draw with fonts and images too.
     for p in &pages {
-        let res = a.resolve_dict(p.dict.get(b"Resources"));
-        a.resources(&res, 0);
+        a.resources_of(p.dict.get(b"Resources"), 0);
     }
     let form = a.resolve_dict(cat.get(b"AcroForm"));
-    let form_resources = a.resolve_dict(form.get(b"DR"));
-    a.resources(&form_resources, 0);
+    a.resources_of(form.get(b"DR"), 0);
     for p in &pages {
         for x in annotations(doc, &p.dict) {
             a.appearance_resources(&x);
