@@ -209,6 +209,28 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
     PageText { glyphs, line_of, space_before, truncated: false }
 }
 
+/// The word-gap threshold between neighbouring glyphs `p` and `c` on a line whose threshold is `threshold`: it follows
+/// the smaller of the two, not the tallest glyph of the line (#3172). A sub- or superscript keeps the line's threshold,
+/// since its smaller height says nothing about the gap next to its host.
+fn pair_threshold(p: &TextGlyph, c: &TextGlyph, typical: f32, threshold: f32) -> f32 {
+    let height = |g: &TextGlyph| (g.rect[3] - g.rect[1]).max(0.1);
+    let (hp, hc) = (height(p), height(c));
+    // A glyph under the script test's size floor (a small `²`) is still a script when it sits off its neighbour's
+    // baseline inside its line, unlike body text beside a big digit, which shares the digit's baseline.
+    let off_baseline = |host: &[f32; 4], host_h: f32, s: &[f32; 4], s_h: f32| {
+        s_h < host_h * 0.45 && (host[3] - s[3]).abs() >= host_h * 0.15 && s[3] > host[1] && s[1] < host[3]
+    };
+    if is_script_on(&p.rect, hp, &c.rect, hc)
+        || is_script_on(&c.rect, hc, &p.rect, hp)
+        || off_baseline(&p.rect, hp, &c.rect, hc)
+        || off_baseline(&c.rect, hc, &p.rect, hp)
+    {
+        return threshold;
+    }
+    let h = hp.min(hc);
+    (typical + h * WORD_GAP).max(h * WORD_GAP).min(threshold)
+}
+
 /// How many grid cells around a glyph the far redraw check looks at in each direction, however large the glyph is next to
 /// the page's median glyph.
 const MAX_REDRAW_REACH: i32 = 8;
@@ -603,6 +625,10 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             for (w, pair) in sc.placed.windows(2).enumerate() {
                 let &[p, c] = pair else { continue };
                 let Some(&Some(gap)) = sc.cluster_gap.get(w + 1) else { continue };
+                // A combining mark is measured by its cluster's base, as its text is: its own small box would lower the
+                // threshold next to it.
+                let base = |i: usize| glyphs.get(sc.anchor.get(i).copied().unwrap_or(i)).copied().unwrap_or(glyphs[i]);
+                let pair_threshold = pair_threshold(base(p), base(c), typical, threshold);
                 let (pt, ct) = (cluster_text(p), cluster_text(c));
                 // Character spacing is added after every glyph of a show (`Tc`, ISO 32000-2 §9.3.2), so text spread to a
                 // wider column -- a Chinese label on a form, 分散對齊 -- repeats one gap, while the gap between two cells
@@ -632,7 +658,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                 let tight_cluster = (loose_sign(pt) || loose_sign(ct)) && gap < h * 0.6;
                 let run_start = sc.breaks.binary_search(&c).is_ok();
                 if let Some(space) = spaces.get_mut(w + 1) {
-                    *space = (gap > threshold || run_start)
+                    *space = (gap > pair_threshold || run_start)
                         && !cjk
                         && !tight_cluster
                         && !pt.trim().is_empty()
