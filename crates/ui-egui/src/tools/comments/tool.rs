@@ -468,6 +468,18 @@ pub(crate) fn part_pressed(view: &mut CommentView, press: &PagePress, cx: &PageC
     view.member = cx.picked(start.origin, view.primary());
 }
 
+/// A finger held on a comment's body, from the page part that owns it (the framework reports no long touch): the
+/// comment is selected unless it already is, as a right-click selects it, and a group subordinate under the finger is
+/// remembered as a click on it remembers it, so Delete acts on the member touched (`cx` is the comment's page).
+pub(crate) fn part_held(view: &mut CommentView, press: &PagePress, cx: &PageCx<'_>) {
+    let Owner::Comment { index } = press.owner else { return };
+    let PressPhase::Held { start, .. } = press.phase else { return };
+    if !view.is_selected((press.page, index)) {
+        view.select_only((press.page, index));
+    }
+    view.member = cx.picked(start.origin, view.primary());
+}
+
 /// The engine edit the gestures of this pass made, taken from the annotation tool after the tool host ran: each
 /// committed `EditEvent` is one engine edit, so a drag is one undo step. A drawn shape that is kept on screen until
 /// its page is drawn again is remembered (`CommentView::settle`). The new comment is selected by the app once the

@@ -1169,20 +1169,19 @@ fn route_press(
                 }
             }
         }
-        Owner::Comment { index } => {
-            // A finger held on a comment selects it, as a right-click does (the framework reports no long touch); with a
-            // modifier held it is left to the click, which adds to or takes from the selection.
-            let limit = ui.ctx().options(|o| o.input_options.max_click_duration);
-            if let PressPhase::Held { start, .. } = press.phase
-                && !(press.mods.shift || press.mods.cmd || press.mods.ctrl)
-                && ui.input(|i| i.any_touches() && i.time - start.time > limit)
-                && !session.comments.is_selected((press.page, *index))
-            {
-                session.comments.select(Some((press.page, *index)));
-            }
+        Owner::Comment { .. } => {
             if let Some(xf) = session.page_xform(press.page, geo) {
                 let page_cx =
                     comments::PageCx { page: press.page, xf: &xf, info: cx.info, prefs: cx.prefs, allowed: cx.allowed, hidden: cx.comments_hidden };
+                // A finger held on a comment selects it (the framework reports no long touch); with a modifier held it
+                // is left to the click, which adds to or takes from the selection.
+                let limit = ui.ctx().options(|o| o.input_options.max_click_duration);
+                if let PressPhase::Held { start, .. } = press.phase
+                    && !(press.mods.shift || press.mods.cmd || press.mods.ctrl)
+                    && ui.input(|i| i.any_touches() && i.time - start.time > limit)
+                {
+                    comments::part_held(&mut session.comments, press, &page_cx);
+                }
                 let words = Env::of(ui).words::<AnnotateWords>();
                 let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
                 comments::part_pressed(&mut session.comments, press, &page_cx, &map, cx.tool, &words);

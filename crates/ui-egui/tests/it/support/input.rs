@@ -33,6 +33,19 @@ pub fn touch_tap<S>(h: &mut Harness<'_, S>, p: Pos2) {
     h.run_steps(4);
 }
 
+/// A finger put down at `p` and held still past egui's long-press time, in the frames of
+/// [`touch_tap`]; [`touch_lift`] ends it.
+pub fn touch_hold<S>(h: &mut Harness<'_, S>, p: Pos2) {
+    one_frame(h, [touch(TouchPhase::Start, p), Event::PointerMoved(p), button(p, true)]);
+    h.run_steps(6);
+}
+
+/// The finger [`touch_hold`] put down at `p` lifts.
+pub fn touch_lift<S>(h: &mut Harness<'_, S>, p: Pos2) {
+    one_frame(h, [touch(TouchPhase::End, p), button(p, false), Event::PointerGone]);
+    h.run_steps(4);
+}
+
 /// A double-click at `p`: two clicks, each a press and release in one frame, in consecutive
 /// frames (0.25 s apart, within egui's 0.3 s double-click delay).
 pub fn double_click<S>(h: &mut Harness<'_, S>, p: Pos2) {
