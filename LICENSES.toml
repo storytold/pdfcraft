@@ -33,7 +33,7 @@ sha256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
 [[document]]
 source = "assets/app-icon/LICENSE-document.txt"
 destination = "assets/app-icon/LICENSE-document.txt"
-sha256 = "a6d66622b26b4369588266682f3c5d7cafbcea1c95bd9be4ffa17612a52c05cd"
+sha256 = "0144d717c623a5be547b4fc07da3bca262fb19d83c52683705567b81dba71a53"
 
 [[document]]
 source = "assets/app-icon/LICENSE.txt"
