@@ -1,4 +1,5 @@
 use super::{Dict, Document, HashSet, ObjRef, Object, Op, Scope};
+use crate::hidden_block::{Residue, is_show};
 
 impl<'a> Scope<'a> {
     /// Is this optional-content reference (an OCG or OCMD) hidden?
@@ -221,13 +222,24 @@ impl<'a> Scope<'a> {
     }
 }
 
+/// What [`strip_hidden_layers`] leaves of a content stream.
+pub(super) struct Stripped {
+    pub ops: Vec<Op>,
+    /// How many hidden blocks went.
+    pub removed: usize,
+    /// The text-showing operators kept from hidden blocks, by where they start: the walk writes
+    /// each as the move its glyphs would have made ([`crate::hidden_block`]).
+    pub shows: HashSet<usize>,
+}
+
 /// Remove marked-content blocks of hidden layers (`/OC /name BDC … EMC`, nested blocks
-/// included). Returns the remaining operators and how many blocks went.
-pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Vec<Op>, props: &Dict) -> (Vec<Op>, usize) {
-    let mut out = Vec::with_capacity(ops.len());
+/// included): whole, or keeping what outlives each block ([`crate::hidden_block`]) when
+/// `Scope::keep_hidden_state`.
+pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Vec<Op>, props: &Dict) -> Stripped {
+    let mut out = Stripped { ops: Vec::with_capacity(ops.len()), removed: 0, shows: HashSet::new() };
     // For each open marked-content block: does it hide its contents?
     let mut stack: Vec<bool> = Vec::new();
-    let mut removed = 0;
+    let mut residue = Residue::default();
     for op in ops {
         let hidden_now = stack.last().copied().unwrap_or(false);
         match op.op.as_slice() {
@@ -242,27 +254,35 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
                         None => false,
                     };
                 if this && !hidden_now {
-                    removed += 1;
+                    out.removed += 1;
                 }
                 stack.push(hidden_now || this);
                 if !(hidden_now || this) {
-                    out.push(op);
+                    out.ops.push(op);
                 }
             }
             b"EMC" => {
                 let was = stack.pop().unwrap_or(false);
                 if !was {
-                    out.push(op);
+                    out.ops.push(op);
+                } else if !stack.last().copied().unwrap_or(false) {
+                    out.ops.append(&mut std::mem::take(&mut residue).finish());
                 }
             }
-            _ => {
-                if !hidden_now {
-                    out.push(op);
+            o if hidden_now => {
+                if scope.keep_hidden_state {
+                    if is_show(o) {
+                        out.shows.insert(op.span.start);
+                    }
+                    residue.push(op, true);
                 }
             }
+            _ => out.ops.push(op),
         }
     }
-    (out, removed)
+    // A hidden block the stream doesn't close.
+    out.ops.append(&mut residue.finish());
+    out
 }
 
 /// Is this dictionary's `/Type` the given name? An indirect `/Type` is followed, as a viewer

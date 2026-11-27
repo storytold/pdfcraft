@@ -8,9 +8,9 @@
 //! User and Language usage give no state at open, and Print and Export usage is not read, so a
 //! visible layer set not to print prints once merged. Then:
 //!
-//! - hidden layers' content is removed, as Remove Hidden Information removes it
-//!   ([`crate::sanitize`]), and their marked blocks in every other content stream (forms and
-//!   annotation appearances) go too;
+//! - hidden layers' content is removed by Remove Hidden Information's page pass
+//!   ([`crate::sanitize`]), and their marked blocks in every other content stream (forms,
+//!   annotation appearances, tiling patterns, soft-mask groups and Type 3 glyphs) go too;
 //! - a visible layer's `/OC` marked block keeps what it draws and loses its `BDC` and `EMC`;
 //! - an XObject in a hidden layer becomes an empty form; one in a visible layer loses `/OC`;
 //! - an annotation in a hidden layer is taken off its page with its pop-up and the replies to it
@@ -20,9 +20,13 @@
 //!   `/Properties`, and the catalog loses `/OCProperties`, alternate configurations (`/Configs`)
 //!   included.
 //!
-//! A hidden layer's block goes whole, graphics-state operators (`cm`, `gs`, colours) inside it
-//! included, as Remove Hidden Information removes it. Content in no layer is left as it is, and a
-//! layer `/OCGs` does not list is no layer (the reader ignores it): its blocks are unwrapped.
+//! A hidden layer's block loses what it draws and keeps what outlives it: graphics and text
+//! state, clipping and text position (ISO 32000-1 §8.11.3.1, [`crate::hidden_block`]). Remove
+//! Hidden Information itself still removes such a block whole; only this pass keeps the rest. On a page
+//! the text a hidden block showed becomes the move its glyphs made; elsewhere, where fonts aren't
+//! read, a document whose hidden text sets where later text on the line goes is refused. Content
+//! in no layer is left as it is, and a layer `/OCGs` does not list is no layer (the reader
+//! ignores it): its blocks are unwrapped.
 //!
 //! Refusals leave the document as it was (the work runs on a copy that replaces it on success):
 //!
@@ -34,16 +38,19 @@
 //!   `/Properties` holds one, or it has no `/Resources` and may use its page's):
 //!   [`RedactError::LayerContentUnreadable`] (its object number). One that can name no layer is
 //!   left as it is, and still drawn;
-//! - a form or tiling pattern without `/Resources` reads its layer names in the resources of what
-//!   draws it (each resource dictionary whose `/XObject` or `/Pattern` names it). One drawn as an
-//!   annotation's appearance, where no such resources are given, or whose names mean a hidden
-//!   layer in one place and not in another, is refused with the same error.
+//! - a content stream without `/Resources` reads its layer names in the resources of what draws
+//!   it ([`Drawers`]): each resource dictionary whose `/XObject` or `/Pattern` names it, whose
+//!   `/ExtGState` holds it as a soft mask's group (`/SMask /G`), or, for a Type 3 glyph whose font
+//!   has no `/Resources`, whose `/Font` names that font. One drawn as an annotation's appearance,
+//!   where no such resources are given, or whose names mean a hidden layer in one place and not
+//!   in another, is refused with the same error.
 
 use std::collections::{HashMap, HashSet};
 
 use pdfcraft_content::{Op, Pieces, serialize_ops};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
+use crate::hidden_block::{Residue, is_show};
 use crate::sanitize::{LayerPass, ListedStates, catalog, content_pass_with, listed_states, sub, view_states};
 use crate::{RedactError, annots_of};
 
@@ -81,13 +88,20 @@ fn flatten(doc: &mut Document) -> Result<Flattened, RedactError> {
     let listed: HashSet<ObjRef> =
         oc.get(b"OCGs").and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default();
     let done = Flattened { visible: listed.difference(&hidden).count(), hidden: listed.intersection(&hidden).count() };
+    // Read before the page pass, which drops the resources a page's own content no longer names.
+    let drawers = Drawers::read(doc);
     if !hidden.is_empty() {
         // The forms it can't read stay drawn: `unwrap_forms` refuses those that could name a layer.
-        content_pass_with(doc, false, Some(LayerPass { off: hidden.iter().copied().collect(), keep_unreadable_forms: true }), true)?;
+        content_pass_with(
+            doc,
+            false,
+            Some(LayerPass { off: hidden.iter().copied().collect(), keep_unreadable_forms: true, keep_hidden_state: true }),
+            true,
+        )?;
     }
     clear_xobjects(doc, &hidden)?;
     unwrap_pages(doc, &hidden)?;
-    unwrap_forms(doc, &hidden, &listed)?;
+    unwrap_forms(doc, drawers, &hidden, &listed)?;
     clear_annotations(doc, &hidden)?;
     drop_layer_properties(doc, &listed)?;
     doc.update_dict(root, |d| {
@@ -115,12 +129,16 @@ fn hidden_at_open(doc: &Document) -> HashSet<ObjRef> {
 /// Is `o`, followed through references, a dictionary whose `/Type` is `name`?
 fn is_type(doc: &Document, o: &Object, name: &[u8]) -> bool {
     let o = crate::resolve_chain(doc, o);
-    let d = match &*o {
-        Object::Dict(d) => d,
-        Object::Stream(s) => &s.dict,
-        _ => return false,
-    };
-    d.get(b"Type").is_some_and(|t| crate::resolve_chain(doc, t).as_name() == Some(name))
+    match &*o {
+        Object::Dict(d) => has_name(doc, d, b"Type", name),
+        Object::Stream(s) => has_name(doc, &s.dict, b"Type", name),
+        _ => false,
+    }
+}
+
+/// Is `d`'s `key`, followed through references, the name `name`?
+fn has_name(doc: &Document, d: &Dict, key: &[u8], name: &[u8]) -> bool {
+    d.get(key).is_some_and(|t| crate::resolve_chain(doc, t).as_name() == Some(name))
 }
 
 /// Is `o` a layer: a dictionary of `/Type /OCG`, or one `/OCGs` lists?
@@ -172,22 +190,69 @@ fn block(doc: &Document, op: &Op, props: &Dict, hidden: &HashSet<ObjRef>) -> Res
     Ok(if layer_state(doc, &target, hidden)? { Block::Hidden } else { Block::Shown })
 }
 
-/// `ops` without their layers' marked blocks: shown ones unwrapped, hidden ones removed. `None`
-/// when they hold no layer's block.
-fn unwrap_ops(doc: &Document, ops: Vec<Op>, props: &Dict, hidden: &HashSet<ObjRef>) -> Result<Option<Vec<Op>>, RedactError> {
+/// What [`unwrap_ops`] made of a stream.
+enum Unwrapped {
+    /// It holds no layer's block.
+    Same,
+    New(Vec<Op>),
+    /// Text a hidden block showed sets where a string after it is shown, a move this pass can't
+    /// measure (it doesn't read fonts).
+    MovesText,
+}
+
+/// Whether a string a hidden block showed still sets where the next one goes: a string moves the
+/// text position, and only a new line or text object starts it afresh.
+#[derive(Default)]
+struct TextRun {
+    open: bool,
+    owed: bool,
+}
+
+impl TextRun {
+    /// Takes the next operator, in a hidden block or not; `false` for a shown string that would
+    /// land where a removed one left the text position.
+    fn step(&mut self, op: &Op, hidden: bool) -> bool {
+        match op.op.as_slice() {
+            b"BT" | b"ET" => {
+                self.open = op.is("BT");
+                self.owed = false;
+            }
+            b"Td" | b"TD" | b"Tm" | b"T*" => self.owed = false,
+            b"Tj" | b"TJ" if !hidden => return !self.owed,
+            b"'" | b"\"" if !hidden => self.owed = false,
+            o if hidden && is_show(o) => self.owed = self.open,
+            _ => {}
+        }
+        true
+    }
+}
+
+/// `ops` without their layers' marked blocks: shown ones unwrapped, hidden ones reduced to what
+/// outlives them ([`crate::hidden_block`]).
+fn unwrap_ops(doc: &Document, ops: Vec<Op>, props: &Dict, hidden: &HashSet<ObjRef>) -> Result<Unwrapped, RedactError> {
     let mut out = Vec::with_capacity(ops.len());
     // For each open block: is it a shown layer's, whose EMC goes with it?
     let mut open: Vec<bool> = Vec::new();
     // How deep inside a hidden layer's block the walk is.
     let mut dropping = 0usize;
+    let mut residue = Residue::default();
+    let mut text = TextRun::default();
     let mut changed = false;
     for op in ops {
+        if !text.step(&op, dropping > 0) {
+            return Ok(Unwrapped::MovesText);
+        }
         let begins = op.is("BDC") || op.is("BMC");
         if dropping > 0 {
             if begins {
                 dropping = dropping.saturating_add(1);
             } else if op.is("EMC") {
                 dropping -= 1;
+                if dropping == 0 {
+                    out.append(&mut std::mem::take(&mut residue).finish());
+                }
+            } else {
+                residue.push(op, false);
             }
             continue;
         }
@@ -210,7 +275,9 @@ fn unwrap_ops(doc: &Document, ops: Vec<Op>, props: &Dict, hidden: &HashSet<ObjRe
         }
         out.push(op);
     }
-    Ok(changed.then_some(out))
+    // A hidden block the stream doesn't close.
+    out.append(&mut residue.finish());
+    Ok(if changed { Unwrapped::New(out) } else { Unwrapped::Same })
 }
 
 /// A resource dictionary's `/Properties`.
@@ -228,7 +295,11 @@ fn unwrap_pages(doc: &mut Document, hidden: &HashSet<ObjRef>) -> Result<(), Reda
             return Err(RedactError::Unreadable(pi + 1));
         }
         let props = properties(doc, page.dict.get(b"Resources"));
-        let Some(ops) = unwrap_ops(doc, parsed.ops, &props, hidden)? else { continue };
+        let ops = match unwrap_ops(doc, parsed.ops, &props, hidden)? {
+            Unwrapped::Same => continue,
+            Unwrapped::New(ops) => ops,
+            Unwrapped::MovesText => return Err(RedactError::LayerContentUnreadable(page.obj.num)),
+        };
         let content = doc.add(Object::Stream(Stream::flate(Dict::new(), &serialize_ops(&ops))));
         doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Ref(content)))?;
     }
@@ -249,13 +320,12 @@ fn may_name_layers(doc: &Document, d: &Dict, listed: &HashSet<ObjRef>) -> bool {
     properties(doc, Some(res)).iter().any(|(_, v)| is_layer(doc, v, listed) || is_type(doc, v, b"OCMD"))
 }
 
-/// Every form and tiling pattern with its layers' blocks unwrapped or removed.
-fn unwrap_forms(doc: &mut Document, hidden: &HashSet<ObjRef>, listed: &HashSet<ObjRef>) -> Result<(), RedactError> {
-    let mut drawers = Drawers::read(doc);
+/// Every form, tiling pattern and Type 3 glyph with its layers' blocks unwrapped or removed.
+fn unwrap_forms(doc: &mut Document, mut drawers: Drawers, hidden: &HashSet<ObjRef>, listed: &HashSet<ObjRef>) -> Result<(), RedactError> {
     for n in doc.object_numbers() {
         let r = ObjRef::new(n, doc.generation(n));
         let Object::Stream(s) = &*doc.get(r) else { continue };
-        if !is_content_stream(doc, &s.dict) {
+        if !is_content_stream(doc, &s.dict) && !drawers.glyphs.contains(&r) {
             continue;
         }
         let parsed = DecodeBudget::page().decode_strict(doc, s).ok().map(|data| pdfcraft_content::parse(&data));
@@ -269,7 +339,11 @@ fn unwrap_forms(doc: &mut Document, hidden: &HashSet<ObjRef>, listed: &HashSet<O
             Some(res) => properties(doc, Some(res)),
             None => drawers.properties(doc, r, &parsed.ops, hidden)?,
         };
-        let Some(ops) = unwrap_ops(doc, parsed.ops, &props, hidden)? else { continue };
+        let ops = match unwrap_ops(doc, parsed.ops, &props, hidden)? {
+            Unwrapped::Same => continue,
+            Unwrapped::New(ops) => ops,
+            Unwrapped::MovesText => return Err(RedactError::LayerContentUnreadable(n)),
+        };
         let mut dict = s.dict.clone();
         dict.remove(b"Length");
         doc.set_existing(r, Object::Stream(Stream::flate(dict, &serialize_ops(&ops))))?;
@@ -280,20 +354,33 @@ fn unwrap_forms(doc: &mut Document, hidden: &HashSet<ObjRef>, listed: &HashSet<O
 /// Most layer names [`Drawers::properties`] looks up, over every form it reads, before it refuses.
 const MAX_NAME_LOOKUPS: usize = 1 << 20;
 
-/// What draws the forms and tiling patterns that have no `/Resources` of their own.
+/// What draws each content stream that has no `/Resources` of its own (module docs): one
+/// mechanism for every way a stream is drawn, so a name in it is read where it is drawn.
 struct Drawers {
-    /// The `/Properties` of each resource dictionary that names one, by the one it names.
+    /// The `/Properties` of each resource dictionary that draws one, by the one it draws.
     by: HashMap<ObjRef, Vec<Dict>>,
+    /// Type 3 glyph programs: content streams their dictionaries don't mark as such.
+    glyphs: HashSet<ObjRef>,
     /// Those drawn as an annotation's appearance.
     appearances: HashSet<ObjRef>,
     lookups: usize,
 }
 
+/// Is `r` a form or tiling pattern without `/Resources`?
+fn resourceless(doc: &Document, r: ObjRef) -> bool {
+    matches!(&*doc.get(r), Object::Stream(s) if !s.dict.contains(b"Resources") && is_content_stream(doc, &s.dict))
+}
+
+/// The group (`/G`) of the soft mask an ExtGState `gs` sets, if any.
+fn soft_mask_group(doc: &Document, gs: &Object) -> Option<ObjRef> {
+    let gs = doc.resolve(gs).as_dict()?.clone();
+    sub(doc, &gs, b"SMask")?.get(b"G")?.as_ref()
+}
+
 impl Drawers {
     fn read(doc: &Document) -> Self {
-        let resourceless = |r: ObjRef| matches!(&*doc.get(r), Object::Stream(s) if !s.dict.contains(b"Resources") && is_content_stream(doc, &s.dict));
-        let mut by: HashMap<ObjRef, Vec<Dict>> = HashMap::new();
-        let mut seen = HashSet::new();
+        let mut drawers = Drawers { by: HashMap::new(), glyphs: HashSet::new(), appearances: appearances(doc), lookups: 0 };
+        let (mut seen, mut fonts) = (HashSet::new(), HashSet::new());
         for n in doc.object_numbers() {
             let o = doc.get(ObjRef::new(n, doc.generation(n)));
             let held = match &*o {
@@ -304,16 +391,38 @@ impl Drawers {
             // A resource dictionary many owners share is read once.
             let Some(res) = held.filter(|r| r.as_ref().is_none_or(|r| seen.insert(r))) else { continue };
             let Some(res) = doc.resolve(res).as_dict().cloned() else { continue };
-            let props = sub(doc, &res, b"Properties").unwrap_or_default();
-            for key in [&b"XObject"[..], b"Pattern"] {
-                for (_, v) in sub(doc, &res, key).unwrap_or_default().iter() {
-                    if let Some(t) = v.as_ref().filter(|&t| resourceless(t)) {
-                        by.entry(t).or_default().push(props.clone());
-                    }
-                }
+            drawers.index(doc, &res, &mut fonts);
+        }
+        drawers
+    }
+
+    /// Records what `res` draws: the forms and tiling patterns its `/XObject` and `/Pattern` name,
+    /// the soft-mask groups its `/ExtGState` sets, and its Type 3 fonts' glyphs (each font with
+    /// `/Resources` of its own, in `fonts`, once).
+    fn index(&mut self, doc: &Document, res: &Dict, fonts: &mut HashSet<ObjRef>) {
+        let props = sub(doc, res, b"Properties").unwrap_or_default();
+        let entries = |key: &[u8]| sub(doc, res, key).unwrap_or_default();
+        let mut drawn: Vec<ObjRef> = Vec::new();
+        for key in [&b"XObject"[..], b"Pattern"] {
+            drawn.extend(entries(key).iter().filter_map(|(_, v)| v.as_ref()));
+        }
+        drawn.extend(entries(b"ExtGState").iter().filter_map(|(_, gs)| soft_mask_group(doc, gs)));
+        for t in drawn.into_iter().filter(|&t| resourceless(doc, t)) {
+            self.by.entry(t).or_default().push(props.clone());
+        }
+        for (_, f) in entries(b"Font").iter() {
+            let Some(font) = doc.resolve(f).as_dict().cloned().filter(|d| has_name(doc, d, b"Subtype", b"Type3")) else { continue };
+            // Its glyphs read names in its own `/Resources`, or else in what shows them.
+            let reads = match font.get(b"Resources") {
+                Some(_) if f.as_ref().is_some_and(|r| !fonts.insert(r)) => continue,
+                Some(own) => properties(doc, Some(own)),
+                None => props.clone(),
+            };
+            for g in sub(doc, &font, b"CharProcs").unwrap_or_default().iter().filter_map(|(_, g)| g.as_ref()) {
+                self.glyphs.insert(g);
+                self.by.entry(g).or_default().push(reads.clone());
             }
         }
-        Drawers { by, appearances: appearances(doc), lookups: 0 }
     }
 
     /// The `/Properties` the layer names in `ops`, the content of `r` (which has no `/Resources`),

@@ -27,6 +27,7 @@ pub mod codes;
 mod elsewhere;
 pub mod flatten_layers;
 mod globals;
+mod hidden_block;
 mod identification;
 mod image;
 mod interp;
@@ -150,10 +151,11 @@ pub enum RedactError {
         "the document combines layers through a membership dictionary (or a visibility expression), which flattening layers does not resolve; the layers were not flattened"
     )]
     LayerMembership,
-    /// Flatten Layers can't read a content stream whole, or can't tell which layers the names in
-    /// it mean (object number given), so a layer in it could be neither merged nor removed.
+    /// Flatten Layers can't read a content stream whole, can't tell which layers the names in it
+    /// mean, or can't tell where text after a hidden layer's text lands (object number given), so
+    /// a layer in it could be neither merged nor removed.
     #[error(
-        "object {0} holds content that can't be read whole, or whose layer names can't be told, so its layers can't be flattened safely; the layers were not flattened"
+        "object {0} holds content that can't be read whole, whose layer names can't be told, or whose hidden layer's text sets where later text goes, so its layers can't be flattened safely; the layers were not flattened"
     )]
     LayerContentUnreadable(u32),
     #[error(transparent)]

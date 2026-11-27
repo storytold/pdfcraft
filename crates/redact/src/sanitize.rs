@@ -646,17 +646,18 @@ fn config_without(doc: &mut Document, mut d: Dict, keep: &impl Fn(&Object) -> bo
     Ok(d)
 }
 
-/// The layers a content pass removes, and whether it keeps a form it can't read (see
-/// `Scope::keep_unreadable_forms`).
+/// The layers a content pass removes, whether it keeps a form it can't read, and whether a hidden
+/// block keeps what outlives it (see `Scope::keep_unreadable_forms`, `Scope::keep_hidden_state`).
 pub(crate) struct LayerPass {
     pub off: Vec<ObjRef>,
     pub keep_unreadable_forms: bool,
+    pub keep_hidden_state: bool,
 }
 
 /// Glyphs of hidden text, or content of hidden layers ([`hidden_layers`]), on every page
 /// (`write` = remove them).
 fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Result<(usize, std::collections::HashSet<ObjRef>), RedactError> {
-    let layers = layers.then(|| LayerPass { off: hidden_layers(doc), keep_unreadable_forms: false });
+    let layers = layers.then(|| LayerPass { off: hidden_layers(doc), keep_unreadable_forms: false, keep_hidden_state: false });
     content_pass_with(doc, text, layers, write)
 }
 
@@ -667,9 +668,9 @@ pub(crate) fn content_pass_with(
     layers: Option<LayerPass>,
     write: bool,
 ) -> Result<(usize, std::collections::HashSet<ObjRef>), RedactError> {
-    let (layers, off, keep_unreadable_forms) = match layers {
-        Some(LayerPass { off, keep_unreadable_forms }) => (true, off, keep_unreadable_forms),
-        None => (false, Vec::new(), false),
+    let (layers, off, keep_unreadable_forms, keep_hidden_state) = match layers {
+        Some(LayerPass { off, keep_unreadable_forms, keep_hidden_state }) => (true, off, keep_unreadable_forms, keep_hidden_state),
+        None => (false, Vec::new(), false, false),
     };
     if !text && !layers {
         return Ok((0, std::collections::HashSet::new()));
@@ -709,6 +710,7 @@ pub(crate) fn content_pass_with(
         scope.hidden_layers = off.iter().copied().collect();
         scope.layers_enabled = layers;
         scope.keep_unreadable_forms = keep_unreadable_forms;
+        scope.keep_hidden_state = keep_hidden_state;
         let out = process(doc, &mut scope, &data, &resources, Matrix::IDENTITY);
         if let Some(error) = out.error {
             return Err(error.on_page(pi + 1));

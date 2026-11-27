@@ -441,3 +441,112 @@ fn a_form_without_resources_whose_layers_cant_be_told_refuses() {
     let doc = drawn_by_an_appearance("<< /L2 6 0 R >>", inner, vec![other]);
     refused_unchanged(doc, |e| matches!(e, RedactError::LayerContentUnreadable(9)));
 }
+
+/// The content of stream `n`, decoded.
+fn stream_text(doc: &Document, n: u32) -> String {
+    let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is not a stream") };
+    String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+}
+
+#[test]
+fn a_hidden_block_keeps_the_state_it_sets() {
+    // On the page: the colour and the matrix set inside the hidden block still apply after it.
+    let contents = stream("", b"0 g /OC /L2 BDC 0 0 1 rg 2 0 0 2 0 0 cm 1 1 m 9 9 l S EMC 5 5 m 6 6 l S");
+    let mut doc = Layered { contents, ..Default::default() }.build();
+    flatten_layers(&mut doc).unwrap();
+    let ops = page_ops(&doc);
+    assert!(ops.iter().any(|o| o == "0 0 1 rg") && ops.iter().any(|o| o == "2 0 0 2 0 0 cm"), "the state stays: {ops:?}");
+    assert!(!ops.iter().any(|o| o == "9 9 l"), "the hidden drawing goes: {ops:?}");
+    // In a tiling pattern, which the page pass doesn't reach: the cell is filled red, not black.
+    let mut doc = layered(
+        "/Pattern << /P0 7 0 R >>",
+        vec![stream(
+            "/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << /Properties << /L2 6 0 R >> >>",
+            b"0 g /OC /L2 BDC 1 0 0 rg 0 0 1 1 re f EMC 0 0 10 10 re f",
+        )],
+    );
+    flatten_layers(&mut doc).unwrap();
+    let cell = stream_text(&doc, 7);
+    assert!(cell.contains("1 0 0 rg") && !cell.contains("0 0 1 1 re"), "{cell}");
+}
+
+/// A resource a hidden block's kept state names stays listed: the page pass that drops the
+/// resources a page no longer names sees the name in what the block left.
+#[test]
+fn a_hidden_blocks_kept_state_keeps_its_resource() {
+    let contents = stream("", b"/OC /L2 BDC /GS1 gs 1 1 m 9 9 l S EMC 5 5 m 6 6 l S");
+    let mut doc =
+        Layered { contents, extra_res: "/ExtGState << /GS1 7 0 R >>", extra: vec![b"<< /Type /ExtGState /CA 0.5 >>".to_vec()], ..Default::default() }
+            .build();
+    flatten_layers(&mut doc).unwrap();
+    let (_, doc) = saved(&doc);
+    assert!(page_ops(&doc).iter().any(|o| o == "/GS1 gs"), "{:?}", page_ops(&doc));
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    let res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
+    let gs = sub(&doc, &res, b"ExtGState").and_then(|g| g.get(b"GS1").map(|o| doc.resolve(o).as_dict().cloned()));
+    assert!(gs.flatten().is_some_and(|d| d.get(b"CA").is_some()), "{res:?}");
+}
+
+#[test]
+fn hidden_text_leaves_the_text_after_it_where_it_was() {
+    let font = "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >>";
+    let contents = stream("", b"BT /F1 10 Tf 0 0 Td /OC /L2 BDC (HIDDENWORD) Tj EMC (Shown) Tj ET");
+    let mut doc = Layered { contents, extra_res: font, ..Default::default() }.build();
+    flatten_layers(&mut doc).unwrap();
+    let ops = page_ops(&doc);
+    assert!(!ops.iter().any(|o| o.contains("HIDDENWORD")), "{ops:?}");
+    let shown = ops.iter().position(|o| o.contains("Shown")).unwrap();
+    // A `TJ` number moves the text right when negative: "Shown" still starts past the hidden word.
+    let moves: f64 = ops[..shown].iter().filter_map(|o| o.strip_prefix('[')?.strip_suffix("] TJ")?.trim().parse::<f64>().ok()).sum();
+    assert!(moves < 0.0, "{ops:?}");
+    // In a pattern, where fonts aren't read, the move can't be measured: refused.
+    let doc = layered(
+        "/Pattern << /P0 7 0 R >>",
+        vec![stream(
+            &format!(
+                "/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << /Properties << /L2 6 0 R >> {font} >>"
+            ),
+            b"BT /F1 10 Tf /OC /L2 BDC (HIDDENWORD) Tj EMC (Shown) Tj ET",
+        )],
+    );
+    refused_unchanged(doc, |e| matches!(e, RedactError::LayerContentUnreadable(7)));
+}
+
+#[test]
+fn a_soft_mask_group_without_resources_reads_its_layers_where_it_is_set() {
+    let mut doc = Layered {
+        contents: stream("", b"/GS1 gs 0 0 10 10 re f /OC /L2 BDC 1 1 m 9 9 l S EMC"),
+        extra_res: "/ExtGState << /GS1 << /SMask << /S /Luminosity /G 7 0 R >> >> >>",
+        extra: vec![stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Group << /S /Transparency /CS /DeviceGray >>",
+            b"/OC /L2 BDC 2 2 m 8 8 l S EMC /OC /L1 BDC 3 3 m 7 7 l S EMC",
+        )],
+        ..Default::default()
+    }
+    .build();
+    flatten_layers(&mut doc).unwrap();
+    let group = stream_text(&doc, 7);
+    assert!(!group.contains("8 8 l"), "the hidden layer's drawing leaves the mask: {group}");
+    assert!(group.contains("7 7 l") && !group.contains("BDC"), "the visible one stays, unwrapped: {group}");
+}
+
+#[test]
+fn a_type3_glyph_leaves_its_layers() {
+    let mut doc = Layered {
+        contents: stream("", b"BT /T3 1 Tf (a) Tj ET /OC /L2 BDC 1 1 m 9 9 l S EMC"),
+        extra_res: "/Font << /T3 7 0 R >>",
+        extra: vec![
+            b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 8 0 R >> \
+              /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] \
+              /Resources << /Properties << /L1 5 0 R /L2 6 0 R >> >> >>"
+                .to_vec(),
+            stream("", b"10 0 d0 /OC /L2 BDC 0 0 5 5 re f EMC /OC /L1 BDC 1 1 2 2 re f EMC"),
+        ],
+        ..Default::default()
+    }
+    .build();
+    flatten_layers(&mut doc).unwrap();
+    let glyph = stream_text(&doc, 8);
+    assert!(!glyph.contains("0 0 5 5 re"), "the hidden layer's drawing leaves the glyph: {glyph}");
+    assert!(glyph.contains("1 1 2 2 re") && !glyph.contains("BDC"), "the visible one stays, unwrapped: {glyph}");
+}

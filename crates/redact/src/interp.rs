@@ -178,6 +178,10 @@ pub(crate) struct Scope<'a> {
     /// left drawn rather than removed. Flatten Layers sets it: it reads every form again on its
     /// own and refuses one that could name a layer, so the forms that stay hold none.
     pub keep_unreadable_forms: bool,
+    /// A hidden layer's block keeps what outlives it ([`crate::hidden_block`]) rather than going
+    /// whole. Flatten Layers sets it: it keeps what the document shows; Remove Hidden Information
+    /// removes.
+    pub keep_hidden_state: bool,
     /// Off groups referenced by optional content that remains visible and therefore still needs
     /// its original default state after sanitization.
     pub retained_off_layers: HashSet<ObjRef>,
@@ -229,6 +233,7 @@ impl<'a> Scope<'a> {
             hidden_layers: HashSet::new(),
             layers_enabled: false,
             keep_unreadable_forms: false,
+            keep_hidden_state: false,
             retained_off_layers: HashSet::new(),
             ocmd_cache: HashMap::new(),
             xobject_oc_cache: HashMap::new(),
@@ -442,10 +447,11 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
     let mut forced_change = false;
     if scope.layers_enabled {
         let props = res_dict(doc, resources, b"Properties");
-        let (kept, removed) = strip_hidden_layers(doc, scope, parsed.ops, &props);
-        parsed.ops = kept;
-        if removed > 0 {
-            scope.layer_blocks += removed;
+        let stripped = strip_hidden_layers(doc, scope, parsed.ops, &props);
+        parsed.ops = stripped.ops;
+        walk.hidden_shows = stripped.shows;
+        if stripped.removed > 0 {
+            scope.layer_blocks += stripped.removed;
             forced_change = true;
         }
     }
@@ -533,6 +539,8 @@ struct Walk {
     /// Painting operators written again under a clip that cuts the regions out: unchanged as
     /// operators, but what they paint is no longer all there.
     clipped: HashSet<usize>,
+    /// Text-showing operators of hidden layers, by where they start ([`strip_hidden_layers`]).
+    hidden_shows: HashSet<usize>,
     out: Output,
 }
 
@@ -553,6 +561,7 @@ impl Walk {
             clip: false,
             pending: Vec::new(),
             clipped: HashSet::new(),
+            hidden_shows: HashSet::new(),
             out: Output::default(),
         }
     }
@@ -588,6 +597,10 @@ impl Walk {
             b"BT" | b"Tc" | b"Tw" | b"Tz" | b"TL" | b"Ts" | b"Tr" | b"Td" | b"TD" | b"Tm" | b"T*" => {
                 self.text_state(&op);
                 Some(op)
+            }
+            b"Tj" | b"TJ" | b"'" | b"\"" if self.hidden_shows.contains(&op.span.start) => {
+                self.hidden_show(&op, piece);
+                None
             }
             b"Tj" | b"TJ" | b"'" | b"\"" => self.show_text(scope, op, piece),
             b"BI" => Self::inline_image(&self.gs, scope, &mut self.out, op, piece),
@@ -825,24 +838,8 @@ impl Walk {
             self.out.patterns_painted.extend(self.patterns.iter().cloned());
             self.out.keeps_all_patterns = true;
         }
-        let o = op.op.as_slice();
-        if o == b"\"" {
-            // `aw ac string "`: the two numbers before the string, whatever surplus precedes them.
-            let at = |back: usize| op.operands.len().checked_sub(back).and_then(|i| op.num(i));
-            self.gs.word_spacing = at(3).unwrap_or(self.gs.word_spacing);
-            self.gs.char_spacing = at(2).unwrap_or(self.gs.char_spacing);
-        }
-        if matches!(o, b"'" | b"\"") {
-            self.tlm = Matrix::translate(0.0, -self.gs.leading).then(&self.tlm);
-            self.tm = self.tlm;
-        }
-        let items: Vec<Object> = match o {
-            // A surplus array (`[(A)] [(B)] TJ`) is malformed, but the operator still
-            // takes the one immediately before it, as the renderer and every other
-            // reader here do (#3569), so a redaction search matches what is drawn.
-            b"TJ" => op.operands.last().and_then(Object::as_array).cloned().unwrap_or_default(),
-            _ => op.operands.last().cloned().into_iter().collect(),
-        };
+        self.line_move(&op);
+        let items = shown_items(&op);
         // Vertical-writing text is laid out horizontally by `show`, so its glyphs are
         // never matched against a region. Rather than ship a document whose vertical
         // text was silently left under a mark, record it so apply can fail closed.
@@ -873,17 +870,65 @@ impl Walk {
         }
         piece.changed = true;
         scope.report.glyphs += removed;
-        match op.op.as_slice() {
-            b"\"" => {
-                piece.ops.push(Op::new("Tw", vec![num(self.gs.word_spacing)]));
-                piece.ops.push(Op::new("Tc", vec![num(self.gs.char_spacing)]));
-                piece.ops.push(Op::new("T*", vec![]));
-            }
-            b"'" => piece.ops.push(Op::new("T*", vec![])),
-            _ => {}
-        }
+        self.line_ops(&op, piece);
         piece.ops.push(Op::new("TJ", vec![Object::Array(new_items)]));
         None
+    }
+
+    /// What `'` and `"` do before they show: `"` sets word and character spacing, and both move
+    /// to the next line.
+    fn line_move(&mut self, op: &Op) {
+        if op.is("\"") {
+            // `aw ac string "`: the two numbers before the string, whatever surplus precedes them.
+            let at = |back: usize| op.operands.len().checked_sub(back).and_then(|i| op.num(i));
+            self.gs.word_spacing = at(3).unwrap_or(self.gs.word_spacing);
+            self.gs.char_spacing = at(2).unwrap_or(self.gs.char_spacing);
+        }
+        if op.is("'") || op.is("\"") {
+            self.tlm = Matrix::translate(0.0, -self.gs.leading).then(&self.tlm);
+            self.tm = self.tlm;
+        }
+    }
+
+    /// [`Walk::line_move`] written out, for a showing operator replaced by a `TJ`.
+    fn line_ops(&self, op: &Op, piece: &mut Piece) {
+        if op.is("\"") {
+            piece.ops.push(Op::new("Tw", vec![num(self.gs.word_spacing)]));
+            piece.ops.push(Op::new("Tc", vec![num(self.gs.char_spacing)]));
+        }
+        if op.is("'") || op.is("\"") {
+            piece.ops.push(Op::new("T*", vec![]));
+        }
+    }
+
+    /// A text-showing operator of a hidden layer: its glyphs aren't drawn, but the text position
+    /// moves as they would have moved it (ISO 32000-1 §8.11.3.1), written as a `TJ` of a number
+    /// alone. At font size 0 a `TJ` number moves nothing, so the spacing such glyphs add is lost;
+    /// vertical writing is laid out horizontally, as [`show`] lays it out.
+    fn hidden_show(&mut self, op: &Op, piece: &mut Piece) {
+        piece.changed = true;
+        self.line_move(op);
+        self.line_ops(op, piece);
+        let (gs, f) = (&self.gs, &self.gs.font);
+        // In thousandths of a text space unit, as a `TJ` number moves: -n/1000 × size.
+        let mut moved = 0.0;
+        for item in shown_items(op) {
+            match item {
+                Object::String(s) => {
+                    for (code, len) in f.codes(&s.bytes) {
+                        let spacing = gs.char_spacing + if f.is_space(code, len) { gs.word_spacing } else { 0.0 };
+                        if gs.size != 0.0 {
+                            moved -= (f.width(code) * gs.size + spacing) * 1000.0 / gs.size;
+                        }
+                    }
+                }
+                other => moved += other.as_f64().unwrap_or(0.0),
+            }
+        }
+        if moved != 0.0 && moved.is_finite() {
+            self.tm = Matrix::translate(-moved / 1000.0 * gs.size * gs.scale, 0.0).then(&self.tm);
+            piece.ops.push(Op::new("TJ", vec![Object::Array(vec![num(moved)])]));
+        }
     }
 
     /// An inline image under a region is removed (or counted, when verifying).
@@ -924,6 +969,17 @@ impl Walk {
         piece.ops.extend(new);
         None
     }
+}
+
+/// What a text-showing operator shows: its string, or a `TJ`'s array. A surplus array
+/// (`[(A)] [(B)] TJ`) is malformed, but the operator still takes the one immediately before it,
+/// as the renderer and every other reader here do (#3569), so a redaction search matches what is
+/// drawn.
+fn shown_items(op: &Op) -> Vec<Object> {
+    if op.is("TJ") {
+        return op.operands.last().and_then(Object::as_array).cloned().unwrap_or_default();
+    }
+    op.operands.last().cloned().into_iter().collect()
 }
 
 /// Strip `/ActualText` (and `/Alt`, `/E`, `/T`) from the marked content around anything redaction
