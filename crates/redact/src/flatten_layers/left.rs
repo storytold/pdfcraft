@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
-use super::{appearances, has_name, is_content_stream, opens_layer_block};
+use super::{appearances, has_name, is_content_stream, opens_layer_block, own_resources};
 use crate::RedactError;
 use crate::sanitize::sub;
 
@@ -126,7 +126,7 @@ impl Roles {
         let content = is_content_stream(doc, d);
         if self.drawn.contains(&r) {
             Role::Read
-        } else if content && d.contains(b"Resources") {
+        } else if content && own_resources(doc, d).is_some() {
             Role::Judged
         } else if content {
             Role::Read

@@ -189,6 +189,9 @@ enum Block {
     Hidden,
     /// Any other marked content, kept.
     Other,
+    /// A shown layer's block whose property list also holds text for readers (ISO 32000-1
+    /// §14.9): it stays a block, tagged `Span`, with only those entries.
+    Span(Dict),
 }
 
 fn block(doc: &Document, op: &Op, props: &Dict, hidden: &HashSet<ObjRef>) -> Result<Block, RedactError> {
@@ -202,7 +205,22 @@ fn block(doc: &Document, op: &Op, props: &Dict, hidden: &HashSet<ObjRef>) -> Res
     };
     // A name no `/Properties` holds names no layer a reader can find: it shows its content.
     let Some(target) = target else { return Ok(Block::Shown) };
-    Ok(if layer_state(doc, &target, hidden)? { Block::Hidden } else { Block::Shown })
+    if layer_state(doc, &target, hidden)? {
+        return Ok(Block::Hidden);
+    }
+    Ok(reader_text(doc, &target).map_or(Block::Shown, Block::Span))
+}
+
+/// The `/ActualText`, `/Alt`, `/E` and `/Lang` strings of the property list `o`, if it has any.
+fn reader_text(doc: &Document, o: &Object) -> Option<Dict> {
+    let d = doc.resolve(o).as_dict().cloned()?;
+    let mut kept = Dict::new();
+    for k in [b"ActualText".as_slice(), b"Alt", b"E", b"Lang"] {
+        if let Some(v) = d.get(k).map(|v| doc.resolve(v)).filter(|v| matches!(&**v, Object::String(_))) {
+            kept.set(k.to_vec(), (*v).clone());
+        }
+    }
+    (!kept.is_empty()).then_some(kept)
 }
 
 /// What [`unwrap_ops`] made of a stream.
@@ -300,6 +318,12 @@ fn unwrap_ops(doc: &Document, ops: Vec<Op>, props: &Dict, hidden: &HashSet<ObjRe
                     changed = true;
                     continue;
                 }
+                Block::Span(d) => {
+                    out.push(Op::new("BDC", vec![Object::Name(b"Span".to_vec()), Object::Dict(d)]));
+                    open.push(false);
+                    changed = true;
+                    continue;
+                }
                 Block::Other => open.push(false),
             }
         } else if op.is("EMC") && open.pop() == Some(true) {
@@ -348,7 +372,7 @@ fn is_content_stream(doc: &Document, d: &Dict) -> bool {
 /// Can this form's content name a layer? Only through its `/Properties`; a form without
 /// `/Resources` may use its page's, so it can.
 fn may_name_layers(doc: &Document, d: &Dict, listed: &HashSet<ObjRef>) -> bool {
-    let Some(res) = d.get(b"Resources") else { return true };
+    let Some(res) = own_resources(doc, d) else { return true };
     properties(doc, Some(res)).iter().any(|(_, v)| is_layer(doc, v, listed) || is_type(doc, v, b"OCMD"))
 }
 
@@ -367,7 +391,7 @@ fn unwrap_forms(doc: &mut Document, mut drawers: Drawers, hidden: &HashSet<ObjRe
             }
             continue;
         };
-        let props = match s.dict.get(b"Resources") {
+        let props = match own_resources(doc, &s.dict) {
             Some(res) => properties(doc, Some(res)),
             None => drawers.properties(doc, r, &parsed.ops, hidden)?,
         };
@@ -413,9 +437,14 @@ struct Caller {
     own: bool,
 }
 
+/// `d`'s `/Resources`, unless it is absent or null, which is the same (ISO 32000-1 §7.3.9).
+pub(super) fn own_resources<'a>(doc: &Document, d: &'a Dict) -> Option<&'a Object> {
+    d.get(b"Resources").filter(|r| !matches!(&*doc.resolve(r), Object::Null))
+}
+
 /// Is `r` a form or tiling pattern without `/Resources`?
 fn resourceless(doc: &Document, r: ObjRef) -> bool {
-    matches!(&*doc.get(r), Object::Stream(s) if !s.dict.contains(b"Resources") && is_content_stream(doc, &s.dict))
+    matches!(&*doc.get(r), Object::Stream(s) if own_resources(doc, &s.dict).is_none() && is_content_stream(doc, &s.dict))
 }
 
 /// The group (`/G`) of the soft mask an ExtGState `gs` sets, if any.
@@ -496,7 +525,7 @@ impl Drawers {
     fn index_font(&mut self, doc: &Document, f: &Object, props: &Dict, fonts: &mut HashSet<ObjRef>) {
         let Some(font) = doc.resolve(f).as_dict().cloned().filter(|d| has_name(doc, d, b"Subtype", b"Type3")) else { return };
         // Its glyphs read names in its own `/Resources`, or else in what shows them.
-        let (reads, own) = match font.get(b"Resources") {
+        let (reads, own) = match own_resources(doc, &font) {
             Some(_) if f.as_ref().is_some_and(|r| !fonts.insert(r)) => return,
             Some(own) => (properties(doc, Some(own)), true),
             None => (props.clone(), false),

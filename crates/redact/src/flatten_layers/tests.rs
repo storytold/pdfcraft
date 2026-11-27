@@ -555,6 +555,47 @@ fn a_type3_glyph_leaves_its_layers() {
     assert!(glyph.contains("1 1 2 2 re") && !glyph.contains("BDC"), "the visible one stays, unwrapped: {glyph}");
 }
 
+/// A Type 3 font whose `/Resources` is a reference to null has none (ISO 32000-1 §7.3.9): its
+/// glyph reads its layer names where it is shown, so the page's hidden layer leaves it.
+#[test]
+fn a_glyph_whose_font_resources_are_null_reads_its_layers_where_it_is_shown() {
+    let mut extra = type3_without_resources(b"10 0 d0 /OC /L2 BDC 0 0 5 5 re f EMC /OC /L1 BDC 1 1 2 2 re f EMC");
+    let font = &mut extra[0];
+    font.truncate(font.len() - 2);
+    font.extend_from_slice(b"/Resources 9 0 R >>");
+    extra.push(b"null".to_vec());
+    let mut doc = Layered {
+        contents: stream("", b"BT /T3 1 Tf (a) Tj ET /OC /L2 BDC 1 1 m 9 9 l S EMC"),
+        extra_res: "/Font << /T3 7 0 R >>",
+        extra,
+        ..Default::default()
+    }
+    .build();
+    flatten_layers(&mut doc).unwrap();
+    let glyph = stream_text(&doc, 8);
+    assert!(!glyph.contains("0 0 5 5 re"), "the hidden layer's drawing leaves the glyph: {glyph}");
+    assert!(glyph.contains("1 1 2 2 re") && !glyph.contains("BDC"), "the visible one stays, unwrapped: {glyph}");
+}
+
+/// An `/OC` block whose property list is no layer but holds replacement text keeps that text
+/// on what it covers, as a `Span` block (ISO 32000-1 §14.9.4).
+#[test]
+fn a_shown_block_keeps_the_replacement_text_its_property_list_holds() {
+    let mut doc = Layered {
+        props: "<< /L1 5 0 R /L2 6 0 R /P 7 0 R >>",
+        contents: stream("", b"/OC /P BDC 0 0 m 1 1 l S EMC /OC /L1 BDC 2 2 m 3 3 l S EMC /OC /L2 BDC 1 1 m 9 9 l S EMC"),
+        extra: vec![b"<< /ActualText (Hi) /Name (P) >>".to_vec()],
+        ..Default::default()
+    }
+    .build();
+    flatten_layers(&mut doc).unwrap();
+    let ops = page_ops(&doc);
+    let span = ops.iter().position(|o| o.contains("/Span") && o.contains("ActualText") && o.ends_with("BDC"));
+    assert!(span.is_some() && !ops.iter().any(|o| o.contains("/OC")), "{ops:?}");
+    assert_eq!(ops.iter().filter(|o| *o == "EMC").count(), 1, "only the span keeps its end: {ops:?}");
+    assert!(ops.iter().any(|o| o.contains("3 3 l")) && !ops.iter().any(|o| o.contains("9 9 l")), "{ops:?}");
+}
+
 /// In a text object `Q` restores the text matrices `q` saved: a `Td` between them is undone, so
 /// the string after `Q` still lands where the hidden one left the position.
 #[test]
@@ -629,7 +670,9 @@ fn hidden_text_in_a_vertical_font_refuses() {
         );
         Layered { contents, extra_res: "/Font << /F0 7 0 R >>", extra: vec![font.into_bytes()], ..Default::default() }.build()
     };
-    refused_unchanged(page("Identity-V"), |e| matches!(e, RedactError::PageRefused { page: 1, .. }));
+    for vertical in ["Identity-V", "V"] {
+        refused_unchanged(page(vertical), |e| matches!(e, RedactError::PageRefused { page: 1, .. }));
+    }
     let mut doc = page("Identity-H");
     flatten_layers(&mut doc).unwrap();
     let ops = page_ops(&doc);

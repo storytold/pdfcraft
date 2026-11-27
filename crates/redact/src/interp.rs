@@ -349,7 +349,7 @@ fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
 }
 
 /// Does this font write vertically? Only a Type0 (composite) font can: its `/Encoding` is a
-/// predefined CMap name ending in `-V` (Identity-V and the like), or an embedded CMap stream
+/// predefined vertical CMap name (`V`, or one ending in `-V` such as Identity-V), or an embedded CMap stream
 /// whose `/WMode` is 1 (ISO 32000-2 §9.7.5).
 fn is_vertical(doc: &Document, font: &Dict) -> bool {
     // `/Subtype` may be written by reference (#6750).
@@ -358,7 +358,8 @@ fn is_vertical(doc: &Document, font: &Dict) -> bool {
         return false;
     }
     match font.get(b"Encoding").map(|e| doc.resolve(e)).as_deref() {
-        Some(Object::Name(n)) => n.ends_with(b"-V"),
+        // `/V` is a predefined CMap as well (ISO 32000-1 §9.7.5.2).
+        Some(Object::Name(n)) => n == b"V" || n.ends_with(b"-V"),
         Some(Object::Stream(s)) => s.dict.int(b"WMode") == Some(1),
         _ => false,
     }
