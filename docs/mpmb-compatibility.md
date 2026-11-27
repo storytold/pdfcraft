@@ -95,3 +95,21 @@ not implemented; the observed sheet calls use `bOverlay=false`. Editing branched
 template name trees is refused to preserve their child metadata. The web runtime
 does not provide the native asynchronous dialog/file-selection host. Arbitrary
 third-party add-ons may require additional APIs or exceed the documented bounds.
+
+## Importing from another sheet
+
+The built-in import and upgrade workflow remains unsupported. The import dialog
+uses a form field's `browseForFileToSubmit` to select a source PDF. It passes the
+selection to `app.openDoc` and expects a document object during the same script
+invocation. PDFCraft's current `openDoc` returns `null` and queues a viewer
+request for a separate, user-approved open. The text-stream picker supplies
+UTF-8 text and cannot provide the document object the import expects.
+
+The import checks the source's sheet type, version and build metadata. It then
+reads source fields and template state and invokes source-side functions over
+the source's character data. Some source field values and display flags change
+temporarily during the workflow. The destination receives form and template
+edits through its own document object. A read-only field snapshot would support
+the version check but cannot run the character transfer. Optional custom images
+also need cross-document icon transfer. An existing button icon handle identifies
+an object in its own document.
