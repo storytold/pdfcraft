@@ -5249,7 +5249,7 @@ notes = "right-click a field ▸ Duplicate: all pages or a range; one field, sha
 
 [[feature]]
 id = "form.multiple-copies"
-title = "Create multiple copies of a field in a grid"
+title = "Copy a field into a grid"
 area = "F"
 tier = "P2"
 milestone = "M6"
@@ -5266,7 +5266,7 @@ evidence = [
   "crates/automation/tests/it/automation.rs::copying_a_field_into_a_grid_through_tools",
   "crates/ui-egui/tests/it/prepare.rs::copying_a_field_into_a_grid_from_its_context_menu",
 ]
-notes = "Prepare a form ▸ Text field table: drag an area, then set rows, columns, spacing, column widths (draggable dividers) and a name pattern per column in a movable window, with the table previewed on the page. Added as one undoable edit, or refused whole with the reason (a cell under 4 pt, a name with a period, a repeated or existing name). Copy into Grid in a text field or check box's menu uses the same window to repeat that field in rows and columns beside it: each copy is an independently named field with the source's flags, look, actions and initial value and appearance streams of its own, previewed on the page and added as one undoable edit; form_add_field_table does the same with source_field. Missing: copying radio groups, choice fields, buttons, signatures and check boxes with per-widget export values (refused with the reason)."
+notes = "Prepare a form ▸ Text field table: drag an area, then set rows, columns, spacing, column widths (draggable dividers) and a name pattern per column in a movable window, with the table previewed on the page. Added as one undoable edit, or refused whole with the reason (a cell under 4 pt, a name with a period, a repeated or existing name). Copy into Grid in a text field or check box's menu uses the same window to repeat that field in rows and columns beside it: each copy is an independently named field with the source's flags, look and value and appearance streams of its own, previewed on the page and added as one undoable edit; form_add_field_table does the same with source_field. Missing: copying radio groups, choice fields, buttons, signatures and check boxes with per-widget export values (refused with the reason)."
 
 [[feature]]
 id = "form.rename-lock-fields"

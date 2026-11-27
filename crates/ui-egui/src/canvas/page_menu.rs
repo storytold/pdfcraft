@@ -267,10 +267,19 @@ fn field_rows(
     if MenuItem::new(tl!("Properties…").to_string()).show(ui).ran {
         pick.field = Some(FieldMenu::Properties);
     }
-    // One field at a time, of a kind a grid can copy.
-    let copyable = view.session.prepare.also.is_empty()
-        && form.iter().find(|f| f.name == name).is_some_and(|f| pdfcraft_engine::field_table::copyable(f, widget));
-    if MenuItem::new(tl!("Copy into Grid…").to_string()).enabled(can_modify && copyable).show(ui).ran {
+    // One field at a time, of a kind a grid can copy; a disabled row says which it is not.
+    let why_not = if !view.session.prepare.also.is_empty() {
+        Some(tl!("Select one field to copy it into a grid"))
+    } else if !form.iter().find(|f| f.name == name).is_some_and(|f| pdfcraft_engine::field_table::copyable(f, widget)) {
+        Some(tl!("Only text fields and check boxes with one export value can be copied into a grid"))
+    } else {
+        None
+    };
+    let mut copies = MenuItem::new(tl!("Copy into Grid…").to_string()).enabled(can_modify && why_not.is_none());
+    if let Some(why) = why_not {
+        copies = copies.tooltip(craft::ui::contract::TooltipSpec::new(why).disabled_text(why));
+    }
+    if copies.show(ui).ran {
         pick.field = Some(FieldMenu::Copies(name.clone(), widget));
     }
     if MenuItem::new(tl!("Duplicate…").to_string()).enabled(can_modify).show(ui).ran {

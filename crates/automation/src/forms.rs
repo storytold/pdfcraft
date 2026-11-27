@@ -551,12 +551,10 @@ impl Automation {
                 let widget = a.opt_int("source_widget")?.unwrap_or(1);
                 let widget = usize::try_from(widget).ok().and_then(|n| n.checked_sub(1)).ok_or_else(|| bad("source_widget must be at least 1"))?;
                 let field = doc.form.iter().find(|f| f.name == source).ok_or_else(|| bad(format!("field {source:?} does not exist")))?;
-                if !matches!(field.kind, pdfcraft_engine::FormFieldKind::Text | pdfcraft_engine::FormFieldKind::CheckBox) {
-                    return Err(bad("only text fields and check boxes can be copied into a grid"));
-                }
                 if field.widgets.get(widget).is_none() {
                     return Err(bad("source_widget does not exist"));
                 }
+                // `copy_edit` refuses, with the reason, a field `field_table::copyable` says no to.
                 field_table::copy_edit(&table, page, info, &doc.form, source, widget).map_err(|e| bad(e.to_string()))?
             } else {
                 if a.get("source_widget").is_some() {

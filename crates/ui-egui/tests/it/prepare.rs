@@ -1090,7 +1090,7 @@ fn copying_a_field_into_a_grid_from_its_context_menu() {
         let f = doc.form.iter().find(|f| &f.name == name).unwrap();
         assert_eq!((f.flags, doc.field_look(name).unwrap()), styled, "{name} keeps the day's multi-line flag, background and border");
     }
-    assert_eq!(doc.can_undo(), Some("Create multiple field copies"));
+    assert_eq!(doc.can_undo(), Some("Copy field into grid"));
     h.execute("edit.undo");
     h.run_steps(2);
     assert_eq!(names(&h), before, "one undo takes every copy back");

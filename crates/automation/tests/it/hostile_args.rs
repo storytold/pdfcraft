@@ -562,3 +562,29 @@ fn no_tool_panics_when_the_viewer_sees_fewer_pages_than_the_file_has() {
     let _ = std::fs::remove_dir_all(&root);
     assert!(failures.is_empty(), "{} failure(s); the first is: {}", failures.len(), failures.first().map_or("", String::as_str));
 }
+
+/// `source_widget` is 1-based and counted against the source's widgets: no value of it but the
+/// source's one widget (or null, which is the default), nor the key without `source_field`,
+/// panics or adds a field.
+#[test]
+fn hostile_source_widgets_are_refused_without_a_panic() {
+    let mut a = Automation::new().with_root(tmp("grid-source-widget")).expect("root");
+    let doc = blank_doc(&mut a);
+    a.call("form_add_field", &json!({"doc": doc, "page": 1, "type": "text", "name": "source", "rect": [20, 20, 180, 50]})).expect("add the source");
+    let mut failures = Vec::new();
+    for value in zoo().into_iter().chain([json!(2), json!(usize::MAX)]).filter(|v| *v != json!(1) && !v.is_null()) {
+        let rect = json!([20, 100, 180, 180]);
+        for args in [
+            json!({"doc": doc, "page": 1, "rect": rect, "rows": 2, "source_field": "source", "source_widget": value}),
+            json!({"doc": doc, "page": 1, "rect": rect, "rows": 2, "source_widget": value}),
+        ] {
+            match catch_unwind(AssertUnwindSafe(|| a.call("form_add_field_table", &args))) {
+                Ok(Err(ToolError::InvalidArgs(_) | ToolError::Failed(_))) => {}
+                Ok(Ok(_)) => failures.push(format!("{args} was accepted")),
+                Ok(Err(e)) => failures.push(format!("{args}: {e:?}")),
+                Err(_) => failures.push(format!("{args} panicked")),
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}

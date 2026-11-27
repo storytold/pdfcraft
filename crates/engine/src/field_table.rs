@@ -13,7 +13,7 @@ use crate::{Edit, FormField, FormFieldKind as FieldKind, NewField};
 pub const LABEL: &str = "Add text field table";
 
 /// The history entry for a grid copied from an existing field.
-pub const COPY_LABEL: &str = "Create multiple field copies";
+pub const COPY_LABEL: &str = "Copy field into grid";
 
 /// The edit adding `table`'s cells to `page` (0-based, shown as `info`) of a document whose
 /// fields are `form`. Refused, with nothing added, when a cell would be too small on the page or
