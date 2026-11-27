@@ -4,15 +4,23 @@ use super::layout::latin_width;
 use super::{AddedText, Dict, Document, EditError};
 use crate::text::{Type3Fallback, Type3Glyph, fallback_face, type3_faces, type3_glyph, unique_font_name, write_type3_glyphs};
 
-/// Han, kana and their full-width punctuation; other scripts keep their shaping paths.
+/// Han, kana, Hangul and their full-width punctuation; other scripts keep their shaping paths.
 pub(super) fn is_cjk(ch: char) -> bool {
-    matches!(u32::from(ch), 0x3000..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
+    matches!(u32::from(ch), 0x3000..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF) || is_hangul(ch)
+}
+
+/// Korean letters one glyph each can draw (#7675): precomposed syllables and the compatibility
+/// jamo typed on their own (ㅋ, ㅠ). [`type3_faces`] gives text with them the Korean face. An
+/// item keeps its text as typed, so conjoining jamo (U+1100–U+11FF), which only make a syllable
+/// once composed, stay out and are refused.
+fn is_hangul(ch: char) -> bool {
+    matches!(u32::from(ch), 0xAC00..=0xD7A3 | 0x3131..=0x318E)
 }
 
 fn missing(ch: char) -> EditError {
     EditError::Invalid(format!(
         "the bundled CJK fonts can't draw \"{ch}\" (U+{:04X}); use a build with a covering craft-fonts face \
-         (Simplified Chinese needs a Hans face in CRAFT_FONTS_DIR)",
+         (Simplified Chinese needs a Hans face and Korean a Kore face in CRAFT_FONTS_DIR)",
         u32::from(ch)
     ))
 }
@@ -49,6 +57,12 @@ impl CjkText {
         let Some(&first) = chars.first() else { return Ok(Self::default()) };
         #[cfg(test)]
         CJK_PLAN_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+        // Without the Korean face, name the first Hangul letter, as a character no face has is named.
+        if let Some(&hangul) = chars.iter().find(|ch| is_hangul(**ch))
+            && pdfcraft_fonts::document_korean_font().is_none()
+        {
+            return Err((missing(hangul), hangul));
+        }
         let text: String = chars.iter().collect();
         let (faces, _) = type3_faces(&text, t.family, t.bold).map_err(|e| (e, first))?;
         let face = fallback_face(&faces, &chars, |face, ch| pdfcraft_fonts::face_has(face.bytes, ch)).ok_or_else(|| (missing(first), first))?;

@@ -12,6 +12,9 @@ mod paragraph_grouping;
 #[path = "mixed_text_tests.rs"]
 mod mixed_text;
 
+#[path = "korean_text_tests.rs"]
+mod korean_text;
+
 /// Three pages: an upright page with content that leaves the graphics state changed (an
 /// unbalanced `cm`), a page rotated 90° and one with inherited, shared resources.
 fn fixture() -> Document {

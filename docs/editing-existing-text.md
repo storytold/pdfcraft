@@ -36,7 +36,7 @@ every row.
 
 Add Text also opens existing text when it is clicked; a blank-space click starts a new item.
 Both text tools retype an added text item with one click. Native builds with the pinned Hans
-font also accept mixed English and Simplified Chinese in Add Text. Western text keeps its
+font also accept mixed English and Simplified Chinese in Add Text, and with the pinned Korean font (NanumGothic) Korean Hangul too (#7675). Western text keeps its
 standard font; CJK glyphs use bounded Type 3 outlines with ToUnicode, using the same advances
 for validation, wrapping and writing. Added items retain their existing persistence format,
 with at most 2400 distinct CJK glyphs per box. Missing glyphs keep the draft open and leave
@@ -58,7 +58,7 @@ embedding, a character the font's encoding can't show is drawn with that same pr
 character no available face has is refused with an error that names it, and a CJK character
 without a craft-fonts build says so. Replacement text takes the craft-fonts Japanese faces when
 they can draw all of it, then the native craft-fonts Hans face (LXGW WenKai Lite) for missing
-Simplified Chinese glyphs, and the bundled Inter face (`assets/fonts`) for the Latin, Greek and
+Simplified Chinese glyphs (text with Hangul takes the Korean face, NanumGothic, before them), and the bundled Inter face (`assets/fonts`) for the Latin, Greek and
 Cyrillic letters they lack (Uzbek `қизил`, Kazakh `әже`): that face needs no build input, so
 these work in every build, the web one included. Choosing another face
 is explicit. Fonts with restricted embedding, unsupported collections, excluded families or
