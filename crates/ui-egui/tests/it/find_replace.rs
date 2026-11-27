@@ -7,6 +7,9 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
+use crate::support;
+use crate::support::AppHarness as _;
+
 /// Two 300×200 pages of Helvetica text: "cat and cat" and "a cat".
 fn fixture() -> Vec<u8> {
     let stream = |content: &str| format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
@@ -44,13 +47,29 @@ fn has_field(h: &Harness<'static, PdfCraftApp>, placeholder: &str) -> bool {
     h.query_all_by(|n| n.placeholder() == Some(placeholder)).next().is_some()
 }
 
+/// The find bar's Replace All button label, as the framework words it.
+fn replace_all() -> String {
+    use craft::i18n::WordSet as _;
+    craft::text::ui::find::FindLabels::english().replace_all.as_str().to_owned()
+}
+
+/// The find bar's Replace with field: a text field named by its label, with no placeholder.
+const REPLACE_WITH: &str = "Replace with:";
+
+fn has_replace_field(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.query_by_role_and_label(egui::accesskit::Role::TextInput, REPLACE_WITH).is_some()
+}
+
 #[test]
 fn replace_all_from_the_find_bar_is_one_undo_step() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("cats.pdf", None, fixture()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "cats.pdf", None, fixture()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     // ⌘F with the Select tool: the find bar, without a Replace row.
@@ -58,13 +77,13 @@ fn replace_all_from_the_find_bar_is_one_undo_step() {
     h.run_steps(3);
     assert!(h.state().views[0].find.is_some());
     assert!(has_field(&h, "Find text"));
-    assert!(!has_field(&h, "Replace with"), "outside Edit text the find bar doesn't replace");
+    assert!(!has_replace_field(&h), "outside Edit text the find bar doesn't replace");
     // ⇧⌘H: Edit text, and the Replace row.
     h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::H);
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::EditText);
     assert!(h.state().views[0].find.as_ref().is_some_and(|f| f.replacing));
-    assert!(has_field(&h, "Replace with"), "the Replace row shows in Edit text");
+    assert!(has_replace_field(&h), "the Replace row shows in Edit text");
     h.query_by(|n| n.placeholder() == Some("Find text")).expect("find field").type_text("cat");
     // Both pages' text loads in the background before every match is listed.
     for _ in 0..400 {
@@ -75,21 +94,21 @@ fn replace_all_from_the_find_bar_is_one_undo_step() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(h.state().views[0].find.as_ref().map(|f| f.matches.len()), Some(3));
-    h.query_by(|n| n.placeholder() == Some("Replace with")).expect("replace field").click();
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, REPLACE_WITH).click();
     h.run_steps(2);
-    h.query_by(|n| n.placeholder() == Some("Replace with")).expect("replace field").type_text("dog");
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, REPLACE_WITH).type_text("dog");
     h.run_steps(1);
     assert_eq!(h.state().views[0].find.as_ref().map(|f| (f.query.as_str(), f.replacement.as_str())), Some(("cat", "dog")));
     // The row may settle over a few frames once the status text changes its width.
     h.run_steps(8);
-    h.get_by_label("Replace all").click();
+    h.get_by_label(&replace_all()).click();
     h.run_steps(4);
-    assert_eq!(texts(&h), ["dog and dog", "a dog"], "{:?}", h.state().toast);
+    assert_eq!(texts(&h), ["dog and dog", "a dog"]);
+    assert!(support::shown_notice(&h).is_some(), "Replace all says what it did");
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Replace all"));
-    assert_eq!(s.toast.as_ref().map(|t| t.0.as_str()), Some("Replaced 3 on 2 pages"));
     // One Undo puts every page back.
-    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.execute("edit.undo"));
     h.run_steps(2);
     assert_eq!(texts(&h), ["cat and cat", "a cat"]);
     let s = h.state();
@@ -99,14 +118,17 @@ fn replace_all_from_the_find_bar_is_one_undo_step() {
 /// Replace changes the highlighted match only: here the second "cat" on the first page.
 #[test]
 fn replace_changes_the_highlighted_match() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("cats.pdf", None, fixture()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "cats.pdf", None, fixture()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
-    assert!(h.state_mut().execute("edit.replace"));
+    assert!(h.execute("edit.replace"));
     h.run_steps(3);
     h.query_by(|n| n.placeholder() == Some("Find text")).expect("find field").type_text("cat");
     for _ in 0..400 {

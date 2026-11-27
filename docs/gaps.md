@@ -171,7 +171,7 @@ update the numbers.
   and read-only automation regressions cover the change; per-glyph validation and the
   separate embedded-font extraction gap remain open. No readiness or backlog re-count.
 - **Impact:** every one is a user who lost trust. Crash reports outrank feature work
-  (`AGENTS.md` §4).
+  (app-agents.md rule 13).
 - **Estimate:** 45–80 h (≈ 0.2–0.4 h per issue). **Doc:** this file.
 
 ### 7. OCR reads only unaccented Latin
@@ -250,7 +250,8 @@ update the numbers.
   Read Out Loud; full keyboard operation of PdfCraft itself and a screen-reader audit.
 - **Evidence:** all 32 checker rules, figure alt text, tag property and sibling order edits, and
   a bounded auto-tag preview exist. Apply writes valid structure and parent-tree links for
-  text-only files, tagging headings by size and weight; it refuses mixed content and existing tags;
+  text-only files, tagging headings by size and weight and marking running headers and footers
+  as pagination artifacts; it refuses mixed content and existing tags;
   `a11y.keyboard-only` (P0) planned, `a11y.app-screen-reader` partial.
 - **Impact:** most untagged files still need another editor to build their structure; PdfCraft itself is
   not yet usable without a mouse.
@@ -305,7 +306,7 @@ update the numbers.
   first reading has not been taken yet.
 - **Evidence:** text extraction (word-F1 0.98 against `pdftotext`) and now rendering (above); qpdf
   checks written output on every CI run since `PDFCRAFT_ORACLES_REQUIRED`. Acrobat captures must
-  stay local in `plan/acrobat/` (clean-room, `AGENTS.md` §1.1).
+  stay local in `plan/acrobat/` (clean-room, clean-room.md).
 - **Still missing:** Acrobat itself as the reference rather than other open renderers; form
   calculation and signature validation; the interop suite that opens every kind of output we write
   (encrypted ones above all, after #774) in pdf.js and MuPDF; and 15 of those 250 files could not

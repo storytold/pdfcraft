@@ -169,7 +169,7 @@ pub fn decode(data: &[u8]) -> Result<Decoded, String> {
     }
     match kind(data) {
         Some(Kind::Png) => {
-            let opts = craft_image_codecs::DecodeOptions { keep_orientation: true, limits: decode_limits(), ..Default::default() };
+            let opts = craft_image_codecs::DecodeOptions { keep_orientation: true, limits: decode_limits() };
             let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, data, &opts).map_err(|e| match e {
                 craft_image_codecs::CodecError::LimitExceeded(_) => too_big(),
                 other => bad(other.to_string()),
@@ -212,7 +212,7 @@ pub fn decode(data: &[u8]) -> Result<Decoded, String> {
                 _ => craft_image_codecs::Format::Tiff,
             };
             let data = if k == Kind::Bmp { bmp_with_pixel_offset(data) } else { std::borrow::Cow::Borrowed(data) };
-            let opts = craft_image_codecs::DecodeOptions { keep_orientation: false, limits: decode_limits(), ..Default::default() };
+            let opts = craft_image_codecs::DecodeOptions { keep_orientation: false, limits: decode_limits() };
             let img = craft_image_codecs::decode_as_with(format, &data, &opts).map_err(|e| match e {
                 craft_image_codecs::CodecError::LimitExceeded(_) => too_big(),
                 other => bad(other.to_string()),

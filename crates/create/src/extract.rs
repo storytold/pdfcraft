@@ -145,13 +145,23 @@ fn decoded(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<Vec<u
 /// alpha, JPEG images included, so cut-out images keep their transparent background.
 fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'static str, Vec<u8>), String> {
     let f = filters(s);
-    let jpeg = matches!(f.last().map(Vec::as_slice), Some(b"DCTDecode" | b"DCT")) && f.len() == 1;
-    match f.last().map(Vec::as_slice) {
-        Some(b"JPXDecode") => return Err("JPEG 2000 images can't be exported yet".into()),
-        Some(b"DCTDecode" | b"DCT") if !jpeg => return Err("JPEG images inside other filters can't be exported yet".into()),
-        _ => {}
+    let jpeg = matches!(f.last().map(Vec::as_slice), Some(b"DCTDecode" | b"DCT"));
+    if matches!(f.last().map(Vec::as_slice), Some(b"JPXDecode")) {
+        return Err("JPEG 2000 images can't be exported yet".into());
     }
-    let as_is = || Ok(("jpg", s.raw.to_vec()));
+    // Decode only the stages before DCT, within the same work budget as other image filters.
+    // The JPEG decoder and as-is export below both need the unwrapped JPEG bytes.
+    let jpeg_data = if jpeg && f.len() > 1 {
+        let direct = doc.with_direct_parms(s);
+        let chain = direct.filters();
+        let Some(((pdfcraft_filters::Filter::Dct, _), prefix)) = chain.split_last() else {
+            return Err("invalid JPEG filter chain".into());
+        };
+        std::borrow::Cow::Owned(budget.decode_chain(prefix, &s.raw, MAX_DECODED).map_err(|e| e.to_string())?)
+    } else {
+        std::borrow::Cow::Borrowed(s.raw.as_ref())
+    };
+    let as_is = || Ok(("jpg", jpeg_data.to_vec()));
     let (w, h) = (s.dict.int(b"Width").unwrap_or(0), s.dict.int(b"Height").unwrap_or(0));
     let Some((w, h)) = size(w, h) else {
         return match () {
@@ -195,12 +205,12 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
         None => space(doc, s.dict.get(b"ColorSpace"), budget)?,
     };
     let (samples, bpc) = if jpeg {
-        if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(space.components() as u64), &s.raw) {
+        if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(space.components() as u64), &jpeg_data) {
             return Err(FilterError::Spent.to_string());
         }
         // Grey, RGB or CMYK samples (YCCK is converted); a JPEG that doesn't decode, or an
         // indexed one (not valid), is written as is, without its transparency.
-        let Some((samples, decoded)) = jpeg_samples(&s.raw, &space, w, h) else { return as_is() };
+        let Some((samples, decoded)) = jpeg_samples(&jpeg_data, &space, w, h) else { return as_is() };
         space = decoded;
         (samples, 8)
     } else {
@@ -309,35 +319,17 @@ fn jpeg_size(data: &[u8]) -> Option<(usize, usize)> {
     if !crate::upright_image::decodable_metadata(data) {
         return None;
     }
-    let mut i = 2usize;
-    if !data.starts_with(&[0xFF, 0xD8]) {
-        return None;
-    }
-    while let Some(&b) = data.get(i) {
-        if b != 0xFF {
-            i += 1;
-            continue;
-        }
-        let marker = *data.get(i + 1)?;
-        match marker {
-            0xFF => i += 1,
-            0x00 | 0x01 | 0xD0..=0xD7 => i += 2,
-            0xDA | 0xD9 => break,
-            0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF => {
-                let h = usize::from(u16::from_be_bytes([*data.get(i + 5)?, *data.get(i + 6)?]));
-                let w = usize::from(u16::from_be_bytes([*data.get(i + 7)?, *data.get(i + 8)?]));
-                return Some((w, h));
+    let mut size = None;
+    let _ = craft_image_codecs::jpeg_probe::walk_jpeg_segments(data, |marker, _span, seg| {
+        if craft_image_codecs::jpeg_probe::is_sof_marker(marker) {
+            if let Some(&[_, h0, h1, w0, w1, ..]) = seg.get(..5) {
+                size = Some((usize::from(u16::from_be_bytes([w0, w1])), usize::from(u16::from_be_bytes([h0, h1]))));
             }
-            _ => {
-                let len = usize::from(u16::from_be_bytes([*data.get(i + 2)?, *data.get(i + 3)?]));
-                if len < 2 {
-                    return None;
-                }
-                i = i.checked_add(2 + len)?;
-            }
+            return Ok(craft_image_codecs::jpeg_probe::JpegVisit::Stop);
         }
-    }
-    None
+        Ok(craft_image_codecs::jpeg_probe::JpegVisit::Continue)
+    });
+    size
 }
 
 /// JPEG `data`, decoded, if its header says it is `w` × `h`.
@@ -418,34 +410,15 @@ fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u
 /// A four-component JPEG's CMYK samples as the page reads them: as stored, not inverted the way
 /// a decoder converting to RGB inverts them, with YCCK converted to CMYK.
 fn adobe_transform(data: &[u8]) -> Option<u8> {
-    if !data.starts_with(&[0xFF, 0xD8]) {
-        return None;
-    }
-    let mut i = 2usize;
-    while let Some(&b) = data.get(i) {
-        if b != 0xFF {
-            i += 1;
-            continue;
+    let mut transform = None;
+    let _ = craft_image_codecs::jpeg_probe::walk_jpeg_segments(data, |marker, _span, seg| {
+        if marker == 0xEE && seg.starts_with(b"Adobe") && seg.len() >= 12 {
+            transform = Some(seg[11]);
+            return Ok(craft_image_codecs::jpeg_probe::JpegVisit::Stop);
         }
-        let marker = *data.get(i + 1)?;
-        match marker {
-            0xFF => i += 1,
-            0x00 | 0x01 | 0xD0..=0xD7 => i += 2,
-            0xDA | 0xD9 => break,
-            _ => {
-                let len = usize::from(u16::from_be_bytes([*data.get(i + 2)?, *data.get(i + 3)?]));
-                if len < 2 {
-                    return None;
-                }
-                let seg = data.get(i + 4..i + 2 + len)?;
-                if marker == 0xEE && seg.starts_with(b"Adobe") && seg.len() >= 12 {
-                    return Some(seg[11]);
-                }
-                i = i.checked_add(2 + len)?;
-            }
-        }
-    }
-    None
+        Ok(craft_image_codecs::jpeg_probe::JpegVisit::Continue)
+    });
+    transform
 }
 
 fn cmyk_jpeg_samples(data: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {

@@ -22,7 +22,7 @@ let html = report_html(&report, "file.pdf", "2026-10-02", "en", &in_english);  /
   declaration check, not validation of every ToUnicode entry or used glyph.
 - **Structure checks** read the structure tree through the role map; table regularity counts
   `ColSpan`/`RowSpan` attributes.
-- **Export paragraph levels** (`heading_levels`) map page/form MCIDs to H1–H6 or P through
+- **Export paragraph levels** (`tagged_heading_levels`) map page/form MCIDs to H1–H6 or P through
   RoleMap and nested spans. The engine passes these read-only results to the text reader;
   missing or ambiguous marks keep the exporter's size heuristic when no enclosing role is
   available. Traversal stops at depth

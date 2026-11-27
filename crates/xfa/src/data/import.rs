@@ -192,8 +192,16 @@ pub fn parse_data_file(text: &str, expect_root: Option<&str>) -> Result<Vec<Impo
     if crate::xml_nesting_depth(text) > MAX_IMPORT_DEPTH {
         return Err(XfaError::TooLarge(format!("the data file nests more than {MAX_IMPORT_DEPTH} levels deep")));
     }
-    let opts = crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
-    let parsed = crate::xml::Document::parse_with_options(text, opts).map_err(|e| XfaError::Malformed(format!("the data file is not XML: {e}")))?;
+    let opts = crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
+    let parsed = crate::xml::Document::parse_with_options(text, opts).map_err(|e| {
+        // The pinned shared parser exposes string errors. Its namespace-copy admission
+        // limit is a resource refusal, not malformed XML; keep every other error distinct.
+        if e == "namespace retention budget exceeded" {
+            XfaError::TooLarge(format!("the data file exceeds the XML namespace retention budget: {e}"))
+        } else {
+            XfaError::Malformed(format!("the data file is not XML: {e}"))
+        }
+    })?;
     let root = parsed.root_element();
     let local = root.tag_name().name();
     let in_xfa = |n: &crate::xml::Node| n.tag_name().namespace().is_none_or(|ns| ns == XFA_DATA_NS);
@@ -304,7 +312,7 @@ pub fn export_data(doc: &Document, xdp: bool, pdf_name: &str) -> Result<String, 
 /// data element), each with the namespaces it uses declared on it. `Ok(None)`: no datasets
 /// element; `Err`: the text can't be read.
 fn datasets_markup(text: &str) -> Result<Option<(String, String)>, ()> {
-    let opts = || crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
+    let opts = || crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
     if crate::xml_nesting_depth(text) > crate::MAX_XML_DEPTH {
         return Err(());
     }

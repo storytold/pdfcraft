@@ -1,4 +1,8 @@
-use super::{Arc, BTreeSet, Modifiers, SourceProblem, SystemTime};
+use std::sync::Arc;
+use std::time::SystemTime;
+
+use craft::ui::patterns::form_dialogs::Secret;
+use pdfcraft_engine::SourceProblem;
 
 /// A column of the list: what it shows and what it sorts by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -14,10 +18,6 @@ pub enum SortKey {
 impl SortKey {
     pub const ALL: [SortKey; 5] = [SortKey::Name, SortKey::Pages, SortKey::Size, SortKey::Modified, SortKey::Warnings];
 
-    pub(super) fn index(self) -> usize {
-        self as usize
-    }
-
     pub(super) fn label(self) -> &'static str {
         match self {
             SortKey::Name => tl!("File name"),
@@ -26,61 +26,6 @@ impl SortKey {
             SortKey::Modified => tl!("Modified"),
             SortKey::Warnings => tl!("Warnings"),
         }
-    }
-
-    /// The narrowest the column may be dragged.
-    pub(super) fn min_width(self) -> f32 {
-        match self {
-            SortKey::Name => 120.0,
-            SortKey::Pages => 110.0,
-            SortKey::Size => 60.0,
-            SortKey::Modified => 80.0,
-            SortKey::Warnings => 100.0,
-        }
-    }
-}
-
-/// The columns' order and widths, as the user arranged them (kept in the settings).
-#[derive(Clone, Debug, PartialEq)]
-pub struct Columns {
-    pub order: [SortKey; 5],
-    /// By [`SortKey::index`]; `None` until a column is resized: fitted to the window until then.
-    pub widths: Option<[f32; 5]>,
-}
-
-impl Default for Columns {
-    fn default() -> Self {
-        Columns { order: SortKey::ALL, widths: None }
-    }
-}
-
-impl Columns {
-    pub(crate) fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({ "order": self.order, "widths": self.widths })
-    }
-
-    /// Settings written by [`Self::to_json`]; anything malformed gives the default layout.
-    pub(crate) fn from_json(v: &serde_json::Value) -> Self {
-        let order = serde_json::from_value::<Vec<SortKey>>(v["order"].clone())
-            .ok()
-            .filter(|o| SortKey::ALL.iter().all(|k| o.contains(k)))
-            .and_then(|o| <[SortKey; 5]>::try_from(o).ok())
-            .unwrap_or(SortKey::ALL);
-        let widths = serde_json::from_value::<[f32; 5]>(v["widths"].clone())
-            .ok()
-            .filter(|w| w.iter().all(|x| x.is_finite()))
-            .map(|w| std::array::from_fn(|i| w[i].clamp(SortKey::ALL[i].min_width(), 4000.0)));
-        Columns { order, widths }
-    }
-
-    /// The widths to show: the user's, or the window's width shared out.
-    pub(super) fn resolved(&self, available: f32) -> [f32; 5] {
-        if let Some(w) = self.widths {
-            return w;
-        }
-        let fixed = 170.0 + 84.0 + 110.0;
-        let flexible = (available - fixed).max(260.0);
-        [(flexible * 0.55).max(140.0), 170.0, 84.0, 110.0, (flexible * 0.45).max(120.0)]
     }
 }
 
@@ -124,22 +69,6 @@ pub(crate) struct Preview {
     pub(crate) pages: Option<PagesTaken>,
 }
 
-/// A password: kept in memory only, never printed (debug output ends up in logs).
-#[derive(Clone, Default)]
-pub struct Secret(pub(super) String);
-
-impl Drop for Secret {
-    fn drop(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.0);
-    }
-}
-
-impl std::fmt::Debug for Secret {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.0.is_empty() { "\"\"" } else { "…" })
-    }
-}
-
 /// Which password a protected file still needs before it can be combined.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lock {
@@ -177,7 +106,7 @@ impl ConflictPreview {
             }
             groups.push(f.group);
             sources.push((f.name.clone(), f.bytes.clone(), None));
-            passwords.push(f.password.as_ref().map(|p| p.0.as_str()));
+            passwords.push(f.password.as_ref().map(|p| p.expose()));
         }
         let per_group = session.combine_field_conflicts(&sources, &passwords);
         self.per_file =
@@ -186,16 +115,13 @@ impl ConflictPreview {
     }
 }
 
-/// Unlock…'s password box: the rows it unlocks and what has been typed.
-#[derive(Clone, Debug)]
-pub(super) struct UnlockPrompt {
-    pub(super) rows: Vec<u64>,
-    pub(super) input: Secret,
-    pub(super) show: bool,
-    pub(super) error: Option<String>,
-    /// Where the box opens (below the link or button that asked for it).
-    pub(super) at: egui::Pos2,
-    pub(super) focused: bool,
+/// Unlock…'s password dialog, while it shows: the rows it unlocks and why the last try failed.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct UnlockAsk {
+    /// The files to unlock, by [`CombineFile::id`].
+    pub(crate) rows: Vec<u64>,
+    /// Why the last password didn't work.
+    pub(crate) error: Option<String>,
 }
 
 /// What can be known about a file up front, opened with a password or not.
@@ -262,11 +188,30 @@ pub(super) fn assess(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Result<Ass
     Ok(Assessed { pages, sizes, problem, lock, notes })
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct Snapshot {
-    pub(super) files: Vec<CombineFile>,
-    pub(super) selected: BTreeSet<u64>,
-    pub(super) sort: Option<(SortKey, bool)>,
+/// What the selection holds: a file (by [`CombineFile::id`]), or one page of an expanded file (by
+/// entry id and place among the entry's pages). The derived order is for sets only; the list's
+/// order is the display order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum CombineKey {
+    File(u64),
+    Page(u64, usize),
+}
+
+impl CombineKey {
+    /// The list entry the key is about.
+    pub(crate) fn entry(self) -> u64 {
+        match self {
+            CombineKey::File(id) | CombineKey::Page(id, _) => id,
+        }
+    }
+}
+
+/// What one undo step holds: the list, its selection and its sort.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct CombineList {
+    pub(crate) files: Vec<CombineFile>,
+    pub(crate) selected: Vec<CombineKey>,
+    pub(crate) sort: Option<(SortKey, bool)>,
 }
 
 /// A file arriving in the list (picked, dropped or already open).
@@ -291,6 +236,19 @@ impl Incoming {
 fn next_auth() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The pages (0-based, in the range's order) that `text` takes from a file of `count` pages: all of
+/// them for an empty range, or why the range is wrong.
+pub(crate) fn takes_range(count: usize, text: &str) -> Result<Vec<usize>, String> {
+    if text.trim().is_empty() {
+        return Ok((0..count).collect());
+    }
+    match pdfcraft_engine::print::select_pages(count, Some(text), &[], pdfcraft_engine::print::Subset::All, false) {
+        Ok(p) if p.is_empty() => Err(tl!("No pages selected").to_string()),
+        Ok(p) => Ok(p),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// A page range checked: the pages it takes and the first of them (0-based), or why it's wrong.
@@ -335,6 +293,19 @@ pub struct CombineFile {
     pub(super) checked: Option<(String, RangeCheck)>,
 }
 
+/// Two entries are the same step of the history when what the user can change or undo agrees; the
+/// bytes and measurements follow from `range` and `auth`, and `password` changes only with `auth`.
+impl PartialEq for CombineFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.group == other.group
+            && self.range == other.range
+            && self.auth == other.auth
+            && self.lock == other.lock
+            && self.problem == other.problem
+    }
+}
+
 impl CombineFile {
     pub(super) fn take(&mut self, a: Assessed, password: Option<Secret>) {
         self.pages = a.pages;
@@ -356,7 +327,7 @@ impl CombineFile {
 
     /// The password the file was unlocked with, if any.
     pub(crate) fn password(&self) -> Option<&str> {
-        self.password.as_ref().map(|p| p.0.as_str())
+        self.password.as_ref().map(|p| p.expose())
     }
 
     /// The number of pages `range` takes, or why it can't be used. Checked again only when the
@@ -381,14 +352,7 @@ impl CombineFile {
 
     /// Every page (0-based) the range takes, in its order: what the preview flips through.
     pub(crate) fn pages_taken(&self) -> Result<Vec<usize>, String> {
-        if self.range.trim().is_empty() {
-            return Ok((0..self.pages).collect());
-        }
-        match pdfcraft_engine::print::select_pages(self.pages, Some(&self.range), &[], pdfcraft_engine::print::Subset::All, false) {
-            Ok(p) if p.is_empty() => Err(tl!("No pages selected").to_string()),
-            Ok(p) => Ok(p),
-            Err(e) => Err(e.to_string()),
-        }
+        takes_range(self.pages, &self.range)
     }
 
     fn checked_range(&mut self) -> RangeCheck {
@@ -402,13 +366,10 @@ impl CombineFile {
             // checks the first page against the page count.)
             Ok((self.pages, 0))
         } else {
-            match pdfcraft_engine::print::select_pages(self.pages, Some(&self.range), &[], pdfcraft_engine::print::Subset::All, false) {
-                Ok(p) => match p.first() {
-                    Some(first) => Ok((p.len(), *first)),
-                    None => Err(tl!("No pages selected").to_string()),
-                },
-                Err(e) => Err(e.to_string()),
-            }
+            takes_range(self.pages, &self.range).and_then(|p| match p.first() {
+                Some(first) => Ok((p.len(), *first)),
+                None => Err(tl!("No pages selected").to_string()),
+            })
         };
         self.checked = Some((self.range.clone(), result.clone()));
         result
@@ -428,16 +389,6 @@ impl CombineFile {
 
 #[derive(Clone)]
 pub(crate) enum RowAction {
-    /// A click on row `i` (Ctrl/⌘ toggles it, Shift selects up to it).
-    Click(usize, Modifiers),
-    SelectAll,
-    /// An arrow key: `by` files on (1 in the list, or along a grid row; a grid row's length for
-    /// Up/Down in the grid). With Shift the selection grows.
-    Step {
-        down: bool,
-        by: usize,
-        extend: bool,
-    },
     MoveUp,
     MoveDown,
     Remove,
@@ -454,9 +405,6 @@ pub(crate) enum RowAction {
     Expand(u64, bool),
     /// Every file that adds more than one page, as its pages (`true`), or all as cards again.
     ExpandAll(bool),
-    /// A click on a page card: that page (by entry id and place among its pages) selected,
-    /// Ctrl/⌘ toggling it, Shift selecting up to it.
-    ClickPage(u64, usize, Modifiers),
     /// A page card (and the rest of the selected pages, if it is selected) dropped before page
     /// `gap` of the list (see [`moved_pages`]), if the list hasn't changed since the drag began.
     MovePages {
@@ -466,11 +414,6 @@ pub(crate) enum RowAction {
     },
     /// One page's trash (`Some`), or the selected pages: out of the list.
     RemovePages(Option<(u64, usize)>),
-    /// Row `from` (and the rest of the selection, if it is selected) dropped on row `to`.
-    Drop {
-        from: usize,
-        to: usize,
-    },
     /// A grid card (and the rest of the selection, if it is selected) dropped at `gap`
     /// (0 = before the first file, n = after the last), if the list hasn't changed since the
     /// drag began.
@@ -480,7 +423,7 @@ pub(crate) enum RowAction {
         gap: usize,
     },
     Sort(SortKey),
-    /// Unlock… on row `i` (and the rest of the selection, if it is selected), or on the
-    /// selection (`None`); the password box opens at the position.
-    Unlock(Option<usize>, egui::Pos2),
+    /// Unlock… on file `id` (and the rest of the selected locked files, if it is selected; an
+    /// unselected file becomes the whole selection), or on the selected locked files (`None`).
+    Unlock(Option<u64>),
 }

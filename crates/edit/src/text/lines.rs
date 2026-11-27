@@ -461,6 +461,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
     let pieces = joined(&content_streams(doc, &p.dict)?);
     let ops = pieces.parse().ops;
     let properties = res.get(b"Properties").and_then(|o| doc.dict(o)).unwrap_or_default();
+    carry.containers = std::rc::Rc::new(super::containers::Containers::collect(doc, &ops, &res));
     let shown =
         interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(TextProperties { lists: &properties, heading_levels: None }))?;
     let mut last: Option<(usize, Pen)> = None; // the stream piece and where its last run ended
@@ -480,7 +481,9 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             let bt = pen.bt;
             let (near, gap) = pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 });
             piece == si
-                && lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
+                && lines.last().is_some_and(|l| {
+                    l.scope == s.scope && l.paint == s.paint && l.heading_level == s.heading_level && l.containers == s.containers && l.logical_order == s.logical_order
+                })
                 && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
                 && (s.text.trim().is_empty() || lines.last().is_some_and(|l| continues_font(l, &s)))
                 && (s.text.trim().is_empty()
@@ -537,6 +540,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 scope: s.scope,
                 heading_level: s.heading_level,
                 paint: s.paint.clone(),
+                containers: s.containers.clone(),
                 logical_order: s.logical_order,
                 actual_text: s.actual_text,
                 clips: s.state.render_mode >= 4,
@@ -604,10 +608,13 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
 fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream: usize) {
     let joins = last.is_some_and(|pen| {
         let bt = pen.bt;
-        lines
-            .last()
-            .is_some_and(|l| l.scope == s.scope && l.heading_level == s.heading_level && l.paint == s.paint && l.logical_order == s.logical_order)
-            && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
+        lines.last().is_some_and(|l| {
+            l.scope == s.scope
+                && l.paint == s.paint
+                && l.heading_level == s.heading_level
+                && l.containers == s.containers
+                && l.logical_order == s.logical_order
+        }) && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
             && (s.text.trim().is_empty() || lines.last().is_some_and(|l| continues_font(l, &s)))
             && (s.text.trim().is_empty()
                 || lines.last().is_some_and(|l| {
@@ -659,6 +666,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             scope: s.scope,
             heading_level: s.heading_level,
             paint: s.paint.clone(),
+            containers: s.containers.clone(),
             logical_order: s.logical_order,
             actual_text: s.actual_text,
             clips: s.state.render_mode >= 4,
@@ -854,8 +862,8 @@ pub(super) fn reading_lines(doc: &Document, page: usize, levels: Option<&Heading
         let mut last_stream = None;
         let mut forms = invoked.into_iter().peekable();
         for s in shown {
-            while let Some((_, name, ts, parent)) = forms.next_if(|f| f.0 < s.op) {
-                enter(w, resources, &name, ts, parent, &mut carry.text_left)?;
+            while let Some((i, name, ts, parent)) = forms.next_if(|f| f.0 < s.op) {
+                enter(w, resources, &name, ts, parent, &mut carry.text_left, carry.containers.clone(), [carry.at.as_slice(), &[i]].concat())?;
                 // Text after a form starts a new line.
                 last = None;
             }
@@ -872,13 +880,22 @@ pub(super) fn reading_lines(doc: &Document, page: usize, levels: Option<&Heading
             }
             add_shown(&mut w.lines, &mut last, s, si);
         }
-        for (_, name, ts, parent) in forms {
-            enter(w, resources, &name, ts, parent, &mut carry.text_left)?;
+        for (i, name, ts, parent) in forms {
+            enter(w, resources, &name, ts, parent, &mut carry.text_left, carry.containers.clone(), [carry.at.as_slice(), &[i]].concat())?;
         }
         Ok(())
     }
-    /// `text_left` is shared by the page and every form it draws.
-    fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts, parent: MarkedScope, text_left: &mut usize) -> Result<(), EditError> {
+    /// `text_left`: the page's text budget, shared with the forms the page draws.
+    fn enter(
+        w: &mut Walk,
+        resources: &Dict,
+        name: &[u8],
+        ts: Ts,
+        parent: MarkedScope,
+        text_left: &mut usize,
+        containers: std::rc::Rc<super::containers::Containers>,
+        at: Vec<usize>,
+    ) -> Result<(), EditError> {
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
         let ops = parse(&form.data).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
@@ -898,6 +915,8 @@ pub(super) fn reading_lines(doc: &Document, page: usize, levels: Option<&Heading
             layers: Vec::new(),
             text_left: *text_left,
             gap_space: false,
+            containers,
+            at,
         };
         w.next_stream = w.next_stream.saturating_add(1);
         if let Some(r) = form.obj {
@@ -926,6 +945,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize, levels: Option<&Heading
     let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let stream_of = |i: usize| ops.get(i).map_or(0, |op| pieces.pieces_of(op).0);
+    carry.containers = std::rc::Rc::new(super::containers::Containers::collect(doc, &ops, &res));
     let lookup = |mcid| levels.and_then(|f| f(None, mcid));
     walk(&mut w, &ops, &res, &mut carry, &stream_of, levels.map(|_| &lookup as &dyn Fn(i64) -> Option<(usize, u8)>))?;
     let mut lines = w.lines;
