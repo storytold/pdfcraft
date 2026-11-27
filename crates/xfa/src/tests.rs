@@ -426,6 +426,8 @@ fn the_xdp_template_wins_over_the_config_packets_template_element() {
     assert_eq!(tpl.root.common.name.as_deref(), Some("form"));
 }
 
+/// The sample form lays out over two pages: captions, draws and page numbers are drawn,
+/// hidden draws take no space, and each field gets its widget with its size, kind and SOM path.
 #[test]
 fn layout_places_captions_fields_and_sizes_containers_to_their_content() {
     let form = layout_xml(&template(1)).unwrap();
@@ -484,6 +486,97 @@ fn layout_places_captions_fields_and_sizes_containers_to_their_content() {
     );
 }
 
+/// The left edges of the lines of a draw `w` points wide holding `text` in Arial 8 pt, with
+/// `para` attributes, from the content area's left edge (0.5in).
+fn line_starts(text: &str, w: f64, para: &str) -> Vec<f64> {
+    let xdp = format!(
+        r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <draw name="label" w="{w}pt" h="1in"><value><text>{text}</text></value><font typeface="Arial" size="8pt"/><para {para} lineHeight="8pt"/></draw>
+</subform>
+</template></xdp:xdp>"##
+    );
+    let form = layout_xml(&xdp).unwrap();
+    let mut lines: Vec<(i64, f64)> = Vec::new();
+    for item in &form.pages[0].items {
+        let Item::Text(s) = item else { continue };
+        let key = (s.baseline * 100.0).round() as i64;
+        match lines.iter_mut().find(|(b, _)| *b == key) {
+            Some((_, x)) => *x = x.min(s.x),
+            None => lines.push((key, s.x)),
+        }
+    }
+    lines.sort_by_key(|(b, _)| *b);
+    lines.into_iter().map(|(_, x)| x - 36.0).collect()
+}
+
+/// A negative textIndent hangs the first line: it starts left of the others, never left of the
+/// box, and the other lines move in by the hang. A positive indent still moves only the first line.
+#[test]
+fn a_negative_text_indent_hangs_the_first_line_and_indents_the_rest() {
+    let text = "11. SERVICE MEMBER BALANCE (TOTAL)";
+    // No left margin: the first line starts at the box's edge and the others 18pt in.
+    let starts = line_starts(text, 58.0, r#"textIndent="-18pt""#);
+    assert!(starts.len() >= 3, "{starts:?}");
+    assert!(starts[0].abs() < 1e-6, "first line at the edge: {starts:?}");
+    assert!(starts[1..].iter().all(|x| (x - 18.0).abs() < 1e-6), "the rest hang 18pt in: {starts:?}");
+    // With a left margin wider than the hang, the first line starts at the margin less the hang.
+    let starts = line_starts(text, 90.0, r#"marginLeft="30pt" textIndent="-18pt""#);
+    assert!(starts.len() >= 2, "{starts:?}");
+    assert!((starts[0] - 12.0).abs() < 1e-6 && starts[1..].iter().all(|x| (x - 30.0).abs() < 1e-6), "{starts:?}");
+    // A positive indent still moves only the first line in.
+    let starts = line_starts(text, 58.0, r#"textIndent="10pt""#);
+    assert!((starts[0] - 10.0).abs() < 1e-6 && starts[1..].iter().all(|x| x.abs() < 1e-6), "{starts:?}");
+    // Without a negative indent a negative left margin moves every line left, as before.
+    let starts = line_starts(text, 58.0, r#"marginLeft="-6pt""#);
+    assert!(starts.iter().all(|x| (x + 6.0).abs() < 1e-6), "{starts:?}");
+    let starts = line_starts(text, 58.0, r#"marginLeft="-6pt" textIndent="10pt""#);
+    assert!((starts[0] - 4.0).abs() < 1e-6 && starts[1..].iter().all(|x| (x + 6.0).abs() < 1e-6), "{starts:?}");
+}
+
+/// A hang wider than its box is bounded by it: every line still starts and ends inside the box,
+/// and lines after the first keep room for the widest glyph when the text wraps.
+#[test]
+fn a_hang_wider_than_the_box_keeps_every_line_inside_it() {
+    // A 58pt box hanging its first line by 100pt, right-aligned.
+    for text in ["AB CD EF", "ABCDEFGHIJ KLMNOPQRST UVWXYZ MMMM WWWW"] {
+        let xdp = format!(
+            r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <draw name="label" w="58pt" h="5in"><value><text>{text}</text></value><font typeface="Arial" size="8pt"/><para hAlign="right" textIndent="-100pt" lineHeight="8pt"/></draw>
+</subform>
+</template></xdp:xdp>"##
+        );
+        let form = layout_xml(&xdp).unwrap();
+        let mut lines = std::collections::BTreeSet::new();
+        for item in &form.pages[0].items {
+            let Item::Text(s) = item else { continue };
+            lines.insert((s.baseline * 100.0).round() as i64);
+            let right = s.x + s.face.width(s.text.trim_end());
+            assert!(s.x >= 36.0 - 1e-6 && right <= 36.0 + 58.0 + 1e-6, "{text}: {:?} runs from {} to {right}", s.text, s.x);
+        }
+        if text.len() > 10 {
+            assert!(lines.len() > 1, "{text}: wraps onto more lines ({})", lines.len());
+        }
+    }
+}
+
+/// A label without a width that hangs its first line is as wide as that line is laid out: the
+/// hang takes back the left margin the first line doesn't use, so right-aligned text starts at
+/// the label's x.
+#[test]
+fn a_label_without_a_width_measures_its_hanging_indent_as_it_is_laid_out() {
+    let items = positioned(
+        r#"<draw name="a" x="1in" y="0"><value><text>11. BALANCE</text></value><font typeface="Arial" size="8pt"/><para hAlign="right" marginLeft="18pt" textIndent="-18pt"/></draw>"#,
+    );
+    let span = items.iter().find_map(|i| if let Item::Text(s) = i { Some(s) } else { None }).expect("the text");
+    assert!((span.x - (36.0 + 72.0)).abs() < 0.05, "starts at its x: {}", span.x);
+}
+
+/// A long table breaks across pages between whole rows, repeats its header row at the top of
+/// each page it continues on, and keeps every row (and field name) once.
 #[test]
 fn tables_break_across_pages_and_repeat_their_header_row() {
     let form = layout_xml(&template(40)).unwrap();
@@ -502,6 +595,58 @@ fn tables_break_across_pages_and_repeat_their_header_row() {
     let all: Vec<&str> = form.pages.iter().flat_map(|p| widgets(p).into_iter().map(|w| w.name.as_str()).collect::<Vec<_>>()).collect();
     assert_eq!(all.iter().filter(|n| n.starts_with("from")).count(), 40);
     assert_eq!(all.len(), all.iter().collect::<std::collections::HashSet<_>>().len(), "field names are unique");
+}
+
+/// A form a viewer saved with its pages drawn, holding only its signature box, is laid out from
+/// its template when its configuration says it must be rendered dynamically: its other fields
+/// live there. Signed, it is left as saved (laying it out would change what was signed), as it is
+/// without that configuration or with `forbidden`.
+#[test]
+fn a_form_saved_with_its_pages_is_laid_out_when_it_requires_dynamic_rendering() {
+    let open = |render: &str, signed: bool| Document::open(Arc::new(crate::fixtures::saved_with_pages_shell(render, signed))).unwrap();
+    let mut doc = open("required", false);
+    assert!(is_dynamic(&doc));
+    let report = render_into(&mut doc).unwrap();
+    assert_eq!(report.fields, 2, "the text field from the template, and the signature box");
+    assert!(!is_dynamic(&open("required", true)), "signed: left as saved");
+    assert!(!is_dynamic(&open("", false)), "no configuration: the fields it has are the form's");
+    assert!(!is_dynamic(&open("forbidden", false)));
+    // A box under nested fields is found; past the 32 levels looked at, the form counts as signed.
+    let deep = |depth: usize| Document::open(Arc::new(crate::fixtures::deep_saved_with_pages_shell(depth))).unwrap();
+    assert!(is_dynamic(&deep(5)), "nested, unsigned");
+    assert!(!is_dynamic(&deep(40)), "too deep to tell: as if signed");
+    // The page lists the box under its new number, and the box knows its parent.
+    let doc = deep(5);
+    let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0));
+    let annot = page.as_dict().and_then(|d| d.get(b"Annots")).and_then(|a| a.as_array().and_then(|a| a.first().cloned())).and_then(|a| a.as_ref());
+    let widget = annot.map(|r| doc.get(r));
+    assert_eq!(widget.as_ref().and_then(|w| w.as_dict().and_then(|d| d.name(b"FT")).map(<[u8]>::to_vec)), Some(b"Sig".to_vec()));
+    assert!(widget.as_ref().and_then(|w| w.as_dict().map(|d| d.contains(b"Parent"))).unwrap_or(false));
+}
+
+/// Only the configuration packet's `acrobat/acrobat7/dynamicRender` asks for dynamic rendering:
+/// not the same element elsewhere, another element that starts with `config`, or another value.
+#[test]
+fn dynamic_rendering_is_read_from_the_configuration_only() {
+    let required = crate::packets::requires_dynamic_render;
+    let config = |inner: &str| {
+        format!(
+            r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><config xmlns="http://www.xfa.org/schema/xci/3.1/">{inner}</config><template/></xdp:xdp>"#
+        )
+    };
+    assert!(required(&config("<acrobat><acrobat7><dynamicRender> required </dynamicRender></acrobat7></acrobat>")));
+    assert!(!required(&config("<acrobat><acrobat7><dynamicRender>forbidden</dynamicRender></acrobat7></acrobat>")));
+    assert!(!required(&config("<acrobat><dynamicRender>required</dynamicRender></acrobat>")), "not under acrobat7");
+    assert!(!required(&config("")));
+    assert!(!required("<configuration><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></configuration>"));
+    assert!(!required("<template><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></template>"));
+    assert!(!required("<config><acrobat><acrobat7><dynamicRender>required"), "no end tag");
+    // A data node named `config` before the configuration packet is not the configuration.
+    let data_first = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><config>x</config></form></xfa:data></xfa:datasets><config xmlns="http://www.xfa.org/schema/xci/3.1/"><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></config><template/></xdp:xdp>"#;
+    assert!(required(data_first), "the configuration packet after a data node named config");
+    let only_data = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><config><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></config></xfa:data></xfa:datasets><template/></xdp:xdp>"#;
+    assert!(!required(only_data), "a data node shaped like a configuration");
+    assert!(required("<config><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></config>"), "a bare config packet");
 }
 
 /// Laying a dynamic form out into its PDF replaces the placeholder page with the template's pages
@@ -3940,6 +4085,163 @@ fn a_zero_caption_reserve_sizes_the_caption_as_none_does() {
     assert!((x_of("withZero") - x_of("without")).abs() < 0.01, "as without a reserve: {} {}", x_of("withZero"), x_of("without"));
 }
 
+/// A date field is shown through its display picture and typed in its edit picture's pattern: its
+/// format action takes the display picture's letters (weekday and month names included), its
+/// keystroke action the edit picture's; without a display picture both take the edit pattern.
+#[test]
+fn date_fields_are_shown_through_their_display_picture() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="plain" w="2in" h="0.3in"><ui><dateTimeEdit/></ui><value><date/></value><format><picture>date{YYYYMMDD}</picture></format></field>
+ <field name="long" w="3in" h="0.3in"><ui><dateTimeEdit/></ui><value><date/></value><format><picture>date{EEEE, MMMM D, YYYY}</picture></format></field>
+ <field name="both" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYYMMDD}|date{DDMMMYY}</picture></ui><value><date/></value><format><picture>date{YYYYMMMDD}</picture></format></field>
+ <field name="none" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date/></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let form = layout_xml(xdp).unwrap();
+    let w = widgets(&form.pages[0]);
+    let shown = |n: &str| w.iter().find(|w| w.name == n).unwrap().display_date.clone();
+    assert_eq!(shown("plain").as_deref(), Some("yyyymmdd"));
+    assert_eq!(shown("long").as_deref(), Some("dddd, mmmm d, yyyy"));
+    assert_eq!(shown("both").as_deref(), Some("yyyymmmdd"));
+    assert_eq!(shown("none"), None);
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let action = |n: &str, k: &[u8]| {
+        let d = fields.iter().find(|(name, _)| name == n).map(|(_, d)| d.clone()).unwrap();
+        let aa = doc.resolve(d.get(b"AA").unwrap()).as_dict().unwrap().clone();
+        let a = doc.resolve(aa.get(k).unwrap()).as_dict().unwrap().clone();
+        doc.resolve(a.get(b"JS").unwrap()).as_string().unwrap().to_text()
+    };
+    assert_eq!(action("plain", b"F"), r#"AFDate_FormatEx("yyyymmdd");"#);
+    assert_eq!(action("plain", b"K"), r#"AFDate_KeystrokeEx("yyyy-mm-dd");"#, "typed in the default edit pattern");
+    assert_eq!(action("long", b"F"), r#"AFDate_FormatEx("dddd, mmmm d, yyyy");"#);
+    assert_eq!(
+        (action("both", b"F"), action("both", b"K")),
+        (r#"AFDate_FormatEx("yyyymmmdd");"#.to_string(), r#"AFDate_KeystrokeEx("yyyymmdd");"#.to_string())
+    );
+    assert_eq!(action("none", b"F"), r#"AFDate_FormatEx("dd/mm/yyyy");"#);
+}
+
+/// A date field with a format action but no keystroke action (as another tool may lay one out)
+/// keeps its data in the format action's pattern: the date it shows is written to the datasets as
+/// ISO and read back in that pattern, rather than kept as text.
+#[test]
+fn a_date_field_without_a_keystroke_action_keeps_its_data_in_the_format_pattern() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="when" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date/></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let mut fields = field_data(&doc);
+    let when = fields.iter().find(|f| f.name == "when").map(|f| f.obj).unwrap();
+    doc.update_dict(when, |d| {
+        let Some(Object::Dict(aa)) = d.get_mut(b"AA") else { panic!("the layout gives a date field its actions") };
+        assert!(aa.remove(b"K").is_some(), "a keystroke action to take away");
+        assert!(aa.get(b"F").is_some(), "the format action stays");
+    })
+    .unwrap();
+    for f in &mut fields {
+        if f.name == "when" {
+            f.data = FieldData::Text("18/10/2016".into());
+        }
+    }
+    let w = write_datasets(&mut doc, &fields).unwrap();
+    assert!(w.written && w.warnings.is_empty(), "{w:?}");
+    let p = read_packets(&doc).unwrap().unwrap();
+    let data = parse_datasets(&p.xdp).unwrap();
+    assert_eq!(data.text_at(&som_to_path("form[0].when[0]")), Some("2016-10-18"));
+    let values = read_values(&doc, &fields);
+    assert!(values.contains(&("when".to_string(), FieldData::Text("18/10/2016".into()))), "{values:?}");
+}
+
+/// Taking the XFA out makes each date field one a static form keeps working: held and typed as
+/// it shows, as another viewer checks typing against the keystroke pattern but reads the value
+/// again in the format's. Its keystroke takes the format's pattern and its value (held in the
+/// edit pattern) is written in it; the report counts the fields changed.
+#[test]
+fn taking_the_xfa_out_types_dates_as_they_show() {
+    use crate::pdf::strip;
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="dayFirst" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date>2016-10-18</date></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
+ <field name="same" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date>2016-10-18</date></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let r = strip(&mut doc).unwrap();
+    assert_eq!(r.date_fields, 1, "{r:?}");
+    assert!(r.notes().iter().any(|n| n.contains("1 date field(s)")), "{:?}", r.notes());
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let field = |n: &str| fields.iter().find(|(name, _)| name == n).map(|(_, d)| d.clone()).unwrap();
+    let action = |n: &str, k: &[u8]| {
+        let aa = doc.resolve(field(n).get(b"AA").unwrap()).as_dict().unwrap().clone();
+        let a = doc.resolve(aa.get(k).unwrap()).as_dict().unwrap().clone();
+        doc.resolve(a.get(b"JS").unwrap()).as_string().unwrap().to_text()
+    };
+    let value = |n: &str| doc.resolve(field(n).get(b"V").unwrap()).as_string().unwrap().to_text();
+    assert_eq!(action("dayFirst", b"K"), r#"AFDate_KeystrokeEx("mm/dd/yyyy");"#);
+    assert_eq!(action("dayFirst", b"F"), r#"AFDate_FormatEx("mm/dd/yyyy");"#);
+    assert_eq!(value("dayFirst"), "10/18/2016");
+    assert!(!field("dayFirst").contains(DATE_KEY), "the private mark goes as before");
+    // Typed and shown alike: the layout already holds its value in that pattern.
+    assert_eq!((action("same", b"K"), value("same")), (r#"AFDate_KeystrokeEx("dd/mm/yyyy");"#.to_string(), "18/10/2016".to_string()));
+}
+
+/// A template's default date is canonical: ISO (`2016-10-11`, October 11) or its basic form. The
+/// layout holds it in the field's edit pattern, as it holds the data's dates and typed ones, so
+/// an edit pattern laid out like ISO with day and month swapped (`yyyy-dd-mm`) doesn't read it
+/// as November 10, before or after the XFA is taken out.
+#[test]
+fn template_default_dates_are_held_in_the_edit_pattern() {
+    use crate::pdf::strip;
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="swapped" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYY-DD-MM}</picture></ui><value><date>2016-10-11</date></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
+ <field name="basic" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date>20161011</date></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let form = layout_xml(xdp).unwrap();
+    let w = widgets(&form.pages[0]);
+    let held = |n: &str| w.iter().find(|w| w.name == n).unwrap().value.clone();
+    assert_eq!(held("swapped").as_deref(), Some("2016-11-10"), "October 11 in yyyy-dd-mm");
+    assert_eq!(held("basic").as_deref(), Some("11/10/2016"));
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    strip(&mut doc).unwrap();
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let value = |n: &str, key: &[u8]| {
+        let d = fields.iter().find(|(name, _)| name == n).map(|(_, d)| d.clone()).unwrap();
+        doc.resolve(d.get(key).unwrap()).as_string().unwrap().to_text()
+    };
+    assert_eq!(value("swapped", b"V"), "10/11/2016", "still October 11 once static");
+    assert_eq!(value("swapped", b"DV"), "10/11/2016", "and so is its default");
+}
+
 /// The terminal fields by full name, down the field tree.
 fn full_names(doc: &Document) -> Vec<(String, Dict)> {
     let root = doc.get(doc.root().unwrap());
@@ -5440,6 +5742,376 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     assert!(!has_password_values(&doc));
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
+}
+
+/// #3910: `<breakBefore target="…" targetType="pageArea"/>`, `<breakAfter target="…"/>` and
+/// `<break before="pageArea" beforeTarget="…"/>` switch to the named `pageArea` master (including
+/// landscape masters after unbounded portrait masters) and give sections on that master its full
+/// content-area width.
+#[test]
+fn named_page_area_breaks_switch_between_portrait_and_landscape_masters() {
+    let xml = r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+ <subform name="form1" layout="tb">
+  <pageSet>
+   <pageArea name="Page1" id="PA1">
+    <contentArea x="25mm" y="44.45mm" w="172.5mm" h="232.55mm"/>
+    <medium stock="a4" short="210mm" long="297mm"/>
+   </pageArea>
+   <pageArea name="Page2" id="PA2">
+    <contentArea x="25mm" y="31.75mm" w="172.5mm" h="245.25mm"/>
+    <medium stock="a4" short="210mm" long="297mm"/>
+   </pageArea>
+   <pageArea name="Page3" id="PA3">
+    <contentArea x="25mm" y="28.575mm" w="259.5mm" h="161.875mm"/>
+    <medium stock="a4" short="210mm" long="297mm" orientation="landscape"/>
+   </pageArea>
+  </pageSet>
+  <subform name="intro" layout="tb">
+   <field name="f1" w="150mm" h="20mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="wide_flow" layout="tb">
+   <breakBefore target="Page3" targetType="pageArea" startNew="1"/>
+   <field name="f_wide1" w="240mm" h="100mm"><ui><textEdit/></ui></field>
+   <field name="f_wide2" w="240mm" h="100mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="back_portrait" layout="tb">
+   <breakBefore target="Page2" targetType="pageArea" startNew="1"/>
+   <field name="f_p2" w="160mm" h="20mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="wide_positioned" w="250mm" h="50mm">
+   <break before="pageArea" beforeTarget="#PA3" after="pageArea" afterTarget="Page1"/>
+   <field name="f_pos" x="200mm" y="5mm" w="45mm" h="15mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="outro" layout="tb">
+   <field name="f_end" w="120mm" h="20mm"><ui><textEdit/></ui></field>
+  </subform>
+ </subform>
+</template>"##;
+    let form = layout_xml(xml).unwrap();
+    // Pages:
+    // 0: Page1 (portrait) — intro
+    // 1: Page3 (landscape) — wide_flow part 1 (f_wide1)
+    // 2: Page3 (landscape) — wide_flow overflow (f_wide2 stays on Page3)
+    // 3: Page2 (portrait) — back_portrait
+    // 4: Page3 (landscape) — wide_positioned (via #PA3)
+    // 5: Page1 (portrait) — outro (afterTarget="Page1")
+    assert_eq!(form.pages.len(), 6, "expected 6 pages, got {}", form.pages.len());
+    let is_landscape = |p: &Page| p.width > p.height && (p.width - 841.89).abs() < 1.0 && (p.height - 595.28).abs() < 1.0;
+    let is_portrait = |p: &Page| p.height > p.width && (p.width - 595.28).abs() < 1.0 && (p.height - 841.89).abs() < 1.0;
+    assert!(is_portrait(&form.pages[0]), "page 1 is Page1 portrait: {:?}", (form.pages[0].width, form.pages[0].height));
+    assert!(is_landscape(&form.pages[1]), "page 2 is Page3 landscape: {:?}", (form.pages[1].width, form.pages[1].height));
+    assert!(is_landscape(&form.pages[2]), "page 3 overflow stays on Page3 landscape: {:?}", (form.pages[2].width, form.pages[2].height));
+    assert!(is_portrait(&form.pages[3]), "page 4 switches to Page2 portrait: {:?}", (form.pages[3].width, form.pages[3].height));
+    assert!(is_landscape(&form.pages[4]), "page 5 positioned subform switches to #PA3 landscape");
+    assert!(is_portrait(&form.pages[5]), "page 6 afterTarget switches back to Page1 portrait");
+
+    // Wide fields on Page3 keep their full 240mm (~680.3pt) width rather than being clamped to
+    // Page1's 172.5mm (~489pt) portrait content area.
+    let widget_w = |page: usize, name: &str| -> f64 {
+        form.pages[page]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Item::Widget(w) if w.name == name => Some(w.rect.w),
+                _ => None,
+            })
+            .unwrap_or(0.0)
+    };
+    assert!(widget_w(1, "f_wide1") > 670.0, "f_wide1 width on landscape page: {}", widget_w(1, "f_wide1"));
+    assert!(widget_w(2, "f_wide2") > 670.0, "f_wide2 width on landscape overflow page: {}", widget_w(2, "f_wide2"));
+    let pos_right = form.pages[4]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Item::Widget(w) if w.name == "f_pos" => Some(w.rect.x + w.rect.w),
+            _ => None,
+        })
+        .unwrap_or(0.0);
+    assert!(pos_right > 600.0, "f_pos at x=200mm on landscape page is not clipped: {pos_right}");
+
+    // When the very first subform targets Page3, page 1 itself uses Page3 without an extra blank page,
+    // `<overflow target="…"/>` directs overflow pages to a named master, and `<breakAfter target="…"/>`
+    // switches the following page master.
+    let first_landscape = r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+ <subform name="form1" layout="tb">
+  <pageSet>
+   <pageArea name="Page1" id="PA1"><contentArea x="25mm" y="25mm" w="160mm" h="247mm"/><medium stock="a4" short="210mm" long="297mm"/></pageArea>
+   <pageArea name="Page3" id="PA3"><contentArea x="25mm" y="25mm" w="247mm" h="160mm"/><medium stock="a4" short="210mm" long="297mm" orientation="landscape"/></pageArea>
+  </pageSet>
+  <subform name="first" layout="tb">
+   <breakBefore target="#pageSet.Page3[0]" targetType="pageArea" startNew="1"/>
+   <overflow target="pageSet.#PA1"/>
+   <breakAfter target="Page3" targetType="pageArea"/>
+   <field name="f1" w="220mm" h="100mm"><ui><textEdit/></ui></field>
+   <field name="f2" w="150mm" h="100mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="after" layout="tb">
+   <field name="f3" w="220mm" h="20mm"><ui><textEdit/></ui></field>
+  </subform>
+ </subform>
+</template>"##;
+    let first_form = layout_xml(first_landscape).unwrap();
+    assert_eq!(first_form.pages.len(), 3);
+    assert!(is_landscape(&first_form.pages[0]), "first page switched to Page3 landscape");
+    assert!(is_portrait(&first_form.pages[1]), "overflow target switched page 2 to PA1 portrait");
+    assert!(is_landscape(&first_form.pages[2]), "breakAfter target switched page 3 back to Page3 landscape");
+}
+
+/// An `overflow` target applies while its subform is laid out (XFA 3.3, "Break on Overflow").
+/// It must not stay selected for a later sibling's untargeted break: that break keeps the
+/// previous master, which is the first eligible area or an explicit `breakBefore` /
+/// `breakAfter` target. A nested overflow ends with its subform, while an ancestor overflow
+/// that is still open keeps applying, and a descendant's explicit break still sticks.
+#[test]
+fn overflow_target_does_not_steer_a_later_untargeted_break() {
+    fn master(page: &Page) -> &'static str {
+        match (page.width.round() as i64, page.height.round() as i64) {
+            (200, 400) => "Body",
+            (180, 360) => "Overflow",
+            (150, 300) => "Special",
+            _ => "other",
+        }
+    }
+    let field = |name: &str, h: &str| format!(r#"<field name="{name}" w="40pt" h="{h}"><ui><textEdit/></ui></field>"#);
+    let kept = field("kept", "20pt");
+    let a = field("a", "80pt");
+    let b = field("b", "80pt");
+    let after = field("after", "20pt");
+    let inner = field("inner", "20pt");
+    let assert_layout = |label: &str, body: &str, masters: &[&str], fields: &[(&str, usize)]| {
+        let xml = format!(
+            r#"<template><subform layout="tb"><pageSet>
+ <pageArea name="Body"><contentArea x="10pt" y="10pt" w="100pt" h="100pt"/><medium short="200pt" long="400pt"/></pageArea>
+ <pageArea name="Overflow"><contentArea x="12pt" y="10pt" w="100pt" h="100pt"/><medium short="180pt" long="360pt"/></pageArea>
+ <pageArea name="Special"><contentArea x="14pt" y="10pt" w="100pt" h="100pt"/><medium short="150pt" long="300pt"/></pageArea>
+</pageSet>{body}</subform></template>"#
+        );
+        let form = layout_xml(&xml).unwrap();
+        let got: Vec<&str> = form.pages.iter().map(master).collect();
+        assert_eq!(got, masters, "{label}");
+        for (name, page) in fields {
+            let found = form.pages.iter().position(|p| widgets(p).iter().any(|w| w.name == *name));
+            assert_eq!(found, Some(*page), "{label}: {name}");
+        }
+        assert!(form.warnings.is_empty(), "{label}: {:?}", form.warnings);
+    };
+
+    // Nothing overflowed, so the target never applies. The sibling's plain page break stays on Body.
+    assert_layout(
+        "unused overflow target",
+        &format!(
+            r#"<subform name="ov" layout="tb"><overflow target="Overflow"/>{kept}</subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Body", "Body"],
+        &[("kept", 0), ("after", 1)],
+    );
+    // The overflowing fragment uses Overflow. The sibling's untargeted break does not.
+    assert_layout(
+        "taken overflow target",
+        &format!(
+            r#"<subform name="ov" layout="tb"><overflow target="Overflow"/>{a}{b}</subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Body", "Overflow", "Body"],
+        &[("a", 0), ("b", 1), ("after", 2)],
+    );
+    // This subform's own breakBefore is what later untargeted breaks keep.
+    assert_layout(
+        "breakBefore survives an unused overflow target",
+        &format!(
+            r#"<subform name="ov" layout="tb"><breakBefore target="Special"/><overflow target="Overflow"/>{kept}</subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Special", "Special"],
+        &[("kept", 0), ("after", 1)],
+    );
+    assert_layout(
+        "breakBefore survives a taken overflow target",
+        &format!(
+            r#"<subform name="ov" layout="tb"><breakBefore target="Special"/><overflow target="Overflow"/>{a}{b}</subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Special", "Overflow", "Special"],
+        &[("a", 0), ("b", 1), ("after", 2)],
+    );
+    // An untargeted breakAfter is not an overflow, so it must not adopt the overflow master.
+    assert_layout(
+        "untargeted breakAfter",
+        &format!(
+            r#"<subform name="ov" layout="tb"><overflow target="Overflow"/><breakAfter targetType="pageArea"/>{kept}</subform><subform name="next" layout="tb">{after}</subform>"#
+        ),
+        &["Body", "Body"],
+        &[("kept", 0), ("after", 1)],
+    );
+    // An explicit breakAfter still selects its own master after the overflow target is put back.
+    assert_layout(
+        "explicit breakAfter",
+        &format!(
+            r#"<subform name="ov" layout="tb"><overflow target="Overflow"/><breakAfter target="Special"/>{kept}</subform><subform name="next" layout="tb">{after}</subform>"#
+        ),
+        &["Body", "Special"],
+        &[("kept", 0), ("after", 1)],
+    );
+    // A descendant's explicit break sticks, including when it names the same master as the overflow.
+    assert_layout(
+        "descendant break names the overflow master",
+        &format!(
+            r#"<subform name="chapter" layout="tb"><overflow target="Overflow"/><subform name="section" layout="tb"><breakBefore target="Overflow"/>{inner}</subform></subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Overflow", "Overflow"],
+        &[("inner", 0), ("after", 1)],
+    );
+    // The inner overflow ends with that subform. The outer one is still open, so the sibling uses it.
+    assert_layout(
+        "nested overflow yields to the ancestor",
+        &format!(
+            r#"<subform name="outer" layout="tb"><overflow target="Overflow"/><subform name="inner" layout="tb"><overflow target="Special"/>{kept}</subform><subform name="sib" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform></subform>"#
+        ),
+        &["Body", "Overflow"],
+        &[("kept", 0), ("after", 1)],
+    );
+}
+
+/// A discarded page master must not consume field counts or names, even for a widget too
+/// small to be emitted. Earlier retained pages still own their counts and reservations.
+#[test]
+fn replacing_empty_page_restores_master_field_state() {
+    for prior_page in [false, true] {
+        let prior = if prior_page {
+            r#"<subform layout="tb"><breakAfter target="Discard"/><field name="body" w="20pt" h="20pt"><ui><textEdit/></ui></field></subform>"#
+        } else {
+            ""
+        };
+        let xml = format!(
+            r#"<template><subform layout="tb"><pageSet>
+ <pageArea name="Discard"><contentArea x="10pt" y="40pt" w="200pt" h="200pt"/>
+  <field name="shared" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="shared" x="25pt" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="tiny" w="20pt" h="0.5pt"><ui><textEdit/></ui></field>
+ </pageArea>
+ <pageArea name="Intermediate"><contentArea x="20pt" y="40pt" w="200pt" h="200pt"/>
+  <field name="shared" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="tiny" w="20pt" h="0.5pt"><ui><textEdit/></ui></field>
+ </pageArea>
+ <pageArea name="Kept"><contentArea x="30pt" y="40pt" w="200pt" h="200pt"/>
+  <field name="shared" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="tiny" x="25pt" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+ </pageArea>
+ </pageSet>{prior}
+ <subform layout="tb"><breakBefore target="Intermediate"/></subform>
+ <subform layout="tb"><breakBefore target="Kept"/><field name="last" w="20pt" h="20pt"><ui><textEdit/></ui></field></subform>
+ </subform></template>"#
+        );
+        let form = layout_xml(&xml).unwrap();
+        assert_eq!(form.pages.len(), if prior_page { 2 } else { 1 });
+        let actual_fields: usize = form.pages.iter().map(|p| widgets(p).len()).sum();
+        assert_eq!(form.fields, actual_fields, "discarded master fields must not remain counted");
+        let kept = widgets(form.pages.last().unwrap());
+        let names: Vec<&str> = kept.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, if prior_page { vec!["shared_3", "tiny_2", "last"] } else { vec!["shared", "tiny", "last"] });
+        assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+    }
+}
+
+/// Updating frame geometry at a break must include ancestors whose final child crosses several
+/// differently-sized masters before returning, while fixed widths keep their original geometry.
+#[test]
+fn flowed_frame_tracks_every_named_master_including_final_child() {
+    for (limits, widths, x_positions) in [
+        ("", [100.0, 240.0, 140.0], [10.0, 30.0, 50.0]),
+        (r#"minW="120pt" maxW="200pt""#, [100.0, 200.0, 140.0], [10.0, 30.0, 50.0]),
+        (r#"w="80pt""#, [80.0; 3], [10.0; 3]),
+    ] {
+        let xml = format!(
+            r#"<template><subform layout="tb" {limits}>
+ <border><edge/><fill><color value="230,230,230"/></fill></border>
+ <pageSet>
+  <pageArea name="A"><contentArea x="10pt" y="10pt" w="100pt" h="200pt"/></pageArea>
+  <pageArea name="B"><contentArea x="30pt" y="10pt" w="240pt" h="200pt"/></pageArea>
+  <pageArea name="C"><contentArea x="50pt" y="10pt" w="140pt" h="200pt"/></pageArea>
+ </pageSet>
+ <field name="first" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+ <subform layout="tb">
+  <subform layout="tb"><breakBefore target="B"/><field name="second" w="20pt" h="20pt"><ui><textEdit/></ui></field></subform>
+  <subform layout="tb"><breakBefore target="C"/><field name="last" w="20pt" h="20pt"><ui><textEdit/></ui></field></subform>
+ </subform>
+ </subform></template>"#
+        );
+        let form = layout_xml(&xml).unwrap();
+        assert_eq!(form.pages.len(), 3);
+        for (i, page) in form.pages.iter().enumerate() {
+            let fills: Vec<Rect> = page.items.iter().filter_map(|it| if let Item::Fill { rect, .. } = it { Some(*rect) } else { None }).collect();
+            assert_eq!(fills, vec![Rect::new(x_positions[i], 10.0, widths[i], 20.0)], "page {i}, limits {limits}");
+            assert!(matches!(page.items.first(), Some(Item::Fill { .. })), "the fill stays below the widgets");
+        }
+        assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+    }
+}
+
+/// A final field can move to another content area on the same page without another child
+/// observing the changed cursor, and replacing the initial master must refresh open frames too.
+#[test]
+fn flowed_frame_tracks_content_areas_and_initial_master_replacement() {
+    for replace_initial in [false, true] {
+        let unused = if replace_initial { r#"<pageArea name="Unused"><contentArea x="5pt" y="5pt" w="50pt" h="100pt"/></pageArea>"# } else { "" };
+        let xml = format!(
+            r#"<template><subform layout="tb"><border><edge/><fill/></border><pageSet>{unused}
+ <pageArea name="Used">
+  <contentArea x="10pt" y="10pt" w="100pt" h="100pt"/>
+  <contentArea x="130pt" y="10pt" w="240pt" h="100pt"/>
+  <contentArea x="390pt" y="10pt" w="140pt" h="100pt"/>
+ </pageArea></pageSet>
+ <subform layout="tb"><breakBefore target="Used"/>
+  <field name="a" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+  <field name="b" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+  <field name="c" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+ </subform></subform></template>"#
+        );
+        let form = layout_xml(&xml).unwrap();
+        assert_eq!(form.pages.len(), 1);
+        let fills: Vec<Rect> =
+            form.pages[0].items.iter().filter_map(|it| if let Item::Fill { rect, .. } = it { Some(*rect) } else { None }).collect();
+        assert_eq!(fills, vec![Rect::new(10.0, 10.0, 100.0, 80.0), Rect::new(130.0, 10.0, 240.0, 80.0), Rect::new(390.0, 10.0, 140.0, 80.0)]);
+        assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+    }
+}
+
+/// Restarting an auto-width child must keep the available width and inset supplied by an
+/// explicitly sized parent, even when the final child moves to a new content area.
+#[test]
+fn flowed_frame_keeps_fixed_parent_width_and_margins() {
+    let xml = r#"<template><subform layout="tb" w="80pt"><margin leftInset="5pt" rightInset="7pt"/>
+ <pageSet><pageArea>
+  <contentArea x="10pt" y="10pt" w="100pt" h="100pt"/>
+  <contentArea x="10pt" y="130pt" w="100pt" h="100pt"/>
+ </pageArea></pageSet>
+ <subform layout="tb"><border><edge/><fill/></border>
+  <field name="a" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+  <field name="b" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+ </subform></subform></template>"#;
+    let form = layout_xml(xml).unwrap();
+    assert_eq!(form.pages.len(), 1);
+    let fills: Vec<Rect> = form.pages[0].items.iter().filter_map(|it| if let Item::Fill { rect, .. } = it { Some(*rect) } else { None }).collect();
+    assert_eq!(fills, vec![Rect::new(15.0, 10.0, 68.0, 80.0), Rect::new(15.0, 130.0, 68.0, 80.0)]);
+    assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+}
+
+/// A positioned block uses raw area moves while it splits. The next flowed sibling still
+/// receives the new area's horizontal geometry, even though its enclosing border is lost.
+#[test]
+fn flowed_sibling_after_split_block_uses_current_area_width() {
+    let xml = r#"<template><subform layout="tb"><pageSet><pageArea>
+ <contentArea x="10pt" y="10pt" w="100pt" h="100pt"/>
+ <contentArea x="130pt" y="10pt" w="240pt" h="100pt"/>
+ </pageArea></pageSet>
+ <subform w="80pt" h="160pt">
+  <field name="a" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="b" y="120pt" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+ </subform>
+ <field name="after" w="200pt" h="20pt"><ui><textEdit/></ui></field>
+ </subform></template>"#;
+    let form = layout_xml(xml).unwrap();
+    assert_eq!(form.pages.len(), 1);
+    let after = widgets(&form.pages[0]).into_iter().find(|w| w.name == "after").unwrap();
+    assert_eq!((after.rect.x, after.rect.w), (130.0, 200.0));
+    assert!(form.warnings.is_empty(), "{:?}", form.warnings);
 }
 
 /// The data a radio group writes for its selected on state compares every button's state before
