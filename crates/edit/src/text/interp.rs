@@ -479,6 +479,7 @@ pub(super) struct Shown {
     pub(super) decodable: bool,
     pub(super) scope: Option<usize>,
     pub(super) paint: Paint,
+    pub(super) containers: Vec<usize>,
     pub(super) logical_order: bool,
     pub(super) actual_text: bool,
     /// Set when a `/PCSoft` or `/PCHard` marker was seen since the previous text line.
@@ -623,6 +624,9 @@ pub(super) struct Carry {
     pub(super) layers: Vec<Option<Vec<u8>>>,
     /// Bytes of glyph text the rest of the page may still produce (see [`MAX_PAGE_TEXT`]).
     pub(super) text_left: usize,
+    pub(super) containers: Rc<super::containers::Containers>,
+    /// The operator indices of the `Do`s, from the page down, that draw these operators.
+    pub(super) at: Vec<usize>,
     /// Whether the last run ended in a space read from a gap, with the next operator a `Tj` or
     /// `TJ` that may start with the space glyph that gap widened.
     pub(super) gap_space: bool,
@@ -657,7 +661,16 @@ impl Carry {
             dash: (Vec::new(), 0.0),
             line_cap: 0,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, gap_space: false }
+        Carry {
+            ts,
+            stack: Vec::new(),
+            marked: Vec::new(),
+            layers: Vec::new(),
+            text_left: MAX_PAGE_TEXT,
+            containers: Rc::default(),
+            at: Vec::new(),
+            gap_space: false,
+        }
     }
 }
 
@@ -964,6 +977,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         decodable,
         scope: marked.regions.last().copied().flatten(),
         paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
+        containers: Vec::new(),
         logical_order: false,
         actual_text: false,
         soft_break: state.soft_break,
@@ -1233,5 +1247,52 @@ pub(super) fn interpret(
     carry.layers = marked.layers;
     out.retain(|s| s.glyph_count > 0 || s.actual_text);
     positioned_tracking(&mut out);
+    assign_containers(&mut out, carry);
     Ok(out)
+}
+
+/// The filled panels each piece of text sits in: its `membership`, less a box a highlight's
+/// height that only part of the text or of its line is in.
+fn assign_containers(out: &mut [Shown], carry: &Carry) {
+    for shown in out.iter_mut() {
+        shown.containers = carry.containers.membership(shown.rect, &[carry.at.as_slice(), &[shown.op]].concat());
+    }
+    // A box a highlight's height that does not reach across the text is a highlight behind part
+    // of it, as when one `Tj` draws the whole line.
+    for shown in out.iter_mut() {
+        let rect = shown.rect;
+        shown.containers.retain(|panel| carry.containers.spans(*panel, rect) || !carry.containers.hugs(*panel, rect));
+    }
+    // Text that runs on along its line keeps a box only part of it is in when the box is a
+    // panel's height: a highlight padded around one word of the line is not a panel.
+    let mut start = 0;
+    while start < out.len() {
+        let mut end = start + 1;
+        while out.get(end).is_some_and(|next| runs_on(&out[end - 1].rect, &next.rect)) {
+            end += 1;
+        }
+        if end - start > 1 {
+            // How many of the run's pieces each box holds (`membership` lists a box once per piece),
+            // counted in one pass: a hostile page can chain thousands of runs into one line.
+            let mut held: HashMap<usize, usize> = HashMap::new();
+            for shown in &out[start..end] {
+                for panel in &shown.containers {
+                    *held.entry(*panel).or_default() += 1;
+                }
+            }
+            for shown in &mut out[start..end] {
+                let rect = shown.rect;
+                shown.containers.retain(|panel| held.get(panel) == Some(&(end - start)) || !carry.containers.hugs(*panel, rect));
+            }
+        }
+        start = end;
+    }
+}
+
+/// Whether text in `next` continues `previous` along its line: about the same height across it,
+/// and starting at or after it with less than a line's height between them.
+fn runs_on(previous: &[f64; 4], next: &[f64; 4]) -> bool {
+    let height = (previous[3] - previous[1]).max(next[3] - next[1]);
+    let centre = |r: &[f64; 4]| (r[1] + r[3]) / 2.0;
+    (centre(previous) - centre(next)).abs() < height / 2.0 && next[0] >= previous[0] && next[0] - previous[2] < height
 }
