@@ -60,6 +60,7 @@ const ICONS: &[(&str, &[u8])] = &[
     icon!("flip-horizontal-2"),
     icon!("flip-vertical-2"),
     icon!("folder-plus"),
+    icon!("freehand-highlighter"),
     icon!("git-compare"),
     icon!("hash"),
     icon!("heading"),

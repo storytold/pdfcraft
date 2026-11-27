@@ -473,6 +473,17 @@ usage = "UI icon, embedded via crates/ui-egui/src/icons.rs"
 sha256 = "76d62eb7796ce6c7e303c437464923de2d1ae19a5c8d010f8b36dfc1d6180890"
 
 [[asset]]
+path = "assets/icons/freehand-highlighter.svg"
+title = "Freehand highlighter"
+author = "Combiler01"
+source = "https://github.com/Combiler01/pdfcraft/blob/e41d774aaad35956985cd084b781a4c4b9e41587/assets/icons/freehand-highlighter.svg"
+licence = "CC0-1.0"
+licence_file = "assets/icons/LICENSE-freehand-highlighter.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icons.rs"
+sha256 = "6198c9cbdb182132b00ad25e8782ac7c7d237d0736c1d1c1f2f94dd6b8b87132"
+
+[[asset]]
 path = "assets/icons/git-compare.svg"
 title = "Lucide icon \"git-compare\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"

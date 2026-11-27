@@ -16,7 +16,7 @@ sha256 = "cd7032ea33b71427f188e34ffb4aee9d6868a57fd196037c5c8b2be03a2a0352"
 [[document]]
 source = "NOTICE"
 destination = "NOTICE"
-sha256 = "6c9f4bf054646ef7ad1553274e2d03ad3c00cc10d10c7af96465d286a91f2d9c"
+sha256 = "17b44e0aa4dc0763f829d5a858dfed546b360ecb21ed278922a360dcdf0b066d"
 
 [[document]]
 source = "vendor/edit-session/LICENSE-MIT"
@@ -54,6 +54,11 @@ sha256 = "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a"
 source = "assets/fonts/OFL-JetBrainsMono.txt"
 destination = "assets/fonts/OFL-JetBrainsMono.txt"
 sha256 = "a76abf002c49097d146e86740a3105a5d00450b1592e820a1109a8c5680cd697"
+
+[[document]]
+source = "assets/icons/LICENSE-freehand-highlighter.txt"
+destination = "assets/icons/LICENSE-freehand-highlighter.txt"
+sha256 = "83cba0ac883f6ef4866e457536bf58727a5702ebf6e7b407579e4f1863ca4c7d"
 
 [[document]]
 source = "assets/icons/LICENSE-lucide.txt"
