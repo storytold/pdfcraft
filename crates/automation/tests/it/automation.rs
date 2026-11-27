@@ -3910,7 +3910,7 @@ fn duplicating_and_cropping_through_tools() {
     // doc_info reads the boxes back in the same convention page_set_box takes them: the rect
     // comes back as written, and the media box of the margin-cropped page starts above and to
     // the left of the displayed (cropped) page.
-    let pages = ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"].clone();
+    let pages = ok(&mut a, "doc_info", json!({ "doc": doc, "box_pages": [1, 2] }))["pages"].clone();
     assert_eq!(pages[1]["boxes"]["crop"], json!([0.0, 0.0, 100.0, 150.0]), "{}", pages[1]);
     assert_eq!(pages[1]["boxes"]["media"], json!([0.0, 0.0, 200.0, 300.0]), "{}", pages[1]);
     assert_eq!(pages[0]["boxes"]["crop"], json!([0.0, 0.0, 160.0, 240.0]), "{}", pages[0]);
@@ -3963,7 +3963,7 @@ fn doc_info_reports_the_five_page_boxes() {
     std::fs::write(dir.join("boxes.pdf"), page_boxes_pdf()).unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "boxes.pdf" }))["doc"].as_u64().unwrap();
-    let pages = ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"].clone();
+    let pages = ok(&mut a, "doc_info", json!({ "doc": doc, "box_pages": [1, 2] }))["pages"].clone();
     let upright = &pages[0]["boxes"];
     assert_eq!(upright["media"], json!([0.0, 0.0, 200.0, 300.0]), "{upright}");
     assert_eq!(upright["crop"], json!([0.0, 0.0, 200.0, 300.0]), "no crop box: the media box");

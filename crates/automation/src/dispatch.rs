@@ -59,8 +59,9 @@ impl Automation {
             "doc_list" => json!({ "documents": self.session.docs().iter().map(summary).collect::<Vec<_>>() }),
             "doc_info" => {
                 let id = self.doc(&a)?.id;
+                let box_pages = if a.get("box_pages").is_some() { self.pages(&a, "box_pages")? } else { Vec::new() };
                 self.session.refresh_fonts(id);
-                info(self.doc(&a)?)
+                info(self.doc(&a)?, &box_pages.into_iter().collect())
             }
             "doc_close" => self.doc_close(&a)?,
             "doc_save" => self.doc_save(&a)?,
