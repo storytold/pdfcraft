@@ -5526,6 +5526,44 @@ fn thai_in_fill_sign_text_and_text_boxes_is_drawn_from_the_thai_face() {
     assert!(ys[0] + hi * 24.0 <= r[3] + 1e-3 && ys[ys.len() - 1] + lo * 24.0 >= r[1] - 1e-3, "{ys:?} in {r:?}");
 }
 
+/// Accented capitals rise past the 0.9 em a line is given above its first baseline (Å nearly to
+/// the top of the em), so at a large size their tops were cut off at the top of a Fill & Sign text
+/// or text box (#8550). The first baseline sits as far down as the line's tallest glyph needs, and
+/// the box grows to hold it, as it does for Thai stacked marks; plain text keeps its place.
+#[test]
+fn accented_capitals_keep_their_tops_inside_fill_sign_text_and_text_boxes() {
+    let mut doc = fixture();
+    let text = "ÅRHUS ÁGUA\nÉcole";
+    let hi = pdfcraft_fonts::shaped_text::line_reach("ÅRHUS ÁGUA").unwrap()[1];
+    assert!(hi > 0.95, "{hi}: Å rises nearly to the top of the em");
+    let item = |shape: Shape| NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: text.into(), author: "Ada".into() };
+    let shapes = [
+        Shape::Typewriter { rect: [40.0, 700.0, 560.0, 760.0], font_size: 48.0 },
+        Shape::TextBox { rect: [20.0, 400.0, 600.0, 480.0], font_size: 60.0 },
+    ];
+    for (shape, size) in shapes.into_iter().zip([48.0, 60.0]) {
+        let t = add_annotation(&mut doc, &item(shape), &meta("t")).unwrap();
+        let doc = reopen(&doc);
+        let d = &list(&doc, 0)[t];
+        let (r, ys) = (rect(d), baselines(&ap_content(&doc, d)));
+        // Both lines are drawn, and the first line's ink lies inside the box: the appearance's
+        // BBox and its clip.
+        assert_eq!(ys.len(), 2, "{ys:?} at {size}");
+        let top = ys.iter().copied().fold(f64::MIN, f64::max);
+        assert!(top + hi * size <= r[3] + 1e-3, "{ys:?} at {size} in {r:?}");
+    }
+    // Plain text keeps its place: the first baseline 0.9 em under the 4 pt padding (2 pt and
+    // the 2 pt border).
+    let p = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [100.0, 100.0, 300.0, 160.0], font_size: 40.0 }), &meta("p")).unwrap();
+    let ys = baselines(&ap_content(&doc, &list(&doc, 0)[p]));
+    assert!((ys[0] - (160.0 - 4.0 - 0.9 * 40.0)).abs() < 1e-3, "{ys:?}");
+    // New text refits the box to its ink too.
+    set_contents(&mut doc, 0, p, "Å", &meta("")).unwrap();
+    let d = &list(&doc, 0)[p];
+    let (r, ys) = (rect(d), baselines(&ap_content(&doc, d)));
+    assert!(ys[0] + hi * 40.0 <= r[3] + 1e-3, "{ys:?} in {r:?}");
+}
+
 const QUAD: [f64; 8] = [20.0, 110.0, 40.0, 110.0, 20.0, 95.0, 40.0, 95.0];
 
 fn reals(v: &[f64]) -> Vec<Object> {
