@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::fallback::{same_font, same_paint};
+use super::fallback::{adopt_source_font, continues_font, same_paint};
 use super::interp::{Carry, Clip, Origin, Pen, Shown, TextState, Ts, clip_shows, clip_within, direction, interpret, region, to_frame, union};
 use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
 
@@ -465,6 +465,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
     let pieces = joined(&content_streams(doc, &p.dict)?);
     let ops = pieces.parse().ops;
     let properties = res.get(b"Properties").and_then(|o| doc.dict(o)).unwrap_or_default();
+    carry.containers = std::rc::Rc::new(super::containers::Containers::collect(doc, &ops, &res));
     let shown = interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(&properties))?;
     let mut last: Option<(usize, Pen)> = None; // the stream piece and where its last run ended
     for mut s in shown {
@@ -483,9 +484,11 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             let bt = pen.bt;
             let (near, gap) = pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 });
             piece == si
-                && lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
+                && lines.last().is_some_and(|l| {
+                    l.scope == s.scope && l.paint == s.paint && l.containers == s.containers && l.logical_order == s.logical_order
+                })
                 && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
-                && (s.text.trim().is_empty() || lines.last().is_some_and(|l| same_font(l, &s.font, &s.base_font, s.face.as_deref())))
+                && (s.text.trim().is_empty() || lines.last().is_some_and(|l| continues_font(l, &s)))
                 && (s.text.trim().is_empty()
                     || lines.last().is_some_and(|l| {
                         (s.size - l.size).abs() < 0.01
@@ -519,6 +522,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             if l.unreadable_mode.is_none() {
                 l.unreadable_mode = s.state.unreadable.as_deref().map(str::to_owned);
             }
+            adopt_source_font(l, &s);
             // Spaces may use a separate subset font; they do not change the visible style.
         } else {
             lines.push(TextLine {
@@ -538,6 +542,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 stream: si,
                 scope: s.scope,
                 paint: s.paint.clone(),
+                containers: s.containers.clone(),
                 logical_order: s.logical_order,
                 actual_text: s.actual_text,
                 clips: s.state.render_mode >= 4,
@@ -546,6 +551,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 soft_break: s.soft_break,
                 hard_break: s.hard_break,
                 soft_gap: s.soft_gap,
+                edited: s.edited,
                 ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
                 origin: Origin {
                     tm: s.tm.0,
@@ -604,9 +610,9 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
 fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream: usize) {
     let joins = last.is_some_and(|pen| {
         let bt = pen.bt;
-        lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
+        lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.containers == s.containers && l.logical_order == s.logical_order)
             && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
-            && (s.text.trim().is_empty() || lines.last().is_some_and(|l| same_font(l, &s.font, &s.base_font, s.face.as_deref())))
+            && (s.text.trim().is_empty() || lines.last().is_some_and(|l| continues_font(l, &s)))
             && (s.text.trim().is_empty()
                 || lines.last().is_some_and(|l| {
                     (s.size - l.size).abs() < 0.01
@@ -637,6 +643,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
         if l.unreadable_mode.is_none() {
             l.unreadable_mode = s.state.unreadable.as_deref().map(str::to_owned);
         }
+        adopt_source_font(l, &s);
     } else {
         lines.push(TextLine {
             text: s.text.clone(),
@@ -655,6 +662,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             stream,
             scope: s.scope,
             paint: s.paint.clone(),
+            containers: s.containers.clone(),
             logical_order: s.logical_order,
             actual_text: s.actual_text,
             clips: s.state.render_mode >= 4,
@@ -663,6 +671,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             soft_break: s.soft_break,
             hard_break: s.hard_break,
             soft_gap: s.soft_gap,
+            edited: s.edited,
             ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
             origin: Origin {
                 tm: s.tm.0,
@@ -833,8 +842,8 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         let mut last_stream = None;
         let mut forms = invoked.into_iter().peekable();
         for s in shown {
-            while let Some((_, name, ts)) = forms.next_if(|f| f.0 < s.op) {
-                enter(w, resources, &name, ts, &mut carry.text_left)?;
+            while let Some((i, name, ts)) = forms.next_if(|f| f.0 < s.op) {
+                enter(w, resources, &name, ts, &mut carry.text_left, carry.containers.clone(), [carry.at.as_slice(), &[i]].concat())?;
                 // Text after a form starts a new line.
                 last = None;
             }
@@ -851,13 +860,21 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             }
             add_shown(&mut w.lines, &mut last, s, si);
         }
-        for (_, name, ts) in forms {
-            enter(w, resources, &name, ts, &mut carry.text_left)?;
+        for (i, name, ts) in forms {
+            enter(w, resources, &name, ts, &mut carry.text_left, carry.containers.clone(), [carry.at.as_slice(), &[i]].concat())?;
         }
         Ok(())
     }
     /// `text_left`: the page's text budget, shared with the forms the page draws.
-    fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts, text_left: &mut usize) -> Result<(), EditError> {
+    fn enter(
+        w: &mut Walk,
+        resources: &Dict,
+        name: &[u8],
+        ts: Ts,
+        text_left: &mut usize,
+        containers: std::rc::Rc<super::containers::Containers>,
+        at: Vec<usize>,
+    ) -> Result<(), EditError> {
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
         let ops = parse(&form.data).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
@@ -874,6 +891,8 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             layers: Vec::new(),
             text_left: *text_left,
             gap_space: false,
+            containers,
+            at,
         };
         let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);
@@ -900,6 +919,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
     let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let stream_of = |i: usize| ops.get(i).map_or(0, |op| pieces.pieces_of(op).0);
+    carry.containers = std::rc::Rc::new(super::containers::Containers::collect(doc, &ops, &res));
     walk(&mut w, &ops, &res, &mut carry, &stream_of)?;
     let mut lines = w.lines;
     // A visual-order Indic font draws pre-base vowel signs before their consonant.

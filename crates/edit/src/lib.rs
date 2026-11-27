@@ -103,4 +103,8 @@ mod find_replace_rows_tests;
 #[cfg(test)]
 mod marked_isolation_tests;
 #[cfg(test)]
+mod paragraph_spacing_break_tests;
+#[cfg(test)]
+mod paragraph_spacing_tests;
+#[cfg(test)]
 mod tests;

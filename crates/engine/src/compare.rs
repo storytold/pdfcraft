@@ -213,6 +213,10 @@ pub struct OfficeExport {
     /// fields or list items past what a Word page holds ([`pdfcraft_export::docx_checked`]: only
     /// those are missing; the page's text and images stay). Radio groups retain locked controls
     /// instead of editable independent checkboxes; pages losing radio editability are listed too.
+    /// RTF also lists the pages that lost a picture to
+    /// its own limits (it repeats a picture's data at every placement) or one whose rotation it
+    /// couldn't bake in; their other content is kept. A picture no format can encode (a JPX image,
+    /// say) is left out of every format without being listed.
     pub truncated_pages: Vec<usize>,
 }
 
@@ -679,7 +683,8 @@ fn widget_look(cos: &pdfcraft_cos::Document, w: &pdfcraft_forms::Widget) -> (Opt
     })
 }
 
-/// Simple HTML has no CSS. Apply its image flips to bounded pixels once per shared image and
+/// The HTML writer embeds a picture's bytes as they are, with no transform of its own (simple HTML
+/// has no CSS). Apply its image flips to bounded pixels once per shared image and
 /// orientation, retaining PNG alpha, and report images that cannot be prepared.
 fn upright_html_images(pages: &mut [pdfcraft_export::Page], dropped: &mut Vec<usize>, work: &mut pdfcraft_cos::ImageBudget) {
     upright_html_images_within(pages, dropped, work, MAX_EXPORT_IMAGE_BYTES);
@@ -1020,19 +1025,21 @@ impl crate::Document {
     /// [`Self::export_office`], and the pages whose text it had to leave out
     /// ([`OfficeExport::truncated_pages`]).
     pub fn export_office_checked(&self, format: OfficeFormat) -> OfficeExport {
-        // RTF and Markdown leave pictures out.
+        // Markdown leaves pictures out.
         let (pages, mut truncated_pages) = match self.editor.as_ref() {
             Some(editor) => {
                 let mut work = pdfcraft_cos::ImageBudget::new(&editor.cos);
                 let (mut pages, mut dropped) = self.export_pages_with(
-                    !matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown),
+                    !matches!(format, OfficeFormat::Markdown),
                     MAX_EXPORT_IMAGE_BYTES,
                     &mut work,
                     matches!(format, OfficeFormat::Docx),
                     MAX_EXPORT_SHAPE_POINTS,
                     MAX_EXPORT_FIELD_BYTES,
                 );
-                if matches!(format, OfficeFormat::HtmlSimple) {
+                // The HTML writer embeds pictures as they are: a mirror or half turn is baked into
+                // their pixels here, for both of its modes.
+                if matches!(format, OfficeFormat::Html | OfficeFormat::HtmlSimple) {
                     upright_html_images(&mut pages, &mut dropped, &mut work);
                 }
                 (pages, dropped)
@@ -1054,7 +1061,13 @@ impl crate::Document {
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
             OfficeFormat::Html => pdfcraft_export::html_with_language(&pages, &title, language.as_deref()).into_bytes(),
             OfficeFormat::HtmlSimple => pdfcraft_export::html_simple_with_language(&pages, &title, language.as_deref()).into_bytes(),
-            OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
+            OfficeFormat::Rtf => {
+                let (rtf, omitted) = pdfcraft_export::rtf_with_title_checked(&pages, &title);
+                truncated_pages.extend(omitted);
+                truncated_pages.sort_unstable();
+                truncated_pages.dedup();
+                rtf.into_bytes()
+            }
             OfficeFormat::Markdown => pdfcraft_export::markdown(&pages).into_bytes(),
         };
         truncated_pages.sort_unstable();

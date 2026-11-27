@@ -1,4 +1,6 @@
-use super::host::{FieldKey, arg, colour, error, function, host, read, s, set_value, strings, text, text_line, value_of, write};
+use super::host::{
+    FieldKey, arg, charge, colour, error, function, host, kind_of, read, s, strings, text, text_bytes, text_line, value_for, value_of, write,
+};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, Request};
 use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
 
@@ -41,8 +43,9 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let value_get = getter!(ctx, n, |f, c| value_of(&f, c));
     let value_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
-            let vals = strings(&arg(args, 0), c)?;
-            write(c, name, |f| set_value(f, vals))?;
+            let vals = value_for(kind_of(c, name)?, strings(&arg(args, 0), c)?);
+            charge(c, name, |f| text_bytes(&f.value), text_bytes(&vals))?;
+            write(c, name, |f| f.value = vals)?;
             Ok(JsValue::undefined())
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
@@ -104,6 +107,7 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let text_color_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let v = strings(&arg(args, 0), c)?;
+            charge(c, name, |f| f.text_color.as_deref().map_or(0, text_bytes), text_bytes(&v))?;
             write(c, name, |f| f.text_color = Some(v.into()))?;
             Ok(JsValue::undefined())
         }
@@ -113,6 +117,7 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let fill_color_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let v = strings(&arg(args, 0), c)?;
+            charge(c, name, |f| f.fill_color.as_deref().map_or(0, text_bytes), text_bytes(&v))?;
             write(c, name, |f| f.fill_color = Some(v.into()))?;
             Ok(JsValue::undefined())
         }
@@ -482,4 +487,95 @@ pub(crate) fn page_num_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> 
     h.doc.page = p;
     h.request(Request::GoToPage(p));
     Ok(JsValue::undefined())
+}
+
+// ── page templates (#1429) ──────────────────────────────────────────────────────────────────
+
+/// A Template object (`this.getTemplate(name)`): its `name`, whether it is `hidden` (setting it
+/// shows or hides the template's page), and `spawn` to add a page from it.
+pub(crate) fn template_object(ctx: &mut Context, name: &str) -> JsObject {
+    let n = JsString::from(name);
+    fn get_name(_: &JsValue, _: &[JsValue], name: &JsString, _c: &mut Context) -> JsResult<JsValue> {
+        Ok(JsValue::from(name.clone()))
+    }
+    fn get_hidden(_: &JsValue, _: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let name = name.to_std_string_escaped();
+        let hidden = host(c)?.borrow().doc.templates.iter().find(|(n, _)| *n == name).is_some_and(|(_, h)| *h);
+        Ok(JsValue::from(hidden))
+    }
+    fn set_hidden(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let hidden = arg(args, 0).to_boolean();
+        let name = name.to_std_string_escaped();
+        let mut h = host(c)?.borrow_mut();
+        // The script reads back what it set.
+        if let Some(t) = h.doc.templates.iter_mut().find(|(n, _)| *n == name) {
+            t.1 = hidden;
+        }
+        h.request(Request::SetTemplateHidden { name, hidden });
+        Ok(JsValue::undefined())
+    }
+    fn spawn(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let request = spawn_request(name.to_std_string_escaped(), args, 0, c)?;
+        host(c)?.borrow_mut().request(request);
+        Ok(JsValue::null())
+    }
+    let rw = Attribute::CONFIGURABLE | Attribute::ENUMERABLE;
+    let get_name = function(ctx, NativeFunction::from_copy_closure_with_captures(get_name, n.clone()));
+    let get_hidden = function(ctx, NativeFunction::from_copy_closure_with_captures(get_hidden, n.clone()));
+    let set_hidden = function(ctx, NativeFunction::from_copy_closure_with_captures(set_hidden, n.clone()));
+    let spawn = NativeFunction::from_copy_closure_with_captures(spawn, n);
+    ObjectInitializer::new(ctx)
+        .accessor(js_string!("name"), Some(get_name), None, rw)
+        .accessor(js_string!("hidden"), Some(get_hidden), Some(set_hidden), rw)
+        .function(spawn, js_string!("spawn"), 4)
+        .build()
+}
+
+/// The request for a page from template `name`, from `spawn`'s arguments starting at `first`:
+/// `(nPage, bRename, bOverlay)` or one object holding them. As in Acrobat, the page is 0 unless
+/// given, and the fields are renamed and the page laid over unless asked otherwise.
+fn spawn_request(name: String, args: &[JsValue], first: usize, ctx: &mut Context) -> JsResult<Request> {
+    let given = arg(args, first);
+    let named = given.as_object().filter(|o| !o.is_array());
+    let mut value = |key: &str, index: usize| -> JsResult<JsValue> {
+        match &named {
+            Some(o) => o.get(JsString::from(key), ctx),
+            None => Ok(arg(args, first.saturating_add(index))),
+        }
+    };
+    let (page, rename, overlay) = (value("nPage", 0)?, value("bRename", 1)?, value("bOverlay", 2)?);
+    let page = if page.is_undefined() { 0.0 } else { page.to_number(ctx)? };
+    // NaN, negative and huge numbers land on the first page and past the last, where the
+    // document clamps them.
+    let page = if page.is_finite() {
+        page.max(0.0).min(usize::MAX as f64) as usize
+    } else if page > 0.0 {
+        usize::MAX
+    } else {
+        0
+    };
+    let flag = |v: &JsValue| if v.is_undefined() { true } else { v.to_boolean() };
+    Ok(Request::SpawnTemplate { name, page, rename: flag(&rename), overlay: flag(&overlay) })
+}
+
+/// `this.getTemplate(cName)`: the Template object, or `null` when there is none of that name.
+pub(crate) fn get_template(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let name = text(&arg(args, 0), ctx)?;
+    let exists = host(ctx)?.borrow().doc.templates.iter().any(|(n, _)| *n == name);
+    Ok(if exists { template_object(ctx, &name).into() } else { JsValue::null() })
+}
+
+/// `this.spawnPageFromTemplate(cTemplate, nPage, bRename, bOverlay)`: the older way to spawn.
+pub(crate) fn spawn_page_from_template(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    // `({ cTemplate, nPage, bRename, bOverlay })` names its arguments, the template included.
+    let (name, first) = match arg(args, 0).as_object().filter(|o| !o.is_array()) {
+        Some(o) => (text(&o.get(js_string!("cTemplate"), ctx)?, ctx)?, 0),
+        None => (text(&arg(args, 0), ctx)?, 1),
+    };
+    if !host(ctx)?.borrow().doc.templates.iter().any(|(n, _)| *n == name) {
+        return Err(error(format!("there is no template named {name}")));
+    }
+    let request = spawn_request(name, args, first, ctx)?;
+    host(ctx)?.borrow_mut().request(request);
+    Ok(JsValue::null())
 }

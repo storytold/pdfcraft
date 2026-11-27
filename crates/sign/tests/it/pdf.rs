@@ -325,6 +325,21 @@ fn an_indirect_annots_array_is_judged_by_the_annotations_it_gains() {
     assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::OTHER])));
 }
 
+/// A signature widget taken off the page's inline /Annots array is covered by no permission (the
+/// indirect-array case is the test above), and stays a change whatever level the signature has.
+#[test]
+fn removing_a_widget_from_an_inline_annots_array_is_not_a_comment_change() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let page = pdfcraft_cos::ObjRef { num: 3, generation: 0 };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let inline = open(&signed).get(page).as_dict().and_then(|d| d.get(b"Annots").cloned()).unwrap();
+    assert!(matches!(inline, Object::Array(ref a) if !a.is_empty()), "the page keeps its widgets inline");
+    let stripped = edit_after(&signed, |doc| doc.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(vec![]))).unwrap());
+    let s = signatures(&open(&stripped), &stripped, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::OTHER])));
+}
+
 /// Issue #1328: a signature field whose /V is null, directly or through a reference, is unsigned:
 /// it is listed as unsigned and can be signed by name.
 #[test]
@@ -1035,6 +1050,13 @@ fn embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid() {
         doc.get(root).as_dict().unwrap().get(b"DSS").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap();
     assert_eq!(dss_dict.name(b"Type"), Some(b"DSS".as_slice()));
     assert!(dss_dict.contains(b"Certs") && dss_dict.contains(b"OCSPs") && dss_dict.contains(b"CRLs") && dss_dict.contains(b"VRI"));
+    // A signature's /VRI entry points at the store's arrays instead of holding its own copy of each.
+    let vri = dss_dict.get(b"VRI").map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()).unwrap();
+    let entry = vri.iter().next().and_then(|(_, e)| e.as_dict().cloned()).unwrap();
+    for (vri_key, dss_key) in [(&b"Cert"[..], &b"Certs"[..]), (b"OCSP", b"OCSPs"), (b"CRL", b"CRLs")] {
+        assert!(matches!(entry.get(vri_key), Some(pdfcraft_cos::Object::Ref(_))));
+        assert_eq!(entry.get(vri_key), dss_dict.get(dss_key));
+    }
     // The earlier signature still validates; the DSS counts as a permitted change.
     let s = signatures(&doc, &ltv, &TrustStore::default()).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
     assert_eq!(s.status, Status::Unknown);
@@ -1392,6 +1414,66 @@ fn xfa_page_swap(doc: &mut Document) {
         }
     })
     .unwrap();
+}
+
+/// A second widget that reuses the signed field's name and `/V` is not that signature.
+#[test]
+fn a_later_field_with_the_same_name_does_not_inherit_the_signature() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let edited = edit_after(&signed, |doc| {
+        let root = doc.root().unwrap();
+        let form = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm")).map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap();
+        let fields = form.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap();
+        let original = fields.iter().find_map(Object::as_ref).unwrap();
+        let value = doc.get(original).as_dict().unwrap().get(b"V").cloned().expect("the signed field has /V");
+        let mut widget = pdfcraft_cos::Dict::new();
+        widget.set(b"Type".to_vec(), Object::name("Annot"));
+        widget.set(b"Subtype".to_vec(), Object::name("Widget"));
+        widget.set(b"FT".to_vec(), Object::name("Sig"));
+        widget.set(b"T".to_vec(), PdfString::text("Approval"));
+        widget.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(10), Object::Int(10), Object::Int(80), Object::Int(40)]));
+        widget.set(b"P".to_vec(), Object::Ref(pdfcraft_cos::ObjRef { num: 3, generation: 0 }));
+        let cloned_v = doc.add((*doc.resolve(&value)).clone());
+        widget.set(b"V".to_vec(), Object::Ref(cloned_v));
+        let planted = doc.add(Object::Dict(widget));
+        doc.update_dict(root, |c| {
+            if let Some(Object::Dict(form)) = c.get_mut(b"AcroForm")
+                && let Some(Object::Array(list)) = form.get_mut(b"Fields")
+            {
+                list.push(Object::Ref(planted));
+            }
+        })
+        .unwrap();
+        doc.update_dict(pdfcraft_cos::ObjRef { num: 3, generation: 0 }, |p| {
+            if let Some(Object::Array(annots)) = p.get_mut(b"Annots") {
+                annots.push(Object::Ref(planted));
+            }
+        })
+        .unwrap();
+    });
+    let listed = signatures(&open(&edited), &edited, &trust);
+    let original = listed.iter().find(|s| s.rect == Some([150.0, 20.0, 280.0, 70.0])).expect("original field");
+    let planted = listed.iter().find(|s| s.rect == Some([10.0, 10.0, 80.0, 40.0])).expect("planted field");
+    assert_eq!(original.status, Status::Valid, "{:?}", original.details);
+    assert_ne!(planted.status, Status::Valid, "the planted widget inherited the signature: {:?}", planted.details);
+}
+
+#[test]
+fn toggling_needs_rendering_is_a_structure_change() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    let certified = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
+    assert_eq!(check(&certified).status, Status::Valid);
+    let edited = edit_after(&certified, |doc| {
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"NeedsRendering".to_vec(), Object::Bool(true))).unwrap();
+    });
+    let s = check(&edited);
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+    assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::STRUCTURE)), "{:?}", s.modification);
 }
 
 #[test]
@@ -2655,7 +2737,7 @@ fn protected(alg: pdfcraft_cos::Algorithm, permissions: i32) -> Vec<u8> {
 /// `fixture()` protected with the user password `user` and an owner password, then saved.
 fn protected_with(alg: pdfcraft_cos::Algorithm, user: &str, permissions: i32) -> Vec<u8> {
     let mut doc = open(&fixture());
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: alg,
         user_password: user,
         owner_password: "owner",
@@ -2981,12 +3063,7 @@ fn wordings_are_complete() {
     let source = source.as_str();
     // The modules below `pdf` word whole sentences too: how a signature value had to be read, and
     // what a certificate does not allow.
-    let elsewhere = [
-        include_str!("../../src/x509.rs"),
-        include_str!("../../src/cms.rs"),
-        include_str!("../../src/keys.rs"),
-        include_str!("../../src/rsa_pad.rs"),
-    ];
+    let elsewhere = [include_str!("../../src/x509.rs"), include_str!("../../src/cms.rs"), include_str!("../../src/keys.rs")];
     /// A sentence said to the user, as opposed to an OID, a name or a tag: it reads as English.
     fn is_sentence(s: &str) -> bool {
         s.len() > 24 && s.ends_with('.') && s.contains(' ') && s.starts_with(|c: char| c.is_ascii_uppercase())
@@ -3019,6 +3096,15 @@ fn wordings_are_complete() {
         out
     }
     let mut said = after(source, &["Detail::plain(", "Detail::of("]);
+    // These existing diagnostics now come from pinned craft-pkcs7 instead of local source.
+    // Keep their translation coverage; crypto.rs exercises the corresponding tolerated forms.
+    said.extend([
+        "The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.",
+        "The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.",
+        "The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.",
+        "The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.",
+    ]);
+
     let at_hand = ["Detail::plain(", "Detail::of(", ".push(", "Some("];
     said.extend(elsewhere.iter().flat_map(|s| after(s, &at_hand)).filter(|s| is_sentence(s)));
     let summary = source.split("pub fn summary").nth(1).and_then(|s| s.split("\n    }").next()).unwrap_or_default();
@@ -3137,6 +3223,172 @@ fn a_cross_reference_entry_that_misses_its_object_is_not_an_unchanged_object() {
     let honest = append_content_revision(&signed, "Contract text", |new| format!("4 1\n{}", xref_entry(new)));
     let s = signatures(&open(&honest), &honest, &trust).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+}
+
+/// `signed` with one more revision appended by hand: `bodies` written as they are, then a
+/// cross-reference table section whose subsections `xref` writes, given where each body starts
+/// and where the section's own `xref` keyword is. `trailer_extra` goes into its trailer, which
+/// continues the signed chain.
+fn append_revision(signed: &[u8], bodies: &[&str], trailer_extra: &str, xref: impl Fn(&[usize], usize) -> String) -> Vec<u8> {
+    let at = signed.windows(9).rposition(|w| w == b"startxref").unwrap() + 9;
+    let prev: String = signed[at..].iter().skip_while(|b| b.is_ascii_whitespace()).take_while(|b| b.is_ascii_digit()).map(|b| *b as char).collect();
+    let mut out = signed.to_vec();
+    let mut starts = Vec::new();
+    for body in bodies {
+        starts.push(out.len());
+        out.extend_from_slice(body.as_bytes());
+    }
+    let section = out.len();
+    out.extend_from_slice(
+        format!("xref\n{}trailer\n<< /Size 61 /Root 1 0 R /Prev {prev} {trailer_extra} >>\nstartxref\n{section}\n%%EOF\n", xref(&starts, section))
+            .as_bytes(),
+    );
+    out
+}
+
+/// When an entry it follows leads to no object, the renderer rebuilds its object index from the
+/// `N G obj` headers in the file, and there the last header for a number wins. So a revision
+/// appended after signing can carry a new body for the page's content stream that no section
+/// lists, plus an entry, named from the trailer, that points at no object: the page draws the
+/// unlisted body while every object the signed revision had still reads as signed. Neither is a
+/// permitted change, apart or together, under a certification or an approval signature. An
+/// honest revision that lists what it adds stays permitted.
+#[test]
+fn an_unlisted_object_body_or_an_entry_that_points_at_no_object_is_not_permitted() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let text = "BT /F1 14 Tf 20 250 Td (Forged text) Tj ET";
+    let forged = format!("4 0 obj\n<< /Length {} >>\nstream\n{text}\nendstream\nendobj\n", text.len());
+    let unused = "60 0 obj\n(unused)\nendobj\n";
+    // Object 60's entry points at the section's own `xref` keyword.
+    let nowhere = |_: &[usize], section: usize| format!("60 1\n{}", xref_entry(section));
+    let listed = |starts: &[usize], _: usize| format!("60 1\n{}", xref_entry(*starts.last().unwrap()));
+    for certify in [Some(1), None] {
+        let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify, ..opts() }).unwrap();
+        let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+        type Subsections<'a> = &'a dyn Fn(&[usize], usize) -> String;
+        let attacks: [(&str, Vec<&str>, &str, Subsections, &str); 3] = [
+            ("an unlisted body and an entry that points at no object", vec![&forged], "/Info 60 0 R", &nowhere, kind::PAGE_CONTENT),
+            ("an entry that points at no object", vec![], "/Info 60 0 R", &nowhere, kind::OTHER),
+            ("an unlisted body beside a listed one", vec![&forged, unused], "", &listed, kind::PAGE_CONTENT),
+        ];
+        for (name, bodies, trailer, xref, what) in attacks {
+            let edited = append_revision(&signed, &bodies, trailer, xref);
+            let s = check(&edited);
+            assert_eq!(s.status, Status::Invalid, "{certify:?}, {name}: {:?}", s.modification);
+            assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&what)), "{certify:?}, {name}: {:?}", s.modification);
+        }
+        let honest = append_revision(&signed, &[unused], "", listed);
+        let s = check(&honest);
+        assert_eq!(s.status, Status::Valid, "{certify:?}, an honest revision: {:?}", s.modification);
+    }
+}
+
+/// `signed` (one page, object 3) with a revision appended by hand that signs it again, as many
+/// writers do: it adds signature field 61, listed in the catalog's `/Fields` and on page 3, whose
+/// value 62 is a signature dictionary over that revision, and ends with a cross-reference stream,
+/// object `xref_num`, that lists 1, 3, 61 and 62 but has no row for itself. ISO 32000-2 §7.5.8.3
+/// asks for that row; readers do without it. `annot_extra` is listed on page 3 as well.
+fn append_signature_with_unlisted_xref_stream(signed: &[u8], xref_num: u32, annot_extra: Option<u32>) -> Vec<u8> {
+    let doc = open(signed);
+    let at = signed.windows(9).rposition(|w| w == b"startxref").unwrap() + 9;
+    let prev: i64 = std::str::from_utf8(&signed[at..]).unwrap().split_whitespace().next().unwrap().parse().unwrap();
+    let r = |num: u32| ObjRef { num, generation: 0 };
+    let mut catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    if let Some(Object::Dict(form)) = catalog.get_mut(b"AcroForm")
+        && let Some(Object::Array(fields)) = form.get_mut(b"Fields")
+    {
+        fields.push(Object::Ref(r(61)));
+    }
+    let mut page = doc.get(r(3)).as_dict().cloned().unwrap();
+    let mut annots = page.get(b"Annots").and_then(Object::as_array).cloned().unwrap();
+    annots.push(Object::Ref(r(61)));
+    annots.extend(annot_extra.map(|n| Object::Ref(r(n))));
+    page.set(b"Annots".to_vec(), Object::Array(annots));
+    let placeholder = "0 0000000000 0000000000 0000000000";
+    let bodies: [(u32, Vec<u8>); 4] = [
+        (1, {
+            let mut b = Vec::new();
+            pdfcraft_cos::serialize(&Object::Dict(catalog), &mut b);
+            b
+        }),
+        (3, {
+            let mut b = Vec::new();
+            pdfcraft_cos::serialize(&Object::Dict(page), &mut b);
+            b
+        }),
+        (61, b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Later) /Rect [0 0 0 0] /F 132 /P 3 0 R /V 62 0 R >>".to_vec()),
+        (
+            62,
+            format!("<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [{placeholder}] /Contents <00> >>").into_bytes(),
+        ),
+    ];
+    let mut out = signed.to_vec();
+    let mut rows = Vec::new();
+    for (num, body) in &bodies {
+        rows.push((*num, out.len()));
+        out.extend_from_slice(format!("{num} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    // Rows of type 1: four bytes of offset, two of generation.
+    let mut data = Vec::new();
+    for (_, offset) in &rows {
+        data.push(1u8);
+        data.extend_from_slice(&u32::try_from(*offset).unwrap().to_be_bytes());
+        data.extend_from_slice(&[0, 0]);
+    }
+    let mut dict = doc.trailer().clone();
+    let plumbing: [&[u8]; 7] = [b"Prev", b"XRefStm", b"Index", b"W", b"Filter", b"DecodeParms", b"Length"];
+    for key in plumbing {
+        dict.remove(key);
+    }
+    dict.set(b"Type".to_vec(), Object::name("XRef"));
+    dict.set(b"Size".to_vec(), Object::Int(64));
+    dict.set(b"Prev".to_vec(), Object::Int(prev));
+    dict.set(b"W".to_vec(), Object::Array([1, 4, 2].map(Object::Int).to_vec()));
+    dict.set(b"Index".to_vec(), Object::Array([1, 1, 3, 1, 61, 2].map(Object::Int).to_vec()));
+    dict.set(b"Length".to_vec(), Object::Int(i64::try_from(data.len()).unwrap()));
+    let section = out.len();
+    out.extend_from_slice(format!("{xref_num} 0 obj\n").as_bytes());
+    pdfcraft_cos::serialize(&Object::Dict(dict), &mut out);
+    out.extend_from_slice(b"\nstream\n");
+    out.extend_from_slice(&data);
+    out.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{section}\n%%EOF\n").as_bytes());
+    // The value signs the revision: its range runs to the end, around /Contents.
+    let contents = out.windows(4).rposition(|w| w == b"<00>").unwrap();
+    let range = format!("0 {contents:010} {:010} {:010}", contents + 4, out.len() - contents - 4);
+    let at = out.windows(placeholder.len()).rposition(|w| w == placeholder.as_bytes()).unwrap();
+    out[at..at + placeholder.len()].copy_from_slice(range.as_bytes());
+    out
+}
+
+/// Many writers append a cross-reference stream with no row for itself. Its header sits in the
+/// appended bytes where no entry points, but it is the section the reader followed, and nothing
+/// refers to it: a later signature written that way stays a permitted change. The exemption
+/// holds only for that: the same stream numbered as the signed page's content, or listed on the
+/// page as an annotation, is refused.
+#[test]
+fn a_cross_reference_stream_without_a_row_for_itself_is_no_unlisted_body() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    for certify in [Some(2), None] {
+        let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify, ..opts() }).unwrap();
+        let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.field == "Signature1").unwrap();
+        let resigned = append_signature_with_unlisted_xref_stream(&signed, 63, None);
+        let doc = open(&resigned);
+        assert!(doc.revisions().iter().any(|r| r.is_stream) && doc.xref_entry(63).is_none() && doc.xref_entry(62).is_some());
+        let s = check(&resigned);
+        assert_eq!(s.status, Status::Valid, "{certify:?}: {:?}", s.modification);
+        assert_eq!(s.modification, Modification::Allowed(vec![kind::SIGNATURE]), "{certify:?}");
+        for (what, xref_num, annot_extra, kind) in
+            [("numbered as the signed page content", 4, None, kind::PAGE_CONTENT), ("listed on the page", 63, Some(63), kind::OTHER)]
+        {
+            let s = check(&append_signature_with_unlisted_xref_stream(&signed, xref_num, annot_extra));
+            assert_eq!(s.status, Status::Invalid, "{certify:?}, {what}: {:?}", s.modification);
+            assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind)), "{certify:?}, {what}: {:?}", s.modification);
+        }
+    }
 }
 
 /// `fixture()` with the page's resources indirect: object 7 is the resources dictionary, 8 its
@@ -3352,6 +3604,206 @@ fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_val
         "{:?}",
         all.iter().map(|s| (&s.status, &s.modification)).collect::<Vec<_>>()
     );
+}
+
+/// The signed catalog and page-tree nodes keep their structural roles even if a later revision
+/// drops `/Type /Catalog` or `/Type /Pages` and adds form keys (`/FT /Tx`, `/DR`) while swapping
+/// the page tree (#3998).
+#[test]
+fn signed_catalog_and_page_tree_keep_their_role_when_relabelled_or_dropped() {
+    use pdfcraft_cos::{ObjRef, Stream};
+    // Rewriting the signed catalog without `/Type /Catalog` while pointing `/Pages` at a new page tree
+    // and adding `/FT /Tx` is refused as a structure change at every DocMDP level.
+    assert_refused_at_every_level(&fixture(), kind::STRUCTURE, |doc| {
+        let new_content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"BT /F1 14 Tf 20 250 Td (Forged) Tj ET".to_vec())));
+        let new_page = doc.add(Object::Dict(dict_of(vec![
+            ("Type", Object::name("Page")),
+            ("Parent", oref(2)),
+            ("MediaBox", Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(300), Object::Int(300)])),
+            ("Contents", Object::Ref(new_content)),
+        ])));
+        let new_pages = doc.add(Object::Dict(dict_of(vec![
+            ("Type", Object::name("Pages")),
+            ("Kids", Object::Array(vec![Object::Ref(new_page)])),
+            ("Count", Object::Int(1)),
+        ])));
+        let af = doc.get(ObjRef { num: 1, generation: 0 }).as_dict().and_then(|c| c.get(b"AcroForm").cloned()).unwrap();
+        doc.set(
+            ObjRef { num: 1, generation: 0 },
+            Object::Dict(dict_of(vec![("Pages", Object::Ref(new_pages)), ("AcroForm", af), ("FT", Object::name("Tx"))])),
+        );
+    });
+
+    // Rewriting the signed `/Pages` dictionary without `/Type /Pages` while replacing `/Kids` and
+    // adding `/FT /Tx` is refused as a page-tree change (`kind::PAGES`) at every DocMDP level.
+    assert_refused_at_every_level(&fixture(), kind::PAGES, |doc| {
+        let new_content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"BT /F1 14 Tf 20 250 Td (Forged) Tj ET".to_vec())));
+        let new_page = doc.add(Object::Dict(dict_of(vec![
+            ("Type", Object::name("Page")),
+            ("Parent", oref(2)),
+            ("MediaBox", Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(300), Object::Int(300)])),
+            ("Contents", Object::Ref(new_content)),
+        ])));
+        doc.set(
+            ObjRef { num: 2, generation: 0 },
+            Object::Dict(dict_of(vec![
+                ("Kids", Object::Array(vec![Object::Ref(new_page), oref(3)])),
+                ("Count", Object::Int(2)),
+                ("FT", Object::name("Tx")),
+            ])),
+        );
+    });
+
+    // Rewriting a signed non-form dictionary (such as an `/Action` dictionary) by adding `/FT /Tx`
+    // or `/DR` in a later revision is classified as `kind::OTHER` rather than `kind::FORM_FILL`,
+    // and is refused even under DocMDP `P = 2` (and `P = 3`).
+    let with_action = fixture_with(
+        b"<< /Type /Catalog /Pages 2 0 R /OpenAction 7 0 R /AcroForm << /Fields [6 0 R] >> >>",
+        &[b"<< /Type /Action /S /URI /URI (https://example.test/signed) >>"],
+    );
+    assert_refused_at_every_level(&with_action, kind::OTHER, |doc| {
+        doc.set(
+            ObjRef { num: 7, generation: 0 },
+            Object::Dict(dict_of(vec![
+                ("Type", Object::name("Action")),
+                ("S", Object::name("URI")),
+                ("URI", Object::String(PdfString::text("https://attacker.invalid/phish"))),
+                ("FT", Object::name("Tx")),
+                ("DR", Object::Dict(Dict::new())),
+            ])),
+        );
+    });
+}
+
+/// Signature dictionaries (`/ByteRange`, `/Contents`, `/Reference`) are read from the revision
+/// covered by the signature, and rewriting a signed signature object or attaching a signature in a
+/// later revision whose `/ByteRange` only covers an earlier revision is refused (#3998).
+#[test]
+fn signed_signature_objects_and_byte_ranges_are_read_from_the_signed_revision() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
+    let sig_ref = open(&signed)
+        .object_numbers()
+        .into_iter()
+        .map(|num| pdfcraft_cos::ObjRef { num, generation: 0 })
+        .find(|r| open(&signed).get(*r).as_dict().is_some_and(|d| d.name(b"Type") == Some(b"Sig")))
+        .unwrap();
+
+    // Rewriting the signed `/Type /Sig` dictionary in a later revision (trying to relax `/P` from
+    // 1 to 3 and adding `/FT /Sig` so the rewrite looks like a signature field) keeps `certify` as
+    // `Some(1)` from the signed revision and invalidates the signature.
+    let relaxed = edit_after(&signed, |doc| {
+        doc.update_dict(sig_ref, |d| {
+            d.remove(b"Type");
+            d.set(b"FT".to_vec(), Object::name("Sig"));
+            d.set(
+                b"Reference".to_vec(),
+                Object::Array(vec![Object::Dict(dict_of(vec![
+                    ("Type", Object::name("SigRef")),
+                    ("TransformMethod", Object::name("DocMDP")),
+                    (
+                        "TransformParams",
+                        Object::Dict(dict_of(vec![("Type", Object::name("TransformParams")), ("P", Object::Int(3)), ("V", Object::name("1.2"))])),
+                    ),
+                ]))]),
+            );
+        })
+        .unwrap();
+    });
+    let s = signatures(&open(&relaxed), &relaxed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.certify, Some(1), "DocMDP level must come from the signed revision");
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.modification);
+    assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::OTHER)), "{:?}", s.modification);
+
+    // A signature object added in a later revision whose `/ByteRange` only covers the earlier
+    // revision (where that signature field did not hold that signature) is refused.
+    let sig_dict = open(&signed).get(sig_ref).as_dict().cloned().unwrap();
+    let replayed = edit_after(&signed, |doc| {
+        let replayed_v = doc.add(Object::Dict(sig_dict.clone()));
+        doc.update_dict(pdfcraft_cos::ObjRef { num: 6, generation: 0 }, |f| {
+            f.set(b"V".to_vec(), Object::Ref(replayed_v));
+        })
+        .unwrap();
+    });
+    let all = signatures(&open(&replayed), &replayed, &trust);
+    let approval = all.iter().find(|s| s.field == "Approval").unwrap();
+    assert_eq!(approval.status, Status::Invalid, "a later signature whose ByteRange only covers an earlier revision must be invalid: {approval:?}");
+}
+
+/// Under DocMDP `P = 1` (no changes permitted), adding a signature field or counter-signing an
+/// existing unsigned signature field invalidates the certifying signature, whereas adding an
+/// RFC 3161 document timestamp (PAdES-LTA) remains permitted (#3998).
+#[test]
+fn certify_level_one_forbids_adding_signature_fields_or_counter_signing() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let trust = TrustStore { certs: vec![id.certificate.clone(), tsa.id.certificate.clone()] };
+    let certified_p1 = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
+    let counter_p1 = pdfcraft_sign::sign(&open(&certified_p1), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let first_p1 = signatures(&open(&counter_p1), &counter_p1, &trust).into_iter().find(|s| s.field == "Signature1").unwrap();
+    assert_eq!(first_p1.status, Status::Invalid, "{:?}", first_p1.modification);
+    assert_eq!(first_p1.modification, Modification::Disallowed(vec![kind::SIGNATURE]));
+
+    // Adding an RFC 3161 document timestamp to a P = 1 certified document is permitted for
+    // long-term validation and keeps the certifying signature valid.
+    let stamped_p1 = pdfcraft_sign::timestamp_document(&open(&certified_p1), &tsa, "D:20261006120000Z").unwrap();
+    let stamped_sigs = signatures(&open(&stamped_p1), &stamped_p1, &trust);
+    let cert_after_ts = stamped_sigs.iter().find(|s| s.field == "Signature1").unwrap();
+    assert_eq!(cert_after_ts.status, Status::Valid, "{:?}", cert_after_ts.modification);
+    assert!(matches!(&cert_after_ts.modification, Modification::Allowed(k) if k.contains(&kind::SIGNATURE)), "{:?}", cert_after_ts.modification);
+    let doc_ts = stamped_sigs.iter().find(|s| s.doc_timestamp).unwrap();
+    assert_eq!(doc_ts.status, Status::Valid, "{:?}", doc_ts.details);
+
+    // Dropping `/Perms` from the catalog after certification is a structure change.
+    let dropped_perms = edit_after(&certified_p1, |doc| {
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            c.remove(b"Perms");
+        })
+        .unwrap();
+    });
+    let after_drop = signatures(&open(&dropped_perms), &dropped_perms, &trust).into_iter().find(|s| s.field == "Signature1").unwrap();
+    assert_eq!(after_drop.status, Status::Invalid, "{:?}", after_drop.modification);
+    assert_eq!(after_drop.modification, Modification::Disallowed(vec![kind::STRUCTURE]));
+
+    // Under P = 2 (filling forms and signing allowed), the same counter-signature is permitted.
+    let certified_p2 = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(2), ..opts() }).unwrap();
+    let counter_p2 = pdfcraft_sign::sign(&open(&certified_p2), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let first_p2 = signatures(&open(&counter_p2), &counter_p2, &trust).into_iter().find(|s| s.field == "Signature1").unwrap();
+    assert_eq!(first_p2.status, Status::Valid, "{:?}", first_p2.modification);
+}
+
+/// Fields that name one signature value are listed each, under their own name, with the verdict
+/// the value earned once.
+#[test]
+fn fields_sharing_a_signature_value_are_listed_with_one_verdict() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let v = open(&signed).get(pdfcraft_cos::ObjRef { num: 6, generation: 0 }).as_dict().and_then(|d| d.get(b"V").cloned()).unwrap();
+    let shared = edit_after(&signed, |doc| {
+        let mut w = pdfcraft_cos::Dict::new();
+        w.set(b"Type".to_vec(), Object::name("Annot"));
+        w.set(b"Subtype".to_vec(), Object::name("Widget"));
+        w.set(b"FT".to_vec(), Object::name("Sig"));
+        w.set(b"T".to_vec(), PdfString::text("Twin"));
+        w.set(b"V".to_vec(), v.clone());
+        w.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0); 4]));
+        let w = doc.add(Object::Dict(w));
+        let root = doc.root().unwrap();
+        let af = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()).unwrap();
+        let af = doc.resolve(&af).as_dict().cloned().unwrap();
+        let mut fields = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap();
+        fields.push(Object::Ref(w));
+        let mut af = af;
+        af.set(b"Fields".to_vec(), Object::Array(fields));
+        doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af))).unwrap();
+    });
+    let list = signatures(&open(&shared), &shared, &trust);
+    let (a, b) = (list.iter().find(|s| s.field == "Approval").unwrap(), list.iter().find(|s| s.field == "Twin").unwrap());
+    assert!(a.signed && b.signed);
+    assert_eq!((a.status, &a.modification, &a.signer, a.signed_len), (b.status, &b.modification, &b.signer, b.signed_len));
 }
 
 #[test]

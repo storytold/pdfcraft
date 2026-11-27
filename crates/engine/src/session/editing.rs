@@ -2,9 +2,9 @@
 use super::check_refresh_panic;
 use super::{
     Arc, DocId, Document, Edit, EditCtx, EditError, Label, MAX_UNDO, ObjectKind, OnceLock, RenderPool, SaveOptions, Scope, Session,
-    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, guard, info_fields,
-    inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state,
-    undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets,
+    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, editor_signatures,
+    guard, info_fields, inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions,
+    sync_xfa_state, undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets,
 };
 use crate::{EditNotice, MarkKind, print_preview_layers};
 
@@ -181,10 +181,12 @@ impl Session {
             runner.runtime = doc.js_runtime.clone();
             runner.doc.zoom = doc.js_zoom;
             runner.doc.page = doc.js_page;
+            runner.doc.layers = crate::live_scripts::js_layers(&doc.info);
             cx.js = Some(runner);
         }
         cx.renamed_fields.clear();
         cx.redaction_overlays.clear();
+        cx.redaction_marks.clear();
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
         run_checked_edit(&mut next, &edit, &mut cx)?;
         // A field's enter or exit scripts that changed nothing leave no edit behind (no undo step,
@@ -195,12 +197,24 @@ impl Session {
             return Ok(None);
         }
         // Redaction removed what its own interpreter places under the marks. The marks were drawn
-        // over the page as the renderer shows it, so the renderer has the last word.
-        if let Edit::ApplyRedactions { pages } = &edit {
-            let marks: Vec<pdfcraft_redact::Mark> =
-                pdfcraft_redact::marks(&editor.cos).into_iter().filter(|m| pages.as_ref().is_none_or(|p| p.contains(&m.page))).collect();
-            guard(|| shown_under_redactions(&next, &marks, &cx.redaction_overlays, &doc.info.pages, doc.password.as_deref()))
-                .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
+        // over the page as the renderer shows it, so the renderer has the last word: on every
+        // apply the edit ran, a batch's included.
+        if !cx.redaction_marks.is_empty() {
+            // A batch that deletes a marked page and adds pages cannot be tied back to the marks:
+            // a copy of a page may carry the text the redaction removed from the original only.
+            // Fail closed.
+            let before: std::collections::HashSet<_> = pdfcraft_model::pages(&editor.cos).iter().map(|p| p.obj).collect();
+            let after: std::collections::HashSet<_> = pdfcraft_model::pages(&next).iter().map(|p| p.obj).collect();
+            // Either refusal also discards what the batch's field scripts left in the realm.
+            if cx.redaction_marks.iter().any(|(o, _)| !after.contains(o)) && after.iter().any(|o| !before.contains(o)) {
+                discard_edit_callbacks(&cx);
+                return Err(EditError::Invalid(
+                    "a batch that deletes a page with a redaction mark and adds pages can't be verified; the document was not changed".into(),
+                ));
+            }
+            guard(|| shown_under_redactions(&next, &cx.redaction_marks, &cx.redaction_overlays, doc.password.as_deref()))
+                .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))
+                .inspect_err(|_| discard_edit_callbacks(&cx))?;
         }
         // Renamed fields are said, not slipped in: a repair-log note (with the caveat that
         // scripts were left alone) and a count in the undo step's label.
@@ -264,20 +278,33 @@ impl Session {
                     ran_away: false,
                     highlight,
                     time_scale: cx.xfa_time_scale,
+                    relaid: false,
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
-                // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run, &mut exited))
+                // only those). The values before the edit tell a click from a value set again.
+                let before: std::collections::HashMap<String, Vec<String>> =
+                    doc.form.iter().filter(|f| changed.contains(&f.name)).map(|f| (f.name.clone(), f.value.clone())).collect();
+                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &before, &mut run, &mut exited))
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;
+                cx.xfa_relaid |= run.relaid;
                 // The next edit of a batch reads the highlight this one's scripts set.
+                // The next XFA run of a batch starts from the page count this one left.
+                cx.pages = run.page_count;
                 let on = run.highlight;
                 cx.set_highlight(on);
                 if let Err(e) = ran {
                     cx.xfa_out.errors.push(e);
                 }
             }
+        }
+        // The form's scripts (a check box showing a section) or its new data (a picture) laid
+        // it out again, even if a later script then failed: as with text growth below, its
+        // pages, widgets and fields were replaced, whether or not the page count changed. The
+        // view and undo/redo rebuild them instead of refreshing only field values.
+        if cx.xfa_relaid {
+            scope = Scope::Full;
         }
         // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
         let mut xfa_notes = Vec::new();
@@ -298,6 +325,7 @@ impl Session {
                     // Layout replaces pages and widgets, even if the page count is unchanged.
                     // Undo/redo must rebuild these too instead of refreshing only field values.
                     scope = Scope::Full;
+                    rerun_layout_ready(&mut next, &mut cx);
                 }
             }
         }
@@ -382,7 +410,7 @@ impl Session {
         let current_keys = std::mem::replace(&mut editor.keys, keys);
         editor.redo.push((label.clone(), current, current_keys, scope));
         Self::adopt_keys(doc);
-        let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
+        let refreshed = guard(|| Self::refresh_restored(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
                 && let Some((label, current, current_keys, scope)) = ed.redo.pop()
@@ -419,7 +447,7 @@ impl Session {
         let current_keys = std::mem::replace(&mut editor.keys, keys);
         editor.undo.push((label.clone(), current, current_keys, scope));
         Self::adopt_keys(doc);
-        let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
+        let refreshed = guard(|| Self::refresh_restored(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
                 && let Some((label, current, current_keys, scope)) = ed.undo.pop()
@@ -462,6 +490,16 @@ impl Session {
         }
     }
 
+    /// [`Self::refresh_scoped`] for a graph undo or redo just brought back. The history survives a
+    /// full save, which renumbers the objects, so the graph may name the layers by other numbers
+    /// than the open document's: the user's layer choices then follow their layers by name, as
+    /// after the save itself, and the layer list is read again whatever `scope` was.
+    fn refresh_restored(doc: &mut Document, scope: Scope) -> Result<(), EditError> {
+        let renumbered =
+            !doc.info.layers.is_empty() && doc.editor.as_ref().is_some_and(|e| layer_ids(&e.cos).iter().ne(doc.info.layers.iter().map(|l| &l.id)));
+        if renumbered { Self::refresh_renumbered(doc) } else { Self::refresh_scoped(doc, scope) }
+    }
+
     /// Rebuild the working bytes and the view data that `scope` may have changed. Metadata edits
     /// keep the renderer; other scopes also replace it.
     /// Comment and form edits skip the full re-inspection (seconds on very large files): the
@@ -500,7 +538,7 @@ impl Session {
             #[cfg(test)]
             check_refresh_panic();
             if !doc.signatures.is_empty() {
-                let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                let mut signatures = editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache);
                 // The display copy is kept for a metadata edit, and so are its marks, unless the
                 // edit changed a verdict (a certification can forbid it): the page then draws the
                 // new one.
@@ -551,7 +589,7 @@ impl Session {
         }
         doc.info.file_size = bytes.len();
         doc.form = form;
-        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
@@ -616,7 +654,7 @@ impl Session {
             doc.marker_scan = OnceLock::new();
         }
         doc.info.file_size = bytes.len();
-        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
@@ -658,15 +696,21 @@ impl Session {
 
     /// Rebuild working bytes, inspection and renderer from the current edit state.
     pub(crate) fn refresh(doc: &mut Document) -> Result<(), EditError> {
-        Self::refresh_with_indexes(doc, true, true)
+        Self::refresh_with_indexes(doc, true, true, false)
+    }
+
+    /// [`Self::refresh`] after a full rewrite renumbered the objects: the user's layer choices
+    /// follow their layers to the new numbers instead of being looked up by the old ones.
+    pub(super) fn refresh_renumbered(doc: &mut Document) -> Result<(), EditError> {
+        Self::refresh_with_indexes(doc, true, true, true)
     }
 
     /// Reinspect a link edit while preserving the page-content marker scan cache.
     fn refresh_links(doc: &mut Document) -> Result<(), EditError> {
-        Self::refresh_with_indexes(doc, false, true)
+        Self::refresh_with_indexes(doc, false, true, false)
     }
 
-    fn refresh_with_indexes(doc: &mut Document, invalidate_markers: bool, invalidate_links: bool) -> Result<(), EditError> {
+    fn refresh_with_indexes(doc: &mut Document, invalidate_markers: bool, invalidate_links: bool, renumbered: bool) -> Result<(), EditError> {
         #[cfg(test)]
         crate::record_full_refresh();
         // A full refresh may follow structural or annotation changes: cached appearances
@@ -685,9 +729,17 @@ impl Session {
         let info = inspect(bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
         // Keep the user's layer choices where the layers still exist.
         let mut info = info;
-        for l in &mut info.layers {
-            if let Some(old) = doc.info.layers.iter().find(|o| o.id == l.id) {
-                l.visible = old.visible;
+        if renumbered {
+            carry_renumbered_layer_choices(&doc.info.layers, &mut info.layers);
+            // The renderer's overrides name the layers by their numbers too.
+            if !doc.config.layers.is_empty() || info.layers.iter().any(|l| l.visible != l.initial) {
+                doc.config.layers = Arc::new(info.layers.iter().map(|l| (l.id.0 as i32, l.id.1 as i32, l.visible)).collect());
+            }
+        } else {
+            for l in &mut info.layers {
+                if let Some(old) = doc.info.layers.iter().find(|o| o.id == l.id) {
+                    l.visible = old.visible;
+                }
             }
         }
         note_warnings(&mut info.warnings, &doc.xfa_warnings);
@@ -710,12 +762,73 @@ impl Session {
         if invalidate_links {
             doc.links = OnceLock::new();
         }
-        let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+        let mut signatures = editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
         Ok(())
+    }
+}
+
+/// After a new layout: the form's `layout:ready` scripts run again, reading its page count, as
+/// after a layout its scripts asked for. Not after a script of this edit ran away: the form's
+/// scripts turn off once it is done.
+fn rerun_layout_ready(next: &mut pdfcraft_cos::Document, cx: &mut EditCtx) {
+    if cx.xfa_ran_away {
+        return;
+    }
+    let Some(tpl) = cx.xfa.clone() else { return };
+    let highlight = cx.highlight();
+    let page_count = pdfcraft_organize::page_count(next).unwrap_or(cx.pages);
+    let mut run = xfa::XfaRun {
+        page_count,
+        out: &mut cx.xfa_out,
+        datasets: cx.xfa_datasets,
+        ran_away: false,
+        highlight,
+        time_scale: cx.xfa_time_scale,
+        relaid: false,
+    };
+    let ran = guard(|| xfa::on_layout(next, &tpl, &mut run)).unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
+    cx.xfa_datasets = run.datasets;
+    cx.xfa_ran_away |= run.ran_away;
+    cx.xfa_relaid |= run.relaid;
+    cx.pages = run.page_count;
+    let on = run.highlight;
+    cx.set_highlight(on);
+    if let Err(e) = ran {
+        cx.xfa_out.errors.push(e);
+    }
+}
+
+/// The optional content groups `cos` lists as layers, in order (what the inspection reads: a group
+/// listed twice is one layer, and one that is not a dictionary is none).
+fn layer_ids(cos: &pdfcraft_cos::Document) -> Vec<(u32, u16)> {
+    let props =
+        cos.trailer().get(b"Root").map(|r| cos.resolve(r)).and_then(|r| r.as_dict().and_then(|r| r.get(b"OCProperties").map(|p| cos.resolve(p))));
+    let groups = props.as_deref().and_then(|p| p.as_dict()).and_then(|p| p.get(b"OCGs").map(|g| cos.resolve(g)));
+    let mut ids: Vec<(u32, u16)> = Vec::new();
+    for group in groups.as_deref().and_then(|g| g.as_array()).into_iter().flatten() {
+        let Some(id) = group.as_ref().map(|id| (id.num, id.generation)) else { continue };
+        if cos.resolve(group).as_dict().is_some() && !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+/// Give `new`, the layers of a file whose objects were renumbered, the visibility the user chose on
+/// `old`. The numbers say nothing across a rewrite (one may now belong to another layer), so each
+/// layer is matched by name: the nth layer called so in `new` is the nth one called so in `old`
+/// (the writer keeps the `/OCGs` order). A layer with no counterpart keeps the file's own default.
+fn carry_renumbered_layer_choices(old: &[pdfcraft_render::Layer], new: &mut [pdfcraft_render::Layer]) {
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for layer in new {
+        let nth = seen.entry(layer.name.as_str()).or_insert(0);
+        let counterpart = old.iter().filter(|o| o.name == layer.name).nth(*nth);
+        *nth += 1;
+        layer.visible = counterpart.map_or(layer.initial, |o| o.visible);
     }
 }
 
@@ -730,7 +843,7 @@ fn take_xfa_output(doc: &mut Document, out: js::JsOutput, ran_away: bool) {
     }
 }
 
-/// What `edit`, taking `prev` to `next`, wants said: never silent (AGENTS.md §4).
+/// What `edit`, taking `prev` to `next`, wants said: never silent (app-agents.md rule 13).
 fn edit_notices(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfcraft_cos::Document) -> Vec<EditNotice> {
     // What it drew with `?` (a value or comment text its font can't draw, stored as typed).
     let mut notices: Vec<EditNotice> = if matches!(scope_of(edit), Scope::Form | Scope::Comments | Scope::Full) {

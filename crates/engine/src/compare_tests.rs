@@ -452,12 +452,14 @@ fn review_simple_html_bounds_expanded_rgba_before_decoding() {
     // A grayscale PNG fits the sample limit but would expand to 100 MiB of RGBA.
     // Only its header is needed: the converter must reject before paying for decode work.
     let mut bytes = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut bytes, 5120, 5120);
-        encoder.set_color(png::ColorType::Grayscale);
-        let mut writer = encoder.write_header().unwrap();
-        writer.write_image_data(&vec![0; 5120 * 5120]).unwrap();
-    }
+    image::ImageEncoder::write_image(
+        image::codecs::png::PngEncoder::new(&mut bytes),
+        &vec![0; 5120 * 5120],
+        5120,
+        5120,
+        image::ExtendedColorType::L8,
+    )
+    .unwrap();
     let im = pdfcraft_export::Image { ext: "png", bytes: Arc::from(bytes), rect: [0.0, 0.0, 20.0, 20.0], size: [20.0; 2], flip: true, rotation: 0.0 };
     let mut pages = vec![pdfcraft_export::Page { images: vec![im], ..Default::default() }];
     let mut dropped = Vec::new();
@@ -495,8 +497,9 @@ fn review_followup_formatted_values_and_selected_option_survive() {
             pdfcraft_export::FieldKind::Text { value, .. } | pdfcraft_export::FieldKind::Choice { value, .. } => assert_eq!(value, expected),
             _ => panic!("wrong field kind"),
         }
+        // The field's control shows that value as its text.
         let zip = pdfcraft_export::docx(&pages, "Formatted");
-        assert!(office_part(&zip, "customXml/item1.xml").contains(expected));
+        assert!(office_part(&zip, "word/document.xml").contains(&format!(">{expected}</w:t>")));
     }
 }
 

@@ -171,7 +171,7 @@ update the numbers.
   and read-only automation regressions cover the change; per-glyph validation and the
   separate embedded-font extraction gap remain open. No readiness or backlog re-count.
 - **Impact:** every one is a user who lost trust. Crash reports outrank feature work
-  (`AGENTS.md` §4).
+  (app-agents.md rule 13).
 - **Estimate:** 45–80 h (≈ 0.2–0.4 h per issue). **Doc:** this file.
 
 ### 7. OCR reads only unaccented Latin
@@ -203,11 +203,16 @@ update the numbers.
   boxes still flows and loses them): vector rules and boxes become shapes behind the text, text
   is placed line by line in its PDF font's family, and AcroForm text, check box, radio, combo
   and list fields become content controls (password fields, multi-select lists and text/choice widgets whose displayed text is rotated are omitted and reported in `truncated_pages`; push buttons and signature fields are also left out),
-  filled in without protecting the document (checked
-  in LibreOffice, WordCraft and Word on a 7-page claim form); Word doesn't limit a control's
-  length, so a text field's `/MaxLen` is only named in its title.
+  filled in without protecting the document; Word doesn't limit a control's
+  length, so a text field's `/MaxLen` is only named in its title. The output is written by
+  craft-docx from the shared word model; on a 7-page claim form it opens in LibreOffice 24.2
+  with its 7 pages, values and all 241 controls in place, and in WordCraft 0.19.1 with the
+  page's art and labels in place but the framed fields in the text flow (8 pages). It has not
+  been opened in Microsoft Word, as the hand-written output it replaces was.
   Radio groups keep their displayed selection as locked controls, with lost editability
-  reported through `truncated_pages`; repeated text, checkbox and choice controls share values.
+  reported through `truncated_pages`; each widget of a repeated field is a control of its own
+  (not bound to one value), and text typed into an empty field takes Word's own formatting,
+  both until craft-wordmodel models them.
   Pictures and paths retain their shared painting order, including paths over scanned pictures.
   Holes in filled paths, clipping, shadings, transparency, editable radio groups, exact font matching
   and broader layout fidelity remain incomplete;
@@ -261,7 +266,8 @@ update the numbers.
   Read Out Loud; full keyboard operation of PdfCraft itself and a screen-reader audit.
 - **Evidence:** all 32 checker rules, figure alt text, tag property and sibling order edits, and
   a bounded auto-tag preview exist. Apply writes valid structure and parent-tree links for
-  text-only files; it refuses mixed content and existing tags;
+  text-only files, tagging headings by size and weight and marking running headers and footers
+  as pagination artifacts; it refuses mixed content and existing tags;
   `a11y.keyboard-only` (P0) planned, `a11y.app-screen-reader` partial.
 - **Impact:** most untagged files still need another editor to build their structure; PdfCraft itself is
   not yet usable without a mouse.
@@ -316,7 +322,7 @@ update the numbers.
   first reading has not been taken yet.
 - **Evidence:** text extraction (word-F1 0.98 against `pdftotext`) and now rendering (above); qpdf
   checks written output on every CI run since `PDFCRAFT_ORACLES_REQUIRED`. Acrobat captures must
-  stay local in `plan/acrobat/` (clean-room, `AGENTS.md` §1.1).
+  stay local in `plan/acrobat/` (clean-room, clean-room.md).
 - **Still missing:** Acrobat itself as the reference rather than other open renderers; form
   calculation and signature validation; the interop suite that opens every kind of output we write
   (encrypted ones above all, after #774) in pdf.js and MuPDF; and 15 of those 250 files could not

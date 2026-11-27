@@ -1,4 +1,61 @@
-use super::{Color32, HashSet, LayerOp, PdfCraftApp, Pos2, Rect, Tokens, Vec2, icons, pos2, theme, vec2};
+use super::{DocInfo, HashSet, LayerOp, PageXform, PdfCraftApp, Pos2, Rect, Vec2, pos2, vec2};
+
+/// Whether what the pages show of the signatures differs between `before` and `after`: a verdict,
+/// or whether a signature's appearance draws it.
+pub(crate) fn signature_states_changed(before: &[pdfcraft_engine::SignatureInfo], after: &[pdfcraft_engine::SignatureInfo]) -> bool {
+    before.len() != after.len()
+        || before.iter().zip(after).any(|(b, a)| b.field != a.field || b.status != a.status || b.verdict_shown != a.verdict_shown)
+}
+
+/// The mark's side as a share of the widget's shorter side.
+pub(super) const MARK_SIDE_SHARE: f32 = 0.25;
+
+/// The largest side of the mark, in screen points, so zooming in stops enlarging it.
+const MARK_SIDE_MAX: f32 = 48.0;
+
+/// The smallest legible side of the mark, in screen points: a widget whose shorter side is under
+/// `MARK_SIDE_MIN / MARK_SIDE_SHARE` (32 points) keeps only its outline. A field over that at 100%
+/// can fall under it when the page is zoomed out to fit.
+pub(super) const MARK_SIDE_MIN: f32 = 8.0;
+
+/// The gap between the mark and the widget's edges, as a share of the mark's side.
+const MARK_INSET_SHARE: f32 = 0.2;
+
+/// The icon's size as a share of the mark's side; the icon is centred in it.
+pub(super) const MARK_ICON_SHARE: f32 = 0.64;
+
+/// The screen position of a widget's bottom-right corner on the page (`rect`, user space): where
+/// its validation mark goes, wherever the page's /Rotate and the view turn it.
+pub(super) fn mark_anchor(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Pos2 {
+    let [_, bottom, right, _] = rect.map(|v| v as f32);
+    xf.user_rect(info, page, [right, bottom, right, bottom]).min
+}
+
+/// Where the validation mark sits in the part of a signature widget's screen rectangle that is on
+/// the page (`page`, on screen too), or `None` when that part is too small for a legible one. It
+/// goes in the corner nearest `anchor`, the screen position of the widget's bottom-right corner on
+/// the page, so it turns with the page and the view: off the middle, where a signer's artwork
+/// usually is, and clear of the state a named-layer appearance captions across its top.
+pub(super) fn verdict_mark_rect(widget: Rect, page: Rect, anchor: Pos2) -> Option<Rect> {
+    // A NaN or infinite corner has no place on screen.
+    if !widget.is_finite() {
+        return None;
+    }
+    // A widget past the crop box's edge shows its mark on the page, not beside it.
+    let widget = widget.intersect(page);
+    let side = (widget.width().min(widget.height()) * MARK_SIDE_SHARE).min(MARK_SIDE_MAX);
+    // Also refuses the negative side of an inverted rectangle.
+    if !(MARK_SIDE_MIN..).contains(&side) {
+        return None;
+    }
+    let inset = side * MARK_INSET_SHARE;
+    // A NaN anchor compares false either way and takes the bottom-right corner.
+    let left = anchor.x - widget.min.x < widget.max.x - anchor.x;
+    let top = anchor.y - widget.min.y < widget.max.y - anchor.y;
+    let x = if left { widget.min.x + inset } else { widget.max.x - inset - side };
+    let y = if top { widget.min.y + inset } else { widget.max.y - inset - side };
+    Some(Rect::from_min_size(pos2(x, y), vec2(side, side)))
+}
 
 /// A validation badge drawn over a signature widget: the widget rectangle (user space), the verdict it shows, and its hover text.
 pub(crate) struct SignatureBadge {
@@ -60,7 +117,7 @@ pub(crate) fn sign_tabs<'a>(
 }
 
 /// The largest sign tab's height, in points. Every other size is a share of the tab's height,
-/// taken from this one: a 3 pt inset, a 12 pt icon, 5 pt padding, an 11 pt label and 4 pt corners.
+/// taken from this one: a 3 pt inset, a 12 pt icon, 5 pt padding and 4 pt corners.
 pub(super) const SIGN_TAB_MAX: f32 = 18.0;
 /// The smallest sign tab's height, in points: a field too small for this chip gets no tab.
 const SIGN_TAB_MIN: f32 = 10.0;
@@ -68,25 +125,22 @@ const SIGN_TAB_MIN: f32 = 10.0;
 const SIGN_TAB_SHARE: f32 = 0.4;
 /// The smallest sign tab that carries the label; below it the tab is the icon alone.
 const SIGN_TAB_LABEL_MIN: f32 = 14.0;
-/// The label's font size on the largest sign tab; it shrinks with the tab.
-const SIGN_TAB_FONT: f32 = 11.0;
 
 /// Where one sign tab is drawn on screen: its chip, the icon's square and, when the label fits,
 /// the point where the label starts (its left edge, on the chip's center line), with the
-/// label's font size and the chip's corner radius at this tab's size.
+/// chip's corner radius at this tab's size.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SignTab {
     pub rect: Rect,
     pub icon: Rect,
     pub label: Option<Pos2>,
-    pub font: f32,
     pub radius: f32,
 }
 
 /// Lays out a sign tab inside the top-left corner of `field` (the widget on screen), for a label
-/// `label_width` points wide at [`SIGN_TAB_FONT`], its size on the largest tab. The tab is
-/// [`SIGN_TAB_SHARE`] of the field's height, from [`SIGN_TAB_MIN`] to [`SIGN_TAB_MAX`], and its
-/// inset, icon, padding, label and corners scale with it. It carries the label from
+/// `label_width` points wide (the theme's small text role, which does not scale with the chip).
+/// The tab is [`SIGN_TAB_SHARE`] of the field's height, from [`SIGN_TAB_MIN`] to
+/// [`SIGN_TAB_MAX`], and its inset, icon, padding and corners scale with it. It carries the label from
 /// [`SIGN_TAB_LABEL_MIN`] up when the whole tab fits in half the field's width, and is a square
 /// icon chip otherwise. It is left out when even that chip doesn't fit, or the field isn't finite.
 pub(crate) fn sign_tab_layout(field: Rect, label_width: f32) -> Option<SignTab> {
@@ -100,68 +154,34 @@ pub(crate) fn sign_tab_layout(field: Rect, label_width: f32) -> Option<SignTab> 
     if field.height() < h + 2.0 * inset || h > field.width() / 2.0 {
         return None;
     }
-    let full = pad + icon_side + pad + label_width * scale + pad;
+    // PLAN: sheet note 9 scales the label with the chip, but `TextRun` has no size, only a role, so the label keeps its width
+    let full = pad + icon_side + pad + label_width + pad;
     let with_label = h >= SIGN_TAB_LABEL_MIN && label_width.is_finite() && label_width > 0.0 && full <= field.width() / 2.0;
     let width = if with_label { full } else { h };
     let rect = Rect::from_min_size(field.min + Vec2::splat(inset), vec2(width, h));
     let icon_x = if with_label { rect.left() + pad } else { rect.center().x - icon_side / 2.0 };
     let icon = Rect::from_min_size(pos2(icon_x, rect.center().y - icon_side / 2.0), Vec2::splat(icon_side));
     let label = with_label.then(|| pos2(icon.right() + pad, rect.center().y));
-    Some(SignTab { rect, icon, label, font: SIGN_TAB_FONT * scale, radius: 4.0 * scale })
-}
-
-/// The sign tab's label, "Sign", laid out at `size` points.
-fn sign_tab_label(ui: &egui::Ui, size: f32) -> std::sync::Arc<egui::Galley> {
-    ui.fonts_mut(|f| f.layout_no_wrap(tl!("Sign").to_string(), theme::semibold(size), Color32::WHITE))
-}
-
-/// The sign tab of an empty signature field whose widget is at `field` on screen, on the page at
-/// `page`, laid out for its label measured at its largest size: where it is painted and where a
-/// click on it signs.
-pub(super) fn sign_tab_at(ui: &egui::Ui, field: Rect, page: Rect) -> Option<SignTab> {
-    sign_tab_on_page(field, page, sign_tab_label(ui, SIGN_TAB_FONT).size().x)
+    Some(SignTab { rect, icon, label, radius: 4.0 * scale })
 }
 
 /// [`sign_tab_layout`] in the part of `field` that is on `page`: form fields take clicks on the
 /// page only, so a widget that straddles the page's edge gets its tab where a click reaches it,
-/// or none when that part has no room for one.
+/// or none when that part has no room for one. `label_width` is the measured "Sign" label
+/// (`page_overlays::SignTabMetrics`), so the one layout serves both the tab's part and its paint.
 pub(crate) fn sign_tab_on_page(field: Rect, page: Rect, label_width: f32) -> Option<SignTab> {
     sign_tab_layout(field.intersect(page), label_width)
 }
 
-/// Paints a sign tab laid out by [`sign_tab_at`]: an accent chip with the signature icon and
-/// "Sign" in white, as the app's primary buttons are. The label is drawn at the tab's size; text
-/// scales with its size, and the padding takes up any rounding. Screen-only chrome, like the
-/// validation badges.
-pub(super) fn paint_sign_tab(ui: &egui::Ui, painter: &egui::Painter, tab: &SignTab, t: &Tokens) {
-    painter.rect_filled(tab.rect, egui::epaint::CornerRadiusF32::same(tab.radius), t.accent);
-    icons::paint(ui, tab.icon, "signature", tab.icon.width(), Color32::WHITE);
-    if let Some(at) = tab.label {
-        let galley = sign_tab_label(ui, tab.font);
-        painter.galley(at - vec2(0.0, galley.size().y / 2.0), galley, Color32::WHITE);
-    }
-}
-
-// Keep the viewer's scroll identity tied to the document instead of its parent UI. Without
-// `fades` (Show Page Edge Shadows off) the viewport-edge gradients are off for this area only.
-pub(super) fn page_scroll<R>(
-    ui: &mut egui::Ui,
-    scroll: egui::ScrollArea,
-    id: egui::Id,
-    fades: bool,
-    draw: impl FnOnce(&mut egui::Ui, egui::Rect) -> R,
-) -> egui::scroll_area::ScrollAreaOutput<R> {
-    let strength = ui.spacing().scroll.fade.strength;
-    if !fades {
-        ui.spacing_mut().scroll.fade.strength = 0.0;
-    }
-    let out = ui.scope_builder(egui::UiBuilder::new().scope_id(id), |ui| scroll.show_viewport(ui, draw)).inner;
-    ui.spacing_mut().scroll.fade.strength = strength;
-    out
-}
-
 /// Run a push button's action (the ones that need no JavaScript engine).
-pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, identity: u64, action: pdfcraft_engine::form_scripts::ButtonAction) {
+pub(super) fn run_button(
+    app: &mut PdfCraftApp,
+    ctx: &egui::Context,
+    index: usize,
+    name: &str,
+    identity: u64,
+    action: pdfcraft_engine::form_scripts::ButtonAction,
+) {
     use pdfcraft_engine::form_scripts::ButtonAction as B;
     let pages = app.session.get(app.views[index].id).map_or(0, |d| d.info.pages.len());
     match action {
@@ -173,14 +193,14 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, identi
                 (false, false) => Some(all.iter().filter(|n| listed(n)).cloned().collect()),
                 (false, true) => Some(all.iter().filter(|n| !listed(n)).cloned().collect()),
             };
-            app.views[index].forms.focus = None;
-            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::ResetForm { names });
+            app.views[index].session.forms.focus = None;
+            app.views[index].session.pending_edit = Some(pdfcraft_engine::Edit::ResetForm { names });
         }
         B::Named(n) => match n.as_str() {
             "Print" => app.open_print(),
             // What PdfCraft's XFA buttons use, and what a script's `execMenuItem("Save")`
             // does too: the Save As dialog, so a click never overwrites the file unasked.
-            "SaveAs" => app.run_command("file.save_as"),
+            "SaveAs" => app.run_command(ctx, "file.save_as"),
             "NextPage" => app.views[index].step_page(true),
             "PrevPage" => app.views[index].step_page(false),
             "FirstPage" => app.views[index].go_to_page(0),
@@ -213,7 +233,7 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, identi
                 .collect();
             if !changes.is_empty() {
                 let label = if hide { "Hide a field" } else { "Show a field" };
-                app.views[index].pending_edit =
+                app.views[index].session.pending_edit =
                     Some(pdfcraft_engine::Edit::Batch { label: label.into(), edits: vec![pdfcraft_engine::Edit::ApplyScriptChanges { changes }] });
             }
         }
@@ -240,7 +260,7 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, identi
         B::ImportIcon => app.choose_field_image_target(app.views[index].id, name, Some(identity)),
         B::Script(js) => {
             let id = app.views[index].id;
-            app.run_button_script_target(id, name, Some(identity), &js);
+            app.run_button_script_target(ctx, id, name, Some(identity), &js);
         }
     }
 }
@@ -252,29 +272,4 @@ pub(super) fn set_layers(app: &mut PdfCraftApp, index: usize, changes: &[(LayerO
     if app.session.set_layer_state(id, changes, preserve_rb) {
         app.views[index].invalidate_content();
     }
-}
-
-/// Where a pinch or ⌘-scroll zooms the view about: the pointer, wherever it is over the view. Not
-/// page input: it is read before the pages' widget exists, once `rect_contains_pointer` has found
-/// the view under the pointer.
-pub(super) fn zoom_anchor(ui: &egui::Ui) -> Option<Pos2> {
-    ui.input(|i| i.pointer.hover_pos())
-}
-
-/// The pointer and frame time that scroll the view while a comment is drawn. Not page input: it is
-/// read before the pages' widget exists, and the pointer may be past the view's edge.
-pub(super) fn drawing_edge_pointer(ui: &egui::Ui) -> (Option<Pos2>, f32) {
-    ui.input(|i| (i.pointer.latest_pos(), i.stable_dt))
-}
-
-/// A press anywhere, or a key, stops the touchpad's glide (#531).
-pub(super) fn glide_interrupted(ui: &egui::Ui) -> bool {
-    ui.input(|i| i.pointer.any_pressed() || i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })))
-}
-
-/// Full screen's click on the document, which turns the page: a primary click this frame with the
-/// view on top under it in `area`. Not page input: it is read before the pages' widget exists, and
-/// the turn waits until the pages have had the click.
-pub(super) fn presentation_click(ui: &egui::Ui, area: Rect) -> bool {
-    ui.rect_contains_pointer(area) && ui.input(|i| i.pointer.primary_clicked())
 }

@@ -194,14 +194,14 @@ impl crate::PdfCraftApp {
         let Some(view) = self.views.get_mut(index) else { return };
         view.interface = TabInterface::opening(HiddenInterface::asked_by(v), own_view);
         if !own_view && v.magnification == M::Default && matches!(v.layout, L::SinglePage | L::TwoUp | L::TwoUpCoverPage) {
-            view.fit = crate::canvas::Fit::Page;
+            view.view.fit = crate::canvas::Fit::Page;
         }
         let (doc, hidden) = (view.id, view.interface.hidden.any());
         if activate && hidden {
             self.notify_interface_hidden();
         }
         // A browser page can't resize or move its window.
-        if !cfg!(target_arch = "wasm32") && activate && only_document && !self.full_screen && (v.fit_window || v.center_window) {
+        if !cfg!(target_arch = "wasm32") && activate && only_document && !self.full_screen() && (v.fit_window || v.center_window) {
             self.pending_window = Some(PendingWindow { doc, fit: v.fit_window, center: v.center_window, frames_left: 30 });
         }
     }
@@ -220,7 +220,10 @@ impl crate::PdfCraftApp {
     }
 
     fn notify_interface_hidden(&mut self) {
-        let key = pdfcraft_engine::commands::command(TOGGLE).and_then(|c| c.shortcut).map(|s| s.label(cfg!(target_os = "macos"))).unwrap_or_default();
+        let key = pdfcraft_engine::commands::command(TOGGLE)
+            .and_then(|c| c.shortcut_for(cfg!(target_os = "macos")))
+            .map(|s| s.label(cfg!(target_os = "macos")))
+            .unwrap_or_default();
         self.notify_fmt("This document hides the toolbars and panels. Press {key} to show them.", &[("key", &key)]);
     }
 

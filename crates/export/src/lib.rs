@@ -23,26 +23,29 @@ mod as_docx;
 mod as_html;
 mod as_markdown;
 mod as_rtf;
+mod as_word;
 mod clip;
 mod flow;
 mod layout;
 
+#[cfg(test)]
+use as_docx::MAX_MEDIA;
 pub(crate) use as_docx::hex;
-#[cfg(test)]
-use as_docx::{FRAMING_SHAPES, MAX_DOCX_LIST_ITEMS, MAX_FIELD_NAME_CHARS, MAX_MEDIA, docx_table, word_font};
 pub use as_docx::{MAX_DOCX_PAGE_POINTS, MAX_DOCX_PAGE_SHAPES, docx, docx_checked, docx_checked_with_language, docx_with_language};
-pub(crate) use as_html::esc;
-#[cfg(test)]
-use as_html::{allowed, base64};
 pub use as_html::{html, html_simple, html_simple_with_language, html_with_language};
 pub use as_markdown::markdown;
 #[cfg(test)]
 use as_markdown::{emphasis, paragraph};
-pub use as_rtf::rtf;
+pub use as_rtf::{rtf, rtf_with_title, rtf_with_title_checked};
+#[cfg(test)]
+use as_word::{FRAMING_SHAPES, MAX_DOCX_LIST_ITEMS, MAX_FIELD_NAME_CHARS, word_font};
 pub use clip::{
     ClipBuilder, ClipSpan, ClipStyle, ClipText, MAX_CLIP_HTML_BYTES, MAX_CLIP_SPANS, MAX_CLIP_TEXT_BYTES, clip_html, font_family,
     font_weight_and_slant,
 };
+pub(crate) use craft_html::standalone::esc;
+#[cfg(test)]
+use craft_html::standalone::{allowed, base64};
 #[cfg(test)]
 use flow::list_item;
 pub use layout::{Block, Cell, Field, FieldKind, Image, Page, Paint, Shape, Stroke, Table};
