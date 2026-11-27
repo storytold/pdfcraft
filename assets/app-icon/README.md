@@ -32,7 +32,7 @@ Licence: [LICENSE.txt](LICENSE.txt) (`MIT OR Apache-2.0`, like the repo).
 | `pdfcraft-1024.png` | 1024 px on Apple's grid; also the runtime Dock icon on macOS |
 | `pdfcraft.icns` | macOS icon (16–1024 px) |
 | `pdfcraft.ico` | Windows icon (16–256 px), embedded in `pdfcraft.exe` by `apps/pdfcraft/build.rs` |
-| `pdfcraft-document.svg` | Windows PDF file icon master: an off-white (`#FCFCFC`) page inside a red frame, the ArtCraft mark and PDF lettering set in Geist ExtraBold outlines; no font dependency |
+| `pdfcraft-document.svg` | Windows PDF file icon master: an off-white (`#FCFCFC`) page inside a red frame, the ArtCraft mark and PDF lettering set in Archivo ExtraBold outlines; no font dependency |
 | `pdfcraft-document.ico` | Windows PDF file icon (16–256 px), embedded as resource 2 in `pdfcraft.exe` |
 | `hicolor/<n>x<n>/apps/ai.storyteller.pdfcraft.png` | Linux hicolor theme, 16–512 px; the 256 px one is the runtime icon on Windows and Linux |
 | `hicolor/scalable/apps/ai.storyteller.pdfcraft.svg` | Linux scalable icon (copy of the master) |
@@ -47,7 +47,9 @@ reader; the app keeps resource 1. The document icon adapts the redesigns JustCal
 that `packaging/icons.sh` renders, Ink and PdfCraft red on off-white (`#FCFCFC`). The ArtCraft mark
 on it is the project's, used as a mark, not licensed for reuse; a fork that distributes a modified
 version must remove or replace it ([LICENSE-document.txt](LICENSE-document.txt)).
-Both icons are embedded, requiring no runtime sidecar. This provides a file type icon; first-page
+The label is Archivo ExtraBold, set in outlines: the display face getartcraft.com uses for its
+headings and wordmark, so the document icons speak in the brand's own typeface without the
+artwork carrying a font. Both icons are embedded, requiring no runtime sidecar. This provides a file type icon; first-page
 thumbnails still need a thumbnail provider.
 
 ## Regenerate
