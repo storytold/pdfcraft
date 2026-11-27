@@ -143,7 +143,7 @@ fn text_tool_single_click_retypes_added_text_without_another_item() {
             if original == "سلام" && pdfcraft_fonts::document_arabic_font().is_none() {
                 continue;
             }
-            if original.contains('中') && !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.covers("Hans")) {
+            if original.contains('中') && !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.has_script("Hans")) {
                 continue;
             }
             let mut h = harness();
@@ -186,33 +186,33 @@ fn mixed_text_add_editor_commits_chinese_and_keeps_an_unsupported_draft() {
     }
     let supported = pdfcraft_engine::first_undrawable(&pdfcraft_engine::AddedText { text: "Agpq 中文 123".into(), ..Default::default() }).is_none();
     let mut h = harness();
-    assert!(h.state_mut().execute("edit.text"));
+    assert!(h.execute("edit.text"));
     h.run_steps(2);
     let point = at(&h, 40.0, 300.0);
     click(&mut h, point);
     h.event(egui::Event::Text("Agpq 中文 123".into()));
     h.run_steps(3);
-    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().text, "Agpq 中文 123");
+    assert_eq!(h.state().views[0].session.content.draft.as_ref().unwrap().text, "Agpq 中文 123");
     h.get_by_label("Done adding text").click();
     h.run_steps(3);
     if !supported {
         assert!(texts(&h).is_empty());
-        assert!(h.state().views[0].content.draft.is_some());
+        assert!(h.state().views[0].session.content.draft.is_some());
         return;
     }
     assert_eq!(texts(&h), ["Agpq 中文 123"]);
-    assert!(h.state_mut().execute("edit.text"));
+    assert!(h.execute("edit.text"));
     h.run_steps(2);
     let point = at(&h, 45.0, 305.0);
     click(&mut h, point);
-    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().index, Some(0));
+    assert_eq!(h.state().views[0].session.content.draft.as_ref().unwrap().index, Some(0));
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text("Agpq 中文 ✓".into()));
     h.run_steps(3);
     h.get_by_label("Done adding text").click();
     h.run_steps(3);
     assert_eq!(texts(&h), ["Agpq 中文 123"]);
-    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().text, "Agpq 中文 ✓");
+    assert_eq!(h.state().views[0].session.content.draft.as_ref().unwrap().text, "Agpq 中文 ✓");
 }
 
 #[test]
