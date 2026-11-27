@@ -543,10 +543,11 @@ impl PdfCraftApp {
         if let Some(l) = v.date_language.as_deref() {
             let _ = self.session.set_date_language(Some(l));
         }
-        // An empty or missing name keeps the login-name default; settings are untrusted, so the
-        // name is cut to a sane length.
-        if let Some(author) = v.author.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
-            self.comment_prefs.author = author.chars().take(MAX_AUTHOR_CHARS).collect();
+        // A saved name replaces the login-name default, an empty one too: a reader may sign new
+        // comments with no name at all (#8497). Only a missing one keeps the default. Settings are
+        // untrusted, so the name is trimmed and cut to a sane length.
+        if let Some(author) = v.author.as_deref() {
+            self.comment_prefs.author = author.trim().chars().take(MAX_AUTHOR_CHARS).collect();
         }
         if let Some(hide) = v.hide_empty_highlight_hover {
             self.comment_prefs.hide_empty_highlight_hover = hide;

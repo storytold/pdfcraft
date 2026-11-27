@@ -634,7 +634,8 @@ impl PreferencesDraft for Prefs<'_> {
         self.app.units = d.units;
         self.app.scroll_speed = d.scroll_speed;
         self.app.invert_middle_drag = d.invert_middle_drag;
-        self.app.comment_prefs.author = d.author;
+        // A name of only spaces is no name, as it is when the settings are read back.
+        self.app.comment_prefs.author = d.author.trim().to_string();
         self.app.comment_prefs.hide_empty_highlight_hover = d.hide_empty_highlight_hover;
         self.app.flatten_fill_sign_on_save = d.flatten_fill_sign_on_save;
         self.app.ask_to_lock_signatures = d.ask_to_lock_signatures;
