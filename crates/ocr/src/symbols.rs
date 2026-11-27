@@ -238,8 +238,13 @@ fn fractions(
     let centre = |c: &ReadChar| (c.left + c.right) / 2.0;
     let (mut grown_left, mut grown) = (None, None);
     for glyph in shapes.fraction_glyphs(text_h) {
-        let Some(ch) = glyph.character(numeral) else { continue };
         let (left, right) = (glyph.left as f32, (glyph.right + 1) as f32);
+        // A glyph clear of the word's columns on either side is a word of its own the
+        // detector missed (`¾ HEX`), not a part of this one.
+        if right + slack < start || left - slack > end {
+            continue;
+        }
+        let Some(ch) = glyph.character(numeral) else { continue };
         // The decoder's steps are coarse, so a character's columns say little on their own: a
         // character was named for the glyph when its columns reach it and hold no ink of its
         // own (a whole number before the glyph, a parenthesis after it, keep theirs).
@@ -584,7 +589,7 @@ impl<'a> Shapes<'a> {
     /// it, `1½`). `text_h` is the text's height, not the region's ink rows: a rule or a
     /// dimension line through the region is no guide to the glyph.
     fn fraction_glyphs(&self, text_h: f32) -> Vec<FractionInk> {
-        let numeral = |k: &Component| (0.28..=0.7).contains(&(k.height() as f32 / text_h)) && k.width() as f32 <= 0.75 * text_h && k.pixels >= 4;
+        let numeral = |k: &Component| (0.28..=0.75).contains(&(k.height() as f32 / text_h)) && k.width() as f32 <= 0.75 * text_h && k.pixels >= 4;
         let reach = 0.35 * text_h;
         fn largest<'c>(ks: impl Iterator<Item = (usize, &'c Component)>) -> Option<(usize, &'c Component)> {
             ks.max_by_key(|(_, k)| k.pixels)
@@ -651,13 +656,13 @@ impl<'a> Shapes<'a> {
         self.components.iter().enumerate().any(|(id, k)| !glyph.parts.contains(&id) && (c.left..=c.right).contains(&k.centre_x()) && glyph_sized(k))
     }
 
-    /// A thin stroke from the box's lower left to its upper right, about as tall as the text:
-    /// a fraction's slash. A letter or a digit of the same box fails the trace or fills the
-    /// other diagonal.
+    /// A thin stroke from the box's lower left to its upper right, about as tall as the text
+    /// (a slash may dip under the baseline, past the line box): a fraction's slash. A letter
+    /// or a digit of the same box fails the trace or fills the other diagonal.
     fn is_fraction_stroke(&self, id: usize, text_h: f32) -> bool {
         let Some(k) = self.components.get(id) else { return false };
         let (w, h) = (k.width() as f32, k.height() as f32);
-        if h < 8.0 || h < 0.55 * text_h || h > 1.15 * text_h || w < 0.2 * h || w > 0.95 * h {
+        if h < 8.0 || h < 0.55 * text_h || h > 1.5 * text_h || w < 0.2 * h || w > 0.95 * h {
             return false;
         }
         if k.pixels as f32 > 0.6 * w * h {
@@ -1047,6 +1052,9 @@ mod tests {
         let close = paren(&mut bracketed, 70);
         let parts = [read('(', (open.0, glyph.0 + 8.0)), read('8', (glyph.0 + 8.0, glyph.1)), read(')', close)];
         assert_eq!(word_read(&bracketed, &parts, None, &numerals("7", "8", &shown)).map(|r| r.text).as_deref(), Some("(⅞)"));
+        // A glyph clear of the word's columns is a word of its own that the detector missed.
+        let apart = [read('H', (glyph.1 + 12.0, glyph.1 + 40.0)), read('x', (glyph.1 + 40.0, glyph.1 + 60.0))];
+        assert_eq!(word_read(&bracketed, &apart, None, &numerals("3", "4", &shown)), None);
         // The detector may box only the glyph's stroke: the glyph is still found, and the word
         // grows to it both ways, but never into the word before.
         let mut sliver = Canvas::new(200, 70);
