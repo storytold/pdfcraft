@@ -861,9 +861,19 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     let width_of = |text: &str, size: f64| {
         if thai || latin { shaped_text::fallback_width(text, size, thai, latin, |s, size| enc.width(s, size)) } else { enc.width(text, size) }
     };
-    // How far a line's ink reaches below and above its baseline (em), where Thai stacks or
-    // descenders reach past the form font's (Helvetica's) -0.207 and 0.718; `None` otherwise.
-    let thai_ink = |line: &str| thai.then(|| shaped_text::thai_reach(line)).flatten().map(|[lo, hi]| [lo.min(-0.207), hi.max(0.718)]);
+    // How far a line's ink reaches below and above its baseline (em), where it reaches past the
+    // form font's (Helvetica's) -0.207 and 0.718: Thai stacks and descenders, and accented
+    // capitals and the other characters outside ASCII (Å, É, Ğ rise nearly to the top of the em,
+    // #8562), measured as a text box measures them. `None` for a line within those bounds. Its
+    // ASCII isn't measured: the bundled face's ascenders differ a little from the field font's,
+    // and a value that stays within the bounds keeps its place.
+    let ink = |line: &str| {
+        let beyond: String = line.chars().filter(|c| !c.is_ascii() && (thai || !shaped_text::is_thai(*c))).collect();
+        if beyond.is_empty() {
+            return None;
+        }
+        shaped_text::line_reach(&beyond).filter(|[lo, hi]| *lo < -0.207 || *hi > 0.718).map(|[lo, hi]| [lo.min(-0.207), hi.max(0.718)])
+    };
     let (mut c, bw) = frame(doc, &wd, width, height);
     let pad = 2.0 + bw;
     let inner_w = (width - 2.0 * pad).max(1.0);
@@ -914,15 +924,16 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                     size = auto_text_size(&text, inner_w, height - 2.0 * pad, true, width_of);
                 }
                 let lines = wrap_with(&text, size, inner_w, width_of);
-                // The first line hangs from the top by its ascent: higher for stacked Thai marks.
-                let mut y = height - pad - size * lines.first().and_then(|l| thai_ink(l)).map_or(0.85, |[_, hi]| hi.max(0.85));
+                // The first line hangs from the top by its ascent: higher for stacked Thai marks
+                // and accented capitals.
+                let mut y = height - pad - size * lines.first().and_then(|l| ink(l)).map_or(0.85, |[_, hi]| hi.max(0.85));
                 // The lines whose descent stays inside the border; the rest are cut off.
                 let mut room = 0;
                 for line in &lines {
                     if y < -size {
                         break;
                     }
-                    let descent = thai_ink(line).map_or(0.207, |[lo, _]| -lo);
+                    let descent = ink(line).map_or(0.207, |[lo, _]| -lo);
                     if y - descent * size >= bw - 0.01 {
                         room += 1;
                     }
@@ -944,8 +955,9 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                     };
                 }
                 // Centre Helvetica's ascent (0.718) and descent (0.207) vertically, or the reach of
-                // Thai stacks and descenders, which an automatic size also keeps inside the padding.
-                let reach = thai_ink(&text);
+                // Thai stacks and descenders and of accented capitals, which an automatic size
+                // also keeps inside the padding.
+                let reach = ink(&text);
                 if let Some([lo, hi]) = reach
                     && da.size == 0.0
                 {
