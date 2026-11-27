@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use craft::atomic::{AtomicFs, NewFilePermissions, RealFs, RenameRetry, retry_rename};
 
 /// [`RealFs`], except that a rename is recorded instead of done: `(staging file, target)`.
-/// This relies on the writer not touching the target after its rename; it sets kept
-/// attributes on the staging file before that, so they survive the deferred rename.
+/// The writer's one step after its rename, restoring hidden and system bits on Windows, is
+/// repeated in `commit` after the real one.
 #[derive(Default)]
 struct HeldRenames(RefCell<Vec<(PathBuf, PathBuf)>>);
 
@@ -83,11 +83,17 @@ fn stage(held: &HeldRenames, path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// them, for the error.
 fn commit(files: &[(PathBuf, &[u8])], pending: &[(PathBuf, PathBuf)]) -> Result<(), String> {
     for (i, (from, to)) in pending.iter().enumerate() {
+        #[cfg(windows)]
+        let replaced = std::fs::metadata(to).ok().filter(Metadata::is_file);
         if let Err(e) = retry_rename(RenameRetry::platform(), || std::fs::rename(from, to)) {
             discard(pending.get(i..).unwrap_or_default());
             let named = files.get(i).map_or(to.as_path(), |(path, _)| path.as_path());
             let earlier = if i > 0 { "; the files before it were already replaced" } else { "" };
             return Err(format!("{}: {e}{earlier}", named.display()));
+        }
+        #[cfg(windows)]
+        if let Some(replaced) = replaced {
+            restore_kept_attributes(to, &replaced);
         }
     }
     // The renames are in place; a failed directory flush can't be undone, so it is best effort.
@@ -97,6 +103,19 @@ fn commit(files: &[(PathBuf, &[u8])], pending: &[(PathBuf, PathBuf)]) -> Result<
         let _ = RealFs.sync_dir(if dir.as_os_str().is_empty() { Path::new(".") } else { dir });
     }
     Ok(())
+}
+
+/// What `craft::atomic` does after its own rename, which `HeldRenames` defers: a server that hides
+/// dot-named files marks the stage hidden and keeps the mark through the rename, so the file gets
+/// the replaced one's hidden and system bits back when they differ. Best effort: the bytes are in.
+#[cfg(windows)]
+fn restore_kept_attributes(target: &Path, replaced: &Metadata) {
+    use std::os::windows::fs::MetadataExt;
+    const KEPT: u32 = 0x2 | 0x4;
+    let saved = std::fs::symlink_metadata(target).map(|m| m.file_attributes() & KEPT);
+    if saved.is_ok_and(|bits| bits != replaced.file_attributes() & KEPT) {
+        let _ = std::fs::set_permissions(target, replaced.permissions());
+    }
 }
 
 fn discard(pending: &[(PathBuf, PathBuf)]) {
