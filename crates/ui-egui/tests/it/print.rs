@@ -401,14 +401,20 @@ fn invalid_ranges_are_explained_in_the_preview() {
 #[test]
 fn print_is_disabled_while_the_page_range_is_invalid() {
     let mut h = harness();
+    list_printers(&mut h, &["Test printer"]);
     h.open();
+    h.settle();
     h.set("which", json!("range"));
-    h.set("range", json!("7"));
-    h.run_steps(3);
-    assert!(h.get_by_role_and_label(Role::Button, "Print").accesskit_node().is_disabled(), "an out-of-range page range leaves Print disabled");
-    h.set("range", json!("1"));
-    h.run_steps(3);
-    assert!(!h.get_by_role_and_label(Role::Button, "Print").accesskit_node().is_disabled(), "a valid range enables Print");
+    for (printer, action) in [(Some("Test printer"), "Print"), (None, "Save as PDF")] {
+        h.pick(printer);
+        h.settle();
+        h.set("range", json!("7"));
+        h.run_steps(3);
+        assert!(h.get_by_role_and_label(Role::Button, action).accesskit_node().is_disabled(), "an out-of-range page range disables {action}");
+        h.set("range", json!("1"));
+        h.run_steps(3);
+        assert!(!h.get_by_role_and_label(Role::Button, action).accesskit_node().is_disabled(), "a valid range enables {action}");
+    }
 }
 
 #[test]
