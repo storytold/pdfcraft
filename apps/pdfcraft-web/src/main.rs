@@ -38,7 +38,10 @@ fn main() {
                     let files = craft::platform::browser_files::BrowserFiles::new(move || wake.wake())
                         .limits(limits)
                         .page_saves(craft_web_host::files::page_save);
-                    let app_host = craft::host::Host::builder(pdfcraft_ui_egui::APP_INFO).files(Arc::new(files)).build();
+                    let app_host = craft::host::Host::builder(pdfcraft_ui_egui::APP_INFO)
+                        .files(Arc::new(files))
+                        .i18n(pdfcraft_ui_egui::i18n::host_catalogs())
+                        .build();
                     let mut app = PdfCraftApp::with_host(Arc::new(app_host), AppServices::system(&cc.egui_ctx, intake));
                     app.apply_settings(&settings.get());
                     app.attach_settings(settings);
