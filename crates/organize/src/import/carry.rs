@@ -329,6 +329,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn set_attachments_does_not_clobber_later_numbered_attachment_name() {
         let mut doc = build(&[
             "<< /Type /Catalog /Pages 2 0 R >>",
