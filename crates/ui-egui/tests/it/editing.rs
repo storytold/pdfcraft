@@ -1220,8 +1220,8 @@ fn a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone() {
         }
     });
     h.run_steps(4);
-    for name in ["Client name", "Project ", "Dept\u{FFFD}"] {
-        h.get_by_label(name).click();
+    for (name, value) in [("Client name", "Acme"), ("Project ", "Padded"), ("Dept\u{FFFD}", "Sales")] {
+        h.get_by_label(&format!("{name}, {value}")).click();
         h.run_steps(3);
         for button in ["Update", "Delete"] {
             assert!(h.get_by_role_and_label(Role::Button, button).accesskit_node().is_disabled(), "{button} is off for {name:?}");
@@ -1231,7 +1231,7 @@ fn a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone() {
     type_into(&mut h, "Name:", "Revision");
     assert!(h.get_by_role_and_label(Role::Button, "Add").accesskit_node().is_disabled(), "Add would overwrite the number");
     assert_eq!(h.get_by_role_and_label(Role::TextInput, "Value:").value().as_deref(), Some("Sales"));
-    h.get_by_label_contains("Project").click();
+    h.get_by_label("Project, Apollo").click();
     h.run_steps(3);
     clear(&mut h, "Value:");
     type_into(&mut h, "Value:", "Gemini");
