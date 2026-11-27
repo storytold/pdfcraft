@@ -93,11 +93,13 @@ const SHADES: usize = 32;
 /// every shade from ink to paper, the paper sits in one. So a table rule or a neighbouring letter
 /// in the ring doesn't count, however much of the ring they fill: in a tight title-block cell the
 /// rules and their halo are more than half of it (#8501). A grey-paper scan keeps its grey, the
-/// ring's light pixels being the paper, and a stray white speck is no shade of its own. White for
-/// an empty ring.
+/// ring's light pixels being the paper, and a stray white speck is no shade of its own: the light
+/// end of the range is read a twentieth of the ring in from the top, so a few specks don't set it
+/// above grey paper. White for an empty ring.
 fn paper_colour(ring: &mut [[f64; 3]]) -> [f64; 3] {
     ring.sort_by(|a, b| luma(a).total_cmp(&luma(b)));
-    let (Some(darkest), Some(lightest)) = (ring.first(), ring.last()) else { return [1.0; 3] };
+    let lightest = ring.len().checked_sub(1 + ring.len() / 20).and_then(|i| ring.get(i));
+    let (Some(darkest), Some(lightest)) = (ring.first(), lightest) else { return [1.0; 3] };
     let mid = (luma(darkest) + luma(lightest)) / 2.0;
     let light = ring.get(ring.partition_point(|c| luma(c) < mid)..).unwrap_or_default();
     let shade = |c: &[f64; 3]| ((luma(c) * SHADES as f64).floor() as usize).min(SHADES - 1);
@@ -131,6 +133,10 @@ mod tests {
         let mut ring: Vec<[f64; 3]> = pixels(5, 0.05).chain(halo(8)).chain(noisy).chain(pixels(3, 1.0)).collect();
         let paper = paper_colour(&mut ring);
         assert!((0.78..=0.82).contains(&paper[0]), "{paper:?}");
+        // Grey paper with one white speck and no ink in the ring at all stays grey: the speck is
+        // not the light end of the paper's range (found in review of #8512).
+        let mut ring: Vec<[f64; 3]> = pixels(99, 0.784).chain(pixels(1, 1.0)).collect();
+        assert_eq!(paper_colour(&mut ring), [0.784; 3]);
         // Paper alone, and nothing.
         let mut ring: Vec<[f64; 3]> = pixels(20, 0.95).collect();
         assert_eq!(paper_colour(&mut ring), [0.95; 3]);
