@@ -202,15 +202,45 @@ fn starts_a_unit(text: &[char], i: usize, prev_numeric: bool) -> bool {
 }
 
 /// The cap and base rows of the numbers beside a word that holds no digit of its own (a `×`
-/// read as a word by itself): the ink rows of a line height's worth of each numeric neighbour's
-/// columns, nearest this word, within the line's box.
+/// read as a word by itself): the rows the glyphs in a line height's worth of each numeric
+/// neighbour's columns set, nearest this word, within the line's box.
 fn neighbour_rows(gray: Gray, prev: Option<Neighbour>, next: Option<Neighbour>, height: f32, top: f32, bottom: f32) -> Option<(i64, i64)> {
-    let before = prev.filter(|n| n.numeric).and_then(|n| Ink::sample(gray, [n.edge - height, top, n.edge, bottom])?.ink_rows());
-    let after = next.filter(|n| n.numeric).and_then(|n| Ink::sample(gray, [n.edge, top, n.edge + height, bottom])?.ink_rows());
+    let rows = |rect: [f32; 4]| {
+        let ink = Ink::sample(gray, rect)?;
+        Shapes::of(&ink)?.reference_rows(usize::MAX)
+    };
+    let before = prev.filter(|n| n.numeric).and_then(|n| rows([n.edge - height, top, n.edge, bottom]));
+    let after = next.filter(|n| n.numeric).and_then(|n| rows([n.edge, top, n.edge + height, bottom]));
     match (before, after) {
         (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.max(b.1))),
         (a, b) => a.or(b),
     }
+}
+
+/// The components that look like the line's letters and digits: at least `min_h` tall, no
+/// wider than twice their height, and within a quarter of the lower median height of those,
+/// `exclude` left out. A frame around the word or a rule across it is wider than that; a rule
+/// down its side is taller; a fraction's small digits are shorter; a glyph from a line the
+/// detector merged with this one is outvoted when the rows are taken by median.
+fn glyph_like(components: &[Component], min_h: i64, exclude: usize) -> Vec<&Component> {
+    let mut glyphs: Vec<&Component> = components
+        .iter()
+        .enumerate()
+        .filter(|(id, k)| *id != exclude && k.height() >= min_h && k.width() <= 2 * k.height())
+        .map(|(_, k)| k)
+        .collect();
+    let mut heights: Vec<i64> = glyphs.iter().map(|k| k.height()).collect();
+    heights.sort_unstable();
+    let Some(&typical) = heights.get(heights.len().saturating_sub(1) / 2) else { return Vec::new() };
+    glyphs.retain(|k| (k.height() - typical).abs() * 4 <= typical);
+    glyphs
+}
+
+/// The median of `values`, `None` of nothing.
+fn median(values: impl Iterator<Item = i64>) -> Option<i64> {
+    let mut sorted: Vec<i64> = values.collect();
+    sorted.sort_unstable();
+    sorted.get(sorted.len() / 2).copied()
 }
 
 /// A digit, or a decimal point and a digit, follows position `i` (in this word, or at the start
@@ -508,25 +538,20 @@ impl<'a> Shapes<'a> {
         Some((ids.clone(), self.glyph(&ids)?))
     }
 
-    /// The rows the word's other glyphs span, which its digits and capitals set: from the top of
-    /// the highest to the bottom of the lowest component at least half the line's height,
+    /// The cap and base rows the word's other glyphs set: the median top and the median bottom
+    /// of its letter-sized components ([`glyph_like`], at least half the line's height),
     /// `exclude` left out. `None` when the word has no other glyph that tall.
     fn reference_rows(&self, exclude: usize) -> Option<(i64, i64)> {
-        let min_h = (self.line.1 - self.line.0 + 1) / 2;
-        let others = self.components.iter().enumerate().filter(|(id, k)| *id != exclude && k.height() >= min_h).map(|(_, k)| k);
-        let top = others.clone().map(|k| k.top).min()?;
-        let bottom = others.map(|k| k.bottom).max()?;
-        Some((top, bottom))
+        let glyphs = glyph_like(&self.components, (self.line.1 - self.line.0 + 1) / 2, exclude);
+        Some((median(glyphs.iter().map(|k| k.top))?, median(glyphs.iter().map(|k| k.bottom))?))
     }
 
-    /// The base row of the word's other glyphs: the median bottom of the components at least a
-    /// third of the line's height, `exclude` left out (a dot over an i is too small to count).
+    /// The base row of the word's other glyphs: the median bottom of its letter-sized
+    /// components at least a third of the line's height, `exclude` left out (a dot over an i is
+    /// too small to count).
     fn baseline_of_others(&self, exclude: usize) -> Option<i64> {
-        let min_h = (self.line.1 - self.line.0 + 1) / 3;
-        let mut bottoms: Vec<i64> =
-            self.components.iter().enumerate().filter(|(id, k)| *id != exclude && k.height() >= min_h).map(|(_, k)| k.bottom).collect();
-        bottoms.sort_unstable();
-        bottoms.get(bottoms.len() / 2).copied()
+        let glyphs = glyph_like(&self.components, (self.line.1 - self.line.0 + 1) / 3, exclude);
+        median(glyphs.iter().map(|k| k.bottom))
     }
 
     /// The nearest component that lies wholly to the right of `glyph`, within [`TAIL`] line
@@ -923,6 +948,14 @@ mod tests {
         (x as f32, (x + 24) as f32)
     }
 
+    /// A box ruled around a cell, as a table or a feature-control frame draws it.
+    fn frame(c: &mut Canvas, x0: usize, y0: usize, x1: usize, y1: usize) {
+        c.rect(x0, y0, x1, y0 + 2);
+        c.rect(x0, y1 - 2, x1, y1);
+        c.rect(x0, y0, x0 + 2, y1);
+        c.rect(x1 - 2, y0, x1, y1);
+    }
+
     /// Three strokes through one point in the top half of the line: an asterisk.
     fn asterisk(c: &mut Canvas, x: usize) -> (f32, f32) {
         let (cx, cy) = ((x + 12) as f32, (BASE - 30) as f32);
@@ -1141,6 +1174,15 @@ mod tests {
             assert_eq!(word(&c, &[read('2', two), read('x', glyph), read('4', four)], None, None), None, "{what} in one word");
             assert_eq!(word(&c, &[read('x', glyph)], number(two.1), number(four.0)), None, "{what} as a word");
         }
+        // In a framed cell (a feature-control frame), the frame is no measure of the line: a
+        // capital `X` between digits still reaches the cap, and stays.
+        let mut c = Canvas::new(200, 70);
+        let two = digit(&mut c, 10);
+        let glyph = capital_x(&mut c, 40);
+        let four = digit(&mut c, 70);
+        frame(&mut c, 2, BASE - CAP - 8, 100, BASE + 8);
+        assert_eq!(word(&c, &[read('2', two), read('X', glyph), read('4', four)], None, None), None, "an X in a frame");
+        assert_eq!(word(&c, &[read('X', glyph)], number(two.1), number(four.0)), None, "an X of its own in a frame");
     }
 
     #[test]
