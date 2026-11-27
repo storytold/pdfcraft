@@ -175,7 +175,7 @@ impl PdfCraftApp {
     pub fn with_intake(ctx: &egui::Context, intake: FileIntake) -> Self {
         let services = AppServices::system(ctx, intake);
         let (files, panels) = craft::dialogs::service::FileService::new(services.wake.clone());
-        let host = Host::builder(APP_INFO).files(Arc::new(files)).build();
+        let host = Host::builder(APP_INFO).files(Arc::new(files)).i18n(i18n::host_catalogs()).build();
         let mut app = Self::with_host(Arc::new(host), services);
         app.file_panels = Some(panels);
         app
@@ -267,6 +267,7 @@ impl PdfCraftApp {
             font_scan: queue(&host, &wake, "pdfcraft-font-scan"),
             print_tasks: print_ui::PrintTasks::new(host.jobs_shared().clone(), wake.clone()),
             host,
+            host_date_language: None,
             wake,
             intake,
             #[cfg(not(target_arch = "wasm32"))]
@@ -845,10 +846,10 @@ impl PdfCraftApp {
                 view.session.pending_pick = None;
             }
         }
-        panes::frame(self, &ctx);
         // Forms' scripts read Highlight fields as `app.runtimeHighlight`.
         let highlight = self.active.and_then(|i| self.views.get(i)).map_or(self.highlight_fields, |v| v.session.highlight_fields);
         self.session.set_field_highlight(highlight);
+        panes::frame(self, &ctx);
         self.sync_titles(&ctx);
         // The accessible window takes the same name, so a screen reader (AT-SPI on Linux, UIA on
         // Windows) can tell it apart (#4614). egui builds the root node afresh every pass.

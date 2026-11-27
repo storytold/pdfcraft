@@ -1220,8 +1220,8 @@ fn a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone() {
         }
     });
     h.run_steps(4);
-    for name in ["Client name", "Project ", "Dept\u{FFFD}"] {
-        h.get_by_label(name).click();
+    for (name, value) in [("Client name", "Acme"), ("Project ", "Padded"), ("Dept\u{FFFD}", "Sales")] {
+        h.get_by_label(&format!("{name}, {value}")).click();
         h.run_steps(3);
         for button in ["Update", "Delete"] {
             assert!(h.get_by_role_and_label(Role::Button, button).accesskit_node().is_disabled(), "{button} is off for {name:?}");
@@ -1231,7 +1231,7 @@ fn a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone() {
     type_into(&mut h, "Name:", "Revision");
     assert!(h.get_by_role_and_label(Role::Button, "Add").accesskit_node().is_disabled(), "Add would overwrite the number");
     assert_eq!(h.get_by_role_and_label(Role::TextInput, "Value:").value().as_deref(), Some("Sales"));
-    h.get_by_label_contains("Project").click();
+    h.get_by_label("Project, Apollo").click();
     h.run_steps(3);
     clear(&mut h, "Value:");
     type_into(&mut h, "Value:", "Gemini");
@@ -6459,7 +6459,7 @@ fn host_dirty_hears_when_unsaved_work_appears_and_goes() {
 fn one_editor_contains_mixed_styles_and_visual_rows() {
     let _gpu = gpu();
     let bytes = source_font_fixture_with_text(
-        "BT 0 0.2 0.5 rg /F1 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
+        "BT 0 0.2 0.5 rg /F2 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
          BT 0 g /F2 12 Tf 20 215 Td (Plain ) Tj /F1 12 Tf 0 0.2 0.5 rg (bold) Tj /F2 12 Tf 0 g ( words) Tj ET \
          BT /F2 10 Tf 20 195 Td (Last row) Tj ET",
     );
@@ -6546,7 +6546,7 @@ fn one_editor_contains_mixed_styles_and_visual_rows() {
 fn the_caret_on_a_small_row_is_as_tall_as_that_row() {
     // It was one row of the region's first (18 pt) size tall, reaching into the row below.
     let bytes = source_font_fixture_with_text(
-        "BT 0 0.2 0.5 rg /F1 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
+        "BT 0 0.2 0.5 rg /F2 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
          BT 0 g /F2 12 Tf 20 215 Td (Plain ) Tj /F1 12 Tf 0 0.2 0.5 rg (bold) Tj /F2 12 Tf 0 g ( words) Tj ET \
          BT /F2 10 Tf 20 195 Td (Last row) Tj ET",
     );
@@ -10368,7 +10368,10 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
         "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>".into(),
     ];
-    let body = "BT /F1 24 Tf 20 200 Td (Heading) Tj /F1 12 Tf 0 -25 Td (Paragraph) Tj ET";
+    // The heading is close enough in size to stay in the paragraph (a much larger one is a block
+    // of its own), and Times goes on one word of the second row: a row set wholly in another
+    // family is a paragraph of its own.
+    let body = "BT /F1 16 Tf 20 200 Td (Heading) Tj /F1 12 Tf 0 -25 Td (Body text in a Paragraph) Tj ET";
     objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
     let mut pdf = Vec::from(b"%PDF-1.7\n");
     let mut xref = Vec::new();
