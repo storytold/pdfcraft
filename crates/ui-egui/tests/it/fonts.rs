@@ -59,9 +59,15 @@ fn japanese_ui_text_uses_craft_fonts() {
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
         let stack = &defs.families[&family];
         let first_jp = stack.iter().position(|n| n.starts_with("BIZ UDPGothic")).expect("BIZ UDPGothic is a fallback");
-        let own = stack.iter().position(|n| n == "Inter" || n == "JetBrainsMono").expect("the app's own font");
+        let app_name = if family == FontFamily::Proportional { "Inter" } else { "JetBrainsMono" };
+        let own = stack.iter().position(|n| n == app_name).expect("the app's own font");
         assert!(own < first_jp, "{family:?}: {stack:?}");
-        assert!(stack[first_jp..].iter().all(|n| pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.name() == *n)), "{stack:?}");
+        assert!(pdfcraft_fonts::ui_japanese_fonts().iter().any(|face| face.name() == stack[first_jp]), "{stack:?}");
+        for fallback in ["Hack", "emoji-monochrome", "Ubuntu-Light", "egui-icons"] {
+            if let Some(index) = stack.iter().position(|name| name == fallback) {
+                assert!(first_jp < index, "{family:?}: {stack:?}");
+            }
+        }
     }
     let mut fonts = Fonts::new(TextOptions::default(), defs);
     for id in families() {
@@ -100,8 +106,23 @@ fn chinese_ui_text_prefers_the_chinese_face() {
     }
 }
 
-/// Built with a craft-fonts Arabic face, Arabic text has real glyphs in every family, from a
-/// face placed after the app's own fonts.
+/// Non-CJK interface scripts without app faces lead the proportional family for their metrics;
+/// monospace keeps its Latin/code face first. In both cases the script and app face must exist.
+fn assert_script_order(defs: &FontDefinitions, script_is_interface_language: bool, is_script_face: impl Fn(&str) -> bool) {
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        let stack = &defs.families[&family];
+        let first = stack.iter().position(|name| is_script_face(name)).expect("a craft-fonts script face");
+        let app_name = if family == FontFamily::Proportional { "Inter" } else { "JetBrainsMono" };
+        let app = stack.iter().position(|name| name == app_name).expect("the app's own font");
+        if script_is_interface_language && family == FontFamily::Proportional {
+            assert!(first < app, "{family:?}: {stack:?}");
+        } else {
+            assert!(app < first, "{family:?}: {stack:?}");
+        }
+    }
+}
+
+/// Built with a craft-fonts Arabic face, Arabic text has real glyphs in every family.
 #[test]
 fn arabic_ui_text_uses_craft_fonts() {
     let arabic: Vec<String> = pdfcraft_fonts::ui_arabic_fonts().iter().map(|f| f.name()).collect();
@@ -110,12 +131,7 @@ fn arabic_ui_text_uses_craft_fonts() {
         return;
     }
     let defs = definitions("ar");
-    for family in [FontFamily::Proportional, FontFamily::Monospace] {
-        let stack = &defs.families[&family];
-        let first_ar = stack.iter().position(|n| arabic.contains(n)).expect("an Arab face is a fallback");
-        let own = stack.iter().position(|n| n == "Inter" || n == "JetBrainsMono").expect("the app's own font");
-        assert!(own < first_ar, "{family:?}: {stack:?}");
-    }
+    assert_script_order(&defs, Lang::from_code("ar").is_some(), |name| arabic.iter().any(|face| face == name));
     let mut fonts = Fonts::new(TextOptions::default(), defs);
     for id in families() {
         assert!(fonts.has_glyphs(&id, ARABIC), "{id:?} lacks {ARABIC}");
@@ -123,7 +139,7 @@ fn arabic_ui_text_uses_craft_fonts() {
 }
 
 /// Built with a craft-fonts Telugu face, Telugu text has real glyphs in every family, from a
-/// face placed after the app's own fonts, and is shaped: the conjunct క్ష is narrower than క్
+/// Telugu face, and is shaped: the conjunct క్ష is narrower than క్
 /// and ష held apart by a zero-width non-joiner.
 #[test]
 fn telugu_ui_text_uses_craft_fonts() {
@@ -133,12 +149,7 @@ fn telugu_ui_text_uses_craft_fonts() {
         return;
     }
     let defs = definitions("te");
-    for family in [FontFamily::Proportional, FontFamily::Monospace] {
-        let stack = &defs.families[&family];
-        let first_te = stack.iter().position(|n| telugu.contains(n)).expect("a Telu face is a fallback");
-        let own = stack.iter().position(|n| n == "Inter" || n == "JetBrainsMono").expect("the app's own font");
-        assert!(own < first_te, "{family:?}: {stack:?}");
-    }
+    assert_script_order(&defs, Lang::from_code("te").is_some(), |name| telugu.iter().any(|face| face == name));
     let mut fonts = Fonts::new(TextOptions::default(), defs);
     for id in families() {
         assert!(fonts.has_glyphs(&id, TELUGU), "{id:?} lacks {TELUGU}");
@@ -151,7 +162,7 @@ fn telugu_ui_text_uses_craft_fonts() {
 }
 
 /// Built with craft-fonts, Hindi text renders with real glyphs (no tofu) in every family: a
-/// `Deva` face is a fallback after the app's own fonts. Without craft-fonts it is the installed
+/// `Deva` face is in the configured stack. Without craft-fonts it is the installed
 /// face's job (the framework's on-demand search), and the web build has neither.
 #[test]
 fn devanagari_ui_text_uses_craft_fonts() {
@@ -160,13 +171,7 @@ fn devanagari_ui_text_uses_craft_fonts() {
         return;
     }
     let defs = definitions("hi");
-    for family in [FontFamily::Proportional, FontFamily::Monospace] {
-        let stack = &defs.families[&family];
-        let first =
-            stack.iter().position(|n| pdfcraft_fonts::ui_devanagari_fonts().iter().any(|f| f.name() == *n)).expect("a Deva face is a fallback");
-        let own = stack.iter().position(|n| n == "Inter" || n == "JetBrainsMono").expect("the app's own font");
-        assert!(own < first, "{family:?}: {stack:?}");
-    }
+    assert_script_order(&defs, Lang::from_code("hi").is_some(), |name| pdfcraft_fonts::ui_devanagari_fonts().iter().any(|face| face.name() == name));
     let mut fonts = Fonts::new(TextOptions::default(), defs);
     for id in families() {
         assert!(fonts.has_glyphs(&id, DEVANAGARI), "{id:?} lacks {DEVANAGARI}");
