@@ -591,7 +591,7 @@ impl PdfCraftApp {
         let date_format = line
             .as_ref()
             .and_then(|_| pdfcraft_engine::dates::custom_stamp_date_format(fields.text(DATE_FORMAT)?).ok().map(std::borrow::Cow::into_owned));
-        let line_font_percent = line.as_ref().map(|_| line_font_percent(&fields));
+        let line_font_percent = line.as_ref().map(|_| line_font_percent(fields));
         let line_position = [LINE_X, LINE_Y].map(|key| fields.text(key).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.5).clamp(0.0, 1.0));
         self.custom_stamps.push(CustomStamp {
             category: text(CATEGORY),
