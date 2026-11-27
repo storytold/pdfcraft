@@ -791,7 +791,12 @@ fn tool_table_is_well_formed() {
 fn purview_status_and_tools_are_exposed() {
     let mut a = Automation::new();
     let status = a.call("purview_status", &json!({})).unwrap();
-    assert!(matches!(&status[..], [Content::Json(value)] if value.get("status").is_some()), "purview_status has no status result");
+    assert!(
+        matches!(&status[..], [Content::Json(value)] if value.get("status").is_some() && value["setup"]["app_id"].is_object()),
+        "purview_status has no setup verification"
+    );
+    let Content::Json(value) = &status[0] else { panic!("status is not JSON") };
+    assert!(value["setup"]["required_permissions"].as_array().is_some_and(|permissions| permissions.len() == 2));
     let names: Vec<&str> = tools().into_iter().map(|tool| tool.name).collect();
     for name in [
         "purview_status",

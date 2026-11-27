@@ -135,7 +135,11 @@ pub fn tools() -> Vec<ToolDef> {
     let save_out = json!({ "type": "string", "description": "File to write. Omit to open the result as a new unsaved document instead." });
     let open = json!({ "type": "boolean", "description": "Also open the result as a new document (default: only when out is omitted)." });
     vec![
-        t("purview_status", "Microsoft Purview status", "Report Microsoft Purview/MIP SDK readiness and authentication status.")
+        t(
+            "purview_status",
+            "Microsoft Purview status",
+            "Report Microsoft Purview/MIP readiness, Entra application checks, delegated-token verification, and authentication status.",
+        )
             .ro()
             .with(schema(json!({}), &[])),
         t("purview_accounts", "List signed-in Microsoft accounts", "List the Microsoft accounts currently signed in in this PdfCraft session.")

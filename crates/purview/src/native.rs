@@ -6,14 +6,42 @@ use std::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 
 #[cfg(feature = "mip-auth")]
 use crate::auth;
-use crate::{PurviewAccount, PurviewDocument, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights, PurviewStatus};
+use crate::{
+    PurviewAccount, PurviewCheck, PurviewDocument, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights, PurviewSetupCheck,
+    PurviewStatus,
+};
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(1);
 const MAX_TEMP_BYTES: u64 = 512 * 1024 * 1024;
 const TOKEN_EXPIRY_SKEW: std::time::Duration = std::time::Duration::from_secs(30);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VerificationStage {
+    Rms,
+    Sync,
+    LabelPolicy,
+    #[cfg(feature = "mip-auth")]
+    Other,
+}
+
+#[derive(Default)]
+struct VerificationState {
+    rms: bool,
+    sync: bool,
+    label_policy: bool,
+    failure: Option<(VerificationStage, String)>,
+}
+
 fn token_usable(expires_at: std::time::Instant) -> bool {
     expires_at.saturating_duration_since(std::time::Instant::now()) > TOKEN_EXPIRY_SKEW
+}
+
+fn valid_app_id(value: &str) -> bool {
+    let value = value.trim();
+    value.len() == 36
+        && [8, 13, 18, 23].iter().all(|index| value.as_bytes().get(*index).is_some_and(|byte| *byte == b'-'))
+        && value.bytes().enumerate().all(|(index, byte)| index == 8 || index == 13 || index == 18 || index == 23 || byte.is_ascii_hexdigit())
+        && !value.chars().filter(|character| *character != '-').all(|character| character == '0')
 }
 
 struct StagedPath(std::path::PathBuf);
@@ -214,6 +242,7 @@ pub struct NativePurviewProvider {
     required_account_id: Mutex<Option<String>>,
     account_gate: RwLock<()>,
     staging_dir: Mutex<Option<std::path::PathBuf>>,
+    verification: Mutex<VerificationState>,
 }
 
 impl NativePurviewProvider {
@@ -234,6 +263,29 @@ impl NativePurviewProvider {
             required_account_id: Mutex::new(None),
             account_gate: RwLock::new(()),
             staging_dir: Mutex::new(None),
+            verification: Mutex::new(VerificationState::default()),
+        }
+    }
+
+    fn verification_passed(&self, stage: VerificationStage) -> Result<(), PurviewError> {
+        let mut verification =
+            self.verification.lock().map_err(|_| PurviewError::Native("Microsoft Purview setup verification state is unavailable".into()))?;
+        match stage {
+            VerificationStage::Rms => verification.rms = true,
+            VerificationStage::Sync => verification.sync = true,
+            VerificationStage::LabelPolicy => verification.label_policy = true,
+            #[cfg(feature = "mip-auth")]
+            VerificationStage::Other => {}
+        }
+        if verification.failure.as_ref().is_some_and(|(failed, _)| *failed == stage) {
+            verification.failure = None;
+        }
+        Ok(())
+    }
+
+    fn verification_failed(&self, stage: VerificationStage, error: impl Into<String>) {
+        if let Ok(mut verification) = self.verification.lock() {
+            verification.failure = Some((stage, error.into()));
         }
     }
 
@@ -530,6 +582,64 @@ impl PurviewProvider for NativePurviewProvider {
         }
     }
 
+    fn setup_check(&self) -> Option<PurviewSetupCheck> {
+        let app_id = if self.app_id.is_empty() {
+            PurviewCheck::Failed("The approved Microsoft Entra Application (client) ID is missing.".into())
+        } else if valid_app_id(&self.app_id) {
+            PurviewCheck::Passed
+        } else {
+            PurviewCheck::Failed("The Application (client) ID is not a valid non-zero GUID.".into())
+        };
+        let sdk = if self.sdk_ready() && helper_path().is_some() {
+            PurviewCheck::Passed
+        } else {
+            PurviewCheck::Failed("The official MIP SDK helper or runtime libraries are unavailable in this package.".into())
+        };
+        let verification = match self.verification.lock() {
+            Ok(verification) => verification,
+            Err(_) => {
+                let unavailable = "Microsoft Purview setup verification state is unavailable.".to_owned();
+                return Some(PurviewSetupCheck {
+                    app_id,
+                    sdk,
+                    public_client: PurviewCheck::Failed(unavailable.clone()),
+                    rms_permission: PurviewCheck::Failed(unavailable.clone()),
+                    sync_permission: PurviewCheck::Failed(unavailable.clone()),
+                    label_policy: PurviewCheck::Failed(unavailable),
+                    redirect_uri: "http://localhost:<ephemeral-port> (register http://localhost)".into(),
+                    required_permissions: vec![
+                        "Azure Rights Management Services / user_impersonation".into(),
+                        "Microsoft Information Protection Sync Service / UnifiedPolicy.User.Read".into(),
+                    ],
+                });
+            }
+        };
+        let failure = |stage: VerificationStage| {
+            verification.failure.as_ref().filter(|(failed, _)| *failed == stage).map(|(_, detail)| PurviewCheck::Failed(detail.clone()))
+        };
+        let rms_verified = self.rms_token().is_some() || verification.rms;
+        let sync_verified = self.sync_token().is_some() || verification.sync;
+        let label_verified = verification.label_policy;
+        let public_client = if rms_verified { PurviewCheck::Passed } else { failure(VerificationStage::Rms).unwrap_or(PurviewCheck::NotChecked) };
+        let rms_permission = if rms_verified { PurviewCheck::Passed } else { failure(VerificationStage::Rms).unwrap_or(PurviewCheck::NotChecked) };
+        let sync_permission = if sync_verified { PurviewCheck::Passed } else { failure(VerificationStage::Sync).unwrap_or(PurviewCheck::NotChecked) };
+        let label_policy =
+            if label_verified { PurviewCheck::Passed } else { failure(VerificationStage::LabelPolicy).unwrap_or(PurviewCheck::NotChecked) };
+        Some(PurviewSetupCheck {
+            app_id,
+            sdk,
+            public_client,
+            rms_permission,
+            sync_permission,
+            label_policy,
+            redirect_uri: "http://localhost:<ephemeral-port> (register http://localhost)".into(),
+            required_permissions: vec![
+                "Azure Rights Management Services / user_impersonation".into(),
+                "Microsoft Information Protection Sync Service / UnifiedPolicy.User.Read".into(),
+            ],
+        })
+    }
+
     fn account(&self) -> Option<PurviewAccount> {
         self.account()
     }
@@ -552,6 +662,12 @@ impl PurviewProvider for NativePurviewProvider {
         *self.active_account_id.lock().map_err(|_| PurviewError::Native("Microsoft account selection is unavailable".into()))? =
             Some(account_id.to_owned());
         *self.auth_status.lock().map_err(|_| PurviewError::Native("Microsoft account sign-in status is unavailable".into()))? = PurviewStatus::Ready;
+        if let Ok(mut verification) = self.verification.lock() {
+            verification.rms = true;
+            verification.sync = true;
+            verification.label_policy = false;
+            verification.failure = None;
+        }
         Ok(())
     }
 
@@ -570,6 +686,8 @@ impl PurviewProvider for NativePurviewProvider {
         }
         let _account_change = self.account_change()?;
         let previous_status = if self.has_tokens() { PurviewStatus::Ready } else { PurviewStatus::SignedOut };
+        *self.verification.lock().map_err(|_| PurviewError::Native("Microsoft Purview setup verification is unavailable".into()))? =
+            VerificationState::default();
         {
             let mut status = self.auth_status.lock().map_err(|_| PurviewError::Native("Microsoft account sign-in status is unavailable".into()))?;
             if *status == PurviewStatus::SigningIn {
@@ -587,11 +705,19 @@ impl PurviewProvider for NativePurviewProvider {
                 "https://api.aadrm.com/.default",
                 "",
             )
-            .map_err(|error| PurviewError::Native(error.to_string()))?;
-            let rms_account = rms_token
-                .account
-                .as_ref()
-                .ok_or_else(|| PurviewError::Native("Microsoft did not identify the account for protection. Sign in again.".into()))?;
+            .map_err(|error| {
+                let detail = error.to_string();
+                self.verification_failed(VerificationStage::Rms, detail.clone());
+                PurviewError::Native(detail)
+            })?;
+            self.verification_passed(VerificationStage::Rms)?;
+            let rms_account = rms_token.account.as_ref().ok_or_else(|| {
+                let error = PurviewError::Native(
+                    "Microsoft did not identify the account for protection. Sign in again with an organizational account.".into(),
+                );
+                self.verification_failed(VerificationStage::Other, error.to_string());
+                error
+            })?;
             let sync_hint = [rms_account.principal_name.as_str(), rms_account.email.as_str(), username_hint]
                 .into_iter()
                 .find(|hint| !hint.trim().is_empty())
@@ -604,8 +730,16 @@ impl PurviewProvider for NativePurviewProvider {
                 "https://psor.api.microsoft.com/.default",
                 "",
             )
-            .map_err(|error| PurviewError::Native(error.to_string()))?;
-            let account = matching_account(rms_token.account.as_ref(), sync_token.account.as_ref())?;
+            .map_err(|error| {
+                let detail = error.to_string();
+                self.verification_failed(VerificationStage::Sync, detail.clone());
+                PurviewError::Native(detail)
+            })?;
+            self.verification_passed(VerificationStage::Sync)?;
+            let account = matching_account(rms_token.account.as_ref(), sync_token.account.as_ref()).map_err(|error| {
+                self.verification_failed(VerificationStage::Other, error.to_string());
+                error
+            })?;
             if let Some(required) = self
                 .required_account_id
                 .lock()
@@ -664,6 +798,12 @@ impl PurviewProvider for NativePurviewProvider {
         };
         *self.auth_status.lock().map_err(|_| PurviewError::Native("Microsoft account sign-in status is unavailable".into()))? =
             if remaining.is_some() { PurviewStatus::Ready } else { PurviewStatus::SignedOut };
+        if let Ok(mut verification) = self.verification.lock() {
+            verification.rms = remaining.is_some();
+            verification.sync = remaining.is_some();
+            verification.label_policy = false;
+            verification.failure = None;
+        }
         if remaining.is_none() {
             let mut staging = self.staging_dir.lock().map_err(|_| PurviewError::Native("Microsoft Purview staging is unavailable".into()))?;
             if let Some(path) = staging.as_ref() {
@@ -747,7 +887,14 @@ impl PurviewProvider for NativePurviewProvider {
             escape_tsv(&sync_token),
             escape_tsv(&cache.to_string_lossy())
         );
-        parse_labels(&self.run_helper(&request)?)
+        let result = self.run_helper(&request).and_then(|line| parse_labels(&line));
+        match &result {
+            Ok(_) => {
+                self.verification_passed(VerificationStage::LabelPolicy)?;
+            }
+            Err(error) => self.verification_failed(VerificationStage::LabelPolicy, error.to_string()),
+        }
+        result
     }
 
     fn apply_label(

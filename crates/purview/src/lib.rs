@@ -6,8 +6,8 @@ mod native;
 
 pub use native::NativePurviewProvider;
 pub use pdfcraft_purview_policy::{
-    PurviewAccount, PurviewDocument, PurviewDocumentState, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights, PurviewStatus,
-    UnavailablePurviewProvider,
+    PurviewAccount, PurviewCheck, PurviewDocument, PurviewDocumentState, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights,
+    PurviewSetupCheck, PurviewStatus, UnavailablePurviewProvider,
 };
 
 #[cfg(test)]
@@ -22,6 +22,19 @@ mod tests {
         assert_eq!(provider.status(), PurviewStatus::NotConfigured);
         assert!(matches!(provider.sign_in(None), Err(PurviewError::NotConfigured)));
         assert_eq!(provider.inspect("plain.pdf", &Arc::new(vec![0])).unwrap(), None);
+        let setup = provider.setup_check().unwrap();
+        assert!(matches!(setup.app_id, PurviewCheck::Failed(_)));
+        assert_eq!(setup.public_client, PurviewCheck::NotChecked);
+    }
+
+    #[test]
+    fn setup_check_reports_app_id_and_required_permissions() {
+        let provider = NativePurviewProvider::new(Some("79a290f0-e7f0-4bd2-bdbe-8efab080402c"));
+        let setup = provider.setup_check().unwrap();
+        assert_eq!(setup.app_id, PurviewCheck::Passed);
+        assert!(setup.redirect_uri.starts_with("http://localhost:"));
+        assert!(setup.required_permissions.iter().any(|permission| permission.contains("user_impersonation")));
+        assert!(setup.required_permissions.iter().any(|permission| permission.contains("UnifiedPolicy.User.Read")));
     }
 
     #[test]

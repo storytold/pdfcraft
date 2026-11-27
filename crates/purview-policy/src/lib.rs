@@ -13,6 +13,25 @@ pub enum PurviewStatus {
     SdkUnavailable,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PurviewCheck {
+    NotChecked,
+    Passed,
+    Failed(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PurviewSetupCheck {
+    pub app_id: PurviewCheck,
+    pub sdk: PurviewCheck,
+    pub public_client: PurviewCheck,
+    pub rms_permission: PurviewCheck,
+    pub sync_permission: PurviewCheck,
+    pub label_policy: PurviewCheck,
+    pub redirect_uri: String,
+    pub required_permissions: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PurviewAccount {
     pub id: String,
@@ -174,6 +193,9 @@ pub enum PurviewError {
 
 pub trait PurviewProvider: Send + Sync {
     fn status(&self) -> PurviewStatus;
+    fn setup_check(&self) -> Option<PurviewSetupCheck> {
+        None
+    }
     fn account(&self) -> Option<PurviewAccount>;
     fn accounts(&self) -> Vec<PurviewAccount>;
     fn switch_account(&self, account_id: &str) -> Result<(), PurviewError>;

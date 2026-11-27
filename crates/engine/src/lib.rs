@@ -139,7 +139,8 @@ pub use pdfcraft_optimize as optimize;
 pub use pdfcraft_preflight as pdfa;
 pub use pdfcraft_print as print;
 pub use pdfcraft_purview_policy::{
-    PurviewAccount, PurviewDocument, PurviewDocumentState, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights, PurviewStatus,
+    PurviewAccount, PurviewCheck, PurviewDocument, PurviewDocumentState, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights,
+    PurviewSetupCheck, PurviewStatus,
 };
 pub use pdfcraft_redact::Elsewhere as RedactionElsewhere;
 pub use pdfcraft_redact::codes::{CODE_SETS as REDACTION_CODE_SETS, CodeSet as RedactionCodeSet};

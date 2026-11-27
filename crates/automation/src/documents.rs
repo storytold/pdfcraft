@@ -15,6 +15,14 @@ const BOOKMARK_PAGE: usize = 100;
 
 const MAX_BOOKMARK_PAGE: usize = 1000;
 
+fn purview_check(check: &pdfcraft_engine::PurviewCheck) -> Value {
+    match check {
+        pdfcraft_engine::PurviewCheck::NotChecked => json!({"status":"not_checked"}),
+        pdfcraft_engine::PurviewCheck::Passed => json!({"status":"passed"}),
+        pdfcraft_engine::PurviewCheck::Failed(detail) => json!({"status":"failed","detail":detail}),
+    }
+}
+
 impl Automation {
     // ---- documents ---------------------------------------------------------------------------
 
@@ -128,7 +136,19 @@ impl Automation {
                 })
             })
             .collect::<Vec<_>>();
-        Ok(json!({"status": status, "account": account, "accounts": accounts}))
+        let setup = self.session.purview_setup_check().map(|check| {
+            json!({
+                "app_id": purview_check(&check.app_id),
+                "sdk": purview_check(&check.sdk),
+                "public_client_and_loopback": purview_check(&check.public_client),
+                "rms_permission": purview_check(&check.rms_permission),
+                "sync_permission": purview_check(&check.sync_permission),
+                "label_policy": purview_check(&check.label_policy),
+                "redirect_uri": check.redirect_uri,
+                "required_permissions": check.required_permissions,
+            })
+        });
+        Ok(json!({"status": status, "account": account, "accounts": accounts, "setup": setup}))
     }
 
     pub(crate) fn purview_accounts(&self) -> Result<Vec<Value>> {

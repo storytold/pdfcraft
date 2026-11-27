@@ -112,6 +112,10 @@ impl Session {
         self.purview.clone()
     }
 
+    pub fn purview_setup_check(&self) -> Option<crate::PurviewSetupCheck> {
+        self.purview.as_ref().and_then(|provider| provider.setup_check())
+    }
+
     pub fn clear_purview_provider(&mut self) {
         self.purview = None;
     }

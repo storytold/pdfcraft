@@ -169,6 +169,45 @@ fn scopes(resource: &str, challenge_scope: &str) -> Vec<String> {
     }
 }
 
+fn explain_token_error(resource: &str, raw: &str) -> String {
+    let (service, permission) = if resource.trim().eq_ignore_ascii_case("https://api.aadrm.com") {
+        ("Azure Rights Management protection token", "Azure Rights Management Services/user_impersonation")
+    } else if resource.trim().eq_ignore_ascii_case("https://psor.api.microsoft.com") {
+        ("Microsoft Information Protection policy token", "Microsoft Information Protection Sync Service/UnifiedPolicy.User.Read")
+    } else {
+        ("Microsoft resource token", "the delegated API permission requested by PdfCraft")
+    };
+    let lower = raw.to_ascii_lowercase();
+    let action = if lower.contains("aadsts50011") || lower.contains("redirect_uri_mismatch") || lower.contains("reply url") {
+        "Register http://localhost under Mobile and desktop applications and enable the public client flow."
+    } else if lower.contains("aadsts7000218")
+        || lower.contains("invalid_client")
+        || lower.contains("client_secret")
+        || lower.contains("client_assertion")
+    {
+        "Use a public/native app registration, set Allow public client flows to Yes, and do not require a client secret."
+    } else if lower.contains("aadsts700016") || lower.contains("application with identifier") || lower.contains("not found in the directory") {
+        "Verify the Application (client) ID, its home tenant, and that Accounts in any organizational directory is enabled for multitenant use."
+    } else if lower.contains("aadsts65001")
+        || lower.contains("aadsts65004")
+        || lower.contains("consent_required")
+        || lower.contains("interaction_required")
+    {
+        "Grant user or admin consent for the delegated permission and retry with the same account."
+    } else if lower.contains("invalid_scope")
+        || lower.contains("aadsts70011")
+        || lower.contains("scope is invalid")
+        || lower.contains("not configured to request the permission")
+    {
+        "Add the delegated permission to this app registration; application-only permissions do not satisfy this desktop flow."
+    } else if lower.contains("aadsts50020") || lower.contains("account from a different tenant") {
+        "The signed-in account is not a member or consented guest of the target tenant, or the registration is not multitenant."
+    } else {
+        "Check the public/native platform, loopback redirect, delegated permission, consent, licensing, and Conditional Access policy."
+    };
+    format!("Microsoft Entra could not issue the {service}. Required delegated permission: {permission}. {action} OAuth detail: {raw}")
+}
+
 fn read_callback(listener: &TcpListener) -> Result<(AuthorizationCode, CsrfToken), PurviewAuthError> {
     listener.set_nonblocking(true).map_err(|e| PurviewAuthError::Callback(e.to_string()))?;
     let deadline = std::time::Instant::now() + Duration::from_secs(300);
@@ -287,8 +326,11 @@ pub fn acquire_token(
         return Err(PurviewAuthError::Callback("OAuth state mismatch".into()));
     }
     let http_client = reqwest::blocking::ClientBuilder::new().use_rustls_tls().build().map_err(|e| PurviewAuthError::Token(e.to_string()))?;
-    let token =
-        client.exchange_code(code).set_pkce_verifier(pkce_verifier).request(&http_client).map_err(|e| PurviewAuthError::Token(e.to_string()))?;
+    let token = client
+        .exchange_code(code)
+        .set_pkce_verifier(pkce_verifier)
+        .request(&http_client)
+        .map_err(|error| PurviewAuthError::Token(explain_token_error(resource, &error.to_string())))?;
     let expires_at = token
         .expires_in()
         .and_then(|duration| std::time::Instant::now().checked_add(duration))
@@ -323,6 +365,18 @@ mod tests {
         assert_eq!(scopes("", ""), vec!["https://api.aadrm.com/.default"]);
         assert_eq!(scopes("https://api.aadrm.com", ""), vec!["https://api.aadrm.com/.default"]);
         assert_eq!(scopes("https://psor.api.microsoft.com", ""), vec!["https://psor.api.microsoft.com/.default"]);
+    }
+
+    #[test]
+    fn token_errors_name_the_registration_fix() {
+        let redirect = explain_token_error("https://api.aadrm.com", "AADSTS50011: reply URL mismatch");
+        assert!(redirect.contains("http://localhost"));
+        assert!(redirect.contains("user_impersonation"));
+        let consent = explain_token_error("https://psor.api.microsoft.com", "AADSTS65001 consent_required");
+        assert!(consent.contains("Grant user or admin consent"));
+        assert!(consent.contains("UnifiedPolicy.User.Read"));
+        let public = explain_token_error("https://api.aadrm.com", "AADSTS7000218 client_secret is required");
+        assert!(public.contains("Allow public client flows"));
     }
 
     #[test]

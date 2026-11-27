@@ -428,6 +428,29 @@ Official guidance:
 - [ ] App ID and app name stored in the release configuration inventory.
 - [ ] Owners and notification contacts configured in Entra.
 
+### Built-in setup verifier
+
+PdfCraft exposes the same read-only verification through:
+
+- **Microsoft account / Sensitivity label → Microsoft Purview setup verification**.
+- Automation/MCP `purview_status`; its `setup` object is suitable for support logs and release
+  evidence because it reports checks and error reasons without returning token values.
+
+The verifier reports:
+
+- Application (client) ID syntax.
+- Official MIP SDK/helper availability.
+- Whether the public-client and loopback browser flow reached a usable protection token.
+- Whether the Azure Rights Management Services `user_impersonation` and MIP Sync
+  `UnifiedPolicy.User.Read` delegated token exchanges succeeded.
+- Whether the published label policy could be read through the SDK helper.
+- The required loopback redirect and delegated permissions.
+
+`Not checked` is expected before sign-in. A successful sign-in plus label-policy load changes
+the live checks to `Passed`; the verifier cannot prove that another tenant will grant consent,
+that a user is licensed, or that the user has rights to a specific file. Those remain
+tenant- and document-specific release gates.
+
 ## Step 2: Request the IPIA
 
 The IPIA is a Storytold-to-Microsoft agreement. It is not a license required from each

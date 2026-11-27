@@ -3,7 +3,7 @@ use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft::ui::patterns::form_dialogs::{FormButtons, FormDialog};
 use craft::ui::pickers::Select;
-use pdfcraft_engine::{PurviewAccount, PurviewDocument, PurviewLabel, PurviewStatus};
+use pdfcraft_engine::{PurviewAccount, PurviewCheck, PurviewDocument, PurviewLabel, PurviewSetupCheck, PurviewStatus};
 
 use crate::PdfCraftApp;
 
@@ -20,6 +20,7 @@ struct PurviewView {
     labels_loading: bool,
     account_change_reason: Option<String>,
     error: Option<String>,
+    setup: Option<PurviewSetupCheck>,
 }
 
 impl PurviewView {
@@ -41,6 +42,7 @@ impl PurviewView {
             labels_loading: false,
             account_change_reason: app.purview_account_change_reason().map(str::to_owned),
             error: app.purview_signin_prompt.as_ref().and_then(|prompt| prompt.error.clone()),
+            setup: app.session.purview_setup_check(),
         }
     }
 }
@@ -206,6 +208,48 @@ fn labels_section(ui: &mut egui::Ui, view: &PurviewView, selected: &mut String, 
     }
 }
 
+fn setup_check_row(ui: &mut egui::Ui, label: &str, check: &PurviewCheck) {
+    ui.horizontal_wrapped(|ui| {
+        ui.strong(label);
+        match check {
+            PurviewCheck::NotChecked => {
+                ui.label(tl!("Not verified yet - complete Microsoft sign-in"));
+            }
+            PurviewCheck::Passed => {
+                ui.colored_label(egui::Color32::DARK_GREEN, tl!("Passed"));
+            }
+            PurviewCheck::Failed(detail) => {
+                ui.colored_label(egui::Color32::RED, tl!("Failed"));
+                ui.label(detail);
+            }
+        }
+    });
+}
+
+fn setup_section(ui: &mut egui::Ui, setup: Option<&PurviewSetupCheck>) {
+    let Some(setup) = setup else { return };
+    let has_failure = [&setup.app_id, &setup.sdk, &setup.public_client, &setup.rms_permission, &setup.sync_permission, &setup.label_policy]
+        .into_iter()
+        .any(|check| matches!(check, PurviewCheck::Failed(_)));
+    ui.separator();
+    egui::CollapsingHeader::new(tl!("Microsoft Purview setup verification")).default_open(has_failure).show(ui, |ui| {
+        ui.small(tl!("This check verifies only what this local POC can prove; tenant licensing and document rights remain tenant-controlled."));
+        setup_check_row(ui, "Application client ID", &setup.app_id);
+        setup_check_row(ui, "MIP SDK and helper", &setup.sdk);
+        setup_check_row(ui, "Public client and loopback redirect", &setup.public_client);
+        setup_check_row(ui, "Azure Rights Management token", &setup.rms_permission);
+        setup_check_row(ui, "MIP policy token", &setup.sync_permission);
+        setup_check_row(ui, "Published sensitivity-label policy", &setup.label_policy);
+        ui.horizontal_wrapped(|ui| {
+            ui.strong("Registered redirect");
+            ui.monospace(&setup.redirect_uri);
+        });
+        for permission in &setup.required_permissions {
+            ui.label(format!("Required delegated permission: {permission}"));
+        }
+    });
+}
+
 fn dialog_body(
     ui: &mut egui::Ui,
     view: &PurviewView,
@@ -274,6 +318,7 @@ fn dialog_body(
     if let Some(error) = &view.error {
         ui.colored_label(egui::Color32::RED, error);
     }
+    setup_section(ui, view.setup.as_ref());
 }
 
 impl StackDialog for PurviewDialog {
