@@ -2,7 +2,7 @@ use super::ast::Expr;
 use super::dates::{MAX_DAYS, civil_from_days, days_from_civil, format_date, parse_date};
 use super::parser::parse;
 use super::value::{Val, fixed, is_numeric_text, parse_num};
-use super::words::word_num;
+use super::words::{decode_entities, word_num};
 use super::{Interp, MAX_STRING, R, STRING_TOO_LONG, XfaKind, is_limit};
 
 impl Interp<'_> {
@@ -200,7 +200,8 @@ impl Interp<'_> {
                 let kind = if args.len() > 1 { self.arg_str(args, 1)?.to_ascii_lowercase() } else { "url".into() };
                 Val::Str(match (lower.as_str(), kind.as_str()) {
                     ("encode", "html" | "xml") => s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;"),
-                    ("decode", "html" | "xml") => s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&"),
+                    ("decode", "xml") => decode_entities(&s, false),
+                    ("decode", "html") => decode_entities(&s, true),
                     ("encode", _) => s
                         .bytes()
                         .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })

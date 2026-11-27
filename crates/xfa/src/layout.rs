@@ -1,7 +1,8 @@
 //! The layout engine: places a template's subforms, draws and fields on pages (XFA 3.3 part 2,
 //! "Layout"). Supports positioned, top-to-bottom, left-to-right and table/row layouts, page
-//! masters with content areas, `breakBefore`/`breakAfter`, and overflow leaders (header rows
-//! repeated after a page break). Repeating subforms get their initial instances.
+//! masters with content areas, `breakBefore`/`breakAfter` (including a named `pageArea`
+//! target), overflow onto a named master, and overflow leaders (header rows repeated after a
+//! page break). Repeating subforms get their initial instances.
 //!
 //! Output is a list of pages of resolution-independent items; `pdf` turns them into PDF.
 
@@ -13,10 +14,10 @@ use std::sync::Arc;
 use base64::Engine;
 
 use crate::XfaError;
-use crate::data::{DataNode, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern};
+use crate::data::{DataNode, DataPath, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern, pattern_to_iso};
 use crate::model::{
     Access, Area, Border, Common, Draw, ExclGroup, Field, Font, HAlign, Layout, Margin, Node, Occur, PageArea, PageRole, Para, Placement, Presence,
-    Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value,
+    Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value, Views,
 };
 use crate::text::{self, Block, Face, Span};
 
@@ -28,11 +29,11 @@ mod items;
 mod measure;
 mod pages;
 
-use common::collect_values;
 pub(crate) use common::date_pattern;
 pub use common::formatted_value;
+use common::{clamp_opt, collect_names, collect_values};
 pub(crate) use items::UNDERLINE_DROP;
-pub use items::{Action, BorderShape, Form, Item, Page, Rounded, Widget, WidgetBorder, WidgetKind};
+pub use items::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widget, WidgetBorder, WidgetKind};
 
 /// Most pages a form may lay out to.
 pub const MAX_PAGES: usize = 500;
@@ -43,8 +44,26 @@ const MAX_DEPTH: usize = 64;
 /// Most size measurements of one layout. Measurements of containers are memoized, so a real
 /// form stays far below this; it bounds the work a hostile template can cause.
 const MAX_MEASURES: usize = 2_000_000;
-/// Most initial instances of one repeating subform.
-const MAX_INSTANCES: usize = 50;
+/// Most characters the draw phase lays out in one layout, each pass counted. A draw re-measures
+/// overflowing text up to six times to shrink it, and a repeating subform draws its text once
+/// per instance, so large text drawn many times would otherwise cost seconds; a real form's
+/// draws stay far below this. Reduced under test so the guard is exercised without laying out
+/// hundreds of megabytes of text.
+#[cfg(not(test))]
+const MAX_DRAW_CHARS: usize = 256 << 20;
+#[cfg(test)]
+const MAX_DRAW_CHARS: usize = 1 << 20;
+/// Most instances of one repeating subform laid out (a row the data adds, or the template's
+/// initial count). `occur max="-1"` sets no upper boundary (XFA 3.3, "The occur element",
+/// p. 786), so this only bounds the work of a hostile or runaway form: a long list or table
+/// is laid out whole up to here, and the rows past it are reported ([`Layouter::warn_truncated`]).
+/// It matches the largest `occur` count the parser reads and the most rows one script run may
+/// add (`MAX_ADDED` in pdfcraft-js). Laying out and listing the fields grows faster than the
+/// row count (one text field a row: 1,000 rows open in about 3 s in a debug build, 2,000 in
+/// about 13 s), so a much larger bound would let one list stall the app. The layout budgets
+/// ([`MAX_MEASURES`], [`MAX_ITEMS`], [`MAX_PAGES`]) still bound the form as a whole, however
+/// its repeats nest.
+pub(crate) const MAX_INSTANCES: usize = 1_000;
 /// Largest picture taken from the data (decoded bytes), as for template pictures.
 const MAX_DATA_IMAGE: usize = 32 << 20;
 /// Most picture bytes one layout keeps, all copies together. Each laid-out picture holds its
@@ -81,8 +100,9 @@ impl Ctx {
     }
 }
 
-/// (address of a subform or area in the template, available width bits, depth).
-type MeasureKey = (usize, u64, usize);
+/// (address of a subform or area in the template, available width bits, depth, SOM path of the
+/// instance measured when data drives the layout).
+type MeasureKey = (usize, u64, usize, String);
 
 /// A cached size, with the inherited text defaults it was measured with.
 struct Measured {
@@ -110,12 +130,32 @@ struct Frame {
     w: f64,
     margin: Margin,
     border: Option<Border>,
+    /// Width-less sections adapt to a new content area, using their original constraints.
+    /// A fixed width keeps its position.
+    width_limits: Option<(Option<f64>, Option<f64>)>,
     part: FlowMark,
     parts: Vec<(usize, usize, Rect)>,
     /// Something inside didn't fit its content area: an item cut across areas, or one placed past
     /// the area's bottom (a table row taller than an area, an overflow leader and the row after it
     /// that don't fit together). The border is left out ([`Layouter::finish_frame`]).
     lost: bool,
+    /// A piece of a field being split sits in the part on this content area, whether or not it
+    /// drew anything there (a widget with no border or fill draws nothing below the break): the
+    /// part counts as holding something, as one that got items does.
+    held: bool,
+}
+
+impl Frame {
+    fn fit_width(&mut self, (x, w): (f64, f64)) {
+        if let Some((min, max)) = self.width_limits {
+            self.x = x;
+            self.w = clamp_opt(w, min, max).min(w.max(1.0));
+        }
+    }
+
+    fn inner_width(&self) -> (f64, f64) {
+        (self.x + self.margin.left, (self.w - self.margin.horizontal()).max(1.0))
+    }
 }
 
 struct Cursor {
@@ -127,6 +167,15 @@ struct Cursor {
     placed: bool,
 }
 
+/// An empty field a page break is splitting ([`Layouter::splitting`]): its widget's SOM path, its
+/// box where it was drawn, and its pieces so far (page index, the page's first item of the piece,
+/// the piece's box).
+struct Splitting {
+    som: String,
+    rect: Rect,
+    pieces: Vec<(usize, usize, Rect)>,
+}
+
 struct Layouter<'t> {
     tpl: &'t Template,
     data: Option<&'t DataNode>,
@@ -136,8 +185,19 @@ struct Layouter<'t> {
     pages: Vec<Page>,
     cur: Option<Cursor>,
     names: HashMap<String, usize>,
+    /// State before the current master was drawn, for replacing an otherwise empty page.
+    page_fields: usize,
+    /// Only names touched on this page, including reservations that emitted no widget.
+    page_names: HashMap<String, Option<usize>>,
+    /// PDF field names added to [`Self::taken`] on the current page.
+    page_taken: Vec<String>,
+    /// Every PDF field name handed out so far.
+    taken: HashSet<String>,
+    /// The names the template's fields, groups and groups' members take as written
+    /// ([`common::collect_names`]), which a made-up `_2`, `_3` name must not take.
+    template_names: HashSet<String>,
     /// Field values by `id`, for embedded fields in rich text.
-    values: HashMap<String, String>,
+    values: HashMap<String, common::EmbedSource>,
     warnings: Vec<String>,
     warned: HashSet<String>,
     fields: usize,
@@ -149,28 +209,70 @@ struct Layouter<'t> {
     measured: RefCell<HashMap<MeasureKey, Measured>>,
     /// Measurements made so far (see [`MAX_MEASURES`]).
     measures: Cell<usize>,
+    /// Characters the draw phase has laid out, each pass counted (see [`MAX_DRAW_CHARS`]).
+    drawn_chars: Cell<usize>,
     /// The fields and draws of the block being placed: (first item, one past the last, top,
     /// bottom) on the last page. A page break keeps each whole (see `split_block`).
     leaves: Vec<(usize, usize, f64, f64)>,
+    /// The empty field a page break is splitting (see `flow_block` and `split_block`).
+    splitting: Option<Splitting>,
+    /// The items `draw_field` drew for the border of the field drawn last: (first, one past the last).
+    field_border: Option<(usize, usize)>,
+    /// Where what is being drawn shows, as the objects it is inside say ([`Common::views`]).
+    views: Views,
     /// The flowed subforms being laid out, outermost first: a break between their children
     /// closes their parts on one content area and opens new ones on the next.
     frames: Vec<Frame>,
+    /// The `pageArea` index used for an untargeted new page. Explicit break targets stick.
+    /// An `overflow` target is installed only while its subform is laid out, then the previous
+    /// selection returns unless a later explicit break replaced it (`preferred_epoch`).
+    preferred_area: Option<usize>,
+    /// Bumped when an explicit break selects [`Self::preferred_area`].
+    preferred_epoch: u64,
+    /// What scripts set on page-master content, applied to each page's copy by its own SOM path.
+    overrides: Option<&'t crate::script::Overrides>,
+    /// The pages' copies of master content that overrides changed, kept for the whole layout so
+    /// their addresses stay unique (the measurement cache keys on them).
+    master_copies: Vec<Rc<Vec<Node>>>,
 }
 
 /// How many instances of a repeating subform to lay out: what the data holds once it holds
-/// any (rows added or removed), else the template's initial count; never below one, never
-/// above the maximum.
+/// any (rows added or removed), else the template's initial count; at least the minimum
+/// whatever the data holds (XFA 3.3, "Repeating Elements using Occurrence Limits", #4744);
+/// never below one, never above the maximum.
 pub fn instance_count(occur: &Occur, from_data: usize) -> usize {
     let n = if from_data > 0 { from_data } else { occur.initial };
-    n.min(occur.max.unwrap_or(usize::MAX)).clamp(1, MAX_INSTANCES)
+    n.max(occur.min).min(occur.max.unwrap_or(usize::MAX)).clamp(1, MAX_INSTANCES)
+}
+
+/// How many instances of `sf` the layout makes under the container at `parent_som`: its `occur`
+/// and the instances `data` holds ([`instance_count`]). The traversal counts them the same way.
+pub(crate) fn subform_instances(tpl: &Template, data: Option<&DataNode>, sf: &Subform, parent_som: &str) -> usize {
+    let from_data = match (&sf.common.name, data) {
+        (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(tpl, parent_som), name),
+        _ => 0,
+    };
+    instance_count(&sf.occur, from_data)
 }
 
 /// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).
 pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError> {
+    layout_inner(tpl, data, None)
+}
+
+/// [`layout`], with what scripts set (`ov`) applied to page-master content page by page: a
+/// field hidden on the second page made from a page area is hidden there only. The rest of the
+/// template takes `ov` before this ([`crate::script::apply_overrides`]).
+pub fn layout_with_overrides(tpl: &Template, data: Option<&DataNode>, ov: &crate::script::Overrides) -> Result<Form, XfaError> {
+    layout_inner(tpl, data, Some(ov))
+}
+
+fn layout_inner(tpl: &Template, data: Option<&DataNode>, overrides: Option<&crate::script::Overrides>) -> Result<Form, XfaError> {
     let areas = match &tpl.root.page_set {
         Some(ps) if !ps.areas.is_empty() => ps.areas.clone(),
         _ => vec![PageArea {
             name: None,
+            id: None,
             width: 612.0,
             height: 792.0,
             content: vec![Rect::new(36.0, 36.0, 540.0, 720.0)],
@@ -179,10 +281,11 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
             occur_min: 0,
         }],
     };
-    let mut values = HashMap::new();
+    let values = collect_values(tpl, data);
     // One copy of the root for the whole layout: measurements are cached by node address.
     let root_node = Node::Subform(Box::new(tpl.root.clone()));
-    collect_values(std::slice::from_ref(&root_node), &mut values, 0);
+    let mut template_names = HashSet::new();
+    collect_names(std::slice::from_ref(&root_node), &mut template_names, 0);
     let mut l = Layouter {
         tpl,
         data,
@@ -191,6 +294,11 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         pages: Vec::new(),
         cur: None,
         names: HashMap::new(),
+        page_fields: 0,
+        page_names: HashMap::new(),
+        page_taken: Vec::new(),
+        taken: HashSet::new(),
+        template_names,
         values,
         warnings: Vec::new(),
         warned: HashSet::new(),
@@ -199,8 +307,16 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         image_bytes: 0,
         measured: RefCell::new(HashMap::new()),
         measures: Cell::new(0),
+        drawn_chars: Cell::new(0),
         leaves: Vec::new(),
+        splitting: None,
+        field_border: None,
+        views: Views::ALL,
         frames: Vec::new(),
+        preferred_area: None,
+        preferred_epoch: 0,
+        overrides,
+        master_copies: Vec::new(),
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };
     l.new_page()?;
@@ -212,19 +328,51 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
     let total = l.pages.len();
     let count = total.to_string();
     for p in &mut l.pages {
-        for it in &mut p.items {
-            if let Item::Text(s) = it
-                && s.text.contains(PAGE_COUNT_MARK)
-            {
-                s.text = s.text.replace(PAGE_COUNT_MARK, &count);
-            }
+        fill_page_count(&mut p.items, &count);
+    }
+    // Tab goes the way the template's traversal says.
+    crate::traverse::order_widgets(&root_node, tpl, data, &mut l.pages);
+    #[cfg(test)]
+    LAID_OUT_ITEMS.with(|c| c.set(l.items));
+    Ok(Form { pages: l.pages, fields: l.fields, warnings: l.warnings })
+}
+
+/// Puts the page count, known once every page is, where `items` left room for it.
+fn fill_page_count(items: &mut [Item], count: &str) {
+    for it in items {
+        match it {
+            Item::Text(s) if s.text.contains(PAGE_COUNT_MARK) => s.text = s.text.replace(PAGE_COUNT_MARK, count),
+            Item::Turned(t) => fill_page_count(&mut t.items, count),
+            Item::Only { item, .. } => fill_page_count(std::slice::from_mut(item.as_mut()), count),
+            _ => {}
         }
     }
-    Ok(Form { pages: l.pages, fields: l.fields, warnings: l.warnings })
 }
 
 // Bytes of embedded field values copied out on this thread, for tests that bound layout work.
 #[cfg(test)]
 thread_local! {
     pub(crate) static EMBED_COPIED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod instance_count_tests {
+    use super::instance_count;
+    use crate::model::Occur;
+
+    /// #4744: `min` is honoured whatever the data holds. A repeating subform with
+    /// `occur min="2" max="2"` keeps two instances even when the data has one.
+    #[test]
+    fn min_is_kept_whatever_the_data_holds() {
+        let occur = Occur { min: 2, max: Some(2), initial: 2 };
+        assert_eq!(instance_count(&occur, 0), 2, "no data: the initial count, at least the minimum");
+        assert_eq!(instance_count(&occur, 1), 2, "one data instance: the minimum still applies");
+        assert_eq!(instance_count(&occur, 3), 2, "more than the maximum: the maximum wins");
+    }
+}
+
+// The item count the last layout on this thread ended with, against `MAX_ITEMS`.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static LAID_OUT_ITEMS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
