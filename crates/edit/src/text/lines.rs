@@ -460,6 +460,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
     let pieces = joined(&content_streams(doc, &p.dict)?);
     let ops = pieces.parse().ops;
     let properties = res.get(b"Properties").and_then(|o| doc.dict(o)).unwrap_or_default();
+    carry.containers = std::rc::Rc::new(super::containers::Containers::collect(doc, &ops, &res));
     let shown = interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(&properties))?;
     let mut last: Option<(usize, Pen)> = None; // the stream piece and where its last run ended
     for mut s in shown {
@@ -478,7 +479,9 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             let bt = pen.bt;
             let (near, gap) = pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 });
             piece == si
-                && lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
+                && lines.last().is_some_and(|l| {
+                    l.scope == s.scope && l.paint == s.paint && l.containers == s.containers && l.logical_order == s.logical_order
+                })
                 && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
                 && (s.text.trim().is_empty() || lines.last().is_some_and(|l| continues_font(l, &s)))
                 && (s.text.trim().is_empty()
@@ -539,6 +542,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 stream: si,
                 scope: s.scope,
                 paint: s.paint.clone(),
+                containers: s.containers.clone(),
                 logical_order: s.logical_order,
                 actual_text: s.actual_text,
                 clips: s.state.render_mode >= 4,
@@ -607,7 +611,7 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
 fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream: usize) {
     let joins = last.is_some_and(|pen| {
         let bt = pen.bt;
-        lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
+        lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.containers == s.containers && l.logical_order == s.logical_order)
             && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
             && (s.text.trim().is_empty() || lines.last().is_some_and(|l| continues_font(l, &s)))
             && (s.text.trim().is_empty()
@@ -664,6 +668,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             stream,
             scope: s.scope,
             paint: s.paint.clone(),
+            containers: s.containers.clone(),
             logical_order: s.logical_order,
             actual_text: s.actual_text,
             clips: s.state.render_mode >= 4,
@@ -843,8 +848,8 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         let mut last_stream = None;
         let mut forms = invoked.into_iter().peekable();
         for s in shown {
-            while let Some((_, name, ts)) = forms.next_if(|f| f.0 < s.op) {
-                enter(w, resources, &name, ts, &mut carry.text_left, &mut carry.characters_left)?;
+            while let Some((i, name, ts)) = forms.next_if(|f| f.0 < s.op) {
+                enter(w, resources, &name, ts, carry, i)?;
                 // Text after a form starts a new line.
                 last = None;
             }
@@ -861,13 +866,15 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             }
             add_shown(&mut w.lines, &mut last, s, si);
         }
-        for (_, name, ts) in forms {
-            enter(w, resources, &name, ts, &mut carry.text_left, &mut carry.characters_left)?;
+        for (i, name, ts) in forms {
+            enter(w, resources, &name, ts, carry, i)?;
         }
         Ok(())
     }
-    /// `text_left`: the page's text budget, shared with the forms the page draws.
-    fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts, text_left: &mut usize, characters_left: &mut usize) -> Result<(), EditError> {
+    /// `parent`: the state of the stream whose `Do` at operator `at` draws the form. The form
+    /// shares its text and character budgets, shared with every form the page draws, and its
+    /// containers, and adds `at` to the path of `Do`s that leads to it.
+    fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts, parent: &mut Carry, at: usize) -> Result<(), EditError> {
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
         let ops = parse(&form.data).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
@@ -882,9 +889,11 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             stack: Vec::new(),
             marked: Vec::new(),
             layers: Vec::new(),
-            text_left: *text_left,
-            characters_left: *characters_left,
+            text_left: parent.text_left,
+            characters_left: parent.characters_left,
             gap_space: false,
+            containers: parent.containers.clone(),
+            at: [parent.at.as_slice(), &[at]].concat(),
         };
         let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);
@@ -892,8 +901,8 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             w.path.push(r);
         }
         walk(w, &ops, form.resources(resources), &mut carry, &|_| stream)?;
-        *text_left = carry.text_left;
-        *characters_left = carry.characters_left;
+        parent.text_left = carry.text_left;
+        parent.characters_left = carry.characters_left;
         if form.obj.is_some() {
             w.path.pop();
         }
@@ -912,6 +921,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
     let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let stream_of = |i: usize| ops.get(i).map_or(0, |op| pieces.pieces_of(op).0);
+    carry.containers = std::rc::Rc::new(super::containers::Containers::collect(doc, &ops, &res));
     walk(&mut w, &ops, &res, &mut carry, &stream_of)?;
     let mut lines = w.lines;
     // A visual-order Indic font draws pre-base vowel signs before their consonant.

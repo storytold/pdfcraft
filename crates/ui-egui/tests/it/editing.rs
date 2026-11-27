@@ -432,7 +432,7 @@ fn shift_click_selects_a_range_and_moves_it() {
     h.run_steps(3);
     assert_eq!(page_texts(h.state()), ["Page 3", "Page 1", "Page 2", "Page 4"]);
     // The moved pages stay selected at their new position, so repeated clicks keep moving them.
-    assert_eq!(h.state().views[0].selected.items.iter().copied().collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(h.state().views[0].selected.items.to_vec(), [1, 2]);
     // The pointer still rests on the button, whose tooltip carries its name too.
     h.get_by_role_and_label(Role::Button, "Move later").click();
     h.run_steps(3);
@@ -914,7 +914,7 @@ fn opening_a_missing_file_fails_and_tells_the_user() {
     assert_eq!(h.state_mut().open_path(&missing.to_string_lossy()), OpenOutcome::Pending);
     h.run_steps(4);
     assert!(h.state().views.is_empty());
-    assert!(support::shown_notice(&mut h).is_some(), "the failure is still reported to the user");
+    assert!(support::shown_notice(&h).is_some(), "the failure is still reported to the user");
 }
 
 #[test]
@@ -944,7 +944,7 @@ fn opening_a_file_whose_copy_vanished_from_disk_focuses_its_tab() {
     h.run_steps(2);
     assert_eq!(h.state().views.len(), 1, "no second tab");
     assert_eq!(h.state().active, Some(0), "the open tab is focused");
-    assert!(support::shown_notice(&mut h).is_none(), "no read error: the file is never read again");
+    assert!(support::shown_notice(&h).is_none(), "no read error: the file is never read again");
 }
 
 #[test]
@@ -3063,20 +3063,20 @@ fn copying_out_of_a_document_honours_its_security() {
 
     let (mut h, copies) = open("pw");
     assert!(!copy(&mut h, &copies), "⌘C copies nothing");
-    assert_eq!(support::shown_notice(&mut h).as_deref(), refused);
+    assert_eq!(support::shown_notice(&h).as_deref(), refused);
     for command in ["edit.snapshot", "export.image", "export.text", "export.docx", "export.pptx", "export.html", "export.rtf", "export.all_images"] {
         // A fresh window per command: the notice of the one before would still be showing.
         let (mut h, _) = open("pw");
         assert!(!h.execute(command), "{command} is refused");
         h.run_steps(2);
-        assert_eq!(support::shown_notice(&mut h).as_deref(), refused, "{command} says why");
+        assert_eq!(support::shown_notice(&h).as_deref(), refused, "{command} says why");
         assert!(h.state().dialogs.is_empty(), "no export dialog");
     }
     // The snapshot tool, chosen on another tab, takes nothing here either.
     h.set_option("quick", "snapshot").unwrap();
     snapshot(&mut h);
     assert!(h.state().last_snapshot.is_none());
-    assert_eq!(support::shown_notice(&mut h).as_deref(), refused);
+    assert_eq!(support::shown_notice(&h).as_deref(), refused);
 
     let (mut h, copies) = open("owner");
     assert!(copy(&mut h, &copies), "the owner may copy");
@@ -3279,7 +3279,7 @@ fn dragging_thumbnails_reorders_pages() {
     let after = page_texts(h.state());
     assert_eq!(after, vec![before[1].clone(), before[2].clone(), before[0].clone(), before[3].clone()], "{after:?}");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move page"));
-    let sel: Vec<usize> = h.state().views[0].selected.items.iter().copied().collect();
+    let sel: Vec<usize> = h.state().views[0].selected.items.to_vec();
     assert_eq!(sel, vec![2], "the moved page stays selected");
 }
 
@@ -3325,7 +3325,7 @@ fn dragging_with_the_copy_modifier_copies_the_pages_into_the_gap() {
     let after = page_texts(h.state());
     assert_eq!(after, vec![before[0].clone(), before[1].clone(), before[2].clone(), before[0].clone()], "{after:?}");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Duplicate page"));
-    let sel: Vec<usize> = h.state().views[0].selected.items.iter().copied().collect();
+    let sel: Vec<usize> = h.state().views[0].selected.items.to_vec();
     assert_eq!(sel, vec![3], "the copy is selected");
 }
 
@@ -3355,7 +3355,7 @@ fn option_copies_and_ctrl_moves_when_the_context_reports_macos() {
     page_drag(&mut h, from, to, Modifiers::ALT);
     assert_eq!(page_texts(h.state()), vec![before[0].clone(), before[1].clone(), before[2].clone(), before[0].clone()], "Option copies on macOS");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Duplicate page"));
-    let sel: Vec<usize> = h.state().views[0].selected.items.iter().copied().collect();
+    let sel: Vec<usize> = h.state().views[0].selected.items.to_vec();
     assert_eq!(sel, vec![3], "the copy is selected");
 }
 
@@ -3370,7 +3370,7 @@ fn copying_cutting_and_pasting_pages() {
     h.run_steps(2);
     let after = page_texts(h.state());
     assert_eq!(after, vec![before[0].clone(), before[1].clone(), before[2].clone(), before[0].clone(), before[3].clone()], "pasted after page 3");
-    let sel: Vec<usize> = h.state().views[0].selected.items.iter().copied().collect();
+    let sel: Vec<usize> = h.state().views[0].selected.items.to_vec();
     assert_eq!(sel, vec![3], "the pasted page is selected");
     // Cut page 2 and paste it at the end.
     h.state_mut().views[0].select_pages(&[1]);
@@ -3961,7 +3961,7 @@ fn a_paragraph_whose_edit_fails_stays_open_with_its_typing() {
     h.run_steps(1);
     h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
     h.run_steps(3);
-    let notice = support::shown_notice(&mut h);
+    let notice = support::shown_notice(&h);
     let s = h.state();
     assert!(notice.as_ref().is_some_and(|m| m.starts_with("Edit text failed")), "the failure is said: {notice:?}");
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), None, "nothing was applied");
@@ -6144,7 +6144,7 @@ fn an_ordinary_paragraph_drag_refusal_never_rewrites_the_text() {
     assert!(doc.can_undo().is_none());
     assert!(!doc.dirty);
     assert_dragged_paragraphs(&dragged_paragraphs(&h), &before);
-    assert!(support::shown_notice(&mut h).unwrap().contains("Text used as a clipping path cannot be moved with this selection."));
+    assert!(support::shown_notice(&h).unwrap().contains("Text used as a clipping path cannot be moved with this selection."));
 }
 
 /// A delete the engine refuses (text used as a clipping path) leaves the document as it was and
@@ -6167,7 +6167,7 @@ fn a_refused_delete_keeps_the_object_selection() {
     let doc = h.state().session.get(id).unwrap();
     assert_eq!((doc.edit_generation(), &doc.bytes), (generation, &bytes), "the refused delete changed nothing");
     assert!(doc.can_undo().is_none());
-    assert!(support::shown_notice(&mut h).is_some(), "the refusal is reported");
+    assert!(support::shown_notice(&h).is_some(), "the refusal is reported");
     h.get_by_label("1 object selected");
 }
 
@@ -6432,7 +6432,7 @@ fn dragging_pages_panel_thumbnails_reorders_pages() {
     assert_eq!(after, vec![before[2].clone(), before[0].clone(), before[1].clone(), before[3].clone()], "{after:?}");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move page"));
     let view = &h.state().views[0];
-    assert_eq!(view.selected.items.iter().copied().collect::<Vec<_>>(), vec![0], "the moved page stays selected");
+    assert_eq!(view.selected.items.to_vec(), vec![0], "the moved page stays selected");
 }
 
 #[test]
@@ -6538,7 +6538,7 @@ fn the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page()
     let (p1, p3) = (panel_thumb(&h, "Page 1"), panel_thumb(&h, "Page 3"));
     h.hover_at(p3);
     h.run_steps(1);
-    assert_eq!(h.state().views[0].selected.items.iter().copied().collect::<Vec<_>>(), vec![0, 1, 2]);
+    assert_eq!(h.state().views[0].selected.items.to_vec(), vec![0, 1, 2]);
     // Every page picked: Delete does nothing, and the menu item is off.
     h.key_press(Key::Delete);
     h.run_steps(3);
@@ -6581,7 +6581,7 @@ fn host_dirty_hears_when_unsaved_work_appears_and_goes() {
 fn one_editor_contains_mixed_styles_and_visual_rows() {
     let _gpu = gpu();
     let bytes = source_font_fixture_with_text(
-        "BT 0 0.2 0.5 rg /F1 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
+        "BT 0 0.2 0.5 rg /F2 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
          BT 0 g /F2 12 Tf 20 215 Td (Plain ) Tj /F1 12 Tf 0 0.2 0.5 rg (bold) Tj /F2 12 Tf 0 g ( words) Tj ET \
          BT /F2 10 Tf 20 195 Td (Last row) Tj ET",
     );
@@ -6669,7 +6669,7 @@ fn one_editor_contains_mixed_styles_and_visual_rows() {
 fn the_caret_on_a_small_row_is_as_tall_as_that_row() {
     // It was one row of the region's first (18 pt) size tall, reaching into the row below.
     let bytes = source_font_fixture_with_text(
-        "BT 0 0.2 0.5 rg /F1 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
+        "BT 0 0.2 0.5 rg /F2 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
          BT 0 g /F2 12 Tf 20 215 Td (Plain ) Tj /F1 12 Tf 0 0.2 0.5 rg (bold) Tj /F2 12 Tf 0 g ( words) Tj ET \
          BT /F2 10 Tf 20 195 Td (Last row) Tj ET",
     );
@@ -8769,7 +8769,7 @@ fn page_properties_does_not_apply_after_the_document_changes() {
     h.run_steps(3);
     assert!(h.state().dialogs.is_empty());
     assert_eq!(
-        support::shown_notice(&mut h).as_deref(),
+        support::shown_notice(&h).as_deref(),
         Some("The document changed while the dialog was open, so nothing was changed. Open Page properties again to set the tab order.")
     );
     let doc = h.state().session.get(id).unwrap();
@@ -9745,7 +9745,7 @@ fn printer_marks_are_added_from_the_dialog_and_removed() {
     assert!(doc.marks().contains(&pdfcraft_engine::MarkKind::PrinterMarks));
     // No trim box: the whole page is the trim box, so the page grew 36 pt a side for the marks.
     assert!((doc.info.pages[0].width - (before + 72.0)).abs() < 0.5, "{} → {}", before, doc.info.pages[0].width);
-    assert_eq!(support::shown_notice(&mut h).unwrap(), "Printer marks added");
+    assert_eq!(support::shown_notice(&h).unwrap(), "Printer marks added");
     assert!(h.execute("prepress.marks.remove"));
     h.run_steps(3);
     let doc = h.state().session.get(id).unwrap();
@@ -9783,13 +9783,13 @@ fn convert_colours_from_the_dialog() {
     // The mode bar has a "Convert" too: the dialog's button is the last one.
     h.query_all_by_label("Convert").last().unwrap().click();
     h.run_steps(3);
-    assert_eq!(support::shown_notice(&mut h).unwrap(), "Converted 2 colours and 0 pictures on 1 pages");
+    assert_eq!(support::shown_notice(&h).unwrap(), "Converted 2 colours and 0 pictures on 1 pages");
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Convert colours"));
     assert!(h.execute("prepress.convert_colors"));
     h.run_steps(2);
     h.query_all_by_label("Convert").last().unwrap().click();
     h.run_steps(3);
-    assert_eq!(support::shown_notice(&mut h).unwrap(), "Nothing on those pages needed converting");
+    assert_eq!(support::shown_notice(&h).unwrap(), "Nothing on those pages needed converting");
 }
 
 /// Print production ▸ Fix hairlines: the dialog widens zero-width and too-thin
@@ -9820,14 +9820,14 @@ fn fix_hairlines_from_the_dialog() {
     h.get_by_label("Type 3 font glyphs");
     h.get_by_label("Fix").click();
     h.run_steps(3);
-    assert_eq!(support::shown_notice(&mut h).unwrap(), "Fixed 1 hairline on 1 page");
+    assert_eq!(support::shown_notice(&h).unwrap(), "Fixed 1 hairline on 1 page");
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Fix hairlines"));
     // Nothing left: told, and no new undo step.
     assert!(h.execute("prepress.hairlines"));
     h.run_steps(2);
     h.get_by_label("Fix").click();
     h.run_steps(3);
-    assert_eq!(support::shown_notice(&mut h).unwrap(), "No hairlines found on those pages");
+    assert_eq!(support::shown_notice(&h).unwrap(), "No hairlines found on those pages");
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Fix hairlines"));
 }
 
@@ -9856,7 +9856,7 @@ fn fix_hairlines_notice_uses_singular_and_plural() {
     h.run_steps(2);
     h.get_by_label("Fix").click();
     h.run_steps(3);
-    assert_eq!(support::shown_notice(&mut h).unwrap(), "Fixed 2 hairlines on 1 page");
+    assert_eq!(support::shown_notice(&h).unwrap(), "Fixed 2 hairlines on 1 page");
 }
 
 /// The Read mode command (not the mode bar) applies a paragraph still open in the editor, as
@@ -10493,7 +10493,10 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
         "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>".into(),
     ];
-    let body = "BT /F1 24 Tf 20 200 Td (Heading) Tj /F1 12 Tf 0 -25 Td (Paragraph) Tj ET";
+    // The heading is close enough in size to stay in the paragraph (a much larger one is a block
+    // of its own), and Times goes on one word of the second row: a row set wholly in another
+    // family is a paragraph of its own.
+    let body = "BT /F1 16 Tf 20 200 Td (Heading) Tj /F1 12 Tf 0 -25 Td (Body text in a Paragraph) Tj ET";
     objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
     let mut pdf = Vec::from(b"%PDF-1.7\n");
     let mut xref = Vec::new();

@@ -375,7 +375,7 @@ fn remove_background_says_which_pages_keep_their_own_backdrop_off() {
     h.steps(2);
     assert!(marks(&h).is_empty());
     assert_eq!(
-        support::shown_notice(&mut h.h).as_deref(),
+        support::shown_notice(&h.h).as_deref(),
         Some("Page 1 changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.")
     );
 }

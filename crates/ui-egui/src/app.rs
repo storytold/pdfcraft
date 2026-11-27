@@ -183,13 +183,15 @@ impl PdfCraftApp {
 
     /// The app unit tests start from: the default host (threads run its jobs, pickers answer Cancelled), no
     /// wake-ups, no autosave folder, the GitHub update source, a fresh intake and an inline watch.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
+    #[cfg(test)]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn for_unit_tests() -> Self {
         Self::for_unit_tests_on(Arc::new(Host::builder(APP_INFO).build()))
     }
 
     /// [`for_unit_tests`](Self::for_unit_tests) over `host`, for a test whose jobs or files are scripted.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
+    #[cfg(test)]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn for_unit_tests_on(host: Arc<Host>) -> Self {
         let services = AppServices::new(
             Wake::none(),
@@ -843,10 +845,10 @@ impl PdfCraftApp {
                 view.session.pending_pick = None;
             }
         }
-        panes::frame(self, &ctx);
         // Forms' scripts read Highlight fields as `app.runtimeHighlight`.
         let highlight = self.active.and_then(|i| self.views.get(i)).map_or(self.highlight_fields, |v| v.session.highlight_fields);
         self.session.set_field_highlight(highlight);
+        panes::frame(self, &ctx);
         self.sync_titles(&ctx);
         // The accessible window takes the same name, so a screen reader (AT-SPI on Linux, UIA on
         // Windows) can tell it apart (#4614). egui builds the root node afresh every pass.

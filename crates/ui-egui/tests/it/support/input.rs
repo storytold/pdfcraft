@@ -33,26 +33,6 @@ pub fn touch_tap<S>(h: &mut Harness<'_, S>, p: Pos2) {
     h.run_steps(4);
 }
 
-/// A finger drag from `a` to `b` in six moves, one frame each, ending as a touch does: release
-/// and `PointerGone` in one frame.
-pub fn touch_drag<S>(h: &mut Harness<'_, S>, a: Pos2, b: Pos2) {
-    one_frame(h, [touch(TouchPhase::Start, a), Event::PointerMoved(a), button(a, true)]);
-    for i in 1..=6 {
-        let p = a + (b - a) * (i as f32 / 6.0);
-        one_frame(h, [touch(TouchPhase::Move, p), Event::PointerMoved(p)]);
-    }
-    one_frame(h, [touch(TouchPhase::End, b), button(b, false), Event::PointerGone]);
-    h.run_steps(4);
-}
-
-/// A mouse click at `p` whose press and release land in one slow frame (#2100).
-pub fn coalesced_click<S>(h: &mut Harness<'_, S>, p: Pos2) {
-    h.hover_at(p);
-    h.run_steps(2);
-    one_frame(h, [button(p, true), button(p, false)]);
-    h.run_steps(4);
-}
-
 /// A double-click at `p`: two clicks, each a press and release in one frame, in consecutive
 /// frames (0.25 s apart, within egui's 0.3 s double-click delay).
 pub fn double_click<S>(h: &mut Harness<'_, S>, p: Pos2) {

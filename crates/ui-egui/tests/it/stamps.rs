@@ -3,7 +3,7 @@
 use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
+use pdfcraft_ui_egui::QuickTool;
 
 #[test]
 fn choosing_and_placing_stamps() {

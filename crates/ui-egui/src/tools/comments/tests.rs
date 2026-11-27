@@ -395,7 +395,7 @@ fn markup_comment_markers_stay_inside_turned_and_zoomed_pages() {
                 ..Default::default()
             };
             let placed = [placed_page(&xf, f64::from(zoom))];
-            let map = page_map(&placed, &info, rotation as u16);
+            let map = page_map(&placed, &info, rotation);
             let side = icon_side(&map);
             let with = |annotations: Vec<Annotation>| DocInfo { annotations, ..info.clone() };
             for rect in [[0.0, 180.0, 30.0, 200.0], [270.0, 180.0, 300.0, 200.0], [270.0, 0.0, 300.0, 20.0], [0.0, 0.0, 30.0, 20.0]] {
@@ -592,7 +592,7 @@ fn an_annotation_round_trips_through_the_page_map_on_turned_and_zoomed_pages() {
             ..Default::default()
         };
         let placed = [placed_page(&xf, f64::from(zoom))];
-        let map = page_map(&placed, &info, rotation as u16);
+        let map = page_map(&placed, &info, rotation);
         let case = format!("page/view rotation {page_rotation}/{rotation}, zoom {zoom}");
         for user in [[10.0, 20.0], [250.0, 150.0]] {
             let back = map.to_user(0, map.to_doc(0, user));

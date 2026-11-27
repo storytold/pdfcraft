@@ -570,6 +570,13 @@ pub(crate) fn move_error(error: &pdfcraft_engine::EditError) -> String {
     }
 }
 
+/// The accent as outline ink: production outlines the selection and the editable paragraphs in blue, not in
+/// the overlay grey the outline component defaults to.
+pub(crate) fn accent_ink(ui: &egui::Ui, share: f32) -> craft::ui::style::DataColor {
+    let [r, g, b, a] = craft::ui::runtime::env::Env::of(ui).tokens.color.accent.solid.0;
+    craft::ui::style::DataColor::new(egui::Color32::from_rgba_unmultiplied(r, g, b, a).gamma_multiply(share))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,11 +600,4 @@ mod tests {
         assert!(matches!(Edit::delete_objects(2, vec![t(ObjectKind::Image, 4)]), Some(Edit::EditPageImage { page: 2, index: 4, .. })));
         assert!(Edit::delete_objects(0, Vec::new()).is_none());
     }
-}
-
-/// The accent as outline ink: production outlines the selection and the editable paragraphs in blue, not in
-/// the overlay grey the outline component defaults to.
-pub(crate) fn accent_ink(ui: &egui::Ui, share: f32) -> craft::ui::style::DataColor {
-    let [r, g, b, a] = craft::ui::runtime::env::Env::of(ui).tokens.color.accent.solid.0;
-    craft::ui::style::DataColor::new(egui::Color32::from_rgba_unmultiplied(r, g, b, a).gamma_multiply(share))
 }

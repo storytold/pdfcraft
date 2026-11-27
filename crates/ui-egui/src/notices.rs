@@ -97,7 +97,6 @@ fn apply(app: &mut PdfCraftApp, ctx: &egui::Context, request: ProgressRequest) {
     }
 }
 
-/// How far the job of `key` has got, from its card; `None` when it has no card shown.
 // PLAN: L-206 names this `Notices::progress(&self, key: &str)`; the app has no `Notices` type, so it is a function
 // over the app's card map.
 
