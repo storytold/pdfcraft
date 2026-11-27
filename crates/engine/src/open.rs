@@ -173,18 +173,9 @@ impl Session {
                 let report = pdfcraft_xfa::existing_layout(&cos);
                 let mut work = cos.clone();
                 let mut warnings = Vec::new();
-                let mut comb_fields = Vec::new();
-                if report.is_none() {
-                    match guard(|| xfa_apply_static_comb_fields(&mut work))
-                        .unwrap_or_else(|m| Err(format!("applying comb settings failed unexpectedly ({m})")))
-                    {
-                        Ok(names) => comb_fields = names,
-                        Err(e) => {
-                            warnings.push(format!("The comb settings in this static XFA form could not be applied: {e}"));
-                            work = cos.clone();
-                        }
-                    }
-                }
+                // The data's values first, into the fields as the file has them: a comb's cell
+                // count, set below, must not turn away a value the form's own data holds. Such a
+                // value stays, as a stored one longer than its comb does.
                 let synced =
                     guard(|| xfa_values_from_datasets(&mut work)).unwrap_or_else(|m| Err(format!("reading its data failed unexpectedly ({m})")));
                 let names = match synced {
@@ -194,6 +185,16 @@ impl Session {
                         Vec::new()
                     }
                 };
+                let mut comb_fields = Vec::new();
+                if report.is_none() {
+                    // All or nothing, like the values: a failure leaves `work` with the values only.
+                    match guard(|| xfa_apply_static_comb_fields(&mut work))
+                        .unwrap_or_else(|m| Err(format!("applying comb settings failed unexpectedly ({m})")))
+                    {
+                        Ok(names) => comb_fields = names,
+                        Err(e) => warnings.push(format!("The comb settings in this static XFA form could not be applied: {e}")),
+                    }
+                }
                 if names.is_empty() && comb_fields.is_empty() {
                     let mut info = info;
                     info.warnings.extend(warnings);

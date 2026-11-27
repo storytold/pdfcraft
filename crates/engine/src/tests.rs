@@ -8807,22 +8807,102 @@ fn static_xfa_comb_open_preserves_existing_values_and_signed_bytes() {
     }
 }
 
-/// Applying XFA data is atomic: an overlong comb value must not leave other fields changed when
-/// the batch fails.
+/// The static fixture's text field, changed by `change` before the form is opened: the bytes to open.
+fn static_shell_with_name_field(data: &str, change: impl FnOnce(&mut pdfcraft_cos::Dict)) -> Arc<Vec<u8>> {
+    let mut source = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::static_shell(data))).unwrap();
+    let name = pdfcraft_forms::fields(&source).into_iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap().obj;
+    source.update_dict(name, change).unwrap();
+    Arc::new(pdfcraft_cos::write_incremental(&source, &pdfcraft_cos::SaveOptions::default()).unwrap())
+}
+
+/// What opening `bytes` gives: the values of the fixture's `name` and `agree` fields, and the warnings.
+fn opened_static_values(bytes: Arc<Vec<u8>>) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("static.pdf", None, bytes, None).expect("opens");
+    let doc = s.get(id).unwrap();
+    let value = |name: &str| doc.form.iter().find(|f| f.name == name).unwrap().value.clone();
+    (value("form1[0].page1[0].name[0]"), value("form1[0].page1[0].agree[0]"), doc.info.warnings.clone())
+}
+
+/// XFA data goes in value by value: one its field refuses (text past the field's own `/MaxLen`)
+/// is left out without a warning, and the other values are still taken. Refusing the whole batch
+/// for it left every public form that takes values from its data without them
+/// (storytold/pdfcraft#8449).
 #[test]
-fn rejected_xfa_dataset_values_do_not_leave_partial_field_mutations() {
-    let template = r#"<subform name="form1" layout="tb">
- <subform name="page1" layout="tb"><field name="name" w="3in" h="0.3in"><ui><textEdit><comb numberOfCells="3"/></textEdit></ui><value><text maxChars="3"/></value></field>
- <field name="agree" w="0.2in" h="0.2in"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items></field></subform>
-</subform>"#;
-    let bytes = pdfcraft_xfa::fixtures::static_shell_with_template(template, "<form1><page1><name>TooLong</name><agree>1</agree></page1></form1>");
-    let mut doc = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
-    xfa_apply_static_comb_fields(&mut doc).expect("comb properties apply");
-    let before = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
-    let result = xfa_values_from_datasets(&mut doc);
-    assert!(result.is_err(), "the value over the three-cell limit rejects the data batch: {result:?}");
-    let after = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
-    assert_eq!(after, before, "a rejected data batch leaves no partial field mutation");
+fn a_refused_xfa_data_value_is_left_out_and_the_others_are_taken() {
+    let bytes = static_shell_with_name_field("<form1><page1><name>TooLong</name><agree>1</agree></page1></form1>", |d| {
+        d.set(b"MaxLen".to_vec(), pdfcraft_cos::Object::Int(3));
+    });
+    let (name, agree, warnings) = opened_static_values(bytes);
+    assert!(name.is_empty(), "the refused value is not applied: {name:?}");
+    assert_eq!(agree, vec!["1".to_string()], "the value after the refused one is still taken");
+    assert!(!warnings.iter().any(|w| w.contains("could not be applied")), "a refused value is not a warning: {warnings:?}");
+    let note = warnings.iter().find(|w| w.contains("taken from this form's XFA data")).expect("the value taken is noted");
+    assert!(note.starts_with("1 form field value ") && note.contains("form1[0].page1[0].agree[0]"), "{note}");
+}
+
+/// A blank form's data holds an empty element for every field, drop-down lists included. A list
+/// with no empty option (the states of USCIS Form I-539, say) stays unselected, with no warning,
+/// and the rest of the data is applied.
+#[test]
+fn an_empty_xfa_data_value_for_a_list_with_no_empty_option_is_skipped_silently() {
+    use pdfcraft_cos::{Object, PdfString};
+    let bytes = static_shell_with_name_field("<form1><page1><name/><agree>1</agree></page1></form1>", |d| {
+        d.set(b"FT".to_vec(), Object::name("Ch"));
+        d.set(b"Ff".to_vec(), Object::Int(i64::from(pdfcraft_forms::flags::COMBO)));
+        let states = [b"AL".to_vec(), b"AK".to_vec()];
+        d.set(b"Opt".to_vec(), Object::Array(states.into_iter().map(|s| Object::String(PdfString::literal(s))).collect()));
+    });
+    let (state, agree, warnings) = opened_static_values(bytes);
+    assert!(state.is_empty(), "nothing is selected: {state:?}");
+    assert_eq!(agree, vec!["1".to_string()], "the rest of the data is applied");
+    assert!(!warnings.iter().any(|w| w.contains("could not be applied")), "an empty data element is not a warning: {warnings:?}");
+    let note = warnings.iter().find(|w| w.contains("taken from this form's XFA data")).expect("the value taken is noted");
+    assert!(note.starts_with("1 form field value ") && !note.contains("name[0]"), "the list is not among the fields changed: {note}");
+}
+
+/// The form's own data is taken as it was before comb support, a value longer than its field's
+/// comb included: it is kept, as a stored one is, and the field is still a comb.
+#[test]
+fn static_xfa_data_longer_than_its_comb_is_still_taken() {
+    let template = r#"<subform name="form1"><subform name="page1"><field name="name"><ui><textEdit><comb numberOfCells="3"/></textEdit></ui></field></subform></subform>"#;
+    let bytes = pdfcraft_xfa::fixtures::static_shell_with_template(template, "<form1><page1><name>TooLong</name></page1></form1>");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("comb.pdf", None, Arc::new(bytes), None).expect("opens");
+    let doc = s.get(id).unwrap();
+    let field = doc.form.iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap();
+    assert_eq!(field.value, vec!["TooLong".to_string()], "the data's value is taken");
+    assert!(field.is_comb() && field.max_len == Some(3), "and the comb settings still apply");
+    assert!(!doc.info.warnings.iter().any(|w| w.contains("could not be applied")), "{:?}", doc.info.warnings);
+}
+
+/// A static form whose template the reader cannot take (here an undeclared prefix; the OPM SF-86's
+/// is past the XML reader's limits) opened without a warning before comb support and still does:
+/// when it only uses the word (the SF-86 asks about "combat" and "combined" service) it is not
+/// read for comb settings at all, and when it has a comb field there is nothing to apply.
+#[test]
+fn a_static_xfa_template_that_cannot_be_read_adds_no_comb_warning() {
+    let words = r#"<subform name="form1"><subform name="page1"><draw undeclared:x="1"><value><text>combat or combined service</text></value></draw><field name="name"/></subform></subform>"#;
+    let comb = r#"<subform name="form1"><subform name="page1"><field name="name" undeclared:x="1"><ui><textEdit><comb numberOfCells="3"/></textEdit></ui></field></subform></subform>"#;
+    for template in [words, comb] {
+        let bytes = pdfcraft_xfa::fixtures::static_shell_with_template(template, "");
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("unreadable-template.pdf", None, Arc::new(bytes), None).expect("opens");
+        let warnings = &s.get(id).unwrap().info.warnings;
+        assert!(!warnings.iter().any(|w| w.contains("comb settings")), "{template}: {warnings:?}");
+    }
+}
+
+/// Only a `<comb>` element sends a static form's template to be read for comb settings.
+#[test]
+fn the_comb_check_finds_comb_elements_and_not_the_word() {
+    use crate::xfa_form::has_comb_element;
+    for xdp in ["<textEdit><comb numberOfCells=\"9\"/></textEdit>", "<textEdit><comb/></textEdit>", "<x:comb>", "<comb\n numberOfCells=\"2\"/>"] {
+        assert!(has_comb_element(xdp), "{xdp}");
+    }
+    for xdp in ["<text>combat, or combined service</text>", "<combo/>", "<draw name=\"comb\"/>", "<p>a comb </p>", "<a b=\"x:comb\"/>", ""] {
+        assert!(!has_comb_element(xdp), "{xdp}");
+    }
 }
 
 /// A static XFA exclusion group laid out as a radio group with `/Opt [(1) (2)]` and on states
