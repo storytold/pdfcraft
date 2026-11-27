@@ -5,6 +5,8 @@ use super::edit::{EditCtx, check_permission, run_edit};
 use super::*;
 use pdfcraft_render::{Layer, LayerOp, OpenError, ReadingColors};
 
+mod print_marks;
+
 /// A minimal `n`-page document; page `i` shows "Page i+1".
 pub(crate) fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
@@ -7501,6 +7503,38 @@ fn active_xfa_does_not_run_pdf_container_scripts_but_keeps_requested_alerts() {
 }
 
 #[test]
+fn take_js_errors_leaves_the_alerts_for_take_js_output() {
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace("if (qty.rawValue === null) qty.rawValue = 2;", "qty.rawValue = 2; xfa.host.messageBox('opened'); throw new Error('open failed');");
+    // Raised time limits: a busy machine does not stop the scripts this checks.
+    let mut s = Session::new().with_xfa_time_scale(100);
+    let id = s.open("xfa.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let errors = s.take_js_errors(id);
+    assert!(errors.iter().any(|e| e.contains("open failed")), "{errors:?}");
+    assert!(s.take_js_errors(id).is_empty());
+    let out = s.take_js_output(id);
+    assert!(out.errors.is_empty(), "{out:?}");
+    assert_eq!(out.alerts, [js::Message::plain("opened")]);
+}
+
+#[test]
+fn take_js_errors_reports_a_document_scripts_error_again_on_the_next_edit() {
+    let helpers = "function times\\(a, b\\) { return a * b; } this.getField\\('go'\\).missingTestMethod\\(\\);";
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form_with(helpers)), None).unwrap();
+    assert_eq!(s.take_js_errors(id).len(), 1, "the document script fails at open");
+    // The document scripts run again when the script list changes, which each pass does.
+    for qty in ["4", "5"] {
+        let script = format!("/* {qty} */ function times(a, b) {{ return a * b; }} this.getField('go').missingTestMethod();");
+        s.apply(id, Edit::SetDocumentScript { name: "helpers".into(), script: Some(script) }).unwrap();
+        s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text(qty.into()) }).unwrap();
+        let errors = s.take_js_errors(id);
+        assert_eq!(errors.len(), 1, "qty {qty}: {errors:?}");
+        assert!(errors[0].starts_with("document script 1: TypeError"), "qty {qty}: {errors:?}");
+    }
+}
+
+#[test]
 fn active_xfa_without_template_scripts_does_not_initialize_pdf_fallback_scripts() {
     let template = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
 <subform name="form" layout="tb"><pageSet><pageArea name="page">
@@ -8312,12 +8346,14 @@ fn on_changes_notes_only_the_exits_that_ran() {
     let names = vec!["probe".to_string()];
     let mut exited = Vec::new();
     let mut out = crate::js::JsOutput::default();
-    let mut stopped = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: true, highlight: false, time_scale: 1 };
-    crate::xfa::on_changes(&mut cos, &tpl, &names, &mut stopped, &mut exited).unwrap();
+    let mut stopped =
+        crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: true, highlight: false, time_scale: 1, relaid: false };
+    crate::xfa::on_changes(&mut cos, &tpl, &names, &Default::default(), &mut stopped, &mut exited).unwrap();
     assert!(exited.is_empty(), "no exit ran: {exited:?}");
     let mut out = crate::js::JsOutput::default();
-    let mut running = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, highlight: false, time_scale: 1 };
-    crate::xfa::on_changes(&mut cos, &tpl, &names, &mut running, &mut exited).unwrap();
+    let mut running =
+        crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, highlight: false, time_scale: 1, relaid: false };
+    crate::xfa::on_changes(&mut cos, &tpl, &names, &Default::default(), &mut running, &mut exited).unwrap();
     assert_eq!(exited.len(), 1, "the exit ran: {exited:?}");
 }
 
@@ -8355,8 +8391,8 @@ fn a_widget_the_field_doesnt_have_runs_no_focus_scripts() {
 
 /// Each radio button of a group is a field of its own: reaching the second button runs its
 /// enter script, reaching the first (which has none) runs nothing. Choosing the button changes
-/// the group's value, which runs the group's scripts, not the button's: leaving the button
-/// still runs its exit.
+/// the group's value, which runs the group's scripts and the new button's (its exit among them,
+/// as when leaving it), so leaving the button does not run that exit a second time.
 #[test]
 fn a_radio_buttons_own_focus_scripts_run() {
     use crate::js::FieldFocus::{Enter, Exit};
@@ -8368,7 +8404,8 @@ fn a_radio_buttons_own_focus_scripts_run() {
     assert!(!s.field_focus(id, &group, 2, Enter).unwrap(), "there is no third button");
     assert_eq!(field_text(&s, id, "picks"), "1");
     s.apply(id, Edit::SetFieldValue { name: group.clone(), value: FieldValue::Radio(Some("L".into())) }).unwrap();
-    assert!(s.field_focus(id, &group, 1, Exit).unwrap(), "the button's exit runs on leaving it");
+    assert_eq!(field_text(&s, id, "drops"), "1", "the click ran the button's exit");
+    assert!(!s.field_focus(id, &group, 1, Exit).unwrap(), "that exit is not run again on leaving");
     assert_eq!(field_text(&s, id, "drops"), "1");
 }
 
@@ -8553,6 +8590,8 @@ fn an_xfa_form_without_a_template_opens_with_its_placeholder_and_a_warning() {
     assert!(doc.info.warnings.iter().any(|w| w.contains("could not be laid out") && w.contains("no template")), "{:?}", doc.info.warnings);
 }
 
+/// A dynamic form opens laid out with the values its datasets hold, and with the rows its data
+/// adds to a repeating table row.
 #[test]
 fn dynamic_xfa_forms_open_with_the_values_and_rows_of_their_data() {
     let data = "<form><head><familyName>Kaur</familyName><born>2001-02-03</born><answer>Y</answer></head><table><row><what0>a</what0></row><row><what0>b</what0></row><row><what0>c</what0></row></table></form>";
@@ -8566,6 +8605,29 @@ fn dynamic_xfa_forms_open_with_the_values_and_rows_of_their_data() {
     assert_eq!(value("answer"), vec!["Y".to_string()]);
     assert_eq!(value("what0_3"), vec!["c".to_string()], "three rows from the data: {:?}", doc.form.iter().map(|f| &f.name).collect::<Vec<_>>());
     assert!(!doc.dirty);
+}
+
+/// A dynamic form a viewer saved with its pages drawn holds only its signature box, so it opened as
+/// a picture with nothing to fill in. When its configuration says it must be rendered dynamically
+/// it is laid out from its template on opening, and its text field can be filled; once signed, it
+/// opens as saved, its pages and signature untouched.
+#[test]
+fn a_form_saved_with_its_pages_that_requires_dynamic_rendering_is_laid_out_unless_signed() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let unsigned = Arc::new(pdfcraft_xfa::fixtures::saved_with_pages_shell("required", false));
+    let id = s.open("saved.pdf", None, unsigned, None).expect("opens");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.xfa, Some(pdfcraft_render::Xfa::Dynamic));
+    assert!(doc.xfa.is_some(), "laid out from the template");
+    let name = doc.form.iter().find(|f| f.name.contains("name")).map(|f| f.name.clone()).expect("the template's text field");
+    s.apply(id, Edit::SetFieldValue { name: name.clone(), value: FieldValue::Text("Ada".into()) }).expect("fills");
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == name).map(|f| f.value.clone()), Some(vec!["Ada".to_string()]));
+    let signed = Arc::new(pdfcraft_xfa::fixtures::saved_with_pages_shell("required", true));
+    let id = s.open("signed.pdf", None, signed.clone(), None).expect("opens");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.xfa, Some(pdfcraft_render::Xfa::Static), "signed: as saved");
+    assert!(doc.xfa.is_none(), "nothing was laid out");
+    assert_eq!(doc.bytes[..], signed[..], "no revision was appended on open");
 }
 
 /// #3180: an XFA form with no fields whose configuration says `dynamicRender` is `forbidden` is a
@@ -9117,6 +9179,58 @@ fn xfa_data_import_on_a_static_form_replaces_every_value_and_pictures_reach_its_
     assert!(xml.contains("<name>Bob</name>") && !xml.contains("<agree>1</agree>"), "{xml}");
 }
 
+/// A click on an XFA check box or radio button runs its change scripts, then its click scripts,
+/// which read the new value, show messages and may ask for the focus; a radio group's run before
+/// those of the button now on. All as one undo step. A text field's click script doesn't run when
+/// its value changes.
+#[test]
+fn xfa_check_box_and_radio_button_clicks_run_their_click_scripts() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::toggle_template()));
+    let mut s = Session::new();
+    let id = s.open("toggle.pdf", None, bytes, None).expect("opens");
+    // What the scripts have written to the form's log field so far.
+    let log = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "log").and_then(|f| f.value.first().cloned()).unwrap_or_default();
+    s.apply(id, Edit::SetFieldValue { name: "agree".into(), value: FieldValue::Check(true) }).unwrap();
+    assert_eq!(log(&s), "change 1;click 1;", "change, then click, each seeing the new value");
+    let out = s.take_js_output(id);
+    assert_eq!(out.alerts, [crate::js::Message::plain("Agreed")]);
+    assert!(
+        out.requests.iter().any(|r| matches!(r, pdfcraft_js::Request::FocusField { name, .. } if name == "note")),
+        "a click may move the focus: {out:?}"
+    );
+    s.apply(id, Edit::SetFieldValue { name: "agree".into(), value: FieldValue::Check(false) }).unwrap();
+    assert_eq!(log(&s), "change 1;click 1;change 0;click 0;", "turning it off is a click too");
+    // One undo step takes back the click and what its scripts did.
+    s.undo(id).unwrap();
+    assert_eq!(log(&s), "change 1;click 1;");
+    // A radio group runs each activity's scripts, then the button now on runs its own; the
+    // button turned off runs none. Exit scripts follow, the button's first.
+    let state = |s: &Session, i: usize| s.get(id).unwrap().form.iter().find(|f| f.name == "answer").and_then(|f| f.widgets.get(i)?.on_state.clone());
+    let (yes, no) = (state(&s, 0).expect("yes"), state(&s, 1).expect("no"));
+    s.apply(id, Edit::SetFieldValue { name: "answer".into(), value: FieldValue::Radio(Some(no)) }).unwrap();
+    assert!(log(&s).ends_with("group change N;no change;group click;no click;no exit;group exit;"), "{}", log(&s));
+    s.apply(id, Edit::SetFieldValue { name: "answer".into(), value: FieldValue::Radio(Some(yes)) }).unwrap();
+    assert!(log(&s).ends_with("no exit;group exit;group change Y;yes change;group click;yes click;yes exit;group exit;"), "{}", log(&s));
+    // A text field's value isn't set by a click.
+    s.apply(id, Edit::SetFieldValue { name: "note".into(), value: FieldValue::Text("typed".into()) }).unwrap();
+    assert!(!log(&s).contains("note click"), "{}", log(&s));
+    // A value set again, unchanged, isn't a click: no click script, no message or request.
+    let _ = s.take_js_output(id);
+    let seen = log(&s);
+    s.apply(id, Edit::SetFieldValue { name: "agree".into(), value: FieldValue::Check(true) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "answer".into(), value: FieldValue::Radio(Some(state(&s, 0).unwrap())) }).unwrap();
+    let after = log(&s);
+    assert!(!after.get(seen.len()..).unwrap_or_default().contains("click"), "{after}");
+    let out = s.take_js_output(id);
+    assert!(out.alerts.is_empty() && out.requests.is_empty(), "{out:?}");
+    // A batch that turns the check box off twice clicks it once: the second set changes nothing.
+    let off = || Edit::SetFieldValue { name: "agree".into(), value: FieldValue::Check(false) };
+    let seen = log(&s);
+    s.apply(id, Edit::Batch { label: "twice".into(), edits: vec![off(), off()] }).unwrap();
+    let after = log(&s);
+    assert_eq!(after.get(seen.len()..).unwrap_or_default().matches("click 0;").count(), 1, "{after}");
+}
+
 /// Importing data into a dynamic form adds and removes the rows of its repeating subform to
 /// match, and the calculations over them run again.
 #[test]
@@ -9387,6 +9501,204 @@ fn filling_growable_xfa_text_reflows_and_undo_restores_the_layout() {
         s.redo(id).unwrap();
         assert_eq!(s.get(id).unwrap().info.pages.len(), 3);
     }
+}
+
+/// Typing text that makes a growable field take another page lays the form out again, and its
+/// layout:ready scripts run again, reading the new page count.
+#[test]
+fn layout_ready_scripts_run_again_after_text_grows_the_form() {
+    let template = pdfcraft_xfa::fixtures::growable_text_template(false).replacen(
+        "<pageSet>",
+        r#"<event activity="ready" ref="$layout"><script contentType="application/x-javascript">xfa.form.form.pages.rawValue = String(xfa.layout.pageCount());</script></event><field name="pages" w="1in" h="0.3in"><ui><textEdit/></ui></field><pageSet>"#,
+        1,
+    );
+    let text: String = (0..150).map(|i| format!("Row{i:03} {}sample\n", "sample ".repeat(8))).collect();
+    let mut s = Session::new();
+    let id = s.open("growing.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let pages = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "pages").map(|f| f.value.clone()).unwrap_or_default();
+    let before = s.get(id).unwrap().info.pages.len();
+    assert_eq!(pages(&s), vec![before.to_string()]);
+    s.apply(id, Edit::SetFieldValue { name: "ACTIVIDADES".into(), value: FieldValue::Text(text) }).unwrap();
+    let after = s.get(id).unwrap().info.pages.len();
+    assert_eq!(after, before + 1, "the text takes another page");
+    assert_eq!(pages(&s), vec![after.to_string()], "layout:ready read the new page count");
+}
+
+/// An edit whose change script runs away runs no more of the form's scripts, even when its text
+/// lays the form out again: the layout:ready scripts that a new layout runs wait, and the scripts
+/// turn off once the edit is done.
+#[test]
+fn a_new_layout_after_a_runaway_change_script_runs_no_layout_ready_scripts() {
+    let template = pdfcraft_xfa::fixtures::growable_text_template(false)
+        .replacen(
+            "<pageSet>",
+            r#"<event activity="ready" ref="$layout"><script contentType="application/x-javascript">xfa.form.form.log.rawValue = (xfa.form.form.log.rawValue || "") + "L";</script></event><field name="log" w="1in" h="0.3in"><ui><textEdit/></ui></field><pageSet>"#,
+            1,
+        )
+        .replacen(
+            r#"<field name="ACTIVIDADES" w="540pt" minH="207.017mm">"#,
+            r#"<field name="ACTIVIDADES" w="540pt" minH="207.017mm"><event activity="exit"><script contentType="application/x-javascript">function f() { for (var j = 0; j &lt; 99999; j++) {} } for (var k = 0; k &lt; 5000; k++) f();</script></event>"#,
+            1,
+        );
+    let text: String = (0..150).map(|i| format!("Row{i:03} {}sample\n", "sample ".repeat(8))).collect();
+    let mut s = Session::new();
+    let id = s.open("growing.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let log = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "log").map(|f| f.value.clone()).unwrap_or_default();
+    assert_eq!(log(&s), vec!["L".to_string()], "layout:ready ran once on opening");
+    let before = s.get(id).unwrap().info.pages.len();
+    s.apply(id, Edit::SetFieldValue { name: "ACTIVIDADES".into(), value: FieldValue::Text(text) }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), before + 1, "the text still takes another page");
+    let out = s.take_js_output(id);
+    assert!(out.errors.iter().any(|e| e.contains("abandoned")), "{:?}", out.errors);
+    assert!(s.get(id).unwrap().xfa_scripts_off());
+    assert_eq!(log(&s), vec!["L".to_string()], "no layout:ready run after the runaway");
+}
+
+/// What the last edit (the top of the undo stack) said it changed.
+fn last_scope(s: &Session, id: DocId) -> crate::history::Scope {
+    s.get(id).unwrap().editor.as_ref().unwrap().undo.last().unwrap().3
+}
+
+/// The view's entry for field `name`: its page index and first widget's rectangle.
+fn field_place(s: &Session, id: DocId, name: &str) -> (Option<usize>, Option<[f32; 4]>) {
+    let f = s.get(id).unwrap().info.fields.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("no field {name}")).clone();
+    (f.page, f.rect)
+}
+
+/// Bytes that save and reopen as the document the session shows (the save check of #1698).
+fn saves_and_reopens(s: &mut Session, id: DocId, pages: usize) {
+    let bytes = s.save_bytes(id).unwrap();
+    s.check_save(id, &bytes).unwrap();
+    let again = s.open("saved.pdf", None, bytes, None).unwrap();
+    assert_eq!(s.get(again).unwrap().info.pages.len(), pages);
+    s.close(again);
+}
+
+/// A check box's change script that shows a hidden section lays the form out onto a second
+/// page: the view's pages and fields are rebuilt, the file saves and reopens, undo and redo
+/// rebuild them too, and hiding the section again takes the page away.
+#[test]
+fn an_xfa_script_that_shows_a_section_adds_its_page_and_undo_takes_it_away() {
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, "", "", "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("grow.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let pages = |s: &Session| s.get(id).unwrap().info.pages.len();
+    let fields = |s: &Session| s.get(id).unwrap().info.fields.len();
+    assert_eq!(pages(&s), 1);
+    let before = fields(&s);
+    assert!(s.get(id).unwrap().info.fields.iter().all(|f| f.name != "d1"), "a hidden section has no widgets");
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    let out = s.take_js_output(id);
+    assert_eq!(pages(&s), 2, "{:?}", out.errors);
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Full);
+    assert_eq!(fields(&s), s.get(id).unwrap().form.len(), "the field list is the form's");
+    assert!(fields(&s) > before);
+    for name in ["d1", "d2"] {
+        let (page, rect) = field_place(&s, id, name);
+        assert_eq!(page, Some(1), "{name}");
+        assert!(rect.is_some(), "{name}");
+    }
+    saves_and_reopens(&mut s, id, 2);
+    // A value typed into the new section lays nothing out: only the values are refreshed.
+    s.apply(id, Edit::SetFieldValue { name: "d1".into(), value: FieldValue::Text("typed".into()) }).unwrap();
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Form);
+    assert_eq!(pages(&s), 2);
+    s.undo(id).unwrap();
+    s.undo(id).unwrap();
+    assert_eq!(pages(&s), 1);
+    assert_eq!(fields(&s), before);
+    saves_and_reopens(&mut s, id, 1);
+    s.redo(id).unwrap();
+    assert_eq!(pages(&s), 2);
+    assert_eq!(field_place(&s, id, "d2").0, Some(1));
+    saves_and_reopens(&mut s, id, 2);
+    // Hidden again: the form shrinks back to one page.
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(false) }).unwrap();
+    assert_eq!(pages(&s), 1);
+    assert_eq!(fields(&s), before);
+    saves_and_reopens(&mut s, id, 1);
+}
+
+/// A relayout that keeps the page count still replaces the pages: a field the shown section
+/// pushes onto the second page is placed there in the view.
+#[test]
+fn an_xfa_script_relayout_that_keeps_the_page_count_moves_fields_in_the_view() {
+    let after = r#"<field name="late" w="3in" h="0.5in"><ui><textEdit/></ui></field><draw name="tail" w="7.5in" h="2in"><value><text>Tail</text></value></draw>"#;
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, "", after, "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("moves.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+    assert_eq!(field_place(&s, id, "late").0, Some(0));
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2, "{:?}", s.take_js_output(id).errors);
+    let (page, rect) = field_place(&s, id, "late");
+    assert_eq!(page, Some(1));
+    let widget = s.get(id).unwrap().form.iter().find(|f| f.name == "late").unwrap().widgets[0].rect;
+    assert_eq!(rect, Some(widget.map(|v| v as f32)), "the view has the new widget's place");
+    s.undo(id).unwrap();
+    assert_eq!(field_place(&s, id, "late").0, Some(0));
+    saves_and_reopens(&mut s, id, 2);
+}
+
+/// A reset whose calculations hide the section lays the form out again too.
+#[test]
+fn an_xfa_reset_whose_calculations_hide_a_section_takes_its_page_away() {
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(true, "", "", "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("reset.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1);
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2, "{:?}", s.take_js_output(id).errors);
+    s.apply(id, Edit::ResetForm { names: None }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1, "{:?}", s.take_js_output(id).errors);
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Full);
+    saves_and_reopens(&mut s, id, 1);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+}
+
+/// Two relayouts in one event, and a script that fails after them: the form was still laid
+/// out again, so the view is rebuilt.
+#[test]
+fn an_xfa_event_that_lays_out_twice_then_fails_still_rebuilds_the_view() {
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, "", "", r#"xfa.layout.relayout(); throw new Error("late failure");"#);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("twice.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.errors.iter().any(|e| e.contains("late failure")), "{:?}", out.errors);
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Full);
+    saves_and_reopens(&mut s, id, 2);
+}
+
+/// A picture chosen for an image field lays the form out again from its data.
+#[test]
+fn an_xfa_picture_lays_the_form_out_again_and_rebuilds_the_view() {
+    let after = r#"<field name="photo" w="1in" h="1in"><ui><imageEdit/></ui></field>"#;
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, "", after, "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("photo.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    s.apply(id, Edit::SetFieldImage { name: "photo".into(), image: Arc::new(pdfcraft_xfa::fixtures::TINY_GIF.to_vec()) }).unwrap();
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Full, "{:?}", s.take_js_output(id).errors);
+    saves_and_reopens(&mut s, id, 1);
+}
+
+/// Text growth, then a script: each lays the form out onto one more page, and it saves.
+#[test]
+fn xfa_text_growth_then_a_script_relayout_both_add_pages() {
+    let before = r#"<field name="notes" w="7.5in" minH="0.5in"><ui><textEdit multiLine="1"/></ui></field>"#;
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, before, "", "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("mixed.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1);
+    let notes: String = (1..=60).map(|i| format!("line {i}\n")).collect();
+    s.apply(id, Edit::SetFieldValue { name: "notes".into(), value: FieldValue::Text(notes) }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+    saves_and_reopens(&mut s, id, 2);
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 3, "{:?}", s.take_js_output(id).errors);
+    saves_and_reopens(&mut s, id, 3);
 }
 
 #[test]
@@ -11759,6 +12071,71 @@ fn cropping_an_existing_image_clips_it_and_moves_with_it() {
     assert!(s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([10.0, 10.0, 10.0, 50.0]) }).is_err());
 }
 
+/// A certified (DocMDP P=2) form, as a certifying application leaves it: signed over the whole
+/// file, with nothing appended.
+fn certified_xfa(original: &[u8]) -> Arc<Vec<u8>> {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let id = sign::pkcs12::open(&p12, "test").unwrap();
+    let cos = pdfcraft_cos::Document::open(Arc::new(original.to_vec())).unwrap();
+    let opts = SignOptions { certify: Some(2), date: "D:20270115080000Z".into(), ..SignOptions::default() };
+    Arc::new(sign::sign(&cos, &id, &opts).unwrap())
+}
+
+/// What opening an XFA form writes (its layout, the values from its data, its open scripts) is
+/// PdfCraft's own working revision, not a change to the file: a certified government form
+/// opened untouched is not "altered since it was signed" (#2759). Once the user changes it, or
+/// saves, the file Save writes is what is judged, open-time revisions included.
+#[test]
+fn certified_xfa_forms_open_unaltered() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let signer = sign::pkcs12::open(&p12, "test").unwrap().certificate;
+    let forms = [
+        // Laying the template out adds pages: a change the certification doesn't permit.
+        ("dynamic", pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(3)), "familyName", sign::kind::PAGES, SignatureStatus::Invalid),
+        // Taking the values from the data fills the fields: a permitted change.
+        (
+            "static",
+            pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name><agree>1</agree></page1></form1>"),
+            "form1[0].page1[0].name[0]",
+            sign::kind::FORM_FILL,
+            SignatureStatus::Valid,
+        ),
+    ];
+    for (what, form, field, saved_kind, saved_status) in forms {
+        let certified = certified_xfa(&form);
+        let mut s = Session::new().with_clock(|| 1_800_000_000);
+        let id = s.open("imm.pdf", None, certified.clone(), None).expect("opens");
+        let doc = s.get(id).unwrap();
+        assert!(doc.bytes.len() > certified.len() && !doc.dirty, "{what}: opening wrote a working revision, not an edit");
+        let verdict = |s: &Session| {
+            let sig = s.get(id).unwrap().signatures[0].clone();
+            (sig.status, sig.modification)
+        };
+        assert_eq!(s.get(id).unwrap().signatures[0].certify, Some(2), "{what}");
+        assert_eq!(verdict(&s), (SignatureStatus::Unknown, sign::Modification::None), "{what}: {:?}", s.get(id).unwrap().signatures[0].details);
+        // Trusting the signer revalidates the file as opened too.
+        s.set_trusted_certificates(vec![signer.clone()]);
+        assert_eq!(verdict(&s), (SignatureStatus::Valid, sign::Modification::None), "{what}");
+        // An edit is judged with everything Save would write; undoing it is the file as opened.
+        s.apply(id, Edit::SetFieldValue { name: field.into(), value: FieldValue::Text("Singh".into()) }).unwrap();
+        assert_ne!(verdict(&s).1, sign::Modification::None, "{what}");
+        s.undo(id).unwrap();
+        assert_eq!(verdict(&s), (SignatureStatus::Valid, sign::Modification::None), "{what}");
+        s.revert(id).unwrap();
+        assert_eq!(verdict(&s), (SignatureStatus::Valid, sign::Modification::None), "{what}");
+        // Saved, the open-time revision is part of the file.
+        let saved = s.save_bytes(id).unwrap();
+        s.mark_saved(id, saved, None).unwrap();
+        let (status, modification) = verdict(&s);
+        assert_eq!(status, saved_status, "{what}: {modification:?}");
+        let kinds = match &modification {
+            sign::Modification::Allowed(k) | sign::Modification::Disallowed(k) => k.clone(),
+            sign::Modification::None => Vec::new(),
+        };
+        assert!(kinds.contains(&saved_kind), "{what}: {modification:?}");
+    }
+}
+
 /// Convert colours re-encodes pictures too (RGB → gray, the JPEG staying JPEG) and is one undo
 /// step; a document with nothing to convert refuses rather than leaving an empty step.
 #[test]
@@ -12428,7 +12805,7 @@ fn a_field_that_only_reads_the_page_count_keeps_its_scripts_value() {
 
 /// layout:ready scripts run once on opening: the root's turns field highlighting on (only when it
 /// is off), a field's sets a value and a later script reads the new highlight, while page
-/// numbering is left to the layout and form:ready is another event.
+/// numbering is left to the layout. form:ready is another event, and runs too.
 #[test]
 fn a_forms_layout_ready_scripts_run_once_it_is_laid_out() {
     let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::layout_ready_template()));
@@ -12440,11 +12817,76 @@ fn a_forms_layout_ready_scripts_run_once_it_is_laid_out() {
     assert_eq!(value(&s, "stamp"), vec!["laid out".to_string()]);
     assert_eq!(value(&s, "seen"), vec!["true".to_string()], "a later script reads the highlight the root's turned on");
     assert!(value(&s, "pageNo").iter().all(|v| v.is_empty()), "page numbers are the layout's: {:?}", value(&s, "pageNo"));
-    assert!(value(&s, "note").iter().all(|v| v.is_empty()), "form:ready is another event");
+    assert_eq!(value(&s, "note"), vec!["form ready".to_string()], "form:ready runs on opening too");
     // With highlighting already on, the form has nothing to ask for.
     s.set_field_highlight(true);
     let id = s.open("ready.pdf", None, bytes, None).expect("opens");
     assert!(s.take_js_output(id).requests.is_empty());
+}
+
+/// The ready events run on opening in the order another viewer ran them on a synthetic form:
+/// initialize children first, form:ready and layout:ready parents first, docReady after the first
+/// layout:ready. A click that lays the form out again (showing a tall section: a second page)
+/// runs every layout:ready script again, once each, and they read the new page count.
+#[test]
+fn ready_events_run_in_order_and_layout_ready_runs_again_after_a_new_layout() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::ready_events_template()));
+    let mut s = Session::new();
+    let id = s.open("ready.pdf", None, bytes, None).expect("opens");
+    let log = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "log").map(|f| f.value.join("")).unwrap_or_default();
+    let opened = "title initialize|root initialize|root form:ready|title form:ready|root layout:ready pages=1|title layout:ready|root docReady";
+    assert_eq!(log(&s), opened);
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1);
+    s.apply(id, Edit::XfaEvent { som: "form[0].grow[0]".into(), activity: "click".into() }).expect("clicks");
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2, "the tall section takes a second page");
+    assert_eq!(log(&s), format!("{opened}|root layout:ready pages=2|title layout:ready"));
+}
+
+/// On opening, the calculations run once the initialize scripts have, before form:ready (XFA
+/// 3.3 fires the form ready event after them), and form:ready runs in the reverse of
+/// initialize's order (the root, then its fields last to first), while layout:ready keeps
+/// document order, as another viewer logged on a synthetic form. Since the ready scripts wrote a
+/// value (the log), the calculations run once more after them: which ones read it isn't known
+/// here. A form whose ready scripts write nothing runs them once.
+#[test]
+fn calculations_run_before_form_ready_which_runs_in_reverse() {
+    let js = |what: &str| {
+        format!(r#"var l = xfa.form.form.log; l.rawValue = (l.rawValue == null || l.rawValue == "" ? "" : l.rawValue + "|") + "{what}";"#)
+    };
+    let event = |activity: &str, reference: &str, what: &str| {
+        format!(r#"<event activity="{activity}"{reference}><script contentType="application/x-javascript">{}</script></event>"#, js(what))
+    };
+    let field = |name: &str, extra: &str| {
+        format!(
+            r#"<field name="{name}" w="2in" h="0.3in"><ui><textEdit/></ui>{}{}{extra}</field>"#,
+            event("initialize", "", &format!("{name} initialize")),
+            event("ready", r#" ref="$form""#, &format!("{name} form:ready")),
+        )
+    };
+    let calc = format!(r#"<calculate><script contentType="application/x-javascript">{} 42;</script></calculate>"#, js("calc calculate"));
+    let layout = |name: &str| event("ready", r#" ref="$layout""#, &format!("{name} layout:ready"));
+    let fields = [field("calc", &calc), field("a", &layout("a")), field("b", &layout("b"))].concat();
+    let xdp = pdfcraft_xfa::fixtures::ready_events_template().replace(r#" <field name="grow""#, &format!(" {fields}\n <field name=\"grow\""));
+    let mut s = Session::new();
+    let id = s.open("ready.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&xdp)), None).expect("opens");
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.join("")).unwrap_or_default();
+    let initialize = "title initialize|calc initialize|a initialize|b initialize|root initialize";
+    let ready = "root form:ready|b form:ready|a form:ready|calc form:ready|title form:ready";
+    let layout = "root layout:ready pages=1|title layout:ready|a layout:ready|b layout:ready";
+    assert_eq!(value(&s, "log"), format!("{initialize}|calc calculate|{ready}|{layout}|root docReady|calc calculate"));
+    assert_eq!(value(&s, "calc"), "42");
+    // Ready scripts that write nothing: the calculations run once, before form:ready.
+    let mut quiet = xdp.clone();
+    for start in
+        [r#"<event activity="ready" ref="$form">"#, r#"<event activity="ready" ref="$layout">"#, r#"<event activity="docReady" ref="$host">"#]
+    {
+        // Each ready script writes nothing; its logging moves to an event that never fires.
+        quiet =
+            quiet.replace(start, &format!(r#"{start}<script contentType="application/x-javascript">1;</script></event><event activity="never">"#));
+    }
+    let id = s.open("quiet.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&quiet)), None).expect("opens");
+    let log = s.get(id).unwrap().form.iter().find(|f| f.name == "log").map(|f| f.value.join("")).unwrap_or_default();
+    assert_eq!(log.matches("calc calculate").count(), 1, "{log}");
 }
 
 /// An edit's two script runtimes share one field highlight: a change an XFA script makes reaches
@@ -12460,6 +12902,31 @@ fn an_edits_xfa_and_field_scripts_share_the_field_highlight() {
         js.doc.runtime_highlight = false;
     }
     assert!(!cx.highlight(), "the next XFA script reads the field scripts' change");
+}
+
+/// In a batch of value edits, a later field's change script reads the page count an earlier one's
+/// layout left: `bump`'s change shows a tall section (a second page), and `count`'s change, in the
+/// same batch, records `xfa.layout.pageCount()`.
+#[test]
+fn a_later_xfa_edit_in_a_batch_reads_the_page_count_an_earlier_one_left() {
+    let script = |js: &str| format!(r#"<event activity="change"><script contentType="application/x-javascript">{js}</script></event>"#);
+    let xdp = pdfcraft_xfa::fixtures::ready_events_template().replace(
+        "<field name=\"log\"",
+        &format!(
+            r#"<field name="bump" w="1in" h="0.3in"><ui><textEdit/></ui>{bump}</field>
+ <field name="count" w="1in" h="0.3in"><ui><textEdit/></ui>{count}</field>
+ <field name="seen" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+ <field name="log""#,
+            bump = script(r#"xfa.form.form.tall.presence = "visible";"#),
+            count = script("xfa.form.form.seen.rawValue = String(xfa.layout.pageCount());"),
+        ),
+    );
+    let mut s = Session::new();
+    let id = s.open("batch.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&xdp)), None).expect("opens");
+    let type_in = |name: &str| Edit::SetFieldValue { name: name.into(), value: FieldValue::Text("x".into()) };
+    s.apply(id, Edit::Batch { edits: vec![type_in("bump"), type_in("count")], label: "Type".into() }).expect("types");
+    let seen = s.get(id).unwrap().form.iter().find(|f| f.name == "seen").map(|f| f.value.clone()).unwrap_or_default();
+    assert_eq!(seen, vec!["2".to_string()]);
 }
 
 /// In a batch of value edits, a later field's change script reads the field highlight an earlier
@@ -13686,6 +14153,44 @@ fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes()
     black(&s, rewritten);
 }
 
+/// A form saved with its pages whose signature box sits deeper than the 32 nested fields looked
+/// through counts as signed, as the xfa crate counts it, so it is left as saved rather than laid
+/// out again over a signature that may be there; nested less deep, unsigned, it is laid out.
+#[test]
+fn a_saved_form_too_deep_to_read_through_is_left_as_saved() {
+    let xfa = |depth: usize| {
+        let mut s = Session::new();
+        let id = s.open("deep.pdf", None, Arc::new(pdfcraft_xfa::fixtures::deep_saved_with_pages_shell(depth)), None).expect("opens");
+        s.get(id).unwrap().info.xfa
+    };
+    assert_eq!(xfa(5), Some(pdfcraft_render::Xfa::Dynamic), "nested, unsigned: laid out");
+    assert_eq!(xfa(40), Some(pdfcraft_render::Xfa::Static), "too deep to tell: left as saved");
+}
+
+/// The renderer's inspection and the xfa crate each decide whether a form saved with its pages
+/// is laid out again from its template, each walking the field tree for a signature in its own
+/// way (the renderer reads the file through lopdf, the xfa crate through cos). They agree on every
+/// such form: required or not, signed or not, and a signature box nested from shallow to past
+/// the depth either looks through.
+#[test]
+fn the_renderer_and_the_xfa_crate_agree_on_which_saved_forms_are_laid_out() {
+    let mut forms: Vec<(String, Vec<u8>)> = Vec::new();
+    for render in ["required", "forbidden", ""] {
+        for signed in [false, true] {
+            forms.push((format!("{render:?}, signed {signed}"), pdfcraft_xfa::fixtures::saved_with_pages_shell(render, signed)));
+        }
+    }
+    for depth in [1, 5, 30, 31, 32, 33, 34, 40] {
+        forms.push((format!("nested {depth} deep"), pdfcraft_xfa::fixtures::deep_saved_with_pages_shell(depth)));
+    }
+    for (what, bytes) in forms {
+        let bytes = Arc::new(bytes);
+        let info = pdfcraft_render::inspect(bytes.clone(), None).expect("inspects");
+        let cos = pdfcraft_cos::Document::open(bytes).expect("opens");
+        assert_eq!(info.xfa == Some(pdfcraft_render::Xfa::Dynamic), pdfcraft_xfa::is_dynamic(&cos), "{what}");
+    }
+}
+
 /// A page still exists after its only master widget is hidden: its master nodes stay in the
 /// script model, so a later script can address them again (test from wireless89's review of
 /// #5368).
@@ -14084,13 +14589,12 @@ fn a_batch_that_applies_redactions_and_copies_a_page_is_refused() {
 /// so when the form is saved.
 #[test]
 fn an_opening_reset_reaches_a_row_added_while_opening() {
-    let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
-        "if (qty.rawValue === null) qty.rawValue = 2;",
-        r#"if (qty.rawValue === null) qty.rawValue = 2; table._row.addInstance(1);"#,
-    )
+    // The row is added by a script of a field before `grand`: the initialize scripts run children
+    // before their parents, so a script of `page1` would come after `grand`'s.
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
     .replace(
         r#"<field name="grand" w="2in" h="0.3in" access="readOnly">"#,
-        r#"<field name="grand" w="2in" h="0.3in" access="readOnly"><event activity="initialize"><script contentType="application/x-javascript">xfa.resolveNode("form.page1.table.row[1].item").rawValue = "X"; xfa.host.resetData("form.page1.table.row[1].item");</script></event>"#,
+        r#"<field name="grand" w="2in" h="0.3in" access="readOnly"><event activity="initialize"><script contentType="application/x-javascript">table._row.addInstance(1);</script></event><event activity="initialize"><script contentType="application/x-javascript">xfa.resolveNode("form.page1.table.row[1].item").rawValue = "X"; xfa.host.resetData("form.page1.table.row[1].item");</script></event>"#,
     );
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
@@ -14109,14 +14613,10 @@ fn an_opening_reset_reaches_a_row_added_while_opening() {
 fn an_opening_reset_reaches_an_exclusion_group_of_a_row_added_while_opening() {
     let group = r#"<exclGroup name="pick" w="1in" h="0.3in"><field name="a" w="0.5in" h="0.3in"><ui><checkButton/></ui><items><text>A</text></items><value><text>A</text></value></field><field name="b" w="0.5in" h="0.3in"><ui><checkButton/></ui><items><text>B</text></items></field></exclGroup>"#;
     let tpl = pdfcraft_xfa::fixtures::scripted_template()
-        .replace(
-            "if (qty.rawValue === null) qty.rawValue = 2;",
-            r#"if (qty.rawValue === null) qty.rawValue = 2; table._row.addInstance(1);"#,
-        )
         .replace(r#"<field name="amount" h="0.3in"><ui><numericEdit/></ui></field>"#, &format!(r#"<field name="amount" h="0.3in"><ui><numericEdit/></ui></field>{group}"#))
         .replace(
             r#"<field name="grand" w="2in" h="0.3in" access="readOnly">"#,
-            r#"<field name="grand" w="2in" h="0.3in" access="readOnly"><event activity="initialize"><script contentType="application/x-javascript">xfa.resolveNode("form.page1.table.row[1].pick").rawValue = "B"; xfa.host.resetData("form.page1.table.row[1].pick");</script></event>"#,
+            r#"<field name="grand" w="2in" h="0.3in" access="readOnly"><event activity="initialize"><script contentType="application/x-javascript">table._row.addInstance(1);</script></event><event activity="initialize"><script contentType="application/x-javascript">xfa.resolveNode("form.page1.table.row[1].pick").rawValue = "B"; xfa.host.resetData("form.page1.table.row[1].pick");</script></event>"#,
         );
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
