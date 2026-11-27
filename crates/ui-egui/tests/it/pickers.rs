@@ -101,8 +101,12 @@ fn harness(docs: &[usize]) -> Rig {
 
 fn rig(docs: &[usize], files: ScriptedFiles) -> Rig {
     let files = Arc::new(files);
+    rig_with_file_service(docs, files.clone(), files)
+}
+
+fn rig_with_file_service(docs: &[usize], files: Arc<ScriptedFiles>, file_service: Arc<dyn craft::host::Files>) -> Rig {
     let jobs = Arc::new(ManualJobs::new());
-    let host = Arc::new(Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(jobs.clone()).files(files.clone()).build());
+    let host = Arc::new(Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(jobs.clone()).files(file_service).build());
 
     let (intake, sender) = FileIntake::new(Wake::none());
     let services = AppServices::new(
@@ -989,16 +993,16 @@ fn attachment_save_preserves_bytes_metadata_and_selected_destination() {
     let ctx_h = h.ctx.clone();
     h.state_mut().attachment_action(&ctx_h, id, index, false);
     h.answer(Picked::Paths(vec![chosen.clone()]));
-    assert_eq!(std::fs::read(&chosen).unwrap(), b"hello notes");
+    assert_eq!(h.files.file(&chosen).as_deref(), Some(b"hello notes".as_slice()));
     let doc = h.state().session.get(id).unwrap();
     assert_eq!(doc.info.attachments[index].name, raw_name);
     assert_eq!(doc.bytes.as_ref(), &original);
-    assert!(!dir.0.join("invoicefdp.exe").exists());
-    std::fs::remove_file(&chosen).unwrap();
+    assert_eq!(h.files.written(), vec![chosen.clone()], "only the chosen destination was written");
     let ctx_h = h.ctx.clone();
     h.state_mut().attachment_action(&ctx_h, id, index, false);
     h.answer(Picked::Cancelled);
-    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 0);
+    assert_eq!(h.files.written(), vec![chosen], "cancel did not write anything");
+    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 0, "the scripted file service must not fall back to native writes");
     let doc = h.state().session.get(id).unwrap();
     assert_eq!(doc.info.attachments[index].name, raw_name);
     assert_eq!(doc.bytes.as_ref(), &original);
@@ -1017,14 +1021,61 @@ fn a_saved_attachment_carries_the_documents_zone() {
     std::fs::write(format!("{}:Zone.Identifier", mail.display()), zone).unwrap();
     let local = dir.0.join("local.pdf");
     std::fs::write(&local, attachment_fixture()).unwrap();
-    let mut h = harness(&[]);
+    // Hold the native picker at the host boundary but save through the real filesystem,
+    // so the production callback can attach an actual NTFS alternate data stream.
+    struct DiskWrites(Arc<ScriptedFiles>);
+    impl craft::host::Files for DiskWrites {
+        fn pick(&self, request: craft::host::PickRequest) -> craft::host::PickId {
+            self.0.pick(request)
+        }
+
+        fn save(&self, request: craft::host::PickRequest, bytes: Vec<u8>) -> craft::host::PickId {
+            self.0.save(request, bytes)
+        }
+
+        fn can_pick(&self) -> bool {
+            self.0.can_pick()
+        }
+
+        fn browser_saves(&self) -> bool {
+            self.0.browser_saves()
+        }
+
+        fn take_answer(&self, id: craft::host::PickId) -> Option<Picked> {
+            self.0.take_answer(id)
+        }
+
+        fn forget(&self, id: craft::host::PickId) {
+            self.0.forget(id);
+        }
+
+        fn pick_pending(&self) -> bool {
+            self.0.pick_pending()
+        }
+
+        fn read(&self, path: &std::path::Path) -> Result<Vec<u8>, craft::host::FileError> {
+            craft::host::NoPickFiles::default().read(path)
+        }
+
+        fn write(&self, path: &std::path::Path, bytes: &[u8], intent: craft::host::WriteIntent) -> Result<bool, craft::host::FileError> {
+            craft::host::NoPickFiles::default().write(path, bytes, intent)
+        }
+
+        fn last_folder(&self, purpose: &str) -> Option<std::path::PathBuf> {
+            self.0.last_folder(purpose)
+        }
+    }
+
+    let files = Arc::new(ScriptedFiles::held());
+    let mut h = rig_with_file_service(&[], files.clone(), Arc::new(DiskWrites(files)));
+    let ctx = h.ctx.clone();
     let opened = [(Some(&mail), zone), (Some(&local), pdfcraft_platform::zone::INTERNET_ZONE), (None, pdfcraft_platform::zone::INTERNET_ZONE)];
     for (i, (path, expected)) in opened.into_iter().enumerate() {
-        h.state_mut().open_bytes(&format!("doc{i}.pdf"), path.map(|p| p.to_string_lossy().into_owned()), attachment_fixture()).unwrap();
+        h.state_mut().open_bytes(&ctx, &format!("doc{i}.pdf"), path.map(|p| p.to_string_lossy().into_owned()), attachment_fixture()).unwrap();
         h.steps(2);
         let id = h.state().views.last().unwrap().id;
         let chosen = dir.0.join(format!("saved{i}.exe"));
-        h.state_mut().attachment_action(id, 0, false);
+        h.state_mut().attachment_action(&ctx, id, 0, false);
         h.answer(Picked::Paths(vec![chosen.clone()]));
         assert_eq!(std::fs::read(&chosen).unwrap(), b"hello notes");
         assert_eq!(zone_of(&chosen).as_deref(), Some(expected.as_bytes()), "document {i}");
