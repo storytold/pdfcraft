@@ -81,6 +81,11 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
     assert!(h.query_all_by_label_contains("is a time letter (H h M s t)").next().is_some());
     assert_eq!(h.state().session.date_format(), "d \\de mmmm yyyy");
     assert_eq!(pattern(&h).as_deref(), Some("dd/mm HH"));
+    h.set_option("date-language", "es").unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().session.date_language(), Some("es"));
+    assert_eq!(pattern(&h).as_deref(), Some("dd/mm HH"), "changing the language must not discard the invalid draft pattern");
+    h.set_option("date-language", "auto").unwrap();
     // Typed a key at a time, spaces stay where they are typed (the box isn't trimmed under the cursor).
     h.get_by_role_and_label(Role::TextInput, "Pattern").click();
     h.run_steps(1);
@@ -155,9 +160,16 @@ fn month_names_follow_the_date_language_or_else_the_interface_language() {
     // The picker offers following the interface first, then the interface languages.
     assert!(shows(&h, "Stejný jako rozhraní (Čeština)"));
     h.set_option("date-language", "es").unwrap();
+    assert_eq!(h.state().session.date_language(), Some("es"));
     h.run_steps(2);
+    assert_eq!(h.state().session.date_language(), Some("es"), "open live Preferences must not reapply the previous language");
     assert_eq!(text(&h), h.state().session.today_text(None, Some("es")).unwrap());
     assert!(shows(&h, "Español"));
+    h.set_option("date-format", "dd mmmm yyyy").unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().session.date_format(), "dd mmmm yyyy");
+    assert_eq!(h.state().session.date_language(), Some("es"), "changing the format leaves the chosen language alone");
+    h.set_option("date-format", "d mmmm yyyy").unwrap();
 
     // Remembered; an unknown saved language is ignored; auto follows the interface again.
     let mut restored = crate::control::new_app();
@@ -199,6 +211,7 @@ fn a_date_the_pdf_cannot_hold_is_refused_with_a_warning_first() {
 
     h.set_option("dialog", "none").unwrap();
     h.run_steps(2);
+    assert!(h.query_by_label_contains("can't be written into the PDF yet").is_none(), "Preferences was closed");
     assert!(h.execute("sign.fill.date"));
     h.run_steps(2);
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
