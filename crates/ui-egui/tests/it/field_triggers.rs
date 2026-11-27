@@ -14,7 +14,7 @@ fn form() -> Vec<u8> {
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
         "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 8 0 R 10 0 R] >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (log) /V () /Rect [20 350 280 370] /P 3 0 R /F 4 >>",
-        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (hot) /V () /Rect [20 250 280 290] /P 3 0 R /F 4 /AA << /E << /S /JavaScript /JS (getField\\('log'\\).value += 'in;';) >> /X << /S /JavaScript /JS (getField\\('log'\\).value += 'out;';) >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (hot) /V () /Rect [20 250 280 290] /P 3 0 R /F 4 /AA << /E << /S /JavaScript /JS (getField\\('log'\\).value += 'in;';) >> /X << /S /JavaScript /JS (getField\\('log'\\).value += 'out;';) >> /D << /S /JavaScript /JS (getField\\('log'\\).value += 'down;';) >> /U << /S /JavaScript /JS (getField\\('log'\\).value += 'up;';) >> >> >>",
         "<< /Type /Annot /Subtype /Widget /FT /Btn /T (strike) /V /Off /AS /Off /Rect [20 300 50 330] /P 3 0 R /F 4 /MK << /CA (4) >> /AP << /N << /Yes 9 0 R /Off 9 0 R >> >> /A << /S /JavaScript /JS (getField\\('note'\\).display = event.target.value == 'Off' ? display.hidden : display.visible; getField\\('log'\\).value += 'up:' + event.target.value + ';';) >> >>",
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /V (struck) /Rect [60 300 280 330] /P 3 0 R /F 6 >>",
@@ -122,4 +122,39 @@ fn a_push_button_with_only_a_mouse_down_action_runs_it_on_press() {
     crate::support::wait_until(&mut h, "Mouse Down ran", |app| field(app, "log").value.join(",") == "Mouse Down;");
     h.run_steps(4);
     assert_eq!(log(&h), "Mouse Down;", "the click runs nothing more");
+}
+
+/// A click in the field being edited runs its Mouse Down and Mouse Up, and nothing else (no Blur
+/// or Focus), as another viewer runs them on a synthetic form: the press and release over the open
+/// editor, and a press that drags along the text and comes up over the field.
+#[test]
+fn a_click_in_the_field_being_edited_runs_its_mouse_down_and_up() {
+    let mut h = harness();
+    let hot = centre(&h, "hot");
+    // The pointer entering and leaving are their own triggers; only the clicks' are checked.
+    let clicks = |h: &Harness<'static, PdfCraftApp>| log(h).replace("in;", "").replace("out;", "");
+    let release = |h: &mut Harness<'static, PdfCraftApp>, pos: egui::Pos2| {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+    };
+    h.hover_at(hot);
+    h.run_steps(1);
+    h.drag_at(hot);
+    h.run_steps(1);
+    release(&mut h, hot);
+    assert_eq!(clicks(&h), "down;up;", "the click that opens it");
+    // Again, in the editor now open over it.
+    h.drag_at(hot);
+    h.run_steps(1);
+    release(&mut h, hot);
+    assert_eq!(clicks(&h), "down;up;down;up;", "a click in the field being edited");
+    // A press that drags along the text, released over the field.
+    h.drag_at(hot);
+    h.run_steps(1);
+    let along = hot + egui::vec2(20.0, 0.0);
+    h.hover_at(along);
+    h.run_steps(1);
+    release(&mut h, along);
+    assert_eq!(clicks(&h), "down;up;down;up;down;up;");
+    assert_eq!(h.state().views[0].session.forms.focus.as_ref().map(|f| f.name.as_str()), Some("hot"), "still being edited");
 }
