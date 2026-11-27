@@ -80,7 +80,13 @@ fn select_after_edit(
         }
         Edit::AddAnnotation(a) => {
             // Select the new comment alone (appended last among the page's comments).
-            let newest = info.annotations.iter().filter(|x| x.page == a.page && !x.is_reply()).map(|x| x.index).max();
+            let newest = info
+                .annotations
+                .iter()
+                .filter(|x| x.page == a.page && !x.is_reply())
+                .max_by_key(|x| x.index)
+                .filter(|x| crate::comments_panel::type_visible(x, &view.session.comments.hidden_types))
+                .map(|x| x.index);
             view.session.comments.clear_selection();
             if let Some(n) = newest {
                 view.session.comments.select_keys(&[(a.page, n)]);
@@ -119,6 +125,7 @@ fn select_after_edit(
                 .annotations
                 .iter()
                 .filter(|x| x.page == *page && !x.is_reply() && !annots_before.iter().any(|b| b.name == x.name))
+                .filter(|x| crate::comments_panel::type_visible(x, &view.session.comments.hidden_types))
                 .map(|x| (*page, x.index))
                 .collect();
             view.session.comments.clear_selection();

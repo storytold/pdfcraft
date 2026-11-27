@@ -885,6 +885,7 @@ struct PageBodyCx<'a> {
     can_modify: bool,
     can_copy: bool,
     comments_hidden: bool,
+    hidden_comment_types: &'a [String],
     text_links: bool,
     /// No dialog, close prompt or palette over the pages.
     unobstructed: bool,
@@ -987,7 +988,7 @@ fn page_parts_of(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSessi
         // The comment a press under the pointer would take, hit within the theme's reach and with its markers at the
         // icon size, both as the tools on the canvas read them.
         let env = Env::of(ui);
-        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
+        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view).with_hidden_types(cx.hidden_comment_types);
         let pointer = ui.input(|i| i.pointer.hover_pos()).map(|p| craft::behavior::kurbo::Point::new(p.x.into(), p.y.into()));
         let (tolerance, icon_side) = (map.doc_len(env.hit_reach()), map.doc_len(env.tokens.size.icon.md));
         let on_link = ui
@@ -1106,7 +1107,15 @@ fn route_press(
             && let Some(page) = body.pages.iter().find(|placed| placed.rect.contains(start.origin)).map(|placed| placed.page)
             && let Some(xf) = session.page_xform(page, geo)
         {
-            let page_cx = comments::PageCx { page, xf: &xf, info: cx.info, prefs: cx.prefs, allowed: cx.allowed, hidden: cx.comments_hidden };
+            let page_cx = comments::PageCx {
+                page,
+                xf: &xf,
+                info: cx.info,
+                prefs: cx.prefs,
+                allowed: cx.allowed,
+                hidden: cx.comments_hidden,
+                hidden_types: cx.hidden_comment_types,
+            };
             let tool_takes_it = match cx.tool {
                 QuickTool::AddText => cx.can_modify,
                 QuickTool::Link => cx.can_modify && matches!(press.owner, Owner::Link { .. } | Owner::TextLink { .. }),
@@ -1170,10 +1179,17 @@ fn route_press(
         }
         Owner::Comment { .. } => {
             if let Some(xf) = session.page_xform(press.page, geo) {
-                let page_cx =
-                    comments::PageCx { page: press.page, xf: &xf, info: cx.info, prefs: cx.prefs, allowed: cx.allowed, hidden: cx.comments_hidden };
+                let page_cx = comments::PageCx {
+                    page: press.page,
+                    xf: &xf,
+                    info: cx.info,
+                    prefs: cx.prefs,
+                    allowed: cx.allowed,
+                    hidden: cx.comments_hidden,
+                    hidden_types: cx.hidden_comment_types,
+                };
                 let words = Env::of(ui).words::<AnnotateWords>();
-                let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
+                let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view).with_hidden_types(cx.hidden_comment_types);
                 comments::part_pressed(&mut session.comments, press, &page_cx, &map, cx.tool, &words);
             }
         }
@@ -1230,7 +1246,15 @@ fn background_context(ui: &egui::Ui, session: &mut PageSession, cx: &PageBodyCx<
         }
         return;
     };
-    let page_cx = comments::PageCx { page, xf: &xf, info: cx.info, prefs: cx.prefs, allowed: cx.allowed, hidden: cx.comments_hidden };
+    let page_cx = comments::PageCx {
+        page,
+        xf: &xf,
+        info: cx.info,
+        prefs: cx.prefs,
+        allowed: cx.allowed,
+        hidden: cx.comments_hidden,
+        hidden_types: cx.hidden_comment_types,
+    };
     let comment = if tool_takes_it {
         comments::context_anchor(&page_cx, &mut session.comments, at);
         None
@@ -1340,7 +1364,7 @@ fn page_before(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallb
         let reply = ToolHost::new().momentary(momentary).run(ui, pass, &mut tool);
         let mut finish = tool.finish();
         // The comment gestures the run finished: each committed one is an engine edit, one undo step per drag.
-        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
+        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view).with_hidden_types(cx.hidden_comment_types);
         let now = ui.input(|i| i.time);
         if let Some(edit) = comments::take_edits(&mut session.comments, &map, cx.info, cx.prefs, now) {
             session.pending_edit = Some(edit);
@@ -1487,12 +1511,19 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
         }
         let stale = drag.moving_page().is_some_and(loading);
         drag.prepare_move(&ctx, cx.doc, &session.comments, session.pending_edit.as_ref(), stale, cx.render_scale);
-        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
+        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view).with_hidden_types(cx.hidden_comment_types);
         for placed in body.pages {
             let size = cx.sizes.get(placed.page).copied().unwrap_or_default();
             let xf = PageXform::of(placed, cx.rotation, size);
-            let pcx =
-                comments::PageCx { page: placed.page, xf: &xf, info: cx.info, prefs: cx.prefs, allowed: cx.allowed, hidden: cx.comments_hidden };
+            let pcx = comments::PageCx {
+                page: placed.page,
+                xf: &xf,
+                info: cx.info,
+                prefs: cx.prefs,
+                allowed: cx.allowed,
+                hidden: cx.comments_hidden,
+                hidden_types: cx.hidden_comment_types,
+            };
             signature_drag::DragLayer::new(&session.signature_drag, &pcx, &map, cx.tool, &session.comments, session.pending_edit.as_ref())
                 .show_at(ui, body.rect);
         }
@@ -1501,10 +1532,10 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
         // The comment under the pointer is hit as the page's parts hit it: within the theme's reach, with its markers
         // at the icon size. The redaction hover is the user's setting, passed as a data colour (L-90).
         let env = Env::of(ui);
-        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
+        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view).with_hidden_types(cx.hidden_comment_types);
         let pick = (map.doc_len(env.hit_reach()), map.doc_len(env.tokens.size.icon.md));
         let pointer = ui.input(|i| i.pointer.hover_pos().filter(|_| !i.pointer.any_down()));
-        let hover = comments::Hover { pointer, redact: cx.redact_hover, pick, allowed: cx.allowed };
+        let hover = comments::Hover { pointer, redact: cx.redact_hover, pick, allowed: cx.allowed, hidden_types: cx.hidden_comment_types };
         comments::show(ui, body, session, cx.rotation, cx.info, cx.prefs, cx.tool, hover);
     }
     if cx.calc_order {
@@ -1811,6 +1842,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         can_modify,
         can_copy: doc.allows_copying(),
         comments_hidden: doc.comments_hidden(),
+        hidden_comment_types: doc.hidden_comment_types(),
         text_links: app.text_links,
         unobstructed,
         prefs: &app.comment_prefs,
@@ -1930,7 +1962,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     if let Some(e) = crate::comments::composer(ui, view, info, &app.comment_prefs) {
         view.session.pending_edit = Some(e);
     }
-    let popups = crate::comments::note_popups(ui, view, info, &app.comment_prefs, doc.comments_hidden(), allowed, body_out.hovered_comment);
+    let popups = crate::comments::note_popups(ui, view, doc, &app.comment_prefs, body_out.hovered_comment);
     if let Some(e) = popups {
         let session = &mut view.session;
         // A click on the composer's Post also takes the focus from a pop-up's box, saving what

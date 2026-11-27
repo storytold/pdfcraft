@@ -513,8 +513,8 @@ impl Drop for RenderPool {
 
 /// A worker's interpreter settings: the document's, stopping once the request is cancelled.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn worker_settings(config: &RenderConfig, stop: &Arc<std::sync::atomic::AtomicBool>) -> InterpreterSettings {
-    InterpreterSettings { cancelled: Some(stop.clone()), ..config.settings() }
+pub(super) fn worker_settings(config: &RenderConfig, stop: &Arc<std::sync::atomic::AtomicBool>, page: Option<(&Pdf, usize)>) -> InterpreterSettings {
+    InterpreterSettings { cancelled: Some(stop.clone()), ..config.settings_for_page(page) }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -710,7 +710,8 @@ pub(super) fn worker(
                     gate.entered.wait();
                     gate.release.wait();
                 }
-                let settings = warning_settings(&worker_settings(&config, &request_cancelled), warnings.clone());
+                let settings =
+                    warning_settings(&worker_settings(&config, &request_cancelled, pdf.as_deref().map(|pdf| (pdf, req.page))), warnings.clone());
                 lock(&warnings).clear();
                 let r = catch_unwind(AssertUnwindSafe(|| {
                     #[cfg(test)]

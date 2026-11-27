@@ -79,6 +79,10 @@ pub struct RenderConfig {
     /// and timers gave another icon (`buttonSetIcon`, an animation's frames). Display only; the
     /// document never changes.
     pub appearances: Arc<Vec<(i32, i32, i32, i32)>>,
+    /// Comment types hidden by the viewer's filter (the Comments panel's type names: `Oval`,
+    /// `Callout`, `Replace text`). Empty shows every type. Fields and links still draw.
+    /// [`crate::normalize_hidden_comment_types`] is the accepted spelling.
+    pub hidden_comment_types: Arc<Vec<String>>,
     /// Refuse a whole-page raster that would be reduced by the renderer's hard size caps.
     /// Tiled requests remain available for pages that exceed those caps. Both modes refuse
     /// a raster whose rounded integer dimensions exceed the final pixel-allocation budget.
@@ -122,14 +126,32 @@ impl RenderConfig {
     /// Passwords belong to parser construction; request-specific preview overrides are applied
     /// by `render_page`, which also preserves the caller's warning and cancellation hooks.
     fn settings(&self) -> InterpreterSettings {
+        self.settings_for_page(None)
+    }
+
+    /// A page request adds type-filter overrides only for its own annotations.
+    fn settings_for_page(&self, page: Option<(&Pdf, usize)>) -> InterpreterSettings {
         let defaults = InterpreterSettings::default();
         let standard = defaults.font_resolver.clone();
         let system_fonts = self.system_fonts;
+        let annotation_overrides = match page {
+            Some((pdf, page)) if !self.hidden_comment_types.is_empty() => {
+                let mut overrides = crate::comment_hide::hidden_type_overrides(pdf, &self.hidden_comment_types, page);
+                let mut seen: std::collections::HashSet<_> = overrides.iter().map(|&(number, generation, _)| (number, generation)).collect();
+                for entry in self.annotations.iter() {
+                    if seen.insert((entry.0, entry.1)) {
+                        overrides.push(*entry);
+                    }
+                }
+                Arc::new(overrides)
+            }
+            _ => self.annotations.clone(),
+        };
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
             view_auto_state: !self.for_print,
             hide_comments: self.hide_comments,
-            annotation_overrides: self.annotations.clone(),
+            annotation_overrides,
             appearance_overrides: self.appearances.clone(),
             font_resolver: Arc::new(move |query| {
                 japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
@@ -555,15 +577,13 @@ pub struct PageRenderer {
     bytes: Arc<Vec<u8>>,
     config: RenderConfig,
     pdf: Option<Pdf>,
-    settings: InterpreterSettings,
     stats: RenderStats,
 }
 
 impl PageRenderer {
     pub fn new(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
         let pdf = parse(&bytes, config.password.as_deref());
-        let settings = config.settings();
-        Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() } }
+        Self { bytes, config, pdf, stats: RenderStats { parser_builds: 1, ..RenderStats::default() } }
     }
 
     pub fn page_count(&self) -> usize {
@@ -579,8 +599,11 @@ impl PageRenderer {
     pub fn filtered_text(&mut self, page: usize, filter: crate::text::TextFilter) -> Result<crate::PageText, String> {
         let pdf = self.pdf.as_ref().ok_or("the document could not be parsed")?;
         self.stats.text_interpretations = self.stats.text_interpretations.saturating_add(1);
-        catch_unwind(AssertUnwindSafe(|| crate::text::extract_page_filtered(pdf, page, &self.settings, filter)))
-            .map_err(|e| format!("text extraction failed: {}", panic_message(&e)))?
+        catch_unwind(AssertUnwindSafe(|| {
+            let settings = self.config.settings_for_page(Some((pdf, page)));
+            crate::text::extract_page_filtered(pdf, page, &settings, filter)
+        }))
+        .map_err(|e| format!("text extraction failed: {}", panic_message(&e)))?
     }
 
     /// Render one page. Never panics.
@@ -604,7 +627,9 @@ impl PageRenderer {
         };
         let cache = RenderCache::new();
         let warnings = Arc::new(Mutex::new(Vec::new()));
-        let settings = warning_settings(&self.settings, warnings.clone());
+        // Scope the type filter to this page so a hostile Annots list elsewhere cannot starve it.
+        let page_settings = self.config.settings_for_page(Some((pdf, req.page)));
+        let settings = warning_settings(&page_settings, warnings.clone());
         let r = render_page(pdf, &cache, &settings, &self.config, req);
         let warnings = take_warnings(&warnings);
         if matches!(r, Err((_, true))) {

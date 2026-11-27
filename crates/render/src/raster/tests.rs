@@ -2793,6 +2793,134 @@ trailer << /Root 1 0 R >>
     assert_eq!((px(&preview, 25, 25), px(&preview, 75, 25)), (vec![255, 255, 255, 255], vec![0, 0, 255, 255]), "the print preview");
 }
 
+/// Hiding one comment type leaves the others, and a field, on the page. A callout, a typewriter
+/// and a text box share `/FreeText`; a replace-text caret is grouped with its strikeout.
+#[test]
+fn hiding_one_comment_type_leaves_the_others() {
+    fn page(annots: &[(&str, &str)]) -> Vec<u8> {
+        let mut pdf = String::from("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+        pdf.push_str("2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n");
+        let refs: Vec<String> = (0..annots.len()).map(|i| format!("{} 0 R", 10 + i * 2)).collect();
+        pdf.push_str(&format!("3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 240 100] /Annots [{}] >> endobj\n", refs.join(" ")));
+        for (i, (rgb, dict)) in annots.iter().enumerate() {
+            let body = format!("{rgb} rg 0 0 30 30 re f\n");
+            let ap = 11 + i * 2;
+            pdf.push_str(&format!(
+                "{ap} 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 30 30] /Length {} >> stream\n{body}endstream endobj\n",
+                body.len()
+            ));
+            pdf.push_str(&format!("{} 0 obj << /Type /Annot {dict} /AP << /N {ap} 0 R >> >> endobj\n", 10 + i * 2));
+        }
+        pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF");
+        pdf.into_bytes()
+    }
+    let render = |pdf: &[u8], types: &[&str]| {
+        let hidden_comment_types = Arc::new(types.iter().map(|s| (*s).to_string()).collect());
+        let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), RenderConfig { hidden_comment_types, ..RenderConfig::default() });
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(p.error.is_none(), "{:?}", p.error);
+        p
+    };
+    let px = |p: &RenderedPage, x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+    let (green, red, yellow, magenta, cyan, blue, black, white) = (
+        vec![0, 255, 0, 255],
+        vec![255, 0, 0, 255],
+        vec![255, 255, 0, 255],
+        vec![255, 0, 255, 255],
+        vec![0, 255, 255, 255],
+        vec![0, 0, 255, 255],
+        vec![0, 0, 0, 255],
+        vec![255, 255, 255, 255],
+    );
+
+    let marks = page(&[
+        ("0 1 0", "/Subtype /Square /Rect [10 60 40 90]"),
+        ("1 0 0", "/Subtype /Circle /Rect [50 60 80 90]"),
+        ("1 1 0", "/Subtype /FreeText /Rect [90 60 120 90]"),
+        ("1 0 1", "/Subtype /FreeText /IT /FreeTextCallout /Rect [130 60 160 90]"),
+        ("0 1 1", "/Subtype /FreeText /IT /FreeTextTypeWriter /Rect [170 60 200 90]"),
+        ("0 0 1", "/Subtype /Widget /FT /Tx /Rect [10 10 40 40]"),
+    ]);
+    let shown = render(&marks, &[]);
+    assert_eq!(
+        (px(&shown, 25, 25), px(&shown, 65, 25), px(&shown, 105, 25), px(&shown, 145, 25), px(&shown, 185, 25), px(&shown, 25, 75)),
+        (green.clone(), red.clone(), yellow.clone(), magenta.clone(), cyan.clone(), blue.clone())
+    );
+    let pdf = parse(&Arc::new(marks.clone()), None).expect("the fixture parses");
+    let config = RenderConfig {
+        hidden_comment_types: Arc::new(vec!["Oval".into()]),
+        annotations: Arc::new(vec![(12, 0, true), (10, 0, true), (10, 0, false), (10, 1, false)]),
+        ..RenderConfig::default()
+    };
+    assert_eq!(
+        config.settings_for_page(Some((&pdf, 0))).annotation_overrides.as_slice(),
+        &[(12, 0, false), (10, 0, true), (10, 1, false)],
+        "type hiding wins, and configured overrides keep the first entry for each object generation",
+    );
+    let ovals = render(&marks, &["circle"]);
+    assert_eq!(px(&ovals, 65, 25), white, "an oval is hidden by its PDF name");
+    assert_eq!(px(&ovals, 25, 25), green, "the rectangle stays");
+    assert_eq!(px(&ovals, 25, 75), blue, "the field stays");
+    let boxes = render(&marks, &["Text box"]);
+    assert_eq!(px(&boxes, 105, 25), white, "the text box");
+    assert_eq!((px(&boxes, 145, 25), px(&boxes, 185, 25)), (magenta.clone(), cyan.clone()), "a callout and a typewriter stay");
+    let callouts = render(&marks, &["Callout", "Typewriter"]);
+    assert_eq!((px(&callouts, 145, 25), px(&callouts, 185, 25)), (white.clone(), white.clone()));
+    assert_eq!(px(&callouts, 105, 25), yellow, "the text box stays");
+
+    // Older Replace-text layout: the strikeout is object 12; its caret is grouped under it.
+    let edit = page(&[
+        ("0 1 1", "/Subtype /StrikeOut /Rect [10 60 40 90]"),
+        ("0 0 1", "/Subtype /StrikeOut /IT /StrikeOutTextEdit /Rect [50 60 80 90]"),
+        ("0 0 0", "/Subtype /Caret /IRT 12 0 R /RT /Group /Rect [90 60 120 90]"),
+        ("1 0 0", "/Subtype /Caret /Rect [130 60 160 90]"),
+    ]);
+    let struck = render(&edit, &["Strikethrough"]);
+    assert_eq!(px(&struck, 25, 25), white, "a plain strikethrough");
+    assert_eq!((px(&struck, 65, 25), px(&struck, 105, 25), px(&struck, 145, 25)), (blue.clone(), black.clone(), red.clone()));
+    let replaced = render(&edit, &["Replace text"]);
+    assert_eq!((px(&replaced, 65, 25), px(&replaced, 105, 25)), (white.clone(), white.clone()), "the strikeout and its caret");
+    assert_eq!((px(&replaced, 25, 25), px(&replaced, 145, 25)), (cyan.clone(), red.clone()));
+    let inserted = render(&edit, &["Insert text"]);
+    assert_eq!(px(&inserted, 145, 25), white, "a caret of its own");
+    assert_eq!(px(&inserted, 105, 25), black, "the replace-text caret stays");
+
+    // Current Replace-text layout: the caret (`/IT /Replace`) is the primary; the strikeout is
+    // grouped under it. Hiding Insert text must not take that caret with it.
+    let caret_primary = page(&[
+        ("0 0 0", "/Subtype /Caret /IT /Replace /Rect [10 60 40 90]"),
+        ("0 0 1", "/Subtype /StrikeOut /IT /StrikeOutTextEdit /IRT 10 0 R /RT /Group /Rect [50 60 80 90]"),
+        ("1 0 0", "/Subtype /Caret /Rect [90 60 120 90]"),
+    ]);
+    let replaced_primary = render(&caret_primary, &["Replace text"]);
+    assert_eq!(
+        (px(&replaced_primary, 25, 25), px(&replaced_primary, 65, 25)),
+        (white.clone(), white.clone()),
+        "the Replace-text caret and its strikeout"
+    );
+    assert_eq!(px(&replaced_primary, 105, 25), red, "an Insert-text caret stays");
+    let inserted_primary = render(&caret_primary, &["Insert text"]);
+    assert_eq!(px(&inserted_primary, 105, 25), white, "the Insert-text caret");
+    assert_eq!(
+        (px(&inserted_primary, 25, 25), px(&inserted_primary, 65, 25)),
+        (black.clone(), blue.clone()),
+        "the Replace-text group stays when Insert text is hidden"
+    );
+
+    // An ungrouped caret with the strikeout intent is still Insert text. The strikeout that
+    // carries that intent is Replace text.
+    let odd_caret = page(&[
+        ("1 0 0", "/Subtype /Caret /IT /StrikeOutTextEdit /Rect [10 60 40 90]"),
+        ("0 0 1", "/Subtype /StrikeOut /IT /StrikeOutTextEdit /Rect [50 60 80 90]"),
+    ]);
+    let as_insert = render(&odd_caret, &["Insert text"]);
+    assert_eq!(px(&as_insert, 25, 25), white, "an ungrouped caret with the strikeout intent is Insert text");
+    assert_eq!(px(&as_insert, 65, 25), blue, "its strikeout stays when Insert text is hidden");
+    let as_replace = render(&odd_caret, &["Replace text"]);
+    assert_eq!(px(&as_replace, 25, 25), red, "Replace text leaves that caret");
+    assert_eq!(px(&as_replace, 65, 25), white, "Replace text hides the strikeout");
+}
+
 /// ISO 32000-2 Table 167: Invisible hides an annotation of a type that isn't standard and
 /// nothing else; §12.5.6.14: a popup has no appearance of its own, so its `/AP` isn't painted.
 #[test]
@@ -2855,7 +2983,7 @@ trailer << /Root 1 0 R >>
 %%EOF";
     let pool = RenderPool::new(Arc::new(ONE_PAGE.to_vec()), 1, RenderConfig::default());
     let flag = lock(&pool.shared.stop).first().cloned().expect("one worker");
-    let settings = worker_settings(&pool.config, &flag);
+    let settings = worker_settings(&pool.config, &flag, None);
     assert!(settings.cancelled.as_ref().is_some_and(|c| Arc::ptr_eq(c, &flag)));
     let shapes = Pdf::new(Arc::new(ONE_PAGE.to_vec())).expect("parses");
     let text = Pdf::new(Arc::new(TEXT.to_vec())).expect("parses");

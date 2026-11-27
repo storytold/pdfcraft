@@ -8,6 +8,26 @@ use craft::review::{AnnotationId, ThreadId};
 /// The screen size, in points, of a comment marker's icon.
 const ICON_POINTS: f32 = 12.0;
 
+#[test]
+fn hiding_a_comment_type_preserves_another_comments_draft() {
+    let oval = Annotation { page: 0, index: 0, ..annotation("Circle", None, false) };
+    let note = Annotation { page: 0, index: 1, ..annotation("Text", None, false) };
+    let annotations = [oval, note];
+    let mut view = CommentView::default();
+    view.select_keys(&[(0, 0), (0, 1)]);
+    view.open_editor(0, 1, "Unfinished note".into());
+
+    view.hidden_types = vec!["Oval".into()];
+    assert!(view.drop_hidden_selection(&annotations));
+    assert_eq!(view.selection(), [(0, 1)]);
+    assert_eq!(view.panel.editing, Some((bridge::thread_id(0, 1), 0, "Unfinished note".into())));
+
+    view.clear_selection();
+    view.hidden_types.push("Note".into());
+    assert!(!view.drop_hidden_selection(&annotations));
+    assert_eq!(view.panel.editing, None);
+}
+
 /// The side of a comment marker in page units, as the app feeds `bridge`: the icon's screen size through the page map's
 /// own conversion, so a change of the conversion is in the test's path.
 fn icon_side(map: &PageMap<'_>) -> f64 {
@@ -70,7 +90,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
     let viewport = Rect::from_min_max(pos2(50.0, 0.0), pos2(140.0, 200.0));
     for (no_rotate, in_view) in [(true, true), (false, false)] {
         let info = DocInfo { pages: vec![page.clone()], annotations: vec![note(no_rotate)], ..Default::default() };
-        let cx = PageCx { page: 0, xf: &xf, info: &info, prefs: &prefs, allowed: true, hidden: false };
+        let cx = PageCx { page: 0, xf: &xf, info: &info, prefs: &prefs, allowed: true, hidden: false, hidden_types: &[] };
         assert_eq!(super::composer::edited_in_view(&cx, 0, viewport), in_view, "no_rotate: {no_rotate}");
     }
 }

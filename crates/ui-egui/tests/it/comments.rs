@@ -3540,6 +3540,33 @@ fn delete_deletes_the_group_member_clicked() {
     assert_eq!(shapes(&h), [("Circle".to_string(), true)], "the Square goes, the Circle stays as a comment of its own");
 }
 
+#[test]
+fn hiding_a_type_clears_a_hidden_group_member_with_the_panel_closed() {
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |_| {});
+    click_pt(&mut h, (220.0, 150.0));
+    assert_eq!(h.state().views[0].session.comments.selection(), [(0, 0)]);
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().session.set_hidden_comment_types(id, &["Oval".into()]));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].session.comments.selection(), [(0, 0)]);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert!(comments(&h).iter().any(|a| a.subtype == "Circle"), "the hidden group member stays");
+    assert!(!comments(&h).iter().any(|a| a.subtype == "Square"), "Delete acts on the visible primary");
+}
+
+#[test]
+fn hiding_a_type_promotes_the_remaining_selected_comment() {
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |_| {});
+    let id = h.state().views[0].id;
+    let oval = comments(&h).into_iter().find(|a| a.subtype == "Circle").expect("oval");
+    let oval_position = (oval.page, oval.index);
+    h.state_mut().views[0].session.comments.select_keys(&[(0, 0), oval_position]);
+    assert!(h.state_mut().session.set_hidden_comment_types(id, &["Rectangle".into()]));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].session.comments.selection(), [oval_position]);
+}
+
 /// CodeRabbit on #4358: the member a click on the page picked is forgotten once the selection is
 /// made anywhere else. After clicking the Circle, choosing the group's card in the Comments panel
 /// selects the comment the card shows, the Square, so Delete deletes the Square, not the Circle

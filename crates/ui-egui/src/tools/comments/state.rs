@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use craft::review::AnnotationEdit;
 use craft::review::ui::{AnnotateTool, CommentsPanelState, NoteDrafts};
@@ -121,6 +121,7 @@ impl CommentView {
 /// Per-document commenting state. The selection lives on [`Self::tool`] (`tool.selected`), the one store.
 #[derive(Default)]
 pub struct CommentView {
+    pub(crate) hidden_types: Vec<String>,
     /// The annotation tool on the page: its selection, drawing and in-flight edit.
     pub tool: AnnotateTool,
     /// Copied comments hanging on the pointer as one bundle: a click puts their centre there, on the
@@ -324,6 +325,26 @@ impl CommentView {
         self.member = None;
     }
 
+    pub(crate) fn drop_hidden_selection(&mut self, annotations: &[Annotation]) -> bool {
+        if self.hidden_types.is_empty() || (self.tool.selected.is_empty() && self.member.is_none() && self.panel.editing.is_none()) {
+            return false;
+        }
+        let hidden: HashSet<_> = annotations
+            .iter()
+            .filter(|annotation| !crate::comments_panel::type_visible(annotation, &self.hidden_types))
+            .map(|annotation| (annotation.page, annotation.index))
+            .collect();
+        let previous = self.primary();
+        self.tool.selected.retain(|id| !hidden.contains(&bridge::key_of(*id)));
+        if self.member.is_some_and(|(member, group)| hidden.contains(&member) || Some(group) != self.primary()) {
+            self.member = None;
+        }
+        if self.panel.editing.as_ref().is_some_and(|(thread, _, _)| hidden.contains(&bridge::thread_key(*thread))) {
+            self.panel.editing = None;
+        }
+        previous != self.primary()
+    }
+
     /// What Delete acts on: the group member clicked, while its group is still the selection,
     /// else the selected comment.
     pub(crate) fn target(&self) -> Option<(usize, usize)> {
@@ -496,9 +517,14 @@ pub(crate) struct PageCx<'a> {
     pub allowed: bool,
     /// Comments are hidden (Hide all comments): nothing to select.
     pub hidden: bool,
+    pub hidden_types: &'a [String],
 }
 
 impl PageCx<'_> {
+    fn type_visible(&self, annotation: &Annotation) -> bool {
+        crate::comments_panel::type_visible(annotation, self.hidden_types)
+    }
+
     pub(super) fn to_user(&self, p: Pos2) -> [f64; 2] {
         let (vx, vy) = self.xf.screen_to_view(p);
         let u = self.info.pages[self.page].view_to_user(vx, vy);
@@ -527,7 +553,10 @@ impl PageCx<'_> {
 
     /// Top-level comments on this page, in inspection order.
     pub(super) fn comments(&self) -> impl Iterator<Item = &Annotation> {
-        self.info.annotations.iter().filter(move |a| !self.hidden && a.page == self.page && a.is_comment() && a.subtype != "Popup")
+        self.info
+            .annotations
+            .iter()
+            .filter(move |a| !self.hidden && a.page == self.page && a.is_comment() && a.subtype != "Popup" && self.type_visible(a))
     }
 
     /// Where a comment is on screen: one rectangle, or one per marked line for text markup.
@@ -557,7 +586,7 @@ impl PageCx<'_> {
             .info
             .annotations
             .iter()
-            .filter(|a| !self.hidden && a.page == self.page && a.grouped && a.intent.as_deref() == Some("StrikeOutTextEdit"))
+            .filter(|a| !self.hidden && a.page == self.page && a.grouped && self.type_visible(a) && a.intent.as_deref() == Some("StrikeOutTextEdit"))
             .filter(under)
             .filter_map(|s| {
                 let (page, index) = s.parent?;
@@ -576,14 +605,14 @@ impl PageCx<'_> {
     pub(super) fn group_members(&self) -> Vec<(&Annotation, &Annotation)> {
         let all = &self.info.annotations;
         // Painted every frame a comment is selected: most documents have no group to look up.
-        if self.hidden || !all.iter().any(|a| a.is_group_member() && a.page == self.page) {
+        if self.hidden || !all.iter().any(|a| a.is_group_member() && a.page == self.page && self.type_visible(a)) {
             return Vec::new();
         }
         let primaries = pdfcraft_render::group_primaries(all);
         all.iter()
             .zip(primaries)
-            .filter(|(a, _)| a.is_group_member() && a.page == self.page)
-            .filter_map(|(a, p)| Some((a, all.get(p?).filter(|p| p.page == self.page && p.is_comment())?)))
+            .filter(|(a, _)| a.is_group_member() && a.page == self.page && self.type_visible(a))
+            .filter_map(|(a, p)| Some((a, all.get(p?).filter(|p| p.page == self.page && p.is_comment() && self.type_visible(p))?)))
             .collect()
     }
 

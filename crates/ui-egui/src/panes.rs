@@ -175,11 +175,26 @@ impl PdfCraftApp {
             }
         }
         self.sync_views(ctx);
+        self.sync_comment_type_filters();
         if let Some(v) = self.active.and_then(|i| self.views.get_mut(i)) {
             self.panes.focus = v.pane.place;
             if v.pane.shown_seq != self.panes.top_seq || self.panes.top_seq == 0 {
                 self.panes.top_seq = self.panes.top_seq.saturating_add(1);
                 v.pane.shown_seq = self.panes.top_seq;
+            }
+        }
+    }
+
+    pub(crate) fn sync_comment_type_filters(&mut self) {
+        for view in &mut self.views {
+            let Some(doc) = self.session.get(view.id) else { continue };
+            let types = doc.hidden_comment_types();
+            if view.session.comments.hidden_types != types {
+                view.session.comments.hidden_types = types.to_vec();
+                view.invalidate_content();
+            }
+            if view.session.comments.drop_hidden_selection(&doc.info.annotations) {
+                view.session.flash = None;
             }
         }
     }

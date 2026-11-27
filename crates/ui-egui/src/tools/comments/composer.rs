@@ -10,7 +10,7 @@ pub(crate) fn composer(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, pr
     let page = c.page;
     // Scrolled away: keep the draft until the page is back.
     let xf = view.page_xform(page)?;
-    let cx = PageCx { page, xf: &xf, info, prefs, allowed: true, hidden: false };
+    let cx = PageCx { page, xf: &xf, info, prefs, allowed: true, hidden: false, hidden_types: &[] };
     let mut anchor = Some(cx.to_screen(c.at));
     let viewport = view.viewport_rect();
     let typewriter_edit = matches!(c.kind, ComposerKind::Edit(index) if info.annotations.iter().any(|a|

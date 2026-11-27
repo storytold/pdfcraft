@@ -170,12 +170,14 @@ fn messages(
 pub(crate) fn note_popups(
     ui: &mut egui::Ui,
     view: &mut DocView,
-    info: &DocInfo,
+    doc: &pdfcraft_engine::Document,
     prefs: &CommentPrefs,
-    hidden: bool,
-    allowed: bool,
     hovered: Option<(usize, usize)>,
 ) -> Option<Edit> {
+    let info = &doc.info;
+    let hidden = doc.comments_hidden();
+    let hidden_types = doc.hidden_comment_types();
+    let allowed = doc.allows_annotation();
     let mut edits: Vec<Edit> = Vec::new();
     // The comment each reply files under, as the Comments panel threads them (by reference).
     let tops = pdfcraft_render::thread_tops(&info.annotations);
@@ -184,9 +186,13 @@ pub(crate) fn note_popups(
     let max = limits.max.unwrap_or(egui::Vec2::splat(f32::MAX));
     let clamp = |s: egui::Vec2| s.max(limits.min).min(max);
     for (page, xf) in view.page_xforms() {
-        let pcx = PageCx { page, xf: &xf, info, prefs, allowed, hidden };
-        let shown: Vec<&Annotation> =
-            info.annotations.iter().filter(|a| !hidden && a.page == page && has_popup(a) && a.popup.is_some_and(|p| p.open)).collect();
+        let pcx = PageCx { page, xf: &xf, info, prefs, allowed, hidden, hidden_types };
+        let shown: Vec<&Annotation> = info
+            .annotations
+            .iter()
+            .filter(|a| !hidden && a.page == page && has_popup(a) && a.popup.is_some_and(|p| p.open))
+            .filter(|a| crate::comments_panel::type_visible(a, hidden_types))
+            .collect();
         for a in shown {
             let Some(p) = a.popup else { continue };
             let placed = xf.user_rect(info, page, p.rect);

@@ -4,11 +4,13 @@
 //! [`CommentsPanel`]. This module maps the document's annotations to its threads and its edits
 //! back to engine edits, and draws the header's filter and "…" buttons for the chrome.
 
+mod filter_menu;
+
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use craft::behavior::IconId;
-use craft::review::ui::comments::{CommentEdit, CommentsHeader, CommentsPanel, comments_filter_menu, comments_more_menu};
+use craft::review::ui::comments::{CommentEdit, CommentsHeader, CommentsPanel, comments_more_menu};
 use craft::review::{CommentAnchor, CommentThread, PageOrder, ReviewStatus, ReviewerStatus, ThreadId};
 use craft::ui::buttons::IconButton;
 use craft::ui::contract::{Entry, Props as _, SelectMode, Show as _};
@@ -43,15 +45,15 @@ pub fn subtype_label(s: &str) -> &str {
 
 /// The comment type as the panel names it, telling callouts, clouds and replaced text apart by `/IT`.
 pub fn kind_label(a: &Annotation) -> &str {
-    match a.intent.as_deref() {
-        // Replace Text: the caret (`/IT /Replace`) is the group's primary; earlier builds made
-        // the strikeout primary.
-        Some("StrikeOutTextEdit" | "Replace") => "Replace text",
-        Some("FreeTextCallout") => "Callout",
-        Some("PolygonCloud") => "Cloud",
-        Some("FreeTextTypeWriter") => "Typewriter",
-        _ => subtype_label(&a.subtype),
+    pdfcraft_render::comment_type_label(&a.subtype, a.intent.as_deref(), a.grouped).unwrap_or_else(|| subtype_label(&a.subtype))
+}
+
+pub(crate) fn type_visible(annotation: &Annotation, hidden_types: &[String]) -> bool {
+    if hidden_types.is_empty() {
+        return true;
     }
+    let label = kind_label(annotation);
+    !hidden_types.iter().any(|kind| kind == label)
 }
 
 /// The number shown in the header: comments, not their replies or status changes.
@@ -256,6 +258,11 @@ pub(crate) fn show(
 ) -> Option<Edit> {
     let info = &doc.info;
     let (mut list, map) = threads(doc, prefs);
+    if !doc.hidden_comment_types().is_empty() {
+        let hidden: std::collections::HashSet<_> =
+            info.annotations.iter().filter(|a| !type_visible(a, doc.hidden_comment_types())).map(|a| thread_id(a.page, a.index)).collect();
+        list.retain(|thread| !hidden.contains(&thread.id));
+    }
     // Keep the panel's selection in step with the page's (clicks on the page, or newly added comments),
     // without disturbing an open inline editor.
     let mut selected_threads = Vec::new();
@@ -424,7 +431,7 @@ pub(crate) fn header(
     view: &mut DocView,
     prefs: &CommentPrefs,
     enabled: impl Fn(&str) -> bool,
-) -> Option<&'static str> {
+) -> (Option<&'static str>, Option<Vec<String>>) {
     let (list, _) = threads(doc, prefs);
     let more = IconButton::new(IconSpec::svg(IconId::new("more"))).label(tl!("More options").to_string()).show(ui);
     let hide_all = if doc.comments_hidden() { tl!("Show all comments") } else { tl!("Hide all comments") };
@@ -440,8 +447,8 @@ pub(crate) fn header(
     let command = comments_more_menu(ui, &more, &list, &mut view.session.comments.panel, &rows);
     let filter = IconButton::new(IconSpec::svg(IconId::new("funnel")))
         .label(tl!("Filter comments").to_string())
-        .selected(view.session.comments.panel.filter.is_active())
+        .selected(view.session.comments.panel.filter.is_active() || !doc.hidden_comment_types().is_empty())
         .show(ui);
-    comments_filter_menu(ui, &filter, &list, &mut view.session.comments.panel);
-    command
+    let types = filter_menu::show(ui, &filter, doc, &list, &mut view.session.comments.panel.filter);
+    (command, types)
 }

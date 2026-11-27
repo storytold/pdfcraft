@@ -521,10 +521,15 @@ impl Panels<'_> {
             .into_iter()
             .filter(|id| pdfcraft_engine::commands::command(id).is_some_and(|spec| self.app.command_enabled(spec)))
             .collect();
-        let command = {
+        let (command, hidden_types) = {
             let Some(doc) = self.app.session.get(id) else { return };
             crate::comments_panel::header(ui, doc, &mut self.app.views[index], &self.app.comment_prefs, |id| enabled.contains(&id))
         };
+        if let Some(types) = hidden_types
+            && self.app.session.set_hidden_comment_types(id, &types)
+        {
+            self.app.sync_comment_type_filters();
+        }
         if let Some(command) = command {
             self.app.run_command(&ui.ctx().clone(), command);
         }

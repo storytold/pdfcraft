@@ -293,7 +293,8 @@ pub(crate) fn page_tool<'a>(
     let size = move |page: usize| sizes.get(page).copied().unwrap_or_default();
     *xforms = cx.pages.iter().map(|placed| (placed.page, PageXform::of(placed, cx.rotation, size(placed.page)))).collect();
     let xforms: &'a [(usize, PageXform)] = xforms;
-    let map: &'a comments::PageMap<'a> = map_slot.insert(comments::PageMap::new(cx.info, cx.pages, cx.rotation, cx.view));
+    let map: &'a comments::PageMap<'a> =
+        map_slot.insert(comments::PageMap::new(cx.info, cx.pages, cx.rotation, cx.view).with_hidden_types(cx.doc.hidden_comment_types()));
     let selects_text = tool_selects_text(tool, cx.preparing);
     let content_delete = tool == QuickTool::Select && session.content.selected.is_some() && session.content.draft.is_none();
     let arm = match tool {
@@ -329,7 +330,7 @@ pub(crate) fn page_tool<'a>(
                         .primary()
                         .and_then(|(page, index)| session.signature_drag.aspect_ratio(page, index).map(|r| (page, index, r)));
                     let view = &mut session.comments;
-                    let map = comments::PageMap::new(cx.info, cx.pages, cx.rotation, cx.view);
+                    let map = comments::PageMap::new(cx.info, cx.pages, cx.rotation, cx.view).with_hidden_types(cx.doc.hidden_comment_types());
                     let annotate = CommentsTool::new(&mut view.tool, &mut view.paste, map, &mut view.tool_done, &mut view.tool_pressed)
                         .image_aspect(aspect)
                         .settings(tool, cx.comment_prefs, cx.allowed, cx.doc.comments_hidden())
@@ -384,7 +385,7 @@ pub(crate) fn page_tool<'a>(
                 member: &mut view.member,
             };
             let place = FillSignTool::new(&cx, input, fill, *press);
-            let map = comments::PageMap::new(cx.info, cx.pages, cx.rotation, cx.view);
+            let map = comments::PageMap::new(cx.info, cx.pages, cx.rotation, cx.view).with_hidden_types(cx.doc.hidden_comment_types());
             let annotate = CommentsTool::new(&mut view.tool, &mut view.paste, map, &mut view.tool_done, &mut view.tool_pressed)
                 .image_aspect(aspect)
                 .settings(tool, cx.comment_prefs, cx.allowed, cx.doc.comments_hidden())
@@ -550,7 +551,15 @@ impl ToolFinish {
             let hidden = cx.doc.comments_hidden();
             for placed in cx.pages {
                 let xf = geo.xform_of(placed);
-                let page_cx = comments::PageCx { page: placed.page, xf: &xf, info: cx.info, prefs: cx.comment_prefs, allowed: cx.allowed, hidden };
+                let page_cx = comments::PageCx {
+                    page: placed.page,
+                    xf: &xf,
+                    info: cx.info,
+                    prefs: cx.comment_prefs,
+                    allowed: cx.allowed,
+                    hidden,
+                    hidden_types: cx.doc.hidden_comment_types(),
+                };
                 comments::page_after_text(&page_cx, tool, self.text_finished, session, geo);
             }
         }

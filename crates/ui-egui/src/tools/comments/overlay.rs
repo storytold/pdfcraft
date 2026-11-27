@@ -19,7 +19,8 @@ use super::{CommentPrefs, DocInfo, QuickTool, color32};
 use crate::canvas::PageSession;
 
 /// What the overlay needs besides the document: what the pointer is over.
-pub(crate) struct Hover {
+pub(crate) struct Hover<'a> {
+    pub hidden_types: &'a [String],
     /// The pointer on screen, when it is over the pages with no button down.
     pub pointer: Option<Pos2>,
     /// The user's Redaction Tool Properties fill and opacity.
@@ -42,9 +43,9 @@ pub(crate) fn show(
     info: &DocInfo,
     prefs: &CommentPrefs,
     tool: QuickTool,
-    hover: Hover,
+    hover: Hover<'_>,
 ) {
-    let map = PageMap::new(info, body.pages, rotation, body.view);
+    let map = PageMap::new(info, body.pages, rotation, body.view).with_hidden_types(hover.hidden_types);
     let all = bridge::annotations(info, &map, QuickTool::Select, hover.allowed);
     let reached = bridge::annotations(info, &map, tool, hover.allowed);
     let markers = bridge::markers(info, &map, hover.pick.1);

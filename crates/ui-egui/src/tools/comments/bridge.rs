@@ -51,6 +51,7 @@ pub(crate) struct PageMap<'a> {
     pub pages: &'a [PlacedPage],
     /// The document's page geometry.
     pub info: &'a DocInfo,
+    hidden_types: &'a [String],
     /// The view's quarter turn in degrees, which the placed pages show but `PageInfo`'s own transform does not.
     pub rotation: u16,
     /// The canvas view the pages are shown in this pass.
@@ -60,7 +61,16 @@ pub(crate) struct PageMap<'a> {
 impl<'a> PageMap<'a> {
     /// A map over `pages` of the document `info`, shown turned by `rotation` degrees in the canvas `view`.
     pub(crate) fn new(info: &'a DocInfo, pages: &'a [PlacedPage], rotation: u16, view: CanvasView) -> Self {
-        Self { pages, info, rotation, view }
+        Self { pages, info, rotation, view, hidden_types: &[] }
+    }
+
+    pub(crate) fn with_hidden_types(mut self, hidden_types: &'a [String]) -> Self {
+        self.hidden_types = hidden_types;
+        self
+    }
+
+    pub(crate) fn type_visible(&self, annotation: &Annotation) -> bool {
+        crate::comments_panel::type_visible(annotation, self.hidden_types)
     }
 
     fn placed(&self, page: usize) -> Option<&PlacedPage> {
@@ -330,12 +340,15 @@ pub(crate) fn annotations(info: &DocInfo, map: &PageMap<'_>, tool: QuickTool, al
     let primaries = pdfcraft_render::group_primaries(all);
     let mut members: HashMap<usize, Vec<&Annotation>> = HashMap::new();
     for (m, primary) in all.iter().zip(&primaries) {
-        if let (true, Some(p)) = (m.is_group_member(), primary) {
+        if let (true, Some(p)) = (m.is_group_member() && map.type_visible(m), primary) {
             members.entry(*p).or_default().push(m);
         }
     }
-    let mut shown: Vec<(usize, &Annotation)> =
-        all.iter().enumerate().filter(|(_, a)| a.is_comment() && a.subtype != "Popup" && map.shows(a.page) && pick(a)).collect();
+    let mut shown: Vec<(usize, &Annotation)> = all
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.is_comment() && a.subtype != "Popup" && map.shows(a.page) && map.type_visible(a) && pick(a))
+        .collect();
     // In paint order (`/Annots`), not the inspection's: the framework takes the last listed as the topmost.
     shown.sort_by_key(|(_, a)| (a.page, a.index));
     shown.into_iter().filter_map(|(i, a)| marked(map, a, members.get(&i).map_or(&[][..], Vec::as_slice), allowed)).collect()
