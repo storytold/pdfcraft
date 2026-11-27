@@ -87,6 +87,9 @@ fn luma(c: &[f64; 3]) -> f64 {
 /// The shades the ring's light pixels are sorted into to find the paper's.
 const SHADES: usize = 32;
 
+/// The luma below which a pixel is ink rather than paper of any shade.
+const INK: f64 = 0.5;
+
 /// The paper's colour among the pixels of the ring around a word. Of the ring's light pixels,
 /// those at least as light as the midpoint between its darkest and its lightest, the paper is the
 /// shade most of them have, and its colour the median of that shade: a rule's halo runs through
@@ -95,10 +98,15 @@ const SHADES: usize = 32;
 /// rules and their halo are more than half of it (#8501). A grey-paper scan keeps its grey, the
 /// ring's light pixels being the paper, and a stray white speck is no shade of its own: the light
 /// end of the range is read a twentieth of the ring in from the top, so a few specks don't set it
-/// above grey paper. White for an empty ring.
+/// above grey paper. A ring still dark there is rule nearly all round, and its paper the little
+/// light it has, so the top itself is the light end. White for an empty ring.
 fn paper_colour(ring: &mut [[f64; 3]]) -> [f64; 3] {
     ring.sort_by(|a, b| luma(a).total_cmp(&luma(b)));
-    let lightest = ring.len().checked_sub(1 + ring.len() / 20).and_then(|i| ring.get(i));
+    let trimmed = ring.len().checked_sub(1 + ring.len() / 20).and_then(|i| ring.get(i));
+    let lightest = match (trimmed, ring.last()) {
+        (Some(t), Some(top)) if luma(t) < INK => Some(top),
+        (t, _) => t,
+    };
     let (Some(darkest), Some(lightest)) = (ring.first(), lightest) else { return [1.0; 3] };
     let mid = (luma(darkest) + luma(lightest)) / 2.0;
     let light = ring.get(ring.partition_point(|c| luma(c) < mid)..).unwrap_or_default();
@@ -137,6 +145,10 @@ mod tests {
         // not the light end of the paper's range (found in review of #8512).
         let mut ring: Vec<[f64; 3]> = pixels(99, 0.784).chain(pixels(1, 1.0)).collect();
         assert_eq!(paper_colour(&mut ring), [0.784; 3]);
+        // A ring that is rule nearly all round: its paper is the little light it has (review of
+        // #8512 again).
+        let mut ring: Vec<[f64; 3]> = pixels(97, 0.1).chain(pixels(3, 0.9)).collect();
+        assert_eq!(paper_colour(&mut ring), [0.9; 3]);
         // Paper alone, and nothing.
         let mut ring: Vec<[f64; 3]> = pixels(20, 0.95).collect();
         assert_eq!(paper_colour(&mut ring), [0.95; 3]);
