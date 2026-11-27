@@ -191,7 +191,14 @@ fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Decode
             None => {}
         }
     }
-    if let Some(k) = js(b"K")
+    let k = js(b"K");
+    // An XFA date field typed in another pattern than it shows.
+    if out.xfa_date
+        && let af::Format::Date(shown) = &out.format
+    {
+        out.edit_date = k.as_deref().and_then(af::parse_date_keystroke).filter(|edit| edit != shown);
+    }
+    if let Some(k) = k
         && out.format == af::Format::None
     {
         // A mask has only a keystroke script.
