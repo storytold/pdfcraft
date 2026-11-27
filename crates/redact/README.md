@@ -53,7 +53,8 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   (`RedactError::ImagesPastAllowance`), and `remove_hidden`, which chose no pages, as one past the
   run's budget. JPEG and JPEG 2000 images in another colour
   space (ICCBased, Indexed), image masks, a JPEG with a `/ColorTransform` of its own, JPEG 2000
-  with alpha, and data that doesn't decode to the dictionary's size are removed whole (fail-closed), and so is a JBIG2 image whose page isn't its size (the renderer
+  with alpha, with a palette under a named colour space or a component mapping of more than four
+  entries, and data that doesn't decode to the dictionary's size are removed whole (fail-closed), and so is a JBIG2 image whose page isn't its size (the renderer
   draws the whole page into the image, so the rows cleared wouldn't be the ones shown) or of more
   than one bit or component, and Group 3 on bytes (`/K` 0 or more, `/EncodedByteAlign`): PdfCraft's
   renderer draws some of its layouts (the fill ending each end-of-line code on a byte) as other
