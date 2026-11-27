@@ -51,6 +51,13 @@ One app ID lets PdfCraft, GridCraft, DeckCraft, WordCraft and later native Craft
 consent as the same first-party Storytold application. The app ID is **not** repeated per
 customer tenant or per user.
 
+The client ID supplied for the PdfCraft POC is **POC-only**. It may be injected into an
+ad-hoc local test build, but it must not be committed as the Storytold suite identity or
+copied into release configuration. Production still requires a Storytold-owned, reviewed
+multitenant public/native registration with publisher identity, owners, delegated
+permissions, consent policy, IPIA, release inventory, and ongoing maintenance ownership.
+A POC ID proves the flow only; it does not satisfy these production gates.
+
 The MIP SDK and its native libraries are still packaged with each application and operating
 system build. Microsoft does not provide a single cross-application SaaS SDK instance that
 Storytold can configure once on a server and have every desktop application inherit. The
