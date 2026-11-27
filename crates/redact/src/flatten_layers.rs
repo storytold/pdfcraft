@@ -42,7 +42,7 @@
 //!   it ([`Drawers`]): each resource dictionary whose `/XObject` or `/Pattern` names it, whose
 //!   `/ExtGState` (or a shading pattern's own `/ExtGState`) holds it as a soft mask's group
 //!   (`/SMask /G`), or, for a Type 3 glyph whose font has no `/Resources`, whose `/Font` names
-//!   that font, and any resource dictionary at all that holds the name (text state, and so the
+//!   that font or whose `/ExtGState` sets it (`/Font`), and any resource dictionary at all that holds the name (text state, and so the
 //!   font, passes into what is drawn after `Tf`). A name none of these holds is refused with the
 //!   same error, never read as shown: the stream may be drawn some other way. So is one drawn as
 //!   an annotation's appearance, where no such resources are given, and one whose names mean a
@@ -218,14 +218,16 @@ enum Unwrapped {
 /// Whether a string a hidden block showed still sets where the next one goes: a string moves the
 /// text position, and only a new line or text object starts it afresh. Inside a text object `q`
 /// and `Q` save and restore the text matrices (ISO 32000-2 §9.4.1 and §8.4.2, as amended by
-/// erratum 368), so `Q` brings back a debt the `q` saved, and keeps any debt incurred since its
-/// `q`. `saved` is not cleared at `BT` or `ET`, so a `Q` after `ET` popping a `q` from inside the
-/// text object may set a debt that isn't there: it over-refuses, never under.
+/// erratum 368), so a `Q` restores the debt its `q` saved, when that `q` was in the same text
+/// object; a `q` from before it saved no text position, and the debt stands.
 #[derive(Default)]
 struct TextRun {
     open: bool,
     owed: bool,
-    saved: Vec<bool>,
+    /// Which text object the walk is in, counted by `BT`.
+    object: usize,
+    /// For each open `q`: the debt it saved, and the text object it was in.
+    saved: Vec<(bool, Option<usize>)>,
 }
 
 impl TextRun {
@@ -236,10 +238,18 @@ impl TextRun {
             b"BT" | b"ET" => {
                 self.open = op.is("BT");
                 self.owed = false;
+                self.object = self.object.wrapping_add(usize::from(self.open));
             }
             b"Td" | b"TD" | b"Tm" | b"T*" => self.owed = false,
-            b"q" => self.saved.push(self.owed),
-            b"Q" => self.owed |= self.saved.pop().unwrap_or(false),
+            b"q" => self.saved.push((self.owed, self.open.then_some(self.object))),
+            b"Q" => {
+                if let Some((owed, Some(object))) = self.saved.pop()
+                    && self.open
+                    && object == self.object
+                {
+                    self.owed = owed;
+                }
+            }
             b"Tj" | b"TJ" if !hidden => return !self.owed,
             b"'" | b"\"" if !hidden => self.owed = false,
             o if hidden && is_show(o) => self.owed = self.open,
@@ -414,6 +424,12 @@ fn soft_mask_group(doc: &Document, gs: &Object) -> Option<ObjRef> {
     sub(doc, &gs, b"SMask")?.get(b"G")?.as_ref()
 }
 
+/// The font an ExtGState `gs` sets (`/Font [font size]`), if any.
+fn extgstate_font(doc: &Document, gs: &Object) -> Option<Object> {
+    let gs = doc.resolve(gs).as_dict()?.clone();
+    doc.resolve(gs.get(b"Font")?).as_array()?.first().cloned()
+}
+
 /// The soft-mask group a shading pattern's own `/ExtGState` sets, if any.
 fn shading_mask_group(doc: &Document, pattern: &Object) -> Option<ObjRef> {
     let p = doc.resolve(pattern).as_dict()?.clone();
@@ -451,7 +467,8 @@ impl Drawers {
 
     /// Records what `res` draws: the forms and tiling patterns its `/XObject` and `/Pattern` name,
     /// the soft-mask groups its `/ExtGState` and its shading patterns' own `/ExtGState` set, and
-    /// its Type 3 fonts' glyphs (each font with `/Resources` of its own, in `fonts`, once).
+    /// the glyphs of the Type 3 fonts its `/Font` names or its `/ExtGState` sets (each font with
+    /// `/Resources` of its own, in `fonts`, once).
     fn index(&mut self, doc: &Document, res: &Dict, fonts: &mut HashSet<ObjRef>) {
         let props = sub(doc, res, b"Properties").unwrap_or_default();
         let entries = |key: &[u8]| sub(doc, res, key).unwrap_or_default();
@@ -464,24 +481,32 @@ impl Drawers {
         for t in drawn.into_iter().filter(|&t| resourceless(doc, t)) {
             self.by.entry(t).or_default().push(Caller { props: props.clone(), own: false });
         }
-        for (_, f) in entries(b"Font").iter() {
-            let Some(font) = doc.resolve(f).as_dict().cloned().filter(|d| has_name(doc, d, b"Subtype", b"Type3")) else { continue };
-            // Its glyphs read names in its own `/Resources`, or else in what shows them.
-            let (reads, own) = match font.get(b"Resources") {
-                Some(_) if f.as_ref().is_some_and(|r| !fonts.insert(r)) => continue,
-                Some(own) => (properties(doc, Some(own)), true),
-                None => (props.clone(), false),
-            };
-            for g in sub(doc, &font, b"CharProcs").unwrap_or_default().iter().filter_map(|(_, g)| g.as_ref()) {
-                self.glyphs.insert(g);
-                if !own {
-                    self.inherits.insert(g);
-                }
-                self.by.entry(g).or_default().push(Caller { props: reads.clone(), own });
-            }
+        let mut shown: Vec<Object> = entries(b"Font").iter().map(|(_, f)| f.clone()).collect();
+        shown.extend(entries(b"ExtGState").iter().filter_map(|(_, gs)| extgstate_font(doc, gs)));
+        for f in &shown {
+            self.index_font(doc, f, &props, fonts);
         }
         if !props.is_empty() {
             self.anywhere.push(props);
+        }
+    }
+
+    /// Records the glyphs of `f`, a font shown under a resource dictionary whose `/Properties`
+    /// are `props`, if it is a Type 3 font.
+    fn index_font(&mut self, doc: &Document, f: &Object, props: &Dict, fonts: &mut HashSet<ObjRef>) {
+        let Some(font) = doc.resolve(f).as_dict().cloned().filter(|d| has_name(doc, d, b"Subtype", b"Type3")) else { return };
+        // Its glyphs read names in its own `/Resources`, or else in what shows them.
+        let (reads, own) = match font.get(b"Resources") {
+            Some(_) if f.as_ref().is_some_and(|r| !fonts.insert(r)) => return,
+            Some(own) => (properties(doc, Some(own)), true),
+            None => (props.clone(), false),
+        };
+        for g in sub(doc, &font, b"CharProcs").unwrap_or_default().iter().filter_map(|(_, g)| g.as_ref()) {
+            self.glyphs.insert(g);
+            if !own {
+                self.inherits.insert(g);
+            }
+            self.by.entry(g).or_default().push(Caller { props: reads.clone(), own });
         }
     }
 

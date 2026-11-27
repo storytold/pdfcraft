@@ -578,6 +578,30 @@ fn a_move_undone_by_q_still_owes_hidden_texts_move() {
     assert!(cell.contains("(B)") && !cell.contains("(A)"), "{cell}");
 }
 
+/// The other way round: hidden text between `q` and `Q` in one text object moves a position `Q`
+/// throws away, so the string after `Q` owes it nothing and the cell flattens. A `q` from before
+/// the text object saved no text position: the debt stands.
+#[test]
+fn hidden_text_between_q_and_q_owes_nothing_after_q() {
+    let font = "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >>";
+    let pattern = |content: &[u8]| {
+        layered(
+            "/Pattern << /P0 7 0 R >>",
+            vec![stream(
+                &format!(
+                    "/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << /Properties << /L2 6 0 R >> {font} >>"
+                ),
+                content,
+            )],
+        )
+    };
+    let mut doc = pattern(b"BT /F1 10 Tf q /OC /L2 BDC (A) Tj EMC Q (B) Tj ET");
+    flatten_layers(&mut doc).unwrap();
+    let cell = stream_text(&doc, 7);
+    assert!(cell.contains("(B)") && !cell.contains("(A)"), "{cell}");
+    refused_unchanged(pattern(b"q BT /F1 10 Tf /OC /L2 BDC (A) Tj EMC Q (B) Tj ET"), |e| matches!(e, RedactError::LayerContentUnreadable(7)));
+}
+
 /// At font size 0 hidden glyphs still move by their character spacing, which a `TJ` number can't
 /// write: refused. With no spacing nothing moves, and the text merges.
 #[test]
@@ -591,6 +615,25 @@ fn hidden_text_at_size_zero_with_spacing_refuses() {
     flatten_layers(&mut doc).unwrap();
     let ops = page_ops(&doc);
     assert!(ops.iter().any(|o| o == "(B) Tj") && !ops.iter().any(|o| o.contains("(A)")), "{ops:?}");
+}
+
+/// A font that writes vertically (Identity-V) moves hidden glyphs down by vertical metrics that
+/// aren't read: refused, as at size 0. The same text in Identity-H merges.
+#[test]
+fn hidden_text_in_a_vertical_font_refuses() {
+    let page = |cmap: &'static str| {
+        let contents = stream("", b"BT /F0 10 Tf /OC /L2 BDC <0001> Tj EMC <0002> Tj ET");
+        let font = format!(
+            "<< /Type /Font /Subtype /Type0 /BaseFont /X /Encoding /{cmap} /DescendantFonts [<< /Type /Font /Subtype /CIDFontType2 \
+             /BaseFont /X /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 500 >>] >>"
+        );
+        Layered { contents, extra_res: "/Font << /F0 7 0 R >>", extra: vec![font.into_bytes()], ..Default::default() }.build()
+    };
+    refused_unchanged(page("Identity-V"), |e| matches!(e, RedactError::PageRefused { page: 1, .. }));
+    let mut doc = page("Identity-H");
+    flatten_layers(&mut doc).unwrap();
+    let ops = page_ops(&doc);
+    assert!(ops.iter().any(|o| o == "<0002> Tj") && !ops.iter().any(|o| o.contains("<0001>")), "{ops:?}");
 }
 
 #[test]
@@ -664,27 +707,63 @@ fn a_layer_name_no_known_caller_holds_refuses() {
     refused_unchanged(doc, |e| matches!(e, RedactError::LayerContentUnreadable(9)));
 }
 
-/// The result is checked, not the paths: a Type 3 font that no `/Font` resource lists, set by an
-/// ExtGState's `/Font` or held in the form's `/DR` for a field's `/DA`, keeps its glyph's hidden
-/// block, and the layers it named are gone. Refused.
-#[test]
-fn a_layer_block_left_by_a_glyph_no_resource_lists_refuses() {
-    let by_gs = Layered {
-        contents: stream("", b"/GS gs BT (a) Tj ET /OC /L2 BDC 1 1 m 9 9 l S EMC"),
-        extra_res: "/ExtGState << /GS << /Font [7 0 R 1] >> >>",
-        extra: type3_without_resources(b"10 0 d0 /OC /L2 BDC 0 0 5 5 re f EMC"),
-        ..Default::default()
-    };
-    refused_unchanged(by_gs.build(), |e| matches!(e, RedactError::LayerContentUnreadable(8)));
-    let mut extra = type3_without_resources(b"10 0 d0 /OC /L2 BDC 0 0 5 5 re f EMC");
+/// A Type 3 font without `/Resources` whose glyph (object 8) draws `glyph`, held only in the
+/// form's `/DR` for a field's `/DA` (object 9): no resource dictionary lists it, so the index
+/// finds no caller and only the last check reads the glyph.
+fn field_glyph(glyph: &[u8]) -> Layered {
+    let mut extra = type3_without_resources(glyph);
     extra.push(b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (F) /Rect [0 0 10 10] /DA (/T3 1 Tf 0 g) /V (a) >>".to_vec());
-    let by_dr = Layered {
+    Layered {
         catalog_extra: "/AcroForm << /Fields [9 0 R] /DR << /Font << /T3 7 0 R >> >> /DA (/T3 1 Tf 0 g) >>",
         page_extra: "/Annots [9 0 R]",
         extra,
         ..Default::default()
-    };
-    refused_unchanged(by_dr.build(), |e| matches!(e, RedactError::LayerContentUnreadable(8)));
+    }
+}
+
+/// The result is checked, not the paths: [`field_glyph`]'s glyph keeps its hidden block, and the
+/// layers it named are gone. Refused.
+#[test]
+fn a_layer_block_left_by_a_glyph_no_resource_lists_refuses() {
+    refused_unchanged(field_glyph(b"10 0 d0 /OC /L2 BDC 0 0 5 5 re f EMC").build(), |e| matches!(e, RedactError::LayerContentUnreadable(8)));
+}
+
+/// A Type 3 font without `/Resources` set by an ExtGState's `/Font` shows its glyph under the
+/// resources that hold the ExtGState: its names are read there, and its hidden block goes.
+#[test]
+fn a_glyph_set_by_an_extgstate_reads_its_layers_where_it_is_set() {
+    let mut doc = Layered {
+        contents: stream("", b"/GS gs BT (a) Tj ET /OC /L2 BDC 1 1 m 9 9 l S EMC"),
+        extra_res: "/ExtGState << /GS << /Font [7 0 R 1] >> >>",
+        extra: type3_without_resources(b"10 0 d0 /OC /L2 BDC 0 0 5 5 re f EMC /OC /L1 BDC 1 1 2 2 re f EMC"),
+        ..Default::default()
+    }
+    .build();
+    flatten_layers(&mut doc).unwrap();
+    let glyph = stream_text(&doc, 8);
+    assert!(!glyph.contains("0 0 5 5 re"), "the hidden layer's drawing leaves the glyph: {glyph}");
+    assert!(glyph.contains("1 1 2 2 re") && !glyph.contains("BDC"), "the visible one stays, unwrapped: {glyph}");
+}
+
+/// The page names the glyph's layer `/L9` as hidden; form 10 sets the font through an ExtGState
+/// and holds no `/L9`, so there the glyph's block shows. The two disagree: refused, not removed.
+#[test]
+fn a_glyph_set_by_an_extgstate_where_its_layer_is_unnamed_refuses() {
+    let mut extra = type3_without_resources(b"10 0 d0 /OC /L9 BDC 0 0 5 5 re f EMC");
+    extra.push(b"<< >>".to_vec());
+    extra.push(stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /ExtGState << /GS << /Font [7 0 R 1] >> >> >>",
+        b"/GS gs BT (a) Tj ET",
+    ));
+    let doc = Layered {
+        props: "<< /L1 5 0 R /L2 6 0 R /L9 6 0 R >>",
+        contents: stream("", b"BT /T3 1 Tf (a) Tj ET /Fm Do /OC /L2 BDC 1 1 m 9 9 l S EMC"),
+        extra_res: "/Font << /T3 7 0 R >> /XObject << /Fm 10 0 R >>",
+        extra,
+        ..Default::default()
+    }
+    .build();
+    refused_unchanged(doc, |e| matches!(e, RedactError::LayerContentUnreadable(8)));
 }
 
 /// The check reads content, not every stream: an attachment holding an uncompressed layered PDF's
@@ -701,17 +780,10 @@ fn an_attachment_holding_a_layer_block_flattens() {
     merged_as_expected(&doc);
 }
 
-/// The glyph of [`a_layer_block_left_by_a_glyph_no_resource_lists_refuses`], set by an
-/// ExtGState's `/Font`, stored as Flate with its last 6 bytes cut: strict decoding fails, and a
-/// reader reads what comes before the damage.
+/// [`field_glyph`]'s glyph stored as Flate with its last 6 bytes cut: strict decoding fails, and
+/// a reader reads what comes before the damage.
 fn damaged_glyph(glyph: &[u8]) -> Document {
-    let mut doc = Layered {
-        contents: stream("", b"/GS gs BT (a) Tj ET /OC /L1 BDC 0 0 m 10 10 l S EMC /OC /L2 BDC 1 1 m 9 9 l S EMC"),
-        extra_res: "/ExtGState << /GS << /Font [7 0 R 1] >> >>",
-        extra: type3_without_resources(b""),
-        ..Default::default()
-    }
-    .build();
+    let mut doc = field_glyph(b"").build();
     let raw = Stream::flate(Dict::new(), glyph).raw.to_vec();
     let cut = raw.get(..raw.len() - 6).unwrap().to_vec();
     let mut dict = Dict::new();
@@ -738,14 +810,8 @@ fn a_damaged_glyph_is_read_up_to_the_damage() {
 #[test]
 fn an_undecodable_glyph_refuses() {
     for dict in ["/Filter /NoSuchDecode", "/Filter /NoSuchDecode /Subtype /Form /Resources << >>"] {
-        let mut extra = type3_without_resources(b"");
-        extra[1] = stream(dict, b"10 0 d0 0 0 5 5 re f");
-        let doc = Layered {
-            contents: stream("", b"/GS gs BT (a) Tj ET /OC /L2 BDC 1 1 m 9 9 l S EMC"),
-            extra_res: "/ExtGState << /GS << /Font [7 0 R 1] >> >>",
-            extra,
-            ..Default::default()
-        };
+        let mut doc = field_glyph(b"");
+        doc.extra[1] = stream(dict, b"10 0 d0 0 0 5 5 re f");
         refused_unchanged(doc.build(), |e| matches!(e, RedactError::LayerContentUnreadable(8)));
     }
 }
@@ -755,14 +821,8 @@ fn an_undecodable_glyph_refuses() {
 #[test]
 fn a_glyph_calling_itself_something_else_refuses() {
     for dict in ["/Type /EmbeddedFile", "/Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray"] {
-        let mut extra = type3_without_resources(b"");
-        extra[1] = stream(dict, b"10 0 d0 /OC /L2 BDC 0 0 5 5 re f EMC");
-        let doc = Layered {
-            contents: stream("", b"/GS gs BT (a) Tj ET /OC /L2 BDC 1 1 m 9 9 l S EMC"),
-            extra_res: "/ExtGState << /GS << /Font [7 0 R 1] >> >>",
-            extra,
-            ..Default::default()
-        };
+        let mut doc = field_glyph(b"");
+        doc.extra[1] = stream(dict, b"10 0 d0 /OC /L2 BDC 0 0 5 5 re f EMC");
         refused_unchanged(doc.build(), |e| matches!(e, RedactError::LayerContentUnreadable(8)));
     }
 }
@@ -789,14 +849,8 @@ fn a_block_in_bytes_the_parser_skipped_refuses() {
     let string = b"10 0 d0 0 0 5 5 re f (a /OC /L2 BDC 1 1 2 2 re f EMC";
     let image = b"10 0 d0 BI /W 1 /H 1 /BPC 8 /CS /G ID /OC /L2 BDC 1 1 2 2 re f EMC";
     for glyph in [&string[..], image] {
-        let mut extra = type3_without_resources(b"");
-        extra[1] = stream("", glyph);
-        let doc = Layered {
-            contents: stream("", b"/GS gs BT (a) Tj ET /OC /L2 BDC 1 1 m 9 9 l S EMC"),
-            extra_res: "/ExtGState << /GS << /Font [7 0 R 1] >> >>",
-            extra,
-            ..Default::default()
-        };
+        let mut doc = field_glyph(b"");
+        doc.extra[1] = stream("", glyph);
         refused_unchanged(doc.build(), |e| matches!(e, RedactError::LayerContentUnreadable(8)));
     }
 }
@@ -810,4 +864,11 @@ fn an_undecodable_form_that_can_name_no_layer_stays() {
     let mut doc = Layered { extra_res: "/XObject << /Fm 7 0 R >>", contents, extra: vec![form], ..Default::default() }.build();
     flatten_layers(&mut doc).unwrap();
     merged_as_expected(&doc);
+    let (_, saved) = saved(&doc);
+    assert!(page_ops(&saved).iter().any(|o| o == "/Fm Do"), "the form is still drawn: {:?}", page_ops(&saved));
+    let page = pdfcraft_model::pages(&saved).remove(0);
+    let res = page.dict.get(b"Resources").and_then(|r| saved.resolve(r).as_dict().cloned()).unwrap_or_default();
+    let fm = sub(&saved, &res, b"XObject").and_then(|x| x.get(b"Fm").cloned());
+    let kept = fm.map(|f| saved.resolve(&f));
+    assert!(matches!(kept.as_deref(), Some(Object::Stream(s)) if has_name(&saved, &s.dict, b"Filter", b"NoSuchDecode")), "{kept:?}");
 }

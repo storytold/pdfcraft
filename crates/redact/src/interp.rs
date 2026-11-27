@@ -904,8 +904,9 @@ impl Walk {
     /// A text-showing operator of a hidden layer: its glyphs aren't drawn, but the text position
     /// moves as they would have moved it (ISO 32000-1 §8.11.3.1), written as a `TJ` of a number
     /// alone. At font size 0 a `TJ` number moves nothing, while such glyphs still move by their
-    /// character and word spacing (§9.4.4): that move can't be written, so it is refused.
-    /// Vertical writing is laid out horizontally, as [`show`] lays it out.
+    /// character and word spacing (§9.4.4): that move can't be written, so it is refused. So is
+    /// a string in a font that writes vertically: its glyphs move by vertical metrics (§9.7.4.3)
+    /// that [`show`], laying text out horizontally, doesn't read.
     fn hidden_show(&mut self, op: &Op, piece: &mut Piece) {
         piece.changed = true;
         self.line_move(op);
@@ -916,6 +917,14 @@ impl Walk {
         let mut lost = false;
         for item in shown_items(op) {
             match item {
+                Object::String(s) if gs.vertical && !s.bytes.is_empty() => {
+                    if self.out.error.is_none() {
+                        self.out.error = Some(RedactError::Refused(
+                            "hidden text in a font that writes vertically moves the text after it by vertical metrics that aren't read".into(),
+                        ));
+                    }
+                    return;
+                }
                 Object::String(s) => {
                     for (code, len) in f.codes(&s.bytes) {
                         let spacing = gs.char_spacing + if f.is_space(code, len) { gs.word_spacing } else { 0.0 };
