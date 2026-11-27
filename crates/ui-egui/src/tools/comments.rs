@@ -12,50 +12,59 @@
 //! Everything is turned into `pdfcraft_engine::Edit`s, queued on the view as `pending_edit` and
 //! applied by the app, so each change is one undo step.
 
-use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
+use egui::{Color32, Pos2, Rect};
 use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
 use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText};
 
-use crate::canvas::{DocView, PageXform};
-use crate::page_pointer::PagePointer;
-use crate::theme::{self, Tokens};
-use crate::{QuickTool, icons};
+use craft::review::{AnnotationKind, AnnotationTool};
 
+use crate::QuickTool;
+use crate::canvas::{DocView, PageXform};
+#[cfg(test)]
+use crate::icons;
+#[cfg(test)]
+use craft::review::ui::annotate::{AnnotateCommand, AnnotateIcons};
+#[cfg(test)]
+use egui::{pos2, vec2};
+
+mod bridge;
+pub(crate) mod colours;
 mod composer;
 mod geometry;
-mod input;
 mod menu;
-mod paint;
+mod overlay;
+mod popups;
 mod state;
+mod tool;
 
-pub(crate) use composer::{composer, submit_key};
 #[cfg(test)]
-use geometry::handle_pos;
+use bridge::hover_tip;
+/// The comment thread of the annotation at `(page, index)`: the key the Comments panel files it under.
+pub use bridge::thread_id;
+pub(crate) use bridge::{PageMap, delete_selected, id_of, key_of, kind_of, parts, pdf_date_seconds, rgb8};
+pub(crate) use colours::{RecentColours, border_choice, fill_choice, palette, to_rgb};
+pub(crate) use composer::composer;
+pub(crate) use geometry::caret_snap;
+pub(crate) use geometry::page_rotation;
 #[cfg(test)]
-pub(crate) use geometry::{caret_snap, snapped_caret};
-pub(crate) use geometry::{corner_ratio, page_rotation, resized};
-pub use geometry::{drawn_text_box_rect, text_box_rect};
-#[cfg(test)]
-use input::hover_tip;
-pub(crate) use input::{describe, fill_grabs, hit, keys, nudge_keys, page_after_text, page_input};
-pub use menu::{CanvasAction, fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
-#[cfg(test)]
-use menu::{RECENT_CUSTOM, same_colour};
-pub(crate) use menu::{attachment_items, context_menu, quick_bar_controls};
-pub(crate) use paint::paint_page;
-#[cfg(test)]
-use paint::{changing_points, drawn_shape, edited_in_view};
+pub(crate) use geometry::snapped_caret;
+pub use geometry::{drawn_text_box_rect, snug_text_box_rect, text_box_rect};
+pub use menu::CanvasAction;
+pub(crate) use menu::{CommentMenuCx, MenuRights, context_rows, popover_from, quick_bar_controls};
+pub(crate) use overlay::{Hover, show};
+pub(crate) use popups::note_popups;
+pub(crate) use state::PageCx;
 #[cfg(test)]
 use state::after_delete;
 use state::login_name;
-pub use state::{CommentView, Composer, ComposerKind, Gesture, SortBy};
-pub(crate) use state::{EditorFocus, PageCx};
-
-/// Acrobat's selection blue for annotation frames and handles (11-visual-spec §5).
-const SELECT_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
+pub use state::{CommentView, Composer, ComposerKind};
+pub(crate) use tool::{CommentsTool, PastePlacement, context_anchor, context_comment, context_target, page_after_text, part_pressed, take_edits};
 
 /// Maximum stroke thickness offered by commenting controls, in PDF points.
 pub const MAX_LINE_WIDTH: f64 = 100.0;
+/// The font sizes a text box or callout default may take (Comment Properties' range).
+const MIN_FONT_SIZE: f64 = 1.0;
+const MAX_FONT_SIZE: f64 = 400.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CommentTool {
@@ -187,14 +196,50 @@ impl CommentTool {
         }
     }
 
-    /// Lucide icon name for this commenting tool.
+    /// The framework's annotation kind this tool draws; the Eraser draws none.
+    pub(crate) fn kind(self) -> Option<AnnotationKind> {
+        Some(match self {
+            Self::Note => AnnotationKind::Note,
+            Self::TextBox => AnnotationKind::TextBox,
+            Self::Highlight => AnnotationKind::Highlight,
+            Self::Underline => AnnotationKind::Underline,
+            Self::StrikeOut => AnnotationKind::StrikeOut,
+            Self::Squiggly => AnnotationKind::Squiggly,
+            Self::Ink => AnnotationKind::Ink,
+            Self::FreehandHighlight => AnnotationKind::FreehandHighlight,
+            Self::Line => AnnotationKind::Line,
+            Self::Arrow => AnnotationKind::Arrow,
+            Self::Rectangle => AnnotationKind::Rectangle,
+            Self::Oval => AnnotationKind::Oval,
+            Self::Polygon => AnnotationKind::Polygon,
+            Self::PolyLine => AnnotationKind::PolyLine,
+            Self::Cloud => AnnotationKind::Cloud,
+            Self::Callout => AnnotationKind::Callout,
+            Self::Caret => AnnotationKind::Caret,
+            Self::ReplaceText => AnnotationKind::ReplaceText,
+            Self::Attach => AnnotationKind::Attach,
+            Self::Eraser => return None,
+        })
+    }
+
+    /// The framework's tool for this one.
+    pub fn tool(self) -> AnnotationTool {
+        self.kind().map_or(AnnotationTool::Eraser, AnnotationTool::Draw)
+    }
+
+    /// The tool that draws `kind`.
+    pub fn from_kind(kind: AnnotationKind) -> Option<Self> {
+        ALL.into_iter().find(|t| t.kind() == Some(kind))
+    }
+
+    /// Icon name for this commenting tool: a catalogue name, or a Lucide name the app's icon set serves.
     pub fn icon(self) -> &'static str {
         match self {
             Self::Note => "message-square-plus",
             Self::TextBox => "type",
             Self::Highlight => "highlighter",
-            Self::Underline => "underline",
-            Self::StrikeOut => "strikethrough",
+            Self::Underline => "text_underline",
+            Self::StrikeOut => "text_strikethrough",
             Self::Squiggly => "spline",
             Self::FreehandHighlight => "highlighter",
             Self::Ink => "pencil",
@@ -206,7 +251,7 @@ impl CommentTool {
             Self::PolyLine => "spline",
             Self::Cloud => "cloud",
             Self::Callout => "message-square-quote",
-            Self::Caret => "text-cursor-input",
+            Self::Caret => "message-square-text",
             Self::ReplaceText => "replace",
             Self::Attach => "paperclip",
             Self::Eraser => "eraser",
@@ -247,9 +292,23 @@ impl CommentTool {
         if matches!(self, Self::TextBox | Self::Callout) { 0.0 } else { 0.5 }
     }
 
+    /// Whether the border-colour control applies to this tool: text boxes and callouts, whose
+    /// border takes the text colour unless it has its own.
+    pub fn has_border_color(self) -> bool {
+        matches!(self, Self::TextBox | Self::Callout)
+    }
+
     /// Whether the fill-colour control applies to this tool.
     pub fn has_fill(self) -> bool {
         matches!(self, Self::Rectangle | Self::Oval | Self::Polygon | Self::Cloud | Self::TextBox | Self::Callout)
+    }
+
+    /// The font size new comments of this kind start with (`None`: no text).
+    fn default_font_size(self) -> Option<f64> {
+        match self.sample() {
+            Shape::TextBox { font_size, .. } | Shape::Callout { font_size, .. } => Some(font_size),
+            _ => None,
+        }
     }
 
     /// A placeholder shape of this kind (for per-tool default styles).
@@ -278,6 +337,13 @@ impl CommentTool {
     }
 }
 
+/// Each comment tool's icon as the framework's annotate commands show it, on every surface (toolbar, flyouts,
+/// palette, menus): [`CommentTool::icon`] is the one map.
+#[cfg(test)]
+pub(crate) fn annotate_icons() -> AnnotateIcons {
+    ALL.iter().fold(AnnotateIcons::new(), |set, t| set.with(AnnotateCommand::of(t.tool()), t.icon()))
+}
+
 /// The comment swatches (our palette, close to Acrobat's quick colours).
 pub const SWATCHES: [(&str, Rgb); 10] = [
     ("Yellow", [1.0, 0.94, 0.0]),
@@ -303,6 +369,8 @@ pub struct CommentPrefs {
     /// `/T` of new comments (Acrobat: Preferences ▸ Identity, default the login name).
     pub author: String,
     styles: Vec<(CommentTool, Style)>,
+    /// The font size of new text boxes and callouts (Make Properties Default).
+    font_sizes: Vec<(CommentTool, f64)>,
     /// Keep the tool selected after use (the pin).
     pub pinned: bool,
     /// The tool each flyout group shows (the last one used).
@@ -316,6 +384,7 @@ impl Default for CommentPrefs {
         Self {
             author: login_name(),
             styles: ALL.iter().map(|t| (*t, Style::default_for(&t.sample()))).collect(),
+            font_sizes: ALL.iter().filter_map(|t| t.default_font_size().map(|s| (*t, s))).collect(),
             pinned: false,
             group_tool: [CommentTool::Note, CommentTool::Highlight, CommentTool::Ink],
             hide_empty_highlight_hover: false,
@@ -353,10 +422,54 @@ impl CommentPrefs {
         }
     }
 
+    /// The text box tool's border shape (the other tools keep a rectangle).
+    pub fn set_border_shape(&mut self, tool: CommentTool, shape: pdfcraft_engine::BorderShape) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.border_shape = if tool == CommentTool::TextBox { shape } else { pdfcraft_engine::BorderShape::Rectangle };
+        }
+    }
+
+    /// The tool's fill's own opacity (0–100 %) and a text box's or callout's text's (10–100 %),
+    /// for new comments; `None`: as the tool's opacity.
+    pub fn set_part_opacity(&mut self, tool: CommentTool, fill: Option<f64>, text: Option<f64>) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.fill_opacity = fill.filter(|o| o.is_finite() && tool.has_fill()).map(|o| o.clamp(0.0, 1.0));
+            s.text_opacity = text.filter(|o| o.is_finite() && matches!(tool, CommentTool::TextBox | CommentTool::Callout)).map(|o| o.clamp(0.1, 1.0));
+        }
+    }
+
     /// The tool's fill (`None`: no fill).
     pub fn set_fill(&mut self, tool: CommentTool, fill: Option<Rgb>) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             s.fill = if tool.has_fill() { fill.filter(|c| c.iter().all(|x| x.is_finite())).map(|c| c.map(|x| x.clamp(0.0, 1.0))) } else { None };
+        }
+    }
+
+    /// The border's own colour for new text boxes and callouts (`None`: the text colour).
+    pub fn set_border_color(&mut self, tool: CommentTool, color: Option<Rgb>) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.border_color =
+                if tool.has_border_color() { color.filter(|c| c.iter().all(|x| x.is_finite())).map(|c| c.map(|x| x.clamp(0.0, 1.0))) } else { None };
+        }
+    }
+
+    /// The font size of new comments of `tool` (`None`: the tool has no text).
+    pub fn font_size(&self, tool: CommentTool) -> Option<f64> {
+        self.font_sizes.iter().find(|(t, _)| *t == tool).map(|(_, s)| *s)
+    }
+
+    /// Every text tool with its default font size (the persisted settings read this).
+    pub fn font_sizes(&self) -> impl Iterator<Item = (CommentTool, f64)> + '_ {
+        self.font_sizes.iter().copied()
+    }
+
+    /// Clamp and store the font size (1–400 pt, as Comment Properties allows) for a text tool;
+    /// a non-finite size keeps the current one.
+    pub fn set_font_size(&mut self, tool: CommentTool, size: f64) {
+        if let Some((_, s)) = self.font_sizes.iter_mut().find(|(t, _)| *t == tool)
+            && size.is_finite()
+        {
+            *s = size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
         }
     }
 
@@ -379,16 +492,36 @@ pub(crate) fn made_by(a: &Annotation, tool: CommentTool) -> bool {
 /// The tool whose defaults "Make Current Properties Default" should update.
 ///
 /// Arrows are stored as Line annotations. An arrow ending belongs to the Arrow tool, so its
-/// defaults stay separate from a plain line.
-pub(crate) fn tool_for_default(a: &Annotation, endings: Option<&[LineEnding]>) -> Option<CommentTool> {
+/// defaults stay separate from a plain line. A Replace Text group is selected by its caret (the
+/// group's primary, ISO 32000-2 §12.5.6.2), so a caret whose group holds a Replace Text strikeout
+/// (`/IT /StrikeOutTextEdit`) belongs to the Replace Text tool; `all` is the document's listing.
+pub(crate) fn tool_for_default(all: &[Annotation], a: &Annotation, endings: Option<&[LineEnding]>) -> Option<CommentTool> {
     match tool_for(a) {
         Some(CommentTool::Line) if endings.is_some_and(|ends| ends.iter().copied().any(arrow_ending)) => Some(CommentTool::Arrow),
+        Some(CommentTool::Caret) if replaces_text(all, a) => Some(CommentTool::ReplaceText),
         other => other,
     }
 }
 
+/// Whether the caret `a` is the primary of a Replace Text group: a grouped strikeout with
+/// `/IT /StrikeOutTextEdit` is one of its subordinates.
+fn replaces_text(all: &[Annotation], a: &Annotation) -> bool {
+    all.iter().any(|s| s.is_group_member() && s.subtype == "StrikeOut" && s.intent.as_deref() == Some("StrikeOutTextEdit") && s.replies_to(a))
+}
+
 fn arrow_ending(ending: LineEnding) -> bool {
     matches!(ending, LineEnding::OpenArrow | LineEnding::ClosedArrow | LineEnding::ROpenArrow | LineEnding::RClosedArrow)
+}
+
+/// Typed text (Fill & Sign's, or a typewriter's): no comment tool makes it, so Make Current
+/// Properties Default sets what Fill & Sign gives new text.
+pub(crate) fn typed_text(a: &Annotation) -> bool {
+    a.subtype == "FreeText" && a.intent.as_deref() == Some("FreeTextTypeWriter")
+}
+
+/// Whether Make Current Properties Default has defaults to set from `a`.
+pub(crate) fn defaultable(a: &Annotation) -> bool {
+    tool_for(a).is_some() || typed_text(a)
 }
 
 /// The tool that makes comments like `a` (for Make Current Properties Default).
@@ -400,7 +533,7 @@ pub fn tool_for(a: &Annotation) -> Option<CommentTool> {
         ("FreeText", _) => CommentTool::TextBox,
         ("Highlight", _) => CommentTool::Highlight,
         ("Underline", _) => CommentTool::Underline,
-        ("StrikeOut", Some("StrikeOutTextEdit")) => CommentTool::ReplaceText,
+        ("StrikeOut", Some("StrikeOutTextEdit")) | ("Caret", Some("Replace")) => CommentTool::ReplaceText,
         ("StrikeOut", _) => CommentTool::StrikeOut,
         ("Squiggly", _) => CommentTool::Squiggly,
         ("Ink", Some("FreehandHighlight")) => CommentTool::FreehandHighlight,
