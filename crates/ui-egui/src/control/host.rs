@@ -50,7 +50,18 @@ impl crate::PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
         let cards = craft::ui::runtime::toast::cards(ctx, &craft::ui::runtime::env::WindowKey::main());
-        let notice = cards.last().map(|card| card.toast.message.as_str().to_string());
+        let notice = cards.last().map(|card| {
+            let toast = &card.toast;
+            toast
+                .title
+                .iter()
+                .chain(std::iter::once(&toast.message))
+                .chain(&toast.lines)
+                .map(|part| part.as_str())
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
         let progress =
             cards.iter().rev().find_map(|card| card.toast.progress.map(|f| json!({ "label": card.toast.message.as_str(), "fraction": f })));
         let dock = crate::side_panels::state(self);
