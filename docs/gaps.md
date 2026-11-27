@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-11-27 | **Last updated:** 2026-11-27 | **Change:** minor (gap 3: #1756 a heading over smaller body lines is its own paragraph; estimates unchanged)
 > **Last reviewed:** 2026-11-11 | **Last updated:** 2026-11-11 | **Change:** minor (gap 8: known residual risk for the LibreOffice sidecar, sandbox tracked in #6953; estimates unchanged)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
@@ -111,8 +112,10 @@ update the numbers.
   one does not absorb that paragraph (#2517). A partial rewrite of the last paragraph keeps a
   source row inside that paragraph, and does not close a following marked region early. Two
   paragraphs that share one text object keep that boundary when the first is rewritten. A heading
-  and smaller body lines (#1756) and cells in different columns (#1680, #2478) are still grouped
-  by the same geometry. A row that a list item wraps onto stays with that item. Estimates are unchanged.
+  over smaller body lines at their own leading is its own paragraph, so editing it leaves the body
+  in place (#1756); a title block at one even step stays one region. Cells in different columns
+  (#1680, #2478) are still grouped by the same geometry. A row that a list item wraps onto stays
+  with that item. Estimates are unchanged.
 
 - **Missing:** robust in-place editing of text PdfCraft didn't write: subset fonts without the
   needed glyphs, CJK and right-to-left text, rotated text, lists, superscript/subscript, keeping
@@ -434,6 +437,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-27 | minor | Gap 3: a row distinctly smaller than the one above, opening rows of its own size at their own leading, starts a new paragraph, so editing a heading no longer rewrites the body under it (#1756). A title block at one even step stays one region. Estimates unchanged. |
 | 2026-11-11 | minor | Gap 8: known residual risk for the LibreOffice sidecar (Impress has no link-update setting; the soffice process isn't network-sandboxed). Sandboxing tracked in #6953. Estimates unchanged. |
 | 2026-10-26 | minor | Gap 8: the LibreOffice profile never updates Writer or Calc linked content on load; Impress has no such setting and the process's network access isn't sandboxed. Estimates unchanged. |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |
