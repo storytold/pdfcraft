@@ -58,6 +58,21 @@ multitenant public/native registration with publisher identity, owners, delegate
 permissions, consent policy, IPIA, release inventory, and ongoing maintenance ownership.
 A POC ID proves the flow only; it does not satisfy these production gates.
 
+When security requires the POC registration to be recreated in a separate tenant, treat it
+as a new POC-only identity rather than as a production migration. Keep that development
+tenant isolated from the Storytold publisher boundary; do not associate it with Partner
+Center or reuse its identity for a public release merely because the POC works. The
+production registration remains in the intended publisher-owned tenant, or that production
+tenant must be associated with the verified Partner Global Account before publisher
+verification. Prefer organizational-directory account types; enable personal Microsoft
+accounts for a POC only when that interoperability is explicitly in scope.
+
+On a POC App ID or home-tenant change, inject the replacement ID only through
+`PDFCRAFT_PURVIEW_APP_ID`, rebuild every affected local GUI/CLI package, verify that the old
+ID is absent, rerun the setup verifier and live authentication/label-policy checks, and revoke
+or disable the obsolete registration after the replacement passes. Record the two identities
+in private test evidence rather than publishing POC tenant details in the release configuration.
+
 The MIP SDK and its native libraries are still packaged with each application and operating
 system build. Microsoft does not provide a single cross-application SaaS SDK instance that
 Storytold can configure once on a server and have every desktop application inherit. The
@@ -593,6 +608,9 @@ The following inputs are required to turn the PdfCraft POC from an SDK bridge in
 - Extract the package into a private SDK staging directory outside the Git repository.
 - Set `MIP_SDK_ROOT` to the package root and verify `include/` and `bins/release/<arch>/` exist.
 - Set `PDFCRAFT_PURVIEW_APP_ID` to the public/native Microsoft Entra application client ID.
+- If the POC App ID or home tenant changes, rebuild all POC GUI/CLI artifacts, verify the old
+  ID is absent from their binaries, repeat the setup verifier and live sign-in/label checks,
+  and disable the obsolete registration only after the replacement passes.
 - Do not set an app secret in `PDFCRAFT_PURVIEW_APP_ID`, CI environment, source, or packaged binary.
 - Complete the public IPIA process before distributing the SDK-enabled public build.
 - Sign and notarize the macOS helper and SDK libraries; sign and Authenticode-sign or notarize the Windows helper and package.
