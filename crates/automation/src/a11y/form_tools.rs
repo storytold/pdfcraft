@@ -95,7 +95,13 @@ impl Automation {
     pub(crate) fn js_tool_button(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
         let source = self.session.script_tool_button_source(id, a.str("name")?).map_err(failed)?;
-        self.js_run(&Args(&json!({"doc":id.0,"script":source,"answers":a.0.get("answers").cloned().unwrap_or(json!([]))})))
+        let mut output = self.js_run(&Args(&json!({"doc":id.0,"script":source,"answers":a.0.get("answers").cloned().unwrap_or(json!([]))})))?;
+        let document = self.doc(a)?;
+        let summary = crate::json::summary(document);
+        for key in ["doc", "pages", "dirty", "undo", "redo"] {
+            output[key] = summary[key].clone();
+        }
+        Ok(output)
     }
     /// `js_run`: run `script` in the document, or as button `field`'s script, and report its
     /// messages, console lines, requests, error, the failing document scripts' errors and result.

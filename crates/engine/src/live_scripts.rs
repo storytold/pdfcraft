@@ -289,6 +289,14 @@ impl Session {
                 }
             }
         }
+        use pdfcraft_js::templates::{Change, LIVE_ADDITION_REFUSAL};
+        if o.page_changes.iter().any(|change| matches!(change, Change::Spawn { .. } | Change::Hidden { hidden: false, .. })) {
+            // Later page changes may refer to the refused additions.
+            o.page_changes.clear();
+            if !o.console.iter().any(|line| line == LIVE_ADDITION_REFUSAL) {
+                o.console.push(LIVE_ADDITION_REFUSAL.into());
+            }
+        }
         let refused = o.execution_refused;
         let generation = self.get(id).map(Document::edit_generation);
         let layers = |s: &Session| s.get(id).map(|d| d.info.layers.iter().map(|l| l.visible).collect::<Vec<_>>());
@@ -303,7 +311,10 @@ impl Session {
                     self.show_view_changes(id, shown, icons, run);
                 }
             }
-            Err(e) => run.output.errors.push(e.to_string()),
+            Err(e) => {
+                run.output.errors.push(e.to_string());
+                self.invalidate_javascript(id);
+            }
         }
         run.edited |= self.get(id).map(Document::edit_generation) != generation;
         run.layers |= layers(self) != layers_before;

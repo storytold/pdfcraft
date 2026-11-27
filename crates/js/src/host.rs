@@ -15,6 +15,7 @@ pub(crate) struct Host {
     pub(crate) compiled_units: usize,
     pub(crate) event_name: String,
     pub(crate) may_change_pages: bool,
+    pub(crate) live_event: bool,
     pub(crate) fields: Arc<Vec<FieldState>>,
     pub(crate) icons: Vec<(super::JsObject, u64)>,
     pub(crate) objects: std::collections::HashMap<(String, Option<u64>, u64), super::JsObject>,

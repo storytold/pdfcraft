@@ -9882,6 +9882,15 @@ fn script_dialog_and_tool_button_commit_answers_without_replaying_callbacks() {
     assert_eq!(ok(&mut a, "js_tool_buttons", json!({"doc":doc}))["buttons"][0]["name"], "choose");
     let out = ok(&mut a, "js_tool_button", json!({"doc":doc,"name":"choose","answers":["{\"event\":\"ok\",\"values\":{\"name\":\"Wizard\"}}"]}));
     assert_eq!(out["error"], Value::Null);
+    assert_eq!(out["doc"], doc);
+    assert_eq!(out["pages"], 3);
+    assert_eq!(out["dirty"], true);
+    assert!(out["undo"].as_str().is_some());
+    assert!(out["redo"].is_null());
+    let cancelled = ok(&mut a, "js_tool_button", json!({"doc":doc,"name":"choose","answers":[null]}));
+    for key in ["doc", "pages", "dirty", "undo", "redo"] {
+        assert_eq!(cancelled[key], out[key]);
+    }
     assert_eq!(ok(&mut a, "js_run", json!({"doc":doc,"script":"getField('class').value"}))["result"], "Wizard");
 }
 

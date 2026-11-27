@@ -169,6 +169,53 @@ fn timer_pdf(open: &str) -> Vec<u8> {
     ])
 }
 
+#[test]
+fn a_template_edit_and_field_value_leave_live_display_out_of_the_saved_pdf() {
+    let mut s = Session::new();
+    let bytes = timer_pdf("getField('f0').display = display.hidden;");
+    let id = s.open("live.pdf", None, Arc::new(bytes), None).unwrap();
+    let run = s.show_page(id, 0, 0.0);
+    assert!(run.output.errors.is_empty(), "{run:?}");
+    assert_eq!(s.run_javascript(id, "getField('f0').display", None).unwrap().result.as_deref(), Some("1"));
+
+    let out = s.run_javascript(id, "createTemplate('Notes', 0).spawn(1, true, false); getField('f0').value = 'edited';", None).unwrap();
+    assert_eq!(out.error, None);
+    let saved = s.save_bytes(id).unwrap();
+    drop(s);
+    let mut reopened = Session::new();
+    let id = reopened.open("saved.pdf", None, saved, None).unwrap();
+    let doc = reopened.get(id).unwrap();
+    assert_eq!(doc.form[0].value, ["edited"]);
+    assert_eq!(doc.info.pages.len(), 2);
+    assert_eq!(doc.form.len(), 2);
+    assert!(doc.form.iter().all(|field| !field.widgets[0].hidden));
+    assert_eq!(reopened.run_javascript(id, "getTemplate('Notes').hidden", None).unwrap().result.as_deref(), Some("false"));
+}
+
+#[test]
+fn page_actions_and_timers_refuse_template_additions_but_keep_field_edits() {
+    let open = r#"
+        getTemplate('Notes').spawn(1, false, false);
+        getField('f0').value = 'opened';
+        app.setTimeOut("getTemplate('Notes').spawn(1, false, false); getField('f0').value = 'timer';", 50);
+    "#;
+    let mut s = Session::new();
+    let id = s.open("template.pdf", None, Arc::new(timer_pdf(open)), None).unwrap();
+    assert_eq!(s.run_javascript(id, "createTemplate('Notes', 0);", None).unwrap().error, None);
+    let check = |s: &Session, run: crate::live_scripts::ScriptRun, value| {
+        assert!(run.output.errors.is_empty(), "{run:?}");
+        assert!(run.edited && run.output.console.iter().any(|line| line.contains("may not add or show")), "{run:?}");
+        let doc = s.get(id).unwrap();
+        assert_eq!(doc.form[0].value, [value]);
+        assert_eq!(doc.info.pages.len(), 1);
+    };
+    let opened = s.show_page(id, 0, 0.0);
+    check(&s, opened, "opened");
+    let due = s.next_timer(id).unwrap();
+    let timer = s.run_timers(id, due);
+    check(&s, timer, "timer");
+}
+
 /// An animation as `animate` builds one by default (method=icon): hidden frames are buttons
 /// holding the icons, and the player gives the one showing button a frame's icon.
 #[test]

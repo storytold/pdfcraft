@@ -91,7 +91,10 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let display_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let d = arg(args, 0).to_number(c)? as i32;
-            write(c, name, |f| f.display = d.clamp(0, 3))?;
+            write(c, name, |f| {
+                f.display_before_write.get_or_insert(f.display);
+                f.display = d.clamp(0, 3);
+            })?;
             Ok(JsValue::undefined())
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
@@ -100,7 +103,10 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let hidden_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let on = arg(args, 0).to_boolean();
-            write(c, name, |f| f.display = if on { DISPLAY_HIDDEN } else { DISPLAY_VISIBLE })?;
+            write(c, name, |f| {
+                f.display_before_write.get_or_insert(f.display);
+                f.display = if on { DISPLAY_HIDDEN } else { DISPLAY_VISIBLE };
+            })?;
             Ok(JsValue::undefined())
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))

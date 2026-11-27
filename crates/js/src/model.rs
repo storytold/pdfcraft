@@ -53,6 +53,8 @@ pub struct FieldState {
     pub readonly: bool,
     pub required: bool,
     pub display: i32,
+    /// Live display before the first write or template copy in this run.
+    pub display_before_write: Option<i32>,
     /// Choice options (export value, display text); check boxes and radios: their export
     /// values, one per widget.
     pub options: Vec<(String, String)>,
@@ -99,6 +101,7 @@ impl FieldState {
             readonly: false,
             required: false,
             display: DISPLAY_VISIBLE,
+            display_before_write: None,
             options: Vec::new(),
             char_limit: None,
             text_color: None,
@@ -369,6 +372,8 @@ impl Panel {
 /// What running a script did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Outcome {
+    /// When the interactive worker queued this outcome.
+    pub completed_at: Option<std::time::Instant>,
     pub page_changes: Vec<crate::templates::Change>,
     pub calculate_enabled: Option<bool>,
     pub calculations_current: bool,

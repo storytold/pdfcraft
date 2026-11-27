@@ -25,7 +25,8 @@
 //! The engine is a sandbox: no file, network or timer access exists, and loops and recursion
 //! are bounded. Side effects (alerts, field changes, resets, printing, navigation) are returned
 //! in an [`Outcome`] for the caller to apply.
-//! Document libraries may be up to 1 MiB each, with an 8 MiB combined source budget;
+//! A set exceeding 1,024 document libraries or 8 MiB of combined source is rejected before
+//! the event handler runs. Within an admitted set, an individual library over 1 MiB is skipped.
 //! individual event handlers remain limited to 256 KiB.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]

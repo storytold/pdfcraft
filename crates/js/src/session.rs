@@ -484,7 +484,7 @@ impl ScriptSession {
                             },
                         }));
                         crate::interaction::set_host(None);
-                        let out = out.unwrap_or_else(|_| {
+                        let mut out = out.unwrap_or_else(|_| {
                             realm = Realm::new();
                             Outcome {
                                 rc: true,
@@ -494,6 +494,7 @@ impl ScriptSession {
                             }
                         });
                         executing.store(false, SeqCst);
+                        out.completed_at = Some(std::time::Instant::now());
                         let _ = reply.send(InteractiveEvent::Complete(out));
                     }
                 })

@@ -28,7 +28,7 @@ fn edit_text_value(value: &serde_json::Value) -> Cow<'_, str> {
 
 fn dialog_values(elements: &[pdfcraft_engine::js::DialogElement], values: &mut std::collections::BTreeMap<String, serde_json::Value>) {
     for e in elements {
-        if !e.id.is_empty() {
+        if !e.id.is_empty() && e.kind != "image" {
             values.insert(e.id.clone(), e.value.clone());
         }
         dialog_values(&e.children, values);
@@ -85,11 +85,25 @@ fn radio_peers(elements: &[pdfcraft_engine::js::DialogElement], group: &str, val
         radio_peers(&e.children, group, values);
     }
 }
+#[derive(Default)]
+struct DialogState {
+    values: std::collections::BTreeMap<String, serde_json::Value>,
+    images: std::collections::HashMap<String, CachedImage>,
+    revision: u32,
+}
+
+#[derive(Default)]
+struct CachedImage {
+    revision: u32,
+    value: serde_json::Value,
+    texture: Option<egui::TextureHandle>,
+}
+
 fn custom_elements(
     ui: &mut egui::Ui,
     elements: &[pdfcraft_engine::js::DialogElement],
     all: &[pdfcraft_engine::js::DialogElement],
-    values: &mut std::collections::BTreeMap<String, serde_json::Value>,
+    state: &mut DialogState,
     focus: &str,
     needs_focus: &mut bool,
     event: &mut Option<String>,
@@ -97,27 +111,31 @@ fn custom_elements(
     for e in elements.iter().filter(|e| e.visible) {
         ui.push_id((&e.id, &e.name, &e.kind), |ui| {
             ui.add_enabled_ui(e.enabled, |ui| {
-                let value = values.get(&e.id).cloned().unwrap_or_default();
-                match e.kind.as_str() {
-                    "image" => {
-                        if let Some(image) = dialog_image(&value) {
-                            let id = ui.scope_id().with(value.to_string());
-                            let texture = ui.ctx().data_mut(|data| data.get_temp::<egui::TextureHandle>(id)).unwrap_or_else(|| {
-                                let texture = ui.ctx().load_texture("dialog image", image, egui::TextureOptions::LINEAR);
-                                ui.ctx().data_mut(|data| data.insert_temp(id, texture.clone()));
-                                texture
-                            });
-                            ui.image((texture.id(), texture.size_vec2()));
+                if e.kind == "image" {
+                    let image = state.images.entry(e.id.clone()).or_default();
+                    if image.revision != state.revision {
+                        image.revision = state.revision;
+                        if image.value != e.value {
+                            image.value.clone_from(&e.value);
+                            image.texture =
+                                dialog_image(&e.value).map(|pixels| ui.ctx().load_texture("dialog image", pixels, egui::TextureOptions::LINEAR));
                         }
                     }
+                    if let Some(texture) = &image.texture {
+                        ui.image((texture.id(), texture.size_vec2()));
+                    }
+                    return;
+                }
+                let value = state.values.get(&e.id).cloned().unwrap_or_default();
+                match e.kind.as_str() {
                     "view" | "cluster" | "radio_group" | "tab_group" | "tab" => {
                         if e.kind == "cluster" && !e.name.is_empty() {
                             ui.strong(&e.name);
                         }
                         if e.alignment == "align_row" {
-                            ui.horizontal_wrapped(|ui| custom_elements(ui, &e.children, all, values, focus, needs_focus, event));
+                            ui.horizontal_wrapped(|ui| custom_elements(ui, &e.children, all, state, focus, needs_focus, event));
                         } else {
-                            custom_elements(ui, &e.children, all, values, focus, needs_focus, event);
+                            custom_elements(ui, &e.children, all, state, focus, needs_focus, event);
                         }
                     }
                     "link_text" => {
@@ -148,7 +166,7 @@ fn custom_elements(
                             *event = Some(e.id.clone());
                         }
                         if response.changed() {
-                            values.insert(e.id.clone(), text.into());
+                            state.values.insert(e.id.clone(), text.into());
                         }
                     }
                     "check_box" | "radio" => {
@@ -157,10 +175,10 @@ fn custom_elements(
                             if e.kind == "radio" { ui.radio(checked, &e.name).clicked() } else { ui.checkbox(&mut checked, &e.name).changed() };
                         if changed {
                             if e.kind == "radio" {
-                                radio_peers(all, &e.group, values);
+                                radio_peers(all, &e.group, &mut state.values);
                                 checked = true;
                             }
-                            values.insert(e.id.clone(), checked.into());
+                            state.values.insert(e.id.clone(), checked.into());
                             *event = Some(e.id.clone());
                         }
                     }
@@ -190,7 +208,7 @@ fn custom_elements(
                             let mut value = value;
                             let toggle = e.multiselect && ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                             select_list(&mut value, &chosen, toggle, &mut vec![]);
-                            values.insert(e.id.clone(), value);
+                            state.values.insert(e.id.clone(), value);
                             *event = Some(e.id.clone());
                         }
                     }
@@ -217,7 +235,7 @@ fn custom_elements(
                     }
                     _ => {
                         if !e.children.is_empty() {
-                            custom_elements(ui, &e.children, all, values, focus, needs_focus, event);
+                            custom_elements(ui, &e.children, all, state, focus, needs_focus, event);
                         }
                     }
                 }
@@ -250,6 +268,7 @@ fn dialog_image(value: &serde_json::Value) -> Option<egui::ColorImage> {
 
 /// The most bytes a text answer may hold; a longer one is not accepted.
 const MAX_ANSWER_BYTES: usize = 4096;
+const PROMPT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// What the open prompt is, so its answer is taken as the right type and a cancellation gives the right reply.
 #[derive(Clone, Copy, Debug)]
@@ -261,13 +280,32 @@ enum Asked {
     Dialog,
 }
 
+// Cancelling a prompt drops its receiver, but a blocked read still occupies its slot.
+static ACTIVE_FILE_READERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+struct FileReaderSlot;
+
+impl FileReaderSlot {
+    fn acquire() -> Option<Self> {
+        use std::sync::atomic::Ordering::Relaxed;
+        const CAPACITY: usize = 2;
+        ACTIVE_FILE_READERS.fetch_update(Relaxed, Relaxed, |active| (active < CAPACITY).then_some(active + 1)).ok().map(|_| Self)
+    }
+}
+
+impl Drop for FileReaderSlot {
+    fn drop(&mut self) {
+        ACTIVE_FILE_READERS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 pub(crate) struct Pending {
     run: PendingScript,
     reply: Option<Sender<Option<String>>>,
     custom_prompt: Option<ScriptPrompt>,
     focus: bool,
     serial: u32,
-    dialog_values: std::collections::BTreeMap<String, serde_json::Value>,
+    dialog_state: DialogState,
     progress: Option<pdfcraft_engine::js::Progress>,
     token: std::sync::Arc<()>,
     file_read: Option<(u32, std::sync::mpsc::Receiver<Result<String, String>>)>,
@@ -285,6 +323,7 @@ impl Pending {
             && self.serial == serial
             && matches!(self.custom_prompt, Some(ScriptPrompt::File))
             && self.file_read.is_none()
+            && self.started.elapsed() < PROMPT_TIMEOUT
     }
     /// Whether this invocation is waiting for an explicit user reply rather than worker execution.
     pub(crate) fn has_prompt(&self) -> bool {
@@ -572,7 +611,7 @@ impl PdfCraftApp {
         if buttons.is_empty() {
             return;
         }
-        let enabled = !self.modal_open() && self.script_pending.is_none();
+        let enabled = self.session.javascript() && !self.modal_open() && self.script_pending.is_none();
         let mut clicked = None;
         ui.horizontal_wrapped(|ui| {
             for button in buttons {
@@ -623,7 +662,7 @@ impl PdfCraftApp {
                     page,
                     focus: false,
                     serial: 0,
-                    dialog_values: Default::default(),
+                    dialog_state: Default::default(),
                     progress: None,
                     token: std::sync::Arc::new(()),
                     file_read: None,
@@ -685,6 +724,12 @@ impl PdfCraftApp {
             self.session.discard_javascript(&pending.run);
             return;
         }
+        if pending.has_prompt() && pending.started.elapsed() >= PROMPT_TIMEOUT {
+            self.close_script_prompt(ctx, &pending);
+            self.session.timeout_javascript(pending.run);
+            self.notify("The form script timed out; its result was discarded");
+            return;
+        }
         if let Some((serial, read)) = pending.file_read.as_ref() {
             let serial = *serial;
             let result = match read.try_recv() {
@@ -694,7 +739,8 @@ impl PdfCraftApp {
             };
             if let Some(result) = result {
                 pending.file_read = None;
-                if serial == pending.serial && matches!(pending.custom_prompt, Some(ScriptPrompt::File)) {
+                if pending.started.elapsed() < PROMPT_TIMEOUT && serial == pending.serial && matches!(pending.custom_prompt, Some(ScriptPrompt::File))
+                {
                     match result {
                         Ok(text) => reply_to_prompt(ctx, &mut pending, Some(text), false),
                         Err(error) => {
@@ -705,14 +751,6 @@ impl PdfCraftApp {
                 }
             }
         }
-        if (!pending.has_prompt() && pending.started.elapsed() > pending.run.timeout)
-            || (pending.has_prompt() && pending.started.elapsed() > Duration::from_secs(300))
-        {
-            self.close_script_prompt(ctx, &pending);
-            self.session.timeout_javascript(pending.run);
-            self.notify("The form script timed out; its result was discarded");
-            return;
-        }
         if let (Some(id), Some(asked)) = (pending.dialog, pending.asked)
             && let Some(result) = self.take_prompt_result(id, asked)
         {
@@ -722,18 +760,22 @@ impl PdfCraftApp {
             };
             reply_to_prompt(ctx, &mut pending, answer, cancel);
         }
-        if !pending.has_prompt() {
+        while !pending.has_prompt() {
             match pending.run.receiver.try_recv() {
                 Ok(InteractiveEvent::Progress(progress)) => {
                     pending.progress = Some(progress);
                     ctx.request_repaint();
                 }
+                Ok(InteractiveEvent::Prompt(_, _)) if pending.started.elapsed() >= pending.run.timeout => break,
                 Ok(InteractiveEvent::Prompt(prompt @ (ScriptPrompt::Dialog(_) | ScriptPrompt::File), reply)) => {
-                    pending.dialog_values.clear();
+                    pending.dialog_state.values.clear();
                     if let ScriptPrompt::Dialog(dialog) = &prompt {
-                        dialog_values(&dialog.elements, &mut pending.dialog_values);
+                        dialog_values(&dialog.elements, &mut pending.dialog_state.values);
+                    } else {
+                        pending.dialog_state.images.clear();
                     }
                     pending.serial = pending.serial.saturating_add(1);
+                    pending.dialog_state.revision = pending.serial;
                     pending.focus = true;
                     pending.started = Instant::now();
                     pending.custom_prompt = Some(prompt);
@@ -750,6 +792,9 @@ impl PdfCraftApp {
                     None => drop(reply),
                 },
                 Ok(InteractiveEvent::Complete(out)) => {
+                    if out.completed_at.unwrap_or_else(Instant::now).saturating_duration_since(pending.started) >= pending.run.timeout {
+                        break;
+                    }
                     let id = pending.run.id;
                     match self.session.finish_javascript(pending.run, out) {
                         Ok(out) => {
@@ -774,13 +819,20 @@ impl PdfCraftApp {
                     }
                     return;
                 }
+                Err(TryRecvError::Disconnected) if pending.started.elapsed() >= pending.run.timeout => break,
                 Err(TryRecvError::Disconnected) => {
                     self.session.discard_javascript(&pending.run);
                     self.notify("The form script stopped unexpectedly");
                     return;
                 }
-                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Empty) => break,
             }
+        }
+        if !pending.has_prompt() && pending.started.elapsed() >= pending.run.timeout {
+            self.close_script_prompt(ctx, &pending);
+            self.session.timeout_javascript(pending.run);
+            self.notify("The form script timed out; its result was discarded");
+            return;
         }
         // Input events wake egui immediately; idle prompts only need a coarse timeout check.
         frame::request_repaint_after(ctx, if pending.has_prompt() && pending.file_read.is_none() { 1.0 } else { 0.016 });
@@ -830,15 +882,17 @@ impl PdfCraftApp {
                             ui,
                             &dialog.elements,
                             &dialog.elements,
-                            &mut pending.dialog_values,
+                            &mut pending.dialog_state,
                             &dialog.focus,
                             &mut pending.focus,
                             &mut event,
                         );
                     });
+                    let revision = pending.dialog_state.revision;
+                    pending.dialog_state.images.retain(|_, image| image.revision == revision);
                     if let Some(event) = event {
                         let mut changed = serde_json::Map::new();
-                        dialog_changes(&dialog.elements, &pending.dialog_values, &mut changed);
+                        dialog_changes(&dialog.elements, &pending.dialog_state.values, &mut changed);
                         answer = Some(serde_json::json!({"event":event,"values":changed}).to_string());
                     }
                 }
@@ -861,10 +915,15 @@ impl PdfCraftApp {
                 let Some(pending) = app.script_pending.as_mut().filter(|p| p.accepts_file(id, serial, &token)) else {
                     return;
                 };
+                let Some(slot) = FileReaderSlot::acquire() else {
+                    app.notify(tl!("The selected-file reader is busy"));
+                    return;
+                };
                 let (tx, rx) = std::sync::mpsc::channel();
                 let wake = ctx.clone();
                 let worker = std::thread::Builder::new().name("pdfcraft-script-file".into()).spawn(move || {
                     use std::io::Read;
+                    let _slot = slot;
                     let result = (|| {
                         if !std::fs::metadata(&path)?.is_file() {
                             return Err(std::io::Error::other("not a regular file"));
@@ -971,17 +1030,17 @@ mod review_tests {
             }
             let pending = app.script_pending.as_ref().unwrap();
             assert!(pending.has_prompt());
-            let loaded = pending.dialog_values["text"].clone();
+            let loaded = pending.dialog_state.values["text"].clone();
             let mut h = Harness::builder()
                 .with_size(egui::vec2(800.0, 600.0))
                 .with_accessibility_check(false)
                 .build_ui_state(|ui, app: &mut PdfCraftApp| app.show_script_dialog(ui.ctx()), app);
             h.run();
-            assert_eq!(h.state().script_pending.as_ref().unwrap().dialog_values["text"], loaded);
+            assert_eq!(h.state().script_pending.as_ref().unwrap().dialog_state.values["text"], loaded);
             if edited {
                 h.get_by_role(egui::accesskit::Role::TextInput).type_text("2");
                 h.run();
-                assert!(h.state().script_pending.as_ref().unwrap().dialog_values["text"].is_string());
+                assert!(h.state().script_pending.as_ref().unwrap().dialog_state.values["text"].is_string());
             }
             // Harness clicks send actual pointer events, so the edit loses focus just as
             // it does when a person opens the popup (an AccessKit action would not).
@@ -1099,6 +1158,33 @@ mod review13_ui_tests {
             }
         }
     }
+    #[test]
+    fn polling_after_the_deadline_accepts_an_on_time_completion_behind_progress() {
+        let ctx = egui::Context::default();
+        let (mut app, id) = app(&ctx);
+        app.start_ui_script(id, "1 + 1;", None, None);
+        let pending = app.script_pending.as_mut().unwrap();
+        let InteractiveEvent::Complete(mut out) = pending.run.receiver.recv_timeout(Duration::from_secs(5)).unwrap() else {
+            panic!("expected the script to finish");
+        };
+        pending.started = Instant::now() - pending.run.timeout - Duration::from_secs(1);
+        out.completed_at = Some(pending.started + pending.run.timeout / 2);
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(InteractiveEvent::Progress(pdfcraft_engine::js::Progress {
+            text: String::new(),
+            value: 0.0,
+            duration: 0.0,
+            active: false,
+            cancel: Default::default(),
+        }))
+        .unwrap();
+        tx.send(InteractiveEvent::Complete(out)).unwrap();
+        pending.run.receiver = rx;
+        app.poll_script_dialog(&ctx);
+        assert!(app.script_pending.is_none());
+        assert!(app.posted_notices.is_empty());
+    }
+
     /// Comparison completion preserves globals and sends Save As/Print to its source document.
     #[test]
     fn non_active_comparison_document_completes_native_script() {

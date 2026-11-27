@@ -793,6 +793,7 @@ fn app_alert_titles_are_clipped_and_charged() {
         compiled_units: 0,
         event_name: "Open".into(),
         may_change_pages: true,
+        live_event: false,
         icons: Vec::new(),
         objects: Default::default(),
         field_keys: Default::default(),
@@ -2953,7 +2954,15 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
 fn templated() -> DocInfo {
     let templates = [("More", None), ("Cover", Some(0))]
         .into_iter()
-        .map(|(name, page)| crate::templates::Template { name: name.into(), page, field_names: Default::default(), crop: [0.0; 4], rotation: 0 })
+        .enumerate()
+        .map(|(source, (name, page))| crate::templates::Template {
+            name: name.into(),
+            source: source as u64,
+            page,
+            field_names: Default::default(),
+            boxes: [[0.0; 4]; 5],
+            rotation: 0,
+        })
         .collect();
     DocInfo { templates, num_pages: 4, ..doc() }
 }
@@ -2983,6 +2992,36 @@ fn spawn_asks_for_a_page_from_the_template() {
     // The arguments by name.
     let o = run_templated("getTemplate('More').spawn({ nPage: 1, bOverlay: false });");
     assert_eq!(o.page_changes, [crate::templates::Change::Spawn { name: "More".into(), page: 1, rename: true, overlay: false }]);
+}
+
+#[test]
+fn template_calls_use_the_page_count_and_lookup_after_argument_conversions() {
+    let o = run_templated("getTemplate('More').spawn({nPage:{valueOf(){deletePages(1, 2); return 100;}}, bOverlay:false});");
+    assert_eq!(
+        o.page_changes,
+        [
+            crate::templates::Change::Delete { start: 1, end: 2 },
+            crate::templates::Change::Spawn { name: "More".into(), page: 2, rename: true, overlay: false },
+        ]
+    );
+    let o = run_templated("getTemplate('More').spawn({get nPage(){removeTemplate('More'); return 0;}, bOverlay:false});");
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("no page template named")), "{o:?}");
+    assert_eq!(o.page_changes, [crate::templates::Change::Remove { name: "More".into() }]);
+}
+
+#[test]
+fn document_initializers_can_edit_pages_during_a_field_event() {
+    let event = Event::field("Validate", "total", "");
+    let o = run(
+        "getTemplate('More').spawn(0, false, false);",
+        &event,
+        &templated(),
+        &fields(),
+        &["getTemplate('More').spawn(1, false, false);".into()],
+        Limits::default(),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.page_changes, [crate::templates::Change::Spawn { name: "More".into(), page: 1, rename: false, overlay: false }]);
 }
 
 #[test]

@@ -235,16 +235,7 @@ pub(crate) fn copy_template_page(
     order.insert(at.min(order.len()), (new_page, Dict::new()));
     // Rebuild removes inherited attributes from the old root. Hidden templates
     // are outside `order`, but later spawns still need their effective attributes.
-    for template in crate::templates(dst).into_iter().filter(|t| t.visible_page.is_none()) {
-        let attrs = crate::templates::inherited(dst, template.page);
-        dst.update_dict(template.page, |d| {
-            for (key, value) in attrs.iter() {
-                if !d.contains(key) {
-                    d.set(key.clone(), value.clone());
-                }
-            }
-        })?;
-    }
+    crate::templates::preserve_hidden_attributes(dst, &order)?;
     rebuild(dst, &order)?;
     Ok(new_page)
 }

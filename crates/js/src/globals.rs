@@ -321,6 +321,7 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
             return Err(error);
         }
     };
+    let mut rolled_back = false;
     let result = (|| {
         for (index, script) in calculations {
             let Some(field) = host(ctx)?.borrow().fields.get(index).cloned() else { continue };
@@ -352,6 +353,7 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
                 if err.as_engine().is_some() || h.calculation_limit_exceeded || h.reset_limit_exceeded {
                     return Err(err);
                 }
+                rolled_back = true;
                 h.fields = fields_before;
                 h.changed = changed_before;
                 h.formatted = formatted_before;
@@ -386,7 +388,7 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     if let Ok(shared) = host(ctx) {
         let mut h = shared.borrow_mut();
         h.calculate_depth = h.calculate_depth.saturating_sub(1);
-        h.calculations_current = result.is_ok() && restored.is_ok();
+        h.calculations_current = !rolled_back && result.is_ok() && restored.is_ok();
     }
     result.and(restored)
 }

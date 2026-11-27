@@ -9,9 +9,11 @@ use std::{
 #[derive(Clone, Debug, PartialEq)]
 pub struct Template {
     pub name: String,
+    /// Shared identity for names that refer to the same source page.
+    pub source: u64,
     pub page: Option<usize>,
     pub field_names: Arc<Vec<String>>,
-    pub crop: [f64; 4],
+    pub boxes: [[f64; 4]; 5],
     pub rotation: i64,
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -24,19 +26,31 @@ pub enum Change {
 }
 
 fn guard(h: &mut crate::host::Host) -> bool {
-    let problem =
-        if !h.may_change_pages || h.calculate_depth > 0 || matches!(h.event_name.as_str(), "Calculate" | "Format" | "Validate" | "Keystroke") {
-            "only a button may change the pages in a field script"
-        } else if h.page_changes.len() >= 100 {
-            "a script may change at most 100 pages in one run"
-        } else {
-            return true;
-        };
+    let problem = if !h.may_change_pages || h.calculate_depth > 0 {
+        "only a button may change the pages in a field script"
+    } else if h.page_changes.len() >= 100 {
+        "a script may change at most 100 pages in one run"
+    } else {
+        return true;
+    };
     if !h.console.iter().any(|line| line == problem) {
         h.print(problem.into());
     }
     false
 }
+/// Console message shared with the engine writeback check for live page additions.
+pub const LIVE_ADDITION_REFUSAL: &str = "page actions and timers may not add or show template pages";
+
+fn guard_live_addition(h: &mut crate::host::Host) -> bool {
+    if !h.live_event {
+        return true;
+    }
+    if !h.console.iter().any(|line| line == LIVE_ADDITION_REFUSAL) {
+        h.print(LIVE_ADDITION_REFUSAL.into());
+    }
+    false
+}
+
 fn template(ctx: &Context, name: &str) -> JsResult<Template> {
     host(ctx)?
         .borrow()
@@ -60,6 +74,7 @@ fn fields(h: &mut crate::host::Host, next: Vec<crate::FieldState>, new_names: &H
         .into_iter()
         .filter_map(|(id, name, s)| by_key.get(&(id, if id.is_some() { String::new() } else { name })).map(|i| (*i, s)))
         .collect();
+    h.formatted = h.formatted.iter().filter_map(|i| h.fields.get(*i).and_then(|f| by_key.get(&key(f)).copied())).collect();
     h.field_keys = crate::host::field_indices(&next);
     h.objects.retain(|key, _| h.field_keys.contains_key(key));
     h.fields = Arc::new(next);
@@ -108,21 +123,20 @@ fn insert(h: &mut crate::host::Host, template: &Template, page: usize, rename: b
         }
     }
     let mut added = HashSet::new();
-    let mut calculations = Vec::new();
+    let mut copies = HashMap::new();
     for (old, f) in source {
         if rename {
             let mut f = f.clone();
             let index = next.len();
             f.name = format!("{prefix}{}", f.name);
             f.object_id = None;
+            f.display_before_write.get_or_insert(f.display);
             f.instance_id = 0;
             f.pages = vec![i32::try_from(page).map_err(|_| error("page index is too large"))?];
-            f.page_crop = template.crop;
+            f.page_crop = template.boxes[1];
             f.page_rotation = template.rotation;
             added.insert(f.name.clone());
-            for (_, script) in h.calculations.iter().filter(|(i, _)| *i == old) {
-                calculations.push((index, script.clone()));
-            }
+            copies.insert(old, index);
             next.push(f);
         } else if let Some(field) = next.get_mut(old) {
             field.pages.retain(|p| *p >= 0);
@@ -131,6 +145,7 @@ fn insert(h: &mut crate::host::Host, template: &Template, page: usize, rename: b
             field.pages.dedup();
         }
     }
+    let calculations: Vec<_> = h.calculations.iter().filter_map(|(old, script)| copies.get(old).map(|index| (*index, script.clone()))).collect();
     fields(h, next, &added);
     h.calculations.extend(calculations);
     for t in &mut h.doc.templates {
@@ -141,7 +156,7 @@ fn insert(h: &mut crate::host::Host, template: &Template, page: usize, rename: b
         }
     }
     h.doc.num_pages = h.doc.num_pages.saturating_add(1);
-    h.doc.page_boxes.insert(page.min(h.doc.page_boxes.len()), [template.crop; 5]);
+    h.doc.page_boxes.insert(page.min(h.doc.page_boxes.len()), template.boxes);
     h.doc.page_rotations.insert(page.min(h.doc.page_rotations.len()), template.rotation);
     Ok(())
 }
@@ -190,27 +205,27 @@ fn delete(h: &mut crate::host::Host, start: usize, end: usize) -> JsResult<()> {
     }
     Ok(())
 }
-fn page(value: &JsValue, ctx: &mut Context, max: usize, default: usize) -> JsResult<usize> {
-    if value.is_undefined() {
-        return Ok(default.min(max));
-    }
-    let n = value.to_number(ctx)?;
-    Ok(n.max(0.0).min(max as f64) as usize)
+fn page_number(value: &JsValue, ctx: &mut Context) -> JsResult<Option<f64>> {
+    if value.is_undefined() { Ok(None) } else { value.to_number(ctx).map(Some) }
+}
+
+fn page(value: Option<f64>, max: usize, default: usize) -> usize {
+    value.map_or(default.min(max), |n| n.max(0.0).min(max as f64) as usize)
 }
 fn spawn(_: &JsValue, args: &[JsValue], name: &crate::JsString, ctx: &mut Context) -> JsResult<JsValue> {
-    let t = template(ctx, &name.to_std_string_escaped())?;
     let first = arg(args, 0);
     let (p, r, o) = if let Some(obj) = first.as_object().filter(|o| !o.is_array()) {
         (obj.get(js_string!("nPage"), ctx)?, obj.get(js_string!("bRename"), ctx)?, obj.get(js_string!("bOverlay"), ctx)?)
     } else {
         (first, arg(args, 1), arg(args, 2))
     };
-    let max = host(ctx)?.borrow().doc.num_pages;
-    let p = page(&p, ctx, max, 0)?;
+    let p = page_number(&p, ctx)?;
     let rename = r.is_undefined() || r.to_boolean();
     let overlay = o.is_undefined() || o.to_boolean();
+    let t = template(ctx, &name.to_std_string_escaped())?;
     let mut h = host(ctx)?.borrow_mut();
-    if !guard(&mut h) {
+    let p = page(p, h.doc.num_pages, 0);
+    if (!overlay && !guard_live_addition(&mut h)) || !guard(&mut h) {
         return Ok(JsValue::undefined());
     }
     if overlay {
@@ -231,7 +246,7 @@ fn hidden_set(_: &JsValue, args: &[JsValue], name: &crate::JsString, ctx: &mut C
     let t = template(ctx, &name.to_std_string_escaped())?;
     let hidden = arg(args, 0).to_boolean();
     let mut h = host(ctx)?.borrow_mut();
-    if !guard(&mut h) {
+    if (!hidden && t.page.is_none() && !guard_live_addition(&mut h)) || !guard(&mut h) {
         return Ok(JsValue::undefined());
     }
     if hidden == t.page.is_none() {
@@ -244,8 +259,8 @@ fn hidden_set(_: &JsValue, args: &[JsValue], name: &crate::JsString, ctx: &mut C
     } else {
         let page = h.doc.num_pages;
         insert(&mut h, &t, page, false)?;
-        if let Some(t) = h.doc.templates.iter_mut().find(|s| s.name == t.name) {
-            t.page = Some(page);
+        for alias in h.doc.templates.iter_mut().filter(|alias| alias.source == t.source) {
+            alias.page = Some(page);
         }
     }
     h.page_changes.push(Change::Hidden { name: t.name, hidden });
@@ -281,8 +296,7 @@ fn create(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
     if name.is_empty() {
         return Err(error("template name must not be empty"));
     }
-    let max = host(ctx)?.borrow().doc.num_pages.saturating_sub(1);
-    let p = page(&p, ctx, max, 0)?;
+    let p = page_number(&p, ctx)?;
     {
         let mut h = host(ctx)?.borrow_mut();
         if !guard(&mut h) {
@@ -291,11 +305,19 @@ fn create(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
         if h.doc.templates.len() >= 4096 {
             return Err(error("too many templates"));
         }
+        let max = h.doc.num_pages.checked_sub(1).ok_or_else(|| error("createTemplate requires an existing page"))?;
+        let p = page(p, max, 0);
         let field_names = Arc::new(h.fields.iter().filter(|f| f.pages.contains(&(i32::try_from(p).unwrap_or(-1)))).map(|f| f.name.clone()).collect());
-        let crop = h.doc.page_boxes.get(p).map_or([0.0; 4], |b| b[1]);
+        let boxes = h.doc.page_boxes.get(p).copied().unwrap_or_default();
         let rotation = h.doc.page_rotations.get(p).copied().unwrap_or(0);
+        let source = h
+            .doc
+            .templates
+            .iter()
+            .find(|t| t.page == Some(p))
+            .map_or_else(|| h.doc.templates.iter().map(|t| t.source).max().unwrap_or(0).saturating_add(1), |t| t.source);
         h.doc.templates.retain(|t| t.name != name);
-        h.doc.templates.push(Template { name: name.clone(), page: Some(p), field_names, crop, rotation });
+        h.doc.templates.push(Template { name: name.clone(), source, page: Some(p), field_names, boxes, rotation });
         h.page_changes.push(Change::Create { name: name.clone(), page: p });
     }
     Ok(object(ctx, &name).into())
@@ -315,10 +337,11 @@ fn delete_pages(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<Js
     let first = arg(args, 0);
     let (start, end) =
         if let Some(o) = first.as_object() { (o.get(js_string!("nStart"), ctx)?, o.get(js_string!("nEnd"), ctx)?) } else { (first, arg(args, 1)) };
-    let max = host(ctx)?.borrow().doc.num_pages;
-    let start = page(&start, ctx, max, 0)?;
-    let end = page(&end, ctx, max, start)?;
+    let start = page_number(&start, ctx)?;
+    let end = page_number(&end, ctx)?;
     let mut h = host(ctx)?.borrow_mut();
+    let start = page(start, h.doc.num_pages, 0);
+    let end = page(end, h.doc.num_pages, start);
     if !guard(&mut h) {
         return Ok(JsValue::undefined());
     }

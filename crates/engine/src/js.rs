@@ -396,6 +396,15 @@ fn changes(
     after: &[pdfcraft_js::FieldState],
     formatted: &std::collections::BTreeSet<String>,
 ) -> Vec<FieldChange> {
+    changes_from(before, after, formatted, None)
+}
+
+fn changes_from(
+    before: &[pdfcraft_js::FieldState],
+    after: &[pdfcraft_js::FieldState],
+    formatted: &std::collections::BTreeSet<String>,
+    display_before: Option<&[pdfcraft_js::FieldState]>,
+) -> Vec<FieldChange> {
     if after.is_empty() {
         return Vec::new();
     }
@@ -409,10 +418,25 @@ fn changes(
     let mut names = std::collections::HashSet::new();
     let duplicates: std::collections::HashSet<_> =
         before.iter().filter_map(|f| (!names.insert(f.name.as_str())).then_some(f.name.as_str())).collect();
+    let mut display_by_name = std::collections::HashMap::new();
+    let mut display_by_id = std::collections::HashMap::new();
+    for field in display_before.into_iter().flatten() {
+        display_by_name.entry(field.name.as_str()).or_insert(field.display);
+        if let Some(id) = field.object_id {
+            display_by_id.insert(id, field.display);
+        }
+    }
     after
         .iter()
         .filter_map(|a| {
             let b = if let Some(id) = a.object_id { by_id.get(&id)? } else { by_name.get(a.name.as_str())? };
+            let original_display = match a.object_id {
+                Some(id) => display_by_id.get(&id),
+                None => display_by_name.get(a.name.as_str()),
+            }
+            .copied()
+            .or(a.display_before_write)
+            .unwrap_or(b.display);
             let c = FieldChange {
                 name: a.name.clone(),
                 object: a
@@ -424,7 +448,7 @@ fn changes(
                 formatted: a.value != b.value && formatted.contains(&a.name),
                 read_only: (a.readonly != b.readonly).then_some(a.readonly),
                 required: (a.required != b.required).then_some(a.required),
-                display: (a.display != b.display).then_some(a.display),
+                display: (a.display != original_display).then_some(a.display),
                 rect: (a.rect != b.rect).then(|| a.rect.map(|r| pdfcraft_js::unrotate_rect(r, b.page_crop, b.page_rotation))).flatten(),
                 stroke_color: a.stroke_color.as_deref().filter(|_| a.stroke_color != b.stroke_color).map(<[_]>::to_vec),
                 text_size: (a.text_size != b.text_size).then_some(a.text_size),
@@ -499,51 +523,36 @@ fn template_states(cos: &pdfcraft_cos::Document) -> Vec<pdfcraft_js::templates::
         return vec![];
     }
     let fields = pdfcraft_forms::fields(cos);
+    let mut widget_fields = std::collections::HashMap::<_, Vec<usize>>::new();
+    for (index, field) in fields.iter().enumerate() {
+        for widget in &field.widgets {
+            widget_fields.entry(widget.obj).or_default().push(index);
+        }
+    }
     let mut names_left = 100_000usize;
     templates
         .into_iter()
         .map(|t| {
-            let widget_ids: std::collections::HashSet<_> = cos
-                .get(t.page)
-                .as_dict()
-                .and_then(|d| d.get(b"Annots").map(|v| cos.resolve(v)))
-                .and_then(|v| v.as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .take(100_000)
-                .filter_map(pdfcraft_cos::Object::as_ref)
-                .collect();
-            let field_names = fields
-                .iter()
-                .filter(|f| f.widgets.iter().any(|w| widget_ids.contains(&w.obj)))
-                .take(names_left)
-                .map(|f| f.name.clone())
-                .collect::<Vec<_>>();
-            names_left = names_left.saturating_sub(field_names.len());
-            let mut dict = cos.get(t.page).as_dict().cloned().unwrap_or_default();
-            let mut next = dict.reference(b"Parent");
-            let mut seen = std::collections::HashSet::new();
-            while let Some(r) = next
-                && seen.len() < 256
-                && seen.insert(r)
+            let mut indices = std::collections::HashSet::new();
+            if names_left > 0
+                && let Some(annots) = cos.get(t.page).as_dict().and_then(|d| d.get(b"Annots").map(|v| cos.resolve(v)))
             {
-                let value = cos.get(r);
-                let Some(parent) = value.as_dict() else { break };
-                for key in pdfcraft_model::INHERITABLE {
-                    if !dict.contains(key)
-                        && let Some(v) = parent.get(key)
-                    {
-                        dict.set(key.to_vec(), v.clone());
-                    }
-                }
-                next = parent.reference(b"Parent");
+                let widgets: std::collections::HashSet<_> =
+                    annots.as_array().into_iter().flatten().take(100_000).filter_map(pdfcraft_cos::Object::as_ref).collect();
+                indices.extend(widgets.iter().filter_map(|id| widget_fields.get(id)).flatten().copied());
             }
+            let mut indices: Vec<_> = indices.into_iter().collect();
+            indices.sort_unstable();
+            let field_names = indices.into_iter().take(names_left).map(|i| fields[i].name.clone()).collect::<Vec<_>>();
+            names_left = names_left.saturating_sub(field_names.len());
+            let (dict, boxes) = pdfcraft_organize::template_geometry(cos, t.page);
             let page = pdfcraft_model::Page { obj: t.page, dict };
             pdfcraft_js::templates::Template {
                 name: t.name,
+                source: (u64::from(t.page.num) << 16) | u64::from(t.page.generation),
                 page: t.visible_page,
                 field_names: field_names.into(),
-                crop: page.crop(cos),
+                boxes,
                 rotation: page.rotation(cos),
             }
         })
@@ -1405,7 +1414,6 @@ impl Session {
                 _ => None,
             })
             .collect();
-        o.requests.retain(|r| !matches!(r, Request::Reset(_)));
         // Reset the PDF first, then apply the final live shadow. Compare against the
         // reset baseline so writes restoring an original value are not mistaken for no-ops.
         let mut baseline = std::borrow::Cow::Borrowed(states);
@@ -1421,8 +1429,11 @@ impl Session {
         {
             apply_page_changes(preview, &o.page_changes)?;
             let geometry = JsRunner::new(preview, "", self.field_highlight).doc;
-            baseline = std::borrow::Cow::Owned(pdfcraft_forms::fields(preview).iter().map(|f| field_state(preview, f, &geometry)).collect());
+            let fields = pdfcraft_forms::fields(preview);
+            baseline = std::borrow::Cow::Owned(fields.iter().map(|f| field_state(preview, f, &geometry)).collect());
+            validate_reset_work(&fields, &baseline, &o.requests)?;
         }
+        o.requests.retain(|r| !matches!(r, Request::Reset(_)));
         // The calculations the script's changes set off read the field highlight it asked for.
         if let Some(on) = last_highlight(&o.requests) {
             self.field_highlight = on;
@@ -1453,7 +1464,7 @@ impl Session {
                 }
             }
         }
-        let mut changes = changes(&baseline, &o.changed, &o.formatted);
+        let mut changes = changes_from(&baseline, &o.changed, &o.formatted, (!o.page_changes.is_empty()).then_some(states));
         if o.calculations_current {
             for change in &mut changes {
                 change.calculation_complete = true;
