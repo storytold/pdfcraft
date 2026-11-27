@@ -1511,6 +1511,13 @@ mod formcalc {
         assert_eq!(calc("null == null"), "1");
         assert_eq!(calc("1 == null"), "0");
         assert_eq!(calc("1 <> null"), "1");
+        // Equality binds looser than the relational operators (XFA 3.3 p. 1061).
+        assert_eq!(calc("1 < 2 == 3 < 4"), "1");
+        assert_eq!(calc("3 > 2 == 2 > 1"), "1");
+        assert_eq!(calc("3 gt 2 eq 2 gt 1"), "1");
+        assert_eq!(calc("2 > 1 <> 1 > 2"), "1");
+        assert_eq!(calc("2 gt 1 ne 1 ge 2"), "1");
+        assert_eq!(calc("0 == 1 < 2"), "0");
         assert!(go("1 / 0", "form1[0].page1[0].total[0]", "calculate").error.is_some());
         // Comments and newlines inside brackets.
         assert_eq!(calc("; a comment\n// another\nSum(1,\n 2,\n 3)"), "6");
