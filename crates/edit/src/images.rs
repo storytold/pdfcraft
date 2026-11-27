@@ -116,11 +116,15 @@ fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditErro
     pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
 }
 
-fn xobjects(doc: &Document, page: &Dict) -> Dict {
+fn resource_dict(doc: &Document, page: &Dict, key: &[u8]) -> Dict {
     page.get(b"Resources")
         .map(|r| doc.resolve(r))
-        .and_then(|r| r.as_dict().and_then(|d| d.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned())))
+        .and_then(|r| r.as_dict().and_then(|d| d.get(key).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned())))
         .unwrap_or_default()
+}
+
+fn xobjects(doc: &Document, page: &Dict) -> Dict {
+    resource_dict(doc, page, b"XObject")
 }
 
 const IMAGE_CENSUS_MAX_OBJECTS: usize = 100_000;
@@ -1091,6 +1095,134 @@ impl ImageState {
         }
         Ok(())
     }
+}
+
+/// Non-scan content present on a page so scan-only pipelines can leave vector art, inline
+/// images, optional-content layers and tagged structure intact.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PageScanContent {
+    /// The content stream paints vector paths (`S`/`f`/`B`), shadings (`sh`) or inline images (`BI`).
+    pub has_vector_or_inline: bool,
+    /// The page uses optional content (`/OC` marked content, OCG/OCMD properties or XObject `/OC`).
+    pub has_optional_content: bool,
+    /// The page carries structure markers (`/StructParents` or marked-content `/MCID` sequences).
+    pub has_tagged_content: bool,
+}
+
+fn op_has_mcid(doc: &Document, op: &Op, props: &Dict) -> bool {
+    match op.operands.get(1) {
+        Some(Object::Dict(d)) => d.contains(b"MCID"),
+        Some(Object::Name(n)) => props.get(n).is_some_and(|x| doc.resolve(x).as_dict().is_some_and(|d| d.contains(b"MCID"))),
+        _ => false,
+    }
+}
+
+/// Inspect page `page` (0-based) for vector painting operators, inline images, optional content
+/// and structure-tree markers (`/StructParents` or `/MCID`).
+pub fn page_scan_content(doc: &Document, page: usize) -> Result<PageScanContent, EditError> {
+    let p = page_of(doc, page)?;
+    let xo = resource_dict(doc, &p.dict, b"XObject");
+    let props = resource_dict(doc, &p.dict, b"Properties");
+    let mut out = PageScanContent { has_tagged_content: p.dict.contains(b"StructParents"), ..Default::default() };
+    for (_, val) in props.iter() {
+        let resolved = doc.resolve(val);
+        let Some(dict) = resolved.as_dict() else { continue };
+        if let Some(kind) = dict.name(b"Type")
+            && (kind == b"OCG" || kind == b"OCMD")
+        {
+            out.has_optional_content = true;
+        }
+        if dict.contains(b"MCID") {
+            out.has_tagged_content = true;
+        }
+    }
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum PathShape {
+        Empty,
+        SingleRect,
+        Complex,
+    }
+    let mut fill_white = false;
+    let mut fill_white_stack: Vec<bool> = Vec::new();
+    let mut fill_state_overflow = false;
+    let mut path_shape = PathShape::Empty;
+    let mut seen_do = false;
+    let pieces = joined(&content_streams(doc, &p.dict)?);
+    for op in &pieces.parse().ops {
+        match op.op.as_slice() {
+            b"q" => {
+                if fill_white_stack.len() < 4096 {
+                    fill_white_stack.push(fill_white);
+                } else {
+                    fill_state_overflow = true;
+                    fill_white = false;
+                }
+            }
+            b"Q" => {
+                if let Some(prev) = fill_white_stack.pop() {
+                    fill_white = prev;
+                }
+            }
+            b"g" => {
+                fill_white = op.nums::<1>().is_some_and(|[g]| g.is_finite() && g >= 0.99);
+            }
+            b"rg" => {
+                fill_white =
+                    op.nums::<3>().is_some_and(|[r, g, b]| r.is_finite() && g.is_finite() && b.is_finite() && r >= 0.99 && g >= 0.99 && b >= 0.99);
+            }
+            b"k" => {
+                fill_white = op.nums::<4>().is_some_and(|[c, m, y, k]| {
+                    c.is_finite() && m.is_finite() && y.is_finite() && k.is_finite() && c <= 0.01 && m <= 0.01 && y <= 0.01 && k <= 0.01
+                });
+            }
+            b"cs" | b"sc" | b"scn" => {
+                fill_white = false;
+            }
+            b"re" => {
+                path_shape = if path_shape == PathShape::Empty { PathShape::SingleRect } else { PathShape::Complex };
+            }
+            b"m" | b"l" | b"c" | b"v" | b"y" | b"h" => {
+                path_shape = PathShape::Complex;
+            }
+            b"n" => {
+                path_shape = PathShape::Empty;
+            }
+            b"f" | b"F" | b"f*" => {
+                // Common scanner PDFs paint a white page-backdrop rectangle before drawing the
+                // scan image. Keep treating non-white, complex, stroked, post-image, or
+                // state-overflowed fills as vector artwork so overlays and drawings are never flattened.
+                let is_white_backdrop = !fill_state_overflow && !seen_do && fill_white && path_shape == PathShape::SingleRect;
+                if !is_white_backdrop {
+                    out.has_vector_or_inline = true;
+                }
+                path_shape = PathShape::Empty;
+            }
+            b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*" | b"sh" | b"BI" => {
+                out.has_vector_or_inline = true;
+                path_shape = PathShape::Empty;
+            }
+            b"BDC" | b"DP" => {
+                if op.name(0) == Some(b"OC") {
+                    out.has_optional_content = true;
+                }
+                if op_has_mcid(doc, op, &props) {
+                    out.has_tagged_content = true;
+                }
+            }
+            b"Do" => {
+                seen_do = true;
+                if let Some(name) = op.name(0)
+                    && let Some(resource) = xo.get(name)
+                    && let Object::Stream(s) = &*doc.resolve(resource)
+                    && s.dict.contains(b"OC")
+                {
+                    out.has_optional_content = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
 }
 
 /// The images and Form artwork page `page` (0-based) draws, in drawing order.

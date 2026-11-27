@@ -76,6 +76,26 @@ let layer = visible_text_layer(&placed, &plan);          // visible text: the ed
 - **Hostile input is rejected, not panicked at.** `OcrImage` holds private, validated state:
   non-zero sides, a 10 000-pixel side cap, a 64-megapixel area cap (checked arithmetic — the
   counts come from documents, so they are untrusted), and an exact buffer length.
+- **ClearScan (`clearscan`, `scan_prep`, `deskew`, `binarize`, `components`, `align`, `cluster`,
+  `vectorize`, `type3`, `background`)** turns scanned pages into vectorised Type 3 glyphs over
+  an erased background image. It rectifies skew (`deskew`: 3-stage coarse/fine/parabolic
+  horizontal projection-profile variance with linear bin splatting on an Otsu-weighted
+  downscaled copy and an expanded bilinear canvas capped under `MAX_PIXELS = 41_943_040`),
+  binarizes at un-dilated stroke fidelity (`binarize`: streaming `O(width)` 41×41 Sauvola
+  thresholding with sensitivity `0..=100` and Otsu fallback below `48 px`), extracts
+  8-connected components (`components`), links components to OCR character boxes while pruning
+  overhanging strokes (`align`), clusters matching bitmaps by single-linkage centroid-aligned
+  ink IoU (`iou_min = 0.65`, gated by `size_tolerance = 0.25`, `area_tolerance = 0.12`, and a
+  16×16 similarity-hash gate at `signature_tolerance = 96` of 256 bits in `cluster`), traces
+  and fits cubic Bézier masters (`vectorize`: Suzuki–Abe contours plus Douglas–Peucker +
+  least-squares cubic fits in a 1000-unit em square), packs up to 255 charprocs (`PER_FONT = 255`,
+  codes `1..=255`, reserving one code in `F1` for an invisible `U+0020` space glyph) per `/Type3`
+  font with an `/Adobe-Identity-UCS` `/ToUnicode` CMap (`type3`),
+  erases matched glyph ink from the rectified background using ring-sampled median fill while
+  protecting unlinked graphics/halos (`background`), and emits replacement page content in
+  original page geometry (`clearscan_image_with_geometry` / `clearscan_recognized_with_geometry`)
+  with per-glyph sampled ink colours (RGB and 1-channel grey), explicit word spaces, and XY-cut
+  reading order.
 
 ## Where it is wired
 
@@ -96,6 +116,17 @@ applies text corrections at the stored original boxes through its stale-document
 or discards the result. Empty corrections remove words. Searchable acceptance is one undo
 step; editable acceptance writes a separate file. `ocr_dictionary` reads or atomically
 updates the UI's per-language dictionary format through an explicitly root-confined path.
+
+For ClearScan, the engine's `clearscan` module provides `Session::clearscan_job` (validating
+modify permissions, building per-page geometry, and pre-computing skip reasons), `ClearScanJob::run`
+and `ClearScanCursor` (steppable per-page preparation and composition), `Session::apply_clearscan`
+(applying valid pages as one undoable `"ClearScan"` step via `Edit::ReplacePageContent`, keeping
+page boxes, `/Rotate`, `/UserUnit`, annotations, links, widgets, and bookmarks intact while
+isolating any failed page), and `Session::clearscan_document`, wired headlessly through the
+`ocr_clearscan` automation tool. Pages that already contain text (when `skip_text_pages` is set),
+draw vector paths, have `< 50%` image coverage or multiple images, wrap artwork in form XObjects
+or Optional Content Groups, or carry structure tags (`/StructTreeRoot`, `/StructParents`, `/MCID`,
+or catalog `/Pg` references) are skipped and reported rather than flattened.
 
 Not yet: languages beyond the tested set (the `ocrs` models read only unaccented Latin; the
 Tesseract side is bounded by its allow-list and whatever its installed language packs cover),

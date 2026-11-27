@@ -110,6 +110,53 @@ fn recognize_text_in_multiple_files_writes_searchable_copies() {
     }
 }
 
+/// Recognize Text ▸ Output ▸ Editable text and images is ClearScan: sensitivity and downsample
+/// appear only for that choice, the run replaces the scan, and Undo takes the step back.
+#[test]
+fn editable_text_and_images_replaces_a_scan_and_undoes() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app_on(Arc::new(ScriptedFiles::new()));
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
+            app
+        }
+    });
+    h.run_steps(4);
+    assert!(h.execute("ocr.recognize"));
+    h.run_steps(2);
+    assert!(h.query_by_label("Sensitivity").is_none(), "sensitivity is a ClearScan setting");
+    assert!(h.query_by_label("Downsample").is_none(), "downsample is a ClearScan setting");
+    set_field(&mut h, "output_mode", serde_json::json!("clearscan"));
+    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Sensitivity");
+    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Downsample");
+    if pdfcraft_engine::ocr::engine_unavailable_reason(pdfcraft_engine::ocr::EngineChoice::Ocrs).is_some() {
+        h.get_by_label_contains("model files are missing");
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    // 72 dpi is one of the dialog's choices. It keeps this synthetic page small.
+    set_field(&mut h, "dpi", serde_json::json!("72"));
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Recognize text").click();
+    h.run_steps(4);
+    assert!(h.state().clearscan_run.is_none() && h.state().ocr_run.is_none(), "finished");
+    assert_eq!((h.state().ocr_draft.sensitivity, h.state().ocr_draft.downsample), (50, 1));
+    let id = h.state().active_ids().unwrap().1;
+    let toast = notice(&h);
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("ClearScan"), "{toast}");
+    let bytes = h.state().session.get(id).unwrap().bytes.clone();
+    let mut renderer = pdfcraft_render::PageRenderer::new(bytes, Default::default());
+    let text =
+        renderer.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
+    let plain = text.text.as_ref().map(|page| page.plain_text().to_lowercase()).unwrap_or_default();
+    assert!(plain.contains("recognize") || plain.contains("scanned") || plain.contains("words"), "{plain} ({toast})");
+    let ctx = h.ctx.clone();
+    h.state_mut().undo(&ctx);
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), None);
+}
+
 /// #1028: "Also recognize pages that already have text" reads a picture on a page that has its own
 /// text, without adding that text a second time.
 #[test]

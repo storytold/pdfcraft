@@ -2844,6 +2844,48 @@ fn replace_pages_swaps_content_but_keeps_annotations() {
 }
 
 #[test]
+fn replace_page_content_keeps_geometry_and_annotations() {
+    let mut doc = open(fixture());
+    let p2_ref = pages(&doc).unwrap()[1].obj;
+    let media = Object::Array(vec![0.into(), 0.into(), 500.into(), 700.into()]);
+    let crop = Object::Array(vec![20.into(), 30.into(), 420.into(), 630.into()]);
+    let bleed = Object::Array(vec![10.into(), 15.into(), 430.into(), 645.into()]);
+    let trim = Object::Array(vec![25.into(), 35.into(), 415.into(), 625.into()]);
+    let art = Object::Array(vec![30.into(), 40.into(), 410.into(), 620.into()]);
+    let annot = doc.add(Object::Dict({
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Link"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![40.into(), 50.into(), 140.into(), 80.into()]));
+        d
+    }));
+    doc.update_dict(p2_ref, |d| {
+        d.set(b"MediaBox".to_vec(), media.clone());
+        d.set(b"CropBox".to_vec(), crop.clone());
+        d.set(b"BleedBox".to_vec(), bleed.clone());
+        d.set(b"TrimBox".to_vec(), trim.clone());
+        d.set(b"ArtBox".to_vec(), art.clone());
+        d.set(b"Rotate".to_vec(), Object::Int(270));
+        d.set(b"UserUnit".to_vec(), Object::Real(2.0));
+        d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(annot)]));
+    })
+    .unwrap();
+    let src = open(fixture());
+    crate::replace_page_content(&mut doc, &[1], &src, &[2]).unwrap();
+    let doc = open(write_full(&doc, &SaveOptions::default()).unwrap());
+    assert_eq!(labels(&doc), ["Page 1", "Page 3", "Page 3"]);
+    let p2 = doc.get(pages(&doc).unwrap()[1].obj).as_dict().unwrap().clone();
+    assert_eq!(p2.get(b"MediaBox"), Some(&media));
+    assert_eq!(p2.get(b"CropBox"), Some(&crop));
+    assert_eq!(p2.get(b"BleedBox"), Some(&bleed));
+    assert_eq!(p2.get(b"TrimBox"), Some(&trim));
+    assert_eq!(p2.get(b"ArtBox"), Some(&art));
+    assert_eq!(p2.get(b"Rotate"), Some(&Object::Int(270)));
+    assert_eq!(p2.get(b"UserUnit").and_then(|o| o.as_f64()), Some(2.0));
+    assert!(p2.contains(b"Annots"), "annotations stay");
+}
+
+#[test]
 fn a_page_becomes_a_form_xobject_upright() {
     let src = open(fixture());
     let mut dst = Document::new_empty();

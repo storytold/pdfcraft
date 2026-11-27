@@ -535,10 +535,14 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<JobCount>>,
+    /// ClearScan from Recognize Text ▸ Editable text and images.
+    pub clearscan_run: Option<ocr_ui::ClearScanRun>,
     /// Pages being recognized, by document.
     pub(crate) ocr_runs: Queue<DocId, Result<Vec<pdfcraft_engine::ocr::OcrPage>, String>>,
     /// Recognize Text in Multiple Files: the batch's summary.
     pub(crate) ocr_batches: Queue<(), String>,
+    /// ClearScan jobs replacing scanned lettering with outlines, by document.
+    pub(crate) clearscan_jobs: Queue<DocId, Result<pdfcraft_engine::clearscan::ClearScanBuilt, ocr_ui::ClearScanFail>>,
     /// The web build's files being read in Web Workers (progress in `ocr_batch`).
     #[cfg(target_arch = "wasm32")]
     ocr_web_batch: Option<ocr_web::Batch>,

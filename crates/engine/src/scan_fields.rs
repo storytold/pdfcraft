@@ -18,7 +18,7 @@ const SCALE: f32 = 2.0;
 /// The longest side of that rendering, in pixels.
 const MAX_SIDE: f32 = 3000.0;
 /// A page is a scan when its images cover at least this share of it.
-const COVERED: f64 = 0.5;
+pub(crate) const COVERED: f64 = 0.5;
 /// A picture inside Form artwork is taken for a scan when it has at least this resolution over
 /// the area the artwork covers (a quarter of the pixels a 72 dpi scan would have).
 const MIN_FORM_DPI: f64 = 36.0;
@@ -97,6 +97,12 @@ fn page_area(info: &PageInfo) -> Option<f64> {
     let [cx0, cy0, cx1, cy1] = info.crop.map(f64::from);
     let area = (cx1 - cx0) * (cy1 - cy0);
     (area.is_finite() && area > 0.0).then_some(area)
+}
+
+/// The share of `info`'s crop box that `image` covers, when both are finite and non-empty.
+pub(crate) fn image_crop_share(info: &PageInfo, image: &pdfcraft_edit::PageImage) -> Option<f64> {
+    let area = page_area(info)?;
+    share(info, area, image)
 }
 
 /// The share of the crop box (of area `area`) that `image` covers, when it is a number.

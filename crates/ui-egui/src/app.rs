@@ -258,6 +258,7 @@ impl PdfCraftApp {
             reveal_jobs: queue(&host, &wake, "pdfcraft-reveal"),
             ocr_runs: queue(&host, &wake, "pdfcraft-ocr"),
             ocr_batches: queue(&host, &wake, "pdfcraft-ocr-files"),
+            clearscan_jobs: queue(&host, &wake, "pdfcraft-clearscan"),
             verify_jobs: queue(&host, &wake, "pdfcraft-ocr-verify"),
             action_jobs: queue(&host, &wake, "pdfcraft-actions"),
             space_audit_jobs: queue(&host, &wake, "pdfcraft-space-audit"),
@@ -412,6 +413,7 @@ impl PdfCraftApp {
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
             ocr_batch: None,
+            clearscan_run: None,
             #[cfg(target_arch = "wasm32")]
             ocr_web_batch: None,
             #[cfg(target_arch = "wasm32")]
