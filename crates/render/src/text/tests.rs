@@ -2349,6 +2349,19 @@ fn table_rows_of_cells_drawn_one_by_one_read_across() {
         word(&mut v, &format!("Cd{r}"), 160.0, y, 6.0);
     }
     assert_eq!(layout(v).plain_text(), "Ab0\nAb1\nAb2\nAb3\nCd0\nCd1\nCd2\nCd3\n########\n########\n########\n########");
+    // A quote's line number sits under a full-width rule of underscores, like a paragraph's short
+    // last line, and the second line of the description stacks under it; its row holds plain cells
+    // too (the quantity), so it is a cell all the same and leaves that block to read with its row
+    // (two corpus quotes; the prices far to the right are a chain of their own).
+    let mut v = Vec::new();
+    word(&mut v, &"_".repeat(80), 20.0, 100.0, 6.0);
+    word(&mut v, "1", 26.0, 118.0, 6.0);
+    word(&mut v, "2.00", 70.0, 118.0, 6.0);
+    word(&mut v, &format!("LNG 00205600 2-1/2 RD CF C1018{}", "x".repeat(5)), 130.0, 118.0, 6.0);
+    word(&mut v, "150.50", 440.0, 118.0, 6.0);
+    word(&mut v, "12 FT", 250.0, 128.0, 6.0);
+    let t = layout(v).plain_text();
+    assert!(t.lines().any(|l| l == "1 2.00 LNG 00205600 2-1/2 RD CF C1018xxxxx"), "{t}");
 }
 
 #[test]

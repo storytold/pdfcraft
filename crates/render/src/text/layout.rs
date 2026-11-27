@@ -668,13 +668,15 @@ fn members_above(n: usize, blocks: &[(Vec<usize>, [f32; 4])]) -> Vec<usize> {
 /// Which segments are the cells of a table row: [`ROW_CELLS`] or more segments of one of `lines`
 /// (each line's segments by their left edge), each within [`SAME_LINE_GAP`] of the next, more than
 /// half of them cells, narrower than [`CELL_WIDTH`] heights (#8534). A narrow segment under a wide
-/// line of its own block (`above`, the member before it, or [`NONE`]) is the short last line of a
-/// paragraph, not a cell, so three columns of prose whose paragraphs end together keep their
-/// columns. The rows of a barcode drawn with a font join no chain and are never cells: they join no
-/// other text (see [`mark_barcode_rows`]).
+/// line of its own block (`above`, the member before it, or [`NONE`]) that is no cell itself looks
+/// like the short last line of a paragraph: it counts as a cell only beside a plain one, so three
+/// columns of prose whose paragraphs end together keep their columns, while a quote's line number
+/// under a heading drawn as one run is a cell beside its quantity and price. `lines` run top-down,
+/// so the line above is settled first. The rows of a barcode drawn with a font join no chain and
+/// are never cells: they join no other text (see [`mark_barcode_rows`]).
 fn row_cells(segs: &[Seg], lines: &[Vec<usize>], above: &[usize]) -> Vec<bool> {
     let wide = |c: usize| segs[c].bbox[2] - segs[c].bbox[0] >= CELL_WIDTH * segs[c].h;
-    let cell = |c: usize| !wide(c) && !above.get(c).is_some_and(|&a| a != NONE && wide(a));
+    let ending = |c: usize, row_cell: &[bool]| above.get(c).is_some_and(|&a| a != NONE && wide(a) && !row_cell.get(a).copied().unwrap_or(false));
     let mut row_cell = vec![false; segs.len()];
     for line in lines {
         let mut start = 0;
@@ -687,7 +689,9 @@ fn row_cells(segs: &[Seg], lines: &[Vec<usize>], above: &[usize]) -> Vec<bool> {
                 continue;
             }
             let chain = line.get(start..k).unwrap_or_default();
-            let narrow = chain.iter().filter(|&&c| cell(c)).count();
+            let plain = chain.iter().filter(|&&c| !wide(c) && !ending(c, &row_cell)).count();
+            let endings = chain.iter().filter(|&&c| !wide(c) && ending(c, &row_cell)).count();
+            let narrow = if plain > 0 { plain + endings } else { 0 };
             if chain.len() >= ROW_CELLS && narrow * 2 > chain.len() && chain.iter().all(|&c| !segs[c].barcode) {
                 for &c in chain {
                     if let Some(cell) = row_cell.get_mut(c) {
