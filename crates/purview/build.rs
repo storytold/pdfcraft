@@ -59,11 +59,13 @@ fn main() {
         std::process::exit(1);
     }
     let mut command = Command::new(compiler);
+    let app_version = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "unknown".into());
     if os == "windows" {
         command
             .arg("/nologo")
             .arg("/std:c++17")
             .arg("/DPDFCRAFT_MIP_SDK=1")
+            .arg(format!("/DPDFCRAFT_VERSION=\"{app_version}\""))
             .arg(format!("/I{}", sdk.join("include").display()))
             .arg("src/purview_mip.cc")
             .arg("/link")
@@ -77,6 +79,7 @@ fn main() {
         command
             .arg("-std=c++17")
             .arg("-DPDFCRAFT_MIP_SDK=1")
+            .arg(format!("-DPDFCRAFT_VERSION=\"{app_version}\""))
             .arg(format!("-I{}", sdk.join("include").display()))
             .arg("src/purview_mip.cc")
             .arg(format!("-L{}", bins.display()))

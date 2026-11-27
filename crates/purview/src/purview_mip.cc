@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+#ifndef PDFCRAFT_VERSION
+#define PDFCRAFT_VERSION "unknown"
+#endif
+
 #ifdef PDFCRAFT_MIP_SDK
 #include <filesystem>
 #include <future>
@@ -202,7 +206,7 @@ static NativeMip create_native_mip(
     const std::string& rms_token,
     const std::string& sync_token,
     const std::string& cache_dir) {
-    mip::ApplicationInfo app_info{app_id, "PdfCraft", "0.21.1"};
+    mip::ApplicationInfo app_info{app_id, "PdfCraft", PDFCRAFT_VERSION};
     std::filesystem::create_directories(cache_dir);
     auto configuration = std::make_shared<mip::MipConfiguration>(
         app_info,
@@ -348,7 +352,7 @@ static void handle_open(const std::vector<std::string>& fields) {
     std::string cache = unescape_tsv(fields[8]);
 
     try {
-        mip::ApplicationInfo app_info{app_id, "PdfCraft", "0.21.1"};
+        mip::ApplicationInfo app_info{app_id, "PdfCraft", PDFCRAFT_VERSION};
         auto mip_configuration = std::make_shared<mip::MipConfiguration>(
             app_info,
             cache,
