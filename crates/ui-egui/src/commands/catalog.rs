@@ -52,8 +52,15 @@ fn kind_of(id: &str) -> CommandKind {
         "view.layout.single" | "view.layout.two_up" => CommandKind::Radio { group: Some("layout".into()) },
         "view.theme.system" | "view.theme.light" | "view.theme.dark" => CommandKind::Radio { group: Some("theme".into()) },
         PANEL => CommandKind::Radio { group: Some("panel".into()) },
-        "view.continuous" | "view.page_gaps" | "view.layout.cover" | "view.full_screen" | "view.read_mode" | "view.side_panel"
-        | "view.tools_pane" | "view.split" => CommandKind::Toggle,
+        "view.continuous"
+        | "view.page_gaps"
+        | "view.layout.cover"
+        | "view.full_screen"
+        | "view.full_screen_with_menu_bar"
+        | "view.read_mode"
+        | "view.side_panel"
+        | "view.tools_pane"
+        | "view.split" => CommandKind::Toggle,
         _ => CommandKind::Command,
     }
 }
@@ -236,6 +243,7 @@ fn checked(app: &PdfCraftApp, command: &CommandRef) -> Option<bool> {
         "view.page_gaps" => view.is_some_and(|v| v.page_gaps),
         "view.layout.cover" => view.is_some_and(|v| v.cover),
         "view.full_screen" => app.full_screen(),
+        "view.full_screen_with_menu_bar" => app.screen_mode == craft::ui::shell::ScreenMode::FullScreenWithMenuBar,
         "view.read_mode" => app.mode == Mode::Read,
         "view.side_panel" => app.right().is_some(),
         "view.tools_pane" => app.left_open(),

@@ -48,9 +48,25 @@ impl PdfCraftApp {
         self.screen_mode = mode;
     }
 
-    /// Enter or leave full-screen reading (Acrobat: View ▸ Full Screen Mode, ⌘L).
+    /// Enter or leave full-screen reading (Acrobat: View ▸ Full Screen Mode, ⌘L). Leaving it goes
+    /// back to the mode it was entered from.
     pub fn set_full_screen(&mut self, on: bool) {
-        self.set_screen_mode(if on { ScreenMode::FullScreen } else { ScreenMode::Standard });
+        if on && !self.full_screen() {
+            self.screen_mode_before_full_screen = self.screen_mode;
+        }
+        let mode = if on { ScreenMode::FullScreen } else { std::mem::take(&mut self.screen_mode_before_full_screen) };
+        self.set_screen_mode(mode);
+    }
+
+    /// F11: the window fills the screen and keeps its menu bar and panels, or goes back to a
+    /// standard window (#7954). In full screen mode it leaves that mode instead.
+    pub fn toggle_full_screen_with_menu_bar(&mut self) {
+        let mode = match self.screen_mode {
+            ScreenMode::Standard => ScreenMode::FullScreenWithMenuBar,
+            _ => ScreenMode::Standard,
+        };
+        self.screen_mode_before_full_screen = ScreenMode::Standard;
+        self.set_screen_mode(mode);
     }
 
     /// Reacts to the screen mode as it stands after the shell's pass, whoever wrote it: every
