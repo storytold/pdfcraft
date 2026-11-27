@@ -306,10 +306,14 @@ fn prepare_a_form_detects_fields_on_a_paper_form() {
 
 /// Advance bounded UI frames until the synthetic prompt label becomes available.
 fn wait_for(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    wait_for_prompt(h, label, |h| h.query_by_label(label).is_some());
+}
+
+fn wait_for_prompt(h: &mut Harness<'static, PdfCraftApp>, label: &str, ready: impl Fn(&Harness<'static, PdfCraftApp>) -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
     while std::time::Instant::now() < deadline {
         h.run_steps(1);
-        if h.query_by_label(label).is_some() {
+        if ready(h) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -373,7 +377,7 @@ fn native_script_prompt_uses_the_german_catalog_when_available() {
     h.set_option("language", "de").unwrap();
     let id = h.state().active_ids().unwrap().1;
     h.run_button_script(id, "hello", "app.response({cQuestion:'Test',bPassword:true});");
-    wait_for(&mut h, heading);
+    wait_for_prompt(&mut h, heading, |h| h.query_by_role_and_label(egui::accesskit::Role::Dialog, heading).is_some());
     assert!(h.query_by_label("Dokument: form.pdf").is_some());
     // The warning in the catalog's words, which translators may reword, and never the English.
     let warning = "This request comes from the document, not PdfCraft. Only enter a password if you trust this document.";
