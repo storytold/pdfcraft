@@ -508,7 +508,7 @@ fn a_highlights_range_is_changed_to_the_selected_text() {
     let mut h = harness(|_| {});
     crate::support::settle(&mut h);
     h.state_mut().views[0].select_text(0, 4, 8);
-    assert!(h.state_mut().execute("comment.highlight"));
+    assert!(h.execute("comment.highlight"));
     h.run_steps(2);
     let width = |h: &Harness<'static, PdfCraftApp>| {
         let r = comments(h)[0].rect;
@@ -516,8 +516,8 @@ fn a_highlights_range_is_changed_to_the_selected_text() {
     };
     let before = width(&h);
     assert_eq!(comments(&h).len(), 1);
-    h.state_mut().set_option("quick", "select").unwrap();
-    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.set_option("quick", "select").unwrap();
+    h.state_mut().views[0].session.comments.select_only((0, 0));
     crate::support::settle(&mut h);
     let open_menu = |h: &mut Harness<'static, PdfCraftApp>| {
         let p = h.state().views[0].glyph_screen_pos(0, 5).expect("text layer");
@@ -534,7 +534,7 @@ fn a_highlights_range_is_changed_to_the_selected_text() {
     h.run_steps(2);
     // Select more text on the page and use it.
     h.state_mut().views[0].select_text(0, 4, 14);
-    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().views[0].session.comments.select_only((0, 0));
     h.run_steps(2);
     open_menu(&mut h);
     h.get_by_label("Mark the selected text instead").click();
@@ -542,7 +542,7 @@ fn a_highlights_range_is_changed_to_the_selected_text() {
     assert_eq!(comments(&h).len(), 1, "the same highlight, not a new one");
     assert!(width(&h) > before + 1.0, "{} vs {before}", width(&h));
     assert!(h.state().views[0].selected_text().is_none(), "the selection is consumed");
-    h.state_mut().undo();
+    h.undo();
     h.run_steps(3);
     assert!((width(&h) - before).abs() < 0.01, "one undo step puts the range back");
 }

@@ -631,7 +631,7 @@ fn set_quads_redraw_failure_preserves_inline_and_indirect_annotations_byte_for_b
             let page = page_refs(&doc).unwrap()[0];
             let mut dict = list(&doc, 0)[h].clone();
             dict.set(b"BE".to_vec(), Object::Dict(Dict::from_iter([(b"S".to_vec(), Object::name("C")), (b"I".to_vec(), Object::Int(2))])));
-            assert!(appearance::build(&dict).is_none(), "cloudy highlight appearances are unsupported");
+            assert!(appearance::build(&doc, &dict).is_none(), "cloudy highlight appearances are unsupported");
             let mut entries = annots(&doc, page);
             entries[h] = if inline { Object::Dict(dict) } else { Object::Ref(doc.add(Object::Dict(dict))) };
             if indirect_annots {
