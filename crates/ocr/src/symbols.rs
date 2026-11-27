@@ -239,9 +239,11 @@ fn fractions(
     let (mut grown_left, mut grown) = (None, None);
     for glyph in shapes.fraction_glyphs(text_h) {
         let (left, right) = (glyph.left as f32, (glyph.right + 1) as f32);
-        // A glyph clear of the word's columns on either side is a word of its own the
-        // detector missed (`¾ HEX`), not a part of this one.
-        if right + slack < start || left - slack > end {
+        // A glyph before the word and clear of its columns is a word of its own the detector
+        // missed (`¾ HEX`), not a part of this one; one after the word, within the region's
+        // reach, is the word's own that the decoder's columns stopped short of (`3½`), and
+        // is appended as a dropped `°` is.
+        if right + slack < start {
             continue;
         }
         let Some(ch) = glyph.character(numeral) else { continue };
