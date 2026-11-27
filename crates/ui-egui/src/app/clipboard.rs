@@ -1,4 +1,28 @@
-use super::*;
+use craft::host::queue::Priority;
+// PLAN: needs the `platform-clipboard` feature on the `craft` dependency in crates/ui-egui/Cargo.toml (owner: pdf-hub-w1); `craft::platform::clipboard` exists only with it
+use craft::platform::clipboard::{ClipboardImage, Flavor, HTML, RGBA8, TEXT};
+
+use super::{CommentClip, DocId, DocView, DocumentCopyJob, PdfCraftApp, QuickTool, comments};
+
+/// The browser's clipboard: a page can't read it outside a paste event, so pastes arrive as events
+/// ([`PdfCraftApp::offer_clip_content`]) and copies go out through egui's platform output, which
+/// eframe's web runner hands to the page. Only text goes out; the browser takes no other flavour from
+/// a canvas app.
+#[cfg(target_arch = "wasm32")]
+pub(super) fn web_clipboard(ctx: &egui::Context) -> craft::platform::clipboard::Clipboard {
+    use craft::platform::clipboard::{Clipboard, ClipboardError, EventClipboard};
+    let (pass, out, wake) = (ctx.clone(), ctx.clone(), ctx.clone());
+    let events = EventClipboard::new(
+        move || pass.cumulative_pass_nr(),
+        move |flavors: &[Flavor]| {
+            let (index, text) = flavors.iter().enumerate().find(|(_, f)| f.mime == TEXT).ok_or(ClipboardError::NoFormat)?;
+            out.copy_text(String::from_utf8_lossy(&text.data).into_owned());
+            Ok(index)
+        },
+    )
+    .with_wake(move || wake.request_repaint());
+    Clipboard::new(events)
+}
 
 /// Why nothing can be copied out of the document: its security doesn't allow it (Table 22,
 /// bit 5; #568).
@@ -8,11 +32,6 @@ pub(crate) fn copy_refused() -> &'static str {
 
 pub(crate) fn print_refused() -> &'static str {
     tl!("The document's security settings don't allow printing")
-}
-
-enum ClipboardPaste {
-    Text(String),
-    Image(std::sync::Arc<egui::ColorImage>),
 }
 
 /// What objects copied in Edit a PDF put on the system clipboard for other applications, so ⌘V
@@ -33,6 +52,13 @@ fn picture_hash(width: usize, height: usize, rgba: &[u8]) -> u64 {
     h.finish()
 }
 
+/// The pixels of `image` for egui; `None` when its buffer isn't `width × height × 4` bytes.
+fn color_image(image: &ClipboardImage) -> Option<egui::ColorImage> {
+    let size = [usize::try_from(image.width).ok()?, usize::try_from(image.height).ok()?];
+    let bytes = size[0].checked_mul(size[1])?.checked_mul(4)?;
+    (bytes == image.rgba.len()).then(|| egui::ColorImage::from_rgba_unmultiplied(size, &image.rgba))
+}
+
 impl PdfCraftApp {
     /// Whether text and images may be copied out of document `id`; says why not when they may
     /// not. Reading aloud and accessibility tools don't ask (assistive technology may read
@@ -45,89 +71,176 @@ impl PdfCraftApp {
         false
     }
 
-    /// ⌘C / ⌘X / ⌘V copy, cut and paste text, images or comments on canvas (unless a text field
-    /// has focus, or something is over the pages). With no text selected, ⌘C copies the selected
-    /// comments, each with its replies.
-    pub(super) fn clipboard_keys(&mut self, i: usize, ctx: &egui::Context) {
-        use egui::{Key, KeyboardShortcut, Modifiers};
-        let pastes: Vec<_> = ctx.input(|input| {
-            input
-                .events
-                .iter()
-                .filter_map(|event| match event {
-                    egui::Event::Paste(text) => Some(ClipboardPaste::Text(text.clone())),
-                    egui::Event::PasteImage(image) => Some(ClipboardPaste::Image(image.clone())),
-                    _ => None,
-                })
-                .collect()
-        });
-        let free = self.dialog.is_none() && !self.palette_open && !self.page_keys.over() && !ctx.egui_wants_keyboard_input() && !self.is_preparing();
-        if !free || self.views.get(i).is_some_and(|v| v.forms.focus.is_some() || v.organize) {
-            self.receive_pastes(i, pastes, false);
-            return;
+    /// Offer the content delivered with the fired paste in the frame that runs it.
+    pub(crate) fn offer_clip_content(&mut self, content: &craft::ui::runtime::commands::ClipContent) {
+        let mut flavors = Vec::new();
+        if let Some(text) = &content.text {
+            flavors.push(Flavor::text(text.as_ref()));
         }
-        let copy = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Copy)))
-            || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::C)));
-        let cut = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Cut)))
-            || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::X)));
-        let paste = ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::V)));
-
-        // Objects selected together in Edit a PDF take ⌘C and ⌘X.
-        let objects = (copy || cut) && self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.objects.count() > 0);
-        if objects {
-            self.copy_objects(i, ctx, cut);
-        }
-        let text_selected = copy && self.views.get(i).and_then(|v| v.selected_text()).is_some_and(|t| !t.is_empty());
-        if copy
-            && !objects
-            && (text_selected || !self.copy_selected_comments(i))
-            && !self.copy_selected_text(i, ctx)
-            && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
-            && let Some(id) = self.views.get(i).map(|v| v.id)
-            && self.may_copy(id)
+        if let Some(image) = &content.image
+            && let (Ok(width), Ok(height)) = (u32::try_from(image.size[0]), u32::try_from(image.size[1]))
         {
-            self.copy_page_image(sel.page, sel.index);
+            let mut data = Vec::new();
+            data.extend_from_slice(&width.to_le_bytes());
+            data.extend_from_slice(&height.to_le_bytes());
+            data.extend(image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied));
+            flavors.push(Flavor::new(RGBA8, data));
         }
-        if cut
-            && !objects
-            && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
-            && let Some(id) = self.views.get(i).map(|v| v.id)
-            && self.may_copy(id)
-        {
-            self.cut_page_image(sel.page, sel.index);
-        }
-        if (paste || !pastes.is_empty()) && self.quick_tool == QuickTool::EditText && self.object_clipboard.is_some() && self.pastes_objects(&pastes)
-        {
-            self.paste_objects(i);
-            return;
-        }
-        if !pastes.is_empty() {
-            self.receive_pastes(i, pastes, true);
-            return;
-        }
-        if paste {
-            let has_override_image = matches!(self.clipboard_override, Some(crate::create_ui::Clip::Image { .. }));
-            #[cfg(not(target_arch = "wasm32"))]
-            let system_has_text = if !has_override_image && self.system_clipboard { crate::os_clipboard::has_text() } else { false };
-            #[cfg(target_arch = "wasm32")]
-            let system_has_text = false;
-
-            if !has_override_image && system_has_text {
-                self.last_copied_image = None;
-                self.last_copied_file = None;
-                return;
-            }
-
-            let page = self.views.get(i).map_or(0, |v| v.current);
-            self.paste_image(page, None);
+        if !flavors.is_empty() {
+            self.clipboard.offer_paste(flavors);
         }
     }
 
-    /// ⌘C / ⌘X in Edit a PDF with objects selected together: copy them for ⌘V in any open
+    /// Writes `text` to the clipboard; says why when it can't. Silent when automation's input is
+    /// fenced off from the user's clipboard.
+    pub(crate) fn put_text(&mut self, text: &str) -> bool {
+        match self.clipboard.write_text(text) {
+            Ok(_) => true,
+            Err(e) => {
+                if let Some(t) = e.text() {
+                    self.notify(crate::i18n::platform_text(t));
+                }
+                false
+            }
+        }
+    }
+
+    /// A newer copy wins over a whole-document copy still reading its pages: drops the waiting
+    /// job and cancels the running one.
+    pub(crate) fn cancel_text_copies(&self) {
+        self.text_copies.reprioritize(|_, _| None);
+    }
+
+    /// Takes the whole-document copies whose pages are read and puts their text on the clipboard.
+    /// A text field's or an image's copy this frame, and the document closing, drop it instead
+    /// (called at the end of the frame, so it sees this frame's copies).
+    pub(crate) fn drain_text_copies(&mut self, ctx: &egui::Context) {
+        let copied = ctx.output(|o| o.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(_) | egui::OutputCommand::CopyImage(_))));
+        let open = |views: &[crate::DocView], doc: &DocId| views.iter().any(|v| v.id == *doc);
+        while let Some(done) = self.text_copies.try_recv() {
+            if !copied && open(&self.views, &done.key) && !done.result.is_empty() {
+                self.put_text(&done.result);
+            }
+        }
+        let views = &self.views;
+        self.text_copies.reprioritize(|doc, priority| (!copied && open(views, doc)).then_some(priority));
+    }
+
+    /// Copy on the canvas: with objects selected in Edit a PDF, those; with no text selected, the
+    /// selected comments with their replies; else the text; else the selected image.
+    pub(crate) fn copy_from_canvas(&mut self, ctx: &egui::Context, i: usize) -> bool {
+        if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
+            return false;
+        }
+        // Objects selected together in Edit a PDF take the copy.
+        if self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.session.objects.count() > 0) {
+            return self.copy_objects(ctx, i, false);
+        }
+        // A selection across pages still being read has no text yet, but is selected all the
+        // same: its copy starts rather than copying the selected comments.
+        let text_selected =
+            self.views.get(i).is_some_and(|v| v.selection_waits_for_text().is_some() || v.selected_text().is_some_and(|t| !t.is_empty()));
+        if !text_selected && self.copy_selected_comments(i) {
+            return true;
+        }
+        if self.copy_selected_text(i) || self.copy_picked_image(i) {
+            return true;
+        }
+        let Some(sel) = self.views.get(i).and_then(|v| v.session.image_selection.clone()) else { return false };
+        let Some(id) = self.views.get(i).map(|v| v.id) else { return false };
+        self.may_copy(id) && self.copy_page_image(sel.page, sel.index)
+    }
+
+    /// Cut on the canvas: objects selected in Edit a PDF, else the selected image.
+    pub(crate) fn cut_from_canvas(&mut self, ctx: &egui::Context, i: usize) -> bool {
+        if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
+            return false;
+        }
+        if self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.session.objects.count() > 0) {
+            return self.copy_objects(ctx, i, true);
+        }
+        if let Some(sel) = self.views.get(i).and_then(|v| v.session.image_selection.clone())
+            && let Some(id) = self.views.get(i).map(|v| v.id)
+            && self.may_copy(id)
+        {
+            return self.cut_page_image(ctx, sel.page, sel.index);
+        }
+        false
+    }
+
+    /// Paste on the canvas, in this order: the objects copied in Edit a PDF while the clipboard
+    /// still holds their copy; a picture the clipboard holds; its text (XFDF is pasted as
+    /// comments, and text beats an image the app only remembers); else the remembered image.
+    pub(crate) fn paste_from_clipboard(&mut self, ctx: &egui::Context, i: usize) {
+        self.paste_from_clipboard_with(ctx, i, None);
+    }
+
+    /// [`Self::paste_from_clipboard`], preferring content delivered with the paste event (`pasted`, F-89)
+    /// over a fresh system-clipboard read so desktop `SystemClipboard` hosts still receive event payloads.
+    pub(crate) fn paste_from_clipboard_with(&mut self, ctx: &egui::Context, i: usize, pasted: Option<&craft::ui::runtime::commands::ClipContent>) {
+        self.paste_from_clipboard_at(ctx, i, pasted, None);
+    }
+
+    pub(crate) fn paste_from_clipboard_at(
+        &mut self,
+        ctx: &egui::Context,
+        i: usize,
+        pasted: Option<&craft::ui::runtime::commands::ClipContent>,
+        at: Option<egui::Pos2>,
+    ) {
+        if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
+            return;
+        }
+        let target = at.and_then(|at| {
+            let view = self.views.get(i)?;
+            let doc = self.session.get(view.id)?;
+            view.session.user_point_at(view.geometry(), &doc.info, at)
+        });
+        let page = target.map_or_else(|| self.views.get(i).map_or(0, |v| v.current()), |(page, _)| page);
+        let delivered_text = pasted.and_then(|c| c.text.as_deref()).filter(|t| !t.is_empty()).map(str::to_owned);
+        let delivered_image = pasted.and_then(|c| c.image.as_ref()).and_then(|img| {
+            let (width, height) = (u32::try_from(img.size[0]).ok()?, u32::try_from(img.size[1]).ok()?);
+            let mut rgba = Vec::with_capacity(img.pixels.len() * 4);
+            rgba.extend(img.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied));
+            Some(ClipboardImage { width, height, rgba })
+        });
+        let text = delivered_text
+            .or_else(|| if self.clipboard.has(&[TEXT]) { self.clipboard.read_text().ok().flatten().filter(|t| !t.is_empty()) } else { None });
+        let image = delivered_image.or_else(|| self.clipboard.read_image().ok().flatten());
+        if self.quick_tool == QuickTool::EditText && self.object_clipboard.is_some() && self.pastes_objects(text.as_deref(), image.as_ref()) {
+            self.paste_objects(ctx, i);
+            return;
+        }
+        if let Some(image) = image {
+            match color_image(&image) {
+                // PLAN: assumed `paste_received_image(page, &egui::ColorImage) -> bool` (pdf-edit-w7)
+                Some(pixels) => {
+                    self.paste_received_image_at(ctx, page, &pixels, target.map(|(_, at)| at));
+                }
+                None => self.notify_error("the clipboard image is empty, malformed or exceeds size limits"),
+            }
+            return;
+        }
+        // An explicit empty paste can fall back to the app's copied comments, after object and
+        // image precedence has been resolved using the actual clipboard contents.
+        let text = pasted.and_then(|c| c.text.as_deref()).filter(|t| t.is_empty()).map(str::to_owned).or(text);
+        if let Some(text) = text {
+            if !text.is_empty() {
+                self.last_copied_image = None;
+                self.last_copied_file = None;
+            }
+            if self.paste_comment_text(ctx, i, text) {
+                return;
+            }
+        }
+        self.paste_image(ctx, page, None);
+    }
+
+    /// Copy in Edit a PDF with objects selected together: copy them for Paste in any open
     /// document, and put their text (or else their first picture) on the system clipboard for
     /// other applications. A cut then deletes them, as one undo step.
-    pub(crate) fn copy_objects(&mut self, i: usize, ctx: &egui::Context, cut: bool) -> bool {
-        let Some((id, Some((page, targets)))) = self.views.get(i).map(|v| (v.id, v.objects.selection())) else { return false };
+    pub(crate) fn copy_objects(&mut self, ctx: &egui::Context, i: usize, cut: bool) -> bool {
+        let Some((id, Some((page, targets)))) = self.views.get(i).map(|v| (v.id, v.session.objects.selection())) else { return false };
         if !self.may_copy(id) {
             return false;
         }
@@ -143,15 +256,14 @@ impl PdfCraftApp {
                 return false;
             }
         };
-        // A newer copy wins over a whole-document copy still reading its pages.
-        self.document_copy = None;
+        self.cancel_text_copies();
         let text = clip.text();
         let picture =
             clip.objects().iter().find(|o| o.target.kind == pdfcraft_engine::ObjectKind::Image && o.content_type == "image").map(|o| o.target.index);
         self.object_clip_mark = if !text.is_empty() {
-            ctx.copy_text(text.clone());
+            self.put_text(&text);
             ObjectClipMark::Text(text)
-        } else if let Some(index) = picture.filter(|_| self.system_clipboard && cfg!(not(target_arch = "wasm32")))
+        } else if let Some(index) = picture
             && self.copy_page_image(page, index)
             && let Some((w, h, rgba)) = &self.last_copied_image
         {
@@ -161,30 +273,31 @@ impl PdfCraftApp {
         };
         self.object_clipboard = Some(pdfcraft_engine::ObjectClipboard::new(clip));
         if cut && let Some(delete) = pdfcraft_engine::Edit::delete_objects(page, targets) {
-            self.apply_edit(delete);
+            self.apply_edit(ctx, delete);
         }
         true
     }
 
-    /// Whether ⌘V's `pastes` (what the system clipboard gave, if anything) are the objects
+    /// Whether Paste's `text` and `image` (what the clipboard holds, if anything) are the objects
     /// copied in Edit a PDF, rather than something copied since, here or in another application.
-    fn pastes_objects(&self, pastes: &[ClipboardPaste]) -> bool {
-        pastes.iter().all(|paste| match (paste, &self.object_clip_mark) {
-            (ClipboardPaste::Text(text), ObjectClipMark::Text(copied)) => text.replace("\r\n", "\n").trim_end() == copied.trim_end(),
-            (ClipboardPaste::Text(text), ObjectClipMark::None) => !pdfcraft_engine::is_xfdf_comments(text),
-            (ClipboardPaste::Image(image), ObjectClipMark::Picture(hash)) => {
-                let rgba: Vec<u8> = image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied).collect();
-                picture_hash(image.size[0], image.size[1], &rgba) == *hash
-            }
-            (ClipboardPaste::Image(_), ObjectClipMark::None) => true,
-            _ => false,
-        })
+    fn pastes_objects(&self, text: Option<&str>, image: Option<&ClipboardImage>) -> bool {
+        let text_is_ours = text.is_none_or(|text| match &self.object_clip_mark {
+            ObjectClipMark::Text(copied) => text.replace("\r\n", "\n").trim_end() == copied.trim_end(),
+            ObjectClipMark::None => !pdfcraft_engine::is_xfdf_comments(text),
+            ObjectClipMark::Picture(_) => false,
+        });
+        let image_is_ours = image.is_none_or(|image| match &self.object_clip_mark {
+            ObjectClipMark::Picture(hash) => picture_hash(image.width as usize, image.height as usize, &image.rgba) == *hash,
+            ObjectClipMark::None => true,
+            ObjectClipMark::Text(_) => false,
+        });
+        text_is_ours && image_is_ours
     }
 
-    /// ⌘V in Edit a PDF: the copied objects onto the current page of tab `i`, as page content
+    /// Paste in Edit a PDF: the copied objects onto the current page of tab `i`, as page content
     /// that draws the same (one undo step), and selected.
-    pub(crate) fn paste_objects(&mut self, i: usize) -> bool {
-        let Some((id, page)) = self.views.get(i).map(|v| (v.id, v.current)) else { return false };
+    pub(crate) fn paste_objects(&mut self, ctx: &egui::Context, i: usize) -> bool {
+        let Some((id, page)) = self.views.get(i).map(|v| (v.id, v.current())) else { return false };
         let (Some(doc), Some(clipboard)) = (self.session.get(id), self.object_clipboard.as_mut()) else { return false };
         if !doc.allows_modification() {
             self.notify_error(tl!("The document's security settings don't allow this change"));
@@ -198,64 +311,49 @@ impl PdfCraftApp {
                 return false;
             }
         };
-        if !self.apply_edit(edit) {
+        if !self.apply_edit(ctx, edit) {
             return false;
         }
         if let (Some(Ok(after)), Some(view)) = (self.session.get(id).map(|d| d.editable_objects(page)), self.views.get_mut(i)) {
-            view.objects.select_pasted(page, &before, after);
+            view.session.objects.select_pasted(page, &before, after);
         }
         true
-    }
-
-    /// `on_canvas`: the paste is the canvas's (no text field, dialog or page grid has it), so
-    /// pictures and copied comments land on the page.
-    fn receive_pastes(&mut self, view: usize, pastes: Vec<ClipboardPaste>, on_canvas: bool) {
-        let page = self.views.get(view).map_or(0, |view| view.current);
-        for paste in pastes {
-            match paste {
-                ClipboardPaste::Text(text) => {
-                    // Text fields may own the paste; the canvas cache still observes its contents.
-                    self.last_copied_image = None;
-                    self.last_copied_file = None;
-                    if on_canvas {
-                        self.paste_comment_text(view, text);
-                    }
-                }
-                ClipboardPaste::Image(image) if on_canvas => {
-                    self.paste_received_image(page, &image);
-                }
-                ClipboardPaste::Image(_) => {}
-            }
-        }
     }
 
     /// A text pasted onto the canvas: XFDF with comments is pasted as comments. Copied comments
     /// come from the system clipboard when it holds them, from the app's own only when it holds
     /// nothing legible (a word copied in another app since is that word, not the comments copied
     /// before it).
-    fn paste_comment_text(&mut self, i: usize, text: String) {
+    fn paste_comment_text(&mut self, ctx: &egui::Context, i: usize, text: String) -> bool {
         if pdfcraft_engine::is_xfdf_comments(&text) {
-            self.paste_comments(i, Some(text), None);
-        } else if text.trim().is_empty() && self.comment_clipboard.is_some() {
-            self.paste_comments(i, None, None);
+            self.paste_comments(ctx, i, Some(text), None);
+            true
+        } else if text.trim().is_empty() {
+            if self.comment_clipboard.is_some() {
+                self.paste_comments(ctx, i, None, None);
+                true
+            } else {
+                false
+            }
+        } else {
+            true
         }
     }
 
     /// Copy the selected comments of tab `i` as XFDF, each with its replies: into the app's
-    /// clipboard (for ⌘V in any tab or window) and onto the system clipboard as text. False
+    /// clipboard (for Paste in any tab or window) and onto the system clipboard as text. False
     /// when nothing is selected.
     pub fn copy_selected_comments(&mut self, i: usize) -> bool {
         let Some(view) = self.views.get(i) else { return false };
-        let keys = view.comments.selection();
+        let keys = view.session.comments.selection();
         if keys.is_empty() {
             return false;
         }
         let id = view.id;
         match self.session.export_comments(id, &keys) {
             Ok(xfdf) => {
-                if let Some(ctx) = &self.ctx {
-                    ctx.copy_text(xfdf.clone());
-                }
+                self.cancel_text_copies();
+                self.put_text(&xfdf);
                 self.comment_clipboard = Some(CommentClip { xfdf, count: keys.len() });
                 true
             }
@@ -269,10 +367,10 @@ impl PdfCraftApp {
     /// Paste copied comments (`text`, XFDF from the system clipboard, or else the app's
     /// clipboard) into tab `i`. With `at` (a page and a user-space point, from the page's menu)
     /// the bundle is placed at once, centred there; otherwise it hangs on the pointer as one
-    /// bundle until a click places it (`Gesture::Place`), so a copy never lands on its original
-    /// and a bundle from a large page goes where it fits on a small one. The copies are selected
-    /// once placed (see `apply_edit`).
-    pub fn paste_comments(&mut self, i: usize, text: Option<String>, at: Option<(usize, [f64; 2])>) -> bool {
+    /// bundle until a click places it (`view.comments.paste`), so a copy never lands on its
+    /// original and a bundle from a large page goes where it fits on a small one. The copies are
+    /// selected once placed (see `apply_edit`).
+    pub fn paste_comments(&mut self, ctx: &egui::Context, i: usize, text: Option<String>, at: Option<(usize, [f64; 2])>) -> bool {
         let Some(xfdf) = text.or_else(|| self.comment_clipboard.as_ref().map(|c| c.xfdf.clone())) else {
             self.notify_tr("Copy comments first");
             return false;
@@ -292,320 +390,171 @@ impl PdfCraftApp {
         match at {
             Some((page, [x, y])) => {
                 let offset = [x - (bounds[0] + bounds[2]) / 2.0, y - (bounds[1] + bounds[3]) / 2.0];
-                self.apply_edit(pdfcraft_engine::Edit::PasteComments { xfdf, page, offset: Some(offset) })
+                self.apply_edit(ctx, pdfcraft_engine::Edit::PasteComments { xfdf, page, offset: Some(offset) })
             }
             None => {
                 let Some(view) = self.views.get_mut(i) else { return false };
-                view.comments.clear_selection();
+                view.session.comments.clear_selection();
                 let outlines = pdfcraft_engine::comment_outlines(&xfdf);
-                view.comments.gesture = Some(comments::Gesture::Place { xfdf, bounds, count, outlines });
+                // PLAN: assumed `comments::PastePlacement { xfdf, bounds, count, outlines }` (pdf-comments-w8)
+                view.session.comments.paste = Some(comments::PastePlacement { xfdf, bounds, count, outlines });
                 self.notify_tr("Click where the copied comments go; Escape lets them go");
                 true
             }
         }
     }
 
-    /// Shared permission gate for copying selected page text from menus and keyboard events.
+    /// Shared permission gate for copying selected page text from menus and the Copy command.
     /// After Select All of the document (#2639), pages whose text wasn't read for display are read
-    /// off the UI thread ([`DocumentCopy`]), and the clipboard gets the text when they're done.
-    pub(crate) fn copy_selected_text(&mut self, i: usize, ctx: &egui::Context) -> bool {
-        // A newer copy wins: a whole-document copy still reading must not replace it later.
-        self.document_copy = None;
+    /// off the UI thread (a `text_copies` job), and the clipboard gets the text when they're done.
+    pub(crate) fn copy_selected_text(&mut self, i: usize) -> bool {
+        self.cancel_text_copies();
         let Some(v) = self.views.get(i) else { return false };
         let id = v.id;
-        if v.all_text && !v.pages_without_text().is_empty() {
+        // So are a selection's pages not read yet (a selection across pages copied before every
+        // page it covers has its text), rather than copying nothing.
+        let waiting = v.selection_waits_for_text();
+        if (v.session.all_text && !v.pages_without_text().is_empty()) || waiting.is_some() {
             // Checked before any page is read: a document that refuses copying reads nothing.
             if !self.may_copy(id) {
                 return false;
             }
-            let Some(job) = self.views.get(i).and_then(|v| Some(DocumentCopyJob::of(v, self.session.get(id)?))) else { return false };
-            self.document_copy = Some(DocumentCopy::start(id, job, ctx));
+            let job = |v: &crate::DocView, doc: &pdfcraft_engine::Document| match waiting {
+                Some(span) if !v.session.all_text => DocumentCopyJob::of_selection(v, doc, span),
+                _ => DocumentCopyJob::of(v, doc),
+            };
+            let Some(job) = self.views.get(i).and_then(|v| Some(job(v, self.session.get(id)?))) else { return false };
+            self.text_copies.submit(id, Priority::BACKGROUND, move |cancel| job.text(cancel).unwrap_or_default());
             return true;
         }
         let Some(text) = v.selected_text().filter(|text| !text.is_empty()) else { return false };
         if !self.may_copy(id) {
             return false;
         }
-        // Built only when there is a clipboard to take it.
-        let html = if self.takes_html() {
-            self.views
-                .get(i)
-                .and_then(DocView::selected_glyphs)
-                .and_then(|(page, layer, glyphs)| self.session.get(id)?.rich_copy(page, &layer, &glyphs).ok())
-                // A capped copy would paste less than the plain text holds; paste that instead.
-                .filter(|copy| !copy.truncated)
-                .map(|copy| copy.html)
-                .filter(|html| !html.is_empty())
-        } else {
-            None
-        };
-        if !html.is_some_and(|html| self.put_rich_text(&html, &text)) {
-            ctx.copy_text(text);
+        let html = self
+            .views
+            .get(i)
+            .and_then(DocView::selected_glyphs)
+            .and_then(|(page, layer, glyphs)| self.session.get(id)?.rich_copy(page, &layer, &glyphs).ok())
+            // A capped copy would paste less than the plain text holds; paste that instead.
+            .filter(|copy| !copy.truncated)
+            .map(|copy| copy.html)
+            .filter(|html| !html.is_empty());
+        // The HTML and its plain alternative go out as one set; where that fails the plain text
+        // is written alone.
+        let rich = html.is_some_and(|html| self.clipboard.write(&[Flavor::new(HTML, html.into_bytes()), Flavor::text(&text)]).is_ok());
+        if !rich {
+            self.put_text(&text);
         }
         true
-    }
-
-    /// Whether Copy with formatting has a clipboard to write: the system clipboard is on, and
-    /// this isn't the web build (or a test stands in for the clipboard).
-    fn takes_html(&self) -> bool {
-        self.system_clipboard && (self.html_clipboard_override.is_some() || cfg!(not(target_arch = "wasm32")))
-    }
-
-    /// Put `html` on the clipboard with `text` as its plain alternative, in one set (egui has no
-    /// HTML output, and its own text copy at the end of the frame would replace the HTML).
-    /// `false` when it wasn't, so the caller copies the plain text the usual way.
-    fn put_rich_text(&mut self, html: &str, text: &str) -> bool {
-        if let Some(set) = self.html_clipboard_override.as_mut() {
-            return set(html, text);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            crate::os_clipboard::with_kept(&mut self.os_clipboard, |c| c.set().html(html, Some(text))).is_ok()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            false
-        }
-    }
-
-    /// The clipboard text of a whole-document copy, once its pages are read; dropped with the
-    /// document it was copied from, and by any later copy (a text field's, a comment's), which
-    /// it must not replace. Run at the end of the frame, so it sees this frame's copies.
-    pub(crate) fn finish_document_copy(&mut self, ctx: &egui::Context) {
-        let Some(c) = &self.document_copy else { return };
-        let copied = ctx.output(|o| o.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(_) | egui::OutputCommand::CopyImage(_))));
-        if copied || !self.views.iter().any(|v| v.id == c.doc) {
-            self.document_copy = None;
-            return;
-        }
-        match c.rx.try_recv() {
-            Ok(text) => {
-                self.document_copy = None;
-                if !text.is_empty() {
-                    ctx.copy_text(text);
-                }
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(50)),
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.document_copy = None,
-        }
     }
 }
 
 #[cfg(test)]
 mod review_tests {
+    use std::sync::{Arc, Mutex};
+
+    use craft::host::queue::{JobQueue, QueueOptions};
+    use craft::host::{ManualJobs, Wake};
+    use craft::platform::clipboard::{Clipboard, EventClipboard};
+
     use super::*;
-    fn delivered() -> egui::Event {
-        egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([1, 1], egui::Color32::GREEN)))
-    }
 
-    fn key(pressed: bool, modifiers: egui::Modifiers) -> egui::Event {
-        egui::Event::Key { key: egui::Key::V, physical_key: None, pressed, repeat: false, modifiers }
-    }
+    type Writes = Arc<Mutex<Vec<Vec<Flavor>>>>;
 
-    fn image_app() -> PdfCraftApp {
-        let mut app = PdfCraftApp::new();
-        app.system_clipboard = false;
+    /// An app on a blank document whose clipboard is fed by paste events and records its writes.
+    fn app_with_clipboard() -> (PdfCraftApp, Writes) {
+        let writes: Writes = Arc::default();
+        let record = writes.clone();
+        let mut app = PdfCraftApp::for_unit_tests();
+        app.clipboard = Clipboard::new(EventClipboard::new(
+            || 0,
+            move |flavors| {
+                record.lock().unwrap().push(flavors.to_vec());
+                Ok(0)
+            },
+        ));
         app.create_blank();
-        app.clipboard_override = Some(crate::create_ui::Clip::Image { width: 1, height: 1, rgba: vec![255, 0, 0, 255] });
-        app
+        (app, writes)
     }
 
-    fn frame(app: &mut PdfCraftApp, ctx: &egui::Context, time: f64, events: Vec<egui::Event>) -> usize {
-        ctx.run_ui(egui::RawInput { time: Some(time), events, ..Default::default() }, |ui| app.clipboard_keys(0, ui.ctx()))
-            .drop_without_applying_deltas();
+    fn green() -> egui::Event {
+        egui::Event::PasteImage(Arc::new(egui::ColorImage::filled([1, 1], egui::Color32::GREEN)))
+    }
+
+    /// One frame's paste events offered, then Paste run as its command; the images on page 1.
+    fn paste(app: &mut PdfCraftApp, events: Vec<egui::Event>) -> usize {
+        let mut content = craft::ui::runtime::commands::ClipContent::default();
+        for event in events {
+            match event {
+                egui::Event::Paste(text) => content.text = Some(text.into()),
+                egui::Event::PasteImage(image) => content.image = Some(image),
+                _ => {}
+            }
+        }
+        app.offer_clip_content(&content);
+        assert!(app.execute(&egui::Context::default(), "edit.paste"));
         app.session.get(app.views[0].id).unwrap().page_images(0).len()
     }
 
     #[test]
-    fn delivered_image_pastes_for_either_modifier_release_order() {
-        for command_first in [true, false] {
-            let mut app = image_app();
-            let ctx = egui::Context::default();
-            frame(&mut app, &ctx, 1.0, vec![egui::Event::ModifiersChanged(egui::Modifiers::COMMAND)]);
-            let releases = if command_first {
-                vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE), key(false, egui::Modifiers::NONE)]
-            } else {
-                vec![key(false, egui::Modifiers::COMMAND), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]
-            };
-            assert_eq!(frame(&mut app, &ctx, 1.1, releases), 0, "key release is not a delivered paste");
-            assert_eq!(frame(&mut app, &ctx, 1.2, vec![delivered()]), 1, "asynchronous pixels identify the actual paste");
-            assert_eq!(frame(&mut app, &ctx, 1.25, vec![key(false, egui::Modifiers::NONE)]), 1);
-        }
-    }
-
-    #[test]
-    fn clipboard_history_after_a_completed_paste_does_not_paste_on_open() {
-        for explicit_press in [false, true] {
-            let mut app = image_app();
-            let ctx = egui::Context::default();
-            let mut first = vec![egui::Event::ModifiersChanged(egui::Modifiers::COMMAND), delivered()];
-            if explicit_press {
-                first.push(key(true, egui::Modifiers::COMMAND));
-            }
-            first.push(key(false, egui::Modifiers::COMMAND));
-            assert_eq!(frame(&mut app, &ctx, 1.0, first), 1);
-            // The integration drops Windows-key identity; Win+V can leave only this release.
-            assert_eq!(
-                frame(&mut app, &ctx, 1.1, vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE), key(false, egui::Modifiers::NONE)]),
-                1,
-                "opening history must not paste"
-            );
-            assert_eq!(
-                frame(&mut app, &ctx, 1.2, vec![delivered(), key(true, egui::Modifiers::COMMAND), key(false, egui::Modifiers::COMMAND)]),
-                2,
-                "choosing an item produces exactly one intentional paste"
-            );
-        }
-    }
-
-    #[test]
-    fn clipboard_history_and_plain_v_after_an_unrelated_shortcut_do_nothing() {
-        let mut app = image_app();
-        let ctx = egui::Context::default();
-        let copy = egui::Event::Key { key: egui::Key::C, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND };
-        frame(&mut app, &ctx, 1.0, vec![egui::Event::ModifiersChanged(egui::Modifiers::COMMAND), copy]);
-        assert_eq!(frame(&mut app, &ctx, 1.1, vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE), key(false, egui::Modifiers::NONE)]), 0);
-        assert_eq!(frame(&mut app, &ctx, 1.2, vec![key(true, egui::Modifiers::NONE), key(false, egui::Modifiers::NONE)]), 0);
-        assert_eq!(frame(&mut app, &ctx, 10.0, vec![key(false, egui::Modifiers::NONE)]), 0);
-    }
-
-    #[test]
     fn delivered_image_is_authoritative_and_not_duplicated_by_keys() {
-        let mut app = image_app();
-        app.system_clipboard = true;
-        app.clipboard_override = Some(crate::create_ui::Clip::Text("newer OS contents".into()));
-        let ctx = egui::Context::default();
-        assert_eq!(frame(&mut app, &ctx, 1.0, vec![delivered(), key(true, egui::Modifiers::COMMAND), key(false, egui::Modifiers::COMMAND)]), 1);
+        let (mut app, _) = app_with_clipboard();
+        assert_eq!(paste(&mut app, vec![egui::Event::Paste("newer OS contents".into()), green()]), 1);
         assert_eq!(app.last_copied_image.as_ref().unwrap().2, vec![0, 255, 0, 255]);
     }
 
-    #[test]
-    fn text_then_image_batch_pastes_image_and_keeps_its_cache() {
-        let mut app = image_app();
-        let ctx = egui::Context::default();
-        assert_eq!(frame(&mut app, &ctx, 1.0, vec![egui::Event::Paste("text".into()), delivered()]), 1);
-        assert_eq!(app.last_copied_image.unwrap().2, vec![0, 255, 0, 255]);
-    }
-
+    /// The clipboard holds one paste at a time: an image offered with text pastes, with the
+    /// pasted pixels kept as the app's cache, whichever event came first.
     #[test]
     fn image_then_text_batch_pastes_image_and_leaves_text_authoritative() {
-        let mut app = image_app();
-        let ctx = egui::Context::default();
-        assert_eq!(frame(&mut app, &ctx, 1.0, vec![delivered(), egui::Event::Paste("text".into())]), 1);
-        assert!(app.last_copied_image.is_none());
+        let (mut app, _) = app_with_clipboard();
+        assert_eq!(paste(&mut app, vec![green(), egui::Event::Paste("text".into())]), 1);
         assert!(app.last_copied_file.is_none());
     }
 
     #[test]
+    fn text_then_image_batch_pastes_image_and_keeps_its_cache() {
+        let (mut app, _) = app_with_clipboard();
+        assert_eq!(paste(&mut app, vec![egui::Event::Paste("text".into()), green()]), 1);
+        assert_eq!(app.last_copied_image.unwrap().2, vec![0, 255, 0, 255]);
+    }
+
+    #[test]
     fn separate_delivered_images_in_one_batch_each_paste_once() {
-        let mut app = image_app();
-        let ctx = egui::Context::default();
-        assert_eq!(
-            frame(&mut app, &ctx, 1.0, vec![delivered(), delivered(), key(true, egui::Modifiers::COMMAND), key(false, egui::Modifiers::COMMAND)]),
-            2
-        );
-    }
-
-    #[test]
-    fn explicit_control_shortcut_still_pastes_once_without_an_image_event() {
-        let mut app = image_app();
-        let ctx = egui::Context::default();
-        assert_eq!(frame(&mut app, &ctx, 1.0, vec![key(true, egui::Modifiers::COMMAND)]), 1);
-        assert_eq!(frame(&mut app, &ctx, 1.1, vec![key(false, egui::Modifiers::COMMAND)]), 1);
-    }
-
-    #[test]
-    fn delivered_image_obeys_focus_modal_and_permission_guards() {
-        let ctx = egui::Context::default();
-        let mut app = image_app();
-        app.palette_open = true;
-        assert_eq!(frame(&mut app, &ctx, 1.0, vec![delivered()]), 0);
-        app.palette_open = false;
-        app.views[0].organize = true;
-        assert_eq!(frame(&mut app, &ctx, 2.0, vec![delivered()]), 0);
-        app.views[0].organize = false;
-        app.apply_edit(pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection {
-            permissions_password: Some("owner".into()),
-            ..Default::default()
-        }));
-        let bytes = app.session.save_bytes(app.views[0].id).unwrap();
-        let mut restricted = PdfCraftApp::new();
-        restricted.open_bytes("restricted.pdf", None, bytes.as_ref().clone()).unwrap();
-        assert!(!restricted.session.get(restricted.views[0].id).unwrap().allows_modification());
-        assert_eq!(frame(&mut restricted, &ctx, 3.0, vec![delivered()]), 0);
-    }
-
-    #[test]
-    fn review_an_image_less_release_is_silent_but_explicit_paste_explains() {
-        let mut app = PdfCraftApp::new();
-        app.system_clipboard = false;
-        app.create_blank();
-        app.toast = None;
-        let ctx = egui::Context::default();
-        ctx.run_ui(
-            egui::RawInput {
-                events: vec![egui::Event::Key {
-                    key: egui::Key::V,
-                    physical_key: None,
-                    pressed: false,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-                ..Default::default()
-            },
-            |ui| app.clipboard_keys(0, ui.ctx()),
-        )
-        .drop_without_applying_deltas();
-        assert!(app.toast.is_none());
-        assert!(!app.paste_image(0, None));
-        assert!(app.toast.is_some(), "an explicit menu action still explains why there is no image");
-    }
-
-    #[test]
-    fn review_text_paste_release_is_silent_and_later_image_paste_still_works() {
-        let mut app = PdfCraftApp::new();
-        app.system_clipboard = false;
-        app.create_blank();
-        app.last_copied_image = Some((1, 1, vec![255, 0, 0, 255]));
-        app.palette_open = true; // A text field owns the first event.
-        let ctx = egui::Context::default();
-        ctx.run_ui(egui::RawInput { events: vec![egui::Event::Paste("text".into())], ..Default::default() }, |ui| app.clipboard_keys(0, ui.ctx()))
-            .drop_without_applying_deltas();
-        assert!(app.last_copied_image.is_none());
-        app.palette_open = false;
-        app.toast = None;
-        ctx.run_ui(
-            egui::RawInput {
-                events: vec![egui::Event::Key {
-                    key: egui::Key::V,
-                    physical_key: None,
-                    pressed: false,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-                ..Default::default()
-            },
-            |ui| app.clipboard_keys(0, ui.ctx()),
-        )
-        .drop_without_applying_deltas();
-        assert!(app.toast.is_none(), "the text gesture's key release must be silent");
-        app.clipboard_override = None;
-        let delivered = egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([1, 1], egui::Color32::GREEN)));
-        ctx.run_ui(egui::RawInput { events: vec![delivered], ..Default::default() }, |ui| app.clipboard_keys(0, ui.ctx()))
-            .drop_without_applying_deltas();
-        let id = app.active_ids().unwrap().1;
-        assert_eq!(app.session.get(id).unwrap().page_images(0).len(), 1, "a later real image shortcut still works");
+        let (mut app, _) = app_with_clipboard();
+        assert_eq!(paste(&mut app, vec![green()]), 1);
+        assert_eq!(paste(&mut app, vec![green()]), 2);
     }
 
     #[test]
     fn review_failed_keyboard_cut_keeps_the_image_selection() {
-        let mut app = PdfCraftApp::new();
-        app.system_clipboard = false;
-        app.create_blank();
-        app.views[0].image_selection = Some(crate::edit_text_ui::ImageSelection::at(0, 0));
-        let ctx = egui::Context::default();
-        ctx.run_ui(egui::RawInput { events: vec![egui::Event::Cut], ..Default::default() }, |ui| app.clipboard_keys(0, ui.ctx()))
-            .drop_without_applying_deltas();
-        assert!(app.views[0].image_selection.is_some());
+        let (mut app, _) = app_with_clipboard();
+        app.views[0].session.image_selection = Some(crate::edit_text_ui::ImageSelection::at(0, 0));
+        app.execute(&egui::Context::default(), "edit.cut");
+        assert!(app.views[0].session.image_selection.is_some());
+    }
+
+    /// Review of #5017: Copy on a text selection still waiting for its pages' text starts its
+    /// copy, even with a comment selected too, rather than copying the comment.
+    #[test]
+    fn a_selection_waiting_for_its_text_takes_copy_over_a_selected_comment() {
+        let ctx = &egui::Context::default();
+        let (mut app, writes) = app_with_clipboard();
+        let jobs = Arc::new(ManualJobs::new());
+        app.text_copies = JobQueue::new(jobs.clone(), Wake::none(), QueueOptions::default());
+        let shape = pdfcraft_engine::Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] };
+        let style = pdfcraft_engine::Style::default_for(&shape);
+        let note = pdfcraft_engine::NewAnnotation { page: 0, shape, style, contents: String::new(), author: String::new() };
+        assert!(app.apply_edit(ctx, pdfcraft_engine::Edit::AddAnnotation(note)));
+        app.views[0].session.comments.select_only((0, 0));
+        // The page's text is not read yet: the selection waits for it.
+        app.views[0].session.texts.clear();
+        app.views[0].select_text(0, 0, 0);
+        assert!(app.views[0].selection_waits_for_text().is_some());
+        assert!(app.execute(&egui::Context::default(), "edit.copy"));
+        assert_eq!(jobs.waiting(), 1, "the selection's copy started");
+        assert!(app.comment_clipboard.is_none(), "the comment was not copied");
+        assert!(writes.lock().unwrap().is_empty(), "no comment payload reached the clipboard");
     }
 }

@@ -65,7 +65,13 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   nothing paints inside the areas;
 - **form XObjects**: rewritten recursively into new objects (pages sharing the original keep it);
 - **annotations** whose rectangle overlaps (with their pop-ups and their replies, `/IRT`), and **form fields** with a
-  widget under a mark;
+  widget under a mark. On a selected page, a non-popup annotation with no readable `/Rect`
+  (exactly four finite numbers, including referenced coordinates) refuses the entire operation
+  with its page and annotation number. Repair or remove it before applying again; nothing changes
+  on refusal. An unreadable rectangle is not treated as evidence that it misses the marks. An
+  entry of `/Annots` that says it is something else (a `/Type` other than `/Annot` and no
+  annotation `/Subtype`, such as a font a writer listed there) is not an annotation: it is kept
+  and does not block Apply;
 - the marks themselves, replaced by boxes in their fill colour (and overlay text) drawn into the
   page as a `/PCMark /Redaction` stream;
 - **metadata** that repeats the removed text (#2448): `/Info` entries containing it or wholly
@@ -130,9 +136,19 @@ Text is placed with the font and size set by `Tf` or by an ExtGState's `/Font` t
 form XObject starts from the text state of the content that draws it. Content that can't be
 decoded makes the operation fail rather than leave it unredacted, and so does an inline image the
 renderer's tokenizer reads no image for (`RedactError::Unreadable`): where the page's operators
-resume after it would be a guess. A Redact annotation with neither a usable `/QuadPoints` array nor a usable
+resume after it would be a guess. So do bytes the content parser can't read, in the page's content
+or in a form under an area (a stray `)` or `}` in a `TJ` array, say): the interpreter reads past
+them, so text they hide, which other readers may draw, would be neither found nor removed. Remove
+hidden information refuses a page for both too, in whatever content it walks. A Redact annotation with neither a usable `/QuadPoints` array nor a usable
 `/Rect` makes it fail with `RedactError::UnreadableMark` before anything changes, instead of
-skipping that mark. The count covers the marks on the pages being applied.
+skipping that mark. The count covers the marks on the pages being applied. Where the walk or a
+cleanup can't read what it must to show something gone (content or forms with bytes the parser
+can't read, or past what one page may read or is followed, a form whose `/Matrix` isn't six
+numbers, a Type 3 font without the entries its cleanup reads), the operation fails with
+`RedactError::PageRefused`, naming the page whose content or forms are the cause, marked or not, or
+with `RedactError::Refused` where no one page is (a Type 3 font, or forms shared across the
+document). `remove_hidden` may have changed the document by then, as for its other refusals: a
+caller passes a copy it can drop.
 
 Tiling-pattern cells are separate streams. Applying a mark removes a pattern resource when no
 surviving paint uses it. If a cell remains reachable after rewriting the selected pages and may

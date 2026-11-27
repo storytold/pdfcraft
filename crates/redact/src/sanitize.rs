@@ -479,12 +479,13 @@ fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
         o.and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
     };
     let all = refs(oc.get(b"OCGs"));
-    let (on, off) = (refs(d.get(b"ON")), refs(d.get(b"OFF")));
-    let mut hidden: Vec<ObjRef> = if d.name(b"BaseState") == Some(b"OFF") {
-        all.iter().copied().filter(|g| !on.contains(g)).collect()
-    } else {
-        off.into_iter().filter(|g| all.contains(g)).collect()
-    };
+    // sets: the lists are the document's, and a filter over every group would scan them each time
+    let (on, off): (std::collections::HashSet<ObjRef>, std::collections::HashSet<ObjRef>) =
+        (refs(d.get(b"ON")).into_iter().collect(), refs(d.get(b"OFF")).into_iter().collect());
+    // The default state is /BaseState, then /ON turns groups on and /OFF turns them off, so a
+    // group both lists name ends up off (§8.11.4.3, Table 101) — the viewer reads it the same way.
+    let base_off = d.get(b"BaseState").map(|b| crate::resolve_chain(doc, b)).is_some_and(|b| b.as_name() == Some(b"OFF".as_slice()));
+    let mut hidden: Vec<ObjRef> = all.iter().copied().filter(|g| off.contains(g) || (base_off && !on.contains(g))).collect();
     // Each rule, layer list and layer is read once, however often the rules name them: many rules
     // can share one long list.
     let known: std::collections::HashSet<ObjRef> = all.iter().copied().collect();
@@ -657,7 +658,18 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         scope.layers_enabled = layers;
         let out = process(doc, &mut scope, &data, &resources, Matrix::IDENTITY);
         if let Some(error) = out.error {
-            return Err(error.into());
+            return Err(error.on_page(pi + 1));
+        }
+        // Bytes the parser can't read, or an inline image whose end is a guess: the walk reads past
+        // them, so what it reads around them may not be what other readers draw (hidden text in a
+        // broken `TJ` is neither found nor removed). As for content that doesn't decode, count the
+        // page so the removal runs and refuses it.
+        if out.unparsed || out.ambiguous {
+            if write {
+                return Err(RedactError::Unreadable(pi + 1));
+            }
+            total += 1;
+            continue;
         }
         let blocks = scope.layer_blocks;
         let glyphs = scope.report.glyphs;
@@ -702,11 +714,11 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
                 }
                 // A full save keeps whatever is still referenced: unlink the originals this page no
                 // longer draws so the removed form or image bytes cannot survive in the saved file.
-                crate::interp::prune(doc, &mut budget, &mut xo, &out.replaced, &page_content)?;
+                crate::interp::prune(doc, &mut budget, &mut xo, &out.replaced, &page_content).map_err(|e| e.on_page(pi + 1))?;
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
-            retired_properties.extend(crate::interp::prune_properties(doc, &mut budget, &mut res, &page_content)?);
-            crate::type3::prune_type3_from_resources(doc, &mut budget, &mut res, &page_content, Some(&page.dict))?;
+            retired_properties.extend(crate::interp::prune_properties(doc, &mut budget, &mut res, &page_content).map_err(|e| e.on_page(pi + 1))?);
+            crate::type3::prune_type3_from_resources(doc, &mut budget, &mut res, &page_content, Some(&page.dict)).map_err(|e| e.on_page(pi + 1))?;
             doc.update_dict(page.obj, |d| {
                 d.set(b"Contents".to_vec(), Object::Array(new_list));
                 d.set(b"Resources".to_vec(), Object::Dict(res));
