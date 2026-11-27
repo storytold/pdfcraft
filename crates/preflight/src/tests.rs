@@ -2760,6 +2760,51 @@ fn convert_removes_usage_rights_and_the_build_number_they_carry() {
     assert_eq!(int_issue(&r.remaining), Some(false));
 }
 
+/// A usage-rights signature object that a kept `/Perms` entry also reaches, directly or through
+/// another object, stays: emptying it would leave the kept entry without its value. The number it
+/// holds stays with it, so that issue is not reported as fixed.
+#[test]
+fn convert_keeps_a_usage_rights_object_a_kept_permission_shares() {
+    let with = |perms: &str| {
+        let catalog = format!("<< /Type /Catalog /Pages 2 0 R /Perms {perms} >>");
+        build(
+            &[
+                catalog.as_str(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R >>",
+                "<< /Type /Sig /Filter /Adobe.PPKLite /Prop_Build << /App << /R 202310270710265 >> >> /ByteRange [0 10 20 5] /Contents <00> >>",
+                "<< /Type /Sig /Reference [<< /Type /SigRef /TransformMethod /DocMDP /Data 4 0 R >>] /ByteRange [0 10 20 5] /Contents <00> >>",
+            ],
+            "",
+        )
+    };
+    let int_fixable = |issues: &[Issue]| issues.iter().find(|i| i.message == "An integer is outside the 32-bit range").map(|i| i.fixable);
+    // The kept entry, resolved through the saved and reopened file.
+    let kept = |doc: &Document, key: &[u8]| -> Object {
+        let bytes = pdfcraft_cos::write_full(doc, &Default::default()).unwrap();
+        let back = Document::open(std::sync::Arc::new(bytes)).unwrap();
+        let perms = back.resolve(back.get(back.root().unwrap()).as_dict().unwrap().get(b"Perms").unwrap());
+        let value = perms.as_dict().unwrap().get(key).cloned().expect("the kept entry is still there");
+        (*back.resolve(&value)).clone()
+    };
+
+    // The same object under both entries.
+    let mut doc = with("<< /UR3 4 0 R /DocMDP 4 0 R >>");
+    assert_eq!(int_fixable(&verify(&doc, Level::A2b)), Some(false), "the kept entry holds the number too");
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.fixed.contains(&"Removed the Reader usage rights, which converting voids".to_string()), "{:?}", r.fixed);
+    assert_eq!(int_fixable(&r.remaining), Some(false), "{:#?}", r.remaining);
+    assert!(kept(&doc, b"DocMDP").as_dict().is_some_and(|d| d.name(b"Type") == Some(b"Sig")), "DocMDP still resolves to its signature");
+
+    // Reached through the kept signature's own objects.
+    let mut doc = with("<< /UR3 4 0 R /DocMDP 5 0 R >>");
+    convert(&mut doc, Level::A2b).unwrap();
+    let docmdp = kept(&doc, b"DocMDP");
+    let reference = docmdp.as_dict().and_then(|d| d.get(b"Reference")).and_then(Object::as_array).and_then(|a| a.first()).cloned();
+    let data = reference.as_ref().and_then(Object::as_dict).and_then(|d| d.get(b"Data")).and_then(Object::as_ref).expect("Data is a reference");
+    assert!(!matches!(*doc.get(data), Object::Null), "the object the kept signature names is not emptied");
+}
+
 /// Font dictionaries of one face share one embedded program: a generator that writes a
 /// `/Helvetica` per page would otherwise get a copy of the program per page.
 #[test]

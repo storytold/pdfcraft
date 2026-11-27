@@ -1020,18 +1020,53 @@ fn check_limits(
 /// older `/UR` some files still carry.
 const USAGE_RIGHTS: [&[u8]; 2] = [b"UR3", b"UR"];
 
-/// The signature objects of the document's usage rights.
+/// The signature objects of the document's usage rights that converting empties: those no other
+/// `/Perms` entry reaches ([`removable_signatures`]).
 fn usage_rights_signatures(doc: &Document) -> std::collections::HashSet<ObjRef> {
     let perms = doc.root().map(|r| doc.get(r)).and_then(|c| c.as_dict().and_then(|c| c.get(b"Perms")).map(|p| doc.resolve(p)));
     let Some(perms) = perms.as_deref().and_then(Object::as_dict) else { return Default::default() };
-    USAGE_RIGHTS.iter().filter_map(|k| perms.get(k)).filter_map(Object::as_ref).collect()
+    let signatures: Vec<ObjRef> = USAGE_RIGHTS.iter().filter_map(|k| perms.get(k)).filter_map(Object::as_ref).collect();
+    let mut kept = perms.clone();
+    for k in USAGE_RIGHTS {
+        kept.remove(k);
+    }
+    removable_signatures(doc, &kept, signatures)
+}
+
+/// Objects a walk from the kept `/Perms` entries reads at most, so a hostile file can't make
+/// conversion walk it whole.
+const MAX_KEPT_PERMS_OBJECTS: usize = 4096;
+
+/// The usage-rights `signatures` that no entry of the kept `/Perms` (`kept`) reaches, directly or
+/// through other objects: emptying a shared one would leave that entry without its value. When
+/// the walk passes [`MAX_KEPT_PERMS_OBJECTS`], none is removable, so nothing kept is lost.
+fn removable_signatures(doc: &Document, kept: &Dict, signatures: Vec<ObjRef>) -> std::collections::HashSet<ObjRef> {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack: Vec<Object> = kept.iter().map(|(_, v)| v.clone()).collect();
+    while let Some(o) = stack.pop() {
+        match o {
+            Object::Ref(r) => {
+                if seen.insert(r) {
+                    if seen.len() > MAX_KEPT_PERMS_OBJECTS {
+                        return Default::default();
+                    }
+                    stack.push((*doc.get(r)).clone());
+                }
+            }
+            Object::Array(items) => stack.extend(items),
+            Object::Dict(d) => stack.extend(d.iter().map(|(_, v)| v.clone())),
+            Object::Stream(s) => stack.extend(s.dict.iter().map(|(_, v)| v.clone())),
+            _ => {}
+        }
+    }
+    signatures.into_iter().filter(|r| !seen.contains(r)).collect()
 }
 
 /// Take the usage rights off the catalog `cat`, keeping the rest of `/Perms` (a certification's
 /// `/DocMDP`), and empty their signature objects. They are signed over the file as it was, so
 /// converting it voids them, and a viewer may lock every field of a form whose usage rights are
 /// void; the XFA layout drops them for the same reason (`pdfcraft_xfa`, `drop_usage_rights`).
-/// Whether there were any.
+/// A signature object a kept entry also reaches stays as it is. Whether there were any.
 fn drop_usage_rights(doc: &mut Document, cat: &mut Dict) -> Result<bool, pdfcraft_cos::CosError> {
     let Some(entry) = cat.get(b"Perms").cloned() else { return Ok(false) };
     let Some(mut perms) = doc.resolve(&entry).as_dict().cloned() else { return Ok(false) };
@@ -1039,6 +1074,7 @@ fn drop_usage_rights(doc: &mut Document, cat: &mut Dict) -> Result<bool, pdfcraf
     if signatures.is_empty() {
         return Ok(false);
     }
+    let removable = removable_signatures(doc, &perms, signatures.iter().filter_map(Object::as_ref).collect());
     match entry {
         Object::Ref(r) if perms.is_empty() => {
             cat.remove(b"Perms");
@@ -1050,7 +1086,7 @@ fn drop_usage_rights(doc: &mut Document, cat: &mut Dict) -> Result<bool, pdfcraf
         Object::Ref(r) => doc.set_existing(r, Object::Dict(perms))?,
         _ => cat.set(b"Perms".to_vec(), Object::Dict(perms)),
     }
-    for r in signatures.iter().filter_map(Object::as_ref) {
+    for r in signatures.iter().filter_map(Object::as_ref).filter(|r| removable.contains(r)) {
         doc.set(r, Object::Null);
     }
     Ok(true)
