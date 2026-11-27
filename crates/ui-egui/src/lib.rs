@@ -41,6 +41,7 @@ pub use combine_ui::{CombineView, Lock as CombineLock, SortKey};
 mod commands;
 pub mod control;
 mod menus;
+pub use menus::tab_context::WindowLauncher;
 mod properties_session;
 /// Header & footer / watermark / background dialog types (tests and automation).
 pub mod marks {
@@ -393,6 +394,9 @@ pub struct PdfCraftApp {
     /// Reads the picked printer's two-sided support in the background (the desktop app sets it;
     /// see [`TwoSidedSource`]). Without one the dialog goes by the printer list alone.
     pub two_sided_source: Option<TwoSidedSource>,
+    /// What starts the window a tab moves to: a new run of this program unless a test stands in
+    /// ([`WindowLauncher`]).
+    pub window_launcher: Option<WindowLauncher>,
     // A browser has no background print work: the type is empty there.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) print_tasks: print_ui::PrintTasks,

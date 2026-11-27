@@ -1258,11 +1258,11 @@ title = "Multiple windows; drag a tab out into a window"
 area = "B"
 tier = "P1"
 milestone = "M14"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/src/menus/tab_context.rs::a_tab_dragged_out_of_the_strip_moves_to_a_new_window", "crates/ui-egui/src/menus/tab_context.rs::move_to_new_window_starts_a_window_on_the_file_and_closes_the_tab"]
+notes = "A document tab dragged out of the strip and let go where no strip or pane takes it (the toolbar, a side panel, outside the window), or the tab's Move to New Window, opens the document in a PdfCraft window of its own (a new run with --new-window) at the page shown, and at its zoom unless the view fits the page or width; the tab closes in the old window. Missing: a document with unsaved changes or never saved to a file stays (a notice says to save it first), since the new window opens the file; the new window doesn't open where the tab was let go; a window's tab can't be dragged back into another window, and there is no Merge all windows; the browser build has one window."
 
 [[feature]]
 id = "view.split-window"
