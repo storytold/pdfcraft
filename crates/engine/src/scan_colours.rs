@@ -198,8 +198,9 @@ fn lines(
         let Some(Some(l)) = lines.get(i) else { return [i, i + 1] };
         let band = i.saturating_sub(lean)..=(i + lean).min(count - 1);
         (l.run[0]..l.run[1])
-            .filter(|&j| !own(i, j, l.own))
-            .flat_map(|j| band.clone().filter(move |&p| own(p, j, l.own)))
+            .filter_map(|j| l.own_at(j).map(|stretch| (j, stretch)))
+            .filter(|&(j, stretch)| !own(i, j, stretch))
+            .flat_map(|(j, stretch)| band.clone().filter(move |&p| own(p, j, stretch)))
             .fold([i, i + 1], |r, p| [r[0].min(p), r[1].max(p + 1)])
     };
     let mut strips = Vec::new();
@@ -216,11 +217,20 @@ fn lines(
 }
 
 /// A rule at one position: the stretch `run` it occupies along, the rules it crosses counting as
-/// ink, and the stretch `own` of its own ink within that.
-#[derive(Clone, Copy)]
+/// ink, and the stretches `own` of its own ink within that, one on either side of each rule it
+/// crosses: a scan leaves a gap at a junction, so the rule's ink is a piece on each side, and each
+/// is the rule's own along its own stretch.
+#[derive(Clone)]
 struct Line {
     run: [usize; 2],
-    own: [usize; 2],
+    own: Vec<[usize; 2]>,
+}
+
+impl Line {
+    /// The stretch of the rule's own ink that `j` lies in; none at a rule it crosses.
+    fn own_at(&self, j: usize) -> Option<[usize; 2]> {
+        self.own.iter().copied().find(|[s, e]| (*s..*e).contains(&j))
+    }
 }
 
 /// Where a rule runs at one position: the longest stretch of ink (the rules it crosses counting
@@ -233,18 +243,18 @@ fn line(len: usize, inked: impl Fn(usize) -> bool, own: impl Fn(usize, [usize; 2
     let ends_anchored = |e: usize| e + JUNCTION_GAP >= len || in_anchor(e - 1) || anchors.iter().any(|[a0, _]| *a0 >= e && a0 - e <= JUNCTION_GAP);
     let own_run = ((MIN_RUN * len as f32).ceil() as usize).max(3);
     let row_ink = |run: usize| (ROW_INK * run as f32).min(ROW_INK_LEANING);
-    // The stretch of the rule's own ink, outside the rules it crosses.
-    let own_stretch = |s: usize, e: usize| {
-        let mut own_ink = (s..e).filter(|&j| inked(j) && !in_anchor(j));
-        let first = own_ink.next()?;
-        Some([first, own_ink.last().unwrap_or(first) + 1])
+    // The stretches of the rule's own ink, between the rules it crosses.
+    let own_stretches = |s: usize, e: usize| -> Vec<[usize; 2]> {
+        runs(e - s, |k| inked(s + k) && !in_anchor(s + k)).into_iter().map(|[a, b]| [s + a, s + b]).collect()
     };
     runs(len, |j| inked(j) || in_anchor(j))
         .into_iter()
         .filter(|[s, e]| starts_anchored(*s) && ends_anchored(*e))
         .filter(|[s, e]| (*s..*e).filter(|&j| inked(j) && !in_anchor(j)).count() >= own_run)
-        .filter_map(|[s, e]| own_stretch(s, e).map(|own| Line { run: [s, e], own }))
-        .filter(|l| (l.run[0]..l.run[1]).filter(|&j| own(j, l.own)).count() as f32 >= row_ink(l.run[1] - l.run[0]))
+        .map(|[s, e]| Line { run: [s, e], own: own_stretches(s, e) })
+        .filter(|l| {
+            (l.run[0]..l.run[1]).filter(|&j| l.own_at(j).is_some_and(|stretch| own(j, stretch))).count() as f32 >= row_ink(l.run[1] - l.run[0])
+        })
         .max_by_key(|l| l.run[1] - l.run[0])
 }
 
@@ -443,6 +453,20 @@ mod tests {
         g.rect(150, 25, 153, 80);
         g.letters(60, 30, 110, 60);
         assert_eq!(g.strips(), [[0, 19, 200, 24], [49, 18, 54, 80], [119, 0, 124, 25], [149, 24, 154, 80]]);
+
+        // A rule across a divider, the scan leaving a pixel's gap on either side of the junction:
+        // the rule's ink is a piece on each side, each the rule's own along its own stretch.
+        let mut g = Grid::new(200, 80);
+        g.rect(100, 0, 103, 80);
+        g.rect(0, 20, 99, 23);
+        g.rect(104, 20, 200, 23);
+        assert_eq!(g.strips(), [[0, 19, 200, 24], [99, 0, 104, 80]], "a crossing with gaps at the junction");
+
+        let mut g = Grid::new(80, 200);
+        g.rect(0, 100, 80, 103);
+        g.rect(20, 0, 23, 99);
+        g.rect(20, 104, 23, 200);
+        assert_eq!(g.strips(), [[0, 99, 80, 104], [19, 0, 24, 200]], "and the other way round");
 
         // A stroke of lettering that touches the rule, and a stub that meets nothing, are not dividers.
         let mut g = Grid::new(200, 80);
