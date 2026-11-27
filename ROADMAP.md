@@ -221,7 +221,7 @@ What's strong and missing in each: [target-app-parity.md](docs/target-app-parity
 
 ## Languages
 
-Twelve key languages: the share of the 2,897 strings in the i18n report's denominator (the interface's strings plus every catalog key), from
+Thirteen key languages: the share of the 2,897 strings in the i18n report's denominator (the interface's strings plus every catalog key), from
 `cargo xtask i18n-report` on 2026-11-03. Detail and script notes: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Strings | Status |
@@ -243,7 +243,7 @@ Twelve key languages: the share of the 2,897 strings in the i18n report's denomi
 Also shipped: Traditional Chinese, Russian, Bulgarian, Telugu, Hungarian, Ukrainian, Italian,
 Kazakh, Polish, Slovenian, Greek, Turkish, Lithuanian, Finnish, Albanian, Catalan, Romanian,
 Norwegian Bokmål, Persian, Central Kurdish, Thai, Lao and Czech: **23 more catalogs**
-(35 interface languages including English).
+(36 interface languages including English).
 
 ## Upcoming
 

@@ -38,7 +38,7 @@ add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../R
   it, ja, ko, nl, no, pl, pt, ru, sv, tr, uk, zh_CN, zh_TW, plus en_AE, en_IL, fr_MA) and Middle
   East / North Africa editions (MEA Arabic, MEH Hebrew, NAF French; `Resources/Sequences/`).
 
-## The twelve key languages
+## The thirteen key languages
 
 | Language | Code | UI strings translated (of 2,897, 2026-11-03) | Dialogs / tooltips / help | Script support | Native review | Status | Acrobat ships it | To `full` (h) |
 |---|---|---|---|---|---|---|---|---|
@@ -61,8 +61,8 @@ twelve, counting a catalog's percentage of the 2,143-key snapshot but only 60% f
 Arabic until their script problems are fixed, and 0 for Hindi, Indonesian and Korean, which had no
 catalog yet. Vietnamese moved from 0% to 100% in that mean (59% → 68%). Hindi, Indonesian and
 Korean now have catalogs, so the score understates them. It is not re-scored here, because that
-decides how their script caveats count (Devanagari rendering unqualified, no Hangul UI face). **≈ 55–110 h**
-to bring all twelve to `full`, of which ≈ 35–60 h is engineering (remaining RTL qualification, a web Hans face, bidi text)
+decides how their script caveats count (Devanagari rendering unqualified, no Hangul UI face). **≈ 56–113 h**
+to bring all thirteen to `full`, of which ≈ 35–60 h is engineering (remaining RTL qualification, a web Hans face, bidi text)
 and the rest catalogs and fixes; native-speaker review needs humans.
 
 No language is `full` except English: every catalog leaves engine error details in English, and
@@ -97,7 +97,7 @@ help/docs polish: their script work is done, and each catalog lacks 46 strings o
 | Thai | `th` | 2,751 (95.0%) | partial | no |
 | Lao | `lo` | 2,504 (86.4%) | partial | no |
 
-**24 other languages** ship (35 catalogs plus English = **36** interface languages in Preferences).
+**23 other languages** ship (35 catalogs plus English = **36** interface languages in Preferences).
 Their presence does not imply a detailed linguistic or runtime review.
 Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
 
