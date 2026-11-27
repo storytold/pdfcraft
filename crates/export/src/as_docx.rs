@@ -68,7 +68,8 @@ pub fn docx_with_language(pages: &[Page], title: &str, language: Option<&str>) -
 /// than a Word page holds ([`MAX_DOCX_PAGE_SHAPES`], [`MAX_DOCX_PAGE_POINTS`]), or whose paths
 /// were not all read ([`Page::art_truncated`]): the rest of those are missing from the document.
 /// Compound fills that exceed the bounded tessellation work are omitted and reported too.
-/// A page that flows draws no shapes, so it is never listed for them.
+/// A page that flows draws no shapes, so it is never listed for them. A page of either kind is
+/// listed when a picture of it is past the document's picture limits and so left out.
 pub fn docx_checked(pages: &[Page], title: &str) -> (Vec<u8>, Vec<usize>) {
     docx_checked_with_language(pages, title, None)
 }

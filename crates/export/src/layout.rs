@@ -129,7 +129,9 @@ impl Field {
     }
 
     /// Fit an automatic field size to its value and usable box, using the same metrics and
-    /// wrapping as PDF field appearances. Explicit font sizes are handled by the caller.
+    /// wrapping as PDF field appearances. Word sets text in half points: a size fitted to the
+    /// box's width goes down to one where the next half point up would make the text wider than
+    /// the box again. Explicit font sizes are handled by the caller.
     pub fn auto_size(&self) -> f64 {
         let (text, multiline) = match &self.kind {
             FieldKind::Text { value, multiline, comb: None, .. } => (value.as_str(), *multiline),
@@ -140,7 +142,9 @@ impl Field {
         let height = if multiline { self.rect[3] - self.rect[1] - 2.0 } else { ((self.rect[3] - self.rect[1]) * 0.65).min(12.0) * 1.15 };
         let font = pdfcraft_fonts::Std14::from_base_font(&self.font);
         let measure = |text: &str, size| font.map_or_else(|| pdfcraft_fonts::cjk_width(text, size), |f| f.text_width(text, size));
-        pdfcraft_forms::appearance::auto_text_size(text, width, height, multiline, measure).clamp(4.0, 12.0)
+        let fitted = pdfcraft_forms::appearance::auto_text_size(text, width, height, multiline, measure).clamp(4.0, 12.0);
+        let rounded = (fitted * 2.0).round() / 2.0;
+        if !multiline && rounded > fitted && measure(text, rounded) > width { (fitted * 2.0).floor() / 2.0 } else { fitted }
     }
 }
 

@@ -264,7 +264,7 @@ pub(crate) fn line_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
             // Font names come from hostile PDF objects and would otherwise be copied in full
             // for every tab-separated piece. Real PostScript font names fit within this cap.
             let base_font: String = block.base_font.chars().take(127).collect();
-            let words: Vec<&str> = line.text.split_whitespace().collect();
+            let words = word_ranges(&line.text);
             if words.len() != ink.len() {
                 // The words can't be matched to their boxes: one piece over all of them.
                 let all = ink.iter().copied().reduce(union).unwrap_or(block.rect);
@@ -278,10 +278,19 @@ pub(crate) fn line_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
                 if !split {
                     continue;
                 }
-                let text = words.get(start..end).unwrap_or_default().join(" ");
+                // The line as it is when nothing splits it. A piece keeps the source's own spaces
+                // between its words (two spaces stay two): only those at a split go.
+                let whole = end - start == words.len();
+                let text = if whole {
+                    block.text.clone()
+                } else {
+                    let from = words.get(start).map_or(0, |w| w.start);
+                    let to = words.get(end - 1).map_or(from, |w| w.end);
+                    line.text.get(from..to).unwrap_or_default().to_string()
+                };
                 let r = ink.get(start..end).unwrap_or_default().iter().copied().reduce(union).unwrap_or(block.rect);
                 // A piece of a split line has no spaces of its own around it.
-                let editor_text = if end - start == words.len() { block.editor_text.clone() } else { text.clone() };
+                let editor_text = if whole { block.editor_text.clone() } else { text.clone() };
                 // These pieces are only for export. Cloning the editing block would retain its
                 // entire reflow_text in every piece, making a line with many tab gaps quadratic
                 // in memory; its editor indexes would not describe these pieces either.
@@ -304,6 +313,25 @@ pub(crate) fn line_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
                 start = end;
             }
         }
+    }
+    out
+}
+
+/// Where each word of `text` (what `split_whitespace` yields) starts and ends in it.
+fn word_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (i, c) in text.char_indices() {
+        if c.is_whitespace() {
+            if let Some(s) = start.take() {
+                out.push(s..i);
+            }
+        } else if start.is_none() {
+            start = Some(i);
+        }
+    }
+    if let Some(s) = start {
+        out.push(s..text.len());
     }
     out
 }

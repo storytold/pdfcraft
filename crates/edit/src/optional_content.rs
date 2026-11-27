@@ -28,6 +28,23 @@ impl<'a> ArtworkReader<'a> {
         let configuration = self.configuration.get_or_init(|| Configuration::new(self.doc));
         Visibility { doc: self.doc, configuration, cache: HashMap::new(), work: MAX_WORK, truncated: configuration.truncated }
     }
+
+    /// Whether the default configuration shows each of `annotations`, in their order: an
+    /// annotation's `/OC` entry hides it as a layer hides content (ISO 32000-2 Table 166), and
+    /// one without the entry is shown. They share one evaluation budget; `None` for an
+    /// annotation it ran out before, which can't be told to be shown.
+    pub fn annotations_shown(&self, annotations: impl IntoIterator<Item = ObjRef>) -> Vec<Option<bool>> {
+        let mut visibility = self.visibility();
+        annotations
+            .into_iter()
+            .map(|r| {
+                let annotation = self.doc.get(r);
+                let Some(membership) = annotation.as_dict().and_then(|d| d.get(b"OC")) else { return Some(true) };
+                let shown = visibility.visible(membership);
+                (!visibility.truncated).then_some(shown)
+            })
+            .collect()
+    }
 }
 
 const MAX_WORK: usize = 100_000;

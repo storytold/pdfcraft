@@ -484,9 +484,12 @@ fn overlaps(a: [f64; 4], b: [f64; 4]) -> bool {
     w.is_finite() && h.is_finite() && w > 0.5 && h > 0.5
 }
 
+/// The furthest a position or size written into a shape reaches, in points: Word's 22 inches.
+const LAYOUT_LIMIT: f64 = 1584.0;
+
 /// Bound every value written into a shape's position and size, including hostile PDF coordinates.
 fn layout_number(n: f64) -> f64 {
-    if n.is_finite() { n.clamp(-1584.0, 1584.0) } else { 0.0 }
+    if n.is_finite() { n.clamp(-LAYOUT_LIMIT, LAYOUT_LIMIT) } else { 0.0 }
 }
 
 /// Most shapes (one per subpath a path draws), and most fields, one Word page holds. A page with
@@ -511,17 +514,19 @@ const Z_TEXT: u32 = 1 << 21;
 const ROW_GAP: f64 = 0.6;
 
 /// The lines grouped into rows of pieces that follow each other on one baseline, in order: same
-/// (upright) direction, baselines within a fifth of the size, and the next piece starting at
-/// most [`ROW_GAP`] times the size after the last (and not far before it).
+/// (upright) direction, baselines within a fifth of the size of the row's first piece (the row
+/// is placed at one baseline, so pieces that each sit a little lower must not drift away from
+/// it), and the next piece starting at most [`ROW_GAP`] times the size after the last (and not
+/// far before it).
 fn rows(lines: &[layout::Block]) -> Vec<Vec<&layout::Block>> {
     let mut out: Vec<Vec<&layout::Block>> = Vec::new();
     for b in lines {
-        let joins = out.last().and_then(|row| row.last()).is_some_and(|prev| {
+        let joins = out.last().and_then(|row| row.first().zip(row.last())).is_some_and(|(first, prev)| {
             let size = prev.size.max(b.size).max(1.0);
             let gap = b.rect[0] - prev.rect[2];
             prev.rotation.abs() <= 0.1
                 && b.rotation.abs() <= 0.1
-                && (prev.rect[1] - b.rect[1]).abs() < 0.2 * prev.size.min(b.size).max(1.0)
+                && (first.rect[1] - b.rect[1]).abs() < 0.2 * first.size.min(b.size).max(1.0)
                 && gap <= ROW_GAP * size
                 && gap >= -0.2 * size
         });
@@ -736,7 +741,8 @@ fn positioned_page<'a>(b: &mut Builder<'a>, page: &'a Page) -> bool {
 /// form) keeps it on every page: its pages of notes then sit where they did instead of flowing
 /// past the page's end. Each page is a section of its own size, and its headings are told from
 /// its own body size. The pages (0-based) that kept their layout but lost shapes, fields or list
-/// items to a limit, or whose paths were not all read, come with it.
+/// items to a limit, or whose paths were not all read, come with it, and so do the pages, kept
+/// or flowing, that lost a picture to the document's picture limits.
 pub(crate) fn word_doc(pages: &[Page], meta: &Meta) -> (Document, Vec<usize>) {
     let mut b = Builder::new(pages, meta, None);
     let mut last = SectionProps::default();
@@ -764,5 +770,9 @@ pub(crate) fn word_doc(pages: &[Page], meta: &Meta) -> (Document, Vec<usize>) {
             last = sec;
         }
     }
+    // A picture past the document's picture limits is missing from its page, kept or flowing.
+    dropped.append(&mut b.omitted);
+    dropped.sort_unstable();
+    dropped.dedup();
     (b.finish(last), dropped)
 }

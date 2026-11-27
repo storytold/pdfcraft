@@ -1015,6 +1015,21 @@ fn word_export_bounds_the_number_of_pictures_and_skips_empty_ones() {
     assert_eq!(doc.media.len(), 1);
 }
 
+/// A page that lost pictures to the document's picture limit is listed, whether it flows or
+/// keeps its layout; a page with all its pictures is not.
+#[test]
+fn review_word_lists_the_pages_whose_pictures_it_leaves_out() {
+    let mut full = page();
+    let one = full.images[0].clone();
+    full.images = vec![one.clone(); MAX_MEDIA];
+    let mut flowing = page();
+    flowing.images = vec![one.clone()];
+    let mut kept = form_page();
+    kept.images = vec![one];
+    assert_eq!(docx_checked(std::slice::from_ref(&full), "Full").1, Vec::<usize>::new());
+    assert_eq!(docx_checked(&[full, flowing, kept], "Over").1, [1, 2]);
+}
+
 /// The flowing paragraphs of a Word document (table cells left out), each as its runs' text
 /// and whether the run is italic.
 fn word_paragraphs(xml: &str) -> Vec<Vec<(String, bool)>> {
@@ -1595,8 +1610,11 @@ fn word_bounds_hostile_shapes_and_fields() {
     for i in 0..MAX_DOCX_PAGE_SHAPES + 50 {
         p.shapes.push(Shape { paths: vec![(vec![[1.0, i as f64 / 100.0], [2.0, 3.0]], false)], ..boxed([0.0; 4]) });
     }
-    let xml = part(&docx(&[p], "Hostile"), "word/document.xml");
-    assert!(xml.matches("id=\"Shape").count() <= MAX_DOCX_PAGE_SHAPES);
+    let zip = docx(&[p], "Hostile");
+    let xml = part(&zip, "word/document.xml");
+    // The fixture's valid lines are drawn, as many as a page holds and no more.
+    let art = drawn(&word(&zip)).len();
+    assert!(art > 0 && art <= MAX_DOCX_PAGE_SHAPES, "{art}");
     assert!(!xml.contains("NaN") && !xml.contains("inf"), "no non-finite number reaches the XML");
     assert!(!xml.contains('\u{0}'));
 }
@@ -2193,6 +2211,65 @@ fn office_regression_positioned_mixed_styles_use_each_line_piece_once() {
     assert_eq!(styles, [("First".to_string(), false, false), ("Bold".to_string(), true, false), ("Italic".to_string(), false, true)]);
 }
 
+/// Pieces that each sit a little lower than the last are one row only while they stay on the
+/// first piece's baseline: the row is placed at one height, so a piece that has drifted further
+/// keeps a text box, and a place, of its own.
+#[test]
+fn review_a_row_of_pieces_stays_on_its_first_pieces_baseline() {
+    let mut p = form_page();
+    p.fields.clear();
+    p.lines = vec![
+        Block { size: 9.0, ..block("One", 60.0, 700.0, 80.0, 709.0) },
+        Block { size: 9.0, ..block("two", 82.0, 700.25, 100.0, 709.25) },
+        Block { size: 9.0, ..block("three", 102.0, 702.0, 130.0, 711.0) },
+    ];
+    let boxes = text_boxes(&word(&docx(&[p], "Drift")));
+    let [(first, at, _), (second, lower, _)] = boxes.as_slice() else { panic!("{boxes:?}") };
+    assert_eq!((first.as_str(), second.as_str()), ("One two", "three"));
+    // Higher on the page is a smaller distance from its top.
+    assert!(lower[1] < at[1], "{boxes:?}");
+}
+
+/// A fitted size that Word's half points would round up no longer fits: 20 Courier glyphs fit
+/// the 63 pt inside a 65 pt box at 5.25 pt, and at 5.5 pt are wider than the box itself.
+#[test]
+fn review_an_automatic_size_fitted_to_the_width_still_fits_in_half_points() {
+    let mut p = form_page();
+    p.fields.truncate(1);
+    let f = &mut p.fields[0];
+    f.font = "Courier".into();
+    f.rect = [20.0, 20.0, 85.0, 40.0];
+    f.kind = FieldKind::Text { value: "W".repeat(20), multiline: false, comb: None, max_len: None };
+    let size = run_of(&controls(&word(&docx(&[p], "Fitted")))[0].1).size.unwrap();
+    // A Courier glyph is 0.6 em wide.
+    assert!(f64::from(size) * 0.6 * 20.0 <= 63.0, "{size}");
+}
+
+/// A compound fill takes a freeform for every [`craft_wordmodel::freeform::MAX_PATHS`]
+/// trapezoids: one that needs a freeform more than the page has room for is left out whole and
+/// the page listed, and one that fits the last freeform is drawn.
+#[test]
+fn review_a_compound_fill_counts_every_freeform_it_takes() {
+    let squares = |n: usize| Shape {
+        even_odd: false,
+        paths: (0..n).flat_map(|i| boxed([10.0, 2.0 * i as f64, 20.0, 2.0 * i as f64 + 1.0]).paths).collect(),
+        stroke: None,
+        fill: Some([1.0, 0.0, 0.0]),
+    };
+    for (trapezoids, fits) in [(craft_wordmodel::freeform::MAX_PATHS, true), (craft_wordmodel::freeform::MAX_PATHS + 1, false)] {
+        let mut p = form_page();
+        p.fields.clear();
+        p.blocks.clear();
+        p.art_framed = true;
+        p.shapes = vec![Shape { paths: vec![(vec![[1.0, 1.0], [2.0, 3.0]], false)], ..boxed([0.0; 4]) }; MAX_DOCX_PAGE_SHAPES - 1];
+        p.shapes.push(squares(trapezoids));
+        let (zip, dropped) = docx_checked(&[p], "Slots");
+        let art = drawn(&word(&zip));
+        assert_eq!(art.len(), MAX_DOCX_PAGE_SHAPES - usize::from(!fits), "{trapezoids} trapezoids");
+        assert_eq!(dropped.is_empty(), fits, "{trapezoids} trapezoids: {dropped:?}");
+    }
+}
+
 #[test]
 fn office_regression_field_formatting_applies_to_field_text() {
     let mut p = form_page();
@@ -2347,18 +2424,25 @@ fn review_radio_groups_keep_their_state_locked_and_report_lost_editability() {
 
 #[test]
 fn review_only_emitted_closed_artwork_suppresses_a_field_outline() {
+    // The page's own circle around a round widget: the field needs no outline of its own, unless
+    // the circle is left open or is not drawn.
+    let circle: Vec<[f64; 2]> = (0..16)
+        .map(|i| {
+            let a = std::f64::consts::TAU * f64::from(i) / 16.0;
+            [95.0 + 5.0 * a.cos(), 155.0 + 5.0 * a.sin()]
+        })
+        .collect();
     for (closed, omitted) in [(false, false), (true, false), (true, true)] {
         let mut p = form_page();
         p.fields.retain(|f| f.name == "No");
         p.fields[0].round = true;
         p.fields[0].border = Some(Stroke { color: [0.0; 3], width: 1.0, dashed: false });
-        let points = vec![[95.0, 150.0], [100.0, 155.0], [95.0, 160.0], [90.0, 155.0]];
-        p.shapes = vec![Shape { paths: vec![(points, closed)], ..boxed([0.0; 4]) }];
+        p.shapes = vec![Shape { paths: vec![(circle.clone(), closed)], ..boxed([0.0; 4]) }];
         if omitted {
             p.shapes.insert(0, Shape { paths: vec![(vec![[0.0, 0.0], [1.0, 1.0]], false); MAX_DOCX_PAGE_SHAPES], ..boxed([0.0; 4]) });
         }
-        let xml = part(&docx(&[p], "Outline"), "word/document.xml");
-        assert!(xml.contains("<a:prstGeom prst=\"ellipse\">"));
+        let outlines = drawn(&word(&docx(&[p], "Outline"))).iter().filter(|s| s.kind == ShapeKind::Ellipse).count();
+        assert_eq!(outlines, usize::from(!closed || omitted), "closed {closed}, omitted {omitted}");
     }
 }
 
@@ -2813,13 +2897,20 @@ fn review_followup_compound_fills_are_trapezoids_that_keep_the_hole() {
         assert!(art[0].fill == Some(Rgb(255, 0, 0)) && art[0].stroke.is_none() && close(art[0].rect, [10.0, 742.0, 90.0, 90.0]), "{art:?}");
         assert_eq!(art[0].paths.len(), 4, "{art:?}");
         assert!(art[0].paths.iter().all(|(points, closed)| *closed && points.len() == 4));
-        // No band covers the hole's middle, (45, 45) from the square's corner.
-        let covers = |points: &[[f32; 2]]| {
-            let (x0, x1) = points.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p[0]), b.max(p[0])));
-            let (y0, y1) = points.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p[1]), b.max(p[1])));
-            x0 < 45.0 && 45.0 < x1 && y0 < 45.0 && 45.0 < y1
-        };
-        assert!(!art[0].paths.iter().any(|(points, _)| covers(points)), "{art:?}");
+        // The bands are the square's four sides around the hole, whose middle none covers: each
+        // as [x0, y0, x1, y1] from the square's corner, in any order.
+        let mut bands: Vec<[f32; 4]> = art[0]
+            .paths
+            .iter()
+            .map(|(points, _)| {
+                let (x0, x1) = points.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p[0]), b.max(p[0])));
+                let (y0, y1) = points.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p[1]), b.max(p[1])));
+                [x0, y0, x1, y1]
+            })
+            .collect();
+        bands.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let expected = [[0.0, 0.0, 90.0, 30.0], [0.0, 30.0, 30.0, 60.0], [0.0, 60.0, 90.0, 90.0], [60.0, 30.0, 90.0, 60.0]];
+        assert!(bands.len() == expected.len() && bands.iter().zip(expected).all(|(band, e)| close(*band, e)), "{bands:?}");
     }
 }
 

@@ -213,6 +213,7 @@ pub struct OfficeExport {
     /// fields or list items past what a Word page holds ([`pdfcraft_export::docx_checked`]: only
     /// those are missing; the page's text and images stay). Radio groups retain locked controls
     /// instead of editable independent checkboxes; pages losing radio editability are listed too.
+    /// Word also lists the pages that lost a picture to the most pictures one document holds.
     /// RTF also lists the pages that lost a picture to
     /// its own limits (it repeats a picture's data at every placement) or one whose rotation it
     /// couldn't bake in; their other content is kept. A picture no format can encode (a JPX image,
@@ -276,7 +277,12 @@ fn export_field(
     let border = border.or_else(|| {
         let look = appearance?;
         let bounds = look.bounds?;
-        let scale = ((w.rect[2] - w.rect[0]) / (bounds[2] - bounds[0])).min((w.rect[3] - w.rect[1]) / (bounds[3] - bounds[1]));
+        // A line is as much wider on the page as the appearance is: its `/BBox`, through its
+        // `/Matrix`, is fitted to the widget's rectangle (ISO 32000-2 §12.5.5), wherever in it
+        // the border is drawn. An appearance without a usable box is measured by its border.
+        let (frame, matrix) = look.frame.unwrap_or(([bounds[2] - bounds[0], bounds[3] - bounds[1]], 1.0));
+        let scale = matrix * ((w.rect[2] - w.rect[0]) / frame[0]).min((w.rect[3] - w.rect[1]) / frame[1]);
+        let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
         look.border.map(|b| pdfcraft_export::Stroke { color: b.color, width: (b.width * scale).max(0.25), dashed: b.dashed })
     });
     let border = border.map(|b| pdfcraft_export::Stroke { width: b.width * unit, ..b });
@@ -424,6 +430,8 @@ fn supported_widget(f: &pdfcraft_forms::Field, w: &pdfcraft_forms::Widget, pages
 
 /// The widget must intersect a real page's visible crop before its coordinates are clamped
 /// into Word's positive page space. Off-crop controls must not reappear at the page edge.
+/// A widget its flags show can still be on a layer that is off: the export asks
+/// [`pdfcraft_edit::ArtworkReader::annotations_shown`] for those that pass here.
 fn visible_widget(w: &pdfcraft_forms::Widget, pages: &[pdfcraft_render::PageInfo]) -> bool {
     let Some(info) = w.page.and_then(|p| pages.get(p)) else { return false };
     let c = info.crop.map(f64::from);
@@ -561,16 +569,16 @@ impl<'a> Looks<'a> {
                                 let color = shape.fill?;
                                 let b = shape.bounds;
                                 let outer = b.iter().zip(bbox).all(|(a, b)| (*a - b).abs() <= 1.0);
-                                let corners = path.points.iter().all(|p| {
-                                    ((p[0] - b[0]).abs() < 0.01 || (p[0] - b[2]).abs() < 0.01)
-                                        && ((p[1] - b[1]).abs() < 0.01 || (p[1] - b[3]).abs() < 0.01)
-                                });
-                                let complete = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]]
-                                    .iter()
-                                    .all(|corner| path.points.iter().any(|p| (p[0] - corner[0]).abs().max((p[1] - corner[1]).abs()) < 0.01));
-                                (outer && corners && complete && (4..=5).contains(&path.points.len())).then_some(color)
+                                (outer && traces_box(&path.points, b)).then_some(color)
                             })
                             .next_back();
+                        let matrix = stream.as_dict().and_then(|d| d.get(b"Matrix")).and_then(|o| {
+                            with_object(cos, o, |o| {
+                                let [a, b, c, d, e, f] = o.as_array()?.as_slice() else { return None };
+                                Some([a.as_f64()?, b.as_f64()?, c.as_f64()?, d.as_f64()?, e.as_f64()?, f.as_f64()?])
+                            })
+                        });
+                        look.frame = appearance_frame(bbox, matrix.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
                     }
                     look
                 })
@@ -587,6 +595,36 @@ struct AppearanceLook {
     border: Option<pdfcraft_edit::Stroke>,
     background: Option<[f64; 3]>,
     bounds: Option<[f64; 4]>,
+    /// The size of the box a viewer fits to the widget's rectangle (the stream's `/BBox` through
+    /// its `/Matrix`), and how much that matrix alone scales a line.
+    frame: Option<([f64; 2], f64)>,
+}
+
+/// [`AppearanceLook::frame`] of an appearance with this `/BBox` and `/Matrix`; `None` for a box
+/// or matrix of no size, or of numbers that aren't finite.
+fn appearance_frame(bbox: [f64; 4], m: [f64; 6]) -> Option<([f64; 2], f64)> {
+    let corners = [[bbox[0], bbox[1]], [bbox[2], bbox[1]], [bbox[2], bbox[3]], [bbox[0], bbox[3]]]
+        .map(|[x, y]| [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]);
+    let size = |axis: usize| {
+        let (low, high) = corners.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), p| (low.min(p[axis]), high.max(p[axis])));
+        high - low
+    };
+    let (width, height, scale) = (size(0), size(1), (m[0] * m[3] - m[1] * m[2]).abs().sqrt());
+    [width, height, scale].iter().all(|n| n.is_finite() && *n > 0.0).then_some(([width, height], scale))
+}
+
+/// Whether `points` trace the sides of the axis-aligned box `b` once, corner to corner: four
+/// points, or five with the last back on the first. Points that only touch every corner (a bow
+/// tie, a side drawn twice) fill part of the box, not all of it.
+fn traces_box(points: &[[f64; 2]], b: [f64; 4]) -> bool {
+    let same = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).abs().max((p[1] - q[1]).abs()) < 0.01;
+    let path = match points {
+        [p, q, r, s] => [*p, *q, *r, *s],
+        [p, q, r, s, back] if same(*p, *back) => [*p, *q, *r, *s],
+        _ => return false,
+    };
+    [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]].iter().all(|corner| path.iter().any(|p| same(*p, *corner)))
+        && path.iter().zip(path.iter().cycle().skip(1)).all(|(p, q)| (p[0] - q[0]).abs() < 0.01 || (p[1] - q[1]).abs() < 0.01)
 }
 
 /// Prefer the largest stroked boundary in page coordinates. Curves in a check mark or the
@@ -811,22 +849,37 @@ impl crate::Document {
         // shared preparation bytes, and a field repeated on an eligible page still survives.
         type WidgetSlot = (usize, usize, usize);
         let mut eligible: HashMap<usize, std::collections::BinaryHeap<WidgetSlot>> = HashMap::new();
-        for (index, f) in fields.iter().enumerate() {
-            if matches!(f.kind, pdfcraft_forms::FieldKind::PushButton | pdfcraft_forms::FieldKind::Signature) {
-                continue;
-            }
-            for (widget, w) in f.widgets.iter().enumerate().filter(|(_, w)| visible_widget(w, &self.info.pages)) {
-                let Some(page) = w.page else { continue };
-                if !supported_widget(f, w, &self.info.pages) {
+        let candidates: Vec<(usize, &pdfcraft_forms::Field, usize, &pdfcraft_forms::Widget)> = fields
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| !matches!(f.kind, pdfcraft_forms::FieldKind::PushButton | pdfcraft_forms::FieldKind::Signature))
+            .flat_map(|(index, f)| {
+                f.widgets.iter().enumerate().filter(|(_, w)| visible_widget(w, &self.info.pages)).map(move |(widget, w)| (index, f, widget, w))
+            })
+            .collect();
+        // A widget on a layer the default configuration turns off is not on the page a reader
+        // sees: neither it nor its value is exported. One whose layers can't be worked out
+        // within the budget is left out too, and its page listed.
+        let shown = looks.artwork.annotations_shown(candidates.iter().map(|(_, _, _, w)| w.obj));
+        for ((index, f, widget, w), shown) in candidates.into_iter().zip(shown) {
+            let Some(page) = w.page else { continue };
+            match shown {
+                Some(true) => {}
+                Some(false) => continue,
+                None => {
                     fields_cut.insert(page);
                     continue;
                 }
-                let heap = eligible.entry(page).or_default();
-                heap.push((w.tab, index, widget));
-                if heap.len() > pdfcraft_export::MAX_DOCX_PAGE_SHAPES {
-                    heap.pop();
-                    fields_cut.insert(page);
-                }
+            }
+            if !supported_widget(f, w, &self.info.pages) {
+                fields_cut.insert(page);
+                continue;
+            }
+            let heap = eligible.entry(page).or_default();
+            heap.push((w.tab, index, widget));
+            if heap.len() > pdfcraft_export::MAX_DOCX_PAGE_SHAPES {
+                heap.pop();
+                fields_cut.insert(page);
             }
         }
         let mut selected = std::collections::BTreeSet::new();
@@ -848,12 +901,31 @@ impl crate::Document {
                 prepared.insert(index, preparation);
             }
         }
-        for on_page in fields_by_page.values() {
-            for (index, _, _) in on_page {
+        // Which of a page's selected widgets the shared byte budget still holds, page by page as
+        // they are written. A radio group has as many buttons as the export keeps of it, so
+        // they are counted only among those.
+        let mut kept: HashMap<usize, Vec<bool>> = HashMap::new();
+        let mut in_order: Vec<usize> = fields_by_page.keys().copied().collect();
+        in_order.sort_unstable();
+        for page in in_order {
+            let Some(on_page) = fields_by_page.get(&page) else { continue };
+            let fits: Vec<bool> = on_page
+                .iter()
+                .take(pdfcraft_export::MAX_DOCX_PAGE_SHAPES)
+                .map(|(index, _, _)| {
+                    let remaining = prepared.get(index).and_then(|preparation| preparation.bytes).and_then(|bytes| field_bytes.checked_sub(bytes));
+                    if let Some(remaining) = remaining {
+                        field_bytes = remaining;
+                    }
+                    remaining.is_some()
+                })
+                .collect();
+            for ((index, _, _), _) in on_page.iter().zip(&fits).filter(|(_, fits)| **fits) {
                 if let Some(preparation) = prepared.get_mut(index) {
                     preparation.buttons += 1;
                 }
             }
+            kept.insert(page, fits);
         }
         let pages = self
             .info
@@ -966,23 +1038,21 @@ impl crate::Document {
                     if on_page.len() > pdfcraft_export::MAX_DOCX_PAGE_SHAPES {
                         fields_truncated = true;
                     }
+                    let fits = kept.get(&i);
                     on_page
                         .iter()
                         .take(pdfcraft_export::MAX_DOCX_PAGE_SHAPES)
-                        .filter_map(|(index, f, w)| {
+                        .enumerate()
+                        .filter_map(|(slot, (index, f, w))| {
                             if !supported_widget(f, w, &self.info.pages) {
                                 fields_truncated = true;
                                 return None;
                             }
-                            let Some(preparation) = prepared.get(index) else {
+                            let fits = fits.and_then(|fits| fits.get(slot)).copied().unwrap_or(false);
+                            let Some(preparation) = prepared.get(index).filter(|_| fits) else {
                                 fields_truncated = true;
                                 return None;
                             };
-                            let Some(remaining) = preparation.bytes.and_then(|bytes| field_bytes.checked_sub(bytes)) else {
-                                fields_truncated = true;
-                                return None;
-                            };
-                            field_bytes = remaining;
                             export_field(cos, f, w, &visible_rect, unit, &mut looks, preparation)
                         })
                         .collect()

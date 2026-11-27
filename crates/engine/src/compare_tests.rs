@@ -521,6 +521,116 @@ fn review_followup_appearance_backgrounds_and_legacy_width() {
     }
 }
 
+/// A border drawn in an appearance is as wide on the page as the appearance's box makes it,
+/// wherever in the box it is drawn: the box, through the stream's matrix, is what a viewer fits
+/// to the widget's rectangle.
+#[test]
+fn review_an_appearance_border_scales_with_its_box_not_with_its_own_path() {
+    let width = |form: &str, data: &str| {
+        let doc = document(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R] >>".into(),
+            "null".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Field) /Rect [10 10 110 30] /P 3 0 R /AP << /N 6 0 R >> >>".into(),
+            format!("<< /Type /XObject /Subtype /Form {form} /Length {} >>\nstream\n{data}\nendstream", data.len()),
+        ]);
+        let fields = pdfcraft_forms::fields(&doc);
+        let f = &fields[0];
+        export_field(&doc, f, &f.widgets[0], &|r| r, 1.0, &mut Looks::new(&doc), &field_preparation(f)).unwrap().border.unwrap().width
+    };
+    let around = width("/BBox [0 0 100 20]", "1 w 0 0 100 20 re S");
+    let inset = width("/BBox [0 0 100 20]", "1 w 20 5 60 10 re S");
+    assert!((inset - around).abs() < 1e-9, "an inset border is no wider: {inset} and {around}");
+    // A box half the widget's size is drawn twice as large, by the fit or by its matrix.
+    for form in ["/BBox [0 0 50 10]", "/BBox [0 0 50 10] /Matrix [2 0 0 2 0 0]"] {
+        let doubled = width(form, "1 w 10 2 30 5 re S");
+        assert!((doubled - 2.0 * around).abs() < 1e-9, "{form}: {doubled} and {around}");
+    }
+}
+
+/// A fill is a field's background only when it covers the appearance's box: points that touch
+/// every corner without going round it (a bow tie, a side drawn twice) fill part of it.
+#[test]
+fn review_only_a_fill_that_goes_round_the_box_is_a_background() {
+    for (appearance, background) in [
+        ("1 0 0 rg 0 0 m 100 0 l 100 20 l 0 20 l f", true),
+        ("1 0 0 rg 0 0 m 100 20 l 100 0 l 0 20 l f", false),
+        ("1 0 0 rg 0 0 m 100 0 l 0 0 l 0 20 l 100 20 l f", false),
+    ] {
+        let doc = review_followup_field_doc("/FT /Tx", appearance);
+        let fields = pdfcraft_forms::fields(&doc);
+        let f = &fields[0];
+        let exported = export_field(&doc, f, &f.widgets[0], &|r| r, 1.0, &mut Looks::new(&doc), &field_preparation(f)).unwrap();
+        assert_eq!(exported.background.is_some(), background, "{appearance}");
+    }
+}
+
+/// A radio group has as many buttons as the export keeps of it: one cut by the field budget is
+/// not counted, so the button that stays doesn't claim a choice the document doesn't hold.
+#[test]
+fn review_a_radio_group_counts_the_buttons_the_budget_keeps() {
+    let widget = |x: usize, state: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [{x} 70 {} 85] /P 3 0 R /AS /Off /AP << /N << /{state} 8 0 R /Off 8 0 R >> >> >>",
+            x + 15
+        )
+    };
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [6 0 R 7 0 R] >>".into(),
+        "null".into(),
+        "<< /T (Size) /FT /Btn /Ff 32768 /Kids [6 0 R 7 0 R] >>".into(),
+        widget(20, "S"),
+        widget(60, "M"),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 15 15] /Length 0 >>\nstream\n\nendstream".into(),
+    ]);
+    let fields = pdfcraft_forms::fields(&doc);
+    let one = prepared_field_bytes(&fields[0]).unwrap();
+    let mut session = Session::new();
+    let id = session.open("radio.pdf", None, doc.bytes().clone(), None).unwrap();
+    let d = session.get(id).unwrap();
+    let cos = &d.editor.as_ref().unwrap().cos;
+    for (budget, kept) in [(MAX_EXPORT_FIELD_BYTES, 2), (one, 1)] {
+        let (pages, _) = d.export_pages_with(false, 0, &mut pdfcraft_cos::ImageBudget::new(cos), true, MAX_EXPORT_SHAPE_POINTS, budget);
+        let buttons: Vec<usize> = pages[0]
+            .fields
+            .iter()
+            .map(|f| match f.kind {
+                pdfcraft_export::FieldKind::Radio { buttons, .. } => buttons,
+                _ => panic!("not a radio button: {f:?}"),
+            })
+            .collect();
+        assert_eq!(buttons, vec![kept; kept]);
+    }
+}
+
+/// A widget on a layer the default configuration turns off is not shown, so neither it nor its
+/// value is exported; the same widget is exported when its layer is on. Nothing was cut short
+/// either way, so the page is not listed.
+#[test]
+fn review_a_widget_on_a_layer_that_is_off_is_not_exported() {
+    for (config, names) in [("/OFF [7 0 R]", vec!["Shown"]), ("/ON [7 0 R]", vec!["Layered", "Shown"])] {
+        let doc = document(&[
+            format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] >> /OCProperties << /OCGs [7 0 R] /D << {config} >> >> >>"),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R 6 0 R] >>".into(),
+            "null".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Layered) /V (kept from view) /Rect [10 10 110 30] /P 3 0 R /OC 7 0 R >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Shown) /V (on the page) /Rect [10 50 110 70] /P 3 0 R >>".into(),
+            "<< /Type /OCG /Name (Internal) >>".into(),
+        ]);
+        let mut session = Session::new();
+        let id = session.open("layers.pdf", None, doc.bytes().clone(), None).unwrap();
+        let d = session.get(id).unwrap();
+        let mut exported: Vec<String> = d.export_pages().iter().flat_map(|p| p.fields.iter().map(|f| f.name.clone())).collect();
+        exported.sort();
+        assert_eq!(exported, names, "{config}");
+        assert_eq!(d.export_office_checked(OfficeFormat::Docx).truncated_pages, Vec::<usize>::new(), "{config}");
+    }
+}
+
 #[test]
 fn review_followup_oversized_direct_and_indirect_widget_colors_are_rejected() {
     use pdfcraft_cos::{Dict, Object};

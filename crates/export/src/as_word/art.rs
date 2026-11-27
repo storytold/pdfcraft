@@ -64,11 +64,17 @@ impl ArtBudget {
     /// Room for one more shape of `points` points: `false`, and the page marked as having
     /// dropped something, when there is none.
     fn take(&mut self, points: usize) -> bool {
-        if self.shapes == 0 || points > self.points {
+        self.take_all(1, points)
+    }
+
+    /// Room for `shapes` more shapes of `points` points together, all of them or none: `false`,
+    /// and the page marked as having dropped something, when they don't all fit.
+    fn take_all(&mut self, shapes: usize, points: usize) -> bool {
+        if shapes > self.shapes || points > self.points {
             self.dropped = true;
             return false;
         }
-        self.shapes -= 1;
+        self.shapes -= shapes;
         self.points -= points;
         true
     }
@@ -243,14 +249,15 @@ fn objects_with_fill(s: &Shape, page_height: f64, budget: &mut ArtBudget, fill: 
 }
 
 /// A compound fill as freeforms of trapezoids that don't overlap, so every reader fills the same
-/// area whatever its own fill rule. Left out, and the page marked, past the bounded work.
+/// area whatever its own fill rule. Left out, and the page marked, past the bounded work or when
+/// the freeforms it takes (one for every [`MAX_PATHS`] trapezoids) don't all fit the page.
 fn compound(s: &Shape, page_height: f64, budget: &mut ArtBudget, color: [f64; 3], out: &mut Vec<InlineObject>) {
     let Some(polygons) = fill::trapezoids(s, &mut budget.fill_work, budget.points) else {
         budget.dropped = true;
         return;
     };
     let Some(bounds) = point_bounds(polygons.iter().flatten()) else { return };
-    if !budget.take(polygons.len().saturating_mul(4)) {
+    if !budget.take_all(polygons.len().div_ceil(MAX_PATHS), polygons.len().saturating_mul(4)) {
         return;
     }
     for chunk in polygons.chunks(MAX_PATHS) {

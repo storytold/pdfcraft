@@ -15798,6 +15798,19 @@ fn office_regression_actual_text_is_not_assigned_to_unrelated_word_boxes() {
     assert_eq!(pieces[0].text, "Right Left");
 }
 
+/// A piece keeps the spaces its source has between its words: only the gap a line is split at
+/// is dropped, and a line that isn't split is the line as read.
+#[test]
+fn review_positioned_pieces_keep_the_spaces_between_their_words() {
+    let doc = text_page("BT /F1 12 Tf 72 700 Td (A  B) Tj ET");
+    let (reading, pieces) = text::reading_blocks_and_lines_checked(&doc, 0).unwrap();
+    assert_eq!(pieces.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["A  B"]);
+    assert_eq!(pieces[0].text, reading.blocks[0].text);
+    let doc = text_page("BT /F1 12 Tf 72 700 Td [(A  B) -6000 (C)] TJ ET");
+    let (_, pieces) = text::reading_blocks_and_lines_checked(&doc, 0).unwrap();
+    assert_eq!(pieces.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["A  B", "C"]);
+}
+
 #[test]
 fn office_regression_split_lines_bound_each_font_name() {
     let mut doc = text_page(&format!("BT /F1 12 Tf 72 700 Td [{}] TJ ET", "(x) -2000 ".repeat(128)));
