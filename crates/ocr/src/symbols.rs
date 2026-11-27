@@ -367,16 +367,30 @@ impl<'a> Shapes<'a> {
         Some(Shapes { ink, labels, components, line })
     }
 
+    /// A component wider than twice the line's height is a rule, not a glyph or a part of one: a
+    /// table rule under the line lies within the region sampled around a word, and it is both
+    /// the largest component near a character's columns and stacked under its glyph (`.000 ±
+    /// .005` under a title-block rule on a 600 dpi scan read as `000+.005`, the rule taken for the
+    /// `±`, while `± .010` on the line above was repaired).
+    fn is_rule(&self, k: &Component) -> bool {
+        k.width() > 2 * (self.line.1 - self.line.0 + 1)
+    }
+
     /// The largest component whose centre lies within `slack` of the character's columns:
     /// the glyph it was read from. Returns its index too.
     fn main_glyph(&self, c: ReadChar, slack: f32) -> Option<(usize, Glyph)> {
         let (lo, hi) = (c.left - slack, c.right + slack);
-        let (id, _) = self.components.iter().enumerate().filter(|(_, k)| (lo..=hi).contains(&k.centre_x())).max_by_key(|(_, k)| k.pixels)?;
+        let (id, _) = self
+            .components
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| !self.is_rule(k) && (lo..=hi).contains(&k.centre_x()))
+            .max_by_key(|(_, k)| k.pixels)?;
         Some((id, self.glyph(&[id])?))
     }
 
     /// The glyph read for the character together with every component stacked over or under
-    /// it: the bar of a `±` is detached from its cross.
+    /// it: the bar of a `±` is detached from its cross. A rule is no part of it.
     fn stacked_glyph(&self, c: ReadChar, slack: f32) -> Option<(Vec<usize>, Glyph)> {
         let (main_id, _) = self.main_glyph(c, slack)?;
         let main = self.components.get(main_id)?;
@@ -388,7 +402,7 @@ impl<'a> Shapes<'a> {
             .filter(|(id, k)| {
                 let overlap = k.right.min(main.right) - k.left.max(main.left) + 1;
                 let gap = (k.top - main.bottom).max(main.top - k.bottom);
-                *id == main_id || (overlap * 2 >= k.width().min(main.width()) && gap <= reach)
+                *id == main_id || (!self.is_rule(k) && overlap * 2 >= k.width().min(main.width()) && gap <= reach)
             })
             .map(|(id, _)| id)
             .collect();
@@ -734,6 +748,22 @@ mod tests {
         let sign = letter_t(&mut tee, 10);
         let one = digit(&mut tee, 50);
         assert_eq!(word(&tee, &[read('t', sign), read('1', one)], None), None, "a t's stem is off centre and its foot is no bar");
+    }
+
+    /// A table rule just under the line, within the region sampled around the word, is neither
+    /// the glyph the `+` was read from (its centre lies in the sign's columns and it holds more
+    /// ink than the cross) nor the bar of the `±` (it is stacked under the cross, and runs on
+    /// far past it). Either way the shape was no `±`, and `.000 ± .005` under a title-block rule
+    /// on a 600 dpi scan read as `000+.005` while `± .010` on the line above was repaired.
+    #[test]
+    fn a_rule_under_the_line_is_neither_the_plus_minus_nor_its_bar() {
+        // The rule's centre lies in the sign's columns and it holds more ink than the cross, and it
+        // is three line heights wide (the line's ink rows run from the cap to the rule).
+        let mut c = Canvas::new(200, 70);
+        let sign = plus_minus(&mut c, 60);
+        let one = digit(&mut c, 100);
+        c.rect(0, BASE + 5, 150, BASE + 6);
+        assert_eq!(word(&c, &[read('+', sign), read('1', one)], None).map(|r| r.text).as_deref(), Some("±1"));
     }
 
     #[test]
