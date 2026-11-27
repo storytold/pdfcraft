@@ -7,7 +7,7 @@ pub use pdfcraft_forms::table::*;
 use pdfcraft_forms::MIN_FIELD_SIDE;
 use pdfcraft_render::PageInfo;
 
-use crate::{Edit, FormField, FormFieldKind as FieldKind, NewField};
+use crate::{Edit, FormField, NewField};
 
 /// The edit's name in the history ("Undo Add text field table"), one of [`crate::BATCH_LABELS`].
 pub const LABEL: &str = "Add text field table";
@@ -43,15 +43,10 @@ pub fn edit(table: &FieldTable, page: usize, info: &PageInfo, form: &[FormField]
     Ok(Edit::Batch { label: LABEL.to_owned(), edits })
 }
 
-/// Whether a grid can copy widget `widget` of `field`: a text field, or a check box whose
-/// widgets share one export value (`pdfcraft_forms::copy_field` refuses the rest).
+/// Whether a grid can copy widget `widget` of `field`: `pdfcraft_forms::copy_field`'s own test
+/// ([`pdfcraft_forms::copyable_widget`]), so the preview and the copy agree.
 pub fn copyable(field: &FormField, widget: usize) -> bool {
-    let kind = match field.kind {
-        FieldKind::Text => true,
-        FieldKind::CheckBox => field.widgets.len() <= 1 || field.options.is_empty(),
-        _ => false,
-    };
-    kind && widget < field.widgets.len()
+    pdfcraft_forms::copyable_widget(field, widget).is_ok()
 }
 
 /// The edit laying `table` out as independent copies of widget `widget` of the field `source`,
@@ -142,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    fn a_grid_refuses_a_check_box_whose_widgets_export_different_values() {
+    fn a_grid_copies_a_check_box_only_when_its_widgets_export_one_value() {
         let mut s = Session::new();
         let bytes = s.create_blank(300.0, 400.0, 1).unwrap();
         let id = s.open("boxes.pdf", None, bytes, None).unwrap();
@@ -157,6 +152,16 @@ mod tests {
         boxes.options = vec![("Yes".into(), "Yes".into()), ("No".into(), "No".into())];
         let refused = copy_edit(&table, 0, &doc.info.pages[0], &form, "box", 0);
         assert_eq!(refused.err(), Some(TableError::Uncopyable("box".into())), "the preview can't call it valid");
+        // One export value from every widget is a box a grid copies, `/Opt` or not.
+        let boxes = form.iter_mut().find(|f| f.name == "box").unwrap();
+        boxes.options = vec![("Yes".into(), "Yes".into()); 2];
+        assert!(copy_edit(&table, 0, &doc.info.pages[0], &form, "box", 0).is_ok());
+        // Different on states without `/Opt` are different export values.
+        let boxes = form.iter_mut().find(|f| f.name == "box").unwrap();
+        boxes.options.clear();
+        boxes.widgets[1].on_state = Some("Other".into());
+        let refused = copy_edit(&table, 0, &doc.info.pages[0], &form, "box", 0);
+        assert_eq!(refused.err(), Some(TableError::Uncopyable("box".into())));
     }
 
     #[test]

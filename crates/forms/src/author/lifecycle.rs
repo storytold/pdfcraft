@@ -370,6 +370,16 @@ pub fn copy_field(doc: &mut Document, name: &str, widget: usize, page: usize, re
     for key in COPY_DROPS {
         field.remove(key);
     }
+    // A check box's `/Opt` holds an export value per widget when it has one entry per widget
+    // (else the on state is the export value); the copy has one widget, this one.
+    if f.kind == FieldKind::CheckBox && field.contains(b"Opt") {
+        match f.options.get(widget).filter(|_| f.options.len() == f.widgets.len()) {
+            Some((export, _)) => field.set(b"Opt".to_vec(), Object::Array(vec![Object::String(PdfString::text(export))])),
+            None => {
+                field.remove(b"Opt");
+            }
+        }
+    }
     // The appearance editor updates indirect /MK and /BS dictionaries in place. Make these
     // per-widget dictionaries direct so editing a copy cannot restyle the source or its siblings.
     for key in [&b"MK"[..], b"BS"] {
@@ -395,13 +405,20 @@ pub fn copy_field(doc: &mut Document, name: &str, widget: usize, page: usize, re
     Ok(())
 }
 
-/// The widget `widget` of `f`, when `f` is a kind a grid can copy.
-fn copyable_widget(f: &Field, widget: usize) -> Result<&Widget, FormError> {
+/// The widget `widget` of `f`, when [`copy_field`] can copy it: a text field, or a check box
+/// whose widgets all have one on state and one export value. A widget without an on state
+/// counts as a different value.
+pub fn copyable_widget(f: &Field, widget: usize) -> Result<&Widget, FormError> {
     if !matches!(f.kind, FieldKind::Text | FieldKind::CheckBox) {
         return invalid("only text fields and check boxes can be copied into a grid");
     }
-    if f.kind == FieldKind::CheckBox && f.widgets.len() > 1 && !f.options.is_empty() {
-        return invalid("a check box with per-widget export values cannot yet be copied into a grid");
+    if f.kind == FieldKind::CheckBox && f.widgets.len() > 1 {
+        let on = f.widgets.first().and_then(|w| w.on_state.as_deref());
+        let export = f.export_of(0);
+        let one = on.is_some() && f.widgets.iter().enumerate().all(|(i, w)| w.on_state.as_deref() == on && f.export_of(i) == export);
+        if !one {
+            return invalid("a check box whose widgets export different values cannot yet be copied into a grid");
+        }
     }
     f.widgets.get(widget).ok_or_else(|| FormError::Invalid(format!("{} has no widget {}", f.name, widget.saturating_add(1))))
 }
@@ -428,6 +445,11 @@ fn copy_source(doc: &Document, f: &Field, w: &Widget) -> Result<Dict, FormError>
         if let Some(value) = widget_dict.get(key) {
             field.set(key.to_vec(), value.clone());
         }
+    }
+    // A widget can be read-only on its own (`/Ff` in the widget); the copy's one dictionary keeps it.
+    if w.read_only {
+        let ff = field.get(b"Ff").and_then(|v| doc.resolve(v).as_int()).unwrap_or(0);
+        field.set(b"Ff".to_vec(), Object::Int(ff | i64::from(flags::READ_ONLY)));
     }
     // Keep both field and widget event dictionaries when they were separate.
     let mut aa = field.get(b"AA").and_then(|a| doc.resolve(a).as_dict().cloned()).unwrap_or_default();

@@ -151,6 +151,87 @@ fn grid_copy_keeps_widget_overrides_when_field_and_widget_are_separate() {
     assert_eq!(copy.da, "/Helv 8 Tf 1 0 0 rg");
 }
 
+/// One page with a check box `box` of two widgets drawing on states `first` and `second`, with
+/// `opt` (`/Opt`, PDF array body) when given.
+fn two_widget_box(first: &str, second: &str, opt: Option<&str>) -> Document {
+    let opt = opt.map_or(String::new(), |o| format!(" /Opt [{o}]"));
+    let kid = |state: &str, x: u32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /AS /Off /Rect [{x} 300 {} 315] /P 3 0 R /AP << /N << /{state} 7 0 R /Off 7 0 R >> >> >>",
+            x + 15
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        format!("<< /FT /Btn /T (box) /V /Off{opt} /Kids [5 0 R 6 0 R] >>"),
+        kid(first, 20),
+        kid(second, 60),
+        "<< /Length 0 >>
+stream
+
+endstream"
+            .into(),
+    ];
+    document(&objs)
+}
+
+#[test]
+fn grid_copy_refuses_a_check_box_whose_widgets_export_different_values() {
+    for doc in [two_widget_box("A", "B", None), two_widget_box("Yes", "Yes", Some("(A) (B)"))] {
+        let mut doc = doc;
+        let before = fields(&doc).len();
+        assert!(copy_field(&mut doc, "box", 0, 0, [20.0, 200.0, 35.0, 215.0], "box_copy").is_err());
+        assert_eq!(fields(&doc).len(), before);
+    }
+}
+
+#[test]
+fn grid_copy_takes_a_check_box_whose_widgets_export_one_value() {
+    let mut doc = two_widget_box("Yes", "Yes", Some("(X) (X)"));
+    copy_field(&mut doc, "box", 1, 0, [20.0, 200.0, 35.0, 215.0], "box_copy").unwrap();
+    let all = fields(&doc);
+    let copy = field(&all, "box_copy");
+    assert_eq!(copy.export_of(0), Some("X"), "the copy exports what its source widget did");
+    assert_eq!(copy.export_of(0), field(&all, "box").export_of(1));
+}
+
+#[test]
+fn grid_copy_of_a_check_box_exports_its_on_state_when_opt_is_not_one_per_widget() {
+    let mut doc = two_widget_box("Yes", "Yes", Some("(A) (B) (C)"));
+    assert_eq!(field(&fields(&doc), "box").export_of(1), Some("Yes"));
+    copy_field(&mut doc, "box", 1, 0, [20.0, 200.0, 35.0, 215.0], "box_copy").unwrap();
+    assert_eq!(field(&fields(&doc), "box_copy").export_of(0), Some("Yes"), "a stray /Opt entry must not become the copy's export value");
+}
+
+#[test]
+fn grid_copy_of_a_check_box_exports_the_value_its_widget_did_past_an_unreadable_opt_entry() {
+    let mut doc = two_widget_box("Yes", "Yes", Some("5 (X) (X)"));
+    assert_eq!(field(&fields(&doc), "box").export_of(0), Some("X"));
+    copy_field(&mut doc, "box", 0, 0, [20.0, 200.0, 35.0, 215.0], "box_copy").unwrap();
+    assert_eq!(field(&fields(&doc), "box_copy").export_of(0), Some("X"));
+}
+
+#[test]
+fn grid_copy_keeps_a_widget_that_is_read_only_on_its_own() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [5 0 R] >>".into(),
+        format!("<< /FT /Tx /T (source) /Ff {} /DA (/Helv 12 Tf 0 g) /Kids [6 0 R] >>", flags::MULTILINE),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Ff 1 /P 3 0 R /Rect [20 300 120 320] >>".into(),
+    ];
+    let mut doc = document(&objs);
+    assert!(field(&fields(&doc), "source").widgets[0].read_only);
+    copy_field(&mut doc, "source", 0, 0, [20.0, 250.0, 120.0, 270.0], "copy").unwrap();
+    let all = fields(&doc);
+    let copy = field(&all, "copy");
+    assert!(copy.widgets[0].read_only && copy.read_only(), "the copy is read-only as its source widget was");
+    assert!(copy.has(flags::MULTILINE), "and keeps the field's own flags");
+}
+
 #[test]
 fn grid_copy_keeps_a_transparent_borderless_multiline_look() {
     let mut doc = fixture();
