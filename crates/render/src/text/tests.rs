@@ -2326,6 +2326,18 @@ fn table_rows_of_cells_drawn_one_by_one_read_across() {
     let t = layout(v).plain_text();
     assert_eq!(t.lines().count(), 9, "{t}");
     assert!(t.starts_with("left0xxxxxxxxxxxxxxxxxxxxxxx\nleft1xxxxxxxxxxxxxxxxxxxxxxx\nleft2xxxxxxxxxxxxxxxxxxxxxxx\nmid0"), "{t}");
+    // Narrow columns of prose: 26 letters a line, 15.6 heights, narrower than a cell may be. Their
+    // lines fill their column, so they are no cells and the page keeps its columns (review on #8548,
+    // seven public pages whose lines run 13.3 to 15.7 heights read across).
+    let mut v = Vec::new();
+    for (x, name) in [(10.0, "left"), (200.0, "mid"), (390.0, "right")] {
+        for l in 0..3 {
+            word(&mut v, &format!("{name}{l}{}", "x".repeat(25 - name.len())), x, 100.0 + 12.0 * l as f32, 6.0);
+        }
+    }
+    let t = layout(v).plain_text();
+    assert_eq!(t.lines().count(), 9, "{t}");
+    assert!(t.starts_with("left0xxxxxxxxxxxxxxxxxxxxx\nleft1xxxxxxxxxxxxxxxxxxxxx\nleft2xxxxxxxxxxxxxxxxxxxxx\nmid0"), "{t}");
     // Two of the three paragraphs end on the same baseline with a short last line (22 letters,
     // 13.2 heights, under a wide line of their own paragraph): not a table row (review on #8534).
     let mut v = Vec::new();
