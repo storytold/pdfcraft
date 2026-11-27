@@ -353,9 +353,14 @@ pub(crate) fn split(args: &[String]) -> Result<(), CliError> {
     // An output folder that does not exist yet is created (#249); one that can't be is reported
     // as the folder's problem, not as the first part's.
     std::fs::create_dir_all(&dir).map_err(|e| format!("split: --out-dir {}: {e}", dir.display()))?;
-    for (a, b, bytes) in parts {
-        let name = dir.join(if a == b { format!("{stem}-p{a}.pdf") } else { format!("{stem}-p{a}-{b}.pdf") });
-        write_pdf(&name, &bytes)?;
+    let files: Vec<(PathBuf, &[u8])> = parts
+        .iter()
+        .map(|(a, b, bytes)| (dir.join(if a == b { format!("{stem}-p{a}.pdf") } else { format!("{stem}-p{a}-{b}.pdf") }), bytes.as_slice()))
+        .collect();
+    // Every part is staged before any replaces an existing file, so a part that can't be written
+    // fails the split with all the earlier outputs as they were (#1793).
+    super::all_or_none::write_all_or_none(&files)?;
+    for (name, _) in &files {
         stdout_line(format_args!("{}", name.display()))?;
     }
     Ok(())
