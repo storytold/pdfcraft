@@ -7,11 +7,13 @@ use std::sync::Arc;
 
 use craft::behavior::{CancelReason, Cursor, CursorIcon, DisplayOrder, ItemSource, Selection, SelectionChange};
 use craft::host::{PickRequest, Picked};
+use craft::theme::variant::Tone;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
-use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{Bind, CollectionEvent, Entry, Politeness, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::dialog::DialogId;
 use craft::ui::list::{List, ListRow};
 use craft::ui::menu::Menu;
+use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
 use craft::ui::pickers::ComboBox;
 use craft::ui::primitives::Draw;
@@ -53,6 +55,9 @@ pub struct CustomStamp {
     /// Overlay text anchor in normalized picture coordinates, from top-left.
     #[serde(default = "default_line_position")]
     pub line_position: [f64; 2],
+    /// The font size for the stamp line. Older stamps use the usual size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_font_percent: Option<u16>,
 }
 
 fn default_line_position() -> [f64; 2] {
@@ -71,6 +76,8 @@ const DYNAMIC: &str = "dynamic";
 const LINE: &str = "line";
 const LINE_OVER_PICTURE: &str = "line_over_picture";
 const DATE_FORMAT: &str = "date_format";
+const DEFAULT_STAMP_DATE_FORMAT: &str = "mmm d, yyyy";
+const LINE_FONT_PERCENT: &str = "line_font_percent";
 const LINE_X: &str = "line_x";
 const LINE_Y: &str = "line_y";
 
@@ -170,6 +177,7 @@ impl<'a> StampTool<'a> {
                 line: self.line.clone(),
                 line_over_picture: stamp.line_over_picture,
                 line_position: stamp.line_position,
+                line_font_percent: stamp.line_font_percent,
             }),
         }
     }
@@ -281,10 +289,26 @@ fn create_params(
         })
         .visible_when(LINE_OVER_PICTURE, true),
         Param::custom(DATE_FORMAT, tl!("Date format"), |ui, fields, _| {
-            let mut value = fields.text(DATE_FORMAT).unwrap_or("mmm d, yyyy").to_owned();
-            let shown = TextField::new(tl!("Date format"), Bind::bound(&mut value)).limit(pdfcraft_engine::dates::MAX_DATE_FORMAT_CHARS).show(ui);
-            fields.set(DATE_FORMAT, value);
-            shown.response
+            ui.vertical(|ui| {
+                let mut value = fields.text(DATE_FORMAT).unwrap_or(DEFAULT_STAMP_DATE_FORMAT).to_owned();
+                let shown = TextField::new(tl!("Date format"), Bind::bound(&mut value)).limit(pdfcraft_engine::dates::MAX_DATE_FORMAT_CHARS).show(ui);
+                if pdfcraft_engine::dates::custom_stamp_date_format(&value).is_err() {
+                    Notice::new(Tone::Warn, tl!("Enter a valid date format, such as dd-mmm-yyyy."))
+                        .layout(NoticeLayout::Inline)
+                        .announce(Politeness::Polite)
+                        .show(ui);
+                }
+                fields.set(DATE_FORMAT, value);
+                shown.response
+            })
+            .inner
+        })
+        .visible_when(DYNAMIC, true),
+        Param::custom(LINE_FONT_PERCENT, tl!("Font size"), |ui, fields, _| {
+            let mut percent = line_font_percent(fields);
+            let response = ui.add(egui::Slider::new(&mut percent, pdfcraft_engine::CUSTOM_STAMP_FONT_PERCENT).suffix("%").text(tl!("Font size")));
+            fields.set(LINE_FONT_PERCENT, percent.to_string());
+            response
         })
         .visible_when(DYNAMIC, true),
         Param::read_only_text("hint", "", tl!("{name}, {date} and {time} become your name, the date and the time."))
@@ -295,17 +319,17 @@ fn create_params(
             let dynamic = fields.bool(DYNAMIC).unwrap_or(false);
             let overlay = dynamic && fields.bool(LINE_OVER_PICTURE).unwrap_or(false);
             let template = fields.text(LINE).unwrap_or_default();
-            let format = fields.text(DATE_FORMAT).unwrap_or("mmm d, yyyy");
-            let formatted_date = pdfcraft_engine::dates::check_date_format(format)
-                .ok()
-                .and_then(|fmt| {
-                    pdfcraft_engine::dates::date_language(&date.language).map(|lang| pdfcraft_engine::dates::format_day(fmt, date.today, lang))
-                })
-                .unwrap_or_else(|| date.fallback.clone());
-            let filled = pdfcraft_engine::Session::stamp_line_with_date_time(template, &author, &formatted_date, &time);
+            let format = fields.text(DATE_FORMAT).unwrap_or(DEFAULT_STAMP_DATE_FORMAT);
+            let filled = pdfcraft_engine::dates::custom_stamp_date_format(format).ok().map(|fmt| {
+                let formatted_date = pdfcraft_engine::dates::date_language(&date.language)
+                    .map(|lang| pdfcraft_engine::dates::format_day(&fmt, date.today, lang))
+                    .unwrap_or_else(|| date.fallback.clone());
+                pdfcraft_engine::Session::stamp_line_with_date_time(template, &author, &formatted_date, &time)
+            });
+            let line_font_percent = Some(line_font_percent(fields));
             let source = egui::vec2(preview_size[0] as f32, preview_size[1] as f32);
             let natural = if dynamic && !overlay {
-                let (w, h) = pdfcraft_engine::custom_stamp_size((f64::from(source.x), f64::from(source.y)), Some(&filled));
+                let (w, h) = pdfcraft_engine::custom_stamp_size((f64::from(source.x), f64::from(source.y)), filled.as_deref(), line_font_percent);
                 egui::vec2(w as f32, h as f32)
             } else {
                 source
@@ -313,15 +337,15 @@ fn create_params(
             let scale = (280.0 / natural.x).min(160.0 / natural.y);
             let picture = source * scale;
             let canvas = natural * scale;
-            let band = if dynamic { canvas.y * pdfcraft_engine::CUSTOM_LINE_BAND as f32 } else { 0.0 };
+            let band = if dynamic && filled.is_some() { canvas.y * pdfcraft_engine::CUSTOM_LINE_BAND as f32 } else { 0.0 };
             let picture_height = canvas.y - if overlay { 0.0 } else { band };
             let (rect, response) = ui.allocate_exact_size(canvas, if overlay { egui::Sense::drag() } else { egui::Sense::hover() });
             let picture_rect =
                 egui::Rect::from_min_size(egui::pos2(rect.center().x - picture.x / 2.0, rect.min.y + (picture_height - picture.y) / 2.0), picture);
             let painter = ui.painter().with_clip_rect(rect);
             painter.image(texture.id(), picture_rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
-            if dynamic {
-                let mut text_size = band * pdfcraft_engine::CUSTOM_LINE_TEXT as f32;
+            if dynamic && let Some(filled) = filled {
+                let mut text_size = band * (pdfcraft_engine::CUSTOM_LINE_TEXT * pdfcraft_engine::custom_stamp_font_scale(line_font_percent)) as f32;
                 let width = painter.layout_no_wrap(filled.clone(), egui::FontId::proportional(text_size), egui::Color32::from_gray(51)).size().x;
                 if width > canvas.x - 4.0 && width > 0.0 {
                     text_size *= ((canvas.x - 4.0) / width).max(0.0);
@@ -366,7 +390,11 @@ fn fields_ok(fields: &DialogFields) -> bool {
     filled(CATEGORY)
         && filled(NAME)
         && (!fields.bool(DYNAMIC).unwrap_or(false)
-            || (filled(LINE) && fields.text(DATE_FORMAT).is_some_and(|f| pdfcraft_engine::dates::check_date_format(f).is_ok())))
+            || (filled(LINE) && fields.text(DATE_FORMAT).is_some_and(|f| pdfcraft_engine::dates::custom_stamp_date_format(f).is_ok())))
+}
+
+fn line_font_percent(fields: &DialogFields) -> u16 {
+    fields.text(LINE_FONT_PERCENT).and_then(|v| v.parse().ok()).filter(|v| pdfcraft_engine::CUSTOM_STAMP_FONT_PERCENT.contains(v)).unwrap_or(100)
 }
 
 /// A row of the palette's list: a category heading or a stamp.
@@ -514,7 +542,8 @@ impl PdfCraftApp {
             (CATEGORY, category),
             (NAME, name),
             (LINE, DEFAULT_LINE.to_owned()),
-            (DATE_FORMAT, "mmm d, yyyy".to_owned()),
+            (DATE_FORMAT, DEFAULT_STAMP_DATE_FORMAT.to_owned()),
+            (LINE_FONT_PERCENT, "100".to_owned()),
             (LINE_X, "0.5".to_owned()),
             (LINE_Y, "0.9".to_owned()),
         ]);
@@ -559,7 +588,10 @@ impl PdfCraftApp {
         let text = |key: &str| fields.text(key).unwrap_or_default().trim().to_string();
         let line = fields.bool(DYNAMIC).unwrap_or(false).then(|| text(LINE)).filter(|l| !l.is_empty());
         let line_over_picture = line.is_some() && fields.bool(LINE_OVER_PICTURE).unwrap_or(false);
-        let date_format = line.as_ref().map(|_| text(DATE_FORMAT));
+        let date_format = line
+            .as_ref()
+            .and_then(|_| pdfcraft_engine::dates::custom_stamp_date_format(fields.text(DATE_FORMAT)?).ok().map(std::borrow::Cow::into_owned));
+        let line_font_percent = line.as_ref().map(|_| line_font_percent(&fields));
         let line_position = [LINE_X, LINE_Y].map(|key| fields.text(key).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.5).clamp(0.0, 1.0));
         self.custom_stamps.push(CustomStamp {
             category: text(CATEGORY),
@@ -571,6 +603,7 @@ impl PdfCraftApp {
             line_over_picture,
             date_format,
             line_position,
+            line_font_percent,
         });
         self.quick_tool = QuickTool::CustomStamp(self.custom_stamps.len() - 1);
     }

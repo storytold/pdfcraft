@@ -431,6 +431,8 @@ pub enum Shape {
         line_over_picture: bool,
         /// Text anchor as fractions of the displayed picture bounds from its top-left.
         line_position: [f64; 2],
+        /// Font size as a percentage of the usual stamp line size.
+        line_font_percent: Option<u16>,
     },
     /// A redaction mark (§12.5.6.23) over quadrilaterals (text) or one rectangle as a quad
     /// (areas, pages). `overlay` is the text shown on the box once applied, drawn with `look`.

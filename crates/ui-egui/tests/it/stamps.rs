@@ -2,7 +2,7 @@
 
 use crate::support::AppHarness as _;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::QuickTool;
 
 #[test]
@@ -183,10 +183,35 @@ fn a_dynamic_png_stamp_keeps_its_background_and_fills_its_line_when_placed() {
     h.get_by_label("Place line over picture").click();
     h.run_steps(2);
 
+    h.get_by_label("Date format").scroll_to_me();
+    h.run_steps(2);
+    h.get_by_label("Date format").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get_by_label("Date format").type_text("DD-MMM-YYYY");
+    h.run_steps(3);
+    assert!(!h.get_by_label("OK").accesskit_node().is_disabled(), "the uppercase date pattern can be saved");
+
+    let size = h.get_by_role_and_label(egui::accesskit::Role::Slider, "Font size");
+    size.scroll_to_me();
+    h.run_steps(2);
+    let size = h.get_by_role_and_label(egui::accesskit::Role::Slider, "Font size");
+    let track = size.rect();
+    let at = egui::pos2(track.left() + track.width() * 0.25, track.center().y);
+    h.hover_at(at);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(2);
+
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().custom_stamps[0].line.as_deref(), Some("By {name} at {time}, {date}"));
     assert!(h.state().custom_stamps[0].line_over_picture);
+    assert_eq!(h.state().custom_stamps[0].date_format.as_deref(), Some("dd-mmm-yyyy"));
+    let font_size = h.state().custom_stamps[0].line_font_percent.unwrap();
+    assert!(font_size < 100, "the smaller font size is saved");
     let p = {
         let r = h.state().views[0].page_screen_rect(0).unwrap();
         r.min + egui::vec2(r.width() * 0.5, r.height() * 0.85)
@@ -223,4 +248,5 @@ fn a_dynamic_png_stamp_keeps_its_background_and_fills_its_line_when_placed() {
     again.apply_settings(&s.settings_snapshot());
     assert_eq!(again.custom_stamps[0].line, s.custom_stamps[0].line, "kept with the library");
     assert!(again.custom_stamps[0].line_over_picture, "placement mode is kept with the library");
+    assert_eq!(again.custom_stamps[0].line_font_percent, Some(font_size), "font size is kept with the library");
 }

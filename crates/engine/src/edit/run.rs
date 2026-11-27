@@ -652,12 +652,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
             note_skipped(doc, &report);
         }
-        Edit::AddCustomStamp { page, rect, name, file, author, line, line_over_picture, line_position } => {
+        Edit::AddCustomStamp { page, rect, name, file, author, line, line_over_picture, line_position, line_font_percent } => {
             let src = mark_source(doc, file)?;
             let line = line.as_deref().map(str::trim).filter(|l| !l.is_empty()).map(|l| l.chars().take(crate::MAX_STAMP_LINE).collect::<String>());
             let picture = (src.size.0.max(1.0), src.size.1.max(1.0));
             // A separate line adds its band under the picture; an over-picture line uses its size.
-            let (sw, sh) = if *line_over_picture { picture } else { pdfcraft_annot::custom_stamp_size(picture, line.as_deref()) };
+            let band_line = line.as_deref().filter(|_| !*line_over_picture);
+            let (sw, sh) = pdfcraft_annot::custom_stamp_size(picture, band_line, *line_font_percent);
             let natural = rect[2] == rect[0] && rect[3] == rect[1];
             let rotation = pdfcraft_organize::page_rotation(doc, *page)?;
             // The picture as displayed: a quarter turn swaps its sides in user space.
@@ -678,6 +679,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 line,
                 line_over_picture: *line_over_picture,
                 line_position: *line_position,
+                line_font_percent: *line_font_percent,
             };
             let style = pdfcraft_annot::Style::default_for(&shape);
             let new = NewAnnotation { page: *page, shape, style, contents: name.clone(), author: author.clone() };

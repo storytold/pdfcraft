@@ -906,16 +906,29 @@ impl Automation {
         if line_over_picture && template.is_none_or(|s| s.trim().is_empty()) {
             return Err(ToolError::InvalidArgs("line_over_picture requires a non-empty line".into()));
         }
-        let date_format = a.opt_str("date_format")?;
-        if let Some(format) = date_format {
-            pdfcraft_engine::dates::check_date_format(format).map_err(ToolError::InvalidArgs)?;
-        }
+        let range = pdfcraft_engine::CUSTOM_STAMP_FONT_PERCENT;
+        let line_font_percent = a
+            .opt_int("line_font_percent")?
+            .map(|percent| {
+                u16::try_from(percent)
+                    .ok()
+                    .filter(|p| range.contains(p))
+                    .ok_or_else(|| ToolError::InvalidArgs(format!("line_font_percent must be from {} to {}", range.start(), range.end())))
+            })
+            .transpose()?;
         let session = self.session();
+        let date = a
+            .opt_str("date_format")?
+            .map(|format| {
+                let format = pdfcraft_engine::dates::custom_stamp_date_format(format)?;
+                session.today_text(Some(&format), session.date_language())
+            })
+            .transpose()
+            .map_err(ToolError::InvalidArgs)?;
         let line = template.filter(|s| !s.trim().is_empty()).map(|s| {
-            if let Some(format) = date_format {
-                let date = session.today_text(Some(format), session.date_language()).unwrap_or_default();
+            if let Some(date) = date.as_deref() {
                 let time = session.stamp_line("{time}", &author);
-                pdfcraft_engine::Session::stamp_line_with_date_time(s, &author, &date, &time)
+                pdfcraft_engine::Session::stamp_line_with_date_time(s, &author, date, &time)
             } else {
                 session.stamp_line(s, &author)
             }
@@ -932,6 +945,7 @@ impl Automation {
             line,
             line_over_picture,
             line_position,
+            line_font_percent,
             author: author.clone(),
         };
         self.apply(a, edit)

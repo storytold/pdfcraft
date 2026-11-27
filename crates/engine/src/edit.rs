@@ -186,6 +186,8 @@ pub enum Edit {
         line_over_picture: bool,
         /// Text anchor as fractions of the displayed picture bounds from its top-left.
         line_position: [f64; 2],
+        /// Font size as a percentage of the usual stamp line size.
+        line_font_percent: Option<u16>,
     },
     /// Rich Media ▸ Add 3D: a U3D or PRC `model` as a 3D annotation in `rect` on `page`, named
     /// `name` (its alternate description). Its poster is the picture in `poster` (a PDF page or an

@@ -1313,7 +1313,11 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
         let mut content = std::mem::take(c).into_bytes();
         if let Some(l) = &line {
             // Centred in the band, at its usual size unless the stamp was made narrower.
-            let mut size = band * crate::CUSTOM_LINE_TEXT;
+            let percent = match d.get(b"PCLineFontPercent") {
+                Some(Object::Int(percent)) => u16::try_from(*percent).ok(),
+                _ => None,
+            };
+            let mut size = band * crate::CUSTOM_LINE_TEXT * crate::custom_stamp_font_scale(percent);
             let tw = text_width(l, size);
             if tw > w - 4.0 && tw > 0.0 {
                 size *= ((w - 4.0) / tw).max(0.0);

@@ -13001,11 +13001,11 @@ fn a_custom_stamp_line_is_filled_in_when_placed() {
     ok(
         &mut a,
         "stamp_custom",
-        json!({ "doc": doc, "page": 1, "path": "b.pdf", "file_page": 2, "at": [100, 150], "name": "Logo", "author": "Ada", "line": "Received {date} {time} by {name}", "line_over_picture": true }),
+        json!({ "doc": doc, "page": 1, "path": "b.pdf", "file_page": 2, "at": [100, 150], "name": "Logo", "author": "Ada", "line": "Received {date} {time} by {name}", "line_over_picture": true, "date_format": "DD-MMM-YYYY", "line_font_percent": 75 }),
     );
     // The clock is 2023-11-14 22:13:20, taken as local time.
     let text = page_text(&mut a, doc)[0].clone();
-    assert!(text.contains("Received Nov 14, 2023 10:13 pm by Ada"), "{text}");
+    assert!(text.contains("Received 14-Nov-2023 10:13 pm by Ada"), "{text}");
     let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
     let rect = |page: u64| {
         let c = list["comments"].as_array().unwrap().iter().find(|c| c["page"] == page).unwrap();
@@ -13021,6 +13021,7 @@ fn a_custom_stamp_line_is_filled_in_when_placed() {
     ok(&mut a, "stamp_custom", json!({ "doc": doc, "page": 3, "path": "b.pdf", "file_page": 2, "at": [100, 150], "line": long }));
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "stamped.pdf" }));
     let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("stamped.pdf")).unwrap())).unwrap();
+    assert!(saved.scan_objects().any(|(_, o)| o.as_dict().and_then(|d| d.get(b"PCLineFontPercent")) == Some(&pdfcraft_cos::Object::Int(75))));
     let lines: Vec<String> = saved
         .scan_objects()
         .filter_map(|(_, o)| o.as_dict()?.get(b"PCByLine")?.as_string().map(pdfcraft_cos::PdfString::to_text))

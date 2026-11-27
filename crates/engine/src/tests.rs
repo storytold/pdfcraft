@@ -109,6 +109,7 @@ fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
                     line: None,
                     line_over_picture: false,
                     line_position: [0.5, 0.9],
+                    line_font_percent: None,
                 },
             )
             .unwrap();
@@ -447,6 +448,7 @@ fn explicit_image_stamps_keep_displayed_orientation_on_rotated_pages() {
                     line: None,
                     line_over_picture: false,
                     line_position: [0.5, 0.9],
+                    line_font_percent: None,
                 },
             )
             .unwrap();
@@ -502,6 +504,7 @@ fn pdf_page_stamps_keep_displayed_orientation_on_rotated_pages() {
                     line: None,
                     line_over_picture: false,
                     line_position: [0.5, 0.9],
+                    line_font_percent: None,
                 },
             )
             .unwrap();
@@ -534,6 +537,7 @@ fn pdf_page_stamps_fit_inside_an_explicit_box() {
         line: None,
         line_over_picture: false,
         line_position: [0.5, 0.9],
+        line_font_percent: None,
     };
     session.apply(id, stamp([56.0, 400.0, 539.0, 700.0])).unwrap();
     assert_eq!(session.get(id).unwrap().info.annotations[0].rect, [56.0, 429.25, 539.0, 670.75]);
@@ -11836,6 +11840,7 @@ fn a_phone_photo_used_as_a_custom_stamp_is_embedded_upright() {
         line: None,
         line_over_picture: false,
         line_position: [0.5, 0.9],
+        line_font_percent: None,
     };
     session.apply(id, stamp).unwrap();
     let cos = &session.get(id).unwrap().editor.as_ref().unwrap().cos;
@@ -13891,6 +13896,7 @@ fn a_custom_stamp_line_keeps_accented_letters() {
         line: Some(session.stamp_line("Reçu à Zürich par {name}", "Zoë")),
         line_over_picture: false,
         line_position: [0.5, 0.9],
+        line_font_percent: None,
     };
     session.apply(id, edit).unwrap();
     let saved = session.save_bytes(id).unwrap();
@@ -13914,7 +13920,7 @@ fn a_lined_custom_stamp_keeps_its_layout_on_turned_pages() {
     image.write_to(&mut png, image::ImageFormat::Png).unwrap();
     let bytes = Arc::new(png.into_inner());
     // A short line: the stamp is the picture's 80 pt wide, 40 / 0.78 pt tall with its band.
-    let (w, h) = pdfcraft_annot::custom_stamp_size((80.0, 40.0), Some("OK"));
+    let (w, h) = pdfcraft_annot::custom_stamp_size((80.0, 40.0), Some("OK"), None);
     assert_eq!(w, 80.0);
     let top = 100.0 - h / 2.0;
     for degrees in [0, 90, 180, 270] {
@@ -13930,6 +13936,7 @@ fn a_lined_custom_stamp_keeps_its_layout_on_turned_pages() {
             line: Some("OK".into()),
             line_over_picture: false,
             line_position: [0.5, 0.9],
+            line_font_percent: None,
         };
         session.apply(id, edit).unwrap();
         let doc = session.get(id).unwrap();
@@ -13972,6 +13979,7 @@ fn a_png_background_keeps_its_date_overlay_after_save() {
                 line: Some(date.clone()),
                 line_over_picture: true,
                 line_position: [0.3, 0.35],
+                line_font_percent: Some(50),
             },
         )
         .unwrap();
@@ -13991,6 +13999,13 @@ fn a_png_background_keeps_its_date_overlay_after_save() {
         matches!(stamp.get(b"PCLinePosition"), Some(pdfcraft_cos::Object::Array(p)) if p == &[pdfcraft_cos::Object::Real(0.3), pdfcraft_cos::Object::Real(0.35)])
     );
     assert_eq!(stamp.get(b"PCByLine").and_then(pdfcraft_cos::Object::as_string).map(pdfcraft_cos::PdfString::to_text), Some(date));
+    let ap = doc.resolve(stamp.get(b"AP").unwrap());
+    let normal = doc.get(ap.as_dict().unwrap().reference(b"N").unwrap());
+    let pdfcraft_cos::Object::Stream(normal) = normal.as_ref() else { panic!("an appearance stream") };
+    let content = String::from_utf8(normal.decoded().unwrap().to_vec()).unwrap();
+    let font_size: f64 = content.lines().find_map(|l| l.strip_prefix("/Helv ")?.strip_suffix(" Tf")?.parse().ok()).unwrap();
+    let usual_size = f64::from(rect[3] - rect[1]) * crate::CUSTOM_LINE_BAND * crate::CUSTOM_LINE_TEXT;
+    assert!(font_size > 0.0 && font_size < usual_size, "the appearance uses the smaller font size: {font_size}");
     let id2 = session.open("dated.pdf", None, saved, None).unwrap();
     let reopened = session.get(id2).unwrap();
     let mut renderer = pdfcraft_render::PageRenderer::new(reopened.bytes.clone(), reopened.config.clone());
