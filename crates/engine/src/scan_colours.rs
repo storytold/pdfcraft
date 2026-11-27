@@ -65,12 +65,9 @@ pub(crate) fn sample(cos: &pdfcraft_cos::Document, info: &PageInfo, page: usize,
             paper.push(rgb);
         }
     }
-    let luma = |c: &[f64; 3]| 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
     let by_luma = |a: &[f64; 3], b: &[f64; 3]| luma(a).total_cmp(&luma(b));
-    paper.sort_by(by_luma);
     ink.sort_by(by_luma);
-    // The paper is the ring's median, so a table rule or a neighbouring letter in it doesn't count.
-    let paper = paper.get(paper.len() / 2).copied().unwrap_or([1.0; 3]);
+    let paper = paper_colour(&mut paper);
     // The ink is the average of the word's darkest pixels; a box without any is printed in black.
     let darkest = ink.get(..ink.len().div_ceil(8)).unwrap_or_default();
     let ink = if darkest.is_empty() {
@@ -81,4 +78,62 @@ pub(crate) fn sample(cos: &pdfcraft_cos::Document, info: &PageInfo, page: usize,
     };
     let ink = if luma(&paper) - luma(&ink) < 0.25 { [0.0; 3] } else { ink };
     Some((paper, ink))
+}
+
+fn luma(c: &[f64; 3]) -> f64 {
+    0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+}
+
+/// The shades the ring's light pixels are sorted into to find the paper's.
+const SHADES: usize = 32;
+
+/// The paper's colour among the pixels of the ring around a word. Of the ring's light pixels,
+/// those at least as light as the midpoint between its darkest and its lightest, the paper is the
+/// shade most of them have, and its colour the median of that shade: a rule's halo runs through
+/// every shade from ink to paper, the paper sits in one. So a table rule or a neighbouring letter
+/// in the ring doesn't count, however much of the ring they fill: in a tight title-block cell the
+/// rules and their halo are more than half of it (#8501). A grey-paper scan keeps its grey, the
+/// ring's light pixels being the paper, and a stray white speck is no shade of its own. White for
+/// an empty ring.
+fn paper_colour(ring: &mut [[f64; 3]]) -> [f64; 3] {
+    ring.sort_by(|a, b| luma(a).total_cmp(&luma(b)));
+    let (Some(darkest), Some(lightest)) = (ring.first(), ring.last()) else { return [1.0; 3] };
+    let mid = (luma(darkest) + luma(lightest)) / 2.0;
+    let light = ring.get(ring.partition_point(|c| luma(c) < mid)..).unwrap_or_default();
+    let shade = |c: &[f64; 3]| ((luma(c) * SHADES as f64).floor() as usize).min(SHADES - 1);
+    let mut counts = [0usize; SHADES];
+    for c in light {
+        if let Some(n) = counts.get_mut(shade(c)) {
+            *n += 1;
+        }
+    }
+    // The fullest shade, the lighter one when two are as full.
+    let Some(fullest) = counts.iter().enumerate().max_by_key(|(i, n)| (**n, *i)).map(|(i, _)| i) else { return [1.0; 3] };
+    let of_shade: Vec<[f64; 3]> = light.iter().filter(|c| shade(c) == fullest).copied().collect();
+    of_shade.get(of_shade.len() / 2).copied().unwrap_or([1.0; 3])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::paper_colour;
+
+    #[test]
+    fn the_paper_is_the_fullest_light_shade_of_the_ring() {
+        let pixels = |n: usize, v: f64| std::iter::repeat_n([v; 3], n);
+        // A rule's halo: a pixel of every shade from the ink to the paper.
+        let halo = |n: usize| (0..n).map(move |i| [0.2 + 0.78 * i as f64 / n as f64; 3]);
+        // A tight cell: the rules are most of the ring, their halo more than the paper, which is
+        // a tenth of it.
+        let mut ring: Vec<[f64; 3]> = pixels(60, 0.1).chain(halo(30)).chain(pixels(10, 1.0)).collect();
+        assert_eq!(paper_colour(&mut ring), [1.0; 3], "white paper, not the halo and not the rule");
+        // Grey paper, a little noisy, with a few white specks and a letter in the ring stays grey.
+        let noisy = (0..80).map(|i| [0.78 + 0.02 * (i % 3) as f64; 3]);
+        let mut ring: Vec<[f64; 3]> = pixels(5, 0.05).chain(halo(8)).chain(noisy).chain(pixels(3, 1.0)).collect();
+        let paper = paper_colour(&mut ring);
+        assert!((0.78..=0.82).contains(&paper[0]), "{paper:?}");
+        // Paper alone, and nothing.
+        let mut ring: Vec<[f64; 3]> = pixels(20, 0.95).collect();
+        assert_eq!(paper_colour(&mut ring), [0.95; 3]);
+        assert_eq!(paper_colour(&mut []), [1.0; 3]);
+    }
 }
