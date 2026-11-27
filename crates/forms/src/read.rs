@@ -32,11 +32,19 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
                 .and_then(|f| f.as_dict().and_then(|fd| fd.get(b"F").and_then(|x| text_of(&doc.resolve(x)))).or_else(|| text_of(&f)))
                 .unwrap_or_default(),
         ),
-        b"GoTo" => {
-            let dest = doc.resolve(a.get(b"D")?);
-            let target = dest.as_array()?.first()?.as_ref()?;
-            af::ButtonAction::GoTo(page_refs(doc).iter().position(|p| *p == target)?)
-        }
+        b"GoTo" => match &*doc.resolve(a.get(b"D")?) {
+            Object::Array(dest) => {
+                let target = dest.first()?.as_ref()?;
+                let page = page_refs(doc).iter().position(|p| *p == target)?;
+                let kind = dest.get(1).map(|k| doc.resolve(k)).and_then(|k| k.as_name().map(<[u8]>::to_vec));
+                // At most the four numbers of /FitR.
+                let operands = dest.iter().skip(2).take(4).map(|n| doc.resolve(n).as_f64().map(|v| v as f32)).collect();
+                af::ButtonAction::GoTo { page, view: kind.map(|kind| (kind, operands)) }
+            }
+            Object::String(name) => af::ButtonAction::GoToNamed(name.to_text()),
+            Object::Name(name) => af::ButtonAction::GoToNamed(String::from_utf8_lossy(name).into_owned()),
+            _ => return None,
+        },
         b"Hide" => {
             let fields = a.get(b"T").map(|t| action_fields(doc, t)).unwrap_or_default();
             let hide = !a.get(b"H").is_some_and(|h| matches!(&*doc.resolve(h), Object::Bool(false)));

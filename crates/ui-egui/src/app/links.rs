@@ -84,7 +84,7 @@ impl PdfCraftApp {
     /// Show `destination` in the tab at `index`: a document just opened from a link or with open
     /// parameters (#3425), or one already open that such a link or launch names. The latest request
     /// for a document wins over a named destination still being looked up.
-    pub(super) fn apply_destination_at(&mut self, index: usize, destination: pdfcraft_render::RemoteDestination) {
+    pub(crate) fn apply_destination_at(&mut self, index: usize, destination: pdfcraft_render::RemoteDestination) {
         let Some(id) = self.views.get(index).map(|view| view.id) else { return };
         #[cfg(not(target_arch = "wasm32"))]
         self.pending_destinations.retain(|pending| pending.doc != id);

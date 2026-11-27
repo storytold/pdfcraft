@@ -158,3 +158,72 @@ fn hide_actions_hide_and_show_fields() {
     click_field(&mut h, "show");
     assert!(!name_hidden(&h), "the Hide action with /H false showed it again");
 }
+
+/// Four 300×400 pages. Page 1 has two push buttons that go to y 100 on page 3, three quarters
+/// down it (#8543): "goto" through an explicit `/XYZ` destination, "named" through the named
+/// destination `low`.
+fn goto_fixture() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) >> /Names << /Dests << /Names [(low) [5 0 R /XYZ 0 100 0]] >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R] /Count 4 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [7 0 R 8 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (goto) /Rect [20 300 100 320] /P 3 0 R /A << /S /GoTo /D [5 0 R /XYZ 0 100 0] >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (named) /Rect [120 300 200 320] /P 3 0 R /A << /S /GoTo /D (low) >> >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// How far below the window's top edge the point three quarters down page 3 is on screen.
+fn below_window_top(h: &Harness<'static, PdfCraftApp>) -> f32 {
+    let v = &h.state().views[0];
+    let r = v.page_screen_rect(2).expect("page 3 on screen");
+    r.min.y + 0.75 * r.height() - v.viewport_rect().min.y
+}
+
+#[test]
+fn go_to_buttons_show_their_destination_not_the_page_top() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "goto.pdf", None, goto_fixture()).unwrap();
+            // Tall enough pages that y 100 on page 3 can scroll to the window's top.
+            app.set_option(&egui::Context::default(), "zoom", "200").unwrap();
+            app
+        }
+    });
+    h.run_steps(6);
+    for button in ["goto", "named"] {
+        h.state_mut().views[0].go_to_page(0);
+        h.run_steps(4);
+        click_field(&mut h, button);
+        // A named destination is looked up off the UI thread.
+        for _ in 0..200 {
+            if h.state().views[0].current() == 2 {
+                break;
+            }
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.run_steps(4);
+        assert_eq!(h.state().views[0].current(), 2, "{button} goes to page 3");
+        let d = below_window_top(&h);
+        assert!(d.abs() < 2.0, "{button}: y 100 on page 3 is at the window's top, not the page top: {d}");
+    }
+}
