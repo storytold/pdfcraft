@@ -182,13 +182,31 @@ impl Sheet {
         let after = median(extents.iter().filter(|e| steady(e)).map(|e| e.1)).unwrap_or(0);
         let paper = self.paper_beside(lanes, lane, &run, before, after);
         // A column is the rule's own when its ink is no more than a pixel thicker than the
-        // rule; a stroke reaching further crosses it, and the band erased there is the one of
-        // the nearest own column (a scanner's tilt shifts the band along the run).
-        let own = |e: &(usize, usize)| thickness(e) <= t + 1;
-        let bands = nearest_own(&extents, own, (before, after));
+        // rule (a scan's edges are ragged); a stroke reaching further crosses it. So does a
+        // column a pixel out that runs on from a crossing, up to a letter's height: the stem
+        // of a letter as narrow as the rule, over it but for a pixel, stands on its foot and
+        // is kept with it, where a ragged pixel on its own goes with the rule. The band
+        // erased at a crossing is the one of the nearest own column (a scanner's tilt shifts
+        // the band along the run).
+        let ragged = |e: &(usize, usize)| thickness(e) <= t + 1;
+        let mut own: Vec<bool> = extents.iter().map(ragged).collect();
+        let letter = limits.min_run / 2;
+        for i in (0..extents.len()).filter(|&i| !ragged(&extents[i])) {
+            for step in [-1isize, 1] {
+                let mut j = i;
+                for _ in 0..letter {
+                    j = match j.checked_add_signed(step) {
+                        Some(j) if j < extents.len() && thickness(&extents[j]) > t => j,
+                        _ => break,
+                    };
+                    own[j] = false;
+                }
+            }
+        }
+        let bands = nearest_own(&extents, &own, (before, after));
         let lane = lane as isize;
-        for ((pos, e), (b, a)) in run.zip(&extents).zip(bands) {
-            let bits = if own(e) { OWN[pass] | BAND[pass] } else { BAND[pass] };
+        for ((pos, own), (b, a)) in run.zip(own).zip(bands) {
+            let bits = if own { OWN[pass] | BAND[pass] } else { BAND[pass] };
             self.mark(lanes, lane - b as isize - 1..=lane + a as isize + 1, pos, bits, paper);
         }
     }
@@ -245,13 +263,14 @@ impl Sheet {
 
 /// For each column of a run, the band of the nearest column that is the rule's own (its own
 /// band for an own column), or `fallback` where none is.
-fn nearest_own(extents: &[(usize, usize)], own: impl Fn(&(usize, usize)) -> bool, fallback: (usize, usize)) -> Vec<(usize, usize)> {
+fn nearest_own(extents: &[(usize, usize)], own: &[bool], fallback: (usize, usize)) -> Vec<(usize, usize)> {
     let n = extents.len();
+    let own = |i: usize| own.get(i).copied().unwrap_or(false);
     // The nearest own column before (or at) each column, and after it, with its distance.
     let mut forward: Vec<Option<(usize, (usize, usize))>> = vec![None; n];
     let mut last = None;
     for (i, e) in extents.iter().enumerate() {
-        if own(e) {
+        if own(i) {
             last = Some((i, *e));
         }
         if let (Some((at, band)), Some(slot)) = (last, forward.get_mut(i)) {
@@ -261,7 +280,7 @@ fn nearest_own(extents: &[(usize, usize)], own: impl Fn(&(usize, usize)) -> bool
     let mut next = None;
     let mut bands = vec![fallback; n];
     for (i, e) in extents.iter().enumerate().rev() {
-        if own(e) {
+        if own(i) {
             next = Some((i, *e));
         }
         let backward = next.map(|(at, band)| (at - i, band));
@@ -365,6 +384,30 @@ mod tests {
         assert_eq!(ink_in(&out, 98, 192, 107, 380), 0, "and below it");
         assert_eq!(ink_in(&out, 105, 150, 138, 190), ink_in(&img, 105, 150, 138, 190), "the letter's ink beyond the rule stays");
         assert!(ink_in(&out, 100, 150, 105, 190) > 0, "the rule stays under the stem rather than cut the letter");
+    }
+
+    /// A stem as narrow as the rule, over it but for one pixel, keeps that pixel: the ink there
+    /// is thicker than the rule, so the column is a crossing and the rule stays under the stem,
+    /// while the rule beyond the letter goes.
+    #[test]
+    fn a_narrow_stem_a_pixel_past_a_rule_keeps_its_ink() {
+        let mut img = page(400, 400, 255);
+        fill(&mut img, 100, 20, 5, 360, 0); // the rule down, x 100..105
+        fill(&mut img, 101, 150, 5, 40, 0); // the stem, x 101..106: one pixel past the rule
+        fill(&mut img, 101, 178, 36, 12, 0); // the foot
+        let out = erased(&img, WORD).unwrap();
+        assert_eq!(ink_in(&out, 98, 20, 107, 148), 0, "the rule above the letter is gone");
+        assert_eq!(ink_in(&out, 98, 192, 107, 380), 0, "and below it");
+        assert_eq!(ink_in(&out, 105, 150, 106, 190), 40, "the stem keeps its pixel past the rule");
+        assert_eq!(ink_in(&out, 106, 178, 137, 190), ink_in(&img, 106, 178, 137, 190), "and the foot its ink");
+        // The same pixels with no foot are a ragged edge of the rule (a scan's edges are), and
+        // go with it; so does a lone pixel out.
+        let mut ragged = page(400, 400, 255);
+        fill(&mut ragged, 100, 20, 5, 360, 0);
+        fill(&mut ragged, 105, 150, 1, 40, 0);
+        fill(&mut ragged, 99, 250, 1, 1, 0);
+        let out = erased(&ragged, WORD).unwrap();
+        assert_eq!(ink_in(&out, 98, 20, 107, 380), 0, "a ragged edge is the rule's");
     }
 
     /// A rule a scanner tilted by a degree is still a rule; a steep diagonal is not.
