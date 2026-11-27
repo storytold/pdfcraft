@@ -359,7 +359,12 @@ impl PdfCraftApp {
             {
                 tl!("The document's security settings don't allow this change").to_string()
             }
-            commands::Needs::Copying if self.active.is_some() => crate::copy_refused().to_string(),
+            // A document that allows copying disables Copy only while nothing is selected (#8557):
+            // its security is not why.
+            commands::Needs::Copying if self.active.is_some() => match self.active_ids().and_then(|(_, id)| self.session.get(id)) {
+                Some(d) if d.allows_copying() => tl!("Select text, a picture or a comment to copy").to_string(),
+                _ => crate::copy_refused().to_string(),
+            },
             commands::Needs::Printing if self.active.is_some() => crate::print_refused().to_string(),
             commands::Needs::TwoPageView if self.active.is_some() => tl!("Switch to two-page view first to show the cover page").to_string(),
             _ => tl!("Open a document first").to_string(),
