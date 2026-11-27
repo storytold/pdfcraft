@@ -210,10 +210,8 @@ pub(super) fn run_button(
         B::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Button),
         B::GoTo { page, view } => {
             let dest = view.map_or(DestView::Top, |(kind, operands)| DestView::from_operands(Some(&kind), &operands));
-            let view = &mut app.views[index];
-            if let Some(doc) = app.session.get(view.id) {
-                view.go_to_dest(page, dest, &doc.info);
-            }
+            // Through `apply_destination_at`, so a named lookup still pending from an earlier click is dropped.
+            app.apply_destination_at(index, pdfcraft_render::RemoteDestination::Page { page, view: dest });
         }
         B::GoToNamed(name) => app.apply_destination_at(index, pdfcraft_render::RemoteDestination::Named(name)),
         B::ShowHide { fields, hide } => {
