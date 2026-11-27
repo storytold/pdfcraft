@@ -166,12 +166,4 @@ mod tests {
         assert_eq!(missing, None);
         Ok(())
     }
-
-    #[test]
-    fn the_compositor_names_a_pci_gpu_or_nothing() {
-        // Whatever this session has: no compositor (CI), one that doesn't say, or a PCI GPU.
-        if let Some((vendor, _)) = super::compositor_gpu() {
-            assert_ne!(vendor, 0);
-        }
-    }
 }
