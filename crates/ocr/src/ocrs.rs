@@ -247,12 +247,12 @@ impl Ocr {
     }
 }
 
-/// Whether a found line reads left to right on an upright page (within about 10° of level):
-/// the symbol check reads glyphs by rows and columns, so a line on its side is taken as read.
-/// A line of two or more words is judged by the run from its first word's centre to its last
-/// word's, since a word of slanted ink (a lone `⅛`, a slash, a word along a dimension line)
-/// gets a tilted box of its own, whatever way the line runs; a line of one word by that word's
-/// up axis.
+/// Whether a found line reads along the page rather than down it (within 45° of level): the
+/// symbol check reads glyphs by rows and columns, so a line on its side is taken as read. The
+/// detector tilts the boxes of short or slanted words on a drawing (a lone `⅛`, a slash, a
+/// word along a dimension line) by a good deal, while a line on its side is a quarter turn
+/// away, so the tolerance is wide; a line of two or more words is judged by the run from its
+/// first word's centre to its last word's, a line of one word by that word's up axis.
 fn is_upright(line: &[RotatedRect]) -> bool {
     let (Some(first), Some(last)) = (line.first(), line.last()) else { return false };
     if line.len() >= 2 {
@@ -260,11 +260,11 @@ fn is_upright(line: &[RotatedRect]) -> bool {
         let (dx, dy) = (b.x - a.x, b.y - a.y);
         let run = (dx * dx + dy * dy).sqrt();
         if run > 0.0 {
-            return dy.abs() <= 0.18 * run;
+            return dy.abs() <= 0.7 * run;
         }
     }
     let up = first.up_axis();
-    up.x.abs() <= 0.18 * up.length()
+    up.x.abs() <= 0.7 * up.length()
 }
 
 /// The grey value at an image pixel of `rgb` (1 or 3 bytes per pixel), 255 (paper) outside it.
@@ -401,15 +401,18 @@ mod tests {
 
     /// A slanted glyph at the head of a line, or a long word along a dimension line, gets a
     /// tilted box of its own; a line of several words is judged by the run between its first
-    /// and last word, a line of one by that word's box.
+    /// and last word, a line of one by that word's box, and only a line a quarter turn from
+    /// level is on its side.
     #[test]
-    fn a_line_of_several_words_is_upright_by_its_run_not_by_any_one_word() {
+    fn a_line_is_upright_by_its_run_and_only_a_quarter_turn_puts_it_on_its_side() {
         let tilted = RotatedRect::new(PointF::from_yx(50.0, 10.0), Vec2::from_yx(-0.8, 0.6), 12.0, 30.0);
         let upright = RotatedRect::from_rect(RectF::from_tlbr(35.0, 30.0, 65.0, 200.0));
         let slanted_long = RotatedRect::new(PointF::from_yx(48.0, 300.0), Vec2::from_yx(-0.8, 0.6), 160.0, 30.0);
         assert!(is_upright(&[tilted, upright]));
         assert!(is_upright(&[upright, slanted_long]), "a long slanted word does not turn its level line");
-        assert!(!is_upright(&[tilted]));
+        assert!(is_upright(&[tilted]), "a lone tilted box is within the tolerance");
+        let on_its_side = RotatedRect::new(PointF::from_yx(100.0, 100.0), Vec2::from_yx(0.0, 1.0), 200.0, 30.0);
+        assert!(!is_upright(&[on_its_side]));
         let below = RotatedRect::from_rect(RectF::from_tlbr(135.0, 30.0, 165.0, 200.0));
         assert!(!is_upright(&[upright, below]), "words stacked down the page are a line on its side");
         assert!(!is_upright(&[]));

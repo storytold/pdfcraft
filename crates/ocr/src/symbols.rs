@@ -132,7 +132,11 @@ pub(crate) fn repair_word(chars: &[ReadChar], line_top: f32, line_bottom: f32, b
     }
     let wide = Ink::sample(gray, [left, line_top - slack, right + slack, line_bottom + slack]);
     let wide = wide.as_ref().and_then(Shapes::of);
-    let (grown_left, grown) = fractions(&mut out, &mut chars, wide.as_ref().unwrap_or(&shapes), slack, numeral);
+    let glyph_shapes = wide.as_ref().unwrap_or(&shapes);
+    // The text's height: the line box the detector found, or the region's ink rows when they
+    // are shorter (a rule or a dimension line through the region makes them taller).
+    let text_h = height.min((glyph_shapes.line.1 - glyph_shapes.line.0 + 1) as f32);
+    let (grown_left, grown) = fractions(&mut out, &mut chars, glyph_shapes, text_h, slack, numeral);
     let chars = chars.as_slice();
     let mut consumed = Vec::new();
     let mut i = 0;
@@ -220,19 +224,26 @@ fn degree_candidates(text: &[char]) -> Vec<usize> {
 /// character, in `out` and in `chars` alike (the new character takes the glyph's columns), or
 /// insert it where the glyph lies when the decoder named nothing for it. Returns the word's new
 /// left and right edges where a glyph lay past its first or last character.
-fn fractions(out: &mut Vec<char>, chars: &mut Vec<ReadChar>, shapes: &Shapes, slack: f32, numeral: Numeral) -> (Option<f32>, Option<f32>) {
+fn fractions(
+    out: &mut Vec<char>,
+    chars: &mut Vec<ReadChar>,
+    shapes: &Shapes,
+    text_h: f32,
+    slack: f32,
+    numeral: Numeral,
+) -> (Option<f32>, Option<f32>) {
     let (Some(start), Some(end)) = (chars.first().map(|c| c.left), chars.last().map(|c| c.right)) else {
         return (None, None);
     };
     let centre = |c: &ReadChar| (c.left + c.right) / 2.0;
     let (mut grown_left, mut grown) = (None, None);
-    for glyph in shapes.fraction_glyphs() {
+    for glyph in shapes.fraction_glyphs(text_h) {
         let Some(ch) = glyph.character(numeral) else { continue };
         let (left, right) = (glyph.left as f32, (glyph.right + 1) as f32);
         // The decoder's steps are coarse, so a character's columns say little on their own: a
         // character was named for the glyph when its columns reach it and hold no ink of its
         // own (a whole number before the glyph, a parenthesis after it, keep theirs).
-        let named_for_the_glyph = |c: &ReadChar| c.right + slack > left && c.left - slack < right && !shapes.owns_ink(*c, &glyph);
+        let named_for_the_glyph = |c: &ReadChar| c.right + slack > left && c.left - slack < right && !shapes.owns_ink(*c, &glyph, text_h);
         let consumed: Vec<usize> = (0..chars.len()).filter(|&i| named_for_the_glyph(&chars[i])).collect();
         let at = consumed.first().copied().unwrap_or_else(|| chars.iter().position(|c| centre(c) > (left + right) / 2.0).unwrap_or(chars.len()));
         for &i in consumed.iter().rev() {
@@ -567,24 +578,25 @@ impl<'a> Shapes<'a> {
     }
 
     /// The fraction glyphs in the region, left to right: a stroke from lower left to upper
-    /// right spanning the line, a numeral about half the line's height at the cap line to its
-    /// left and another at the baseline to its right, both near it, and nothing else of any
-    /// size between the two (a full digit before the glyph lies outside it).
-    fn fraction_glyphs(&self) -> Vec<FractionInk> {
-        let line_h = (self.line.1 - self.line.0 + 1) as f32;
-        let numeral = |k: &Component| (0.33..=0.7).contains(&(k.height() as f32 / line_h)) && k.width() as f32 <= 0.75 * line_h && k.pixels >= 4;
-        let reach = 0.35 * line_h;
+    /// right about as tall as the text, a numeral about half that height at the stroke's top to
+    /// its left and another at its foot to its right, both near it, and nothing else of any
+    /// size between the two or small beside them (a full digit before the glyph lies outside
+    /// it, `1½`). `text_h` is the text's height, not the region's ink rows: a rule or a
+    /// dimension line through the region is no guide to the glyph.
+    fn fraction_glyphs(&self, text_h: f32) -> Vec<FractionInk> {
+        let numeral = |k: &Component| (0.28..=0.7).contains(&(k.height() as f32 / text_h)) && k.width() as f32 <= 0.75 * text_h && k.pixels >= 4;
+        let reach = 0.35 * text_h;
         fn largest<'c>(ks: impl Iterator<Item = (usize, &'c Component)>) -> Option<(usize, &'c Component)> {
             ks.max_by_key(|(_, k)| k.pixels)
         }
         let mut out = Vec::new();
-        for (s, stroke) in self.components.iter().enumerate().filter(|&(id, _)| self.is_fraction_stroke(id)) {
-            let at_the_cap_line = |k: &Component| (k.top - self.line.0) as f32 <= 0.2 * line_h && (k.bottom - self.line.0) as f32 <= 0.72 * line_h;
-            let on_the_baseline = |k: &Component| (self.line.1 - k.bottom) as f32 <= 0.2 * line_h && (k.top - self.line.0) as f32 >= 0.28 * line_h;
+        for (s, stroke) in self.components.iter().enumerate().filter(|&(id, _)| self.is_fraction_stroke(id, text_h)) {
+            let at_the_top = |k: &Component| (k.top - stroke.top) as f32 <= 0.2 * text_h && (k.bottom - stroke.top) as f32 <= 0.72 * text_h;
+            let at_the_foot = |k: &Component| (stroke.bottom - k.bottom) as f32 <= 0.2 * text_h && (k.top - stroke.top) as f32 >= 0.28 * text_h;
             let Some((n, numerator)) = largest(self.components.iter().enumerate().filter(|&(id, k)| {
                 id != s
                     && numeral(k)
-                    && at_the_cap_line(k)
+                    && at_the_top(k)
                     && k.centre_x() < stroke.centre_x()
                     && k.right < stroke.right
                     && k.right as f32 >= stroke.left as f32 - reach
@@ -594,7 +606,7 @@ impl<'a> Shapes<'a> {
             let Some((d, denominator)) = largest(self.components.iter().enumerate().filter(|&(id, k)| {
                 id != s
                     && numeral(k)
-                    && on_the_baseline(k)
+                    && at_the_foot(k)
                     && k.centre_x() > stroke.centre_x()
                     && k.left > stroke.left
                     && k.left as f32 <= stroke.right as f32 + reach
@@ -609,12 +621,12 @@ impl<'a> Shapes<'a> {
             // beside it: `1/64` set with small numerals is no sixth (a full-size digit beside
             // the glyph is the whole number, `1½`, and stays).
             let within = |k: &Component, l: i64, r: i64| (k.right.min(r) - k.left.max(l) + 1) * 2 > k.width();
-            let small = |k: &Component| (0.3 * line_h..=0.75 * line_h).contains(&(k.height() as f32));
+            let small = |k: &Component| (0.28 * text_h..=0.75 * text_h).contains(&(k.height() as f32));
             let intruder = self.components.iter().enumerate().any(|(id, k)| {
                 id != s
                     && id != n
                     && id != d
-                    && ((within(k, left, right) && k.height() as f32 >= 0.3 * line_h)
+                    && ((within(k, left, right) && k.height() as f32 >= 0.28 * text_h)
                         || (within(k, left - reach as i64, right + reach as i64) && small(k)))
             });
             if intruder {
@@ -634,23 +646,18 @@ impl<'a> Shapes<'a> {
     /// Whether the character's columns hold ink of their own, besides the fraction glyph's
     /// parts: a glyph-sized component (a hyphen or a full stop, not a speck, and not a rule
     /// that happens to be centred there) whose centre lies within them.
-    fn owns_ink(&self, c: ReadChar, glyph: &FractionInk) -> bool {
-        let line_h = (self.line.1 - self.line.0 + 1) as f32;
-        let glyph_sized = |k: &Component| k.pixels >= 3 && (0.1 * line_h..=1.5 * line_h).contains(&(k.width().max(k.height()) as f32));
+    fn owns_ink(&self, c: ReadChar, glyph: &FractionInk, text_h: f32) -> bool {
+        let glyph_sized = |k: &Component| k.pixels >= 3 && (0.1 * text_h..=1.5 * text_h).contains(&(k.width().max(k.height()) as f32));
         self.components.iter().enumerate().any(|(id, k)| !glyph.parts.contains(&id) && (c.left..=c.right).contains(&k.centre_x()) && glyph_sized(k))
     }
 
-    /// A thin stroke from the box's lower left to its upper right, spanning the line from near
-    /// the cap line to near the baseline: a fraction's slash. A letter or a digit of the same
-    /// box fails the trace or fills the other diagonal.
-    fn is_fraction_stroke(&self, id: usize) -> bool {
+    /// A thin stroke from the box's lower left to its upper right, about as tall as the text:
+    /// a fraction's slash. A letter or a digit of the same box fails the trace or fills the
+    /// other diagonal.
+    fn is_fraction_stroke(&self, id: usize, text_h: f32) -> bool {
         let Some(k) = self.components.get(id) else { return false };
-        let line_h = (self.line.1 - self.line.0 + 1) as f32;
         let (w, h) = (k.width() as f32, k.height() as f32);
-        if h < 8.0 || h < 0.6 * line_h || h > 1.15 * line_h || w < 0.2 * h || w > 0.95 * h {
-            return false;
-        }
-        if (k.top - self.line.0) as f32 > 0.25 * line_h || (self.line.1 - k.bottom) as f32 > 0.25 * line_h {
+        if h < 8.0 || h < 0.55 * text_h || h > 1.15 * text_h || w < 0.2 * h || w > 0.95 * h {
             return false;
         }
         if k.pixels as f32 > 0.6 * w * h {
