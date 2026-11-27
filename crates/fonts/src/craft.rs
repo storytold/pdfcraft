@@ -85,6 +85,19 @@ pub fn document_hebrew_font(bold: bool) -> Option<&'static EmbeddedFace> {
     hebrew_face(CRAFT_FONTS, bold)
 }
 
+/// The face for Korean text written into PDFs: the first Regular `Kore` or `Hang` face, else the
+/// first of any style (craft-fonts has NanumGothic Regular). Preferring Regular keeps plain text
+/// plain once craft-fonts carries more Korean weights. `None` without craft-fonts or without a
+/// Korean face, and on the web, whose build carries no Korean face. Bold sources are drawn in it too.
+pub fn document_korean_font() -> Option<&'static EmbeddedFace> {
+    korean_face(CRAFT_FONTS)
+}
+
+fn korean_face(faces: &[EmbeddedFace]) -> Option<&EmbeddedFace> {
+    let korean = || faces.iter().filter(|f| f.has_script("Kore") || f.has_script("Hang"));
+    korean().find(|f| f.style == "Regular").or_else(|| korean().next())
+}
+
 fn hebrew_face(faces: &[EmbeddedFace], bold: bool) -> Option<&EmbeddedFace> {
     let hebr = || faces.iter().filter(|f| f.has_script("Hebr"));
     let style = if bold { "Bold" } else { "Regular" };
@@ -307,6 +320,27 @@ mod tests {
         assert!(hebrew_face(&faces[..1], false).is_none());
         assert_eq!(ui_hebrew_fonts().len(), CRAFT_FONTS.iter().filter(|f| f.has_script("Hebr")).count());
         assert_eq!(document_hebrew_font(false).is_some(), CRAFT_FONTS.iter().any(|f| f.has_script("Hebr")));
+    }
+
+    #[test]
+    fn korean_document_face_is_the_first_kore_or_hang_face() {
+        let faces = [
+            EmbeddedFace { family: "BIZ UDPGothic", style: "Regular", scripts: &["Jpan"], index: 0, role: None, bytes: b"japanese" },
+            EmbeddedFace { family: "FakeHangul", style: "Regular", scripts: &["Hang"], index: 0, role: None, bytes: b"hang" },
+            EmbeddedFace { family: "FakeKorean", style: "Regular", scripts: &["Hang", "Kore"], index: 0, role: None, bytes: b"kore" },
+        ];
+        assert_eq!(korean_face(&faces).map(|f| f.bytes), Some(&b"hang"[..]));
+        assert_eq!(korean_face(&faces[2..]).map(|f| f.bytes), Some(&b"kore"[..]));
+        // Regular wins over a heavier face listed first; without one, any Korean face.
+        let weights = [
+            EmbeddedFace { family: "FakeKorean", style: "Bold", scripts: &["Hang", "Kore"], index: 0, role: None, bytes: b"bold" },
+            EmbeddedFace { family: "FakeKorean", style: "Regular", scripts: &["Hang", "Kore"], index: 0, role: None, bytes: b"regular" },
+        ];
+        assert_eq!(korean_face(&weights).map(|f| f.bytes), Some(&b"regular"[..]));
+        assert_eq!(korean_face(&weights[..1]).map(|f| f.bytes), Some(&b"bold"[..]));
+        // Never a face of another script, even a CJK one.
+        assert!(korean_face(&faces[..1]).is_none());
+        assert_eq!(document_korean_font().is_some(), CRAFT_FONTS.iter().any(|f| f.has_script("Kore") || f.has_script("Hang")));
     }
 
     /// `build.rs` embeds the Japanese CJK faces whole and any other CJK face only up to

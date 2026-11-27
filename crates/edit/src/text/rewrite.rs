@@ -1,8 +1,8 @@
-use super::blocks::{BlockStyle, TextBlock, paragraph_separator, row_break, wrap};
+use super::blocks::{BlockStyle, RangeStyle, TextBlock, paragraph_separator, row_break, wrap};
 use super::fallback::{
-    Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, Type3Run, drop_unused_fallback_fonts, is_variation_selector, needs_type3, no_japanese_font,
-    source_character_advance, source_encodes, source_fallback_runs, source_family, source_program_completes, source_runs, source_show, source_space,
-    source_width, type3_encode, type3_font,
+    Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, Type3Run, compose_hangul, composed_offset, drop_unused_fallback_fonts, is_variation_selector,
+    needs_type3, no_japanese_font, source_character_advance, source_encodes, source_fallback_runs, source_family, source_program_completes,
+    source_runs, source_show, source_space, source_width, type3_encode, type3_font,
 };
 use super::interp::{Carry, Origin, TextState, interpret};
 use super::lines::{
@@ -47,6 +47,8 @@ fn refuse_clipping_text(lines: &[TextLine], dropped: &std::collections::HashSet<
 /// [`replace_line`] with the most unique characters one generated font may hold (tests lower it).
 pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usize, text: &str, max_glyphs: usize) -> Result<LineEdit, EditError> {
     let text = text.replace(row_break, " ");
+    // One glyph is drawn per character, so decomposed Hangul is composed into syllables first.
+    let text = compose_hangul(&text).map_or(text, |(composed, _)| composed);
     let lines = text_lines(doc, page)?;
     let target = lines.get(line).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no line {}", page + 1, line + 1)))?;
     target.ensure_editable()?;
@@ -1051,6 +1053,23 @@ pub(crate) fn rewrite_block_from(
     style: &BlockStyle,
     max_glyphs: usize,
 ) -> Result<LineEdit, EditError> {
+    // Decomposed Hangul is drawn as syllables; the styled ranges follow the text they style.
+    let composed = text.and_then(compose_hangul);
+    let restyled;
+    let (text, style) = match &composed {
+        Some((composed, map)) => {
+            restyled = BlockStyle {
+                ranges: style
+                    .ranges
+                    .iter()
+                    .map(|r| RangeStyle { range: composed_offset(map, r.range.start)..composed_offset(map, r.range.end), ..r.clone() })
+                    .collect(),
+                ..style.clone()
+            };
+            (Some(composed.as_str()), &restyled)
+        }
+        None => (text, style),
+    };
     let blocks = group_blocks(&lines);
     let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
     // Existing PDF paragraphs do not yet persist selected-row alignment intent. Refuse
