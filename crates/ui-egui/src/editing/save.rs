@@ -52,6 +52,24 @@ pub struct PendingLock {
     failed: SaveThen,
 }
 
+/// A save held back by [`dialogs::redact`](crate::dialogs::redact): the document has
+/// redaction marks that aren't applied, so what they cover would be saved (#4741).
+pub struct PendingRedactSave {
+    pub id: DocId,
+    target: SaveTarget,
+    /// What was to run once the document is written (close its tab, quit).
+    after: SaveThen,
+    /// What runs when the save does not happen after all.
+    failed: SaveThen,
+}
+
+impl PendingRedactSave {
+    /// The question was dismissed: the save does not happen, so what waited on it is told.
+    pub(crate) fn dismissed(self, app: &mut PdfCraftApp, ctx: &egui::Context) {
+        (self.failed)(app, ctx);
+    }
+}
+
 /// The save under way. The framework's save flow runs one at a time, so one slot holds what the
 /// request needs across the passes its picker or changed-on-disk question takes.
 pub struct PendingSave {
@@ -139,6 +157,13 @@ impl PdfCraftApp {
             && !answered
         {
             crate::dialogs::signature::ask_lock(self, PendingLock { id, target, after: Box::new(after), failed: Box::new(failed) });
+            return false;
+        }
+        // A redaction mark only outlines what it covers until it is applied: saved as it is, the
+        // text and images under it stay in the file for anyone to read (#4741). Ask first, unless
+        // the marks were kept on purpose and nothing changed since.
+        if self.redact_answered.take() != Some(id) && self.must_ask_about_marks(id) {
+            crate::dialogs::redact::ask_before_save(self, PendingRedactSave { id, target, after: Box::new(after), failed: Box::new(failed) });
             return false;
         }
         let Some(doc) = self.session.get(id) else {
@@ -424,6 +449,47 @@ impl PdfCraftApp {
         } else {
             (p.failed)(self, ctx);
         }
+    }
+
+    /// Whether saving document `id` must first ask about its redaction marks: it has some, and
+    /// they weren't kept on purpose at its current generation.
+    fn must_ask_about_marks(&self, id: DocId) -> bool {
+        self.session.get(id).is_some_and(|doc| doc.redaction_marks() > 0 && self.kept_redaction_marks.get(&id) != Some(&doc.edit_generation()))
+    }
+
+    /// The redaction question answered with Redact all and save: apply the marks, as Redact all
+    /// does, then go on with the save. A refused apply saves nothing.
+    pub(crate) fn redact_then_save(&mut self, ctx: &egui::Context) {
+        let Some(p) = self.pending_redact_save.take() else { return };
+        let Some(index) = self.views.iter().position(|v| v.id == p.id) else { return (p.failed)(self, ctx) };
+        // Applying edits goes to the document in front: the one being saved (Save, or the close
+        // prompt brought it forward).
+        self.active = Some(index);
+        crate::tools::redact_ui::finish_apply(ctx, self);
+        if self.session.get(p.id).is_some_and(|d| d.redaction_marks() > 0) {
+            return (p.failed)(self, ctx);
+        }
+        self.redact_answered = Some(p.id);
+        self.save_then(ctx, index, p.target, p.after, p.failed);
+    }
+
+    /// The redaction question answered with Save with marks: write the marks as they are, for
+    /// applying later, and don't ask again until the document changes. Only a save that writes
+    /// counts: a cancelled one leaves the next Save asking again.
+    pub(crate) fn save_keeping_redaction_marks(&mut self, ctx: &egui::Context) {
+        let Some(p) = self.pending_redact_save.take() else { return };
+        let Some(index) = self.views.iter().position(|v| v.id == p.id) else { return (p.failed)(self, ctx) };
+        let (id, after) = (p.id, p.after);
+        // Noted once the file is written, at the generation it is saved at (writing moves the
+        // document's generation on).
+        let after = move |app: &mut Self, ctx: &egui::Context| {
+            if let Some(generation) = app.session.get(id).map(|d| d.edit_generation()) {
+                app.kept_redaction_marks.insert(id, generation);
+            }
+            after(app, ctx);
+        };
+        self.redact_answered = Some(id);
+        self.save_then(ctx, index, p.target, after, p.failed);
     }
 
     /// Lock now, on the notice shown after a signature is placed (#2149): lock document `id`'s

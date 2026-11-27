@@ -11,11 +11,11 @@ pub(crate) mod save;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use craft::dialogs::save::SaveTarget;
-pub use save::PendingLock;
 #[cfg(target_arch = "wasm32")]
 pub use save::SaveTarget;
 #[cfg(test)]
 use save::unredacted_file_name;
+pub use save::{PendingLock, PendingRedactSave};
 
 /// Text typed into a new text box that isn't added to the page yet.
 fn new_text_typed(v: &crate::DocView) -> bool {

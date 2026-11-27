@@ -23,6 +23,8 @@ pub(crate) struct OpenPrompts {
     pub(crate) sanitize: Option<DialogId>,
     /// The question about locking placed signatures into the page before a save (`pending_lock`).
     pub(crate) lock_signatures: Option<DialogId>,
+    /// The question about redaction marks that aren't applied before a save (`pending_redact_save`).
+    pub(crate) redact_save: Option<DialogId>,
 }
 
 /// `name` cut to at most `max` characters by replacing its middle with "…", keeping the start and
@@ -195,6 +197,12 @@ impl PdfCraftApp {
                 DialogResult::Ok(answer) => super::signature::finish_lock(ctx, self, answer),
                 _ => self.pending_lock = None,
             }
+        }
+        if let Some(dialog) = self.prompts.redact_save
+            && let Some(result) = self.dialogs.take_by_id::<StandardPrompt>(dialog)
+        {
+            self.prompts.redact_save = None;
+            super::redact::finish_ask(ctx, self, result);
         }
         if self.pending_link.is_some() && self.prompts.link.is_none() {
             self.ask_link();

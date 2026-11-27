@@ -21,6 +21,7 @@ pub(super) mod printer_marks_ui;
 pub(crate) mod prompts;
 pub(crate) mod properties;
 pub(super) mod protect;
+pub(crate) mod redact;
 pub(crate) mod rename_ui;
 pub(crate) mod shortcuts;
 pub(crate) mod signature;

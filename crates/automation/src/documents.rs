@@ -229,7 +229,18 @@ impl Automation {
         let path = target.to_string_lossy().into_owned();
         self.session.mark_saved(id, bytes.clone(), Some(path.clone())).map_err(failed)?;
         let doc = self.session.get(id).ok_or_else(|| failed("the saved document is no longer open"))?;
-        Ok(json!({ "path": path, "bytes": bytes.len(), "incremental": incremental, "document": summary(doc) }))
+        let mut out = json!({ "path": path, "bytes": bytes.len(), "incremental": incremental, "document": summary(doc) });
+        // A redaction mark that isn't applied leaves what it covers in the file (#4741): said,
+        // not silent. The sentence is the same for one mark and several, so no plural form is
+        // spelled here; `redaction_marks_pending` carries the count.
+        let marks = doc.redaction_marks();
+        if marks > 0 {
+            out["redaction_marks_pending"] = json!(marks);
+            out["warnings"] = json!([
+                "Redaction marks that aren't applied are saved as marks, so the text and images under them are still in the saved file; redact_apply removes them, then save again"
+            ]);
+        }
+        Ok(out)
     }
 
     pub(crate) fn doc_revisions(&mut self, a: &Args) -> Result<Value> {

@@ -360,6 +360,14 @@ pub struct PdfCraftApp {
     /// doesn't ask again. The placed-signature mark itself stays until that save succeeds, so a
     /// save that fails or is cancelled asks again next time.
     pub(crate) lock_answered: Option<pdfcraft_engine::DocId>,
+    /// A save waiting behind the question about redaction marks that aren't applied (#4741).
+    pub(crate) pending_redact_save: Option<editing::PendingRedactSave>,
+    /// The document whose redaction question was just answered: its save goes on without asking
+    /// again.
+    pub(crate) redact_answered: Option<pdfcraft_engine::DocId>,
+    /// The documents whose redaction marks the user chose to save as marks, each at the edit
+    /// generation it was last saved at: saving one again unchanged doesn't ask again.
+    pub(crate) kept_redaction_marks: std::collections::HashMap<pdfcraft_engine::DocId, u64>,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,
     pub fill_tool: fill_sign::FillTool,

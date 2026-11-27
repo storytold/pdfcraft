@@ -6046,6 +6046,28 @@ fn redact_mark_respects_single_page_and_rejects_conflicting_selectors() {
     assert!(text[1].contains("Private"));
 }
 
+/// doc_save says when redaction marks aren't applied (#4741): saved as marks, they leave what
+/// they cover in the file. Once applied, the save says nothing. One sentence serves one mark and
+/// several; `redaction_marks_pending` carries the count.
+#[test]
+fn saving_with_redaction_marks_not_applied_says_so() {
+    let dir = workdir("redact-save-pending");
+    std::fs::write(dir.join("memo.txt"), "Call 555-123-4567 today").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "memo.txt" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "redact_mark", json!({ "doc": doc, "pattern": "phone" }));
+    let r = ok(&mut a, "doc_save", json!({ "doc": doc, "path": "marked.pdf" }));
+    assert_eq!(r["redaction_marks_pending"], 1, "{r}");
+    let warning = r["warnings"][0].as_str().unwrap_or_default();
+    assert!(warning.starts_with("Redaction marks that aren't applied") && warning.contains("redact_apply"), "{r}");
+    let marked = ok(&mut a, "doc_open", json!({ "path": "marked.pdf" }))["doc"].as_u64().unwrap();
+    assert!(page_text(&mut a, marked)[0].contains("555-123-4567"), "the number is still in the saved file");
+    ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    let r = ok(&mut a, "doc_save", json!({ "doc": doc, "path": "redacted.pdf" }));
+    assert!(r.get("redaction_marks_pending").is_none() && r.get("warnings").is_none(), "{r}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn redacting_through_tools() {
     let dir = workdir("redact");
