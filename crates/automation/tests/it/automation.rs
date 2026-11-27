@@ -15379,3 +15379,15 @@ fn pdf_watermark_uses_visible_source_crop_through_tools() {
         assert_eq!(rendered[0], rendered[1], "same displayed source gives identical saved watermark at target rotation {rotation}");
     }
 }
+
+#[test]
+fn open_bytes_opens_a_document_the_tools_can_edit_and_save() {
+    let mut a = Automation::new();
+    let doc = a.open_bytes("held.pdf", fixture(3), None).expect("opens from bytes");
+    assert_eq!(ok(&mut a, "doc_inspect", json!({"doc": doc}))["document"]["pages"], json!(3));
+    ok(&mut a, "page_rotate", json!({"doc": doc, "pages": [2], "degrees": 90}));
+    let bytes = a.session().save_full_bytes(pdfcraft_engine::DocId(doc)).expect("saves to bytes");
+    let again = a.open_bytes("again.pdf", bytes.to_vec(), None).expect("reopens its own output");
+    assert_eq!(ok(&mut a, "doc_inspect", json!({"doc": again}))["document"]["pages"], json!(3));
+    assert!(a.open_bytes("junk.pdf", b"not a pdf".to_vec(), None).is_err(), "bytes that aren't a PDF are refused");
+}
