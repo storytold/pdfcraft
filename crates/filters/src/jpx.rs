@@ -77,12 +77,14 @@ fn header_fits(data: &[u8]) -> Option<bool> {
 }
 
 /// The boxes in a `jp2h` box: `Some(palette)` when each component mapping (`cmap`, four bytes an
-/// entry, ISO 15444-1 I.5.3.5) has at most four entries, `palette` telling whether one is a `pclr`.
+/// entry, ISO 15444-1 I.5.3.5) and each palette (`pclr`, I.5.3.4) at most four entries or columns,
+/// `palette` telling whether one is a `pclr`.
 fn header_box(mut rest: &[u8]) -> Option<bool> {
     let mut palette = false;
     while !rest.is_empty() {
         let (kind, body, next) = jp2_box(rest)?;
-        if kind == b"cmap" && body.len() / 4 > 4 {
+        // Without a `cmap` the decoder maps every palette column (`NPC`, after the 2-byte `NE`).
+        if (kind == b"cmap" && body.len() / 4 > 4) || (kind == b"pclr" && body.get(2).is_none_or(|&n| n > 4)) {
             return None;
         }
         palette |= kind == b"pclr";
@@ -157,5 +159,6 @@ mod tests {
         assert_eq!(super::header_fits(&with(jp2h(b"cmap", &[0; 16]))), Some(false), "four entries fit");
         assert_eq!(super::header_fits(&with(jp2h(b"cmap", &[0; 20]))), None, "five don't");
         assert_eq!(super::header_fits(&with(jp2h(b"pclr", &[0; 3]))), Some(true), "a palette is found");
+        assert_eq!(super::header_fits(&with(jp2h(b"pclr", &[0, 1, 5]))), None, "a palette of five columns isn't");
     }
 }
