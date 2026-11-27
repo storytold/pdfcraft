@@ -262,7 +262,7 @@ fn selected_text_copy_floating_button_honours_permissions() {
         let mut loaded = false;
         for _ in 0..200 {
             h.run_steps(2);
-            if h.state_mut().views[0].select_all() {
+            if h.state_mut().views.first_mut().is_some_and(|v| v.select_all()) {
                 loaded = true;
                 break;
             }
