@@ -437,6 +437,16 @@ impl Document {
         self.editor.as_ref().map(|e| crate::text_style_bookmarks::styles(&e.cos)).unwrap_or_default()
     }
 
+    /// Suggest outline (#6020): the bookmark tree proposed for the document, from its tagged
+    /// headings or else from how its text looks. `None` when the document doesn't allow copying
+    /// (the titles are its text) or can't be read for editing.
+    pub fn suggest_outline(&self) -> Option<crate::suggest_outline::OutlineSuggestion> {
+        if !self.allows_copying() {
+            return None;
+        }
+        self.editor.as_ref().map(|e| crate::suggest_outline::suggest(&e.cos))
+    }
+
     /// Edit a PDF ▸ Edit text: the lines of existing text on `page` (0-based).
     pub fn text_lines(&self, page: usize) -> Vec<pdfcraft_edit::TextLine> {
         self.editor.as_ref().and_then(|e| pdfcraft_edit::text_lines(&e.cos, page).ok()).unwrap_or_default()
