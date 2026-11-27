@@ -2318,6 +2318,13 @@ fn table_rows_of_cells_drawn_one_by_one_read_across() {
     let t = layout(v).plain_text();
     assert_eq!(t.lines().count(), 3, "{t}");
     assert!(t.starts_with("Item Description") && t.lines().nth(1).is_some_and(|l| l.starts_with("R1C1 R1C2") && l.ends_with("R1C3")), "{t}");
+}
+
+/// What is no table row: columns of prose whose lines share baselines (#8548 review), a column of
+/// prose with short segments beside each line, an accounting report's heading column, a barcode's
+/// rows, and the line number of a quote under a full-width rule, which is a cell all the same.
+#[test]
+fn columns_of_prose_are_no_table_rows() {
     // Three columns of prose (28 letters a line, 16.8 heights) 2.2 heights apart whose lines share
     // baselines keep reading as columns, also where one paragraph's last line is short.
     let mut v = Vec::new();
@@ -2342,6 +2349,36 @@ fn table_rows_of_cells_drawn_one_by_one_read_across() {
         word(&mut v, &format!("cd{l}"), 250.0, y, 6.0);
     }
     assert_eq!(layout(v).plain_text(), "prose0xxxxxxxxxxxxxx\nprose1xxxxxxxxxxxxxx\nprose2xxxxxxxxxxxxxx\nab0\nab1\nab2\ncd0\ncd1\ncd2");
+    // An accounting report's first column: account headings and totals (28 to 34 letters) with the
+    // dates of their entries (10 letters) indented under them, one block. Four of its seven lines
+    // but the last are as wide as the widest, yet it is no column of prose: the dates are cells,
+    // and each reads across with its name and status (a corpus report lost these rows).
+    let mut v = Vec::new();
+    let column = [
+        ("818 - Tear Down and Clean Up", 145.0),
+        ("07/02/2026", 151.0),
+        ("Total 818 - Tear Down and Clean", 145.0),
+        ("Unbillable:903 Shipping/Receivin", 145.0),
+        ("06/30/2026", 151.0),
+        ("07/02/2026", 151.0),
+        ("Total Unbillable:903 Shipping/Rece", 145.0),
+        ("Total W.F. Wells, Inc.:26-9949", 145.0),
+    ];
+    for (l, (text, x)) in column.iter().enumerate() {
+        let y = 100.0 + 10.0 * l as f32;
+        word(&mut v, text, *x, y, 6.0);
+        if text.starts_with('0') {
+            word(&mut v, "Aaron R Eichholz", 245.0, y, 6.0);
+            word(&mut v, "Not Billable", 380.0, y, 6.0);
+        }
+        // Every entry and total has its hours in the last column, a line's width away.
+        if text.starts_with('0') || text.starts_with("Total") {
+            word(&mut v, "1:00", 480.0, y, 6.0);
+        }
+    }
+    let t = layout(v).plain_text();
+    assert_eq!(t.lines().filter(|l| l.starts_with('0') && l.contains("Aaron R Eichholz Not Billable")).count(), 3, "{t}");
+    assert!(t.lines().any(|l| l == "818 - Tear Down and Clean Up"), "{t}");
     // Narrow columns of prose: 26 letters a line, 15.6 heights, narrower than a cell may be. Their
     // lines fill their column, so they are no cells and the page keeps its columns (review on #8548,
     // seven public pages whose lines run 13.3 to 15.7 heights read across).

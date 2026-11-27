@@ -650,38 +650,55 @@ fn stack_blocks(segs: &[Seg], lines: &Lines) -> Vec<(Vec<usize>, [f32; 4])> {
 }
 
 /// For each of `n` segments, whether its block (in `blocks`) is a column of prose: two or more
-/// lines, the widest at least [`PROSE_WIDTH`] heights, and its lines but the last mostly filling
-/// the column, at least [`FULL_LINE`] of the widest (the last line of a paragraph is short). Body
+/// lines, the widest at least [`PROSE_WIDTH`] heights, and its lines but the last filling the
+/// column, at least [`FULL_LINE`] of the widest, with at most a quarter of them short (the last
+/// line of a paragraph is short, so is an indented first line); a block of two is judged by both
+/// its lines, or a heading over one short cell would pass, and an accounting report's column of
+/// account headings and totals with the dates of their entries under them is half wide lines and
+/// half dates, no prose. Body
 /// text set in three columns runs 13 to 16 heights a line, narrower than a cell may be, and read
 /// across where its columns shared a baseline grid (review on #8548, seven public pages); a table
 /// column's cells are ragged, a part number under a description under a quantity, or narrower than
 /// prose, a column of dates or amounts, and a quote's line number under a full-width rule and the
 /// description's second line is in a ragged block too.
 fn prose_members(segs: &[Seg], blocks: &[(Vec<usize>, [f32; 4])]) -> Vec<bool> {
-    let width = |c: usize| segs[c].bbox[2] - segs[c].bbox[0];
     let mut prose = vec![false; segs.len()];
     for (members, _) in blocks {
-        let Some((_, body)) = members.split_last() else { continue };
-        if body.is_empty() {
+        if !fills_its_column(segs, members) {
             continue;
         }
-        let widest = members.iter().map(|&m| width(m)).fold(0.0_f32, f32::max);
-        let height = members.iter().map(|&m| segs[m].h).fold(0.0_f32, f32::max);
-        let full = body.iter().filter(|&&m| width(m) >= FULL_LINE * widest).count();
-        if widest >= PROSE_WIDTH * height && full * 2 > body.len() {
-            for &m in members {
-                if let Some(slot) = prose.get_mut(m) {
-                    *slot = true;
-                }
+        for &m in members {
+            if let Some(slot) = prose.get_mut(m) {
+                *slot = true;
             }
         }
     }
     prose
 }
 
+/// Whether the block of `members` is a column of prose, as [`prose_members`] defines one. Two
+/// lines are thin evidence: a pair of padded descriptions or a two-line address fill their column
+/// alike, so a block of two is prose only when it is wider than a cell may be ([`CELL_WIDTH`]).
+/// A line is as wide as its ink: a padded cell's box runs on with spaces.
+fn fills_its_column(segs: &[Seg], members: &[usize]) -> bool {
+    let width = |c: usize| (if segs[c].ink.is_finite() { segs[c].ink } else { segs[c].bbox[2] }) - segs[c].bbox[0];
+    let Some((_, body)) = members.split_last() else { return false };
+    let body = if body.len() >= 2 { body } else { members };
+    if body.len() < 2 {
+        return false;
+    }
+    let widest = members.iter().map(|&m| width(m)).fold(0.0_f32, f32::max);
+    let height = members.iter().map(|&m| segs[m].h).fold(0.0_f32, f32::max);
+    let min_width = if members.len() >= 3 { PROSE_WIDTH } else { CELL_WIDTH };
+    let full = body.iter().filter(|&&m| width(m) >= FULL_LINE * widest).count();
+    widest >= min_width * height && full + body.len() / 4 >= body.len()
+}
+
 /// Which segments are the cells of a table row: [`ROW_CELLS`] or more segments of one of `lines`
 /// (each line's segments by their left edge), each within [`SAME_LINE_GAP`] of the next, more than
-/// half of them cells, narrower than [`CELL_WIDTH`] heights (#8534). A chain that holds a line of
+/// half of them cells, narrower than [`CELL_WIDTH`] heights (#8534; the cases are the tests
+/// `table_rows_of_cells_drawn_one_by_one_read_across` and `columns_of_prose_are_no_table_rows`).
+/// A chain that holds a line of
 /// a column of prose (`prose`, from [`prose_members`]) is no row, whatever is beside the line: the
 /// line stays in its paragraph and the short segments beside it (line numbers, margin notes) read
 /// after the column. The rows of a barcode drawn with a font join no chain and are never cells:
