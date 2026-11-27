@@ -97,8 +97,14 @@ impl PdfCraftApp {
                     _ => return Err("form-reminder must be on or off".to_string()),
                 };
             }
-            ("date-format", _) => self.session.set_date_format(value)?,
-            ("date-language", _) => self.session.set_date_language(Some(value).filter(|v| *v != "auto"))?,
+            ("date-format", _) => {
+                self.session.set_date_format(value)?;
+                self.sync_open_date_format();
+            }
+            ("date-language", _) => {
+                self.session.set_date_language(Some(value).filter(|v| *v != "auto"))?;
+                self.sync_open_date_language();
+            }
             ("tool", _) => {
                 let g = pdfcraft_engine::catalog::group(value).ok_or_else(|| format!("unknown tool {value}"))?;
                 self.select_tool(ctx, g.id);
@@ -547,6 +553,8 @@ impl PdfCraftApp {
             }
             "none" => {
                 self.cancel_dialogs(ctx);
+                // Preferences is a separate live window, not part of the dialog host.
+                self.preferences = None;
                 self.redact_props = None;
                 self.redact_search_open = false;
                 self.hidden_draft = None;

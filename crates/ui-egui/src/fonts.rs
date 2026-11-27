@@ -63,8 +63,8 @@ pub fn ui_fonts(lang: Lang) -> UiFonts<'static> {
     let mut emoji = Emoji::default();
     emoji.monochrome = noto_emoji();
     let fonts = UiFonts::new(&SCRIPTS)
-        .app_face("Inter", own_face(platform, "Inter", pdfcraft_fonts::INTER_REGULAR), &[proportional.clone(), monospace.clone()])
         .app_face("JetBrainsMono", own_face(platform, "JetBrainsMono", JETBRAINS_MONO), std::slice::from_ref(&monospace))
+        .app_face("Inter", own_face(platform, "Inter", pdfcraft_fonts::INTER_REGULAR), &[proportional.clone(), monospace.clone()])
         .app_face("Inter-Medium", own_face(platform, "Inter-Medium", INTER_MEDIUM), std::slice::from_ref(&medium))
         .app_face("Inter-SemiBold", own_face(platform, "Inter-SemiBold", INTER_SEMIBOLD), std::slice::from_ref(&semibold))
         .family(Family::named(MEDIUM).weight(500))
