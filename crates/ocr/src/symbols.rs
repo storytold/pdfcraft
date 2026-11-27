@@ -636,7 +636,14 @@ impl<'a> Shapes<'a> {
     /// it, `1½`). `text_h` is the text's height, not the region's ink rows: a rule or a
     /// dimension line through the region is no guide to the glyph.
     fn fraction_glyphs(&self, text_h: f32) -> Vec<FractionInk> {
-        let numeral = |k: &Component| (0.28..=0.75).contains(&(k.height() as f32 / text_h)) && k.width() as f32 <= 0.75 * text_h && k.pixels >= 4;
+        // A numeral's size; the cross of a `±` may have it (and more ink than the numeral
+        // beside it), but is part of the sign.
+        let numeral = |id: usize, k: &Component| {
+            (0.28..=0.75).contains(&(k.height() as f32 / text_h))
+                && k.width() as f32 <= 0.75 * text_h
+                && k.pixels >= 4
+                && !self.is_part_of_plus_minus(id)
+        };
         let reach = 0.35 * text_h;
         fn largest<'c>(ks: impl Iterator<Item = (usize, &'c Component)>) -> Option<(usize, &'c Component)> {
             ks.max_by_key(|(_, k)| k.pixels)
@@ -647,7 +654,7 @@ impl<'a> Shapes<'a> {
             let at_the_foot = |k: &Component| (stroke.bottom - k.bottom) as f32 <= 0.2 * text_h && (k.top - stroke.top) as f32 >= 0.28 * text_h;
             let Some((n, numerator)) = largest(self.components.iter().enumerate().filter(|&(id, k)| {
                 id != s
-                    && numeral(k)
+                    && numeral(id, k)
                     && at_the_top(k)
                     && k.centre_x() < stroke.centre_x()
                     && k.right < stroke.right
@@ -657,7 +664,7 @@ impl<'a> Shapes<'a> {
             };
             let Some((d, denominator)) = largest(self.components.iter().enumerate().filter(|&(id, k)| {
                 id != s
-                    && numeral(k)
+                    && numeral(id, k)
                     && at_the_foot(k)
                     && k.centre_x() > stroke.centre_x()
                     && k.left > stroke.left
@@ -673,12 +680,10 @@ impl<'a> Shapes<'a> {
             // into the glyph's neighbourhood, however little of it: `1/64` set with small
             // numerals is no sixth, at any spacing of the `4`. A numeral sits at the
             // numerator's level or the denominator's; a full-size digit beside the glyph is
-            // the whole number (`1½`), a small ring after it the `°` of `22½°`, and the cross
-            // of a `±` before it (`±½`), which may sit at that level, is part of the sign.
+            // the whole number (`1½`), and a small ring after it the `°` of `22½°`.
             let within = |k: &Component, l: i64, r: i64| (k.right.min(r) - k.left.max(l) + 1) * 2 > k.width();
             let reaches = |k: &Component, l: i64, r: i64| k.left <= r && k.right >= l;
-            let small_numeral =
-                |id: usize, k: &Component| numeral(k) && (at_the_top(k) || at_the_foot(k)) && !self.is_degree(k) && !self.is_part_of_plus_minus(id);
+            let small_numeral = |id: usize, k: &Component| numeral(id, k) && (at_the_top(k) || at_the_foot(k)) && !self.is_degree(k);
             let intruder = self.components.iter().enumerate().any(|(id, k)| {
                 id != s
                     && id != n
@@ -1264,6 +1269,13 @@ mod tests {
         let glyph = fraction(&mut short, 40);
         let chars = [read('+', sign), read('1', (glyph.0, glyph.0 + 14.0)), read('2', (glyph.0 + 14.0, glyph.1))];
         assert_eq!(word_read(&short, &chars, None, &numerals("1", "2", &shown)).map(|r| r.text).as_deref(), Some("±½"));
+        // Two columns nearer, the cross is within the stroke's reach and holds more ink than
+        // the numeral: it is no numerator either.
+        let mut near = Canvas::new(200, 70);
+        let sign = plus_minus(&mut near, 6);
+        let glyph = fraction(&mut near, 40);
+        let chars = [read('+', sign), read('1', (glyph.0, glyph.0 + 14.0)), read('2', (glyph.0 + 14.0, glyph.1))];
+        assert_eq!(word_read(&near, &chars, None, &numerals("1", "2", &shown)).map(|r| r.text).as_deref(), Some("±½"));
     }
 
     #[test]
