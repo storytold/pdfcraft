@@ -270,8 +270,18 @@ fn key_text(key: &[u8]) -> String {
 /// Appends `suffix` (ASCII) to `key` in the key's own encoding.
 fn append_in_encoding(key: &mut Vec<u8>, suffix: &str) {
     match key.get(..2) {
-        Some([0xfe, 0xff]) => key.extend(suffix.encode_utf16().flat_map(u16::to_be_bytes)),
-        Some([0xff, 0xfe]) => key.extend(suffix.encode_utf16().flat_map(u16::to_le_bytes)),
+        Some([0xfe, 0xff]) | Some([0xff, 0xfe]) => {
+            // A leftover last byte is not a unit (readers leave it out when decoding). Drop it
+            // so the suffix stays aligned, then append in the key's byte order.
+            if key.len() % 2 == 1 {
+                key.pop();
+            }
+            if key[0] == 0xfe {
+                key.extend(suffix.encode_utf16().flat_map(u16::to_be_bytes));
+            } else {
+                key.extend(suffix.encode_utf16().flat_map(u16::to_le_bytes));
+            }
+        }
         _ => key.extend_from_slice(suffix.as_bytes()),
     }
 }
@@ -300,6 +310,25 @@ mod tests {
     }
 
     #[test]
+    fn set_attachments_renames_a_truncated_utf16_key_without_misaligning_the_suffix() {
+        // A UTF-16 "A" with a leftover trailing byte: to_text ignores that byte, and a
+        // byte-preserving append of " (2)" would pair it with the suffix and store the wrong name.
+        let bodies = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+        ];
+        for (order, truncated) in [("BE", [0xfe, 0xff, 0x00, 0x41, 0x00].as_slice()), ("LE", [0xff, 0xfe, 0x41, 0x00, 0x00].as_slice())] {
+            let mut doc = build(&bodies);
+            set_attachments(&mut doc, vec![(truncated.to_vec(), Object::Null), (truncated.to_vec(), Object::Null)]).unwrap();
+            let entries = crate::attachments::entries(&doc);
+            let names: Vec<String> = entries.iter().map(|(k, _)| key_text(k)).collect();
+            assert_eq!(names, ["A", "A (2)"], "{order}");
+            let renamed = entries.iter().map(|(k, _)| k).find(|k| key_text(k) == "A (2)").expect("{order}: renamed key");
+            assert_eq!(renamed.len() % 2, 0, "{order}: the renamed key is a complete UTF-16 string");
+        }
+    }
+
     fn set_attachments_does_not_clobber_later_numbered_attachment_name() {
         let mut doc = build(&[
             "<< /Type /Catalog /Pages 2 0 R >>",
