@@ -2,9 +2,9 @@
 use super::check_refresh_panic;
 use super::{
     Arc, DocId, Document, Edit, EditCtx, EditError, Label, MAX_UNDO, ObjectKind, OnceLock, RenderPool, SaveOptions, Scope, Session,
-    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, guard, info_fields,
-    inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state,
-    undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets,
+    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, editor_signatures,
+    guard, info_fields, inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions,
+    sync_xfa_state, undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets,
 };
 use crate::{EditNotice, MarkKind, print_preview_layers};
 
@@ -278,20 +278,33 @@ impl Session {
                     ran_away: false,
                     highlight,
                     time_scale: cx.xfa_time_scale,
+                    relaid: false,
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
-                // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run, &mut exited))
+                // only those). The values before the edit tell a click from a value set again.
+                let before: std::collections::HashMap<String, Vec<String>> =
+                    doc.form.iter().filter(|f| changed.contains(&f.name)).map(|f| (f.name.clone(), f.value.clone())).collect();
+                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &before, &mut run, &mut exited))
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;
+                cx.xfa_relaid |= run.relaid;
                 // The next edit of a batch reads the highlight this one's scripts set.
+                // The next XFA run of a batch starts from the page count this one left.
+                cx.pages = run.page_count;
                 let on = run.highlight;
                 cx.set_highlight(on);
                 if let Err(e) = ran {
                     cx.xfa_out.errors.push(e);
                 }
             }
+        }
+        // The form's scripts (a check box showing a section) or its new data (a picture) laid
+        // it out again, even if a later script then failed: as with text growth below, its
+        // pages, widgets and fields were replaced, whether or not the page count changed. The
+        // view and undo/redo rebuild them instead of refreshing only field values.
+        if cx.xfa_relaid {
+            scope = Scope::Full;
         }
         // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
         let mut xfa_notes = Vec::new();
@@ -312,6 +325,7 @@ impl Session {
                     // Layout replaces pages and widgets, even if the page count is unchanged.
                     // Undo/redo must rebuild these too instead of refreshing only field values.
                     scope = Scope::Full;
+                    rerun_layout_ready(&mut next, &mut cx);
                 }
             }
         }
@@ -524,7 +538,7 @@ impl Session {
             #[cfg(test)]
             check_refresh_panic();
             if !doc.signatures.is_empty() {
-                let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                let mut signatures = editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache);
                 // The display copy is kept for a metadata edit, and so are its marks, unless the
                 // edit changed a verdict (a certification can forbid it): the page then draws the
                 // new one.
@@ -575,7 +589,7 @@ impl Session {
         }
         doc.info.file_size = bytes.len();
         doc.form = form;
-        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
@@ -640,7 +654,7 @@ impl Session {
             doc.marker_scan = OnceLock::new();
         }
         doc.info.file_size = bytes.len();
-        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
@@ -748,12 +762,43 @@ impl Session {
         if invalidate_links {
             doc.links = OnceLock::new();
         }
-        let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+        let mut signatures = editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
         Ok(())
+    }
+}
+
+/// After a new layout: the form's `layout:ready` scripts run again, reading its page count, as
+/// after a layout its scripts asked for. Not after a script of this edit ran away: the form's
+/// scripts turn off once it is done.
+fn rerun_layout_ready(next: &mut pdfcraft_cos::Document, cx: &mut EditCtx) {
+    if cx.xfa_ran_away {
+        return;
+    }
+    let Some(tpl) = cx.xfa.clone() else { return };
+    let highlight = cx.highlight();
+    let page_count = pdfcraft_organize::page_count(next).unwrap_or(cx.pages);
+    let mut run = xfa::XfaRun {
+        page_count,
+        out: &mut cx.xfa_out,
+        datasets: cx.xfa_datasets,
+        ran_away: false,
+        highlight,
+        time_scale: cx.xfa_time_scale,
+        relaid: false,
+    };
+    let ran = guard(|| xfa::on_layout(next, &tpl, &mut run)).unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
+    cx.xfa_datasets = run.datasets;
+    cx.xfa_ran_away |= run.ran_away;
+    cx.xfa_relaid |= run.relaid;
+    cx.pages = run.page_count;
+    let on = run.highlight;
+    cx.set_highlight(on);
+    if let Err(e) = ran {
+        cx.xfa_out.errors.push(e);
     }
 }
 
