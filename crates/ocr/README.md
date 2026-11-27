@@ -43,8 +43,11 @@ let layer = visible_text_layer(&placed, &plan);          // visible text: the ed
   is read, a character that can stand for one of the three, next to a digit, is checked against
   the pixels it was read from (`symbols`): a centred cross over a detached bar is `±`, a ring
   with a stroke reaching past it at both ends is `Ø` (a slashed zero keeps its stroke inside
-  the ring, and stays a zero), a small raised ring after a digit is `°`, read or dropped. No
-  clear shape, no change; lines on their side and Tesseract's words are not checked.
+  the ring, and stays a zero), a small raised ring after a digit is `°`, read or dropped. The
+  fraction glyphs (`½`, `¼`, `⅜`) are found the same way, two half-height numerals about a
+  stroke from lower left to upper right; the model cannot read numerals that small in place, so
+  each is cut out and read as a line of its own, and the pair names the character (`1½` was
+  `112`). No clear shape, no change; lines on their side and Tesseract's words are not checked.
 - **Confidence drives review.** One classifier (`band_for`) puts a word in the High
   (≥ 90), Medium (70–89) or Low (< 70) band — the review overlay's colours, the legend and the
   counts; the batch flag rule (`low_confidence`, default threshold 60) is deliberately a
@@ -105,9 +108,9 @@ step; editable acceptance writes a separate file. `ocr_dictionary` reads or atom
 updates the UI's per-language dictionary format through an explicitly root-confined path.
 
 Not yet: languages beyond the tested set (the `ocrs` models read only unaccented Latin, plus
-the three drawing symbols read back from the ink; the Tesseract side is bounded by its
-allow-list and whatever its installed language packs cover), other symbols the alphabet lacks
-(`µ`, `×`, single-glyph fractions),
+the drawing symbols and fraction glyphs read back from the ink; the Tesseract side is bounded
+by its allow-list and whatever its installed language packs cover), other symbols the alphabet
+lacks (`µ`, `×`),
 OCR in the browser (the tesseract module is compiled out for wasm32), the deep scan-cleanup
 options (descreen, background removal, edge-shadow removal), and editable glyph coverage
 beyond the available attributed faces.

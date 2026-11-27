@@ -1,16 +1,23 @@
-//! Tolerance and dimension symbols the ocrs models cannot name (#8300).
+//! Tolerance and dimension symbols the ocrs models cannot name (#8300, #8504).
 //!
 //! The recognition model's alphabet ([`super::ALPHABET`]) is ASCII and the euro sign: it has no
 //! `±`, `Ø` or `°`, the three symbols every dimensioned drawing's title block and callouts
-//! carry. The CTC decoder names the nearest class instead — `+`, `-`, `t` or `:` for `±`; `0`,
-//! `8`, `@` or `?` for `Ø`; `?` or nothing for `°` — and a tolerance of ±.005 silently becomes
-//! +.005. After a line is read, the characters that can stand in for a symbol are checked
-//! against the ink they were read from, and renamed only when that ink has the symbol's shape:
+//! carry, and none of the fraction glyphs (`½`, `¼`, `⅜`) inch drawings print stock sizes and
+//! threads with. The CTC decoder names the nearest class instead — `+`, `-`, `t` or `:` for
+//! `±`; `0`, `8`, `@` or `?` for `Ø`; `?` or nothing for `°`; the small numerals of `1½` as
+//! `112` — and a tolerance of ±.005 silently becomes +.005. After a line is read, the characters
+//! that can stand in for a symbol are checked against the ink they were read from, and renamed
+//! only when that ink has the symbol's shape:
 //!
 //! - `±`: a centred cross with a detached bar under it, as wide as the crossbar.
 //! - `Ø`: a ring with one straight stroke across it from lower left to upper right that reaches
 //!   past the ring at both ends (a slashed zero keeps its stroke inside the ring, and stays).
 //! - `°`: a small ring in the top half of the line, right after a digit, with nothing under it.
+//! - a fraction glyph: a thin stroke from lower left to upper right spanning the line, a numeral
+//!   about half the line's height at the cap line to its left and another at the baseline to
+//!   its right. The model cannot read numerals that small in place, so each is shown to it on
+//!   its own, at the height of a line, and the pair names the character (`1` over `2` is `½`);
+//!   a pair with no character of its own, or a numeral the model cannot name, is left as read.
 //!
 //! Only a character next to a digit is checked (`± .005`, `Ø1.25`, `1/2°`), so a plus between
 //! words is never touched, and the checks are conservative: too small to judge, too faint, or no
@@ -27,15 +34,31 @@ pub(crate) struct ReadChar {
     pub right: f32,
 }
 
-/// A word's text after the check, and its new right edge when a dropped `°` was found past it.
+/// A word's text after the check, and its new left or right edge when a fraction glyph, or a
+/// dropped `°`, was found past the word's columns.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Repair {
     pub text: String,
+    pub left: Option<f32>,
     pub right: Option<f32>,
+}
+
+/// The words beside the one checked: where the one before ends and the next begins (image
+/// columns), and whether the next starts with a digit or a decimal point.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Neighbours {
+    pub prev_right: Option<f32>,
+    pub next_left: Option<f32>,
+    pub next_digit: bool,
 }
 
 /// The grey value (0 ink … 255 paper) at an image pixel; 255 outside the image.
 pub(crate) type Gray<'a> = &'a dyn Fn(i64, i64) -> u8;
+
+/// What the recogniser reads in an image region (`[left, top, right, bottom]`, pixels) shown to
+/// it on its own, at the height of a line: a fraction glyph's small numerals, which it cannot
+/// read in place. `None` when it reads nothing there.
+pub(crate) type Numeral<'a> = &'a dyn Fn([f32; 4]) -> Option<String>;
 
 /// How far past a character's columns its glyph may lie, as a fraction of the line's height:
 /// the columns come from the recogniser's coarse steps, not from the ink.
@@ -50,18 +73,35 @@ const MAX_REGION: usize = 2_000_000;
 const STANDS_FOR_PLUS_MINUS: &str = "+-t:=";
 const STANDS_FOR_DIAMETER: &str = "0Oo8@?Q";
 const STANDS_FOR_DEGREE: &str = "?oO0'\"*^";
+/// Characters the decoder names for the parts of a fraction glyph, besides digits (`?` is its
+/// name for a glyph it cannot place at all).
+const STANDS_FOR_FRACTION_STROKE: &str = "/\\Xx%?";
+/// The fraction characters a numerator and a denominator form, by their digits.
+const FRACTIONS: &[(char, char, char)] = &[
+    ('1', '2', '½'),
+    ('1', '3', '⅓'),
+    ('2', '3', '⅔'),
+    ('1', '4', '¼'),
+    ('3', '4', '¾'),
+    ('1', '5', '⅕'),
+    ('2', '5', '⅖'),
+    ('3', '5', '⅗'),
+    ('4', '5', '⅘'),
+    ('1', '6', '⅙'),
+    ('5', '6', '⅚'),
+    ('1', '7', '⅐'),
+    ('1', '8', '⅛'),
+    ('3', '8', '⅜'),
+    ('5', '8', '⅝'),
+    ('7', '8', '⅞'),
+    ('1', '9', '⅑'),
+];
 
-/// Check one word. `line_top..line_bottom` is the line's box as found (image rows), `next_left`
-/// where the next word on the line starts, `next_digit` whether that word starts with a digit
-/// or a decimal point. `None` when nothing changes.
-pub(crate) fn repair_word(
-    chars: &[ReadChar],
-    line_top: f32,
-    line_bottom: f32,
-    next_left: Option<f32>,
-    next_digit: bool,
-    gray: Gray,
-) -> Option<Repair> {
+/// Check one word. `line_top..line_bottom` is the line's box as found (image rows), `beside`
+/// the words either side of it, `numeral` the recogniser, for a fraction glyph's small numerals.
+/// `None` when nothing changes.
+pub(crate) fn repair_word(chars: &[ReadChar], line_top: f32, line_bottom: f32, beside: Neighbours, gray: Gray, numeral: Numeral) -> Option<Repair> {
+    let Neighbours { prev_right, next_left, next_digit } = beside;
     let text: Vec<char> = chars.iter().map(|c| c.ch).collect();
     if !has_candidate(&text, next_digit) {
         return None;
@@ -81,6 +121,19 @@ pub(crate) fn repair_word(
     let region = Ink::sample(gray, [first.left - slack, line_top - slack, right + slack, line_bottom + slack])?;
     let shapes = Shapes::of(&region)?;
     let mut out = text.clone();
+    // A fraction glyph first: the characters named for its parts become one, and `chars` is
+    // kept lined up with `out` for the checks that follow. The glyph is looked for [`TAIL`]
+    // before the word as well (not past the word before): the detector may box only its
+    // stroke and denominator.
+    let mut chars = chars.to_vec();
+    let mut left = first.left - TAIL * height - slack;
+    if let Some(prev) = prev_right {
+        left = left.max(prev + 1.0);
+    }
+    let wide = Ink::sample(gray, [left, line_top - slack, right + slack, line_bottom + slack]);
+    let wide = wide.as_ref().and_then(Shapes::of);
+    let (grown_left, grown) = fractions(&mut out, &mut chars, wide.as_ref().unwrap_or(&shapes), slack, numeral);
+    let chars = chars.as_slice();
     let mut consumed = Vec::new();
     let mut i = 0;
     while i < out.len() {
@@ -106,7 +159,11 @@ pub(crate) fn repair_word(
     let new_right = degree(&mut out, chars, &shapes, slack, next_left);
     // A second character the decoder named for the bar of a `±` goes with it.
     drop_consumed(&mut out, chars, &shapes, slack, &consumed);
-    (out != text).then(|| Repair { text: out.into_iter().collect(), right: new_right })
+    let right = match (grown, new_right) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    };
+    (out != text).then(|| Repair { text: out.into_iter().collect(), left: grown_left, right })
 }
 
 /// Whether any character of `text` could stand for a symbol in a numeric context: the quick
@@ -115,15 +172,22 @@ fn has_candidate(text: &[char], next_digit: bool) -> bool {
     text.iter().enumerate().any(|(i, &c)| {
         (STANDS_FOR_PLUS_MINUS.contains(c) && digit_follows(text, i, next_digit))
             || (STANDS_FOR_DIAMETER.contains(c) && starts_a_number(text, i, next_digit))
+            || c.is_ascii_digit()
+            || STANDS_FOR_FRACTION_STROKE.contains(c)
     }) || !degree_candidates(text).is_empty()
+}
+
+/// A digit or a fraction character: what a `±`, a `Ø` or a `°` goes with.
+fn is_numeral(c: char) -> bool {
+    c.is_ascii_digit() || FRACTIONS.iter().any(|&(_, _, f)| f == c)
 }
 
 /// A digit, or a decimal point and a digit, follows position `i` (in this word, or at the start
 /// of the next one when `i` is the last character).
 fn digit_follows(text: &[char], i: usize, next_digit: bool) -> bool {
     match text.get(i + 1) {
-        Some(c) if c.is_ascii_digit() => true,
-        Some('.') => text.get(i + 2).is_some_and(char::is_ascii_digit),
+        Some(&c) if is_numeral(c) => true,
+        Some('.') => text.get(i + 2).is_some_and(|&c| is_numeral(c)),
         Some(_) => false,
         None => next_digit,
     }
@@ -143,13 +207,88 @@ fn degree_candidates(text: &[char]) -> Vec<usize> {
         return Vec::new();
     };
     let mut digits = Vec::new();
-    if text[last].is_ascii_digit() {
+    if is_numeral(text[last]) {
         digits.push(last);
     }
-    if STANDS_FOR_DEGREE.contains(text[last]) && last >= 1 && text[last - 1].is_ascii_digit() {
+    if STANDS_FOR_DEGREE.contains(text[last]) && last >= 1 && is_numeral(text[last - 1]) {
         digits.push(last - 1);
     }
     digits
+}
+
+/// Replace what the decoder named for each fraction glyph in the word's ink with the fraction
+/// character, in `out` and in `chars` alike (the new character takes the glyph's columns), or
+/// insert it where the glyph lies when the decoder named nothing for it. Returns the word's new
+/// left and right edges where a glyph lay past its first or last character.
+fn fractions(out: &mut Vec<char>, chars: &mut Vec<ReadChar>, shapes: &Shapes, slack: f32, numeral: Numeral) -> (Option<f32>, Option<f32>) {
+    let (Some(start), Some(end)) = (chars.first().map(|c| c.left), chars.last().map(|c| c.right)) else {
+        return (None, None);
+    };
+    let centre = |c: &ReadChar| (c.left + c.right) / 2.0;
+    let (mut grown_left, mut grown) = (None, None);
+    for glyph in shapes.fraction_glyphs() {
+        let Some(ch) = glyph.character(numeral) else { continue };
+        let (left, right) = (glyph.left as f32, (glyph.right + 1) as f32);
+        // The decoder's steps are coarse, so a character's columns say little on their own: a
+        // character was named for the glyph when its columns reach it and hold no ink of its
+        // own (a whole number before the glyph, a parenthesis after it, keep theirs).
+        let named_for_the_glyph = |c: &ReadChar| c.right + slack > left && c.left - slack < right && !shapes.owns_ink(*c, &glyph);
+        let consumed: Vec<usize> = (0..chars.len()).filter(|&i| named_for_the_glyph(&chars[i])).collect();
+        let at = consumed.first().copied().unwrap_or_else(|| chars.iter().position(|c| centre(c) > (left + right) / 2.0).unwrap_or(chars.len()));
+        for &i in consumed.iter().rev() {
+            out.remove(i);
+            chars.remove(i);
+        }
+        out.insert(at, ch);
+        chars.insert(at, ReadChar { ch, left, right });
+        if left < start {
+            grown_left = Some(grown_left.map_or(left, |g: f32| g.min(left)));
+        }
+        if right > end {
+            grown = Some(grown.map_or(right, |g: f32| g.max(right)));
+        }
+    }
+    (grown_left, grown)
+}
+
+/// A fraction glyph's ink: the columns it spans and the boxes of its two numerals (image pixels,
+/// right and bottom exclusive).
+#[derive(Debug, PartialEq)]
+struct FractionInk {
+    left: i64,
+    right: i64,
+    /// The components it is made of: numerator, stroke, denominator.
+    parts: [usize; 3],
+    numerator: [f32; 4],
+    denominator: [f32; 4],
+}
+
+impl FractionInk {
+    /// The fraction character, from what the recogniser reads in each numeral's box: `None`
+    /// when it cannot name one, or the pair has no character of its own.
+    fn character(&self, numeral: Numeral) -> Option<char> {
+        let n = numeral_digit(&numeral(self.numerator)?)?;
+        let d = numeral_digit(&numeral(self.denominator)?)?;
+        FRACTIONS.iter().find(|&&(num, den, _)| num == n && den == d).map(|&(_, _, f)| f)
+    }
+}
+
+/// The digit a numeral shown on its own was read as: one character, a digit or a letter the
+/// decoder names for one (`l` or `I` for a `1`, `S` for a `5`, `Z` for a `2`, `B` for an `8`).
+fn numeral_digit(read: &str) -> Option<char> {
+    let mut chars = read.chars().filter(|c| !c.is_whitespace());
+    let c = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    match c {
+        '0'..='9' => Some(c),
+        'l' | 'I' | '|' => Some('1'),
+        'Z' | 'z' => Some('2'),
+        'S' | 's' => Some('5'),
+        'B' => Some('8'),
+        _ => None,
+    }
 }
 
 /// Drop a character beside a `±` when the decoder named it for part of the same ink, a cross
@@ -427,6 +566,113 @@ impl<'a> Shapes<'a> {
         ring && under * 20 <= ((self.line.1 - c.bottom).max(0) as usize + 1) * c.width() as usize
     }
 
+    /// The fraction glyphs in the region, left to right: a stroke from lower left to upper
+    /// right spanning the line, a numeral about half the line's height at the cap line to its
+    /// left and another at the baseline to its right, both near it, and nothing else of any
+    /// size between the two (a full digit before the glyph lies outside it).
+    fn fraction_glyphs(&self) -> Vec<FractionInk> {
+        let line_h = (self.line.1 - self.line.0 + 1) as f32;
+        let numeral = |k: &Component| (0.33..=0.7).contains(&(k.height() as f32 / line_h)) && k.width() as f32 <= 0.75 * line_h && k.pixels >= 4;
+        let reach = 0.35 * line_h;
+        fn largest<'c>(ks: impl Iterator<Item = (usize, &'c Component)>) -> Option<(usize, &'c Component)> {
+            ks.max_by_key(|(_, k)| k.pixels)
+        }
+        let mut out = Vec::new();
+        for (s, stroke) in self.components.iter().enumerate().filter(|&(id, _)| self.is_fraction_stroke(id)) {
+            let at_the_cap_line = |k: &Component| (k.top - self.line.0) as f32 <= 0.2 * line_h && (k.bottom - self.line.0) as f32 <= 0.72 * line_h;
+            let on_the_baseline = |k: &Component| (self.line.1 - k.bottom) as f32 <= 0.2 * line_h && (k.top - self.line.0) as f32 >= 0.28 * line_h;
+            let Some((n, numerator)) = largest(self.components.iter().enumerate().filter(|&(id, k)| {
+                id != s
+                    && numeral(k)
+                    && at_the_cap_line(k)
+                    && k.centre_x() < stroke.centre_x()
+                    && k.right < stroke.right
+                    && k.right as f32 >= stroke.left as f32 - reach
+            })) else {
+                continue;
+            };
+            let Some((d, denominator)) = largest(self.components.iter().enumerate().filter(|&(id, k)| {
+                id != s
+                    && numeral(k)
+                    && on_the_baseline(k)
+                    && k.centre_x() > stroke.centre_x()
+                    && k.left > stroke.left
+                    && k.left as f32 <= stroke.right as f32 + reach
+            })) else {
+                continue;
+            };
+            if !(0.7..=1.45).contains(&(numerator.height() as f32 / denominator.height() as f32)) {
+                continue;
+            }
+            let (left, right) = (numerator.left.min(stroke.left), denominator.right.max(stroke.right));
+            // Nothing else of any size within the glyph, and no further small numeral right
+            // beside it: `1/64` set with small numerals is no sixth (a full-size digit beside
+            // the glyph is the whole number, `1½`, and stays).
+            let within = |k: &Component, l: i64, r: i64| (k.right.min(r) - k.left.max(l) + 1) * 2 > k.width();
+            let small = |k: &Component| (0.3 * line_h..=0.75 * line_h).contains(&(k.height() as f32));
+            let intruder = self.components.iter().enumerate().any(|(id, k)| {
+                id != s
+                    && id != n
+                    && id != d
+                    && ((within(k, left, right) && k.height() as f32 >= 0.3 * line_h)
+                        || (within(k, left - reach as i64, right + reach as i64) && small(k)))
+            });
+            if intruder {
+                continue;
+            }
+            // Each numeral is cut out with a little paper around it, as a line is.
+            let padded = |k: &Component| {
+                let pad = (0.15 * k.height() as f32).max(1.0);
+                [k.left as f32 - pad, k.top as f32 - pad, (k.right + 1) as f32 + pad, (k.bottom + 1) as f32 + pad]
+            };
+            out.push(FractionInk { left, right, parts: [n, s, d], numerator: padded(numerator), denominator: padded(denominator) });
+        }
+        out.sort_by_key(|f| f.left);
+        out
+    }
+
+    /// Whether the character's columns hold ink of their own, besides the fraction glyph's
+    /// parts: a glyph-sized component (a hyphen or a full stop, not a speck, and not a rule
+    /// that happens to be centred there) whose centre lies within them.
+    fn owns_ink(&self, c: ReadChar, glyph: &FractionInk) -> bool {
+        let line_h = (self.line.1 - self.line.0 + 1) as f32;
+        let glyph_sized = |k: &Component| k.pixels >= 3 && (0.1 * line_h..=1.5 * line_h).contains(&(k.width().max(k.height()) as f32));
+        self.components.iter().enumerate().any(|(id, k)| !glyph.parts.contains(&id) && (c.left..=c.right).contains(&k.centre_x()) && glyph_sized(k))
+    }
+
+    /// A thin stroke from the box's lower left to its upper right, spanning the line from near
+    /// the cap line to near the baseline: a fraction's slash. A letter or a digit of the same
+    /// box fails the trace or fills the other diagonal.
+    fn is_fraction_stroke(&self, id: usize) -> bool {
+        let Some(k) = self.components.get(id) else { return false };
+        let line_h = (self.line.1 - self.line.0 + 1) as f32;
+        let (w, h) = (k.width() as f32, k.height() as f32);
+        if h < 8.0 || h < 0.6 * line_h || h > 1.15 * line_h || w < 0.2 * h || w > 0.95 * h {
+            return false;
+        }
+        if (k.top - self.line.0) as f32 > 0.25 * line_h || (self.line.1 - k.bottom) as f32 > 0.25 * line_h {
+            return false;
+        }
+        if k.pixels as f32 > 0.6 * w * h {
+            return false;
+        }
+        let Some(g) = self.glyph(&[id]) else { return false };
+        let (w, h) = (g.w, g.h);
+        const N: usize = 40;
+        let r = (w.min(h) / 8).max(1);
+        let along = |t: usize| (t * (w - 1) / N, (h - 1) - t * (h - 1) / N);
+        let stroke = (0..=N).filter(|&t| g.near(along(t).0, along(t).1, r)).count();
+        if stroke * 100 < (N + 1) * 85 {
+            return false;
+        }
+        let reaches = |ts: &mut dyn Iterator<Item = usize>| ts.take(N / 10 + 1).any(|t| g.near(along(t).0, along(t).1, r));
+        if !reaches(&mut (0..=N)) || !reaches(&mut (0..=N).rev()) {
+            return false;
+        }
+        let other = (0..=N).filter(|&t| g.near(t * (w - 1) / N, t * (h - 1) / N, r)).count();
+        other * 100 <= (N + 1) * 45
+    }
+
     /// The mask of the components `ids`, over their joint box.
     fn glyph(&self, ids: &[usize]) -> Option<Glyph> {
         let boxes: Vec<&Component> = ids.iter().filter_map(|&id| self.components.get(id)).collect();
@@ -695,14 +941,167 @@ mod tests {
         (x as f32, (x + 25) as f32)
     }
 
+    /// A fraction glyph: a numeral half the cap height at the cap line, a thin stroke from the
+    /// baseline up to the right, and a `2`-shaped numeral on the baseline past it.
+    fn fraction(c: &mut Canvas, x: usize) -> (f32, f32) {
+        c.rect(x + 2, BASE - CAP, x + 5, BASE - CAP + 20);
+        c.line(x as f32 + 6.0, BASE as f32, x as f32 + 22.0, (BASE - CAP + 1) as f32, 3.0);
+        let (l, t) = (x + 18, BASE - 20);
+        c.rect(l, t, l + 12, t + 2);
+        c.rect(l + 10, t, l + 12, t + 10);
+        c.rect(l, t + 9, l + 12, t + 11);
+        c.rect(l, t + 9, l + 2, BASE);
+        c.rect(l, BASE - 2, l + 12, BASE);
+        (x as f32, (x + 32) as f32)
+    }
+
+    /// A hyphen between a fraction and the thread pitch after it.
+    fn hyphen(c: &mut Canvas, x: usize) -> (f32, f32) {
+        c.rect(x + 2, BASE - 22, x + 10, BASE - 18);
+        (x as f32, (x + 12) as f32)
+    }
+
+    /// A parenthesis: a full-height stem (a parenthesis's curve is as tall).
+    fn paren(c: &mut Canvas, x: usize) -> (f32, f32) {
+        c.rect(x + 2, BASE - CAP, x + 5, BASE);
+        (x as f32, (x + 8) as f32)
+    }
+
+    /// A full-height slash, as `1/2` is set with full digits.
+    fn slash(c: &mut Canvas, x: usize) -> (f32, f32) {
+        c.line(x as f32 + 2.0, BASE as f32, x as f32 + 18.0, (BASE - CAP + 1) as f32, 3.0);
+        (x as f32, (x + 20) as f32)
+    }
+
     fn read(ch: char, cols: (f32, f32)) -> ReadChar {
         ReadChar { ch, left: cols.0, right: cols.1 }
     }
 
     fn word(c: &Canvas, chars: &[ReadChar], next: Option<(f32, bool)>) -> Option<Repair> {
+        word_read(c, chars, next, &|_| None)
+    }
+
+    fn word_read(c: &Canvas, chars: &[ReadChar], next: Option<(f32, bool)>, numeral: Numeral) -> Option<Repair> {
         let top = (BASE - CAP) as f32;
         let bottom = (BASE + 1) as f32;
-        repair_word(chars, top, bottom, next.map(|n| n.0), next.is_some_and(|n| n.1), &c.gray())
+        let beside = Neighbours { prev_right: None, next_left: next.map(|n| n.0), next_digit: next.is_some_and(|n| n.1) };
+        repair_word(chars, top, bottom, beside, &c.gray(), numeral)
+    }
+
+    /// A stand-in recogniser: it names `top` for a box in the top half of the line and
+    /// `bottom` for one lower down, and keeps the boxes it was shown.
+    fn numerals<'a>(top: &'a str, bottom: &'a str, shown: &'a std::cell::RefCell<Vec<[f32; 4]>>) -> impl Fn([f32; 4]) -> Option<String> + 'a {
+        move |rect| {
+            shown.borrow_mut().push(rect);
+            Some((if rect[3] <= (BASE - 15) as f32 { top } else { bottom }).to_string())
+        }
+    }
+
+    #[test]
+    fn two_half_height_numerals_about_a_stroke_are_the_fraction_glyph_the_recogniser_names_them_for() {
+        let mut c = Canvas::new(200, 70);
+        let one = digit(&mut c, 10);
+        let glyph = fraction(&mut c, 36);
+        let shown = std::cell::RefCell::new(Vec::new());
+        // `1½` read as `112`: the two names for the glyph's numerals become the character, the
+        // whole number before it stays.
+        let halves = [read('1', one), read('1', (glyph.0, glyph.0 + 14.0)), read('2', (glyph.0 + 14.0, glyph.1))];
+        let fixed = word_read(&c, &halves, None, &numerals("1", "2", &shown)).expect("the ½ is repaired");
+        assert_eq!(fixed.text, "1½");
+        assert!(fixed.right.is_none(), "the word's columns already covered the glyph");
+        // Each numeral was shown on its own: a box in the glyph's columns with a little paper
+        // around it, the numerator's left of and above the denominator's.
+        let boxes = shown.borrow().clone();
+        assert_eq!(boxes.len(), 2, "{boxes:?}");
+        let (n, d) = (boxes[0], boxes[1]);
+        assert!(n[0] >= glyph.0 - 4.0 && d[2] <= glyph.1 + 4.0 && n[2] < d[0], "{boxes:?}: the numerator lies left of the denominator");
+        assert!(n[1] + n[3] < d[1] + d[3] && n[3] < d[3] && n[1] < d[1], "{boxes:?}: the numerator lies above the denominator");
+        // What the recogniser names for the numerals decides the character.
+        assert_eq!(word_read(&c, &halves, None, &numerals("7", "8", &shown)).map(|r| r.text).as_deref(), Some("1⅞"));
+        assert_eq!(word_read(&c, &halves, None, &numerals("l", "4", &shown)).map(|r| r.text).as_deref(), Some("1¼"));
+        // `¼-20` read as `/4-20`: whatever the decoder named for the glyph's parts goes, and
+        // the hyphen and digits after it, with ink of their own, stay.
+        let mut thread = Canvas::new(200, 70);
+        let glyph = fraction(&mut thread, 36);
+        let dash = hyphen(&mut thread, 70);
+        let (two, nought) = (digit(&mut thread, 84), digit(&mut thread, 108));
+        let quarter =
+            [read('/', (glyph.0, glyph.0 + 14.0)), read('4', (glyph.0 + 14.0, glyph.1)), read('-', dash), read('2', two), read('0', nought)];
+        assert_eq!(word_read(&thread, &quarter, None, &numerals("1", "4", &shown)).map(|r| r.text).as_deref(), Some("¼-20"));
+        // The decoder's columns are coarse: a name for the glyph whose columns run past it goes
+        // too (`⅝` read as `58`), while a parenthesis whose columns reach the glyph keeps its
+        // own ink (`(⅞)` read as `(8)`).
+        let eighth =
+            [read('5', (glyph.0, glyph.0 + 16.0)), read('8', (glyph.0 + 16.0, glyph.1 + 4.0)), read('-', dash), read('2', two), read('0', nought)];
+        assert_eq!(word_read(&thread, &eighth, None, &numerals("5", "8", &shown)).map(|r| r.text).as_deref(), Some("⅝-20"));
+        let mut bracketed = Canvas::new(200, 70);
+        let open = paren(&mut bracketed, 26);
+        let glyph = fraction(&mut bracketed, 36);
+        let close = paren(&mut bracketed, 70);
+        let parts = [read('(', (open.0, glyph.0 + 8.0)), read('8', (glyph.0 + 8.0, glyph.1)), read(')', close)];
+        assert_eq!(word_read(&bracketed, &parts, None, &numerals("7", "8", &shown)).map(|r| r.text).as_deref(), Some("(⅞)"));
+        // The detector may box only the glyph's stroke: the glyph is still found, and the word
+        // grows to it both ways, but never into the word before.
+        let mut sliver = Canvas::new(200, 70);
+        let x = digit(&mut sliver, 10);
+        let glyph = fraction(&mut sliver, 36);
+        let stroke = [read('?', (glyph.0 + 12.0, glyph.0 + 22.0))];
+        let beside = Neighbours { prev_right: Some(x.1), next_left: Some(90.0), next_digit: false };
+        let fixed = repair_word(&stroke, (BASE - CAP) as f32, (BASE + 1) as f32, beside, &sliver.gray(), &numerals("3", "4", &shown))
+            .expect("the ¾ is found about its stroke");
+        assert_eq!(fixed.text, "¾");
+        assert!(fixed.left.is_some_and(|l| l < glyph.0 + 12.0 && l >= x.1), "{fixed:?}: the word grows left to the glyph");
+        assert!(fixed.right.is_some_and(|r| r > glyph.0 + 22.0 && r <= glyph.1), "{fixed:?}: and right to it");
+        let beside = Neighbours { prev_right: Some(glyph.0 + 10.0), ..beside };
+        assert_eq!(
+            repair_word(&stroke, (BASE - CAP) as f32, (BASE + 1) as f32, beside, &sliver.gray(), &numerals("3", "4", &shown)),
+            None,
+            "the numerator belongs to the word before"
+        );
+        // Named for nothing at all after the whole number, the glyph is appended and the word
+        // grows to it.
+        let fixed = word_read(&c, &[read('1', one)], None, &numerals("1", "2", &shown)).expect("the dropped ½ is appended");
+        assert_eq!(fixed.text, "1½");
+        assert!(fixed.right.is_some_and(|r| r > one.1 && r <= glyph.1), "{fixed:?}: the word now ends at the glyph");
+    }
+
+    #[test]
+    fn a_fraction_glyph_is_left_as_read_when_its_numerals_are_not_named_or_name_no_character() {
+        let mut c = Canvas::new(200, 70);
+        let one = digit(&mut c, 10);
+        let glyph = fraction(&mut c, 36);
+        let halves = [read('1', one), read('1', (glyph.0, glyph.0 + 14.0)), read('2', (glyph.0 + 14.0, glyph.1))];
+        let shown = std::cell::RefCell::new(Vec::new());
+        assert_eq!(word_read(&c, &halves, None, &numerals("?", "2", &shown)), None, "a numeral the recogniser cannot name");
+        assert_eq!(word_read(&c, &halves, None, &numerals("4", "7", &shown)), None, "four sevenths has no character");
+        assert_eq!(word_read(&c, &halves, None, &|_| None), None, "nothing read");
+    }
+
+    /// `1/64` set with small numerals: the `4` beside the `6` says the pair is no sixth.
+    #[test]
+    fn a_small_numeral_beside_the_denominator_makes_no_fraction_glyph() {
+        let mut c = Canvas::new(200, 70);
+        let glyph = fraction(&mut c, 36);
+        // A second small numeral right after the denominator, the same size.
+        let (l, t) = (36 + 33, BASE - 20);
+        c.rect(l, t, l + 3, BASE);
+        c.rect(l + 8, t, l + 11, BASE);
+        c.rect(l, t + 9, l + 11, t + 11);
+        let shown = std::cell::RefCell::new(Vec::new());
+        let chars = [read('/', (glyph.0, glyph.0 + 14.0)), read('6', (glyph.0 + 14.0, glyph.1)), read('4', (glyph.1, glyph.1 + 14.0))];
+        assert_eq!(word_read(&c, &chars, None, &numerals("1", "6", &shown)), None);
+        assert!(shown.borrow().is_empty(), "no numeral was shown to the recogniser");
+    }
+
+    #[test]
+    fn full_height_digits_about_a_slash_are_no_fraction_glyph() {
+        let mut c = Canvas::new(200, 70);
+        let one = digit(&mut c, 10);
+        let stroke = slash(&mut c, 34);
+        let two = digit(&mut c, 56);
+        let shown = std::cell::RefCell::new(Vec::new());
+        assert_eq!(word_read(&c, &[read('1', one), read('/', stroke), read('2', two)], None, &numerals("1", "2", &shown)), None);
+        assert!(shown.borrow().is_empty(), "no numeral was shown to the recogniser");
     }
 
     #[test]

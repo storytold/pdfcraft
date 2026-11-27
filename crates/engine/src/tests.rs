@@ -6858,6 +6858,29 @@ fn recognize_text_reads_tolerance_symbols() {
     }
 }
 
+/// The ocrs alphabet has no fraction glyphs either: the `1½` and `¼-20` of an inch drawing's
+/// stock sizes and threads read as digits (`112`, `/4-20`) until their small numerals are read
+/// on their own; fractions set with full digits and a slash are left as they read (#8504).
+#[test]
+fn recognize_text_reads_fraction_glyphs() {
+    if !ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "1½ x 2¼ BAR\n¼-20 UNC x ¾ DEEP\n⅜-16 x ⅝ DEEP\n3/4 DIA 1/2 DEEP").unwrap();
+    let id = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(id).unwrap()).png(0, 300.0).unwrap();
+    let scan = s.create_from_images(&[("scan.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    s.recognize_text(id, &[], ocr::OcrSettings::default()).unwrap();
+    // The model reads the `x` of a callout as either case.
+    let text = page_texts(&s, id)[0].replace(' ', "").to_uppercase();
+    for want in ["1½X2¼BAR", "¼-20UNCX¾DEEP", "⅜-16X⅝DEEP", "3/4DIA1/2DEEP"] {
+        assert!(text.contains(want), "{want} in {text:?}");
+    }
+}
+
 const SYNTHETIC_SCAN_DPI: f64 = 300.0;
 
 /// A scan of the OCR sentence at the source page's physical size, without a text layer.
