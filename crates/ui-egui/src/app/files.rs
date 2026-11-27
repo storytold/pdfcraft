@@ -815,7 +815,7 @@ impl PdfCraftApp {
 
     /// The web has no queue: the retry opens the held bytes at once.
     #[cfg(target_arch = "wasm32")]
-    fn retry_inline(&mut self, ctx: &egui::Context, mut p: PasswordPrompt, pw: zeroize::Zeroizing<String>) {
+    fn retry_inline(&mut self, ctx: &egui::Context, mut p: PasswordPrompt, pw: Option<zeroize::Zeroizing<String>>) {
         let after_open = p.after_open.clone();
         let opened = self.try_open(ctx, &p.name, p.path.take(), p.bytes.clone(), pw.as_deref().map(String::as_str), p.activate);
         drop(pw);
