@@ -863,6 +863,11 @@ const MAX_QUADS: usize = 50_000;
 /// quadrilaterals and the appearance is redrawn; the colour, opacity, contents, replies and every
 /// other entry are kept. A locked markup, another kind of comment, a redaction (its area is what
 /// is removed) or an empty or non-finite area is refused, and nothing changes.
+///
+/// Each quad's corners may come in the order Acrobat writes and the appearance draws (top left,
+/// top right, bottom left, bottom right), or around the area as ISO 32000-2 §12.5.6.10 (Table
+/// 182) describes it, the text running from the first corner to the second; the latter are stored
+/// in the former order. A quad whose first two corners are opposite each other is refused.
 pub fn set_quads(doc: &mut Document, page: usize, index: usize, quads: &[[f64; 8]], meta: &Meta) -> Result<(), AnnotError> {
     if quads.len() > MAX_QUADS {
         return Err(AnnotError::Invalid(format!("at most {MAX_QUADS} text areas")));
@@ -873,6 +878,7 @@ pub fn set_quads(doc: &mut Document, page: usize, index: usize, quads: &[[f64; 8
     }
     // Non-collinear corners span an area in either Z-order or perimeter order. Validate every
     // quad before annot_ref can promote an inline annotation to a reference.
+    let mut stored = Vec::with_capacity(quads.len());
     for quad in quads {
         let [x0, y0, x1, y1, x2, y2, x3, y3] = *quad;
         let (a, b, c) = ([x1 - x0, y1 - y0], [x2 - x0, y2 - y0], [x3 - x0, y3 - y0]);
@@ -881,7 +887,9 @@ pub fn set_quads(doc: &mut Document, page: usize, index: usize, quads: &[[f64; 8
         if !areas.iter().all(|area| area.is_finite()) || areas.iter().all(|area| *area == 0.0) {
             return Err(bad_area());
         }
+        stored.push(z_order(*quad).ok_or_else(|| AnnotError::Invalid("a text area's first two corners must be adjacent".into()))?);
     }
+    let quads = stored.as_slice();
     // Read without promotion: even valid geometry must leave an inline entry untouched when
     // its lock or subtype refuses the edit.
     let mut d = annots(doc, page_ref(doc, page)?)
@@ -912,6 +920,29 @@ pub fn set_quads(doc: &mut Document, page: usize, index: usize, quads: &[[f64; 8
     // r is now a dictionary, and adding the stream cannot replace an existing object, so
     // store_built's dictionary update cannot fail after promotion.
     store_built(doc, r, &d, built)
+}
+
+/// `quad` with its corners in the order the appearance draws them (top left, top right, bottom
+/// left, bottom right): kept when already so, reordered from a perimeter order (see
+/// [`set_quads`]), `None` when its first two corners are opposite each other.
+fn z_order(quad: [f64; 8]) -> Option<[f64; 8]> {
+    let [x1, y1, x2, y2, x3, y3, x4, y4] = quad;
+    let (p1, p2, p3, p4) = ([x1, y1], [x2, y2], [x3, y3], [x4, y4]);
+    let side = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    // Whether segments ab and cd cross at a point inside both.
+    let crosses = |a, b, c, d| side(a, b, c) * side(a, b, d) < 0.0 && side(c, d, a) * side(c, d, b) < 0.0;
+    // The outline drawn from Z-order corners: 1, 2, 4, 3.
+    if !crosses(p1, p2, p4, p3) && !crosses(p2, p4, p3, p1) {
+        return Some(quad);
+    }
+    if crosses(p1, p2, p3, p4) || crosses(p2, p3, p4, p1) {
+        return None;
+    }
+    // Around the area: the text runs from corner 1 to corner 2 with the area on its left
+    // (counterclockwise, 1-2 the bottom edge) or on its right (clockwise, 1-2 the top edge).
+    let counterclockwise = side(p1, p2, p3) > 0.0;
+    let [tl, tr, bl, br] = if counterclockwise { [p4, p3, p1, p2] } else { [p1, p2, p4, p3] };
+    Some([tl[0], tl[1], tr[0], tr[1], bl[0], bl[1], br[0], br[1]])
 }
 
 /// Scale a drawing's strokes into `rect`. The margin between the strokes and the old `/Rect` (half
@@ -1156,20 +1187,27 @@ fn ink_rect_for_width(d: &Dict, old_w: f64, w: f64) -> Option<[f64; 4]> {
 /// annotation has no border) and neither part has line endings. All or nothing: if one member
 /// can't be restyled, none is.
 pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
-    let (_, r) = annot_ref(doc, page, index)?;
-    let others = replace_text_partners(doc, page, r)?;
-    // Check every partner before changing anything.
+    // Check the target and every partner before annot_ref can promote an inline target: a
+    // refused restyle must not add an object or rewrite /Annots.
+    let entry = annots(doc, page_ref(doc, page)?).get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    let target = doc.resolve(&entry).as_dict().cloned().filter(crate::lookup::is_comment_dict).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    check_style(doc, &target, &change)?;
+    let others = replace_text_partners(doc, page, &entry)?;
     for &o in &others {
+        // A partner the change leaves alone is checked for its lock only, as before.
         unlocked(doc, o)?;
+        let part = partner_change(doc, o, &change);
+        if !part_unchanged(&part) {
+            check_style(doc, &annot_dict(doc, o), &part)?;
+        }
     }
+    let (_, r) = annot_ref(doc, page, index)?;
     let before: Vec<(ObjRef, Dict)> = others.iter().map(|&o| (o, annot_dict(doc, o))).collect();
     let mut done: Vec<(ObjRef, Dict)> = vec![(r, annot_dict(doc, r))];
     style_one(doc, r, change.clone(), meta)?;
     for (o, d) in before {
-        let caret = d.name(b"Subtype") == Some(b"Caret");
-        let part = StyleChange { color: change.color, opacity: change.opacity, width: change.width.filter(|_| caret), endings: None };
-        let unchanged = part.color.is_none() && part.opacity.is_none() && part.width.is_none();
-        if unchanged {
+        let part = partner_change(doc, o, &change);
+        if part_unchanged(&part) {
             continue;
         }
         if let Err(e) = style_one(doc, o, part, meta) {
@@ -1187,41 +1225,62 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
 /// The other members of the Replace Text proposal `r` belongs to, on `page`: for its caret, the
 /// strikeouts grouped under it; for a strikeout, its caret and any other strikeout under it.
 /// Empty for anything else.
-fn replace_text_partners(doc: &Document, page: usize, r: ObjRef) -> Result<Vec<ObjRef>, AnnotError> {
-    let own = Object::Ref(r);
-    let caret = match replaced_by(doc, &own) {
-        Some(c) => c,
-        None if annot_dict(doc, r).name(b"Subtype") == Some(b"Caret") => r,
-        None => return Ok(Vec::new()),
+/// `entry` is the target's `/Annots` entry; written inline, it is no other member's caret.
+fn replace_text_partners(doc: &Document, page: usize, entry: &Object) -> Result<Vec<ObjRef>, AnnotError> {
+    let own = entry.as_ref();
+    let caret = match (replaced_by(doc, entry), own) {
+        (Some(c), _) => c,
+        (None, Some(r)) if annot_dict(doc, r).name(b"Subtype") == Some(b"Caret") => r,
+        _ => return Ok(Vec::new()),
     };
     let list = annots(doc, page_ref(doc, page)?);
     let strikes = list.iter().filter(|e| replaced_by(doc, e) == Some(caret)).filter_map(Object::as_ref);
     // `/Annots` may list one annotation twice: restyle each once.
-    let mut seen: HashSet<ObjRef> = HashSet::from([r]);
+    let mut seen: HashSet<ObjRef> = own.into_iter().collect();
     Ok(std::iter::once(caret).chain(strikes).filter(|&o| seen.insert(o)).collect())
 }
 
-/// [`set_style`] on one annotation.
-fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
-    let StyleChange { color, opacity, width, endings } = change;
-    unlocked(doc, r)?;
-    let d = annot_dict(doc, r);
-    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
-    // Check before changing anything: a stale appearance would contradict the new style.
-    if !crate::draw::can_draw(doc, &d) {
-        return Err(AnnotError::Unsupported(subtype.clone()));
+/// What a Replace Text partner `o` takes of `change`: colour and opacity, and line width for
+/// its caret only.
+fn partner_change(doc: &Document, o: ObjRef, change: &StyleChange) -> StyleChange {
+    let caret = annot_dict(doc, o).name(b"Subtype") == Some(b"Caret");
+    StyleChange { color: change.color, opacity: change.opacity, width: change.width.filter(|_| caret), endings: None }
+}
+
+fn part_unchanged(part: &StyleChange) -> bool {
+    part.color.is_none() && part.opacity.is_none() && part.width.is_none()
+}
+
+/// Whether [`style_one`] would refuse `change` on the annotation `d`, without changing anything.
+fn check_style(doc: &Document, d: &Dict, change: &StyleChange) -> Result<(), AnnotError> {
+    if annotation_flags(doc, d) & FLAG_LOCKED != 0 {
+        return Err(AnnotError::Invalid("the comment is locked".into()));
     }
+    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    // A stale appearance would contradict the new style.
+    if !crate::draw::can_draw(doc, d) {
+        return Err(AnnotError::Unsupported(subtype));
+    }
+    let StyleChange { color, opacity, width, endings } = change;
     if color.is_some_and(|c| !finite(&c)) || opacity.is_some_and(|o| !o.is_finite()) || width.is_some_and(|w| !w.is_finite()) {
         return Err(AnnotError::Invalid("invalid style".into()));
     }
-    if let Some(ends) = &endings {
+    if let Some(ends) = endings {
         let callout = subtype == "FreeText" && d.contains(b"CL");
         let pair = matches!(subtype.as_str(), "Line" | "PolyLine");
         if (callout && ends.len() != 1) || (pair && ends.len() != 2) || (!callout && !pair) {
             return Err(AnnotError::Invalid("this comment has no line endings to change".into()));
         }
     }
-    refuse_foreign_text(doc, &d)?;
+    refuse_foreign_text(doc, d)
+}
+
+/// [`set_style`] on one annotation.
+fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
+    let d = annot_dict(doc, r);
+    check_style(doc, &d, &change)?;
+    let StyleChange { color, opacity, width, endings } = change;
+    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     let free_text = subtype == "FreeText";
     // The face and size the text is drawn in, which the new colour keeps.
     let drawn = text_style::text_style(&d, text_style::dr_face(doc, &d));

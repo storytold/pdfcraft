@@ -535,6 +535,70 @@ fn restyling_a_squiggly_refuses_more_quads_than_the_minimum_vertex_budget_allows
     }
 }
 
+/// A restyle refused for an inline annotation (one too large to redraw, one that can't be drawn,
+/// one locked) must not promote it: no object is added and /Annots is not rewritten.
+#[test]
+fn set_style_refusal_leaves_an_inline_annotation_unpromoted() {
+    let short = [0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0];
+    let cloud = Object::Dict(Dict::from_iter([(b"S".to_vec(), Object::name("C")), (b"I".to_vec(), Object::Int(2))]));
+    let cases: [(Markup, &[u8], Object); 3] = [
+        (Markup::Squiggly, b"QuadPoints", create::num_array(&vec![short; 66_667].concat())),
+        (Markup::Highlight, b"BE", cloud),
+        (Markup::Highlight, b"F", Object::Int(crate::types::FLAG_LOCKED)),
+    ];
+    for (kind, key, value) in cases {
+        let mut doc = fixture();
+        let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind, quads: vec![short] }), &meta("s")).unwrap();
+        let page = page_refs(&doc).unwrap()[0];
+        let mut dict = list(&doc, 0)[h].clone();
+        dict.set(key.to_vec(), value);
+        let mut entries = annots(&doc, page);
+        entries[h] = Object::Dict(dict);
+        set_annots(&mut doc, page, entries).unwrap();
+        let mut doc = reopen(&doc);
+        let snapshot = |doc: &Document| {
+            (write_incremental(doc, &SaveOptions::default()).unwrap(), format!("{:?}", doc.get(page)), doc.object_numbers().len(), doc.is_modified())
+        };
+        let before = snapshot(&doc);
+        let change = StyleChange::new(Some([0.0, 1.0, 0.0]), None, None, None);
+        assert!(set_style(&mut doc, 0, h, change, &meta("restyle")).is_err(), "{}", String::from_utf8_lossy(key));
+        assert!(snapshot(&doc) == before, "refusing {} promoted the inline annotation", String::from_utf8_lossy(key));
+    }
+}
+
+/// Corners given around the area, clockwise or (as ISO 32000-2 Table 182 describes) counter-
+/// clockwise, are stored and drawn as the same corners in drawing order: the highlight fills
+/// the area instead of crossing itself and the underline runs along its bottom.
+#[test]
+fn set_quads_draws_perimeter_order_corners_as_the_area() {
+    // Each case: the drawing-order quad, then the same area given around it each way.
+    let level = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    let tilted = [10.0, 30.0, 40.0, 40.0, 14.0, 18.0, 44.0, 28.0];
+    let around = |[a, b, c, d, e, f, g, h]: [f64; 8]| [[a, b, c, d, g, h, e, f], [e, f, g, h, c, d, a, b]];
+    let drawn = |quad: [f64; 8]| {
+        let mut doc = fixture();
+        let start = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+        let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![start] }), &meta("h")).unwrap();
+        let u = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Underline, quads: vec![start] }), &meta("u")).unwrap();
+        set_quads(&mut doc, 0, h, &[quad], &meta("h")).unwrap();
+        set_quads(&mut doc, 0, u, &[quad], &meta("u")).unwrap();
+        let all = list(&doc, 0);
+        let qp: Vec<f64> = all[h].get(b"QuadPoints").unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect();
+        (qp, ap_content(&doc, &all[h]), ap_content(&doc, &all[u]))
+    };
+    for z in [level, tilted] {
+        let expected = drawn(z);
+        for quad in around(z) {
+            assert!(drawn(quad) == expected, "{quad:?} is stored and drawn as {z:?}");
+        }
+    }
+    // Opposite first corners name no edge for the text to run along.
+    let mut doc = fixture();
+    let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![level] }), &meta("h")).unwrap();
+    let diagonal = [72.0, 712.0, 200.0, 700.0, 200.0, 712.0, 72.0, 700.0];
+    assert!(set_quads(&mut doc, 0, h, &[diagonal], &meta("bad")).is_err());
+}
+
 /// Zero-area quadrilaterals, including collinear diagonals with a nonempty bounding box,
 /// never replace a markup. Reject them before even promoting an inline annotation to a reference.
 #[test]
@@ -2196,6 +2260,14 @@ fn restyling_a_replace_text_pair_restyles_both_members() {
     set_locked(&mut locked, 0, s, true).unwrap();
     assert!(set_style(&mut locked, 0, c, StyleChange::new(Some(green), None, None, None), &meta("")).is_err());
     assert_eq!(color(&locked, c), red.color.to_vec(), "the caret keeps its colour");
+
+    // A width takes no part of the strikeout, so one that can't be redrawn doesn't refuse it.
+    let mut cloudy = doc.clone();
+    let (_, sr) = crate::lookup::annot_ref(&mut cloudy, 0, s).unwrap();
+    let cloud = Object::Dict(Dict::from_iter([(b"S".to_vec(), Object::name("C")), (b"I".to_vec(), Object::Int(2))]));
+    cloudy.update_dict(sr, |d| d.set(b"BE".to_vec(), cloud)).unwrap();
+    assert!(!crate::draw::can_draw(&cloudy, &crate::lookup::annot_dict(&cloudy, sr)), "a cloudy strikeout can't be drawn");
+    set_style(&mut cloudy, 0, c, StyleChange::new(None, None, Some(3.0), None), &meta("")).unwrap();
 }
 
 #[test]
