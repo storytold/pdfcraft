@@ -1078,11 +1078,10 @@ struct ParagraphHost<'a> {
     ed: &'a mut LineEditor,
     /// Measures each draft as Apply writes it, for the caret and selection geometry.
     background: &'a mut TextBackground,
-    /// A PDF draft raster shows the text: a changed draft follows its PDF geometry. Without one the
-    /// editor draws the changed draft itself, so the caret follows the faces it is drawn in.
+    /// A PDF draft raster shows the text: a changed draft follows its PDF geometry. Without one, or
+    /// once the draft's preview failed, the editor draws the changed draft itself, so the caret
+    /// follows the faces it is drawn in.
     raster: bool,
-    /// The draft's PDF preview failed: the editor draws the draft itself, with its caret and selection.
-    fallback: bool,
     faces: &'a BTreeMap<String, FontRef>,
     view: CanvasView,
     /// Screen pixels per page point.
@@ -1098,6 +1097,16 @@ struct ParagraphHost<'a> {
 /// PDF preview failed (`fallback`), or while no PDF draft raster shows it (`raster` is false).
 fn draws_draft(fallback: bool, raster: bool, changed: bool) -> bool {
     fallback || (changed && !raster)
+}
+
+/// A PDF raster of other text is under the editor: a draft raster shows the changed paragraph
+/// (`raster` and `changed`), and it is of an earlier draft (`of_draft` is false) while this one's is
+/// prepared. The caret, the selection and the editor's layout follow the draft as it is now, so
+/// they would sit at its places on another draft's ink. Over the page's own text (a paragraph not
+/// changed yet), over the editor's own drawing of the draft and over a raster of this draft they
+/// show, at provisional places until the worker publishes the draft's PDF geometry.
+fn over_other_text(raster: bool, changed: bool, of_draft: bool) -> bool {
+    raster && changed && !of_draft
 }
 
 /// The chars each row of `galley` holds, without its line break.
@@ -1153,17 +1162,11 @@ impl ParagraphHost<'_> {
         self.view.to_screen(p) - self.origin
     }
 
-    /// The editor draws the changed draft itself: its preview failed, or no PDF draft raster shows
-    /// it yet. `editor_session` draws the text by the same rule.
-    fn draws_draft(&self) -> bool {
-        draws_draft(self.fallback, self.raster, self.ed.has_changes())
-    }
-
-    /// The caret and selection show over the raster of this very draft, or over the editor's own
-    /// drawing of it. Over a raster of other text they would sit at another draft's places: the worker
-    /// publishes the PDF ink and the exact geometry together on a later pass.
+    /// The caret and selection show unless a raster of other text is under the editor
+    /// ([`over_other_text`]): the worker publishes the PDF ink and the exact geometry together on
+    /// a later pass.
     fn marks_shown(&self) -> bool {
-        self.draws_draft() || self.background.current(self.ed)
+        !over_other_text(self.raster, self.ed.has_changes(), self.background.raster_of(self.ed))
     }
 
     /// The cursor at char `offset` on laid-out line `line`: at a soft wrap the offset ends one line
@@ -1357,7 +1360,6 @@ fn editor_session(
             ed: &mut *ed,
             background: &mut *background,
             raster: background_ready && !fallback,
-            fallback,
             faces: &faces,
             view: body.view,
             scale,
@@ -1379,8 +1381,9 @@ fn editor_session(
     // Applied before a raster shows it, the draft stays up as the editor draws it.
     let drawing = DraftDrawing::new(&xf, ed, Arc::clone(&galley), origin, text_color, covered);
     // Over a raster of other text the provisional layout is left out with the caret: the worker
-    // publishes the PDF ink and the exact geometry together on a later pass.
-    if visible || background.current(ed) {
+    // publishes the PDF ink and the exact geometry together on a later pass. The editor's own
+    // drawing of the draft is never over one.
+    if !over_other_text(background_ready && !fallback, ed.has_changes(), background.raster_of(ed)) {
         let drawn = if visible { galley } else { unseen(galley) };
         ParagraphText::new(origin, drawn, text_color).show_at(ui, page_clip);
     }
@@ -1941,7 +1944,6 @@ mod tests {
             ed: &mut ed,
             background: &mut background,
             raster: false,
-            fallback: false,
             faces: &faces,
             view,
             scale: 1.0,
@@ -1956,6 +1958,48 @@ mod tests {
         host.galley = None;
         assert!(host.caret(3, None).is_none());
         assert!(host.selection_quads(0..3).is_empty());
+        background.worker.as_ref().unwrap().pause(false);
+    }
+
+    /// An unchanged paragraph opened before the worker has measured it: the page shows the
+    /// paragraph's own text, so the caret and selection show over it at their provisional places,
+    /// also with an earlier draft's raster in the store, which goes under a changed draft only.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn an_unchanged_paragraph_shows_its_caret_before_the_worker_replies() {
+        let (app, mut ed) = preview_app();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let ctx = egui::Context::default();
+        // The raster store counts its frames by pass.
+        ctx.begin_pass(egui::RawInput::default());
+        let mut background = TextBackground::default();
+        let worker = worker::DraftWorker::new(&ctx).unwrap();
+        worker.pause(true);
+        background.worker = Some(worker);
+        assert!(!ed.has_changes());
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        assert!(background.pending() && !background.current(&ed), "the worker has not replied");
+        let faces = BTreeMap::new();
+        let view = CanvasView::new(Rect::from_min_size(Pos2::ZERO, vec2(600.0, 800.0)), Point::new(300.0, 400.0), 1.0);
+        let mut host = ParagraphHost {
+            ctx: &ctx,
+            doc,
+            ed: &mut ed,
+            background: &mut background,
+            raster: false,
+            faces: &faces,
+            view,
+            scale: 1.0,
+            width: 400.0,
+            origin: Pos2::ZERO,
+            galley: None,
+        };
+        assert!(host.caret(3, None).is_some(), "the unchanged paragraph has its caret");
+        assert!(!host.selection_quads(0..3).is_empty(), "and its selection");
+        host.raster = true;
+        host.galley = None;
+        assert!(host.caret(3, None).is_some(), "no raster goes under an unchanged paragraph");
+        assert!(!host.selection_quads(0..3).is_empty());
         background.worker.as_ref().unwrap().pause(false);
     }
 

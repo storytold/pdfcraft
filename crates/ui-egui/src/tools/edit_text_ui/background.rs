@@ -348,10 +348,17 @@ impl TextBackground {
         self.source.as_ref()
     }
 
-    pub fn current(&self, ed: &LineEditor) -> bool {
+    /// The worker has published `ed`'s draft as it is now, its raster and its PDF geometry.
+    #[cfg(test)]
+    pub(super) fn current(&self, ed: &LineEditor) -> bool {
         self.serial.is_none()
             && self.draft_error.is_none()
             && self.render_key.as_ref().is_some_and(|(text, style)| text == &ed.text && style == &ed.style())
+    }
+
+    /// The raster in the store is of `ed`'s draft as it is now, its text and its style.
+    pub(super) fn raster_of(&self, ed: &LineEditor) -> bool {
+        self.texture_key.as_ref().is_some_and(|(text, style)| *text == ed.text && *style == ed.style())
     }
 
     pub fn error_for(&self, page: usize, block: usize) -> Option<&str> {
