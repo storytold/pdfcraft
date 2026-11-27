@@ -41,6 +41,7 @@ pub(crate) use copy::{Copier, copy_object};
 use copy::{MAX_COPY_DEPTH, SKIP_ON_PAGE};
 use fields::{add_kid, field_and_widget, register_fields, resolve_field_conflicts, split_own_field};
 pub use fields::{combine_field_conflicts, field_name_conflicts};
+pub(crate) use fields::{listed_fields, share_fields_with_originals};
 
 /// How colliding fully-qualified field names are resolved when pages are imported.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -104,7 +105,9 @@ fn added_objects(dst: &Document, before: &HashSet<u32>) -> Vec<ObjRef> {
 /// under one new bookmark titled `title` (the file's name) at its first inserted page, as Combine
 /// Files does for each file. That bookmark goes among the top-level bookmarks where the pages went:
 /// before the first one that points after them. Bookmarks to pages left out stay behind, unless a
-/// bookmark below them leads to an inserted page; a file without bookmarks adds none.
+/// bookmark below them leads to an inserted page; a file without bookmarks adds none. Catalog
+/// attachments are merged with the destination's attachments, with duplicate name-tree keys
+/// renamed, as in Combine Files.
 pub fn insert_file_pages(
     dst: &mut Document,
     src: &Document,
@@ -123,6 +126,15 @@ pub fn insert_file_pages(
     {
         let after = at.min(crate::page_count(dst)?.saturating_sub(imported.pages.len())).saturating_add(imported.pages.len());
         insert_file_bookmark(dst, &Mark { title: title.to_string(), page: *first, outline }, after)?;
+    }
+    if !imported.pages.is_empty() {
+        let mut incoming = Vec::new();
+        carry::collect_attachments(dst, src, &mut incoming)?;
+        if !incoming.is_empty() {
+            let mut attachments = crate::attachments::entries(dst);
+            attachments.append(&mut incoming);
+            set_attachments(dst, attachments)?;
+        }
     }
     Ok(ImportOutcome { pages: imported.pages, renamed_fields: imported.renamed_fields })
 }
@@ -570,9 +582,9 @@ pub fn import_value(dst: &mut Document, src: &Document, value: &Object) -> Resul
 }
 
 /// Page `page` of `src` as a form XObject in `dst` (its content and resources, no annotations),
-/// for backgrounds and watermarks taken from a PDF. The form's `/BBox` is the page's crop box
-/// and its `/Matrix` undoes the page rotation, so it draws upright as displayed. Returns the
-/// form and its displayed size in points.
+/// for backgrounds and watermarks taken from a PDF. The form's `/BBox` is the visible crop box
+/// (clipped to the media box), and its `/Matrix` undoes the page rotation, so it draws upright
+/// as displayed. Returns the form and its displayed size in points.
 pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(ObjRef, (f64, f64)), OrganizeError> {
     use pdfcraft_cos::Stream;
     let all = walk(src)?;
@@ -580,12 +592,20 @@ pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(
     // the page's own.
     let (pr, d) = all.get(page).cloned().ok_or(OrganizeError::NoSuchPage(page))?;
     let own = src.get(pr).as_dict().cloned().unwrap_or_default();
-    let rect = |k: &[u8]| -> Option<[f64; 4]> {
-        let a = src.resolve(d.get(k)?);
-        let v: Vec<f64> = a.as_array()?.iter().filter_map(|x| src.resolve(x).as_f64()).collect();
-        (v.len() == 4).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
+    // Use the viewer's effective bounds: an oversized CropBox must not reveal artwork
+    // outside MediaBox or change the watermark's aspect ratio and fit (#7687).
+    let source_page = pdfcraft_model::Page { obj: pr, dict: d };
+    let d = &source_page.dict;
+    // Keep an explicitly empty source empty: callers such as 3D posters reject it.
+    // The viewer's Letter fallback must not turn that invalid input into a usable picture.
+    let raw_rect = |key: &[u8]| -> Option<[f64; 4]> {
+        let obj = src.resolve(d.get(key)?);
+        let [a, b, c, e] = obj.as_array()?.as_slice() else { return None };
+        let [Some(x0), Some(y0), Some(x1), Some(y1)] = [a, b, c, e].map(|v| src.resolve(v).as_f64()) else { return None };
+        [x0, y0, x1, y1].iter().all(|v| v.is_finite()).then(|| [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
     };
-    let bbox = rect(b"CropBox").or_else(|| rect(b"MediaBox")).unwrap_or([0.0, 0.0, 612.0, 792.0]);
+    let bbox =
+        raw_rect(b"CropBox").or_else(|| raw_rect(b"MediaBox")).filter(|b| b[0] == b[2] || b[1] == b[3]).unwrap_or_else(|| source_page.crop(src));
     let (w, h) = (bbox[2] - bbox[0], bbox[3] - bbox[1]);
     let rotate = d.get(b"Rotate").and_then(|r| src.resolve(r).as_int()).unwrap_or(0).rem_euclid(360);
     // Content: the page's streams, decoded and joined. Of a stream damaged partway, the copy draws

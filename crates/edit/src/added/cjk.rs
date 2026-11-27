@@ -1,7 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use pdfcraft_fonts::CraftFont;
-
 use super::layout::latin_width;
 use super::{AddedText, Dict, Document, EditError};
 use crate::text::{Type3Fallback, Type3Glyph, fallback_face, type3_faces, type3_glyph, unique_font_name, write_type3_glyphs};
@@ -22,7 +20,7 @@ fn missing(ch: char) -> EditError {
 /// One bounded set of outlines supplies validation, measurement and writing for the item.
 #[derive(Default)]
 pub(super) struct CjkText {
-    face: Option<&'static CraftFont>,
+    face: Option<&'static pdfcraft_fonts::EmbeddedFace>,
     glyphs: Vec<Type3Glyph>,
     widths: HashMap<char, f64>,
 }

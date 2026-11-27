@@ -1,6 +1,6 @@
-use super::TextGlyph;
 use super::device::WORD_GAP;
 use super::layout::is_rtl;
+use super::{HashMap, TextGlyph};
 
 /// Glyphs `start..end` of the glyph list [`arrange`] lays out, drawn one after another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,11 +31,21 @@ pub(super) struct Seg {
     extra: Option<Box<SegExtra>>,
     pub(super) bbox: [f32; 4],
     pub(super) h: f32,
+    /// The right edge of its visible glyphs; the box may reach further with trailing spaces.
+    /// Negative infinity when every glyph is blank.
+    pub(super) ink: f32,
+    /// A row of a barcode drawn with a font (see [`mark_barcode_rows`]): it joins no other text.
+    pub(super) barcode: bool,
 }
 
 #[derive(Default)]
 struct SegExtra {
     more: Vec<Run>,
+}
+
+/// The right edge of `g`'s ink, for [`Seg::ink`]: negative infinity for a blank glyph.
+pub(super) fn ink_of(g: &TextGlyph) -> f32 {
+    if g.text.trim().is_empty() { f32::NEG_INFINITY } else { g.rect[2] }
 }
 
 /// Whether `(script_bbox, script_h)` is a superscript or subscript on `(host_bbox, host_h)`.
@@ -65,8 +75,16 @@ pub(super) fn is_script_on(host_bbox: &[f32; 4], host_h: f32, script_bbox: &[f32
 }
 
 impl Seg {
-    pub(super) fn new(first: Run, bbox: [f32; 4], h: f32) -> Self {
-        Seg { first, extra: None, bbox, h }
+    pub(super) fn new(first: Run, bbox: [f32; 4], h: f32, ink: f32) -> Self {
+        Seg { first, extra: None, bbox, h, ink, barcode: false }
+    }
+
+    /// Whether this segment is a table cell padded with spaces towards `next`, the next cell on
+    /// its baseline: a report generator lays rows out in fixed-width fields this way (see
+    /// [`PADDED_FIELD`]).
+    pub(super) fn padded_towards(&self, next: &Seg, h: f32) -> bool {
+        let gap = next.bbox[0] - self.bbox[2];
+        self.ink.is_finite() && self.bbox[2] - self.ink >= h * PADDED_FIELD && (0.0..h * PADDED_REACH).contains(&gap)
     }
 
     pub(super) fn cy(&self) -> f32 {
@@ -96,6 +114,7 @@ impl Seg {
 
     pub(super) fn merge(&mut self, other: Seg) {
         self.extend_box(&other.bbox, other.h);
+        self.ink = self.ink.max(other.ink);
         let extra = self.extra.get_or_insert_with(Default::default);
         extra.more.push(other.first);
         if let Some(o) = other.extra {
@@ -103,6 +122,66 @@ impl Seg {
         }
     }
 }
+
+/// A barcode font (a QR or Aztec code on an invoice, as on every Mexican CFDI) draws its symbol as
+/// rows of glyphs stacked flush with no leading: at least this many rows ...
+const BARCODE_ROWS: usize = 4;
+/// ... of at least this many glyphs each.
+const BARCODE_ROW_GLYPHS: usize = 8;
+
+/// Mark the segments that are rows of a barcode drawn with a font (see [`barcode_rows`]). Text
+/// beside the code sits on the same baselines and would otherwise join its rows, so the code's
+/// rows and the text would interleave in reading order.
+pub(super) fn mark_barcode_rows(segs: &mut [Seg]) {
+    let rows: Vec<(usize, [f32; 4])> = segs.iter().map(|s| (if s.extra.is_none() { s.first.len() } else { 0 }, s.bbox)).collect();
+    for (s, barcode) in segs.iter_mut().zip(barcode_rows(&rows)) {
+        s.barcode = barcode;
+    }
+}
+
+/// Which of the rows of text `rows`, each as its glyph count and box, are rows of a barcode drawn
+/// with a font: runs of at least [`BARCODE_ROWS`] rows of one glyph count, height, left and right
+/// edge, each starting where the one above ends. Text set solid still has lines of different
+/// lengths and glyph counts.
+pub(super) fn barcode_rows(rows: &[(usize, [f32; 4])]) -> Vec<bool> {
+    // Positions to an eighth of a point: a barcode's rows are placed exactly.
+    let q = |v: f32| (v * 8.0).round() as i64;
+    let height = |bb: &[f32; 4]| bb[3] - bb[1];
+    let mut stacks: HashMap<(usize, i64, i64, i64), Vec<usize>> = HashMap::new();
+    for (k, (n, bb)) in rows.iter().enumerate() {
+        if *n >= BARCODE_ROW_GLYPHS && bb.iter().all(|v| v.is_finite()) {
+            stacks.entry((*n, q(bb[0]), q(bb[2]), q(height(bb)))).or_default().push(k);
+        }
+    }
+    let mut barcode = vec![false; rows.len()];
+    for stack in stacks.values_mut().filter(|stack| stack.len() >= BARCODE_ROWS) {
+        stack.sort_by(|&a, &b| rows[a].1[1].total_cmp(&rows[b].1[1]));
+        let mut start = 0;
+        for k in 1..=stack.len() {
+            let flush = stack.get(k).is_some_and(|&r| {
+                let (above, below) = (&rows[stack[k - 1]].1, &rows[r].1);
+                (below[1] - above[3]).abs() <= height(above) * 0.05
+            });
+            if !flush {
+                if k - start >= BARCODE_ROWS {
+                    for &r in &stack[start..k] {
+                        barcode[r] = true;
+                    }
+                }
+                start = k;
+            }
+        }
+    }
+    barcode
+}
+
+/// A segment whose box runs on past its last visible glyph by this many line heights of spaces is
+/// a padded table cell, and the next cell on its baseline belongs to the same row if it starts
+/// within [`PADDED_REACH`] line heights of the padding. Without this, a row whose padding stops
+/// short of the next cell reads that cell after the whole table, and a drag along the row selects
+/// everything between.
+const PADDED_FIELD: f32 = 2.0;
+const PADDED_REACH: f32 = 8.0;
 
 /// Two glyphs of different runs that overlap by more than this fraction of the line height collide.
 const RUN_COLLISION: f32 = 0.25;
@@ -153,6 +232,10 @@ pub(super) struct Scratch {
     pub(super) logical: Vec<usize>,
     /// `placed` with the marks merged in, built before it is swapped in.
     pub(super) merged: Vec<usize>,
+    /// The merged ink intervals of the current segment, each with the ink length before it, for `drop_covered_blanks`.
+    pub(super) ink: Vec<[f32; 3]>,
+    /// The ink glyphs of the current segment as (left, right, run), by left edge, for `drop_covered_blanks`.
+    pub(super) ink_runs: Vec<(f32, f32, usize)>,
     /// For each glyph of the page, the glyph a combining mark drawn right after it rides on (the start of its cluster),
     /// or the glyph itself. Placement sorts clusters, so a mark keeps its content-stream place after its base (#6517).
     /// A glyph past its end is its own anchor.
@@ -316,6 +399,8 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
         sc.placed.sort_unstable_by(|a, b| by_cluster(glyphs, &sc.anchor, *a, *b));
     } else {
         collide(glyphs, height, s.h, sc);
+        // Only another run can draw over a run's blanks: a single run is left as it is.
+        drop_covered_blanks(glyphs, sc);
     }
     // Each mark goes before the first placed glyph whose x is greater than its own, or its letter's when it is a
     // combining mark riding on one. Marks are visited in that order, and that position never moves back, so one pass
@@ -451,6 +536,99 @@ fn keep_taken_back_blanks(glyphs: &[&TextGlyph], placed: &mut [usize]) {
             }
         }
     }
+}
+
+/// Removes blank glyphs from `sc.placed` that are mostly covered by the ink of other glyphs on the line. A run of blanks
+/// drawn over the digits of an earlier run (a cover headline that overprints a number with spaces) would otherwise sort
+/// between the digits and show as spaces inside the number (#3172). Only other runs' ink counts: a blank its own run's
+/// letters overlap (kerned into a tight word gap) is that run's word break. A blank that stands in a gap is kept. A
+/// forced word break on a removed blank moves to the next glyph of its run that is kept. Each blank costs two binary
+/// searches over the line's ink, and a blank that ink mostly covers then a scan of the glyphs that can reach it.
+fn drop_covered_blanks(glyphs: &[&TextGlyph], sc: &mut Scratch) {
+    let blank = |i: usize| glyphs[i].text.trim().is_empty();
+    if !sc.placed.iter().any(|&i| blank(i)) {
+        return;
+    }
+    let ink = &mut sc.ink;
+    ink.clear();
+    ink.extend(sc.placed.iter().filter(|&&i| !blank(i)).map(|&i| [glyphs[i].rect[0], glyphs[i].rect[2], 0.0]));
+    ink.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    // Merge into disjoint intervals.
+    ink.dedup_by(|cur, prev| {
+        let overlaps = cur[0] <= prev[1];
+        if overlaps {
+            prev[1] = prev[1].max(cur[1]);
+        }
+        overlaps
+    });
+    // `iv[2]` is the ink length of all intervals before this one.
+    let mut total = 0.0;
+    for iv in ink.iter_mut() {
+        iv[2] = total;
+        total += iv[1] - iv[0];
+    }
+    let ink = &sc.ink;
+    let covered = |l: f32, r: f32| {
+        let first = ink.partition_point(|iv| iv[1] <= l);
+        let end = ink.partition_point(|iv| iv[0] < r);
+        let (Some(head), Some(last)) = (ink.get(first), end.checked_sub(1).and_then(|k| ink.get(k))) else { return 0.0 };
+        if end <= first {
+            return 0.0;
+        }
+        let after = ink.get(end).map_or(total, |iv| iv[2]);
+        after - head[2] - (l - head[0]).max(0.0) - (last[1] - r).max(0.0)
+    };
+    // The ink glyphs with their runs, by left edge, and the widest of them: only a glyph starting less than that left
+    // of a blank can reach it.
+    let by_x = &mut sc.ink_runs;
+    by_x.clear();
+    by_x.extend(sc.owner.iter().filter(|&&(i, _)| !blank(i)).map(|&(i, r)| (glyphs[i].rect[0], glyphs[i].rect[2], r)));
+    by_x.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let widest = by_x.iter().map(|g| g.1 - g.0).fold(0.0f32, f32::max);
+    let by_x = &sc.ink_runs;
+    // How much of [l, r] the ink of runs other than `run` covers. The intervals come in order of their left edges.
+    let covered_by_others = |l: f32, r: f32, run: usize| {
+        let (from, to) = (by_x.partition_point(|g| g.0 < l - widest), by_x.partition_point(|g| g.0 < r));
+        let (mut sum, mut reach) = (0.0, l);
+        for &(a, b, _) in by_x.get(from..to).unwrap_or_default().iter().filter(|g| g.2 != run) {
+            let (a, b) = (a.max(reach), b.min(r));
+            if b > a {
+                sum += b - a;
+                reach = b;
+            }
+        }
+        sum
+    };
+    sc.merged.clear();
+    for &(i, run) in &sc.owner {
+        let (l, r) = (glyphs[i].rect[0], glyphs[i].rect[2]);
+        if blank(i) && r - l > 0.0 && covered(l, r) > 0.5 * (r - l) && covered_by_others(l, r, run) > 0.5 * (r - l) {
+            sc.merged.push(i);
+        }
+    }
+    if sc.merged.is_empty() {
+        return;
+    }
+    // `placed` is not sorted by index, so the dropped glyphs are sorted for the lookups.
+    sc.merged.sort_unstable();
+    let dropped = &sc.merged;
+    sc.placed.retain(|i| dropped.binary_search(i).is_err());
+    for b in sc.breaks.iter_mut() {
+        if dropped.binary_search(b).is_err() {
+            continue;
+        }
+        let x0 = |i: usize| glyphs[i].rect[0];
+        let run = sc.text.iter().find(|run| run.range().contains(b));
+        let kept = run.and_then(|run| {
+            let left = run.range().filter(|j| dropped.binary_search(j).is_err());
+            left.min_by(|a, c| x0(*a).total_cmp(&x0(*c)).then(a.cmp(c)))
+        });
+        *b = kept.unwrap_or(NONE);
+    }
+    sc.breaks.retain(|&b| b != NONE);
+    sc.breaks.sort_unstable();
+    sc.breaks.dedup();
+    sc.merged.clear();
 }
 
 /// `place_glyphs` for a segment of two or more text runs. `h` is the segment's line height. Returns whether the segment

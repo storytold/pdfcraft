@@ -3,7 +3,7 @@ use serde_json::json;
 
 #[test]
 fn mixed_text_literal_font_name_edits_keep_neighbour_rendering() {
-    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.covers("Hans")) {
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.has_script("Hans")) {
         return;
     }
     let dir = workdir("mixed-text-literal-font");
@@ -38,7 +38,7 @@ fn mixed_text_literal_font_name_edits_keep_neighbour_rendering() {
 
 #[test]
 fn mixed_text_tools_add_retype_undo_delete_and_save_both_ways() {
-    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.covers("Hans")) {
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.has_script("Hans")) {
         return;
     }
     let dir = workdir("mixed-text-tools");
@@ -81,7 +81,7 @@ fn mixed_text_tools_add_retype_undo_delete_and_save_both_ways() {
 
 #[test]
 fn mixed_text_existing_paragraph_keeps_neighbour_and_reopens() {
-    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.covers("Hans")) {
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.has_script("Hans")) {
         return;
     }
     let dir = workdir("mixed-existing-text");

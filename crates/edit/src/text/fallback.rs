@@ -1,8 +1,8 @@
 use super::HashSet;
-use super::interp::Ts;
+use super::interp::{Shown, Ts};
 use super::lines::page_dict;
 use super::{
-    CraftFont, Dict, Document, EditError, GlyphError, HashMap, Metrics, Object, Op, PdfString, Stream, TextLine, japanese_glyph_from, parse,
+    Dict, Document, EditError, EmbeddedFace, GlyphError, HashMap, Metrics, Object, Op, PdfString, Stream, TextLine, japanese_glyph_from, parse,
 };
 
 /// Text → the runs that show it: each run's font resource name and the bytes shown in that font.
@@ -56,7 +56,7 @@ pub(super) fn is_type3_fallback(font: &Dict) -> bool {
 
 /// The generated font's `/Name` and its resource prefix: the bundled Latin face, Hebrew, or the
 /// Japanese ones.
-fn fallback_names(face: &CraftFont, hebrew: bool) -> (&'static str, &'static str) {
+fn fallback_names(face: &EmbeddedFace, hebrew: bool) -> (&'static str, &'static str) {
     if hebrew {
         (HEBREW_FONT_NAME, "PCHe")
     } else if face.family == "Inter" {
@@ -149,6 +149,23 @@ fn fonts_shown(doc: &Document, page: &Dict, resources: &Dict) -> Option<std::col
     Some(shown)
 }
 
+/// Whether run `s` may continue `line` font-wise: the same font, or both inside the `/PCEdLine`
+/// sequence of a replacement that set the words its font can't show in a substitute (#2378),
+/// which reads back as the one line it replaced, so the next edit replaces all of it.
+pub(super) fn continues_font(line: &TextLine, s: &Shown) -> bool {
+    same_font(line, &s.font, &s.base_font, s.face.as_deref()) || (s.edited.is_some() && line.edited == s.edited)
+}
+
+/// A line that began with a substitute run takes the source font of a later run, so the next
+/// replacement starts from the line's own font again.
+pub(super) fn adopt_source_font(line: &mut TextLine, s: &Shown) {
+    if line.edited.is_some() && line.font.starts_with("PCEd") && !s.font.starts_with(b"PCEd") {
+        line.font = String::from_utf8_lossy(&s.font).into_owned();
+        line.base_font = s.base_font.clone();
+        line.face = s.face.clone();
+    }
+}
+
 /// Whether a run shown in `font` (a resource name), with `/BaseFont` `base_font` and the Japanese
 /// or Hebrew fallback face it subsets, if any, continues `line`: the same font resource, another
 /// resource for the same font (a writer may split one font into several subsets, #3661), or
@@ -232,7 +249,7 @@ fn pdf_num(v: f64) -> String {
     if v.fract() == 0.0 { format!("{v:.0}") } else { format!("{v:.4}").trim_end_matches('0').trim_end_matches('.').to_string() }
 }
 
-fn type3_path(face: &CraftFont, ch: char) -> Result<(Vec<u8>, f64), EditError> {
+fn type3_path(face: &EmbeddedFace, ch: char) -> Result<(Vec<u8>, f64), EditError> {
     let glyph = japanese_glyph_from(face, ch).map_err(|e| match e {
         GlyphError::NoFont => no_japanese_font(),
         GlyphError::Missing => EditError::Invalid(format!("the {} fallback font has no glyph for U+{:04X}", face.family, ch as u32)),
@@ -288,7 +305,7 @@ fn unicode_hex(ch: char) -> String {
 
 /// The same outline for a face that may simply lack the glyph: `None` then, so the caller can try
 /// the next face (and report the character once none of them has it).
-pub(crate) fn type3_glyph(face: &CraftFont, ch: char) -> Result<Option<(Vec<u8>, f64)>, EditError> {
+pub(crate) fn type3_glyph(face: &EmbeddedFace, ch: char) -> Result<Option<(Vec<u8>, f64)>, EditError> {
     match japanese_glyph_from(face, ch) {
         Err(GlyphError::Missing) => Ok(None),
         _ => type3_path(face, ch).map(Some),
@@ -319,7 +336,7 @@ fn needs_japanese(ch: char) -> bool {
 /// The chosen face has no outline for `ch`, and neither has any other: say which character it is and
 /// what the writer can do about it. A CJK character without a Japanese face in the build is about
 /// that build input, which is the one answer that changes it.
-pub(crate) fn no_glyph_for(face: &CraftFont, ch: char) -> EditError {
+pub(crate) fn no_glyph_for(face: &EmbeddedFace, ch: char) -> EditError {
     if needs_japanese(ch) && pdfcraft_fonts::document_japanese_font().is_none() {
         return no_japanese_font();
     }
@@ -342,7 +359,11 @@ pub(super) fn no_japanese_font() -> EditError {
 }
 
 /// The first of `faces` (best match first) that has a glyph for every one of `chars`, else the first.
-pub(crate) fn fallback_face<'a>(faces: &[&'a CraftFont], chars: &[char], has_glyph: impl Fn(&CraftFont, char) -> bool) -> Option<&'a CraftFont> {
+pub(crate) fn fallback_face<'a>(
+    faces: &[&'a EmbeddedFace],
+    chars: &[char],
+    has_glyph: impl Fn(&EmbeddedFace, char) -> bool,
+) -> Option<&'a EmbeddedFace> {
     faces.iter().copied().find(|face| chars.iter().all(|ch| has_glyph(face, *ch))).or_else(|| faces.first().copied())
 }
 
@@ -361,10 +382,10 @@ fn no_hebrew_font() -> EditError {
 /// the Japanese faces. Other text takes the Japanese faces, and the
 /// bundled Latin face behind them, which covers the Latin, Greek and Cyrillic letters they lack
 /// (#2593: the Japanese faces have no қ, ғ, ҳ, ә, ө, ү, ұ or һ).
-pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) -> Result<(Vec<&'static CraftFont>, bool), EditError> {
+pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) -> Result<(Vec<&'static EmbeddedFace>, bool), EditError> {
     let japanese = pdfcraft_fonts::document_japanese_fonts_for_style(family == crate::added::Family::Times, bold);
     let cjk = text.chars().any(needs_japanese);
-    let chinese = pdfcraft_fonts::CRAFT_FONTS.iter().filter(|face| cjk && face.covers("Hans"));
+    let chinese = pdfcraft_fonts::CRAFT_FONTS.iter().filter(|face| cjk && face.has_script("Hans"));
     let latin = pdfcraft_fonts::document_latin_fonts(bold);
     if !text.chars().any(crate::bidi::is_hebrew) {
         return Ok((japanese.into_iter().chain(chinese).chain(latin).collect(), false));
@@ -409,7 +430,7 @@ pub(super) fn type3_font(
     }
     let face = if hebrew { faces.first().copied() } else { fallback_face(&faces, &named, |face, ch| japanese_glyph_from(face, ch).is_ok()) }
         .ok_or_else(|| no_fallback_font(text))?;
-    let others: &[&CraftFont] = if hebrew { faces.get(1..).unwrap_or_default() } else { &[] };
+    let others: &[&EmbeddedFace] = if hebrew { faces.get(1..).unwrap_or_default() } else { &[] };
     // Every outline is read before the document is touched, so a character that fails leaves it
     // as it was. Each font takes the next `per_font` characters; codes restart at 1 in each.
     let per_font = max_glyphs.clamp(1, MAX_TYPE3_GLYPHS);
@@ -442,7 +463,7 @@ pub(super) fn type3_font(
 pub(crate) fn write_type3_glyphs(
     doc: &mut Document,
     fonts_res: &mut Dict,
-    face: &CraftFont,
+    face: &EmbeddedFace,
     hebrew: bool,
     glyphs: Vec<Type3Glyph>,
     per_font: usize,
@@ -469,7 +490,7 @@ pub(crate) fn write_type3_glyphs(
 /// Adds one generated font whose codes 1 to `glyphs.len()` show `glyphs`, and returns its resource
 /// name (`PCLat`, `PCJp`, then `PCJp1`, ...; `PCHe`, ... for Hebrew text). Nothing here can fail: the
 /// outlines were read already.
-pub(super) fn add_type3_font(doc: &mut Document, fonts_res: &mut Dict, face: &CraftFont, hebrew: bool, glyphs: Vec<Type3Glyph>) -> String {
+pub(super) fn add_type3_font(doc: &mut Document, fonts_res: &mut Dict, face: &EmbeddedFace, hebrew: bool, glyphs: Vec<Type3Glyph>) -> String {
     let last_char = glyphs.len();
     let mut charprocs = Dict::new();
     let mut widths = Vec::with_capacity(last_char);
@@ -727,6 +748,7 @@ thread_local! {
 }
 
 #[cfg(test)]
+/// Returns the number of source-character measurements on this thread and resets the counter.
 pub(crate) fn take_source_character_measurements() -> usize {
     SOURCE_CHARACTER_MEASUREMENTS.with(|count| count.replace(0))
 }
@@ -766,6 +788,30 @@ pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, 
         out.push(Op::new("EMC", Vec::new()));
     }
     Ok(out)
+}
+
+/// `text` split into runs of words `metrics` can show (`true`) and words it can't (`false`), in
+/// order. A word is shown in one font, so a word with any character the font lacks goes to the
+/// substitute whole rather than switching fonts letter by letter. Spaces join the run they are
+/// in, since [`source_show`] draws spaces the font lacks with a displacement.
+pub(super) fn source_runs(metrics: &Metrics, text: &str) -> Vec<(bool, String)> {
+    let mut runs: Vec<(bool, String)> = Vec::new();
+    // Spaces before the first word go with it: on their own they would make a run of the line's
+    // font with nothing to show (review on #2955).
+    let mut lead = String::new();
+    for (i, word) in text.split(' ').enumerate() {
+        let piece = if i == 0 { word.to_string() } else { format!(" {word}") };
+        if runs.is_empty() && word.is_empty() {
+            lead.push_str(&piece);
+            continue;
+        }
+        let own = word.is_empty() || metrics.encode(word).is_some();
+        match runs.last_mut() {
+            Some((last, run)) if *last == own || word.is_empty() => run.push_str(&piece),
+            _ => runs.push((own, std::mem::take(&mut lead) + &piece)),
+        }
+    }
+    runs
 }
 
 #[cfg(test)]

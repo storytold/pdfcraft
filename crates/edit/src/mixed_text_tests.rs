@@ -5,7 +5,7 @@ use crate::text;
 const MIXED: &str = "Agpq 中文 简体汉字 联络 编辑 保存 重开 123";
 
 fn has_hans() -> bool {
-    pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.covers("Hans"))
+    pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.has_script("Hans"))
 }
 
 #[test]

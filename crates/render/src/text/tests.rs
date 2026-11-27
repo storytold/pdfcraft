@@ -1327,6 +1327,85 @@ fn limited_search_stops_after_the_requested_matches() {
     assert_eq!(text.find_opts_limited("o", false, false, 10), vec![0..1, 1..2, 2..3, 3..4]);
 }
 
+fn tall(t: &str, x0: f32, y0: f32, x1: f32, h: f32) -> TextGlyph {
+    let rect = [x0, y0, x1, y0 + h];
+    TextGlyph { text: t.into(), rect, quad: [[x0, y0], [x1, y0], [x1, rect[3]], [x0, rect[3]]], direction: [1.0, 0.0] }
+}
+
+/// #3172: blanks drawn over big digits must not show inside the number, and the word gap next to big digits follows
+/// the glyphs it lies between.
+#[test]
+fn blanks_under_a_number_and_a_word_gap_next_to_big_digits() {
+    // Big dark digits, then a smaller sentence drawn over them with blanks where the digits sit.
+    let mut v = Vec::new();
+    for (t, x) in [("5", 0.0), ("0", 6.0), ("1", 100.0), ("4", 106.0)] {
+        v.push(tall(t, x, 3.0, x + 6.0, 34.0));
+    }
+    for (t, x) in [("F", 16.5), ("R", 22.5), (" ", 100.0), (" ", 106.0), ("C", 130.0), ("D", 136.0)] {
+        v.push(tall(t, x, 6.0, x + 6.0, 28.0));
+    }
+    assert_eq!(layout(v).plain_text(), "50 FR 14 CD");
+}
+
+/// #3172: a word break on the covered blank that opens an overprinted run moves to the run's next glyph.
+#[test]
+fn a_covered_leading_blank_keeps_the_word_break_of_its_run() {
+    let v = vec![
+        g("1", 0.0, 10.0, 6.0),
+        // " X" drawn over the "1": the blank is covered, and "X" sits right behind it.
+        g(" ", 0.0, 10.0, 6.0),
+        g("X", 6.0, 10.0, 12.0),
+    ];
+    assert_eq!(layout(v).plain_text(), "1 X");
+}
+
+/// #3172: a superscript keeps the line's word-gap threshold, not its own smaller height's, so a small gap before it is
+/// no word break.
+#[test]
+fn a_superscript_close_to_its_host_takes_no_space() {
+    let v = vec![g("a", 0.0, 10.0, 6.0), g("x", 6.0, 10.0, 12.0), tall("2", 13.2, 7.0, 16.8, 6.0)];
+    assert_eq!(layout(v).plain_text(), "ax2");
+}
+
+/// #3172: a combining mark is measured by its cluster's base. Its own small box would shrink the word-gap threshold
+/// next to it, so a close letter after "á" read as a new word (noted in review).
+#[test]
+fn a_letter_close_after_a_combining_mark_takes_no_space() {
+    let v = vec![
+        g("x", 0.0, 10.0, 6.0),
+        g("a", 6.0, 10.0, 12.0),
+        tall("\u{301}", 10.0, 19.0, 12.0, 1.0),
+        g("b", 13.0, 10.0, 19.0),
+        g("y", 19.0, 10.0, 25.0),
+    ];
+    assert_eq!(layout(v).plain_text(), "xa\u{301}by");
+}
+
+/// #3172: a superscript too small for the sub- and superscript test (under half its host's height) still keeps the
+/// line's word-gap threshold next to its host: its height says no more about that gap (noted in review).
+#[test]
+fn a_tiny_superscript_close_to_its_host_takes_no_space() {
+    let v = vec![g("a", 0.0, 10.0, 6.0), g("b", 6.0, 10.0, 12.0), tall("2", 13.0, 9.5, 15.4, 4.0)];
+    assert_eq!(layout(v).plain_text(), "ab2");
+}
+
+/// #3172: only another run's ink drops a blank. A space its own run's letter is kerned over is still that run's word
+/// break, even on a line where another run overprints elsewhere.
+#[test]
+fn a_blank_its_own_letters_overlap_stays_a_word_break() {
+    let v = vec![
+        // "A B" with the space pulled back under the "A", and the "B" kerned close: the space is the only word break.
+        g("A", 0.0, 10.0, 6.0),
+        g(" ", 2.0, 10.0, 8.0),
+        g("B", 6.5, 10.0, 12.5),
+        // A word far right, then a run drawn back over the "B", so the line's runs collide.
+        g("Q", 200.0, 10.0, 206.0),
+        g("1", 7.5, 10.0, 13.5),
+    ];
+    let text = layout(v).plain_text();
+    assert!(text.starts_with("A B"), "{text:?}");
+}
+
 fn word(v: &mut Vec<TextGlyph>, s: &str, x: f32, y: f32, advance: f32) {
     for (i, c) in s.chars().enumerate() {
         let x0 = x + i as f32 * advance;
@@ -1346,6 +1425,122 @@ fn fake_bold_duplicates_are_removed() {
     // A zero-width combining mark redrawn on itself is dropped too.
     let v = vec![g("e", 10.0, 10.0, 16.0), g("\u{301}", 13.0, 10.0, 13.0), g("e", 10.0, 10.0, 16.0), g("\u{301}", 13.0, 10.0, 13.0)];
     assert_eq!(layout(v).plain_text(), "e\u{301}");
+}
+
+/// Text drawn once per column clip: "WO" and the `edge` glyphs, lots of other text, then the `second_pass`.
+fn column_passes(edge: &[TextGlyph], second_pass: &[TextGlyph]) -> String {
+    let mut v = Vec::new();
+    word(&mut v, "WO", 10.0, 10.0, 6.0);
+    v.extend_from_slice(edge);
+    for k in 0..50 {
+        word(&mut v, "xx", 100.0, 40.0 + 14.0 * k as f32, 6.0);
+    }
+    v.extend_from_slice(second_pass);
+    layout(v).plain_text()
+}
+
+/// #3173: a page drawn once per column clip draws a glyph on the clip edge in both passes, far apart in drawing order.
+#[test]
+fn a_glyph_redrawn_by_the_other_column_pass_is_dropped() {
+    let mut v = Vec::new();
+    word(&mut v, "WO", 10.0, 10.0, 6.0);
+    v.push(g("R", 22.0, 10.0, 28.0));
+    word(&mut v, "illu", 10.0, 30.0, 6.0);
+    v.push(g("s", 34.0, 30.0, 40.0));
+    // The other pass: lots of other text, then the same glyphs at (almost) the same place and the rest of each word.
+    for k in 0..50 {
+        word(&mut v, "xx", 100.0, 40.0 + 14.0 * k as f32, 6.0);
+    }
+    v.push(g("R", 22.0, 10.0, 28.0));
+    word(&mut v, "LD", 28.0, 10.0, 6.0);
+    v.push(g("s", 33.99, 30.0, 39.99));
+    word(&mut v, "trated", 40.0, 30.0, 6.0);
+    let text = layout(v).plain_text();
+    assert!(text.lines().any(|l| l == "WORLD"), "{text}");
+    assert!(text.lines().any(|l| l == "illustrated"), "{text}");
+}
+
+/// #3173: the second pass draws the glyph a little taller, so its grid cell must still be the one of the first copy.
+#[test]
+fn a_redrawn_glyph_of_slightly_different_height_is_dropped() {
+    // Far from the page origin, a grid cell sized by each glyph's own height would put the two copies three cells apart.
+    let mut v = Vec::new();
+    word(&mut v, "WO", 150.0, 150.0, 6.0);
+    v.push(em_box("R", 162.0, 150.0, 168.0, 160.0));
+    for k in 0..50 {
+        word(&mut v, "xx", 300.0, 200.0 + 14.0 * k as f32, 6.0);
+    }
+    v.push(em_box("R", 162.0, 150.0, 168.0, 160.3));
+    word(&mut v, "LD", 168.0, 150.0, 6.0);
+    let text = layout(v).plain_text();
+    assert!(text.lines().any(|l| l == "WORLD"), "{text}");
+}
+
+/// #3173: a fake-bold copy after the last glyph of a pass does not hide that the glyph ends its run.
+#[test]
+fn a_fake_bold_copy_at_the_end_of_a_pass_does_not_hide_the_run_end() {
+    let mut second = vec![g("R", 22.0, 10.0, 28.0)];
+    word(&mut second, "LD", 28.0, 10.0, 6.0);
+    let text = column_passes(&[g("R", 22.0, 10.0, 28.0), g("R", 22.1, 10.0, 28.1)], &second);
+    assert!(text.lines().any(|l| l == "WORLD"), "{text}");
+}
+
+/// A glyph redrawn five or more times in a row at its own place prints once: the copies past the
+/// four-glyph window still match the kept glyph they follow.
+#[test]
+fn many_copies_of_a_glyph_in_a_row_print_once() {
+    let mut v = Vec::new();
+    word(&mut v, "WOR", 10.0, 10.0, 6.0);
+    for _ in 0..7 {
+        v.push(g("L", 28.0, 10.0, 34.0));
+    }
+    v.push(g("D", 34.0, 10.0, 40.0));
+    assert_eq!(layout(v).plain_text(), "WORLD");
+}
+
+/// #3173: the far redraw check reaches as far as a redraw may sit vertically, for a tall, narrow
+/// glyph whose horizontal tolerance is much smaller than its vertical one.
+#[test]
+fn a_tall_narrow_glyph_redrawn_a_little_higher_is_dropped() {
+    let mut v = vec![em_box("|", 10.0, 100.0, 11.0, 140.0)];
+    for k in 0..50 {
+        word(&mut v, "xx", 100.0, 200.0 + 14.0 * k as f32, 6.0);
+    }
+    v.push(em_box("|", 10.0, 107.0, 11.0, 147.0));
+    let text = layout(v).plain_text();
+    assert_eq!(text.matches('|').count(), 1, "{text}");
+}
+
+/// #3173: a glyph followed by its superscript is inside a run, so a later run starting at its place is not its redraw.
+#[test]
+fn a_glyph_followed_by_its_superscript_is_not_a_run_end() {
+    let mut v = vec![em_box("H", 10.0, 10.0, 16.0, 20.0), em_box("2", 16.0, 16.0, 19.0, 22.0)];
+    for k in 0..50 {
+        word(&mut v, "xx", 100.0, 40.0 + 14.0 * k as f32, 6.0);
+    }
+    v.push(em_box("H", 10.0, 10.0, 16.0, 20.0));
+    v.push(em_box("O", 16.0, 10.0, 22.0, 20.0));
+    let text = layout(v).plain_text();
+    assert_eq!(text.matches('H').count(), 2, "{text}");
+}
+
+/// #3173: a glyph kept in a cell does not hide the earlier glyph there that the redraw matches.
+#[test]
+fn a_redraw_is_matched_against_earlier_glyphs_of_the_same_cell() {
+    // A narrow "l" at 10 ends its line, a second one 0.8 pt to the right (more than a half of its width) is its own letter,
+    // and the last one, more than 4 glyphs later, redraws the first.
+    let v = vec![
+        g("l", 10.0, 10.0, 11.0),
+        g("Z", 200.0, 100.0, 206.0),
+        g("l", 10.8, 10.0, 11.8),
+        g("Y", 300.0, 200.0, 306.0),
+        g("Z", 300.0, 300.0, 306.0),
+        g("Y", 300.0, 400.0, 306.0),
+        g("Z", 300.0, 500.0, 306.0),
+        g("l", 10.0, 10.0, 11.0),
+    ];
+    let text = layout(v).plain_text();
+    assert_eq!(text.matches('l').count(), 2, "{text}");
 }
 
 /// #1467: condensed text (80 Tz and below, OCR layers fitted to the scan) sets narrow letters
@@ -2687,6 +2882,414 @@ fn a_column_selection_across_columns_reads_row_by_row() {
     assert_eq!(t.glyph_rects(&part), vec![[10.0, 24.0, 34.0, 34.0]]);
 }
 
+/// A drag along one row of a table that reads column by column selects that row, not the
+/// rest of the first column and the top of the second.
+#[test]
+fn a_drag_along_one_table_row_selects_that_row() {
+    let t = table();
+    let (apple, two) = (4, 17);
+    assert_eq!(t.text_of(apple..two + 1), "Apple\nPear\nQty\n12", "reading order detours through the columns");
+    for (anchor, head) in [(apple, two), (two, apple)] {
+        let row = t.visual_between(anchor, head, None).expect("one row");
+        assert_eq!(t.column_text(&row), "Apple\t12");
+        assert_eq!(t.glyph_rects(&row).len(), 2, "one highlight per cell");
+    }
+    // Part of a row: from inside "Apple" to the "1" of "12".
+    let part = t.visual_between(6, 16, None).expect("one row");
+    assert_eq!(t.column_text(&part), "ple\t1");
+}
+
+/// A drag over several rows of that table selects by rows too: the rest of the top row from
+/// where it started, then the bottom row up to where it ends.
+#[test]
+fn a_drag_over_table_rows_selects_those_rows() {
+    let t = table();
+    let (name, two) = (0, 17);
+    assert_eq!(t.text_of(name..two + 1), "Name\nApple\nPear\nQty\n12", "reading order takes \"Pear\" from the row below");
+    for (anchor, head) in [(name, two), (two, name)] {
+        let rows = t.visual_between(anchor, head, None).expect("rows");
+        assert_eq!(t.column_text(&rows), "Name\tQty\nApple\t12");
+    }
+    // From inside "Name" ("me") to the "1" of "12": the start of the top row and the end of
+    // the bottom one are left out.
+    let rows = t.visual_between(2, 16, None).expect("rows");
+    assert_eq!(t.column_text(&rows), "me\tQty\nApple\t1");
+    // Over three rows, ending in the other column: the middle row comes whole, though reading
+    // order (down the first column, then the second) would cover the same glyphs.
+    let rows = t.visual_between(1, 18, None).expect("rows");
+    assert_eq!(t.column_text(&rows), "ame\tQty\nApple\t12\nPear\t7");
+    // Down the second column only, reading order stays.
+    assert_eq!(t.visual_between(13, 18, None), None, "from \"Qty\" down to \"7\"");
+}
+
+/// A drag down the first column whose pointer ends out to the right, past the text of its
+/// last row, crosses the columns: the rows. With the pointer over the column, reading order.
+#[test]
+fn a_pointer_ending_beside_the_column_takes_the_rows() {
+    let t = table();
+    let pear = 9;
+    assert_eq!(t.visual_between(0, pear, Some(20.0)), None, "over the first column");
+    let rows = t.visual_between(0, pear, Some(150.0)).expect("rows");
+    assert_eq!(t.column_text(&rows), "Name\tQty\nApple\t12\nP");
+    // Running text: the rows are reading order's own glyphs, so reading order stays.
+    let mut v = Vec::new();
+    word(&mut v, "Heading", 10.0, 10.0, 6.0);
+    word(&mut v, "A longer line of text", 10.0, 22.0, 6.0);
+    let t = layout(v);
+    assert_eq!(t.visual_between(0, 20, Some(200.0)), None);
+}
+
+/// Side-by-side columns (a bilingual contract): a drag in the right column that ends on a list
+/// marker hanging left of its text, past a gap like a gutter, still takes nothing from the left
+/// column, where it never went.
+#[test]
+fn a_drag_in_the_right_column_takes_nothing_from_the_left() {
+    let mut v = Vec::new();
+    for (row, (left, right)) in [("Uno dos", "One two"), ("Tres cuatro", "Three four"), ("Cinco seis", "Five six")].into_iter().enumerate() {
+        let y = 10.0 + row as f32 * 12.0;
+        word(&mut v, left, 10.0, y, 6.0);
+        word(&mut v, right, 230.0, y, 6.0);
+    }
+    word(&mut v, "II.", 200.0, 46.0, 6.0);
+    word(&mut v, "Seven", 230.0, 46.0, 6.0);
+    let t = layout(v);
+    let one = (0..t.glyphs.len()).find(|&i| t.glyphs[i].rect[0] == 230.0 && t.glyphs[i].rect[1] == 10.0).expect("\"One\"");
+    let marker = (0..t.glyphs.len()).find(|&i| t.glyphs[i].rect[0] == 200.0).expect("\"II.\"");
+    let selected = t.visual_between(one, marker, Some(203.0)).unwrap_or_else(|| (one.min(marker)..=one.max(marker)).collect());
+    assert!(selected.iter().all(|&i| t.glyphs[i].rect[0] >= 200.0), "{:?}", t.column_text(&selected));
+}
+
+/// A justified line leaves a gap between two words wider than a column gutter, which no other
+/// row of a short drag may cross; but it parts only that line, where a gutter parts the rows.
+#[test]
+fn a_justified_gap_is_not_a_gutter() {
+    let mut v = Vec::new();
+    for row in 0..8 {
+        word(&mut v, "Some words of a line", 10.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    // Row 8: "Wide" then, 60 units on, "gap".
+    word(&mut v, "Wide", 10.0, 106.0, 6.0);
+    word(&mut v, "gap", 94.0, 106.0, 6.0);
+    let t = layout(v);
+    assert!(!t.gutter_between(20.0, 100.0, 106.0 - 40.0, 116.0 + 40.0, 10.0), "the rows above cross it");
+    assert!(!t.gutter_between(20.0, 100.0, 106.0, 116.0, 10.0), "on its own row it parts one line only");
+    assert!(!t.gutter_between(20.0, 200.0, 0.0, 200.0, 10.0), "past the text's right edge nothing is parted");
+    // A table's columns part every row.
+    assert!(table().gutter_between(20.0, 100.0, 0.0, 60.0, 10.0));
+}
+
+/// A heading across the page just above a table crosses the table's gutter, but a drag over
+/// the table from its first cell to its last still takes the rows.
+#[test]
+fn a_heading_above_a_table_does_not_hide_its_gutter() {
+    let mut v = Vec::new();
+    word(&mut v, "A heading wider than the whole table", 10.0, -6.0, 6.0);
+    for (row, (name, qty)) in [("Name", "Qty"), ("Apple", "12"), ("Pear", "7")].into_iter().enumerate() {
+        let y = 10.0 + row as f32 * 14.0;
+        word(&mut v, name, 10.0, y, 6.0);
+        word(&mut v, qty, 100.0, y, 6.0);
+    }
+    let t = layout(v);
+    let first = (0..t.glyphs.len()).find(|&i| t.glyphs[i].text == "N").expect("\"Name\"");
+    let last = (0..t.glyphs.len()).find(|&i| t.glyphs[i].text == "7").expect("\"7\"");
+    let x = (t.glyphs[last].rect[0] + t.glyphs[last].rect[2]) / 2.0;
+    let rows = t.visual_between(first, last, Some(x)).expect("rows");
+    assert_eq!(t.column_text(&rows), "Name\tQty\nApple\t12\nPear\t7");
+}
+
+/// Two columns of running text: one paragraph fills the left column and runs on at the top of
+/// the right. A drag from its start to its end, or along the first row from one column into
+/// the other, keeps reading order (the left column, then the right) instead of interleaving
+/// the columns by rows.
+#[test]
+fn a_drag_across_columns_of_running_text_keeps_reading_order() {
+    let mut v = Vec::new();
+    let left =
+        ["One paragraph starts at the top", "of the left column and runs down", "for a few ordinary lines of text", "until the column ends and then"];
+    let right = ["it carries on at the top of the", "right column where the reader", "expects it to continue."];
+    for (row, s) in left.into_iter().enumerate() {
+        word(&mut v, s, 10.0, 10.0 + row as f32 * 14.0, 6.0);
+    }
+    for (row, s) in right.into_iter().enumerate() {
+        word(&mut v, s, 240.0, 10.0 + row as f32 * 14.0, 6.0);
+    }
+    let t = layout(v);
+    let last = t.glyphs.len() - 1;
+    let at = |i: usize| Some((t.glyphs[i].rect[0] + t.glyphs[i].rect[2]) / 2.0);
+    assert_eq!(t.visual_between(0, last, at(last)), None, "to the end of the paragraph");
+    let right_start = (0..t.glyphs.len()).find(|&i| t.glyphs[i].rect[0] == 240.0 && t.glyphs[i].rect[1] == 10.0).expect("\"it\"");
+    assert_eq!(t.visual_between(0, right_start + 1, at(right_start + 1)), None, "along the first row");
+}
+
+/// A column of running text beside a short sidebar (not a table: most of its rows have nothing
+/// beside them): a drag from the bottom of the text up to the top of the sidebar keeps reading
+/// order, the text to its end and then the sidebar's first line, not every row between.
+#[test]
+fn a_sidebar_beside_running_text_is_not_a_table() {
+    let mut v = Vec::new();
+    for row in 0..10 {
+        word(&mut v, "Some running text of a longer line", 10.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    for (row, s) in ["Dates", "3 May: fair", "4 May: open day"].into_iter().enumerate() {
+        word(&mut v, s, 260.0, 10.0 + row as f32 * 20.0, 6.0);
+    }
+    let t = layout(v);
+    let last_line_start =
+        (0..t.glyphs.len()).find(|&i| t.glyphs[i].rect[0] == 10.0 && t.glyphs[i].rect[1] == 10.0 + 9.0 * 12.0).expect("last line start");
+    let dates = (0..t.glyphs.len()).find(|&i| t.glyphs[i].rect[0] == 260.0 && t.glyphs[i].rect[1] == 10.0).expect("\"Dates\"");
+    let x = Some((t.glyphs[dates].rect[0] + t.glyphs[dates].rect[2]) / 2.0);
+    assert_eq!(t.visual_between(last_line_start, dates + 3, x), None, "from the last prose line up to the sidebar");
+    assert_eq!(t.visual_between(dates + 3, last_line_start, x), None, "and back");
+}
+
+/// Short terms beside their definitions (a description list) are not running text: a drag
+/// across them takes the rows.
+#[test]
+fn terms_beside_definitions_still_take_the_rows() {
+    let mut v = Vec::new();
+    for (row, (term, def)) in
+        [("PDF/UA", "PDF for accessibility"), ("PDF/A", "PDF for long-term preservation"), ("PDF/E", "PDF for engineering workflows")]
+            .into_iter()
+            .enumerate()
+    {
+        let y = 10.0 + row as f32 * 14.0;
+        word(&mut v, term, 10.0, y, 6.0);
+        word(&mut v, def, 100.0, y, 6.0);
+    }
+    let t = layout(v);
+    let first = 0;
+    let eng = t.find("engineering").into_iter().next().expect("\"engineering\"").start;
+    let x = Some((t.glyphs[eng].rect[0] + t.glyphs[eng].rect[2]) / 2.0);
+    let rows = t.visual_between(first, eng, x).expect("rows");
+    assert_eq!(t.column_text(&rows), "PDF/UA\tPDF for accessibility\nPDF/A\tPDF for long-term preservation\nPDF/E\tPDF for e");
+}
+
+/// Reading order stays the answer on one line, down one column, and where it doesn't leave
+/// the rows the drag covers.
+#[test]
+fn a_drag_that_reading_order_already_covers_keeps_it() {
+    let t = table();
+    assert_eq!(t.visual_between(4, 8, None), None, "within \"Apple\"");
+    assert_eq!(t.visual_between(0, 10, None), None, "down the first column, from \"Name\" into \"Pear\"");
+    assert_eq!(t.visual_between(4, usize::MAX, None), None, "past the text");
+    // One row of two cells reads as one line, so reading order stays on the row.
+    let mut v = Vec::new();
+    word(&mut v, "Left", 10.0, 10.0, 6.0);
+    word(&mut v, "Right", 100.0, 10.0, 6.0);
+    let t = layout(v);
+    assert_eq!(t.plain_text(), "Left Right");
+    assert_eq!(t.visual_between(0, 8, None), None);
+}
+
+/// A report generator pads each cell of a row with spaces. A cell whose padding stops short of
+/// the next cell (here 62 units, its last letter further from the next cell than a line reaches)
+/// still reads as one row with it, instead of the next cell coming after the whole table.
+#[test]
+fn a_cell_padded_with_spaces_joins_the_next_cell_of_its_row() {
+    let line_of_cells = |cell: &str, next_x: f32| {
+        let mut v = Vec::new();
+        word(&mut v, cell, 10.0, 10.0, 6.0);
+        word(&mut v, "9.00", next_x, 10.0, 6.0);
+        let t = layout(v);
+        let last = t.glyphs.len() - 1;
+        t.line_of[0] == t.line_of[last]
+    };
+    assert!(line_of_cells("Item    ", 120.0), "padded to x 58, the amount 62 further on");
+    assert!(!line_of_cells("Item", 120.0), "unpadded, the gap is a column gap");
+    assert!(!line_of_cells("Item    ", 160.0), "padded, but the next cell is too far");
+}
+
+/// Past the end of a short row, the pointer stays on that row: a longer row just below,
+/// nearer by the old distance, used to take the drag's end into it.
+#[test]
+fn a_point_level_with_a_row_takes_that_rows_nearest_glyph() {
+    let mut v = Vec::new();
+    word(&mut v, "Short", 10.0, 10.0, 6.0);
+    word(&mut v, "A much longer row", 10.0, 22.0, 6.0);
+    let t = layout(v);
+    // Level with "Short" (y 10..20, ending at x 40), 60 past it, above the long row.
+    assert_eq!(t.nearest(100.0, 15.0), Some(4), "the \"t\" of \"Short\"");
+    // In the gap between the rows the nearer glyph still wins.
+    let below = t.nearest(100.0, 21.5).and_then(|i| t.line_of.get(i).copied());
+    assert_eq!(below, Some(1), "just above the long row, nearer to it than to the short one");
+    assert_eq!(PageText::default().nearest(0.0, 0.0), None);
+    assert!(t.nearest(f32::NAN, 15.0).is_some(), "a NaN point still answers, never panics");
+}
+
+/// Two columns whose baselines don't line up: a point in the leading between two right-hand
+/// lines, level with a left-hand line far away, takes the right-hand line next to it.
+#[test]
+fn a_point_between_lines_is_not_taken_by_a_far_line_level_with_it() {
+    let mut v = Vec::new();
+    for row in 0..3 {
+        word(&mut v, "Left text", 10.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    for row in 0..2 {
+        word(&mut v, "Right text", 200.0, 16.0 + row as f32 * 12.0, 6.0);
+    }
+    let t = layout(v);
+    // y 27: between the right lines (16..26 and 28..38), within the left line at 22..32.
+    let i = t.nearest(205.0, 27.0).expect("a glyph");
+    assert!(t.glyphs[i].rect[0] >= 200.0, "took {:?} at {:?}", t.glyphs[i].text, t.glyphs[i].rect);
+}
+
+/// The mirror image: a point in the gutter just right of the left column, between two of its
+/// lines and level with a right-hand line, takes the left-hand line beside it.
+#[test]
+fn a_point_in_the_gutter_is_not_taken_by_the_far_column_level_with_it() {
+    let mut v = Vec::new();
+    for row in 0..3 {
+        word(&mut v, "Left text", 10.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    for row in 0..2 {
+        word(&mut v, "Right text", 200.0, 16.0 + row as f32 * 12.0, 6.0);
+    }
+    let t = layout(v);
+    // y 21: between the left lines (10..20 and 22..32), within the right line at 16..26.
+    let i = t.nearest(70.0, 21.0).expect("a glyph");
+    assert!(t.glyphs[i].rect[2] <= 64.0, "took {:?} at {:?}", t.glyphs[i].text, t.glyphs[i].rect);
+}
+
+/// The same, with the left line level with the point the longest of its column (ragged right):
+/// the column's shorter lines still mark the gutter.
+#[test]
+fn a_long_level_line_does_not_hide_the_gutter_from_its_column() {
+    let mut v = Vec::new();
+    for (row, s) in ["Left text", "Left text longer", "Left text"].into_iter().enumerate() {
+        word(&mut v, s, 10.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    for row in 0..2 {
+        word(&mut v, "Right text", 200.0, 16.0 + row as f32 * 12.0, 6.0);
+    }
+    let t = layout(v);
+    let i = t.nearest(205.0, 27.0).expect("a glyph");
+    assert!(t.glyphs[i].rect[0] >= 200.0, "took {:?} at {:?}", t.glyphs[i].text, t.glyphs[i].rect);
+}
+
+/// An invoice's seal beside its QR code, the code drawn with a barcode font: eight flush rows of
+/// twelve 4 × 6 pt glyphs, and five 8 pt lines of text 5 pt to their right, every other one on a
+/// code row's baseline.
+fn barcode_beside_text() -> PageText {
+    const SEAL: [&str; 5] = ["one two three", "four five six", "seven eight", "nine ten", "eleven twelve"];
+    let mut v = Vec::new();
+    for row in 0..8 {
+        let y = 100.0 + row as f32 * 6.0;
+        for k in 0..12 {
+            let c = char::from(b'A' + ((row * 5 + k) % 26) as u8);
+            let x = 10.0 + k as f32 * 4.0;
+            v.push(em_box(&c.to_string(), x, y, x + 4.0, y + 6.0));
+        }
+    }
+    for (line, text) in SEAL.into_iter().enumerate() {
+        let y = 100.0 + line as f32 * 9.0;
+        for (k, c) in text.chars().enumerate() {
+            let x = 63.0 + k as f32 * 4.8;
+            v.push(em_box(&c.to_string(), x, y, x + 4.8, y + 8.0));
+        }
+    }
+    layout(v)
+}
+
+/// The seal's lines read on together, not each joined to the code row beside it, and the code
+/// reads after all the text.
+#[test]
+fn a_barcode_drawn_with_a_font_reads_apart_from_the_text_beside_it() {
+    let t = barcode_beside_text();
+    let text = t.plain_text();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.get(..5), Some(&["one two three", "four five six", "seven eight", "nine ten", "eleven twelve"][..]), "{text}");
+    assert_eq!(lines.len(), 13, "{text}");
+    assert!(lines[5..].iter().all(|l| l.len() == 12 && l.chars().all(|c| c.is_ascii_uppercase())), "{text}");
+}
+
+/// A point in the leading right of the seal's text, level with a row of the code, takes the
+/// seal's line, and a drag down the seal selects none of the code.
+#[test]
+fn a_point_beside_a_barcode_takes_the_text_not_the_code_row() {
+    let t = barcode_beside_text();
+    let is_code = |i: usize| t.glyphs[i].rect[2] <= 58.0;
+    // Right of "four five six" (ends at 125.4), in the leading below it and level with code row 3.
+    let i = t.nearest(120.0, 117.5).expect("a glyph");
+    assert!(!is_code(i), "took the code's {:?} at {:?}", t.glyphs[i].text, t.glyphs[i].rect);
+    // Over the code, its row still wins.
+    let i = t.nearest(30.0, 117.5).expect("a glyph");
+    assert!(is_code(i));
+    // From "one" to the end of "nine ten", the pointer past it.
+    let (one, ten) = (t.nearest(65.0, 104.0).expect("one"), t.nearest(100.0, 131.0).expect("ten"));
+    let picked = t.visual_between(one, ten, Some(110.0)).unwrap_or_else(|| (one.min(ten)..=one.max(ten)).collect());
+    assert!(!picked.iter().any(|&i| is_code(i)), "{:?}", t.column_text(&picked));
+}
+
+/// A short word on the baseline of a barcode's first row, a label's width to its left, stays a
+/// line of its own: the code row does not go on the word's line, and the code keeps all its rows.
+#[test]
+fn a_word_on_a_barcode_rows_baseline_does_not_take_the_row() {
+    let mut v = Vec::new();
+    for (k, c) in "Seal".chars().enumerate() {
+        let x = 10.0 + k as f32 * 4.0;
+        v.push(em_box(&c.to_string(), x, 100.0, x + 4.0, 106.0));
+    }
+    for row in 0..4 {
+        let y = 100.0 + row as f32 * 6.0;
+        for k in 0..12 {
+            let c = char::from(b'A' + ((row * 5 + k) % 26) as u8);
+            let x = 50.0 + k as f32 * 4.0;
+            v.push(em_box(&c.to_string(), x, y, x + 4.0, y + 6.0));
+        }
+    }
+    assert_eq!(layout(v).plain_text(), "Seal\nABCDEFGHIJKL\nFGHIJKLMNOPQ\nKLMNOPQRSTUV\nPQRSTUVWXYZA");
+}
+
+/// A table beside a line of prose on one of its rows: the prose, left of everywhere the drag
+/// went, does not count as a row with one cell, and a drag down the table still takes its rows.
+#[test]
+fn prose_left_of_a_table_does_not_hide_its_rows() {
+    let mut v = Vec::new();
+    for (row, (name, qty)) in [("Name", "Qty"), ("Apple", "12"), ("Pear", "7")].into_iter().enumerate() {
+        let y = 10.0 + row as f32 * 14.0;
+        word(&mut v, name, 200.0, y, 6.0);
+        word(&mut v, qty, 290.0, y, 6.0);
+    }
+    word(&mut v, "Some unrelated prose", 10.0, 17.0, 6.0);
+    let t = layout(v);
+    let at = |c: &str, x: f32| t.glyphs.iter().position(|g| g.text == c && (g.rect[0] - x).abs() < 0.5).expect("a glyph");
+    let (name, two) = (at("N", 200.0), at("2", 296.0));
+    let picked = t.visual_between(name, two, Some(t.glyphs[two].rect[2] + 4.0)).expect("rows");
+    assert_eq!(t.column_text(&picked), "Name\tQty\nApple\t12");
+}
+
+/// A double-click drag between two words of one table row, or of two rows, takes both whole
+/// in either direction. A right-to-left word reads from its right end, so its first glyph in
+/// reading order is not its left end.
+#[test]
+fn row_ends_take_both_words_whole() {
+    let t = table();
+    let rows = |t: &PageText, from: usize, to: usize| {
+        let (unit, other) = (t.word_at(from).expect("a word"), t.word_at(to).expect("a word"));
+        let (anchor, head) = t.row_ends(unit, other);
+        t.visual_between(anchor, head, Some(t.glyphs[to].rect[2])).map(|p| t.column_text(&p))
+    };
+    // "Name" 0..=3, "Apple" 4..=8, "Qty" 13..=15.
+    for (from, to, copied) in [(1, 14, "Name\tQty"), (14, 1, "Name\tQty"), (14, 6, "Qty\nApple"), (6, 14, "Qty\nApple")] {
+        assert_eq!(rows(&t, from, to).as_deref(), Some(copied), "{from} to {to}");
+    }
+
+    // Two columns of Hebrew words, drawn visually (each word's letters left to right reversed).
+    let mut v = Vec::new();
+    for (row, (a, b)) in [("םש", "תומכ"), ("חופת", "רשע"), ("סגא", "עבש")].into_iter().enumerate() {
+        let y = 10.0 + row as f32 * 14.0;
+        word(&mut v, a, 10.0, y, 6.0);
+        word(&mut v, b, 100.0, y, 6.0);
+    }
+    let t = layout(v);
+    let at = |x: f32| t.glyphs.iter().position(|g| (g.rect[0] - x).abs() < 0.5 && (g.rect[1] - 10.0).abs() < 0.5).expect("a glyph");
+    let (left, right) = (at(10.0), at(100.0));
+    for (from, to) in [(left, right), (right, left)] {
+        let picked = rows(&t, from, to).expect("rows");
+        assert!(picked.contains("שם") && picked.contains("כמות"), "{picked:?}");
+    }
+}
+
 /// A rectangle that misses every glyph, or is not a number, selects nothing.
 #[test]
 fn an_empty_or_degenerate_column_selection_is_empty() {
@@ -2731,6 +3334,10 @@ fn vertical_lines_keep_reading_order() {
     };
     let all = t.glyphs_in([0.0, 0.0, 60.0, 40.0]);
     assert_eq!(t.column_text(&all), "日本\n語文");
+    // A drag from one vertical column into the next at the same height is not along a row:
+    // reading order stays (本 then 語文, down each column).
+    assert_eq!(t.visual_between(1, 3, Some(25.0)), None, "from 本 across to 文");
+    assert_eq!(t.visual_between(0, 2, Some(25.0)), None, "from 日 across to 語");
 }
 
 /// An embedded TrueType font with no `/Encoding`, flagged `flags`, its `/ToUnicode` (if
@@ -2770,6 +3377,104 @@ fn truetype_without_an_encoding_reads_its_codes_as_win_ansi() {
     let expected = "Rückfragen für Überhitzungsschutz: können, weiß, Café";
     assert_eq!(ocr_layer_text(4, false), expected, "symbolic, no /ToUnicode");
     assert_eq!(ocr_layer_text(32, true), expected, "nonsymbolic, /ToUnicode for ASCII only");
+}
+
+/// #3713: a Chinese label spread to the width of a longer one (分散對齊, as on Taiwanese forms)
+/// is one show with character spacing, so every gap of the label is the same, while the value
+/// beside it has none. The line's typical gap is therefore the value's zero, and from half a
+/// line height upwards each of the label's gaps read as a word gap: 「受文者」 copied as
+/// 「受 文 者」 and Find no longer matched it. A repeated gap is spacing, whatever its width.
+#[test]
+fn a_chinese_label_spread_by_character_spacing_keeps_its_characters_together() {
+    // `Tc` is added after every glyph of the string (ISO 32000-2 §9.3.2), so the gap before
+    // the value is the spacing too; the value's own glyphs follow at `0 Tc`.
+    let line = |tc: f32| {
+        let mut v = Vec::new();
+        let mut x = 0.0;
+        for ch in ["受", "文", "者"] {
+            v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+            x += 12.0 + tc;
+        }
+        for ch in ["如", "正", "本"] {
+            v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+            x += 12.0;
+        }
+        layout(v).plain_text()
+    };
+    // A tenth of the font size up to a whole em: the issue's nine steps, the last three of
+    // which used to break.
+    for tc in [1.2, 2.4, 3.0, 3.6, 4.2, 4.8, 6.0, 9.0, 12.0] {
+        assert_eq!(line(tc), "受文者如正本", "{tc} pt of character spacing");
+    }
+
+    // A gap that stands on its own is still a word gap. The width is what the review caught: a
+    // whole line height swallowed any isolated gap under one em, so two cells of a form row set
+    // 9pt apart on a 12pt line copied as one word. Half a line height upwards is a gap, which is
+    // the width Hangul already used; below it is still spacing.
+    let cells = |gap: f32| {
+        let mut v = Vec::new();
+        for (i, ch) in ["姓", "名"].iter().enumerate() {
+            let x = i as f32 * 12.0;
+            v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+        }
+        for (i, ch) in ["王", "小", "明"].iter().enumerate() {
+            let x = 24.0 + gap + i as f32 * 12.0;
+            v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+        }
+        layout(v).plain_text()
+    };
+    // Two character widths, as before, and then the band that used to be lost: half a line
+    // height and up. 6.0 is the boundary itself, which is a gap.
+    for gap in [24.0, 18.0, 12.0, 9.0, 7.2, 6.0] {
+        assert_eq!(cells(gap), "姓名 王小明", "{gap} pt between the two cells");
+    }
+    // And below it, still spacing rather than a gap -- one isolated narrow gap must not start
+    // splitting a label that happens to carry one.
+    for gap in [5.4, 3.0, 1.2, 0.0] {
+        assert_eq!(cells(gap), "姓名王小明", "{gap} pt is spacing, not a gap");
+    }
+}
+
+/// Korean is written with spaces between words (띄어쓰기), and a file may write them as
+/// position rather than as space characters, so the rule for Chinese and Japanese -- where a
+/// gap between two characters is never a word gap -- must not reach Hangul (#3722 review).
+#[test]
+fn korean_words_separated_by_position_keep_their_spaces() {
+    let line = |gap: f32| {
+        let mut v = Vec::new();
+        let mut x = 0.0;
+        for word in ["안녕", "하세요", "여러분"] {
+            for ch in word.chars() {
+                v.push(em_box(&ch.to_string(), x, 0.0, x + 12.0, 12.0));
+                x += 12.0;
+            }
+            x += gap;
+        }
+        layout(v).plain_text()
+    };
+    // Half the line height upwards is a word gap, as it was before the Chinese rule changed.
+    for gap in [6.0, 7.0, 9.0, 12.0] {
+        assert_eq!(line(gap), "안녕 하세요 여러분", "{gap} pt between the words");
+    }
+    // Below that it is letter spacing, which is unchanged.
+    assert_eq!(line(3.0), "안녕하세요여러분");
+}
+
+/// Halfwidth Hangul jamo are Hangul too: equal gaps between them from half a line height up are
+/// word gaps, not the character spacing of spread Chinese text.
+#[test]
+fn halfwidth_hangul_separated_by_equal_gaps_keeps_its_spaces() {
+    let mut v = Vec::new();
+    let mut x = 0.0;
+    // A one-letter word between two others: its two word gaps repeat each other.
+    for word in ["\u{FFA1}\u{FFA2}", "\u{FFA4}", "\u{FFA7}\u{FFA8}"] {
+        for ch in word.chars() {
+            v.push(em_box(&ch.to_string(), x, 0.0, x + 6.0, 12.0));
+            x += 6.0;
+        }
+        x += 7.0;
+    }
+    assert_eq!(layout(v).plain_text(), "\u{FFA1}\u{FFA2} \u{FFA4} \u{FFA7}\u{FFA8}");
 }
 
 /// Issue #2929: a footnote reference (superscript) on a line stays in that line instead of
@@ -2892,7 +3597,7 @@ fn paragraph_selection_includes_lines_with_footnote_references() {
 
     // Pin that internal band too: replacing the first extend_box condition with `false`
     // must fail here even when plain text and highlight rectangles remain unchanged.
-    let mut segment = Seg::new(Run { start: 0, end: 1 }, marker, marker[3] - marker[1]);
+    let mut segment = Seg::new(Run { start: 0, end: 1 }, marker, marker[3] - marker[1], marker[2]);
     segment.extend_box(&body, body[3] - body[1]);
     for (actual, expected) in segment.bbox.into_iter().zip([marker[0], body[1], body[2], body[3]]) {
         close(actual, expected);
@@ -3182,16 +3887,20 @@ fn collection_page(collection: (&str, &str), encoding: &str, descendant: &str, t
     use lopdf::{Document, Object, Stream, dictionary};
     let (registry, ordering) = collection;
     let mut doc = Document::with_version("1.7");
-    let (key, program): (&str, &[u8]) = if descendant == "CIDFontType0" {
-        ("FontFile3", include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb"))
+    let (key, program): (&str, Vec<u8>) = if descendant == "CIDFontType0" {
+        let (data, _) = (InterpreterSettings::default().font_resolver)(&craft_pdf::interpret::font::FontQuery::Standard(
+            craft_pdf::interpret::font::StandardFont::Courier,
+        ))
+        .expect("bundled Courier stand-in font");
+        ("FontFile3", (*data).as_ref().to_vec())
     } else {
-        ("FontFile2", include_bytes!("../../../../assets/fonts/Inter-Regular.ttf"))
+        ("FontFile2", include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").to_vec())
     };
     let mut file = dictionary! {};
     if descendant == "CIDFontType0" {
         file.set("Subtype", "CIDFontType0C");
     }
-    let program = doc.add_object(Stream::new(file, program.to_vec()));
+    let program = doc.add_object(Stream::new(file, program));
     let descriptor = doc.add_object(dictionary! { "Type" => "FontDescriptor", "FontName" => "TestJapan1", "Flags" => 4, key => program });
     let cid = doc.add_object(dictionary! {
         "Type" => "Font", "Subtype" => descendant, "BaseFont" => "TestJapan1",

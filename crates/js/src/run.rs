@@ -1,7 +1,9 @@
 use super::globals::{event_object, install};
 use super::host::{Host, Shared, host, text};
 use super::model::{DocInfo, Event, FieldState, Limits, Outcome};
-use super::{Arc, BTreeSet, Context, HostHooks, JsNativeError, JsResult, JsString, JsValue, NativeFunction, Realm, RefCell, Source, js_string};
+use super::{
+    Arc, BTreeSet, Context, HostHooks, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Realm, RefCell, Source, js_string,
+};
 
 /// Longest script, in bytes.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;
@@ -148,6 +150,7 @@ pub(crate) fn run_shared_here(
             reset_calls: 0,
             calculation_evaluations: 0,
             calculation_limit_exceeded: false,
+            call: None,
         },
         limits,
     )
@@ -200,6 +203,8 @@ pub(crate) struct ScriptSetup<'a> {
     pub(crate) reset_calls: usize,
     pub(crate) calculation_evaluations: usize,
     pub(crate) calculation_limit_exceeded: bool,
+    /// A timer's function to call in place of the script (#169).
+    pub(crate) call: Option<JsObject>,
 }
 
 /// Create a restricted temporary Boa context and convert initialization failures into script outcomes.
@@ -272,6 +277,7 @@ pub(crate) fn run_in_context(
         kept: 0,
         retained: 0,
         dropped: 0,
+        layers_changed: BTreeSet::new(),
     }));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
     let mut doc_errors: Vec<(usize, String)> = setup.skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
@@ -297,7 +303,10 @@ pub(crate) fn run_in_context(
                 doc_errors.push((i, doc_error(i, &e)));
             }
         }
-        let r = ctx.eval(Source::from_bytes(script))?;
+        let r = match &setup.call {
+            Some(f) => f.call(&JsValue::undefined(), &[], ctx)?,
+            None => ctx.eval(Source::from_bytes(script))?,
+        };
         if !r.is_undefined() {
             out.result = Some(text(&r, ctx)?);
         }
@@ -328,11 +337,14 @@ pub(crate) fn run_in_context(
         out.alerts = std::mem::take(&mut h.alerts);
         out.console = std::mem::take(&mut h.console);
         out.requests = std::mem::take(&mut h.requests);
+        let layers = std::mem::take(&mut h.layers_changed);
+        out.layers = layers.into_iter().filter_map(|i| h.doc.layers.get(i).map(|l| (i, l.on))).collect();
         if h.dropped > 0 {
             out.console.push(format!("the script's messages, console lines and requests passed their limits; {} more were left out", h.dropped));
         }
         ctx.insert_data(RefCell::new(h));
     }
+    out.timers = crate::timers::report(ctx);
     out
 }
 
