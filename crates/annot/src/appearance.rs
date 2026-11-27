@@ -1322,11 +1322,26 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
             if tw > w - 4.0 && tw > 0.0 {
                 size *= ((w - 4.0) / tw).max(0.0);
             }
+            // Helvetica's ink reaches 0.718 em above and 0.207 em below its baseline. Keep
+            // the complete line inside its appearance box, including at edge anchors and at
+            // the largest separate-line font size.
+            const ASCENT: f64 = 0.718;
+            const DESCENT: f64 = 0.207;
+            let line_room = if line_over_picture { h } else { band };
+            let line_height = size * (ASCENT + DESCENT);
+            if line_height > line_room && line_height > 0.0 {
+                size *= line_room / line_height;
+            }
             let tw = text_width(l, size);
             let (tx, ty) = if line_over_picture {
-                (x0 + w * line_position[0] - tw / 2.0, y0 + h * (1.0 - line_position[1]) - size * 0.35)
+                let center_x = x0 + w * line_position[0];
+                let center_y = y0 + h * (1.0 - line_position[1]);
+                let tx = (center_x - tw / 2.0).clamp(x0, (x1 - tw).max(x0));
+                let ty = (center_y - size * (ASCENT - DESCENT) / 2.0).clamp(y0 + size * DESCENT, (y1 - size * ASCENT).max(y0 + size * DESCENT));
+                (tx, ty)
             } else {
-                (x0 + (w - tw) / 2.0, y0 + (band - size * 0.72) / 2.0)
+                let baseline = y0 + size * DESCENT + (band - size * (ASCENT + DESCENT)) / 2.0;
+                (x0 + (w - tw) / 2.0, baseline)
             };
             content.extend(format!("BT\n0.2 0.2 0.2 rg\n/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(size), n(tx), n(ty)).bytes());
             content.extend(literal(&win_ansi(l)));
