@@ -1555,6 +1555,42 @@ mod formcalc {
         assert_eq!(calc(r#"Format("9.99", 2.344)"#), "2.34");
     }
 
+    /// A numeric built-in given null (`null`, an empty field) gives null, so a total on a blank
+    /// form stays empty; Sum, Avg, Max and Min leave nulls out and give null when nothing is
+    /// left, Count gives 0, and the operators still read null as 0 (XFA 3.3, the Returns of
+    /// Abs, Ceil, Floor, Mod, Round and Sum).
+    #[test]
+    fn numeric_builtins_give_null_for_null_arguments() {
+        // `total` is an empty numeric field, `table.row[*].amount` holds 10 and 5.
+        for script in [
+            "Abs(null)",
+            "Abs(total)",
+            "Ceil(total)",
+            "Floor(null)",
+            "Mod(null, 3)",
+            "Mod(7, total)",
+            "Mod(total, 0)",
+            "Round(total)",
+            "Round(total, 2)",
+            "Round(total * total, 2)",
+            "Sum(null)",
+            "Sum(total, null)",
+            "Avg(total)",
+            "Max(null, total)",
+            "Min(total)",
+        ] {
+            assert_eq!(calc(script), "", "{script}");
+            assert_eq!(calc(&format!("{script} == null")), "1", "{script}");
+        }
+        assert_eq!(calc("Sum(total, 2, null, 3)"), "5");
+        assert_eq!(calc("Sum(table.row[*].amount, total)"), "15");
+        assert_eq!(calc("Max(total, -1)"), "-1");
+        assert_eq!(calc("Count(total, null)"), "0");
+        assert_eq!(calc("Round(2.345, null)"), "2");
+        assert_eq!(calc("5 + null + 3"), "8");
+        assert_eq!(calc("Abs(total) + 1"), "1");
+    }
+
     #[test]
     fn round_keeps_huge_values_finite() {
         assert_eq!(calc("Round(1e300, 12) == 1e300"), "1");

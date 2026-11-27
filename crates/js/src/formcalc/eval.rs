@@ -208,6 +208,14 @@ impl Interp<'_> {
         Ok(self.to_num(&v))
     }
 
+    /// Argument `i` as a number, or `None` when it is null (`null`, an empty field, an argument
+    /// left out): a numeric built-in returns null for a null mandatory argument (XFA 3.3, the
+    /// Returns of Abs, Ceil, Floor, Mod and Round), where the operators read it as 0.
+    pub(super) fn arg_num_or_null(&mut self, args: &[Expr], i: usize) -> R<Option<f64>> {
+        let v = self.arg(args, i)?;
+        Ok(if self.is_null(&v) { None } else { Some(self.to_num(&v)) })
+    }
+
     pub(super) fn arg_str(&mut self, args: &[Expr], i: usize) -> R<String> {
         let v = self.arg(args, i)?;
         Ok(self.to_str(&v))
