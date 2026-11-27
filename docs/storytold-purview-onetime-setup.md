@@ -391,6 +391,21 @@ Open **API permissions**.
 10. Expand `UnifiedPolicy` and add `UnifiedPolicy.User.Read`.
 11. Select **Add permissions**.
 
+`Microsoft Information Protection Sync Service` is a separate first-party API. It is not
+the **Microsoft Purview** API shown by a search for “Purview”, and
+`Purview.DelegatedAccess` is not a substitute for `UnifiedPolicy.User.Read`.
+
+If the sync service is not listed under **APIs my organization uses**:
+
+1. Search Enterprise applications by the Microsoft first-party application ID
+   `870c4f2e-85b6-4d43-bdda-6ed9a579b725`.
+2. If its service principal is absent, an administrator must instantiate it in the tenant:
+   `az ad sp create --id 870c4f2e-85b6-4d43-bdda-6ed9a579b725`.
+3. Refresh the app registration, return to **APIs my organization uses**, and search again
+   for the exact name **Microsoft Information Protection Sync Service**.
+4. Add only delegated `UnifiedPolicy.User.Read`; do not select tenant-wide
+   `UnifiedPolicy.Tenant.Read` for this desktop user flow.
+
 No application-only permission is needed for normal desktop user sign-in. Do not add
 `Content.SuperUser`, `Content.DelegatedReader`, `Content.DelegatedWriter` or
 `UnifiedPolicy.Tenant.Read` unless a separate documented service/daemon app with a
