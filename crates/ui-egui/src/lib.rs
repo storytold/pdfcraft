@@ -207,6 +207,8 @@ struct PendingOpen {
     /// An answer taken from the queue and kept back for later (a password prompt waiting for an
     /// earlier file's password retry).
     ready: Option<open_worker::ResultKind>,
+    /// This result has already been inspected again after a successful Purview sign-in.
+    purview_retried: bool,
     /// Do not inspect a document under an account that is being changed.
     deferred: Option<(open_worker::Job, craft::host::queue::Priority)>,
     /// Reopen Closed Tab asked for it: its closed-tab entry goes once it has opened, and stays when it fails.
@@ -523,8 +525,6 @@ pub struct PdfCraftApp {
     pub screen_mode: craft::ui::shell::ScreenMode,
     /// Reports unsaved work, or an open OCR review, to the embedding page (web, see [`HostDirtyFn`]).
     pub host_dirty: Option<HostDirtyFn>,
-    /// Host-owned requests that must be drained on the UI thread before the file intake.
-    pub host_events: Option<Box<dyn FnMut()>>,
     /// The "save changes?" questions of a closing tab or a quit, asked one document at a time.
     pub(crate) close_guard: Option<craft::quit::CloseGuard<DocId>>,
     /// The open `UnsavedChangesDialog` belonging to `close_guard`, kept across a frame panic.

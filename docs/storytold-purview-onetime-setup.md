@@ -641,11 +641,30 @@ Supported native helper builds follow the target platform:
 
 ## Step 4: Build the shared native integration
 
+The PdfCraft POC already consumes the reviewed Craft Libraries platform boundary
+for files received outside the command line:
+
+- `craft-platform::open::FileIntake` is the one UI-thread intake for Finder/Open
+  With/Dock opens, dropped files, second launches, and quit requests.
+- `craft-platform::open::apple_events` registers and drains macOS Apple events
+  behind that intake, so PdfCraft has no direct `fmv-macos-events` dependency or
+  app-local bridge.
+- The implementation is from the merged
+  [craft-libs PR #2473](https://github.com/storytold/craft-libs/pull/2473),
+  commit `907c1bb815d9ec790a3ee4c3389a7ca6301cc03f`, included in PdfCraft's
+  pinned Craft Libraries revision `0a6e42b80bfd586aee6ee1144aa98cf1ea37a844`.
+
+That library change was reviewed through the merged framework PR with no open
+review threads and a passing SonarQube quality gate. No new Craft Libraries MIP
+provider is required for the one-app POC: the official SDK, OAuth account
+sessions, PDF rights policy, and PDF re-publishing remain in PdfCraft until a
+second app actually shares a stable format-independent contract.
+
 Recommended Storytold layout:
 
 ```text
 craft-libs/
-  purview/                 shared Rust types and provider contract
+  purview/                 future shared types/provider once a second app needs them
 
 pdfcraft/
   native Purview helper

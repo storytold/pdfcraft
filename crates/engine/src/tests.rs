@@ -3023,6 +3023,33 @@ fn mandatory_sensitivity_policy_blocks_save_until_a_label_is_selected() {
     assert!(matches!(s.save_full_bytes(id), Err(EditError::Protection(_))));
 }
 
+#[test]
+fn label_only_purview_save_checks_the_output_like_an_ordinary_pdf() {
+    let (mut session, id) = session_with(1);
+    let original = session.get(id).unwrap().bytes.clone();
+    session.doc_mut(id).unwrap().purview = Some(crate::PurviewDocumentState {
+        handle: 1,
+        original,
+        document: crate::PurviewDocument {
+            label: Some(crate::PurviewLabel {
+                id: "label".into(),
+                name: "Internal".into(),
+                description: String::new(),
+                tooltip: String::new(),
+                color: None,
+                parent_id: None,
+                sensitivity: 0,
+                active: true,
+                protection: false,
+            }),
+            ..Default::default()
+        },
+        provider: Arc::new(pdfcraft_purview_policy::UnavailablePurviewProvider),
+    });
+    let invalid = Arc::new(b"not a PDF".to_vec());
+    assert!(matches!(session.check_save(id, &invalid), Err(EditError::Reopen(_))));
+}
+
 fn protect_for_test(session: &mut Session, id: DocId, rights: crate::PurviewRights) -> Arc<Vec<u8>> {
     let original = Arc::new(b"synthetic protected original".to_vec());
     session.doc_mut(id).unwrap().purview = Some(crate::PurviewDocumentState {
@@ -3202,6 +3229,34 @@ fn protected_source_provider_for_test(working: Vec<u8>, rights: crate::PurviewRi
         inspect_calls: std::sync::atomic::AtomicUsize::new(0),
         close_calls: std::sync::atomic::AtomicUsize::new(0),
     })
+}
+
+#[test]
+fn purview_full_save_refreshes_renumbered_runtime_state() {
+    let content = b"/OC /R BDC 1 0 0 rg 10 10 40 80 re f EMC /OC /B BDC 0 0 1 rg 110 10 40 80 re f EMC";
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [9 0 R 10 0 R] /D << /BaseState /ON /Order [9 0 R 10 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Properties << /R 9 0 R /B 10 0 R >> >> >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+    ];
+    objs.extend((5..=8).map(|_| b"null".to_vec()));
+    objs.push(b"<< /Type /OCG /Name (Red rectangle) >>".to_vec());
+    objs.push(b"<< /Type /OCG /Name (Blue rectangle) >>".to_vec());
+    let original = pdf_of_objects(&objs);
+    let (mut session, id, provider) = protected_session_with_working_for_test(original.clone());
+    session.doc_mut(id).unwrap().purview.as_mut().unwrap().document.protected = false;
+    assert!(session.set_layer_visible(id, 0, false));
+    let before = session.get(id).unwrap().info.layers.iter().map(|layer| layer.id).collect::<Vec<_>>();
+    let saved = session.save_full_bytes(id).unwrap();
+    session.mark_saved(id, saved, Some("/tmp/out/labeled.pdf".into())).unwrap();
+    let after = session.get(id).unwrap().info.layers.iter().map(|layer| layer.id).collect::<Vec<_>>();
+    assert_ne!(before, after);
+    assert_eq!(
+        session.get(id).unwrap().info.layers.iter().map(|layer| (layer.name.as_str(), layer.visible)).collect::<Vec<_>>(),
+        [("Red rectangle", false), ("Blue rectangle", true)]
+    );
+    assert!(provider.published_working.lock().unwrap().is_some());
 }
 
 #[test]

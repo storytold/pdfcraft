@@ -190,6 +190,7 @@ impl PdfCraftApp {
             then: request.then,
             display_override: None,
             ready: None,
+            purview_retried: false,
             deferred,
             reopen: false,
         });
@@ -241,6 +242,28 @@ impl PdfCraftApp {
                 waiting.push(pending);
                 continue;
             };
+            if !pending.purview_retried
+                && self.session.purview_status() == pdfcraft_engine::PurviewStatus::Ready
+                && let open_worker::ResultKind::Prepared { bytes, result, .. } = &kind
+                && matches!(**result, Err(pdfcraft_render::OpenError::NeedsPurviewSignIn))
+            {
+                let token = pending.token;
+                let job = open_worker::Job {
+                    context: self.session.open_context().with_highlight(self.highlight_fields),
+                    name: pending.name.clone(),
+                    path: pending.path.clone(),
+                    password: None,
+                    input: open_worker::Input::Bytes(bytes.clone()),
+                    named: match &pending.after_open {
+                        Some(pdfcraft_render::RemoteDestination::Named(name)) => Some(name.clone()),
+                        _ => None,
+                    },
+                };
+                self.opens.submit(token, Priority::VISIBLE, move |cancel| open_worker::run(job, cancel));
+                pending.purview_retried = true;
+                waiting.push(pending);
+                continue;
+            }
             // While a closed prompt's password is being tried, a later file that asks for its own
             // password keeps its reply: its prompt would hide the retry's outcome. Others admit.
             if !retry && self.password_retry.is_some() && asks_for_password(&kind) {
@@ -852,6 +875,7 @@ impl PdfCraftApp {
             });
             if let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == token) {
                 pending.display_override = p.display_override;
+                pending.purview_retried = true;
             }
             // Replies behind it that ask for a password wait for its outcome (`poll_pending_opens`).
             self.password_retry = Some(token);

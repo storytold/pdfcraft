@@ -14,7 +14,8 @@ fn inspect_protected_output(state: &crate::PurviewDocumentState, name: &str, byt
 fn republish_verified(state: &crate::PurviewDocumentState, name: &str, working: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
     let output = state.provider.republish(state.handle, &state.original, working).map_err(|error| EditError::Protection(error.to_string()))?;
     if state.document.protected {
-        inspect_protected_output(state, name, &output)?;
+        let opened = inspect_protected_output(state, name, &output)?;
+        state.provider.close(opened.handle);
     }
     Ok(output)
 }
@@ -115,14 +116,18 @@ impl Session {
     pub fn check_save(&self, id: DocId, bytes: &Arc<Vec<u8>>) -> Result<(), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(()) };
-        if let Some(state) = doc.purview.as_ref() {
-            if state.document.protected {
-                let opened = inspect_protected_output(state, &doc.name, bytes)?;
-                pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), editor.keys.reopen.as_deref())
-                    .map_err(|error| EditError::Reopen(error.to_string()))?;
-                pdfcraft_render::check_pages(opened.bytes, doc.password.as_deref(), doc.info.pages.len())
-                    .map_err(|error| EditError::Reopen(error.to_string()))?;
-            }
+        if let Some(state) = doc.purview.as_ref()
+            && state.document.protected
+        {
+            let opened = inspect_protected_output(state, &doc.name, bytes)?;
+            let checked = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), editor.keys.reopen.as_deref())
+                .map_err(|error| EditError::Reopen(error.to_string()))
+                .and_then(|_| {
+                    pdfcraft_render::check_pages(opened.bytes, doc.password.as_deref(), doc.info.pages.len())
+                        .map_err(|error| EditError::Reopen(error.to_string()))
+                });
+            state.provider.close(opened.handle);
+            checked?;
             return Ok(());
         }
         pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
@@ -155,6 +160,12 @@ impl Session {
             let typed = pdfcraft_forms::password_values(&editor.cos);
             if let Some(purview) = doc.purview.as_ref() {
                 if let Some(opened) = purview_rebase {
+                    let preserves_objects =
+                        opened.bytes.starts_with(editor.saved.as_slice()) || opened.bytes.starts_with(editor.cos.bytes().as_slice());
+                    if !preserves_objects {
+                        renumbered = true;
+                        crate::js::replace_runtime(&mut doc.js_runtime);
+                    }
                     let mut working = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), editor.keys.reopen.as_deref())
                         .map_err(|error| EditError::Reopen(error.to_string()))?;
                     let warnings = restore_session_passwords(&mut working, &typed, doc.info.xfa.is_some(), doc.xfa_template.as_deref())?;
@@ -169,8 +180,12 @@ impl Session {
                     state.original = bytes.clone();
                     state.document = opened.document;
                     doc.purview = Some(state);
-                    renumbered = false;
                 } else {
+                    let preserves_objects = bytes.starts_with(editor.saved.as_slice()) || bytes.starts_with(editor.cos.bytes().as_slice());
+                    if !preserves_objects {
+                        renumbered = true;
+                        crate::js::replace_runtime(&mut doc.js_runtime);
+                    }
                     let mut working = pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref())
                         .map_err(|error| EditError::Reopen(error.to_string()))?;
                     let warnings = restore_session_passwords(&mut working, &typed, doc.info.xfa.is_some(), doc.xfa_template.as_deref())?;
@@ -181,7 +196,6 @@ impl Session {
                     editor.unsaved_file = false;
                     doc.bytes = bytes.clone();
                     doc.purview = None;
-                    renumbered = false;
                 }
             } else {
                 // An encrypted file needs the password it is protected with now (the owner

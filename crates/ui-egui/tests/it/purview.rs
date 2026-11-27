@@ -426,6 +426,29 @@ fn a_second_protected_open_waits_for_the_first_sign_in_prompt() {
 }
 
 #[test]
+fn successful_sign_in_retries_every_queued_protected_open() {
+    let provider = TestPurviewProvider::signed_out_for_pfile();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut provider = provider;
+    provider.inspect_calls = Some(calls.clone());
+    let mut h = harness_pfile(provider);
+    let ctx = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx, "second.pfile", None, b"MicrosoftIRMServices Protected PDF".to_vec()).unwrap();
+    h.run_steps(5);
+    h.get_by_label("Continue with Microsoft").click();
+    for _ in 0..300 {
+        h.run_steps(1);
+        if h.state().session.docs().len() == 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(h.state().purview_signin_prompt.is_none(), "stale sign-in replies must not reopen the modal");
+    assert_eq!(h.state().session.docs().len(), 2);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 4, "each protected file is inspected before and after sign-in");
+}
+
+#[test]
 fn microsoft_sign_in_does_not_block_the_ui() {
     let (started_tx, started_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();

@@ -403,7 +403,6 @@ impl PdfCraftApp {
             unlock_prompt: None,
             screen_mode: Default::default(),
             host_dirty: None,
-            host_events: None,
             close_guard: None,
             close_guard_dialog: None,
             props_session: None,
@@ -787,9 +786,6 @@ impl PdfCraftApp {
         // The picks first: a file the user picked opens ahead of a startup file that arrived with it, which then waits
         // for that open and goes to a background tab.
         self.process_picks(ctx);
-        if let Some(pump) = self.host_events.as_mut() {
-            pump();
-        }
         self.open_intake(ctx);
         self.present_portfolios(ctx);
         if let Some((_, id)) = self.active_ids() {

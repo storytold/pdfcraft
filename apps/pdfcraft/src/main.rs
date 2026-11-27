@@ -34,12 +34,14 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::cell::Cell;
+#[cfg(target_os = "macos")]
+use std::cell::RefCell;
 use std::rc::Rc;
+#[cfg(target_os = "macos")]
+use std::sync::{Arc, OnceLock};
 
 use pdfcraft_ui_egui::PdfCraftApp;
 
-#[cfg(target_os = "macos")]
-mod apple_events;
 mod compositor_gpu;
 mod reopen;
 mod single_instance;
@@ -251,7 +253,18 @@ fn main() -> eframe::Result {
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
     // that launched us as well as later ones. Lives until the event loop returns.
     #[cfg(target_os = "macos")]
-    let apple_events = apple_events::AppleEvents::install();
+    let (apple_intake, apple_context, _apple_events) = {
+        let context = Arc::new(OnceLock::<egui::Context>::new());
+        let wake_context = Arc::clone(&context);
+        let wake = craft::host::Wake::new(move || {
+            if let Some(ctx) = wake_context.get() {
+                ctx.request_repaint();
+            }
+        });
+        let (intake, sender) = craft::platform::open::FileIntake::new(wake);
+        let events = craft::platform::open::apple_events::install(sender);
+        (Rc::new(RefCell::new(Some(intake))), context, events)
+    };
     // Set once the app is created, which is after the renderer has started.
     let started = Rc::new(Cell::new(false));
     let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
@@ -263,7 +276,9 @@ fn main() -> eframe::Result {
             Rc::clone(&started),
             instance.as_ref(),
             #[cfg(target_os = "macos")]
-            &apple_events,
+            Rc::clone(&apple_intake),
+            #[cfg(target_os = "macos")]
+            Arc::clone(&apple_context),
         ),
     );
     match result {
@@ -281,7 +296,9 @@ fn main() -> eframe::Result {
                     started,
                     instance.as_ref(),
                     #[cfg(target_os = "macos")]
-                    &apple_events,
+                    Rc::clone(&apple_intake),
+                    #[cfg(target_os = "macos")]
+                    Arc::clone(&apple_context),
                 ),
             )
         }
@@ -497,27 +514,34 @@ fn app_creator<'a>(
     launch: Launch,
     started: Rc<Cell<bool>>,
     instance: Option<&'a single_instance::Server>,
-    #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
+    #[cfg(target_os = "macos")] apple_intake: Rc<RefCell<Option<craft::platform::open::FileIntake>>>,
+    #[cfg(target_os = "macos")] apple_context: Arc<OnceLock<egui::Context>>,
 ) -> eframe::AppCreator<'a> {
     let Launch { files, options, control, create_images, combine, frame, lang, two_paged } = launch;
     Box::new(move |cc| {
         started.set(true);
         install_runtime(cc, frame, lang)?;
-        let ctx = cc.egui_ctx.clone();
-        let wake = craft::host::Wake::new(move || ctx.request_repaint());
+        #[cfg(not(target_os = "macos"))]
+        let wake = {
+            let ctx = cc.egui_ctx.clone();
+            craft::host::Wake::new(move || ctx.request_repaint())
+        };
+        #[cfg(target_os = "macos")]
+        let _ = apple_context.set(cc.egui_ctx.clone());
         // Files a second launch hands over arrive through the single-instance server.
         let intake = match instance {
             Some(server) => server.connect(&cc.egui_ctx),
+            #[cfg(target_os = "macos")]
+            None => {
+                let Some(intake) = apple_intake.borrow_mut().take() else {
+                    return Err(std::io::Error::other("the macOS file intake was already started").into());
+                };
+                intake
+            }
+            #[cfg(not(target_os = "macos"))]
             None => craft::platform::open::FileIntake::new(wake).0,
         };
-        // Finder, Open With and the Dock deliver files as Apple events, not arguments.
-        #[cfg(target_os = "macos")]
-        let host_events = apple_events.connect(intake.sender(), &cc.egui_ctx);
         let mut app = PdfCraftApp::with_intake(&cc.egui_ctx, intake);
-        #[cfg(target_os = "macos")]
-        {
-            app.host_events = Some(host_events);
-        }
         // First start (or settings from before Units existed): the region's unit.
         app.units = pdfcraft_ui_egui::units::Unit::system();
         // The system's reopen-windows choice (macOS) starts the preference; a saved choice replaces it.

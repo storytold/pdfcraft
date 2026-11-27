@@ -107,6 +107,11 @@ impl Session {
         self.purview = Some(provider);
     }
 
+    /// The provider shared by work that must keep the caller's account and token state.
+    pub fn purview_provider(&self) -> Option<Arc<dyn crate::PurviewProvider>> {
+        self.purview.clone()
+    }
+
     pub fn clear_purview_provider(&mut self) {
         self.purview = None;
     }
