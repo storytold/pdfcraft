@@ -50,6 +50,7 @@ pub fn kind_label(a: &Annotation) -> &str {
         Some("FreeTextCallout") => "Callout",
         Some("PolygonCloud") => "Cloud",
         Some("FreeTextTypeWriter") => "Typewriter",
+        Some("FreehandHighlight") if a.subtype == "Ink" => "Freehand-Highlight",
         _ => subtype_label(&a.subtype),
     }
 }
@@ -444,4 +445,49 @@ pub(crate) fn header(
         .show(ui);
     comments_filter_menu(ui, &filter, &list, &mut view.session.comments.panel);
     command
+}
+
+#[cfg(test)]
+mod tests {
+    use pdfcraft_render::Annotation;
+
+    use super::*;
+
+    fn mock_annotation(subtype: &str, intent: Option<&str>) -> Annotation {
+        Annotation {
+            page: 0,
+            subtype: subtype.into(),
+            author: None,
+            contents: None,
+            modified: None,
+            name: None,
+            in_reply_to: None,
+            parent: None,
+            grouped: false,
+            rect: [0.0; 4],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: intent.map(str::to_owned),
+            fill_sign: false,
+            no_rotate: false,
+            points: Vec::new(),
+            text_box: None,
+            popup: None,
+        }
+    }
+
+    #[test]
+    fn freehand_highlight_kind_label() {
+        let freehand = mock_annotation("Ink", Some("FreehandHighlight"));
+        assert_eq!(kind_label(&freehand), "Freehand-Highlight");
+
+        let plain_ink = mock_annotation("Ink", None);
+        assert_eq!(kind_label(&plain_ink), "Drawing");
+
+        let non_ink = mock_annotation("Square", Some("FreehandHighlight"));
+        assert_eq!(kind_label(&non_ink), "Rectangle");
+    }
 }
