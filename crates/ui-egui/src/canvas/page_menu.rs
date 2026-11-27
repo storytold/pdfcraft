@@ -55,6 +55,8 @@ pub(crate) struct PageMenuPerms {
 pub(crate) enum FieldMenu {
     Properties,
     Duplicate(String),
+    /// Copy into Grid: the field and the widget the press was on.
+    Copies(String, usize),
 }
 
 /// What a row of the default menu does when picked.
@@ -264,6 +266,12 @@ fn field_rows(
     }
     if MenuItem::new(tl!("Properties…").to_string()).show(ui).ran {
         pick.field = Some(FieldMenu::Properties);
+    }
+    // One field at a time, of a kind a grid can copy.
+    let copyable = view.session.prepare.also.is_empty()
+        && form.iter().find(|f| f.name == name).is_some_and(|f| pdfcraft_engine::field_table::copyable(f, widget));
+    if MenuItem::new(tl!("Copy into Grid…").to_string()).enabled(can_modify && copyable).show(ui).ran {
+        pick.field = Some(FieldMenu::Copies(name.clone(), widget));
     }
     if MenuItem::new(tl!("Duplicate…").to_string()).enabled(can_modify).show(ui).ran {
         pick.field = Some(FieldMenu::Duplicate(name));

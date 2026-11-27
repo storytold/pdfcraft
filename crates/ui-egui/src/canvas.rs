@@ -2069,6 +2069,29 @@ struct FrameRequests {
     generation: u64,
 }
 
+/// Opens what a field's menu item picked in view `index`; Properties is handled with the other property requests.
+fn open_field_menu_pick(
+    app: &mut PdfCraftApp,
+    ctx: &egui::Context,
+    index: usize,
+    pick: FieldMenu,
+    form: &[pdfcraft_engine::FormField],
+    generation: u64,
+) {
+    match pick {
+        FieldMenu::Duplicate(name) => crate::dialogs::duplicate_field::open(app, ctx, name),
+        FieldMenu::Copies(name, widget) => {
+            let doc = app.views[index].id;
+            // As for a drawn table: the window lasts while the form is prepared.
+            if crate::field_table_ui::open_copies(app, doc, name, widget, form, generation) {
+                app.left = crate::LeftPanel::Tool("form");
+                app.reveal_tools();
+            }
+        }
+        FieldMenu::Properties => {}
+    }
+}
+
 /// Opens the dialogs and runs the app commands the frame asked for.
 #[allow(clippy::cognitive_complexity)]
 fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, requests: FrameRequests) {
@@ -2107,8 +2130,8 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
     if let Some((name, w)) = field_props {
         crate::prepare::dialog::open(app, &name, w, crate::prepare::FieldTab::General);
     }
-    if let Some(FieldMenu::Duplicate(name)) = field_menu {
-        crate::dialogs::duplicate_field::open(app, ctx, name);
+    if let Some(pick) = field_menu {
+        open_field_menu_pick(app, ctx, index, pick, &form, generation);
     }
     if let Some((page, rect)) = app.views[index].session.links.open_new.take() {
         app.open_link_props(page, Some(rect), None);
