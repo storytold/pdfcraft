@@ -58,7 +58,7 @@ sha256 = "a76abf002c49097d146e86740a3105a5d00450b1592e820a1109a8c5680cd697"
 [[document]]
 source = "assets/icons/LICENSE-freehand-highlighter.txt"
 destination = "assets/icons/LICENSE-freehand-highlighter.txt"
-sha256 = "286e4fd7b447330b2c88e23890e3cd0a9d38cb398d4a59cb247f578ccbda3213"
+sha256 = "83cba0ac883f6ef4866e457536bf58727a5702ebf6e7b407579e4f1863ca4c7d"
 
 [[document]]
 source = "assets/icons/LICENSE-lucide.txt"
