@@ -12,8 +12,10 @@ mod license_check;
 mod macos_integration;
 mod netcheck;
 mod parity;
+mod pdf_deps;
 mod screenshots;
 mod version;
+mod web;
 
 type Command = fn(&[String]) -> anyhow::Result<()>;
 
@@ -21,11 +23,14 @@ type Command = fn(&[String]) -> anyhow::Result<()>;
 const COMMANDS: &[(&str, &str, Command)] = &[
     ("version", "Print the workspace version, or `version set X.Y.Z[-pre]` to change it and refresh Cargo.lock", version_cmd),
     ("layers", "Enforce the crate dependency layering (plan/architecture.md §3)", gates::layers),
+    ("pdf-deps", "Check the pinned shared PDF reader, its backend and the local inspector", |_| {
+        pdf_deps::run(&gates::root()).map_err(anyhow::Error::msg)
+    }),
     ("wasm", "cargo check --target wasm32-unknown-unknown for every crate below L8, in one call", gates::wasm),
     ("deny", "Dependency licences, bans, sources and advisories (deny.toml; needs cargo-deny)", gates::deny),
     (
         "ci",
-        "fmt --check, clippy -D warnings, the CLI without default features, test, i18n-report, layers, wasm, license-check, deny, parity (stops at first failure)",
+        "fmt --check, clippy -D warnings, the CLI without default features, test, i18n-report, layers, wasm, license-check, deny, parity (runs every step, then reports each failure)",
         gates::ci,
     ),
     ("test", "Workspace tests: cargo nextest (cargo test when it is missing), then doctests", gates::test),
@@ -55,6 +60,11 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
+    (
+        "web-worker-link",
+        "Hash the web build's OCR worker files and name the worker in index.html (a Trunk post-build hook runs it)",
+        web::worker_link,
+    ),
 ];
 
 fn version_cmd(args: &[String]) -> anyhow::Result<()> {

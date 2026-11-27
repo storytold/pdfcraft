@@ -1,12 +1,13 @@
 //! Acrobat JavaScript in the shell: what scripts ask for (alerts, printing, navigation, links),
-//! the JavaScript console (⌘J), Document JavaScripts, and Preferences ▸ JavaScript.
+//! and the JavaScript console's state.
 
-use egui::{Align, Layout};
+use craft::theme::variant::Tone;
+use craft::ui::notices::{NoticeEnd, PostedNotice};
+use craft::ui::runtime::{frame, toast::ToastId};
+use pdfcraft_engine::DocId;
 use pdfcraft_engine::js::{JsOutput, Message, MessageIcon, Panel, Request};
-use pdfcraft_engine::{DocId, Edit};
 
-use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use crate::PdfCraftApp;
 
 /// The JavaScript console: the input and the output so far.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -15,25 +16,36 @@ pub struct JsConsole {
     pub log: Vec<String>,
 }
 
-/// Document JavaScripts: the script being edited.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct DocJsDraft {
-    pub name: String,
-    pub script: String,
-}
-
-/// Most form script messages that wait for the toast; past it, more are left out and counted, and
-/// the toast says how many once the rest have been shown. One run shows at most this many (the
+/// Most form script messages that wait for a notice; past it, more are left out and counted, and
+/// a notice says how many once the rest have been shown. One run shows at most this many (the
 /// script engine's own limit), so only runs in quick succession reach it.
 const MAX_WAITING_MESSAGES: usize = 100;
 
-/// The icon a script message's toast shows for `icon`.
-pub(crate) fn message_icon(icon: MessageIcon) -> &'static str {
+/// The script notice on screen, so its end is known for the app's own: one message is shown at a time, each
+/// when the one before it has gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScriptShown {
+    /// A script message.
+    Message(ToastId),
+    /// The count of messages the queue had no room for, with that count: said again if the notice was dropped
+    /// before it was shown its time.
+    Count(ToastId, u64),
+}
+
+impl ScriptShown {
+    fn id(self) -> ToastId {
+        match self {
+            ScriptShown::Message(id) | ScriptShown::Count(id, _) => id,
+        }
+    }
+}
+
+/// The tone a script message's notice reads in for `icon`.
+pub(crate) fn message_tone(icon: MessageIcon) -> Tone {
     match icon {
-        MessageIcon::Error => "circle-x",
-        MessageIcon::Warning => "triangle-alert",
-        MessageIcon::Question => "circle-help",
-        MessageIcon::Status => "info",
+        MessageIcon::Error => Tone::Bad,
+        MessageIcon::Warning => Tone::Warn,
+        MessageIcon::Question | MessageIcon::Status => Tone::Info,
     }
 }
 
@@ -47,7 +59,7 @@ impl PdfCraftApp {
     /// Act on what scripts produced in document `id`: alerts are shown, console output goes to
     /// the console, print and page requests are carried out, links wait for the user's permission
     /// (form submissions are reported, never sent).
-    pub fn handle_js(&mut self, id: DocId, out: JsOutput) {
+    pub fn handle_js(&mut self, ctx: &egui::Context, id: DocId, out: JsOutput) {
         let view = self.views.iter().position(|v| v.id == id);
         // A script that ran away turned the form's scripts off: calculations and buttons stop
         // working, and the error is only in the console. Say so once, and bring the notice bar
@@ -70,18 +82,31 @@ impl PdfCraftApp {
         }
         for r in out.requests {
             match r {
-                Request::Print => self.open_print(),
+                Request::Print => {
+                    if let Some(i) = view {
+                        // The print dialog reads the active document throughout its lifetime.
+                        // Keep the source selected; restoring the comparison tab would retarget it.
+                        self.active = Some(i);
+                        self.open_print();
+                    }
+                }
                 Request::GoToPage(p) => {
                     if let Some(i) = view {
                         self.views[i].go_to_page(p);
                     }
                 }
+                Request::OpenDoc(path) => self.request_script_document(id, &path),
                 Request::LaunchUrl(u) => self.request_document_url(&u, crate::LinkOrigin::Script),
                 Request::Submit(u) => self.notify_fmt(
                     "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.",
                     &[("u", &u)],
                 ),
-                Request::SaveAs => self.run_command("file.save_as"),
+                Request::SaveAs => {
+                    if let Some(i) = view {
+                        self.save_view(ctx, i, crate::SaveTarget::As);
+                    }
+                }
+                Request::OpenAttachment { name, open } => self.open_script_attachment(ctx, id, &name, open),
                 Request::ShowPanel(p) => {
                     let panel = match p {
                         Panel::Bookmarks => crate::RightPanel::Bookmarks,
@@ -91,185 +116,224 @@ impl PdfCraftApp {
                         Panel::Layers => crate::RightPanel::Layers,
                     };
                     // Show/Hide: a panel already showing closes.
-                    self.right = (self.right != Some(panel)).then_some(panel);
+                    self.set_right((self.right() != Some(panel)).then_some(panel));
                 }
-                Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
+                Request::Zoom(z) => {
+                    if let Some(i) = view {
+                        self.views[i].view.zoom = z / 100.0;
+                        self.views[i].view.fit = craft::pages::Fit::None;
+                    }
+                }
+                Request::Highlight(on) => self.script_highlight(id, on),
+                Request::Focus(name) => self.focus_script_field(id, view, &name, None),
+                Request::FocusField { name, object_id } => self.focus_script_field(id, view, &name, Some(object_id)),
+                // The engine applies these with the script's other changes (resets, templates).
+                Request::Beep | Request::Reset(_) | Request::SpawnTemplate { .. } | Request::SetTemplateHidden { .. } => {}
             }
         }
         self.show_script_messages(out.alerts);
     }
 
-    /// Show form script messages `messages` in order, each in the toast with its title and icon.
-    /// The first takes the toast at once when it is free; otherwise it waits, like the rest, for
-    /// what the toast shows (another message, or a notice such as the run's own submit request)
-    /// to go ([`Self::next_script_message`]).
+    fn focus_script_field(&mut self, id: DocId, view: Option<usize>, name: &str, object_id: Option<u64>) {
+        if let Some(i) = view
+            && let Some(f) = self.session.get(id).and_then(|d| {
+                d.form.iter().find(|f| object_id.map_or_else(|| f.name == name, |key| pdfcraft_engine::js::field_object_id(f.obj) == key))
+            })
+            && let Some((wi, widget)) = f.widgets.iter().enumerate().find(|(_, w)| !w.hidden && w.page.is_some())
+        {
+            let page = widget.page.unwrap_or(0);
+            if self.views[i].page_screen_rect(page).is_none() {
+                self.views[i].go_to_page(page);
+            }
+            self.views[i].session.forms.focus = Some(crate::forms_ui::open_focus(f, wi));
+        }
+    }
+
+    /// Show form script messages `messages` in order, each as a notice with its title and tone.
+    /// The first is posted on the next pass ([`Self::script_tick`]) when no script notice is on
+    /// screen; otherwise it waits, like the rest, for the one shown to end ([`Self::script_notice_ended`]).
     pub fn show_script_messages(&mut self, messages: Vec<Message>) {
         let room = MAX_WAITING_MESSAGES.saturating_sub(self.script_messages.len());
         let left_out = u64::try_from(messages.len().saturating_sub(room)).unwrap_or(u64::MAX);
         self.script_messages_dropped = self.script_messages_dropped.saturating_add(left_out);
         self.script_messages.extend(messages.into_iter().take(room));
-        if self.toast.is_none() {
-            self.next_script_message();
-        }
     }
 
-    /// The pointer's triggers on tab `index` this frame, in another viewer's order: the widget it
-    /// left runs its Mouse Exit action and the one it reached its Mouse Enter, then a press runs
-    /// the pressed widget's Mouse Down, before the field the focus leaves commits.
-    pub(crate) fn run_pointer_triggers(&mut self, index: usize) {
-        use pdfcraft_engine::FieldTrigger as T;
-        // A field's editor, drawn over the field (or closing over it this frame), hides the
-        // pointer from the pages: while no dialog is open and the pointer is still inside the
-        // widget it was over, it hasn't left.
-        let still = self.views.get(index).and_then(|view| {
-            let (name, widget) = view.forms.hovered.clone()?;
-            let p = self.ctx.as_ref()?.input(|i| i.pointer.hover_pos())?;
-            let doc = self.session.get(view.id)?;
-            let f = doc.form.iter().find(|f| f.name == name)?;
-            let inside = crate::forms_ui::field_screen_rect(view, &doc.info, f, widget)?.contains(p);
-            (inside && !self.modal_open()).then_some((name, widget))
-        });
-        let Some(view) = self.views.get_mut(index) else { return };
-        let seen = view.forms.hover_seen.take().or(still);
-        let mut queue = Vec::new();
-        if view.forms.hovered != seen {
-            let left = std::mem::replace(&mut view.forms.hovered, seen.clone());
-            queue.extend(left.map(|(n, w)| (n, w, T::MouseExit)));
-            queue.extend(seen.map(|(n, w)| (n, w, T::MouseEnter)));
-        }
-        queue.extend(std::mem::take(&mut view.forms.pressed_on).into_iter().map(|(n, w)| (n, w, T::MouseDown)));
-        for (name, widget, trigger) in queue {
-            self.run_field_trigger(index, &name, widget, trigger);
-        }
-    }
-
-    /// What a click released on tab `i` runs once its commit and focus scripts have: the Mouse Up
-    /// action of the field it released on, or a push button's action.
-    pub(crate) fn run_release_triggers(&mut self, i: usize) {
-        let Some(view) = self.views.get_mut(i) else { return };
-        let released = std::mem::take(&mut view.forms.released_on);
-        let button = view.forms.button.take();
-        for (name, widget) in released {
-            self.run_field_trigger(i, &name, widget, pdfcraft_engine::FieldTrigger::MouseUp);
-        }
-        if let Some((name, action)) = button {
-            crate::canvas::run_button(self, i, &name, action);
-        }
-    }
-
-    /// Run what widget `widget` of field `name` on tab `i` does on `trigger` (ISO 32000-2 Table
-    /// 197): a JavaScript sees that event, and any other action runs as a push button's does,
-    /// except that only a click may run a menu item, open a link, submit or pick a picture.
-    /// With JavaScript turned off its scripts don't run, and nothing says so: only a push
-    /// button's click asks for one to run. A script that changes the field being edited shows in
-    /// its editor, as an XFA enter script's does.
-    pub(crate) fn run_field_trigger(&mut self, i: usize, name: &str, widget: usize, trigger: pdfcraft_engine::FieldTrigger) {
-        use pdfcraft_engine::form_scripts::ButtonAction as B;
-        let Some(id) = self.views.get(i).map(|v| v.id) else { return };
-        let Some(action) = self.session.field_action(id, name, widget, trigger) else { return };
-        let B::Script(js) = action else {
-            // Off a click, an action may not run a menu item (print, save), open a link, submit
-            // or pick a picture: it changes the form, the view or the layers, or shows a message.
-            if !trigger.is_click() && matches!(action, B::Named(_) | B::Uri(_) | B::Submit(_) | B::ImportIcon) {
-                self.js_console.log.push(format!("{name}: its {} action only runs on a click", trigger.label()));
-                return;
-            }
-            // A reset or show/hide applies now, and leaves the edit already queued (the text the
-            // press committed) to apply after it, in another viewer's order, and the field being
-            // edited open: a push button's click closes it first, a trigger doesn't.
-            if matches!(action, B::Reset { .. } | B::ShowHide { .. }) {
-                if let Some(edit) = crate::canvas::action_edit(self, i, &action) {
-                    let before = self.focus_before(i, id);
-                    self.apply_edit(edit);
-                    // A reset of the field being edited shows in its editor, so leaving it
-                    // doesn't write the old text back.
-                    self.refresh_focus(i, id, before);
-                }
-                return;
-            }
-            crate::canvas::run_button(self, i, name, action);
+    /// A form button's `exportDataObject`: the attached file `name` (its key in the document's
+    /// embedded files, else its file name), opened in a new tab when the script asks to open a
+    /// PDF, and otherwise offered to save. Other files aren't launched in other programs.
+    fn open_script_attachment(&mut self, ctx: &egui::Context, id: DocId, name: &str, open: bool) {
+        let Some(doc) = self.session.get(id) else { return };
+        let keyed = |a: &pdfcraft_render::Attachment| matches!(&a.source, pdfcraft_render::AttachmentSource::Document { key } if key == name);
+        let index = doc.info.attachments.iter().position(keyed).or_else(|| doc.info.attachments.iter().position(|a| a.name == name));
+        let Some(i) = index else {
+            // The name is the form's own text: shortened, as file names are elsewhere.
+            let shown = crate::dialogs::shorten_middle(name, 80);
+            self.notify_fmt("The form asks for the attached file {name}, which this document doesn't have.", &[("name", &shown)]);
             return;
         };
-        if !self.session.javascript() {
-            return;
+        // Whether it is a PDF is decided by its bytes, not its name (`attachment_action`).
+        self.attachment_action(ctx, id, i, open);
+    }
+
+    /// A form's script turned field highlighting on or off (`app.runtimeHighlight`): as the
+    /// Highlight fields button does, for document `id` and the next ones.
+    pub(crate) fn script_highlight(&mut self, id: DocId, on: bool) {
+        if let Some(v) = self.views.iter_mut().find(|v| v.id == id) {
+            v.session.highlight_fields = on;
         }
-        let before = self.focus_before(i, id);
-        let generation = self.session.get(id).map(|d| d.edit_generation());
-        match self.session.run_field_script(id, &js, Some(name), trigger) {
-            Ok(o) => {
-                if self.session.get(id).map(|d| d.edit_generation()) != generation {
-                    if let Some(info) = self.session.get(id).map(|d| d.info.clone())
-                        && let Some(view) = self.views.get_mut(i)
-                    {
-                        view.document_changed(&info);
-                    }
-                    self.refresh_focus(i, id, before);
-                }
-                let out = JsOutput {
-                    alerts: o.alerts,
-                    console: o.console,
-                    requests: o.requests,
-                    errors: o.error.into_iter().collect(),
-                    doc_errors: Vec::new(),
-                };
-                self.handle_js(id, out);
-            }
-            Err(e) => self.notify_fmt("{field}: {e}", &[("field", name), ("e", &e.to_string())]),
-        }
+        self.highlight_fields = on;
+        self.session.set_field_highlight(on);
     }
 
-    /// The field being edited in view `i` of document `id`, as its editor text and its value, for
-    /// [`Self::refresh_focus`] after a change.
-    fn focus_before(&self, i: usize, id: DocId) -> Option<(String, Vec<String>)> {
-        let name = self.views.get(i)?.forms.focus.as_ref()?.name.clone();
-        self.session.get(id)?.form.iter().find(|f| f.name == name).map(|f| (crate::forms_ui::draft_text(f), f.value.clone()))
-    }
-
-    /// After a change to the form, the editor open in view `i` shows its field's new value, unless
-    /// the person has typed there since `before` ([`crate::forms_ui::refresh_draft`]).
-    fn refresh_focus(&mut self, i: usize, id: DocId, before: Option<(String, Vec<String>)>) {
-        let Some(before) = before else { return };
-        let Some(draft) = self.views.get_mut(i).and_then(|v| v.forms.focus.as_mut()) else { return };
-        let Some(f) = self.session.get(id).and_then(|d| d.form.iter().find(|f| f.name == draft.name)) else { return };
-        crate::forms_ui::refresh_draft(draft, (&before.0, &before.1), (crate::forms_ui::draft_text(f), &f.value));
-    }
-
-    /// Put the next waiting script message in the toast, or, once none waits, a notice of how many
-    /// the queue had no room for. False when there is neither.
-    pub fn next_script_message(&mut self) -> bool {
+    /// Post the next waiting script message, or, once none waits, a notice of how many the queue had
+    /// no room for. False when there is neither.
+    pub fn next_script_message(&mut self, ctx: &egui::Context) -> bool {
         let Some(m) = self.script_messages.pop_front() else {
             // Every message the queue held has been shown: say how many it had no room for.
             if self.script_messages_dropped == 0 {
                 return false;
             }
             let n = std::mem::take(&mut self.script_messages_dropped);
-            self.notify(crate::i18n::trn(
+            let text = crate::i18n::trn(
                 crate::i18n::current(),
                 n,
                 "{n} more message from the form's scripts was left out.",
                 "{n} more messages from the form's scripts were left out.",
-            ));
-            // Kept with the toast until it has been shown its time (the toast's own expiry).
-            self.toast_dropped = n;
+            );
+            let Some(id) = self.notices.post(ctx, &PostedNotice::new(text.to_string()), &[]) else { return false };
+            self.script_shown = Some(ScriptShown::Count(id, n));
             return true;
         };
-        self.toast = Some((m.text.clone(), 0.0));
-        self.toast_script = Some(m);
-        true
+        let notice = match m.title.as_ref().filter(|title| !title.is_empty()) {
+            Some(title) => PostedNotice::new(title.clone()).message(m.text.clone()),
+            None => PostedNotice::new(m.text.clone()),
+        }
+        .tone(message_tone(m.icon));
+        match self.notices.post(ctx, &notice, &[]) {
+            Some(id) => {
+                self.script_shown = Some(ScriptShown::Message(id));
+                true
+            }
+            // Nothing silences a script message, so this does not happen; the next one takes its place.
+            None => self.next_script_message(ctx),
+        }
+    }
+
+    /// A notice ended: when it is the script notice on screen, the next message is posted. A count notice
+    /// the card limit dropped before its time is said again.
+    pub(crate) fn script_notice_ended(&mut self, ctx: &egui::Context, end: &NoticeEnd) {
+        let (NoticeEnd::Closed(id) | NoticeEnd::Expired(id) | NoticeEnd::Dropped(id) | NoticeEnd::Silenced { id, .. }) = end else { return };
+        let Some(shown) = self.script_shown.filter(|shown| shown.id() == *id) else { return };
+        self.script_shown = None;
+        if let ScriptShown::Count(_, n) = shown
+            && matches!(end, NoticeEnd::Dropped(_))
+        {
+            self.script_messages_dropped = self.script_messages_dropped.saturating_add(n);
+        }
+        self.next_script_message(ctx);
+    }
+
+    /// Each frame: the live scripts of the document being read (#169). Its page's open actions
+    /// run when the page changes (after the close actions of the page it was at), and its timers
+    /// when they fall due, such as an animation's frames (LaTeX `animate`). Only the active tab
+    /// runs: an animation in another tab waits until its tab shows again.
+    pub(crate) fn script_tick(&mut self, ctx: &egui::Context) {
+        // A message queued before the window had a context is posted on the first pass.
+        if self.script_shown.is_none() && !self.script_messages.is_empty() {
+            // Requests from the same script may already have queued notices; post those first.
+            crate::notices::post_queued(self, ctx);
+            self.next_script_message(ctx);
+        }
+        // Nothing acts on the document under a dialog or prompt (`modal_open`): page actions and
+        // timers wait, and an interval that fell behind runs once when it closes.
+        if self.modal_open() {
+            return;
+        }
+        let Some((i, id)) = self.active_ids() else { return };
+        let now_ms = ctx.input(|input| input.time) * 1000.0;
+        let page = self.views[i].current();
+        // The page's actions, then its timers, if what the actions asked for left the viewer as it
+        // was: a page they went to runs its close and open actions (next frame) before any timer,
+        // and a dialog they opened holds the timers too.
+        for timers in [false, true] {
+            if timers && (self.modal_open() || self.active_ids() != Some((i, id)) || self.views[i].current() != page) {
+                frame::request_repaint_after(ctx, 0.0);
+                break;
+            }
+            // The field being edited as it was, so a script changing it shows in its editor while
+            // a draft the user already typed into is kept (as `run_field_triggers` does).
+            let before: Option<(String, Vec<String>)> = self.views[i].session.forms.focus.as_ref().and_then(|e| {
+                crate::forms_ui::focused_field(e, &self.session.get(id)?.form).map(|f| (crate::forms_ui::draft_text(f), f.value.clone()))
+            });
+            let run = if timers { self.session.run_timers(id, now_ms) } else { self.session.show_page(id, page, now_ms) };
+            if run.is_empty() {
+                continue;
+            }
+            if run.edited {
+                if let Some(info) = self.session.get(id).map(|d| d.info.clone()) {
+                    self.views[i].document_changed(ctx, &info);
+                }
+                if let Some(before) = &before
+                    && let Some(draft) = self.views[i].session.forms.focus.as_mut()
+                    && let Some(f) = self.session.get(id).and_then(|d| crate::forms_ui::focused_field(draft, &d.form))
+                {
+                    crate::forms_ui::refresh_draft(draft, (&before.0, &before.1), (crate::forms_ui::draft_text(f), &f.value));
+                }
+            } else if run.layers {
+                self.views[i].invalidate_content();
+            } else {
+                for p in &run.pages {
+                    self.views[i].page_changed(*p);
+                }
+            }
+            self.handle_js(ctx, id, run.output);
+            frame::request_repaint_after(ctx, 0.0);
+        }
+        if let Some(at) = self.session.next_timer(id) {
+            let wait = ((at - now_ms) / 1000.0).clamp(0.0, 3600.0);
+            frame::request_repaint_after(ctx, wait);
+        }
+    }
+
+    /// Run document `id`'s catalog JavaScript for `event` (Will Save before a save, Will Print
+    /// before printing) and show what it said. What it changed is part of what is saved or
+    /// printed. A failing script is reported and the save or print still goes ahead.
+    pub(crate) fn run_document_actions(&mut self, ctx: &egui::Context, id: DocId, event: pdfcraft_engine::js::DocumentScriptEvent) {
+        let before = self.session.get(id).map(|d| d.edit_generation());
+        let out = self.session.run_document_actions(id, event);
+        if self.session.get(id).map(|d| d.edit_generation()) != before
+            && let Some(i) = self.views.iter().position(|v| v.id == id)
+            && let Some(info) = self.session.get(id).map(|d| d.info.clone())
+        {
+            self.views[i].document_changed(ctx, &info);
+        }
+        if !out.is_empty() {
+            self.handle_js(ctx, id, out);
+        }
     }
 
     /// Run a push button's JavaScript (its Mouse Up action).
-    pub fn run_button_script(&mut self, id: DocId, field: &str, script: &str) {
+    pub fn run_button_script(&mut self, ctx: &egui::Context, id: DocId, field: &str, script: &str) {
+        self.run_button_script_target(ctx, id, field, None, script);
+    }
+    /// Run the action of the exact clicked button, preserving legacy name-only entry points.
+    pub fn run_button_script_target(&mut self, ctx: &egui::Context, id: DocId, field: &str, identity: Option<u64>, script: &str) {
         // A script reads the fields: include what's still being typed in one (#166).
-        if !self.commit_form_typing() {
+        if !self.commit_form_typing(ctx) {
             return;
         }
-        match self.session.run_javascript(id, script, Some(field)) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.session.get(id).is_some_and(|d| d.info.xfa.is_none()) {
+            self.start_ui_script(id, script, Some(field), identity);
+            return;
+        }
+        match self.session.run_javascript_target(id, script, Some(field), identity) {
             Ok(o) => {
                 if let Some(i) = self.views.iter().position(|v| v.id == id)
                     && let Some(info) = self.session.get(id).map(|d| d.info.clone())
                 {
-                    self.views[i].document_changed(&info);
+                    self.views[i].document_changed(ctx, &info);
                 }
                 let out = JsOutput {
                     alerts: o.alerts,
@@ -278,20 +342,81 @@ impl PdfCraftApp {
                     errors: o.error.into_iter().collect(),
                     doc_errors: Vec::new(),
                 };
-                self.handle_js(id, out);
+                self.handle_js(ctx, id, out);
             }
             Err(e) => self.notify_fmt("{field}: {e}", &[("field", field), ("e", &e.to_string())]),
         }
     }
 
+    /// `app.openDoc(path)`: resolve the path against document `id`'s folder (no file is touched)
+    /// and ask before opening it, as for a link to another PDF given by an absolute path; a script
+    /// never opens a file unasked. A request while another link waits for an answer is dropped,
+    /// as a link's is (#2081).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn request_script_document(&mut self, id: DocId, path: &str) {
+        if self.pending_remote_link.is_some() || self.pending_link.is_some() {
+            return;
+        }
+        let source = self.session.get(id).and_then(|d| d.path.clone());
+        match pdfcraft_engine::js::resolve_javascript_document_path(source.as_deref().map(std::path::Path::new), path) {
+            Ok(path) => {
+                self.pending_remote_link =
+                    Some(crate::PendingRemoteLink { source: id, path, destination: pdfcraft_render::RemoteDestination::Default })
+            }
+            Err(e) => self.notify_fmt("Couldn't follow linked PDF: {reason}", &[("reason", &e.to_string())]),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn request_script_document(&mut self, _id: DocId, _path: &str) {
+        self.notify_tr("Local cross-PDF links require the desktop app");
+    }
+
+    /// Run the JavaScript action of link `index` on page `page` (0-based; its place in the page's
+    /// annotations), clicked in document `id` (#2081). A failed script changes nothing.
+    pub fn run_link_script(&mut self, ctx: &egui::Context, id: DocId, page: usize, index: usize) {
+        if !self.commit_form_typing(ctx) {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.start_link_script(id, page, index);
+        }
+        // Script getters read the clicked view's zoom, page and field highlight, as on the
+        // desktop, where starting the script sets them.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(view) = self.views.iter().find(|v| v.id == id) {
+            let (zoom, current, highlight) = (view.zoom(), view.current(), view.session.highlight_fields);
+            self.session.set_javascript_view(id, zoom * 100.0, highlight, current);
+        }
+        #[cfg(target_arch = "wasm32")]
+        match self.session.run_link_javascript(id, page, index, &[]) {
+            Ok(o) => {
+                if let Some(i) = self.views.iter().position(|v| v.id == id)
+                    && let Some(info) = self.session.get(id).map(|d| d.info.clone())
+                {
+                    self.views[i].document_changed(ctx, &info);
+                }
+                let out = JsOutput {
+                    alerts: o.alerts,
+                    console: o.console,
+                    requests: o.requests,
+                    errors: o.error.into_iter().collect(),
+                    doc_errors: Vec::new(),
+                };
+                self.handle_js(ctx, id, out);
+            }
+            Err(e) => self.notify(e.to_string()),
+        }
+    }
+
     /// Prepare a form ▸ detect fields from the page's blanks, lines and boxes.
-    pub fn detect_fields(&mut self) {
+    pub fn detect_fields(&mut self, ctx: &egui::Context) {
         let Some((i, id)) = self.active_ids() else { return };
         match self.session.auto_detect_fields(id, &[]) {
             Ok(names) if names.is_empty() => self.notify_tr("No form fields were detected"),
             Ok(names) => {
                 if let Some(info) = self.session.get(id).map(|d| d.info.clone()) {
-                    self.views[i].document_changed(&info);
+                    self.views[i].document_changed(ctx, &info);
                 }
                 if names.len() == 1 {
                     self.notify_tr("Detected 1 form field");
@@ -304,7 +429,7 @@ impl PdfCraftApp {
     }
 
     /// The console's Run: evaluate the input in the active document.
-    pub fn run_console(&mut self) {
+    pub fn run_console(&mut self, ctx: &egui::Context) {
         let Some((i, id)) = self.active_ids() else { return };
         let script = self.js_console.input.clone();
         if script.trim().is_empty() {
@@ -314,151 +439,17 @@ impl PdfCraftApp {
         match self.session.run_javascript(id, &script, None) {
             Ok(o) => {
                 if let Some(info) = self.session.get(id).map(|d| d.info.clone()) {
-                    self.views[i].document_changed(&info);
+                    self.views[i].document_changed(ctx, &info);
                 }
                 let (error, result) = (o.error.clone(), o.result.clone());
                 let out = JsOutput { alerts: o.alerts, console: o.console, requests: o.requests, errors: Vec::new(), doc_errors: Vec::new() };
-                self.handle_js(id, out);
+                self.handle_js(ctx, id, out);
                 match error {
                     Some(e) => self.js_console.log.push(format!("Error: {e}")),
                     None => self.js_console.log.extend(result),
                 }
             }
             Err(e) => self.js_console.log.push(format!("Error: {e}")),
-        }
-    }
-}
-
-fn buttons(ui: &mut egui::Ui, primary: &str, others: &[&str]) -> Option<String> {
-    let mut clicked = None;
-    ui.horizontal(|ui| {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            // Stable ids: the console's output above changes how many widgets come first.
-            // Labels are translated for display; the returned id stays English.
-            if ui.push_id(primary, |ui| widgets::pill_button(ui, tl!(primary), true)).inner.clicked() {
-                clicked = Some(primary.to_string());
-            }
-            for o in others {
-                if ui.push_id(o, |ui| widgets::pill_button(ui, tl!(o), false)).inner.clicked() {
-                    clicked = Some(o.to_string());
-                }
-            }
-        })
-    });
-    clicked
-}
-
-/// The JavaScript console. Returns `true` to close.
-pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
-    ui.label(egui::RichText::new(tl!("JavaScript Console")).font(theme::semibold(18.0)));
-    ui.add_space(6.0);
-    if !app.session.javascript() {
-        ui.label(egui::RichText::new(tl!("JavaScript is turned off (Preferences ▸ JavaScript).")).small().color(t.text_muted));
-    }
-    egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        egui::ScrollArea::vertical().max_height(220.0).stick_to_bottom(true).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.set_min_height(160.0);
-            if app.js_console.log.is_empty() {
-                ui.label(egui::RichText::new(tl!("Output appears here.")).color(t.text_muted));
-            }
-            for line in &app.js_console.log {
-                ui.label(egui::RichText::new(line).monospace());
-            }
-        });
-    });
-    ui.add_space(6.0);
-    let input = ui.add(
-        crate::widgets::block(&mut app.js_console.input)
-            .code_editor()
-            .desired_rows(4)
-            .desired_width(f32::INFINITY)
-            .hint_text(tl!("JavaScript, e.g. getField(\"total\").value"))
-            .id_salt("js-console-input"),
-    );
-    let run_key = input.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
-    ui.add_space(8.0);
-    match buttons(ui, "Run", &["Close", "Clear"]).as_deref() {
-        Some("Run") => app.run_console(),
-        Some("Clear") => app.js_console.log.clear(),
-        Some("Close") => return true,
-        _ if run_key => app.run_console(),
-        _ => {}
-    }
-    false
-}
-
-/// Document JavaScripts: list, edit, add and delete. Returns `true` to close.
-pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
-    ui.label(egui::RichText::new(tl!("Document JavaScripts")).font(theme::semibold(18.0)));
-    ui.add_space(6.0);
-    let scripts = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.document_scripts()).unwrap_or_default();
-    let mut edit: Option<Edit> = None;
-    ui.horizontal(|ui| {
-        ui.label(tl!("Script Name:"));
-        ui.add(crate::widgets::line(&mut app.doc_js.name).desired_width(240.0).id_salt("doc-js-name"));
-    });
-    ui.add_space(4.0);
-    egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        egui::ScrollArea::vertical().max_height(120.0).id_salt("doc-js-list").show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            if scripts.is_empty() {
-                ui.label(egui::RichText::new(tl!("This document has no document-level scripts.")).color(t.text_muted));
-            }
-            for (name, js) in &scripts {
-                if ui.selectable_label(app.doc_js.name == *name, name).clicked() {
-                    app.doc_js = DocJsDraft { name: name.clone(), script: js.clone() };
-                }
-            }
-        });
-    });
-    ui.add_space(6.0);
-    ui.add(crate::widgets::block(&mut app.doc_js.script).code_editor().desired_rows(8).desired_width(f32::INFINITY).id_salt("doc-js-script"));
-    ui.add_space(8.0);
-    let name = app.doc_js.name.trim().to_string();
-    let close = match buttons(ui, "Save", &["Close", "Delete"]).as_deref() {
-        Some("Save") if !name.is_empty() => {
-            edit = Some(Edit::SetDocumentScript { name, script: Some(app.doc_js.script.clone()) });
-            false
-        }
-        Some("Delete") if scripts.iter().any(|(n, _)| *n == name) => {
-            edit = Some(Edit::SetDocumentScript { name, script: None });
-            app.doc_js = DocJsDraft::default();
-            false
-        }
-        Some("Close") => true,
-        _ => false,
-    };
-    if let Some(e) = edit {
-        app.apply_edit(e);
-    }
-    close
-}
-
-#[expect(unused_imports, reason = "re-exported for tests and backward compatibility")]
-pub(crate) use crate::dialogs::preferences::{
-    PREFERENCES_BUTTON_ROW, PREFERENCES_MIN_SCROLL, date_language_picker_name, preferences_body, preferences_buttons, preferences_header,
-};
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn date_language_names_fall_back_when_the_native_name_cannot_be_drawn() {
-        if !crate::i18n::needs_catalogs() {
-            return;
-        }
-        let date_language = |code: &str| pdfcraft_engine::dates::DATE_LANGUAGES.iter().find(|l| l.code == code).expect("date language");
-        let hindi = date_language("hi");
-        assert_eq!(date_language_picker_name(hindi, |_| true), hindi.name, "the native name is kept when it can be drawn");
-        assert_eq!(date_language_picker_name(hindi, |_| false), "Hindi", "no Devanagari face: show the English name");
-        let chinese = date_language("zh-hans");
-        assert_eq!(date_language_picker_name(chinese, |_| false), "Simplified Chinese");
-        for language in &pdfcraft_engine::dates::DATE_LANGUAGES {
-            assert!(!date_language_picker_name(language, |_| false).is_empty(), "{}", language.code);
         }
     }
 }
