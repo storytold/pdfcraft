@@ -39,10 +39,11 @@ impl PdfCraftApp {
 /// a comment is a part of its page only under the pointer, so a press that comes with the pointer's arrival, as every
 /// tap's does and a fast mouse's can, would go past the comment to what lies under it. From the first press that
 /// `lands` on, `events` wait in `held` and lead the next frame's, in order; the frame gets the move alone. A press
-/// waits one frame at most. Returns whether events wait.
+/// waits one frame at most, so another press held behind it, at another place, comes with it. Returns whether events
+/// wait.
 fn hold_landing_press(events: &mut Vec<egui::Event>, held: &mut Vec<egui::Event>, lands: impl Fn(egui::Pos2) -> bool) -> bool {
-    // The press that leads the held events had its move in the last frame.
-    let landed = usize::from(!held.is_empty());
+    // What waited a frame comes now, every press in it: only the frame's own events can wait.
+    let landed = held.len();
     held.append(events);
     std::mem::swap(events, held);
     let landing = events.iter().enumerate().skip(landed).find_map(|(at, event)| match event {
@@ -68,19 +69,28 @@ mod tests {
     use egui::{Event, Key, Modifiers, PointerButton, pos2};
 
     /// A press that lands gets a frame of its own move first, also where the backend sent none (a browser's touch),
-    /// then comes with every event behind it in order, and waits no longer than that.
+    /// then comes with every event behind it in order, and waits no longer than that, nor does a press at another
+    /// place that came behind it.
     #[test]
     fn a_landing_press_waits_one_frame_behind_its_move_and_keeps_the_order() {
-        let at = pos2(5.0, 6.0);
-        let button = |pressed| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let (at, beside) = (pos2(5.0, 6.0), pos2(40.0, 6.0));
+        let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
         let key = Event::Key { key: Key::A, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
-        let sent = vec![button(true), button(false), key.clone(), Event::PointerGone];
+        let sent = vec![
+            button(at, true),
+            button(at, false),
+            Event::PointerMoved(beside),
+            button(beside, true),
+            button(beside, false),
+            key.clone(),
+            Event::PointerGone,
+        ];
         let mut held = Vec::new();
         let mut first = sent.clone();
         assert!(hold_landing_press(&mut first, &mut held, |_| true));
         assert_eq!(first, [Event::PointerMoved(at)]);
         let mut next = vec![Event::WindowFocused(false)];
-        assert!(!hold_landing_press(&mut next, &mut held, |_| true), "the press waits no second frame");
+        assert!(!hold_landing_press(&mut next, &mut held, |_| true), "neither press waits a second frame");
         assert_eq!(next, [sent, vec![Event::WindowFocused(false)]].concat());
         assert!(held.is_empty());
     }
