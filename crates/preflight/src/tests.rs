@@ -108,17 +108,23 @@ fn convert_fixes_all_but_fonts() {
     assert!(r.fixed.iter().any(|f| f.contains("output intent")), "{:?}", r.fixed);
     let left: Vec<&str> = r.remaining.iter().map(|i| i.message.as_str()).collect();
     assert_eq!(left, ["The font Helvetica isn't embedded"], "{:#?}", r.remaining);
+    // A file that doesn't conform isn't identified as PDF/A (#8535): the metadata carries the
+    // document information, the output intent stays, and the report says what was left out.
+    assert!(r.fixed.iter().any(|f| f.contains("no PDF/A-2b identification") && f.contains("1 problem remains")), "{:?}", r.fixed);
+    assert!(!r.fixed.iter().any(|f| f.starts_with("Identified")), "{:?}", r.fixed);
     let d = declared(&doc);
-    assert_eq!(d.pdfa, Some((2, "B".into())));
+    assert_eq!(d.pdfa, None);
     assert_eq!(d.output_intents, ["sRGB IEC61966-2.1"]);
-    // The metadata carries the document information.
     let x = metadata(&doc).unwrap();
     assert_eq!(xmp::value(&x, "dc:title").as_deref(), Some("Report"));
     assert_eq!(xmp::value(&x, "xmp:CreateDate").as_deref(), Some("2024-01-05T09:30:00Z"));
-    // It survives a save.
+    assert_eq!(xmp::identifier(&x, xmp::PDFA_ID, "part"), None);
+    // It survives a save: the font, and the identification the file was left without.
     let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
     let back = Document::open(std::sync::Arc::new(bytes)).unwrap();
-    assert_eq!(verify(&back, Level::A2b).len(), 1);
+    let mut clauses: Vec<&str> = verify(&back, Level::A2b).iter().map(|i| i.clause).collect();
+    clauses.sort_unstable();
+    assert_eq!(clauses, ["6.2.11.4", "6.6.4"]);
 }
 
 #[test]
@@ -138,6 +144,9 @@ fn embedded_files_differ_between_parts() {
     assert!(verify(&d3, Level::A3b).iter().any(|i| i.message.contains("AFRelationship")));
     let r = convert(&mut d3, Level::A3b).unwrap();
     assert!(r.remaining.is_empty(), "{:#?}", r.remaining);
+    // Nothing remains, so the file is identified.
+    assert!(r.fixed.iter().any(|f| f == "Identified the file as PDF/A-3b in its XMP metadata"), "{:?}", r.fixed);
+    assert_eq!(declared(&d3).pdfa, Some((3, "B".into())));
 }
 
 /// A page that paints a DeviceCMYK image (as `doc_create` makes from a CMYK JPEG), with

@@ -240,8 +240,9 @@ fn info(doc: &Document, key: &str) -> Option<String> {
     i.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())).filter(|s| !s.is_empty())
 }
 
-/// The XMP packet for `doc` declaring `level`, from its document information.
-pub fn packet(doc: &Document, level: crate::Level) -> String {
+/// The XMP packet for `doc` from its document information, declaring `level` when given: a
+/// file that doesn't conform gets none (#8535).
+pub fn packet(doc: &Document, level: Option<crate::Level>) -> String {
     let mut props = String::new();
     if let Some(t) = info(doc, "Title") {
         props.push_str(&format!("   <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:title>\n", esc(&t)));
@@ -267,6 +268,8 @@ pub fn packet(doc: &Document, level: crate::Level) -> String {
     if let Some(d) = info(doc, "ModDate").and_then(|d| iso_date(&d)) {
         props.push_str(&format!("   <xmp:ModifyDate>{d}</xmp:ModifyDate>\n"));
     }
+    let id =
+        level.map_or_else(String::new, |l| format!("   <pdfaid:part>{}</pdfaid:part>\n   <pdfaid:conformance>B</pdfaid:conformance>\n", l.part()));
     format!(
         "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
 <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
@@ -276,13 +279,10 @@ pub fn packet(doc: &Document, level: crate::Level) -> String {
     xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\"\n\
     xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"\n\
     xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\">\n\
-   <pdfaid:part>{}</pdfaid:part>\n\
-   <pdfaid:conformance>B</pdfaid:conformance>\n\
-{props}  </rdf:Description>\n\
+{id}{props}  </rdf:Description>\n\
  </rdf:RDF>\n\
 </x:xmpmeta>\n\
-<?xpacket end=\"w\"?>",
-        level.part()
+<?xpacket end=\"w\"?>"
     )
 }
 
