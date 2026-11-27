@@ -2,7 +2,10 @@
 //!
 //! Each text object becomes a paragraph, or a heading when its size or weight sets it apart from
 //! the body text ([`crate::autotag_roles`]); either can be retagged with the existing tag-property
-//! tool after human review. Painted paths, shadings and images outside text objects
+//! tool after human review. Running headers, footers and page numbers, found by repetition across
+//! the pages ([`crate::autotag_running`]), are wrapped in
+//! `/Artifact <</Type /Pagination /Subtype /Header>> BDC … EMC` (or `/Footer`) instead of being
+//! tagged. Painted paths, shadings and images outside text objects
 //! are wrapped in `/Artifact BMC … EMC` so the resulting page passes the tagged-content check.
 
 use std::collections::{HashMap, HashSet};
@@ -11,6 +14,7 @@ use pdfcraft_content::{Op, Pieces, serialize_ops};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
 use crate::autotag_roles::{self, Evidence};
+use crate::autotag_running::{self, Edge, Frame, PageText};
 
 const MAX_PAGES: usize = 1_000;
 const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -26,6 +30,21 @@ pub struct AutoTagResult {
     pub pages: usize,
     pub paragraphs: usize,
     pub headings: usize,
+    /// Text objects marked as running header artifacts.
+    pub headers: usize,
+    /// Text objects marked as running footer artifacts, page numbers included.
+    pub footers: usize,
+}
+
+/// A text object auto-tag marks as a running header or footer instead of tagging it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunningText {
+    /// 0-based page index.
+    pub page: usize,
+    /// `"Header"` or `"Footer"`, the artifact subtype written.
+    pub subtype: &'static str,
+    /// The text shown, at most 256 characters.
+    pub text: String,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -50,6 +69,14 @@ struct Plan {
     spans: Vec<(usize, usize)>,
     evidence: Vec<Evidence>,
     artifacts: HashMap<usize, usize>,
+    frame: Frame,
+}
+
+/// What a text object's span is wrapped in.
+#[derive(Clone, Copy)]
+enum Mark {
+    Tag(usize, &'static str),
+    Running(Edge),
 }
 
 fn unsupported(page: usize, reason: impl Into<String>) -> AutoTagError {
@@ -269,7 +296,8 @@ fn plan_page(
     }
     let resources = page_fonts(doc, &page.dict);
     let evidence = autotag_roles::evidence(doc, fonts, &resources, &parsed.ops, &spans);
-    Ok(Plan { page: page.obj, ops: parsed.ops, spans, evidence, artifacts })
+    let frame = Frame { rotation: page.rotation(doc), crop: page.crop(doc) };
+    Ok(Plan { page: page.obj, ops: parsed.ops, spans, evidence, artifacts, frame })
 }
 
 fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
@@ -301,21 +329,26 @@ fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
     Ok(out)
 }
 
-fn mark_ops(
-    ops: Vec<Op>,
-    starts: &HashMap<usize, (usize, &'static str)>,
-    ends: &HashSet<usize>,
-    artifacts: &HashMap<usize, usize>,
-) -> Result<Vec<Op>, AutoTagError> {
+fn mark_ops(ops: Vec<Op>, starts: &HashMap<usize, Mark>, ends: &HashSet<usize>, artifacts: &HashMap<usize, usize>) -> Result<Vec<Op>, AutoTagError> {
     let artifact_ends: HashSet<usize> = artifacts.values().copied().collect();
     let extra = starts.len().saturating_add(artifacts.len()).saturating_mul(2);
     let mut marked = Vec::with_capacity(ops.len().saturating_add(extra));
     for (at, op) in ops.into_iter().enumerate() {
         let is_artifact = artifacts.contains_key(&at);
-        if let Some(&(mcid, role)) = starts.get(&at) {
+        if let Some(&mark) = starts.get(&at) {
             let mut properties = Dict::new();
-            properties.set(b"MCID".to_vec(), Object::Int(i64::try_from(mcid).map_err(|_| AutoTagError::TooManyPages)?));
-            marked.push(Op::new("BDC", vec![Object::name(role), Object::Dict(properties)]));
+            let tag = match mark {
+                Mark::Tag(mcid, role) => {
+                    properties.set(b"MCID".to_vec(), Object::Int(i64::try_from(mcid).map_err(|_| AutoTagError::TooManyPages)?));
+                    role
+                }
+                Mark::Running(edge) => {
+                    properties.set(b"Type".to_vec(), Object::name("Pagination"));
+                    properties.set(b"Subtype".to_vec(), Object::name(edge.subtype()));
+                    "Artifact"
+                }
+            };
+            marked.push(Op::new("BDC", vec![Object::name(tag), Object::Dict(properties)]));
         } else if is_artifact {
             marked.push(Op::new("BMC", vec![Object::name("Artifact")]));
         }
@@ -361,54 +394,107 @@ fn write_structure(
     Ok(())
 }
 
-/// Tag every text object in an untagged PDF as a paragraph or a heading and mark painted paths, shadings and
+/// The edge each planned text object repeats at, for running text, per page and span.
+fn running(plans: &[Plan]) -> Vec<Vec<Option<Edge>>> {
+    let pages: Vec<PageText<'_>> = plans.iter().map(|p| PageText { frame: p.frame, objects: &p.evidence }).collect();
+    autotag_running::find(&pages, autotag_roles::body_size(plans.iter().flat_map(|p| &p.evidence)))
+}
+
+/// The running headers, footers and page numbers [`autotag_text`] would mark as artifacts, in page
+/// order. Refuses what `autotag_text` refuses, and changes nothing.
+pub fn running_text(doc: &Document) -> Result<Vec<RunningText>, AutoTagError> {
+    let plans = plan(doc)?;
+    let mut out = Vec::new();
+    for (page, (plan, edges)) in plans.iter().zip(running(&plans)).enumerate() {
+        for (evidence, edge) in plan.evidence.iter().zip(edges) {
+            if let Some(edge) = edge {
+                out.push(RunningText { page, subtype: edge.subtype(), text: evidence.text.clone() });
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// What [`autotag_text`] has written so far.
+struct Written {
+    children: Vec<Object>,
+    numbers: Vec<Object>,
+    result: AutoTagResult,
+}
+
+/// Tag or mark one page's text objects, and write its marked content.
+fn tag_page(
+    next: &mut Document,
+    document: ObjRef,
+    page: Plan,
+    edges: &[Option<Edge>],
+    roles: &mut impl Iterator<Item = &'static str>,
+    written: &mut Written,
+) -> Result<(), AutoTagError> {
+    let (mut starts, mut ends, mut parents) = (HashMap::new(), HashSet::new(), Vec::new());
+    let key = i64::try_from(written.result.pages).map_err(|_| AutoTagError::TooManyPages)?;
+    for (at, &(first, last)) in page.spans.iter().enumerate() {
+        ends.insert(last);
+        if let Some(edge) = edges.get(at).copied().flatten() {
+            starts.insert(first, Mark::Running(edge));
+            let count = if edge == Edge::Top { &mut written.result.headers } else { &mut written.result.footers };
+            *count = count.saturating_add(1);
+            continue;
+        }
+        let role = roles.next().unwrap_or("P");
+        let mcid = parents.len();
+        let mut element = Dict::new();
+        element.set(b"Type".to_vec(), Object::name("StructElem"));
+        element.set(b"S".to_vec(), Object::name(role));
+        element.set(b"P".to_vec(), Object::Ref(document));
+        element.set(b"Pg".to_vec(), Object::Ref(page.page));
+        element.set(b"K".to_vec(), Object::Int(i64::try_from(mcid).map_err(|_| AutoTagError::TooManyPages)?));
+        let reference = next.add(element);
+        parents.push(Object::Ref(reference));
+        written.children.push(Object::Ref(reference));
+        starts.insert(first, Mark::Tag(mcid, role));
+        let count = if role == "P" { &mut written.result.paragraphs } else { &mut written.result.headings };
+        *count = count.saturating_add(1);
+    }
+    if !parents.is_empty() {
+        next.update_dict(page.page, |d| d.set(b"StructParents".to_vec(), Object::Int(key)))?;
+        written.numbers.extend([Object::Int(key), Object::Array(parents)]);
+        written.result.pages = written.result.pages.saturating_add(1);
+    }
+    let marked = mark_ops(page.ops, &starts, &ends, &page.artifacts)?;
+    let stream = next.add(Stream::flate(Dict::new(), &serialize_ops(&marked)));
+    next.update_dict(page.page, |d| d.set(b"Contents".to_vec(), Object::Ref(stream)))?;
+    Ok(())
+}
+
+/// Tag every text object in an untagged PDF as a paragraph or a heading, mark running headers,
+/// footers and page numbers as pagination artifacts, and mark painted paths, shadings and
 /// images outside text objects as artifacts. The full structure tree, parent tree and
 /// marked-content IDs are written together. Unsupported operators are refused before any
 /// mutation. On success the caller can use tag-property edits to correct the roles after review.
 pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
     let plans = plan(doc)?;
-    let all: Vec<Evidence> = plans.iter().flat_map(|p| p.evidence.iter().copied()).collect();
-    let mut roles = autotag_roles::roles(&all).into_iter();
+    let running = running(&plans);
+    // Running text is left out of the body style and the heading levels, as it is out of the tags.
+    let tagged: Vec<Evidence> = plans
+        .iter()
+        .zip(&running)
+        .flat_map(|(p, edges)| p.evidence.iter().zip(edges).filter(|(_, edge)| edge.is_none()).map(|(e, _)| e.clone()))
+        .collect();
+    let mut roles = autotag_roles::roles(&tagged).into_iter();
     let mut next = doc.clone();
     let catalog = next.root().ok_or(AutoTagError::NoCatalog)?;
     let (root, document) = (next.add(Object::Null), next.add(Object::Null));
-    let (mut children, mut numbers, mut tagged_pages, mut paragraphs, mut headings) = (Vec::new(), Vec::new(), 0usize, 0usize, 0usize);
-    for page in plans {
+    let result = AutoTagResult { pages: 0, paragraphs: 0, headings: 0, headers: 0, footers: 0 };
+    let mut written = Written { children: Vec::new(), numbers: Vec::new(), result };
+    for (page, edges) in plans.into_iter().zip(running) {
         if page.spans.is_empty() && page.artifacts.is_empty() {
             continue;
         }
-        let (mut starts, mut ends) = (HashMap::new(), HashSet::new());
-        if !page.spans.is_empty() {
-            let key = i64::try_from(tagged_pages).map_err(|_| AutoTagError::TooManyPages)?;
-            let mut parents = Vec::with_capacity(page.spans.len());
-            for (mcid, (first, last)) in page.spans.iter().enumerate() {
-                let role = roles.next().unwrap_or("P");
-                let mut element = Dict::new();
-                element.set(b"Type".to_vec(), Object::name("StructElem"));
-                element.set(b"S".to_vec(), Object::name(role));
-                element.set(b"P".to_vec(), Object::Ref(document));
-                element.set(b"Pg".to_vec(), Object::Ref(page.page));
-                element.set(b"K".to_vec(), Object::Int(i64::try_from(mcid).map_err(|_| AutoTagError::TooManyPages)?));
-                let reference = next.add(element);
-                parents.push(Object::Ref(reference));
-                children.push(Object::Ref(reference));
-                starts.insert(*first, (mcid, role));
-                ends.insert(*last);
-                if role == "P" {
-                    paragraphs = paragraphs.saturating_add(1);
-                } else {
-                    headings = headings.saturating_add(1);
-                }
-            }
-            next.update_dict(page.page, |d| d.set(b"StructParents".to_vec(), Object::Int(key)))?;
-            numbers.extend([Object::Int(key), Object::Array(parents)]);
-            tagged_pages += 1;
-        }
-        let marked = mark_ops(page.ops, &starts, &ends, &page.artifacts)?;
-        let stream = next.add(Stream::flate(Dict::new(), &serialize_ops(&marked)));
-        next.update_dict(page.page, |d| d.set(b"Contents".to_vec(), Object::Ref(stream)))?;
+        tag_page(&mut next, document, page, &edges, &mut roles, &mut written)?;
     }
-    write_structure(&mut next, catalog, root, document, children, numbers, tagged_pages)?;
+    let Written { children, numbers, result } = written;
+    write_structure(&mut next, catalog, root, document, children, numbers, result.pages)?;
     *doc = next;
-    Ok(AutoTagResult { pages: tagged_pages, paragraphs, headings })
+    Ok(result)
 }
