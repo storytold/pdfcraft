@@ -290,8 +290,12 @@ fn read_line(line: &ocrs::TextLine, before: Option<RectF>, upright: bool, gray: 
                 .checked_sub(1)
                 .and_then(|p| words.get(p))
                 .map(|p| symbols::Neighbour { edge: p.bounding_rect().right() as f32, numeric: symbols::ends_number(&text_of(p)) });
-            let next =
-                words.get(i + 1).map(|n| symbols::Neighbour { edge: n.bounding_rect().left() as f32, numeric: symbols::leads_number(&text_of(n)) });
+            // A `Ø` the decoder sets apart from its number (`2`, `x`, `O`, `.250`) leads a
+            // number when the word after it does.
+            let after_next = words.get(i + 2).is_some_and(|m| symbols::leads_number(&text_of(m), false));
+            let next = words
+                .get(i + 1)
+                .map(|n| symbols::Neighbour { edge: n.bounding_rect().left() as f32, numeric: symbols::leads_number(&text_of(n), after_next) });
             if let Some(fix) = symbols::repair_word(&chars, line_box.top(), line_box.bottom(), prev, next, gray) {
                 text = fix.text;
                 if let Some(right) = fix.right {
