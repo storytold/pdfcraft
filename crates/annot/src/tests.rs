@@ -5534,23 +5534,26 @@ fn thai_in_fill_sign_text_and_text_boxes_is_drawn_from_the_thai_face() {
 fn accented_capitals_keep_their_tops_inside_fill_sign_text_and_text_boxes() {
     let mut doc = fixture();
     let text = "ÅRHUS ÁGUA\nÉcole";
-    let hi = pdfcraft_fonts::shaped_text::line_reach("ÅRHUS ÁGUA").unwrap()[1];
-    assert!(hi > 0.95, "{hi}: Å rises nearly to the top of the em");
+    let reach = pdfcraft_fonts::shaped_text::line_reach;
+    let (hi, lo) = (reach("ÅRHUS ÁGUA").unwrap()[1], reach("École").unwrap()[0]);
+    assert!(hi > 0.95 && lo < 0.0, "{hi} {lo}: Å rises nearly to the top of the em");
     let item = |shape: Shape| NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: text.into(), author: "Ada".into() };
+    // Each box is drawn too short for its two lines: it grows to hold them.
     let shapes = [
-        Shape::Typewriter { rect: [40.0, 700.0, 560.0, 760.0], font_size: 48.0 },
-        Shape::TextBox { rect: [20.0, 400.0, 600.0, 480.0], font_size: 60.0 },
+        (Shape::Typewriter { rect: [40.0, 700.0, 560.0, 760.0], font_size: 48.0 }, 60.0),
+        (Shape::TextBox { rect: [20.0, 400.0, 600.0, 480.0], font_size: 60.0 }, 80.0),
     ];
-    for (shape, size) in shapes.into_iter().zip([48.0, 60.0]) {
+    for ((shape, drawn), size) in shapes.into_iter().zip([48.0, 60.0]) {
         let t = add_annotation(&mut doc, &item(shape), &meta("t")).unwrap();
         let doc = reopen(&doc);
         let d = &list(&doc, 0)[t];
         let (r, ys) = (rect(d), baselines(&ap_content(&doc, d)));
-        // Both lines are drawn, and the first line's ink lies inside the box: the appearance's
-        // BBox and its clip.
+        assert!(r[3] - r[1] > drawn && r[3] - r[1] >= 2.4 * size, "{r:?} at {size}: grown from {drawn} to hold two lines");
+        // Both lines are drawn, and their ink lies inside the box: the appearance's BBox and
+        // its clip.
         assert_eq!(ys.len(), 2, "{ys:?} at {size}");
-        let top = ys.iter().copied().fold(f64::MIN, f64::max);
-        assert!(top + hi * size <= r[3] + 1e-3, "{ys:?} at {size} in {r:?}");
+        let (top, bottom) = (ys.iter().copied().fold(f64::MIN, f64::max), ys.iter().copied().fold(f64::MAX, f64::min));
+        assert!(top + hi * size <= r[3] + 1e-3 && bottom + lo * size >= r[1] - 1e-3, "{ys:?} at {size} in {r:?}");
     }
     // Plain text keeps its place: the first baseline 0.9 em under the 4 pt padding (2 pt and
     // the 2 pt border).
