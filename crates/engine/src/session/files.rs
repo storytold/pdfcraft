@@ -4,6 +4,9 @@ use super::{
     print_layer_states, print_raster, set_default_layer_state, source_kind, writable, write_full,
 };
 
+/// Why printer's marks were refused for a print that goes as pictures.
+const MARKS_AS_PICTURES: &str = "printer marks print with the pages as they are, not as pictures: leave out as_image and app-managed colour (a document that allows only low-resolution printing always prints as pictures)";
+
 /// Whether a conversion may run LibreOffice for an Office document (seconds, in another
 /// process) or must refuse it because the caller is on the frame thread.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -229,6 +232,36 @@ impl Session {
 
     /// The print-ready PDF for `settings` (sheets laid out for the paper; see `pdfcraft-print`).
     pub fn print_pdf(&self, id: DocId, settings: &print::Settings) -> Result<Vec<u8>, EditError> {
+        self.print_pdf_marked(id, settings, None)
+    }
+
+    /// Whether printer's marks fit around `pages` (0-based): [`pdfcraft_edit::add_printer_marks`]
+    /// run on a scratch copy, so a page the marks would widen past the largest page a PDF can
+    /// have is refused before anything (the Will Print actions) changes the document. The copy
+    /// is dropped; [`Session::print_pdf_marked`] adds the marks again on the print copy.
+    pub fn check_printer_marks(&self, id: DocId, pages: &[usize], marks: &crate::PrinterMarks) -> Result<(), EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let mut cos = match doc.editor.as_ref() {
+            Some(e) => e.cos.clone(),
+            None => {
+                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
+            }
+        };
+        let mut pages = pages.to_vec();
+        pages.sort_unstable();
+        pages.dedup();
+        pdfcraft_edit::add_printer_marks(&mut cos, &pages, marks, true)?;
+        Ok(())
+    }
+
+    /// [`Session::print_pdf`] with printer's marks (Acrobat's Marks and Bleeds) drawn around each
+    /// printed page on the print copy only: the document itself gets none. A page is widened for
+    /// them as [`pdfcraft_edit::add_printer_marks`] widens it, and marks the document already
+    /// carries are replaced, so a page never prints two sets. With form fields only, the fields
+    /// and the marks print and the page content doesn't. The pages print as they are, so
+    /// marks can't go with a print as pictures (Print as image, app-managed colour, or a document
+    /// that allows only low-resolution printing).
+    pub fn print_pdf_marked(&self, id: DocId, settings: &print::Settings, marks: Option<&crate::PrinterMarks>) -> Result<Vec<u8>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if !doc.allows_printing() {
             return Err(EditError::NotPermitted("printing"));
@@ -243,6 +276,9 @@ impl Session {
         // Print as image: the pages used become pictures first, then the picture document is
         // imposed in their place (its page k is the k-th distinct source page used).
         if let Some(raster) = low_res.as_ref().or(settings.raster.as_ref()) {
+            if marks.is_some() {
+                return Err(EditError::Print(MARKS_AS_PICTURES.into()));
+            }
             let mut distinct: Vec<usize> = Vec::new();
             for &p in &settings.pages {
                 if !distinct.contains(&p) {
@@ -286,6 +322,21 @@ impl Session {
         // written. This copy is only printed, never saved.
         if doc.signatures.iter().any(|s| s.verdict_shown) {
             let _ = pdfcraft_sign::show_status_layers(&mut cos, &mut doc.signatures.to_vec(), &doc.captions);
+        }
+        let marked;
+        let mut settings = settings;
+        if let Some(marks) = marks {
+            // Form fields only prints no page content, so the page content goes before the
+            // marks are added, and the marks then print as the page content does.
+            if settings.content == print::Content::FormFieldsOnly {
+                pdfcraft_print::keep_printed(&mut cos, print::Content::FormFieldsOnly);
+                marked = print::Settings { content: print::Content::Document, ..settings.clone() };
+                settings = &marked;
+            }
+            let mut pages = settings.pages.clone();
+            pages.sort_unstable();
+            pages.dedup();
+            pdfcraft_edit::add_printer_marks(&mut cos, &pages, marks, true)?;
         }
         pdfcraft_print::impose(&cos, settings).map_err(|e| EditError::Print(e.to_string()))
     }
