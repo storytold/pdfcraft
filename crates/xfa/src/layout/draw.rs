@@ -497,14 +497,9 @@ impl Layouter<'_> {
                 }
                 _ => inner,
             },
-            Aspect::Actual => match crate::image::size(data) {
-                Some((iw, ih)) if iw > 0 && ih > 0 => {
-                    let (dx, dy) = crate::image::resolution(data).unwrap_or((72.0, 72.0));
-                    let dx = if dx.is_finite() && dx > 0.0 { dx } else { 72.0 };
-                    let dy = if dy.is_finite() && dy > 0.0 { dy } else { 72.0 };
-                    Rect::new(inner.x, inner.y, clamp(f64::from(iw) * 72.0 / dx, inner.w), clamp(f64::from(ih) * 72.0 / dy, inner.h))
-                }
-                _ => inner,
+            Aspect::Actual => match crate::image::actual_size(data) {
+                Some((w, h)) => Rect::new(inner.x, inner.y, clamp(w, inner.w), clamp(h, inner.h)),
+                None => inner,
             },
         };
         self.push(Item::Image { rect: fitted, data: Arc::new(data.to_vec()), content_type: content_type.to_string() })

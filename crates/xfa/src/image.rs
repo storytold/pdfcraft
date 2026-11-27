@@ -129,6 +129,15 @@ pub fn resolution(data: &[u8]) -> Option<(f64, f64)> {
     (ok(dx) && ok(dy)).then_some((dx, dy))
 }
 
+/// The picture's own size in points (`aspect="actual"`): its pixel size at its header
+/// resolution, or at 72 dpi when it records none; `None` when the pixel size can't be read or is
+/// zero. Drawing and measuring both use it, so a flowed picture takes the room it is drawn in.
+pub fn actual_size(data: &[u8]) -> Option<(f64, f64)> {
+    let (iw, ih) = size(data).filter(|&(w, h)| w > 0 && h > 0)?;
+    let (dx, dy) = resolution(data).unwrap_or((72.0, 72.0));
+    Some((f64::from(iw) * 72.0 / dx, f64::from(ih) * 72.0 / dy))
+}
+
 fn jpeg_resolution(data: &[u8]) -> Option<(f64, f64)> {
     if data.get(0..2)? != [0xFF, 0xD8] {
         return None;

@@ -1,8 +1,8 @@
 use super::common::clamp_opt;
 use super::field::auto_check_reserve;
 use super::{
-    Access, Area, Ctx, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Measured, Node, Para, Placement, Rect, SomIndices,
-    Subform, Ui, Value, data_path, text,
+    Access, Area, Aspect, Ctx, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Measured, Node, Para, Placement, Rect,
+    SomIndices, Subform, Ui, Value, data_path, text,
 };
 
 /// Where [`Layouter::pack_instances`] puts one object: the (child index, instance) steps to it, and
@@ -224,6 +224,12 @@ impl Layouter<'_> {
         match v {
             Value::Text(t) => text::measure_height(&text::plain(t), w, &ctx.para, &Face::of(&ctx.font), &|id, max| self.embed(id, max)),
             Value::Rich(r) => text::measure_height(r, w, &ctx.para, &Face::of(&ctx.font), &|id, max| self.embed(id, max)),
+            // A picture at its own size is as tall as it is drawn ([`Layouter::draw_image`]),
+            // whatever width it has; the others scale to the width.
+            Value::Image { data, aspect: Aspect::Actual, .. } => match crate::image::actual_size(data) {
+                Some((_, h)) if h.is_finite() => h.clamp(0.0, 100_000.0),
+                _ => crate::image::size(data).map_or(w, |(iw, ih)| if iw > 0 { w * ih as f64 / iw as f64 } else { w }),
+            },
             Value::Image { data, .. } => crate::image::size(data).map_or(w, |(iw, ih)| if iw > 0 { w * ih as f64 / iw as f64 } else { w }),
             Value::Line { .. } | Value::Rectangle(_) | Value::Empty => 0.0,
         }

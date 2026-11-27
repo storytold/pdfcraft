@@ -9057,6 +9057,31 @@ fn aspect_actual_uses_tiff_and_bmp_header_resolution() {
     assert!(rb.w < 1899.0 && rb.h < 664.0, "BMP actual should scale by 1200 dpi, not 72 dpi: {rb:?}");
 }
 
+/// A flowed draw without a height takes the height its picture is drawn at: an `actual` picture
+/// keeps its own size whatever the draw's width, so the next object starts below it, not inside it.
+#[test]
+fn aspect_actual_picture_without_a_height_pushes_the_next_object_below_it() {
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode(png_with_header(600, 300, None));
+    let rule = base64::engine::general_purpose::STANDARD.encode(png_with_header(10, 1, None));
+    let xdp = format!(
+        r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="flow" layout="tb" w="7.5in">
+  <draw name="pic" w="200pt"><value><image contentType="image/png" aspect="actual">{data}</image></value></draw>
+  <draw name="next" w="100pt" h="10pt"><value><image contentType="image/png" aspect="none">{rule}</image></value></draw>
+ </subform>
+</subform>
+</template></xdp:xdp>"##
+    );
+    let items = layout_xml(&xdp).unwrap().pages.into_iter().next().unwrap().items;
+    let rects: Vec<Rect> = items.iter().filter_map(|i| if let Item::Image { rect, .. } = i { Some(*rect) } else { None }).collect();
+    let [pic, next] = rects[..] else { panic!("two pictures, got {rects:?}") };
+    assert!((pic.w - 600.0).abs() < 1e-6 && (pic.h - 300.0).abs() < 1e-6, "actual at 72 dpi: {pic:?}");
+    assert!((next.y - pic.y).abs() >= 300.0 - 1e-6, "the next draw starts inside the picture: {pic:?} then {next:?}");
+}
+
 #[test]
 fn aspect_none_with_large_negative_margins_stays_within_extent_bound() {
     use base64::Engine;
