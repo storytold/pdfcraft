@@ -506,15 +506,18 @@ fn app_creator<'a>(
         let ctx = cc.egui_ctx.clone();
         let wake = craft::host::Wake::new(move || ctx.request_repaint());
         // Files a second launch hands over arrive through the single-instance server.
-        // PLAN: assumed single_instance::Server::connect(&self, &egui::Context) -> FileIntake and apple_events::AppleEvents::connect(&self, IntakeSender, &egui::Context) (pdf-shell-w6).
         let intake = match instance {
             Some(server) => server.connect(&cc.egui_ctx),
             None => craft::platform::open::FileIntake::new(wake).0,
         };
         // Finder, Open With and the Dock deliver files as Apple events, not arguments.
         #[cfg(target_os = "macos")]
-        apple_events.connect(intake.sender(), &cc.egui_ctx);
+        let host_events = apple_events.connect(intake.sender(), &cc.egui_ctx);
         let mut app = PdfCraftApp::with_intake(&cc.egui_ctx, intake);
+        #[cfg(target_os = "macos")]
+        {
+            app.host_events = Some(host_events);
+        }
         // First start (or settings from before Units existed): the region's unit.
         app.units = pdfcraft_ui_egui::units::Unit::system();
         // The system's reopen-windows choice (macOS) starts the preference; a saved choice replaces it.

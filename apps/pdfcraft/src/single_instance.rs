@@ -64,6 +64,7 @@ pub enum Claim {
 /// over at once are kept until the UI takes them.
 pub struct Server {
     /// Feeds `intake`; the socket thread keeps a clone.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     sender: IntakeSender,
     /// The window's context, set by [`Server::connect`]; a batch that arrives earlier wakes nothing.
     ctx: Arc<OnceLock<egui::Context>>,

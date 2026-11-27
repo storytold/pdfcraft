@@ -33,8 +33,7 @@ impl AppleEvents {
     /// The inbox belongs to the main thread (it is not `Send`, and drains inside its own wake
     /// would borrow it twice), so the returned function does the forwarding: the frame calls it
     /// once per frame on the main thread.
-    // PLAN: pdf-hub-w1 calls the returned function once per frame (it replaces the `OsEventsFn` poll).
-    pub fn connect(&self, sender: IntakeSender, ctx: &egui::Context) -> Box<dyn Fn()> {
+    pub fn connect(&self, sender: IntakeSender, ctx: &egui::Context) -> Box<dyn FnMut()> {
         let wake = ctx.clone();
         self.inbox.set_wake(move || wake.request_repaint());
         let inbox = self.inbox.clone();
