@@ -335,7 +335,9 @@ fn pages_section(d: &PrintDraft, count: usize, units: Unit, has_area: bool) -> P
             Param::new("range", lbl(tl!("Pages")), ParamKind::text(d.range.clone())).hint(lbl(format!("1-{count}"))).enabled_when("which", "range"),
             choice("subset", row_label(tl!("More options:")), subset, id_of(&SUBSET, d.subset)),
             check("reverse", lbl(tl!("Reverse pages")), d.reverse),
-            check("only_commented", lbl(tl!("Only pages with comments")), d.only_commented),
+            // A selected area prints its one page as it is: the comment filter has nothing to pick.
+            check("only_commented", lbl(tl!("Only pages with comments")), d.only_commented)
+                .enabled_when_in("which", WHICH.iter().filter(|(w, _)| *w != Which::Area).map(|(_, id)| *id)),
         ],
     )
 }

@@ -13080,6 +13080,36 @@ fn doc_print_only_the_pages_with_comments() {
     assert!(!dir.join("none.pdf").exists(), "nothing is written when nothing prints");
 }
 
+/// Only pages with comments counts a page as the Comments panel does: a review status alone (one
+/// with no `/IRT`, or one whose comment can't be found) does not make its page a commented one.
+#[test]
+fn doc_print_only_commented_skips_pages_with_only_a_status() {
+    let dir = workdir("print-commented-status");
+    // Contributor-original PDF: a note on page 1, a status with no `/IRT` on page 2, and a status
+    // whose annotation (object 9) doesn't exist on page 3.
+    std::fs::write(
+        dir.join("status.pdf"),
+        b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [6 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [7 0 R] >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [8 0 R] >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [100 100 120 120] /T (Alpha) /Contents (COMMENT) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [100 60 120 80] /T (Beta) /StateModel /Review /State /Accepted >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [100 60 120 80] /IRT 9 0 R /T (Gamma) /StateModel /Review /State /Rejected >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+    )
+    .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "status.pdf" }))["doc"].as_u64().unwrap();
+    let all = ok(&mut a, "doc_print", json!({ "doc": doc, "path": "all.pdf" }));
+    let r = ok(&mut a, "doc_print", json!({ "doc": doc, "only_commented": true, "path": "commented.pdf" }));
+    assert!(r["pages"].as_u64() < all["pages"].as_u64(), "the status-only pages are left out: {r} / {all}");
+    assert_eq!(r["pages"].as_u64(), Some(1), "{r}");
+}
+
 #[test]
 fn doc_print_a_selected_area() {
     let dir = workdir("print-area");
