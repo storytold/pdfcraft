@@ -32,7 +32,7 @@ Licence: [LICENSE.txt](LICENSE.txt) (`MIT OR Apache-2.0`, like the repo).
 | `pdfcraft-1024.png` | 1024 px on Apple's grid; also the runtime Dock icon on macOS |
 | `pdfcraft.icns` | macOS icon (16–1024 px) |
 | `pdfcraft.ico` | Windows icon (16–256 px), embedded in `pdfcraft.exe` by `apps/pdfcraft/build.rs` |
-| `pdfcraft-document.svg` | Windows PDF file icon master: a white page inside a red frame, the ArtCraft mark and outlined PDF lettering; no font dependency |
+| `pdfcraft-document.svg` | Windows PDF file icon master: an off-white (`#FCFCFC`) page inside a red frame, the ArtCraft mark and outlined PDF lettering; no font dependency |
 | `pdfcraft-document.ico` | Windows PDF file icon (16–256 px), embedded as resource 2 in `pdfcraft.exe` |
 | `hicolor/<n>x<n>/apps/ai.storyteller.pdfcraft.png` | Linux hicolor theme, 16–512 px; the 256 px one is the runtime icon on Windows and Linux |
 | `hicolor/scalable/apps/ai.storyteller.pdfcraft.svg` | Linux scalable icon (copy of the master) |
@@ -44,8 +44,9 @@ hicolor icon.
 Windows PDF files use resource 2 (`"pdfcraft.exe",-2`) when PdfCraft is chosen as the default
 reader; the app keeps resource 1. The document icon adapts the redesigns JustCallMeAD posted in
 [#308](https://github.com/storytold/pdfcraft/issues/308): a 3:4 page centred on the square canvas
-that `packaging/icons.sh` renders, Ink and PdfCraft red on white. The ArtCraft mark on it is the
-project's, used as a mark, not licensed for reuse ([LICENSE-document.txt](LICENSE-document.txt)).
+that `packaging/icons.sh` renders, Ink and PdfCraft red on off-white (`#FCFCFC`). The ArtCraft mark
+on it is the project's, used as a mark, not licensed for reuse; a fork that distributes a modified
+version must remove or replace it ([LICENSE-document.txt](LICENSE-document.txt)).
 Both icons are embedded, requiring no runtime sidecar. This provides a file type icon; first-page
 thumbnails still need a thumbnail provider.
 

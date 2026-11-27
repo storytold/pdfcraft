@@ -10,9 +10,10 @@ beside this file in Windows distributions.
 
 The ArtCraft mark on the document (the "A") is a brand mark of the PdfCraft
 project. It is used here as a mark, not as a licence: no trademark right is
-granted, and a fork that reuses this artwork must not present that mark as its
-own (the same rule as the ArtCraft logos in docs/brand/, see
-docs/brand/LICENSE-brand.txt).
+granted. A fork that distributes a modified version of PdfCraft, or any work
+derived from it, must remove that mark from this artwork or replace it with its
+own, and must not present it as its own. A fork kept only to propose changes
+back to this repository may keep the mark unchanged.
 
 The icon uses no typeface or external image. Regenerate the ICO with
 packaging/icons.sh; every asset and its SHA-256 is recorded in ATTRIBUTION.toml.

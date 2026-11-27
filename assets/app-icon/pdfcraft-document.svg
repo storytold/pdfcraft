@@ -3,7 +3,8 @@
      the PDF lettering is resized and set in the app's Ink (#0B0B0C), the flat red became the
      app's PdfCraft red (#B70228) in a gradient, and the fold is filled instead of hollow.
      Geometry drawn in CorelDRAW 2026 and kept as exported. The ArtCraft mark is a brand
-     mark of the PdfCraft project, used as a mark and not licensed for reuse (LICENSE-document.txt).
+     mark of the PdfCraft project, used as a mark and not licensed for reuse; a fork that
+     distributes a modified version must remove or replace it (LICENSE-document.txt).
      No fonts or external images. Every PNG and the .ico are rendered from this file by
      packaging/icons.sh. -->
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
@@ -13,7 +14,7 @@
     <style type="text/css">
      <![CDATA[
       .fil3 {fill:#0B0B0C}
-      .fil0 {fill:white;fill-rule:nonzero}
+      .fil0 {fill:#FCFCFC;fill-rule:nonzero}
       .fil1 {fill:url(#id0);fill-rule:nonzero}
       .fil2 {fill:url(#id1);fill-rule:nonzero}
      ]]>

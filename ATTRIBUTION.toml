@@ -1614,7 +1614,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "assets/app-icon/LICENSE-document.txt"
 kind = "icon"
 usage = "Master artwork for the Windows PDF file type icon; rendered by packaging/icons.sh, without fonts or external images"
-sha256 = "87bce656fea51787172fe1c192fa7ab05499f69428e497c892b6acf7f929dd41"
+sha256 = "5a3c7d4fd26616c4e01d5d64d89e27c31f018cfc709840880b41952b4a732e78"
 
 [[asset]]
 path = "assets/app-icon/pdfcraft-document.ico"
@@ -1625,7 +1625,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "assets/app-icon/LICENSE-document.txt"
 kind = "icon"
 usage = "Embedded in pdfcraft.exe as resource 2; the Windows installer uses it for PdfCraft.Document and Applications/pdfcraft.exe PDF file associations"
-sha256 = "b0e61448548782d8c9cf5325304ce9d521ff3956ae8de38491d5bc212fa5238a"
+sha256 = "ff396ee902a5fa0f6198fa3a034738609743fe459524e758b5ca7c83e1680541"
 
 [[asset]]
 path = "assets/app-icon/hicolor/16x16/apps/ai.storyteller.pdfcraft.png"
