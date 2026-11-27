@@ -183,15 +183,21 @@ impl Sheet {
         let paper = self.paper_beside(lanes, lane, &run, before, after);
         // A column is the rule's own when its ink is no more than a pixel thicker than the
         // rule (a scan's edges are ragged); a stroke reaching further crosses it. So does a
-        // column a pixel out that runs on from a crossing, up to a letter's height: the stem
-        // of a letter as narrow as the rule, over it but for a pixel, stands on its foot and
-        // is kept with it, where a ragged pixel on its own goes with the rule. The band
-        // erased at a crossing is the one of the nearest own column (a scanner's tilt shifts
-        // the band along the run).
+        // column a pixel out that runs on from a letter's crossing, up to a letter's height:
+        // the stem of a letter as narrow as the rule, over it but for a pixel, stands on its
+        // foot and is kept with it, where a ragged pixel on its own goes with the rule. A
+        // letter's crossing stops within a letter's height of the band on both sides; another
+        // rule's, a junction, runs on, and the ragged edge beside a junction is the rule's.
+        // The band erased at a crossing is the one of the nearest own column (a scanner's
+        // tilt shifts the band along the run).
         let ragged = |e: &(usize, usize)| thickness(e) <= t + 1;
         let mut own: Vec<bool> = extents.iter().map(ragged).collect();
         let letter = limits.min_run / 2;
-        for i in (0..extents.len()).filter(|&i| !ragged(&extents[i])) {
+        let letters_crossing = |pos: usize| {
+            let (b, a) = self.extent(lanes, lane, pos, letter + cap);
+            b <= before + letter && a <= after + letter
+        };
+        for i in (0..extents.len()).filter(|&i| !ragged(&extents[i]) && letters_crossing(run.start + i)) {
             for step in [-1isize, 1] {
                 let mut j = i;
                 for _ in 0..letter {
@@ -408,6 +414,12 @@ mod tests {
         fill(&mut ragged, 99, 250, 1, 1, 0);
         let out = erased(&ragged, WORD).unwrap();
         assert_eq!(ink_in(&out, 98, 20, 107, 380), 0, "a ragged edge is the rule's");
+        // A rule across the first, where the foot was, is a crossing too, but no letter's: the
+        // ragged edge beside the junction is still the rule's, and both rules go.
+        fill(&mut ragged, 20, 178, 360, 5, 0);
+        let out = erased(&ragged, WORD).unwrap();
+        assert_eq!(ink_in(&out, 98, 20, 107, 380), 0, "the ragged edge beside a junction is the rule's");
+        assert_eq!(ink_in(&out, 20, 176, 380, 184), 0, "and the rule across goes");
     }
 
     /// A rule a scanner tilted by a degree is still a rule; a steep diagonal is not.
