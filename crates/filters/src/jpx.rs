@@ -16,8 +16,11 @@ pub struct JpxSamples {
 
 /// The samples of JPEG 2000 `data` if its header says it is `w` × `h` with one, three or four
 /// components and no alpha channel (`/SMaskInData`). `None` for data that doesn't decode, another
-/// size or component count, or alpha; the decoder panicking is `None` too.
-pub fn decode_jpx(data: &[u8], w: usize, h: usize) -> Option<JpxSamples> {
+/// size or component count, or alpha; the decoder panicking is `None` too. `space_given`: the image
+/// dictionary names a colour space, so a page ignores the file's colour data and draws a palette's
+/// raw indices (ISO 32000-2 §8.9.5.1); an image with a palette (`pclr`) is then `None`, since the
+/// samples here are the palette's colours.
+pub fn decode_jpx(data: &[u8], w: usize, h: usize, space_given: bool) -> Option<JpxSamples> {
     catch_unwind(AssertUnwindSafe(|| {
         let img = Image::new(data, &DecodeSettings::default()).ok()?;
         // The header has to give the size the caller checked, so nothing larger is allocated.
@@ -28,8 +31,8 @@ pub fn decode_jpx(data: &[u8], w: usize, h: usize) -> Option<JpxSamples> {
         let components = usize::from(space.num_channels());
         // Checked before decoding: a codestream may declare up to 16384 components and every one
         // is decoded, though a palette box (`pclr`) gives the output its own count, so both are
-        // checked (an allocation failure aborts, past `catch_unwind`).
-        if !matches!(components, 1 | 3 | 4) || !components_fit(data) {
+        // checked, as is each component mapping (an allocation failure aborts, past `catch_unwind`).
+        if !matches!(components, 1 | 3 | 4) || (header_fits(data)? && space_given) {
             return None;
         }
         let device = match space {
@@ -46,28 +49,46 @@ pub fn decode_jpx(data: &[u8], w: usize, h: usize) -> Option<JpxSamples> {
 
 /// Whether every codestream the decoder may decode in JPEG 2000 `data` has one, three or four
 /// components (`Csiz`, ISO 15444-1 A.5.1): a raw codestream, or each top-level `jp2c` box of a JP2
-/// file. The boxes are read by the decoder's rules: it reads them until one it can't and decodes
-/// the last `jp2c`, so all of those are checked.
-fn components_fit(data: &[u8]) -> bool {
+/// file, and every component mapping (`cmap` in a `jp2h` box) at most four entries, since the
+/// decoder makes a whole component for each before the output's size is checked. The boxes are read
+/// by the decoder's rules: it reads them until one it can't and decodes the last `jp2c`, so all of
+/// those are checked. `Some(palette)` when they fit, `palette` telling whether a `jp2h` box holds
+/// a palette (`pclr`).
+fn header_fits(data: &[u8]) -> Option<bool> {
     // SOC, then SIZ: its marker, Lsiz, Rsiz and eight 32-bit sizes before Csiz.
     let fits = |c: &[u8]| c.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) && matches!(c.get(40..42), Some([0, 1 | 3 | 4]));
     if data.starts_with(&[0xFF, 0x4F]) {
-        return fits(data);
+        return fits(data).then_some(false);
     }
-    let (mut rest, mut any) = (data, false);
+    let (mut rest, mut any, mut palette) = (data, false, false);
     while !rest.is_empty() {
         // Bytes left that aren't a box are refused, not skipped: the decoder's own arithmetic may
         // still read one there (its XLBox wraps on a 32-bit target).
-        let Some((kind, body, next)) = jp2_box(rest) else { return false };
-        if kind == b"jp2c" {
-            if !fits(body) {
-                return false;
-            }
-            any = true;
+        let (kind, body, next) = jp2_box(rest)?;
+        match kind {
+            b"jp2c" if !fits(body) => return None,
+            b"jp2c" => any = true,
+            b"jp2h" => palette |= header_box(body)?,
+            _ => {}
         }
         rest = next;
     }
-    any
+    any.then_some(palette)
+}
+
+/// The boxes in a `jp2h` box: `Some(palette)` when each component mapping (`cmap`, four bytes an
+/// entry, ISO 15444-1 I.5.3.5) has at most four entries, `palette` telling whether one is a `pclr`.
+fn header_box(mut rest: &[u8]) -> Option<bool> {
+    let mut palette = false;
+    while !rest.is_empty() {
+        let (kind, body, next) = jp2_box(rest)?;
+        if kind == b"cmap" && body.len() / 4 > 4 {
+            return None;
+        }
+        palette |= kind == b"pclr";
+        rest = next;
+    }
+    Some(palette)
 }
 
 /// The first box of `data`: its type, its contents and what follows it. `None` for one too short,
@@ -92,14 +113,14 @@ mod tests {
     /// only one, three and four have a device colour space.
     #[test]
     fn an_image_of_more_than_four_components_is_refused() {
-        assert!(super::decode_jpx(include_bytes!("../tests/data/five-components.jp2"), 16, 16).is_none());
+        assert!(super::decode_jpx(include_bytes!("../tests/data/five-components.jp2"), 16, 16, false).is_none());
     }
 
     /// A palette of three columns over a codestream of five components is refused too: the
     /// palette sets the output's count, but all five components would be decoded.
     #[test]
     fn a_palette_over_more_than_four_components_is_refused() {
-        assert!(super::decode_jpx(include_bytes!("../tests/data/palette-five-components.jp2"), 16, 16).is_none());
+        assert!(super::decode_jpx(include_bytes!("../tests/data/palette-five-components.jp2"), 16, 16, false).is_none());
     }
 
     /// Every `jp2c` box is checked, since the decoder decodes the last: one that fits before one
@@ -113,11 +134,28 @@ mod tests {
         three.extend([0, 3]);
         let mut both = five[..at].to_vec();
         both.extend(&three);
-        assert!(super::components_fit(&both), "one codestream of three components fits");
+        assert!(super::header_fits(&both).is_some(), "one codestream of three components fits");
         both.extend(&five[at..]);
-        assert!(!super::components_fit(&both), "a later one of five doesn't");
-        assert!(!super::components_fit(&[&[0, 0, 0, 5][..], b"jp2c", &three[8..]].concat()), "a length below the header's");
-        assert!(!super::components_fit(&three[..40]), "a box past the end");
-        assert!(!super::components_fit(&[&three[..], &[0, 0, 0, 1]].concat()), "bytes after the last box");
+        assert!(super::header_fits(&both).is_none(), "a later one of five doesn't");
+        assert!(super::header_fits(&[&[0, 0, 0, 5][..], b"jp2c", &three[8..]].concat()).is_none(), "a length below the header's");
+        assert!(super::header_fits(&three[..40]).is_none(), "a box past the end");
+        assert!(super::header_fits(&[&three[..], &[0, 0, 0, 1]].concat()).is_none(), "bytes after the last box");
+    }
+
+    /// A component mapping of more than four entries is refused before decoding, since the decoder
+    /// makes a whole component for each; a palette in the header is reported.
+    #[test]
+    fn a_component_mapping_past_four_entries_is_refused_and_a_palette_found() {
+        let mut three = vec![0, 0, 0, 50, b'j', b'p', b'2', b'c', 0xFF, 0x4F, 0xFF, 0x51];
+        three.resize(48, 0);
+        three.extend([0, 3]);
+        let jp2h = |kind: &[u8], body: &[u8]| {
+            let child = [&u32::try_from(body.len() + 8).unwrap().to_be_bytes()[..], kind, body].concat();
+            [&u32::try_from(child.len() + 8).unwrap().to_be_bytes()[..], b"jp2h", &child].concat()
+        };
+        let with = |header: Vec<u8>| [header, three.clone()].concat();
+        assert_eq!(super::header_fits(&with(jp2h(b"cmap", &[0; 16]))), Some(false), "four entries fit");
+        assert_eq!(super::header_fits(&with(jp2h(b"cmap", &[0; 20]))), None, "five don't");
+        assert_eq!(super::header_fits(&with(jp2h(b"pclr", &[0; 3]))), Some(true), "a palette is found");
     }
 }

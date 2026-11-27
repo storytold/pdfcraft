@@ -161,7 +161,7 @@ fn coded_samples(
     if !budget.pay_jpeg(pixels.saturating_mul(4), &s.raw) {
         return None;
     }
-    let jpx = pdfcraft_filters::decode_jpx(&s.raw, w, h)?;
+    let jpx = pdfcraft_filters::decode_jpx(&s.raw, w, h, s.dict.contains(b"ColorSpace"))?;
     match declared {
         Some(n) => (n == jpx.components).then_some((jpx.data, jpx.components, None)),
         None => Some((jpx.data, jpx.components, Some(jpx.device?))),
