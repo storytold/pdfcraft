@@ -438,6 +438,112 @@ fn a_drag_ending_in_the_gutter_takes_no_rows_from_the_next_column() {
     assert_eq!(text(&h), Some(BESIDE_LEFT[..4].join("\n")));
 }
 
+/// Two columns of running text 20 pt apart whose left column goes on as a list of short entries.
+/// The lines around the lower entries do not show the gutter, as no running text ends at it
+/// there; those around the first entries do, and beside the entries the two columns look like the
+/// cells of a table's rows.
+fn columns_with_a_list() -> Vec<u8> {
+    let column = |x: u32, lines: &[&str]| {
+        let lines: String = lines.iter().map(|line| format!("({line}) Tj T* ")).collect();
+        format!("BT /F1 10 Tf 12 TL {x} 250 Td {lines}ET ")
+    };
+    let content = format!("{}{}", column(20, &LIST_LEFT), column(190, &LIST_RIGHT));
+    format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Courier >> endobj\n\
+trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+const LIST_LEFT: [&str; 11] = [
+    "The left column of a page",
+    "set in two columns starts",
+    "with three lines of text,",
+    "then a list:",
+    "first entry",
+    "the second",
+    "third entry",
+    "the fourth",
+    "fifth entry",
+    "the sixth",
+    "last entry",
+];
+const LIST_RIGHT: [&str; 11] = [
+    "while the right column of",
+    "the page is running text,",
+    "all of it as wide as that",
+    "column is, from the first",
+    "line of the page down to,",
+    "and past, the last of the",
+    "entries beside it. Eleven",
+    "lines of it stand here so",
+    "that each entry has a row",
+    "of the right column level",
+    "with it, as a table does.",
+];
+
+/// A drag down the list that ends in the gutter, nearer the right column's text than its own
+/// entry's, is held in its column by the gutter the lines around its start show. Level with the
+/// entry it ends on, the lines show no gutter, and the right column's line is the nearest text:
+/// the drag still ends at its head, and takes no rows across the gutter.
+#[test]
+fn a_drag_held_in_its_column_beside_a_list_takes_no_rows_across_the_gutter() {
+    let mut h = opened("list.pdf", columns_with_a_list());
+    let rect = |h: &Harness<'static, PdfCraftApp>, g: usize| h.state().views[0].glyph_screen_rect(0, g).expect("glyph on screen");
+    let mut starts = Vec::new();
+    let mut glyphs = 0;
+    for line in LIST_LEFT.iter().chain(&LIST_RIGHT) {
+        starts.push(glyphs);
+        glyphs += line.len();
+    }
+    // The gutter, from the end of the left column's first line to the start of the right one's.
+    let (g0, g1) = (rect(&h, starts[1] - 1).right(), rect(&h, starts[11]).left());
+    // From the first entry down to the fifth, a sixth of the gutter before the right column.
+    let from = glyph(&h, starts[4]) - vec2(4.0, 0.0);
+    let level = rect(&h, starts[8]).center().y;
+    drag(&mut h, from, egui::pos2(g1 - (g1 - g0) / 6.0, level), Modifiers::NONE);
+    assert_eq!(text(&h), Some(LIST_LEFT[4..=8].join("\n")));
+}
+
+/// A Shift-click extends the selection to the glyph nearest the click, as it did before a drag
+/// stayed in its column: pressed and released in one pass, it is no drag, and the column the
+/// selection began in does not hold it back from the next column's line.
+#[test]
+fn a_shift_click_in_the_gutter_extends_to_the_nearest_text() {
+    let mut h = opened("columns.pdf", narrow_columns());
+    let mut starts = Vec::new();
+    let mut glyphs = 0;
+    for line in NARROW_LEFT.iter().chain(&NARROW_RIGHT) {
+        starts.push(glyphs);
+        glyphs += line.len();
+    }
+    let rect = |h: &Harness<'static, PdfCraftApp>, g: usize| h.state().views[0].glyph_screen_rect(0, g).expect("glyph on screen");
+    // A selection in the left column, from the start of its fourth line into its last.
+    let (from, to) = (glyph(&h, starts[3]) - vec2(4.0, 0.0), glyph(&h, starts[4] + 3));
+    drag(&mut h, from, to, Modifiers::NONE);
+    assert_eq!(text(&h), Some([NARROW_LEFT[3], &NARROW_LEFT[4][..=3]].join("\n")));
+    h.run_steps(60);
+    // In the gutter, a sixth of it before the right column's first line: that line is the nearest text.
+    let (g0, g1) = (rect(&h, starts[1] - 1).right(), rect(&h, starts[5]).left());
+    let at = egui::pos2(g1 - (g1 - g0) / 6.0, rect(&h, starts[5]).center().y);
+    h.event(Event::ModifiersChanged(Modifiers::SHIFT));
+    h.hover_at(at);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::SHIFT });
+    }
+    h.run_steps(1);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(1);
+    assert_eq!(text(&h), Some([NARROW_LEFT[3], NARROW_LEFT[4], &NARROW_RIGHT[0][..1]].join("\n")));
+}
+
 /// Two article columns, the right one a line shorter: its last glyph, the end of reading order,
 /// sits above the left column's last line.
 fn uneven_columns() -> Vec<u8> {
