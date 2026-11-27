@@ -44,7 +44,7 @@ impl PdfCraftApp {
         // restarting does not immediately reopen the dialog while `status` is still non-idle.
         let dirty: Vec<usize> = (0..self.views.len()).filter(|&i| self.has_unsaved_work(i)).collect();
         self.answer_update_check(ctx, dirty.is_empty());
-        self.show_update_check();
+        self.show_update_check(ctx);
 
         // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
         let can_save = dirty.iter().all(|&i| self.saves_in_place(i));
@@ -84,8 +84,15 @@ impl PdfCraftApp {
     /// Keeps the check-result dialog on the host while the updater has something to report, and
     /// feeds it.
     #[cfg(not(target_arch = "wasm32"))]
-    fn show_update_check(&mut self) {
-        if !self.dialogs.is_open::<UpdateCheckDialog>() && !matches!(self.updater.status(), Status::Idle) {
+    fn show_update_check(&mut self, ctx: &egui::Context) {
+        if matches!(self.updater.status(), Status::Idle) {
+            if self.dialogs.is_open::<UpdateCheckDialog>() {
+                self.dialogs.cancel::<UpdateCheckDialog>(ctx);
+                let _ = self.dialogs.take::<UpdateCheckDialog>();
+            }
+            return;
+        }
+        if !self.dialogs.is_open::<UpdateCheckDialog>() {
             self.dialogs.open(UpdateCheckDialog::new(env!("CARGO_PKG_VERSION")));
         }
         let (status, installing, message) = (self.updater.status().clone(), self.updater.is_installing(), self.updater.status_message());
@@ -101,8 +108,12 @@ impl PdfCraftApp {
     /// update ready.
     #[cfg(not(target_arch = "wasm32"))]
     fn answer_update_check(&mut self, ctx: &egui::Context, clean: bool) {
-        let Some(DialogResult::Ok(choice)) = self.dialogs.take::<UpdateCheckDialog>() else {
-            return;
+        let choice = match self.dialogs.take::<UpdateCheckDialog>() {
+            Some(DialogResult::Ok(choice)) => choice,
+            // The dialog host sends Cancel when it closes a dialog from outside (for example,
+            // Escape). Consume it as Close so the last non-idle status doesn't reopen it.
+            Some(DialogResult::Cancel) => CheckChoice::Close,
+            _ => return,
         };
         match choice {
             CheckChoice::Close => self.updater.dismiss_status(),

@@ -219,6 +219,39 @@ const WINDOW: &[&str] = &["view.next_tab", "view.previous_tab"];
 const HELP: &[&str] =
     &["help.shortcuts", SEP, "help.app_page", "help.github", "help.website", "help.discord", SEP, "help.check_updates", SEP, "help.about"];
 
+/// Where the menu bar lists command `id`: the English titles of its menu and submenu, top menu first,
+/// as [`MenuBar`] builds them. The shortcuts window groups its rows by them. `None` for a command
+/// the bar lists by something other than its id (tools, documents, side panels) or not at all.
+pub(crate) fn menu_path(id: &str) -> Option<&'static [&'static str]> {
+    const PLACES: &[(&[&str], &[&str])] = &[
+        (FILE, &["File"]),
+        (CREATE, &["File", "Create"]),
+        (EXPORT, &["File", "Export"]),
+        (PROTECT, &["File", "Protect"]),
+        (EDIT, &["Edit"]),
+        (PAGES, &["Edit", "Pages"]),
+        (SIGN, &["Sign"]),
+        (WINDOW, &["Window"]),
+        (HELP, &["Help"]),
+        (ZOOM, &["View", "Zoom"]),
+        (&[ROTATE_CW, ROTATE_CCW], &["View", "Rotate view"]),
+        (NAVIGATION, &["View", "Page navigation"]),
+        (DISPLAY, &["View", "Page display"]),
+        (PANES, &["View"]),
+        (PANE_COMMANDS, &["View"]),
+        (MODES, &["View"]),
+        (THEMES, &["View", "Display theme"]),
+        (&["view.palette"], &["View"]),
+    ];
+    if id == SEP {
+        return None;
+    }
+    if FILL.iter().any(|(fill, _)| *fill == id) {
+        return Some(&["Sign", "Fill & Sign"]);
+    }
+    PLACES.iter().find(|(ids, _)| ids.contains(&id)).map(|(_, path)| *path)
+}
+
 /// A registry shortcut as a craft-keymap chord: `command` is ⌘ (Ctrl elsewhere) and `mac_ctrl`
 /// the Control key on macOS. `None` for a key craft-keymap doesn't name.
 pub(crate) fn chord(s: Shortcut) -> Option<Chord> {
