@@ -129,7 +129,7 @@ pub(crate) fn repair_word(
             && let Some((id, glyph)) = shapes.nearest_glyph(chars[i], slack)
         {
             let rows = shapes
-                .reference_rows(glyph.rows(), id)
+                .reference_rows(glyph.span(), id)
                 .or_else(|| *beside.get_or_insert_with(|| neighbour_rows(gray, prev, next, &glyph, [line_top - slack, line_bottom + slack], height)));
             if rows.is_some_and(|rows| is_times(&glyph, rows)) {
                 out[i] = '×';
@@ -137,7 +137,7 @@ pub(crate) fn repair_word(
         } else if STANDS_FOR_MICRO.contains(c)
             && starts_a_unit(&out, i, prev_numeric)
             && let Some((id, glyph)) = shapes.nearest_glyph(chars[i], slack)
-            && let Some(baseline) = shapes.baseline_of_others(glyph.rows(), id)
+            && let Some(baseline) = shapes.baseline_of_others(glyph.span(), id)
             && is_micro(&glyph, baseline)
         {
             out[i] = 'µ';
@@ -221,30 +221,40 @@ fn neighbour_rows(
     let ink = Ink::sample(gray, [left, top, right, bottom])?;
     let shapes = Shapes::of(&ink)?;
     let own = shapes.components.iter().position(|k| k.left == glyph.left && k.top == glyph.top).unwrap_or(usize::MAX);
-    shapes.reference_rows(glyph.rows(), own)
+    shapes.reference_rows(glyph.span(), own)
 }
 
-/// The rows a glyph spans, inclusive.
+/// The box a glyph spans, inclusive.
 #[derive(Clone, Copy, Debug)]
-struct Rows {
+struct Span {
+    left: i64,
     top: i64,
+    right: i64,
     bottom: i64,
 }
 
-impl Rows {
+impl Span {
     fn height(self) -> f32 {
         (self.bottom - self.top + 1) as f32
+    }
+
+    /// Whether the component's box holds this one: a frame or a cell ruled around the glyph,
+    /// which no letter is.
+    fn within(self, k: &Component) -> bool {
+        k.left <= self.left && k.right >= self.right && k.top <= self.top && k.bottom >= self.bottom
     }
 }
 
 /// The components that can stand for the letters and digits on the row of the glyph at `at`:
 /// between `range.0` and `range.1` times its height, no wider than twice their own height, not
-/// a thin stroke over twice as tall as it, and over its rows by at least half its height,
-/// `exclude` left out. A frame around the word or a rule across it is wider than that; a rule
-/// down the word's side is a thin stroke far taller than it (a `1` beside a `×` is thin too,
-/// but under twice its height); a fraction's small digits and a degree ring are shorter; a
-/// glyph from a row the detector merged with this one lies off its rows.
-fn glyph_like(components: &[Component], at: Rows, range: (f32, f32), exclude: usize) -> Vec<&Component> {
+/// a thin stroke a third again as tall as it, and over its rows by at least half its height,
+/// `exclude` left out, and nothing whose box holds the glyph's. A frame around the word or a
+/// rule across it is wider than that, and a piece of a frame cut by the region's edge, squat
+/// enough to pass, holds the glyph; a rule down the word's side, or a frame cell's, is a thin
+/// stroke taller than its letters (a `1` beside a `×` is thin and taller too, and goes, but the
+/// digits beside it stay); a fraction's small digits and a degree ring are shorter; a glyph
+/// from a row the detector merged with this one lies off its rows.
+fn glyph_like(components: &[Component], at: Span, range: (f32, f32), exclude: usize) -> Vec<&Component> {
     let h = at.height();
     components
         .iter()
@@ -252,8 +262,13 @@ fn glyph_like(components: &[Component], at: Rows, range: (f32, f32), exclude: us
         .filter(|(id, k)| {
             let kh = k.height() as f32;
             let overlap = (k.bottom.min(at.bottom) - k.top.max(at.top) + 1) as f32;
-            let thin_and_tall = k.width() * 4 < k.height() && kh > 2.0 * h;
-            *id != exclude && (range.0 * h..=range.1 * h).contains(&kh) && k.width() <= 2 * k.height() && !thin_and_tall && overlap * 2.0 >= h
+            let thin_and_tall = k.width() * 4 < k.height() && kh > 1.3 * h;
+            *id != exclude
+                && !at.within(k)
+                && (range.0 * h..=range.1 * h).contains(&kh)
+                && k.width() <= 2 * k.height()
+                && !thin_and_tall
+                && overlap * 2.0 >= h
         })
         .map(|(_, k)| k)
         .collect()
@@ -441,8 +456,8 @@ struct Glyph {
 }
 
 impl Glyph {
-    fn rows(&self) -> Rows {
-        Rows { top: self.top, bottom: self.top + self.h as i64 - 1 }
+    fn span(&self) -> Span {
+        Span { left: self.left, top: self.top, right: self.left + self.w as i64 - 1, bottom: self.top + self.h as i64 - 1 }
     }
 
     fn at(&self, x: usize, y: usize) -> bool {
@@ -577,7 +592,7 @@ impl<'a> Shapes<'a> {
     /// the median bottom of its letter-sized components ([`glyph_like`]: from four fifths of
     /// its height, a capital `X` among digits, to two and a half times it, a `×` among them),
     /// `exclude` left out. `None` when the word has no other such glyph.
-    fn reference_rows(&self, at: Rows, exclude: usize) -> Option<(i64, i64)> {
+    fn reference_rows(&self, at: Span, exclude: usize) -> Option<(i64, i64)> {
         let glyphs = glyph_like(&self.components, at, (0.8, 2.5), exclude);
         // The tighter of two medians at each end: a glyph larger than the line's letters (a
         // geometric-characteristic symbol, a `Ø`) or off its row must not widen the rows, and
@@ -593,7 +608,7 @@ impl<'a> Shapes<'a> {
     /// letter-sized components on its row from half its height (a unit's `in` beside a `µ`
     /// with its tail) to one and a half times it, `exclude` left out (a dot over an i is too
     /// small to count).
-    fn baseline_of_others(&self, at: Rows, exclude: usize) -> Option<i64> {
+    fn baseline_of_others(&self, at: Span, exclude: usize) -> Option<i64> {
         let glyphs = glyph_like(&self.components, at, (0.5, 1.5), exclude);
         median(glyphs.iter().map(|k| k.bottom))
     }
@@ -1236,6 +1251,24 @@ mod tests {
         frame(&mut c, 2, BASE - CAP - 8, 100, BASE + 8);
         assert_eq!(word(&c, &[read('2', two), read('X', glyph), read('4', four)], None, None), None, "an X in a frame");
         assert_eq!(word(&c, &[read('X', glyph)], number(two.1), number(four.0)), None, "an X of its own in a frame");
+        // A cell's rules on either side of an `X` of its own, with the frame's lines out of
+        // reach: the rules are taller than the letters and no measure of the line either; the
+        // numbers past them are.
+        let mut c = Canvas::new(200, 70);
+        let two = digit(&mut c, 2);
+        let glyph = capital_x(&mut c, 40);
+        let four = digit(&mut c, 92);
+        c.rect(34, BASE - CAP - 10, 36, BASE + 10);
+        c.rect(66, BASE - CAP - 10, 68, BASE + 10);
+        assert_eq!(word(&c, &[read('X', glyph)], number(two.1), number(four.0)), None, "an X of its own between rules");
+        // A cell ruled around the `X` alone, squat enough to pass for a letter: it holds the X,
+        // which no letter does, so it is no measure either.
+        let mut c = Canvas::new(200, 70);
+        let two = digit(&mut c, 2);
+        let glyph = capital_x(&mut c, 40);
+        let four = digit(&mut c, 92);
+        frame(&mut c, 32, BASE - CAP - 8, 72, BASE + 8);
+        assert_eq!(word(&c, &[read('X', glyph)], number(two.1), number(four.0)), None, "an X of its own in a cell of its own");
         // A capital `X` of its own after a larger symbol (a geometric-characteristic symbol the
         // decoder named a digit) and before a number: the number's rows are the measure, not
         // the symbol's, and the X reaches the cap.
