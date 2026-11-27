@@ -236,14 +236,24 @@ impl Ocr {
     }
 }
 
-/// Whether a found line reads left to right on an upright page (its up axis within about 10°
-/// of vertical): the symbol check reads glyphs by rows and columns, so a line on its side is
-/// taken as read.
+/// Whether a found line reads left to right on an upright page: the symbol check reads glyphs
+/// by rows and columns, so a line on its side is taken as read. Two or more words run along
+/// the line within about 10° of horizontal; a word on its own has its up axis within about 10°
+/// of vertical (a single digit's box can lean either way, so it is not asked when the line's
+/// run can be).
 fn is_upright(line: &[RotatedRect]) -> bool {
-    line.first().is_some_and(|r| {
-        let up = r.up_axis();
-        up.x.abs() <= 0.18 * up.length()
-    })
+    match (line.first(), line.last()) {
+        (Some(first), Some(last)) if line.len() >= 2 => {
+            let (a, b) = (first.center(), last.center());
+            let (dx, dy) = (b.x - a.x, b.y - a.y);
+            dy.abs() <= 0.18 * (dx * dx + dy * dy).sqrt()
+        }
+        (Some(only), _) => {
+            let up = only.up_axis();
+            up.x.abs() <= 0.18 * up.length()
+        }
+        _ => false,
+    }
 }
 
 /// The grey value at an image pixel of `rgb` (1 or 3 bytes per pixel), 255 (paper) outside it.
@@ -264,10 +274,11 @@ fn gray_reader(rgb: &[u8], width: u32, height: u32) -> impl Fn(i64, i64) -> u8 +
 }
 
 /// The words of a recognised line, each clipped to the line found (`before`) and, on an upright
-/// line, checked for the tolerance symbols the model cannot name (`symbols`).
+/// line, checked for the drawing symbols the model cannot name (`symbols`).
 fn read_line(line: &ocrs::TextLine, before: Option<RectF>, upright: bool, gray: &dyn Fn(i64, i64) -> u8) -> Line {
     use ocrs::TextItem;
     let words: Vec<ocrs::TextWord<'_>> = line.words().collect();
+    let text_of = |w: &ocrs::TextWord<'_>| -> Vec<char> { w.chars().iter().map(|c| c.char).collect() };
     let read = |i: usize, w: &ocrs::TextWord<'_>| {
         let r = w.bounding_rect();
         let mut rect = clip([r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32], before);
@@ -275,10 +286,13 @@ fn read_line(line: &ocrs::TextLine, before: Option<RectF>, upright: bool, gray: 
         if upright && let Some(line_box) = before {
             let chars: Vec<symbols::ReadChar> =
                 w.chars().iter().map(|c| symbols::ReadChar { ch: c.char, left: c.rect.left() as f32, right: c.rect.right() as f32 }).collect();
-            let next = words.get(i + 1);
-            let next_left = next.map(|n| n.bounding_rect().left() as f32);
-            let next_digit = next.and_then(|n| n.chars().first()).is_some_and(|c| c.char.is_ascii_digit() || c.char == '.');
-            if let Some(fix) = symbols::repair_word(&chars, line_box.top(), line_box.bottom(), next_left, next_digit, gray) {
+            let prev = i
+                .checked_sub(1)
+                .and_then(|p| words.get(p))
+                .map(|p| symbols::Neighbour { edge: p.bounding_rect().right() as f32, numeric: symbols::ends_number(&text_of(p)) });
+            let next =
+                words.get(i + 1).map(|n| symbols::Neighbour { edge: n.bounding_rect().left() as f32, numeric: symbols::leads_number(&text_of(n)) });
+            if let Some(fix) = symbols::repair_word(&chars, line_box.top(), line_box.bottom(), prev, next, gray) {
                 text = fix.text;
                 if let Some(right) = fix.right {
                     rect[2] = rect[2].max(right);

@@ -15,9 +15,9 @@
 //! display fonts. WinAnsi-only invisible text keeps the standard Helvetica layout here.
 //!
 //! The ocrs models read the Latin alphabet (English and other languages written without
-//! accents); the `±`, `Ø` and `°` of dimensioned drawings, which that alphabet lacks, are read
-//! back from the ink after recognition (`symbols`). Tesseract (the `tesseract` module, off the
-//! web build) reads whatever its installed language packs cover.
+//! accents); the `±`, `Ø`, `°`, `×` and `µ` of dimensioned drawings, which that alphabet lacks,
+//! are read back from the ink after recognition (`symbols`). Tesseract (the `tesseract` module,
+//! off the web build) reads whatever its installed language packs cover.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

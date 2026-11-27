@@ -6837,8 +6837,11 @@ fn recognize_text_reads_the_euro_sign() {
     assert!(text.contains("€250"), "{text}");
 }
 
-/// The ocrs alphabet has no `±`, `Ø` or `°`: a drawing's tolerance block reads with them all the
-/// same, from the ink under the characters the model names instead (#8300).
+/// The ocrs alphabet has no `±`, `Ø`, `°` or `µ`: a drawing's tolerance block and surface-finish
+/// callout read with them all the same, from the ink under the characters the model names
+/// instead (#8300, #8503). The `×` of #8503 is not here: the renderer's stand-in for Helvetica
+/// sets it on the baseline like an `x`, where the shape test rightly leaves it as read; its
+/// cases are the drawn glyphs in `pdfcraft_ocr::symbols`.
 #[test]
 fn recognize_text_reads_tolerance_symbols() {
     if !ocr::available() {
@@ -6846,14 +6849,14 @@ fn recognize_text_reads_tolerance_symbols() {
         return;
     }
     let mut s = Session::new().with_clock(|| 1_700_000_000);
-    let text = s.create_from_text("t", "FRACTIONAL ± 1/16\"\nANGULAR ± 1/2°\nCAPACITY: Ø1-1/4\"\n.000 ± .005").unwrap();
+    let text = s.create_from_text("t", "FRACTIONAL ± 1/16\"\nANGULAR ± 1/2°\nCAPACITY: Ø1-1/4\"\n.000 ± .005\n32 µin FINISH").unwrap();
     let id = s.open("text.pdf", None, text, None).unwrap();
     let png = export::Exporter::new(s.get(id).unwrap()).png(0, 300.0).unwrap();
     let scan = s.create_from_images(&[("scan.png".into(), png)]).unwrap();
     let id = s.open("scan.pdf", None, scan, None).unwrap();
     s.recognize_text(id, &[], ocr::OcrSettings::default()).unwrap();
     let text = page_texts(&s, id)[0].replace(' ', "");
-    for want in ["±1/16", "±1/2°", "Ø1-1/4", "±.005"] {
+    for want in ["±1/16", "±1/2°", "Ø1-1/4", "±.005", "32µin"] {
         assert!(text.contains(want), "{want} in {text:?}");
     }
 }

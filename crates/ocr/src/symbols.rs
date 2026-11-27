@@ -2,22 +2,30 @@
 //!
 //! The recognition model's alphabet ([`super::ALPHABET`]) is ASCII and the euro sign: it has no
 //! `±`, `Ø` or `°`, the three symbols every dimensioned drawing's title block and callouts
-//! carry. The CTC decoder names the nearest class instead — `+`, `-`, `t` or `:` for `±`; `0`,
-//! `8`, `@` or `?` for `Ø`; `?` or nothing for `°` — and a tolerance of ±.005 silently becomes
-//! +.005. After a line is read, the characters that can stand in for a symbol are checked
-//! against the ink they were read from, and renamed only when that ink has the symbol's shape:
+//! carry, nor the `×` of a callout's count or chamfer (`2 × Ø.250`, `45° × .06`) or the `µ` of a
+//! surface finish (`32 µin`) (#8503). The CTC decoder names the nearest class instead — `+`,
+//! `-`, `t` or `:` for `±`; `0`, `8`, `@` or `?` for `Ø`; `?` or nothing for `°`; `x` or `?` for
+//! `×`; `H` or `u` for `µ` — and a tolerance of ±.005 silently becomes +.005. After a line is
+//! read, the characters that can stand in for a symbol are checked against the ink they were
+//! read from, and renamed only when that ink has the symbol's shape:
 //!
 //! - `±`: a centred cross with a detached bar under it, as wide as the crossbar.
 //! - `Ø`: a ring with one straight stroke across it from lower left to upper right that reaches
 //!   past the ring at both ends (a slashed zero keeps its stroke inside the ring, and stays).
 //! - `°`: a small ring in the top half of the line, right after a digit, with nothing under it.
+//! - `×`: a cross of two diagonals between two numbers, raised off the line's base and short of
+//!   its cap, centred on the line's middle (a letter `x` sits on the base, an `X` reaches the
+//!   cap).
+//! - `µ`: a `u` after a number and before a unit's letters whose left stem runs on below the
+//!   line's base, its top open and its bowl across the bottom (a `p` closes its bowl at the
+//!   top, a `y` has no bowl).
 //!
-//! Only a character next to a digit is checked (`± .005`, `Ø1.25`, `1/2°`), so a plus between
-//! words is never touched, and the checks are conservative: too small to judge, too faint, or no
-//! clear shape is a no-op. Tesseract's alphabet has these characters, so its words are not
-//! checked. The shapes are the ones ISO 129-1 and ASME Y14.5 draw and every sans-serif face
-//! follows; the thresholds were chosen on glyphs drawn in code (the tests), on a title block
-//! rendered at 150 and 300 dpi, and on a drawing scanned at 600 dpi.
+//! Only a character next to a digit is checked (`± .005`, `Ø1.25`, `1/2°`, `2 × 4`, `32 µin`),
+//! so a plus or an x between words is never touched, and the checks are conservative: too small
+//! to judge, too faint, or no clear shape is a no-op. Tesseract's alphabet has these characters,
+//! so its words are not checked. The shapes are the ones ISO 129-1 and ASME Y14.5 draw and every
+//! sans-serif face follows; the thresholds were chosen on glyphs drawn in code (the tests), on a
+//! title block and callouts rendered at 150 and 300 dpi, and on a drawing scanned at 600 dpi.
 
 /// A character the engine read and the image columns it was read from (pixels, left and right).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -32,6 +40,15 @@ pub(crate) struct ReadChar {
 pub(crate) struct Repair {
     pub text: String,
     pub right: Option<f32>,
+}
+
+/// A word's neighbour on the line: where its box meets this word (the previous word's right
+/// edge or the next word's left edge, image columns), and whether it is a number on this word's
+/// side ([`ends_number`], [`leads_number`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Neighbour {
+    pub edge: f32,
+    pub numeric: bool,
 }
 
 /// The grey value (0 ink … 255 paper) at an image pixel; 255 outside the image.
@@ -50,22 +67,28 @@ const MAX_REGION: usize = 2_000_000;
 const STANDS_FOR_PLUS_MINUS: &str = "+-t:=";
 const STANDS_FOR_DIAMETER: &str = "0Oo8@?Q";
 const STANDS_FOR_DEGREE: &str = "?oO0'\"*^";
+/// Characters the decoder names for a `×`, and for a `µ`.
+const STANDS_FOR_TIMES: &str = "xX?*";
+const STANDS_FOR_MICRO: &str = "HhuUp";
+/// The most letters a unit after a `µ` has (`in`, `m`, `s`, `Pa`).
+const UNIT_LETTERS: usize = 3;
 
-/// Check one word. `line_top..line_bottom` is the line's box as found (image rows), `next_left`
-/// where the next word on the line starts, `next_digit` whether that word starts with a digit
-/// or a decimal point. `None` when nothing changes.
+/// Check one word. `line_top..line_bottom` is the line's box as found (image rows), `prev` and
+/// `next` the words beside it on the line, if any. `None` when nothing changes.
 pub(crate) fn repair_word(
     chars: &[ReadChar],
     line_top: f32,
     line_bottom: f32,
-    next_left: Option<f32>,
-    next_digit: bool,
+    prev: Option<Neighbour>,
+    next: Option<Neighbour>,
     gray: Gray,
 ) -> Option<Repair> {
     let text: Vec<char> = chars.iter().map(|c| c.ch).collect();
-    if !has_candidate(&text, next_digit) {
+    let (prev_numeric, next_numeric) = (prev.is_some_and(|n| n.numeric), next.is_some_and(|n| n.numeric));
+    if !has_candidate(&text, prev_numeric, next_numeric) {
         return None;
     }
+    let next_left = next.map(|n| n.edge);
     let (first, last) = (chars.first()?, chars.last()?);
     let height = line_bottom - line_top;
     if !(height.is_finite() && height >= 6.0) {
@@ -80,12 +103,15 @@ pub(crate) fn repair_word(
     }
     let region = Ink::sample(gray, [first.left - slack, line_top - slack, right + slack, line_bottom + slack])?;
     let shapes = Shapes::of(&region)?;
+    // The cap and base rows for a `×` read as a word of its own, from the numbers beside it;
+    // sampled once, and only when wanted.
+    let mut beside: Option<Option<(i64, i64)>> = None;
     let mut out = text.clone();
     let mut consumed = Vec::new();
     let mut i = 0;
     while i < out.len() {
         let c = out[i];
-        if STANDS_FOR_PLUS_MINUS.contains(c) && digit_follows(&out, i, next_digit) {
+        if STANDS_FOR_PLUS_MINUS.contains(c) && digit_follows(&out, i, next_numeric) {
             if let Some((ids, glyph)) = shapes.stacked_glyph(chars[i], slack)
                 && is_plus_minus(&glyph)
             {
@@ -93,11 +119,28 @@ pub(crate) fn repair_word(
                 consumed.extend(ids);
             }
         } else if STANDS_FOR_DIAMETER.contains(c)
-            && starts_a_number(&out, i, next_digit)
+            && starts_a_number(&out, i, next_numeric)
             && let Some((_, glyph)) = shapes.main_glyph(chars[i], slack)
             && is_diameter(&glyph)
         {
             out[i] = 'Ø';
+        } else if STANDS_FOR_TIMES.contains(c)
+            && between_numbers(&out, i, prev_numeric, next_numeric)
+            && let Some((id, glyph)) = shapes.nearest_glyph(chars[i], slack)
+        {
+            let rows = shapes
+                .reference_rows(id)
+                .or_else(|| *beside.get_or_insert_with(|| neighbour_rows(gray, prev, next, height, line_top - slack, line_bottom + slack)));
+            if rows.is_some_and(|rows| is_times(&glyph, rows)) {
+                out[i] = '×';
+            }
+        } else if STANDS_FOR_MICRO.contains(c)
+            && starts_a_unit(&out, i, prev_numeric)
+            && let Some((id, glyph)) = shapes.nearest_glyph(chars[i], slack)
+            && let Some(baseline) = shapes.baseline_of_others(id)
+            && is_micro(&glyph, baseline)
+        {
+            out[i] = 'µ';
         }
         i += 1;
     }
@@ -111,11 +154,63 @@ pub(crate) fn repair_word(
 
 /// Whether any character of `text` could stand for a symbol in a numeric context: the quick
 /// test that keeps ordinary words away from the pixels.
-fn has_candidate(text: &[char], next_digit: bool) -> bool {
+fn has_candidate(text: &[char], prev_numeric: bool, next_numeric: bool) -> bool {
     text.iter().enumerate().any(|(i, &c)| {
-        (STANDS_FOR_PLUS_MINUS.contains(c) && digit_follows(text, i, next_digit))
-            || (STANDS_FOR_DIAMETER.contains(c) && starts_a_number(text, i, next_digit))
+        (STANDS_FOR_PLUS_MINUS.contains(c) && digit_follows(text, i, next_numeric))
+            || (STANDS_FOR_DIAMETER.contains(c) && starts_a_number(text, i, next_numeric))
+            || (STANDS_FOR_TIMES.contains(c) && between_numbers(text, i, prev_numeric, next_numeric))
+            || (STANDS_FOR_MICRO.contains(c) && starts_a_unit(text, i, prev_numeric))
     }) || !degree_candidates(text).is_empty()
+}
+
+/// `text` ends with a number: a digit last, or a `°`, an inch or foot mark, or a character the
+/// decoder names for a `°`, right after a digit.
+pub(crate) fn ends_number(text: &[char]) -> bool {
+    match text {
+        [.., d] if d.is_ascii_digit() => true,
+        [.., d, m] => d.is_ascii_digit() && (STANDS_FOR_DEGREE.contains(*m) || "°\"'".contains(*m)),
+        _ => false,
+    }
+}
+
+/// `text` begins with a number: a digit, a decimal point and a digit, or a `Ø` (or a character
+/// the decoder names for one) and a digit.
+pub(crate) fn leads_number(text: &[char]) -> bool {
+    match text.first() {
+        Some(c) if c.is_ascii_digit() => true,
+        Some('.') => text.get(1).is_some_and(char::is_ascii_digit),
+        Some(c) if *c == 'Ø' || STANDS_FOR_DIAMETER.contains(*c) => digit_follows(text, 0, false),
+        _ => false,
+    }
+}
+
+/// Position `i` lies between two numbers, in this word or in the words beside it: `2x4`, or an
+/// `x` of its own between `2` and `Ø.250`.
+fn between_numbers(text: &[char], i: usize, prev_numeric: bool, next_numeric: bool) -> bool {
+    let before = if i == 0 { prev_numeric } else { ends_number(&text[..i]) };
+    let after = if i + 1 >= text.len() { next_numeric } else { leads_number(&text[i + 1..]) };
+    before && after
+}
+
+/// Position `i` is the first letter of a unit after a number (`32 µin`, `5µm`): a digit before
+/// it, in this word or at the end of the previous one, and one to [`UNIT_LETTERS`] letters after
+/// it, nothing else.
+fn starts_a_unit(text: &[char], i: usize, prev_numeric: bool) -> bool {
+    let after_digit = if i == 0 { prev_numeric } else { text[i - 1].is_ascii_digit() };
+    let unit = &text[i + 1..];
+    after_digit && (1..=UNIT_LETTERS).contains(&unit.len()) && unit.iter().all(char::is_ascii_alphabetic)
+}
+
+/// The cap and base rows of the numbers beside a word that holds no digit of its own (a `×`
+/// read as a word by itself): the ink rows of a line height's worth of each numeric neighbour's
+/// columns, nearest this word, within the line's box.
+fn neighbour_rows(gray: Gray, prev: Option<Neighbour>, next: Option<Neighbour>, height: f32, top: f32, bottom: f32) -> Option<(i64, i64)> {
+    let before = prev.filter(|n| n.numeric).and_then(|n| Ink::sample(gray, [n.edge - height, top, n.edge, bottom])?.ink_rows());
+    let after = next.filter(|n| n.numeric).and_then(|n| Ink::sample(gray, [n.edge, top, n.edge + height, bottom])?.ink_rows());
+    match (before, after) {
+        (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.max(b.1))),
+        (a, b) => a.or(b),
+    }
 }
 
 /// A digit, or a decimal point and a digit, follows position `i` (in this word, or at the start
@@ -278,6 +373,7 @@ impl Component {
 #[derive(Debug)]
 struct Glyph {
     left: i64,
+    top: i64,
     w: usize,
     h: usize,
     on: Vec<bool>,
@@ -375,6 +471,23 @@ impl<'a> Shapes<'a> {
         Some((id, self.glyph(&[id])?))
     }
 
+    /// The component whose centre lies nearest the character's, of those at least a quarter of
+    /// the line's height and within `slack` of its columns: the glyph a `×` or a `µ` was read
+    /// from, which a neighbouring digit's larger glyph must not stand in for when the decoder's
+    /// columns are off. Returns its index too.
+    fn nearest_glyph(&self, c: ReadChar, slack: f32) -> Option<(usize, Glyph)> {
+        let (lo, hi) = (c.left - slack, c.right + slack);
+        let centre = (c.left + c.right) / 2.0;
+        let min_h = (self.line.1 - self.line.0 + 1) / 4;
+        let (id, _) = self
+            .components
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| k.height() >= min_h && (lo..=hi).contains(&k.centre_x()))
+            .min_by(|(_, a), (_, b)| (a.centre_x() - centre).abs().total_cmp(&(b.centre_x() - centre).abs()))?;
+        Some((id, self.glyph(&[id])?))
+    }
+
     /// The glyph read for the character together with every component stacked over or under
     /// it: the bar of a `±` is detached from its cross.
     fn stacked_glyph(&self, c: ReadChar, slack: f32) -> Option<(Vec<usize>, Glyph)> {
@@ -393,6 +506,27 @@ impl<'a> Shapes<'a> {
             .map(|(id, _)| id)
             .collect();
         Some((ids.clone(), self.glyph(&ids)?))
+    }
+
+    /// The rows the word's other glyphs span, which its digits and capitals set: from the top of
+    /// the highest to the bottom of the lowest component at least half the line's height,
+    /// `exclude` left out. `None` when the word has no other glyph that tall.
+    fn reference_rows(&self, exclude: usize) -> Option<(i64, i64)> {
+        let min_h = (self.line.1 - self.line.0 + 1) / 2;
+        let others = self.components.iter().enumerate().filter(|(id, k)| *id != exclude && k.height() >= min_h).map(|(_, k)| k);
+        let top = others.clone().map(|k| k.top).min()?;
+        let bottom = others.map(|k| k.bottom).max()?;
+        Some((top, bottom))
+    }
+
+    /// The base row of the word's other glyphs: the median bottom of the components at least a
+    /// third of the line's height, `exclude` left out (a dot over an i is too small to count).
+    fn baseline_of_others(&self, exclude: usize) -> Option<i64> {
+        let min_h = (self.line.1 - self.line.0 + 1) / 3;
+        let mut bottoms: Vec<i64> =
+            self.components.iter().enumerate().filter(|(id, k)| *id != exclude && k.height() >= min_h).map(|(_, k)| k.bottom).collect();
+        bottoms.sort_unstable();
+        bottoms.get(bottoms.len() / 2).copied()
     }
 
     /// The nearest component that lies wholly to the right of `glyph`, within [`TAIL`] line
@@ -446,7 +580,7 @@ impl<'a> Shapes<'a> {
                 self.labels.get(iy as usize * self.ink.w + ix as usize).is_some_and(|l| wanted.contains(l))
             })
             .collect();
-        Some(Glyph { left, w, h, on })
+        Some(Glyph { left, top, w, h, on })
     }
 }
 
@@ -544,6 +678,78 @@ fn is_diameter(g: &Glyph) -> bool {
         runs.pop();
     }
     runs == [true, false, true, false, true]
+}
+
+/// A cross of two diagonals in the middle of the line, raised off its base (`ref_bottom`) and
+/// short of its cap (`ref_top`) by at least [`TIMES_CLEAR`] of their distance: `×`. A letter `x`
+/// sits on the base and an `X` reaches the cap; an asterisk sits in the top half and has a third
+/// stroke; a `?`, a ring or a plus has no diagonals, or ink at the middle of a side.
+fn is_times(g: &Glyph, (ref_top, ref_bottom): (i64, i64)) -> bool {
+    let (w, h) = (g.w, g.h);
+    let ref_h = (ref_bottom - ref_top + 1) as f32;
+    if w < 6 || h < 6 || ref_h < 10.0 || w * 2 > h * 3 || h * 2 > w * 3 {
+        return false;
+    }
+    let bottom = g.top + h as i64 - 1;
+    let clear = TIMES_CLEAR * ref_h;
+    if ((g.top - ref_top) as f32) < clear || ((ref_bottom - bottom) as f32) < clear {
+        return false;
+    }
+    let centre = (g.top + bottom) as f32 / 2.0 - ref_top as f32;
+    if !(0.3 * ref_h..=0.7 * ref_h).contains(&centre) {
+        return false;
+    }
+    const N: usize = 24;
+    let r = (w.min(h) / 8).max(1);
+    // On a glyph a few pixels wide, the arms pass right beside the sides' midpoints.
+    let fine = w.min(h) / 16;
+    let falling = |t: usize| (t * (w - 1) / N, t * (h - 1) / N);
+    let rising = |t: usize| (t * (w - 1) / N, (h - 1) - t * (h - 1) / N);
+    let inked = |along: &dyn Fn(usize) -> (usize, usize)| (0..=N).filter(|&t| g.near(along(t).0, along(t).1, r)).count() * 100 >= (N + 1) * 85;
+    if !inked(&falling) || !inked(&rising) {
+        return false;
+    }
+    let (cx, cy) = (w / 2, h / 2);
+    !(g.near(cx, 0, fine) || g.near(cx, h - 1, fine) || g.near(0, cy, fine) || g.near(w - 1, cy, fine))
+}
+
+/// How far a `×` stays off the line's base and cap, as a fraction of their distance: Arial's
+/// keeps about a sixth at each end, a letter `x` none at the base.
+const TIMES_CLEAR: f32 = 0.08;
+
+/// A `u` whose left stem runs on below the word's base row, its top open and its bowl across
+/// the bottom: `µ`. A `u` or an `H` stops at the base; a `p` closes its bowl at the top; a `y`
+/// has no bowl, and its tail hangs from the middle.
+fn is_micro(g: &Glyph, baseline: i64) -> bool {
+    let (w, h) = (g.w, g.h);
+    let bottom = g.top + h as i64 - 1;
+    let (Ok(above), Ok(below)) = (usize::try_from(baseline - g.top + 1), usize::try_from(bottom - baseline)) else { return false };
+    // The tail: a sixth to two thirds of the letter's height.
+    if w < 6 || above < 6 || above > h || below < 2 || below * 6 < above || below * 3 > above * 2 {
+        return false;
+    }
+    // The tail is a stem on the left: narrow, all of it in the left two fifths. It is read from
+    // a little below the base row, where a round foot overshoots by a pixel at 600 dpi.
+    let tail = above + (above / 10).max(1)..h;
+    if tail.is_empty() {
+        return false;
+    }
+    let Some((l, r)) = g.extent(tail) else { return false };
+    if (r - l + 1) * 20 > w * 9 || r * 5 >= w * 2 {
+        return false;
+    }
+    // Open at the top: two stems at the sides and nothing between them, down most of the way.
+    let top_rows = 0..above * 3 / 5;
+    let middle = w * 3 / 10..w * 7 / 10;
+    if top_rows.clone().any(|y| middle.clone().any(|x| g.at(x, y))) {
+        return false;
+    }
+    let both_stems = top_rows.clone().filter(|&y| g.extent(y..y + 1).is_some_and(|(l, r)| l * 4 <= w && r * 4 >= w * 3)).count();
+    if both_stems * 10 < top_rows.len() * 7 {
+        return false;
+    }
+    // The bowl: a row near the base spans most of the width.
+    (above - above * 3 / 10..above).any(|y| g.extent(y..y + 1).is_some_and(|(l, r)| (r - l + 1) * 10 >= w * 7))
 }
 
 /// The values of `samples` as runs, with runs shorter than two samples ignored.
@@ -695,14 +901,105 @@ mod tests {
         (x as f32, (x + 25) as f32)
     }
 
+    /// A cross of two diagonals in the middle of the line, clear of the cap and the base: `×`.
+    fn times(c: &mut Canvas, x: usize) -> (f32, f32) {
+        cross(c, x, BASE - 29, BASE - 11)
+    }
+
+    /// The same cross from the x-height down to the baseline: a letter `x`.
+    fn letter_x(c: &mut Canvas, x: usize) -> (f32, f32) {
+        cross(c, x, BASE - 28, BASE)
+    }
+
+    /// The cross at cap height: an `X`.
+    fn capital_x(c: &mut Canvas, x: usize) -> (f32, f32) {
+        cross(c, x, BASE - CAP, BASE)
+    }
+
+    fn cross(c: &mut Canvas, x: usize, top: usize, bottom: usize) -> (f32, f32) {
+        let (l, r) = ((x + 3) as f32, (x + 21) as f32);
+        c.line(l, top as f32, r, bottom as f32, 4.0);
+        c.line(l, bottom as f32, r, top as f32, 4.0);
+        (x as f32, (x + 24) as f32)
+    }
+
+    /// Three strokes through one point in the top half of the line: an asterisk.
+    fn asterisk(c: &mut Canvas, x: usize) -> (f32, f32) {
+        let (cx, cy) = ((x + 12) as f32, (BASE - 30) as f32);
+        c.line(cx, cy - 9.0, cx, cy + 9.0, 4.0);
+        c.line(cx - 8.0, cy - 5.0, cx + 8.0, cy + 5.0, 4.0);
+        c.line(cx - 8.0, cy + 5.0, cx + 8.0, cy - 5.0, 4.0);
+        (x as f32, (x + 24) as f32)
+    }
+
+    /// Two stems from the x-height to the baseline joined by a bowl at the foot: `u`.
+    fn letter_u(c: &mut Canvas, x: usize) -> (f32, f32) {
+        c.rect(x + 2, BASE - 28, x + 6, BASE);
+        c.rect(x + 18, BASE - 28, x + 22, BASE);
+        c.rect(x + 2, BASE - 4, x + 22, BASE);
+        (x as f32, (x + 24) as f32)
+    }
+
+    /// A `u` whose left stem runs on below the baseline: `µ`.
+    fn micro(c: &mut Canvas, x: usize) -> (f32, f32) {
+        let cols = letter_u(c, x);
+        c.rect(x + 2, BASE, x + 6, BASE + 10);
+        cols
+    }
+
+    /// Two cap-height stems with a crossbar: `H`.
+    fn capital_h(c: &mut Canvas, x: usize) -> (f32, f32) {
+        c.rect(x + 2, BASE - CAP, x + 6, BASE);
+        c.rect(x + 18, BASE - CAP, x + 22, BASE);
+        c.rect(x + 2, BASE - 22, x + 22, BASE - 18);
+        (x as f32, (x + 24) as f32)
+    }
+
+    /// A stem below the baseline with a closed bowl on its right: `p`.
+    fn letter_p(c: &mut Canvas, x: usize) -> (f32, f32) {
+        c.rect(x + 2, BASE - 28, x + 6, BASE + 10);
+        c.ring(x as f32 + 13.0, BASE as f32 - 14.0, 10.0, 14.0, 4.0);
+        (x as f32, (x + 24) as f32)
+    }
+
+    /// Two arms meeting below the x-height, the right one running on below the baseline: `y`.
+    fn letter_y(c: &mut Canvas, x: usize) -> (f32, f32) {
+        c.line((x + 3) as f32, (BASE - 28) as f32, (x + 12) as f32, (BASE - 4) as f32, 4.0);
+        c.line((x + 21) as f32, (BASE - 28) as f32, (x + 4) as f32, (BASE + 10) as f32, 4.0);
+        (x as f32, (x + 24) as f32)
+    }
+
+    /// A stem with a dot over it: `i`.
+    fn letter_i(c: &mut Canvas, x: usize) -> (f32, f32) {
+        c.rect(x + 2, BASE - 28, x + 6, BASE);
+        c.rect(x + 2, BASE - 38, x + 6, BASE - 34);
+        (x as f32, (x + 8) as f32)
+    }
+
+    /// Two stems from the x-height with a bar across the top: `n`.
+    fn letter_n(c: &mut Canvas, x: usize) -> (f32, f32) {
+        c.rect(x + 2, BASE - 28, x + 6, BASE);
+        c.rect(x + 18, BASE - 28, x + 22, BASE);
+        c.rect(x + 2, BASE - 28, x + 22, BASE - 24);
+        (x as f32, (x + 24) as f32)
+    }
+
     fn read(ch: char, cols: (f32, f32)) -> ReadChar {
         ReadChar { ch, left: cols.0, right: cols.1 }
     }
 
-    fn word(c: &Canvas, chars: &[ReadChar], next: Option<(f32, bool)>) -> Option<Repair> {
+    fn number(edge: f32) -> Option<Neighbour> {
+        Some(Neighbour { edge, numeric: true })
+    }
+
+    fn letters(edge: f32) -> Option<Neighbour> {
+        Some(Neighbour { edge, numeric: false })
+    }
+
+    fn word(c: &Canvas, chars: &[ReadChar], prev: Option<Neighbour>, next: Option<Neighbour>) -> Option<Repair> {
         let top = (BASE - CAP) as f32;
         let bottom = (BASE + 1) as f32;
-        repair_word(chars, top, bottom, next.map(|n| n.0), next.is_some_and(|n| n.1), &c.gray())
+        repair_word(chars, top, bottom, prev, next, &c.gray())
     }
 
     #[test]
@@ -710,30 +1007,30 @@ mod tests {
         let mut c = Canvas::new(200, 70);
         let sign = plus_minus(&mut c, 10);
         let one = digit(&mut c, 50);
-        let fixed = word(&c, &[read('+', sign), read('1', one)], None).expect("the ± is repaired");
+        let fixed = word(&c, &[read('+', sign), read('1', one)], None, None).expect("the ± is repaired");
         assert_eq!(fixed.text, "±1");
         // The decoder's other names for the same ink repair the same way.
-        assert_eq!(word(&c, &[read('-', sign), read('1', one)], None).map(|r| r.text).as_deref(), Some("±1"));
-        assert_eq!(word(&c, &[read('t', sign), read('1', one)], None).map(|r| r.text).as_deref(), Some("±1"));
+        assert_eq!(word(&c, &[read('-', sign), read('1', one)], None, None).map(|r| r.text).as_deref(), Some("±1"));
+        assert_eq!(word(&c, &[read('t', sign), read('1', one)], None, None).map(|r| r.text).as_deref(), Some("±1"));
         // The sign as a word of its own, before a word that starts with a digit.
-        assert_eq!(word(&c, &[read('+', sign)], Some((50.0, true))).map(|r| r.text).as_deref(), Some("±"));
+        assert_eq!(word(&c, &[read('+', sign)], None, number(50.0)).map(|r| r.text).as_deref(), Some("±"));
         // The decoder may split the one glyph over two steps, a `+` and a `-` side by side: the
         // leftover name goes with the symbol, whichever side it is on.
         let (left_half, right_half) = ((sign.0, sign.0 + 13.0), (sign.0 + 13.0, sign.1));
         let split = [read('+', left_half), read('-', right_half), read('1', one)];
-        assert_eq!(word(&c, &split, None).map(|r| r.text).as_deref(), Some("±1"));
+        assert_eq!(word(&c, &split, None, None).map(|r| r.text).as_deref(), Some("±1"));
         let split = [read('-', left_half), read('+', right_half), read('1', one)];
-        assert_eq!(word(&c, &split, None).map(|r| r.text).as_deref(), Some("±1"));
+        assert_eq!(word(&c, &split, None, None).map(|r| r.text).as_deref(), Some("±1"));
 
         let mut plain = Canvas::new(200, 70);
         let sign = plain_plus(&mut plain, 10);
         let one = digit(&mut plain, 50);
-        assert_eq!(word(&plain, &[read('+', sign), read('1', one)], None), None, "a plus has no bar under it");
+        assert_eq!(word(&plain, &[read('+', sign), read('1', one)], None, None), None, "a plus has no bar under it");
 
         let mut tee = Canvas::new(200, 70);
         let sign = letter_t(&mut tee, 10);
         let one = digit(&mut tee, 50);
-        assert_eq!(word(&tee, &[read('t', sign), read('1', one)], None), None, "a t's stem is off centre and its foot is no bar");
+        assert_eq!(word(&tee, &[read('t', sign), read('1', one)], None, None), None, "a t's stem is off centre and its foot is no bar");
     }
 
     #[test]
@@ -743,7 +1040,7 @@ mod tests {
             let ring = draw(&mut c, 10);
             let one = digit(&mut c, 60);
             for named in ['0', '8', '?'] {
-                let got = word(&c, &[read(named, ring), read('1', one)], None).map(|r| r.text);
+                let got = word(&c, &[read(named, ring), read('1', one)], None, None).map(|r| r.text);
                 assert_eq!(got.as_deref(), expect, "{named} read over this glyph");
             }
         }
@@ -756,7 +1053,7 @@ mod tests {
         let ring = diameter(&mut c, 40);
         let one = digit(&mut c, 90);
         // Inside a number the ring is a digit the decoder named, whatever its ink.
-        assert_eq!(word(&c, &[read('2', two), read('0', ring), read('1', one)], None), None);
+        assert_eq!(word(&c, &[read('2', two), read('0', ring), read('1', one)], None, None), None);
     }
 
     #[test]
@@ -766,19 +1063,19 @@ mod tests {
         let ring = degree(&mut c, 36);
         // Read as a question mark over the ring's columns: renamed. Read as a zero, the same:
         // a digit at the end of a word may be the name for the ring after the digit before it.
-        assert_eq!(word(&c, &[read('2', two), read('?', ring)], None).map(|r| r.text).as_deref(), Some("2°"));
-        assert_eq!(word(&c, &[read('2', two), read('0', ring)], None).map(|r| r.text).as_deref(), Some("2°"));
+        assert_eq!(word(&c, &[read('2', two), read('?', ring)], None, None).map(|r| r.text).as_deref(), Some("2°"));
+        assert_eq!(word(&c, &[read('2', two), read('0', ring)], None, None).map(|r| r.text).as_deref(), Some("2°"));
         // A full-height zero after the digit is the digit the decoder named.
         let mut twenty = Canvas::new(200, 70);
         let tens = digit(&mut twenty, 10);
         let nought = zero(&mut twenty, 36);
-        assert_eq!(word(&twenty, &[read('2', tens), read('0', nought)], None), None);
+        assert_eq!(word(&twenty, &[read('2', tens), read('0', nought)], None, None), None);
         // Dropped, the digit's columns running on to the line's end: appended, and the word
         // grows to the ring.
-        let fixed = word(&c, &[read('2', (two.0, 120.0))], None).expect("the dropped ° is appended");
+        let fixed = word(&c, &[read('2', (two.0, 120.0))], None, None).expect("the dropped ° is appended");
         assert_eq!(fixed.text, "2°");
         assert!(fixed.right.is_none(), "the word's columns already reached past the ring");
-        let fixed = word(&c, &[read('2', two)], None).expect("the dropped ° is appended");
+        let fixed = word(&c, &[read('2', two)], None, None).expect("the dropped ° is appended");
         assert!(fixed.right.is_some_and(|r| r > two.1 && r <= 60.0), "{fixed:?}: the word now ends at the ring");
 
         // The same ring on the baseline is a letter, and a ring past the next word's start is
@@ -786,8 +1083,8 @@ mod tests {
         let mut o = Canvas::new(200, 70);
         let two = digit(&mut o, 10);
         let ring = letter_o(&mut o, 36);
-        assert_eq!(word(&o, &[read('2', two), read('o', ring)], None), None);
-        assert_eq!(word(&c, &[read('2', two)], Some((36.0, false))), None);
+        assert_eq!(word(&o, &[read('2', two), read('o', ring)], None, None), None);
+        assert_eq!(word(&c, &[read('2', two)], None, letters(36.0)), None);
     }
 
     /// `±1°` read as `+-1?`: the sign's leftover name goes, and the ring is still found after
@@ -800,10 +1097,10 @@ mod tests {
         let ring = degree(&mut c, 76);
         let (left_half, right_half) = ((sign.0, sign.0 + 13.0), (sign.0 + 13.0, sign.1));
         let split = [read('+', left_half), read('-', right_half), read('1', one), read('?', ring)];
-        assert_eq!(word(&c, &split, None).map(|r| r.text).as_deref(), Some("±1°"));
+        assert_eq!(word(&c, &split, None, None).map(|r| r.text).as_deref(), Some("±1°"));
         // Dropped altogether, the digit's columns running on: appended, and the word grows.
         let split = [read('+', left_half), read('-', right_half), read('1', one)];
-        let fixed = word(&c, &split, None).expect("both repaired");
+        let fixed = word(&c, &split, None, None).expect("both repaired");
         assert_eq!(fixed.text, "±1°");
         assert!(fixed.right.is_some_and(|r| r > one.1), "{fixed:?}: the word now ends at the ring");
     }
@@ -815,8 +1112,66 @@ mod tests {
         let ring = diameter(&mut c, 50);
         // A plus between words and a ring before a letter keep what the decoder named: no
         // pixel is read for them.
-        assert_eq!(word(&c, &[read('+', sign)], Some((50.0, false))), None);
-        assert_eq!(word(&c, &[read('0', ring), read('x', (90.0, 100.0))], None), None);
+        assert_eq!(word(&c, &[read('+', sign)], None, letters(50.0)), None);
+        assert_eq!(word(&c, &[read('0', ring), read('x', (90.0, 100.0))], None, None), None);
+    }
+
+    #[test]
+    fn a_raised_cross_between_numbers_is_a_multiplication_sign_but_an_x_an_upper_x_or_an_asterisk_is_not() {
+        // In one word, `2x4`, and as a word of its own between `2` and `4`, under each name the
+        // decoder gives the sign.
+        let mut c = Canvas::new(200, 70);
+        let two = digit(&mut c, 10);
+        let sign = times(&mut c, 40);
+        let four = digit(&mut c, 70);
+        assert_eq!(word(&c, &[read('2', two), read('x', sign), read('4', four)], None, None).map(|r| r.text).as_deref(), Some("2×4"));
+        for named in ['x', 'X', '?', '*'] {
+            let got = word(&c, &[read(named, sign)], number(two.1), number(four.0)).map(|r| r.text);
+            assert_eq!(got.as_deref(), Some("×"), "{named} read over the sign");
+        }
+        // Between a word and a number, or with nothing on one side, the name stands.
+        assert_eq!(word(&c, &[read('x', sign)], letters(two.1), number(four.0)), None);
+        assert_eq!(word(&c, &[read('x', sign)], number(two.1), None), None);
+        // A letter on the baseline, a capital up to the cap, an asterisk in the top half.
+        for (draw, what) in [(letter_x as fn(&mut Canvas, usize) -> (f32, f32), "an x"), (capital_x, "an X"), (asterisk, "an asterisk")] {
+            let mut c = Canvas::new(200, 70);
+            let two = digit(&mut c, 10);
+            let glyph = draw(&mut c, 40);
+            let four = digit(&mut c, 70);
+            assert_eq!(word(&c, &[read('2', two), read('x', glyph), read('4', four)], None, None), None, "{what} in one word");
+            assert_eq!(word(&c, &[read('x', glyph)], number(two.1), number(four.0)), None, "{what} as a word");
+        }
+    }
+
+    #[test]
+    fn a_u_whose_stem_runs_below_the_line_after_a_number_is_a_micron_sign_but_a_u_an_h_a_p_or_a_y_is_not() {
+        let mut c = Canvas::new(200, 70);
+        let sign = micro(&mut c, 10);
+        let i = letter_i(&mut c, 40);
+        let n = letter_n(&mut c, 56);
+        let unit = |named: char| [read(named, sign), read('i', i), read('n', n)];
+        // After a number, under each name the decoder gives the sign.
+        for named in ['H', 'u', 'p'] {
+            assert_eq!(word(&c, &unit(named), number(8.0), None).map(|r| r.text).as_deref(), Some("µin"), "{named} read over the sign");
+        }
+        // In one word with the number.
+        let mut joined = Canvas::new(200, 70);
+        let five = digit(&mut joined, 10);
+        let sign = micro(&mut joined, 36);
+        let m = letter_n(&mut joined, 66);
+        assert_eq!(word(&joined, &[read('5', five), read('u', sign), read('m', m)], None, None).map(|r| r.text).as_deref(), Some("5µm"));
+        // After a word, or before more letters than a unit has, the name stands: no pixel is read.
+        assert_eq!(word(&c, &unit('u'), letters(8.0), None), None);
+        let long = [read('u', sign), read('i', i), read('n', n), read('c', (82.0, 90.0)), read('h', (90.0, 100.0))];
+        assert_eq!(word(&c, &long, number(8.0), None), None);
+        // A `u` or an `H` that stops at the line, a `p` with its bowl closed at the top, a `y`.
+        for (draw, what) in [(letter_u as fn(&mut Canvas, usize) -> (f32, f32), "a u"), (capital_h, "an H"), (letter_p, "a p"), (letter_y, "a y")] {
+            let mut c = Canvas::new(200, 70);
+            let glyph = draw(&mut c, 10);
+            let i = letter_i(&mut c, 40);
+            let n = letter_n(&mut c, 56);
+            assert_eq!(word(&c, &[read('u', glyph), read('i', i), read('n', n)], number(8.0), None), None, "{what} before a unit");
+        }
     }
 
     #[test]
@@ -827,6 +1182,6 @@ mod tests {
         for p in &mut c.px {
             *p = 255 - (255 - *p) / 8;
         }
-        assert_eq!(word(&c, &[read('+', sign), read('1', one)], None), None);
+        assert_eq!(word(&c, &[read('+', sign), read('1', one)], None, None), None);
     }
 }
