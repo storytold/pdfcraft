@@ -9871,6 +9871,43 @@ fn a_page_master_script_of_a_page_gone_does_not_hide_the_form() {
     }
 }
 
+/// Scripts an XFA form marks to run on a forms server (`runAt="server"`), or writes for another
+/// kind of application (`binding`), don't run when it opens: the fields they would set stay
+/// empty, while scripts for the client (no `runAt`, `client` or `both`) still calculate. The
+/// form says so in its warnings (#8337).
+#[test]
+fn xfa_server_scripts_and_scripts_for_other_applications_do_not_run_on_open() {
+    let js = |attrs: &str, body: &str| format!(r#"<script contentType="application/x-javascript"{attrs}>{body}</script>"#);
+    let calculated = |name: &str, attrs: &str| {
+        format!(r#"<field name="{name}" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate>{}</calculate></field>"#, js(attrs, "qty.rawValue * 5"))
+    };
+    let template = format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+<field name="qty" w="2in" h="0.3in"><ui><numericEdit/></ui><value><integer>2</integer></value></field>
+<field name="note" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="initialize">{}</event></field>
+{}{}{}{}{}
+</subform></template></xdp:xdp>"#,
+        js(r#" runAt="server""#, r#"this.rawValue = "from the server";"#),
+        calculated("plain", ""),
+        calculated("client", r#" runAt="client""#),
+        calculated("both", r#" runAt="both""#),
+        calculated("server", r#" runAt="server""#),
+        calculated("other", r#" binding="AcroForm""#),
+    );
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("server.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).expect("opens");
+    let value = |n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_else(|| panic!("no field {n}"));
+    for name in ["plain", "client", "both"] {
+        assert_eq!(value(name), ["10"], "{name}");
+    }
+    for name in ["server", "other", "note"] {
+        assert!(value(name).iter().all(|v| v.is_empty()), "{name}: {:?}", value(name));
+    }
+    let warnings = &s.get(id).unwrap().xfa.as_ref().expect("laid out").warnings;
+    assert!(warnings.iter().any(|w| w.contains("forms server")), "{warnings:?}");
+}
+
 /// An XFA form's scripts initialize, calculate, validate, show subforms and add and remove rows,
 /// with undo and save/reopen.
 #[test]
