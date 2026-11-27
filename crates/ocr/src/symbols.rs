@@ -79,7 +79,7 @@ pub(crate) fn repair_word(
         right = right.min(next - 1.0);
     }
     let region = Ink::sample(gray, [first.left - slack, line_top - slack, right + slack, line_bottom + slack])?;
-    let shapes = Shapes::of(&region)?;
+    let shapes = Shapes::of(&region, gray)?;
     let mut out = text.clone();
     let mut consumed = Vec::new();
     let mut i = 0;
@@ -203,6 +203,8 @@ struct Ink {
     w: usize,
     h: usize,
     on: Vec<bool>,
+    /// The grey value under which a pixel is ink, for reading on past the region's edges.
+    threshold: u32,
 }
 
 impl Ink {
@@ -223,7 +225,19 @@ impl Ink {
             return None;
         }
         let threshold = (lo + hi) / 2;
-        Some(Ink { left, top, w, h, on: values.iter().map(|&g| u32::from(g) < threshold).collect() })
+        Some(Ink { left, top, w, h, on: values.iter().map(|&g| u32::from(g) < threshold).collect(), threshold })
+    }
+
+    /// How many columns the ink of a component that reaches the region's left or right edge runs
+    /// on past that edge, up to `cap` on each side: the rest of a rule the region cut short. A
+    /// component clear of both edges runs on nowhere.
+    fn runs_past(&self, gray: Gray, c: &Component, cap: i64) -> i64 {
+        let on = |x: i64| (c.top..=c.bottom).any(|y| u32::from(gray(x, y)) < self.threshold);
+        let run = |edge: i64, step: i64| (1..=cap).take_while(|i| on(edge + i * step)).count() as i64;
+        let (left_edge, right_edge) = (self.left, self.left + self.w as i64 - 1);
+        let left = if c.left == left_edge { run(left_edge, -1) } else { 0 };
+        let right = if c.right == right_edge { run(right_edge, 1) } else { 0 };
+        left + right
     }
 
     fn at(&self, x: i64, y: i64) -> bool {
@@ -258,6 +272,8 @@ struct Component {
     right: i64,
     bottom: i64,
     pixels: usize,
+    /// Columns its ink runs on past the region's edges, where the region cut it short.
+    beyond: i64,
 }
 
 impl Component {
@@ -322,9 +338,12 @@ struct Shapes<'a> {
 }
 
 impl<'a> Shapes<'a> {
-    fn of(ink: &'a Ink) -> Option<Shapes<'a>> {
+    /// `gray` is the page the region was sampled from, for measuring a component the region cut
+    /// short at its edge ([`Shapes::is_rule`]).
+    fn of(ink: &'a Ink, gray: Gray) -> Option<Shapes<'a>> {
         let line = ink.ink_rows()?;
         let (w, h) = (ink.w, ink.h);
+        let cap = 2 * (line.1 - line.0 + 1);
         let mut labels = vec![0u32; w * h];
         let mut components = Vec::new();
         let mut stack = Vec::new();
@@ -333,7 +352,7 @@ impl<'a> Shapes<'a> {
                 continue;
             }
             let id = u32::try_from(components.len() + 1).ok()?;
-            let mut c = Component { left: i64::MAX, top: i64::MAX, right: i64::MIN, bottom: i64::MIN, pixels: 0 };
+            let mut c = Component { left: i64::MAX, top: i64::MAX, right: i64::MIN, bottom: i64::MIN, pixels: 0, beyond: 0 };
             stack.push(start);
             if let Some(l) = labels.get_mut(start) {
                 *l = id;
@@ -362,6 +381,7 @@ impl<'a> Shapes<'a> {
             c.right += ink.left;
             c.top += ink.top;
             c.bottom += ink.top;
+            c.beyond = ink.runs_past(gray, &c, cap);
             components.push(c);
         }
         Some(Shapes { ink, labels, components, line })
@@ -371,9 +391,11 @@ impl<'a> Shapes<'a> {
     /// table rule under the line lies within the region sampled around a word, and it is both
     /// the largest component near a character's columns and stacked under its glyph (`.000 ±
     /// .005` under a title-block rule on a 600 dpi scan read as `000+.005`, the rule taken for the
-    /// `±`, while `± .010` on the line above was repaired).
+    /// `±`, while `± .010` on the line above was repaired). The width counts the ink past the
+    /// region's edges: around a sign that is a word of its own the region ends before the next
+    /// word, and a rule cut to the region's width would pass for a bar.
     fn is_rule(&self, k: &Component) -> bool {
-        k.width() > 2 * (self.line.1 - self.line.0 + 1)
+        k.width() + k.beyond > 2 * (self.line.1 - self.line.0 + 1)
     }
 
     /// The largest component whose centre lies within `slack` of the character's columns:
@@ -764,6 +786,9 @@ mod tests {
         let one = digit(&mut c, 100);
         c.rect(0, BASE + 5, 150, BASE + 6);
         assert_eq!(word(&c, &[read('+', sign), read('1', one)], None).map(|r| r.text).as_deref(), Some("±1"));
+        // The sign as a word of its own: the region ends before the next word, and the rule is
+        // cut to under a line height and a half within it. Its ink runs on past the region's edges.
+        assert_eq!(word(&c, &[read('+', sign)], Some((100.0, true))).map(|r| r.text).as_deref(), Some("±"));
     }
 
     #[test]
