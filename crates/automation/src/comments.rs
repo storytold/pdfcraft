@@ -470,7 +470,10 @@ impl Automation {
         }
         style.fill = a.color("fill")?;
         if let Some(o) = a.opt_num("opacity")? {
-            style.opacity = o.clamp(0.0, 1.0);
+            if !(0.0..=1.0).contains(&o) {
+                return Err(ToolError::InvalidArgs(format!("opacity must be between 0 and 1, got {o}")));
+            }
+            style.opacity = o;
         }
         // The fill's and a text box's text's own opacities (the line keeps `opacity`).
         let (fill_opacity, text_opacity) = (a.opt_num("fill_opacity")?, a.opt_num("text_opacity")?);
@@ -758,6 +761,9 @@ impl Automation {
             edits.push(Edit::SetAnnotationContents { page, index, text: text.to_string() });
         }
         let (color, opacity, width) = (a.color("color")?, a.opt_num("opacity")?, a.opt_num("width")?);
+        if let Some(o) = opacity.filter(|&o| !(0.0..=1.0).contains(&o)) {
+            return Err(ToolError::InvalidArgs(format!("opacity must be between 0 and 1, got {o}")));
+        }
         if color.is_some() || opacity.is_some() || width.is_some() {
             edits.push(Edit::StyleAnnotation { page, index, color, opacity, width, endings: None });
         }
