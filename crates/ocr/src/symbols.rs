@@ -215,8 +215,9 @@ fn neighbour_rows(
     [top, bottom]: [f32; 2],
     height: f32,
 ) -> Option<(i64, i64)> {
-    let left = prev.filter(|n| n.numeric).map_or(glyph.left as f32, |n| n.edge - height);
-    let right = next.filter(|n| n.numeric).map_or((glyph.left + glyph.w as i64) as f32, |n| n.edge + height);
+    let reach = 1.5 * height;
+    let left = prev.filter(|n| n.numeric).map_or(glyph.left as f32, |n| n.edge - reach);
+    let right = next.filter(|n| n.numeric).map_or((glyph.left + glyph.w as i64) as f32, |n| n.edge + reach);
     let ink = Ink::sample(gray, [left, top, right, bottom])?;
     let shapes = Shapes::of(&ink)?;
     let own = shapes.components.iter().position(|k| k.left == glyph.left && k.top == glyph.top).unwrap_or(usize::MAX);
@@ -321,9 +322,17 @@ fn drop_consumed(out: &mut Vec<char>, chars: &[ReadChar], shapes: &Shapes, slack
 /// digit's glyph; returns the word's new right edge when the ring lay past the word.
 fn degree(out: &mut Vec<char>, chars: &[ReadChar], shapes: &Shapes, slack: f32, next_left: Option<f32>) -> Option<f32> {
     for digit in degree_candidates(out) {
-        let Some((_, glyph)) = chars.get(digit).and_then(|c| shapes.main_glyph(*c, slack)) else {
+        let Some((id, glyph)) = chars.get(digit).and_then(|c| shapes.main_glyph(*c, slack)) else {
             continue;
         };
+        // A last digit whose columns resolve to the glyph of the digit before it was named for
+        // the ring's own ink (`45°` read as `450`): that digit's turn, which renames it.
+        let named_for_the_ring = digit + 1 == out.len()
+            && digit >= 1
+            && chars.get(digit - 1).and_then(|c| shapes.main_glyph(*c, slack)).is_some_and(|(before, _)| before == id);
+        if named_for_the_ring {
+            continue;
+        }
         let Some(ring) = shapes.ring_after(&glyph, next_left) else {
             continue;
         };
@@ -570,7 +579,14 @@ impl<'a> Shapes<'a> {
     /// `exclude` left out. `None` when the word has no other such glyph.
     fn reference_rows(&self, at: Rows, exclude: usize) -> Option<(i64, i64)> {
         let glyphs = glyph_like(&self.components, at, (0.8, 2.5), exclude);
-        Some((median(glyphs.iter().map(|k| k.top))?, median(glyphs.iter().map(|k| k.bottom))?))
+        // The tighter of two medians at each end: a glyph larger than the line's letters (a
+        // geometric-characteristic symbol, a `Ø`) or off its row must not widen the rows, and
+        // a `×` among the letters is clear of the rows they set, however tight.
+        let mut tops: Vec<i64> = glyphs.iter().map(|k| k.top).collect();
+        let mut bottoms: Vec<i64> = glyphs.iter().map(|k| k.bottom).collect();
+        tops.sort_unstable();
+        bottoms.sort_unstable();
+        Some((*tops.get(tops.len() / 2)?, *bottoms.get(bottoms.len().checked_sub(1)? / 2)?))
     }
 
     /// The base row of the letters beside the glyph at `at`: the median bottom of the
@@ -1138,6 +1154,15 @@ mod tests {
         assert!(fixed.right.is_none(), "the word's columns already reached past the ring");
         let fixed = word(&c, &[read('2', two)], None, None).expect("the dropped ° is appended");
         assert!(fixed.right.is_some_and(|r| r > two.1 && r <= 60.0), "{fixed:?}: the word now ends at the ring");
+
+        // `45°` read as `450` with the `0`'s columns reaching back over the `5`: the `0` was named
+        // for the ring, so it is renamed, not kept with a `°` appended after it.
+        let mut c = Canvas::new(200, 70);
+        let four = digit(&mut c, 10);
+        let five = digit(&mut c, 36);
+        let ring = degree(&mut c, 62);
+        let chars = [read('4', four), read('5', (five.0, five.0 + 14.0)), read('0', (five.0 + 14.0, ring.1))];
+        assert_eq!(word(&c, &chars, None, None).map(|r| r.text).as_deref(), Some("45°"));
 
         // The same ring on the baseline is a letter, and a ring past the next word's start is
         // that word's.
