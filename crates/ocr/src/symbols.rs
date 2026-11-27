@@ -672,18 +672,19 @@ impl<'a> Shapes<'a> {
             // Nothing else of any size within the glyph, and no further small numeral reaching
             // into the glyph's neighbourhood, however little of it: `1/64` set with small
             // numerals is no sixth, at any spacing of the `4`. A numeral sits at the
-            // numerator's level or the denominator's; a `±` beside the glyph spans the line
-            // (`±½`), a full-size digit is the whole number (`1½`), and a small ring after the
-            // glyph is the `°` of `22½°`.
+            // numerator's level or the denominator's; a full-size digit beside the glyph is
+            // the whole number (`1½`), a small ring after it the `°` of `22½°`, and the cross
+            // of a `±` before it (`±½`), which may sit at that level, is part of the sign.
             let within = |k: &Component, l: i64, r: i64| (k.right.min(r) - k.left.max(l) + 1) * 2 > k.width();
             let reaches = |k: &Component, l: i64, r: i64| k.left <= r && k.right >= l;
-            let small_numeral = |k: &Component| numeral(k) && (at_the_top(k) || at_the_foot(k)) && !self.is_degree(k);
+            let small_numeral =
+                |id: usize, k: &Component| numeral(k) && (at_the_top(k) || at_the_foot(k)) && !self.is_degree(k) && !self.is_part_of_plus_minus(id);
             let intruder = self.components.iter().enumerate().any(|(id, k)| {
                 id != s
                     && id != n
                     && id != d
                     && ((within(k, left, right) && k.height() as f32 >= 0.28 * text_h)
-                        || (reaches(k, left - reach as i64, right + reach as i64) && small_numeral(k)))
+                        || (reaches(k, left - reach as i64, right + reach as i64) && small_numeral(id, k)))
             });
             if intruder {
                 continue;
@@ -697,6 +698,14 @@ impl<'a> Shapes<'a> {
         }
         out.sort_by_key(|f| f.left);
         out
+    }
+
+    /// Whether the component is a part of a `±`: it and whatever is stacked over or under it
+    /// within its columns make the sign's shape.
+    fn is_part_of_plus_minus(&self, id: usize) -> bool {
+        let Some(k) = self.components.get(id) else { return false };
+        let columns = ReadChar { ch: '+', left: k.left as f32, right: k.right as f32 };
+        self.stacked_glyph(columns, 0.0).is_some_and(|(ids, glyph)| ids.contains(&id) && is_plus_minus(&glyph))
     }
 
     /// Whether the character's columns hold ink of their own, besides the fraction glyph's
@@ -1236,8 +1245,9 @@ mod tests {
         assert_eq!(count.get(), 2);
     }
 
-    /// `±½`: the sign beside the glyph, within its reach, is no numeral (its cross spans the
-    /// line from near the cap to near the baseline), and both are repaired.
+    /// `±½`: the sign beside the glyph, within its reach, is no numeral, whether its cross
+    /// spans the line from near the cap to near the baseline or sits short at the numerator's
+    /// level, and both are repaired.
     #[test]
     fn a_sign_beside_a_fraction_glyph_is_no_numeral_and_both_are_repaired() {
         let mut c = Canvas::new(200, 70);
@@ -1247,6 +1257,13 @@ mod tests {
         let shown = std::cell::RefCell::new(Vec::new());
         let chars = [read('+', (10.0, 37.0)), read('1', (glyph.0, glyph.0 + 14.0)), read('2', (glyph.0 + 14.0, glyph.1))];
         assert_eq!(word_read(&c, &chars, None, &numerals("1", "2", &shown)).map(|r| r.text).as_deref(), Some("±½"));
+        // The short cross of the usual sign, numeral-sized and at the numerator's level, a
+        // column short of the glyph's reach: part of a `±`, so no numeral either.
+        let mut short = Canvas::new(200, 70);
+        let sign = plus_minus(&mut short, 4);
+        let glyph = fraction(&mut short, 40);
+        let chars = [read('+', sign), read('1', (glyph.0, glyph.0 + 14.0)), read('2', (glyph.0 + 14.0, glyph.1))];
+        assert_eq!(word_read(&short, &chars, None, &numerals("1", "2", &shown)).map(|r| r.text).as_deref(), Some("±½"));
     }
 
     #[test]
