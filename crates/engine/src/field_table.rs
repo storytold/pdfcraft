@@ -7,7 +7,7 @@ pub use pdfcraft_forms::table::*;
 use pdfcraft_forms::MIN_FIELD_SIDE;
 use pdfcraft_render::PageInfo;
 
-use crate::{Edit, FormField, NewField};
+use crate::{Edit, FormField, FormFieldKind as FieldKind, NewField};
 
 /// The edit's name in the history ("Undo Add text field table"), one of [`crate::BATCH_LABELS`].
 pub const LABEL: &str = "Add text field table";
@@ -43,8 +43,24 @@ pub fn edit(table: &FieldTable, page: usize, info: &PageInfo, form: &[FormField]
     Ok(Edit::Batch { label: LABEL.to_owned(), edits })
 }
 
-/// Lay out a grid of independent copies of one existing field widget.
+/// Whether a grid can copy widget `widget` of `field`: a text field, or a check box whose
+/// widgets share one export value (`pdfcraft_forms::copy_field` refuses the rest).
+pub fn copyable(field: &FormField, widget: usize) -> bool {
+    let kind = match field.kind {
+        FieldKind::Text => true,
+        FieldKind::CheckBox => field.widgets.len() <= 1 || field.options.is_empty(),
+        _ => false,
+    };
+    kind && widget < field.widgets.len()
+}
+
+/// The edit laying `table` out as independent copies of widget `widget` of the field `source`,
+/// one copy in each cell. Refused, with nothing added, for a field a grid can't copy
+/// ([`copyable`]) and for whatever [`edit`] refuses.
 pub fn copy_edit(table: &FieldTable, page: usize, info: &PageInfo, form: &[FormField], source: &str, widget: usize) -> Result<Edit, TableError> {
+    if !form.iter().any(|f| f.name == source && copyable(f, widget)) {
+        return Err(TableError::Uncopyable(source.to_owned()));
+    }
     let batch = edit(table, page, info, form)?;
     Ok(match batch {
         Edit::Batch { edits, .. } => Edit::Batch {
@@ -123,6 +139,24 @@ mod tests {
         }
         assert_eq!(s.undo(id).unwrap().to_string(), COPY_LABEL);
         assert_eq!(s.get(id).unwrap().form.len(), 1);
+    }
+
+    #[test]
+    fn a_grid_refuses_a_check_box_whose_widgets_export_different_values() {
+        let mut s = Session::new();
+        let bytes = s.create_blank(300.0, 400.0, 1).unwrap();
+        let id = s.open("boxes.pdf", None, bytes, None).unwrap();
+        s.apply(id, Edit::AddField { page: 0, rect: [30.0, 330.0, 50.0, 350.0], kind: NewField::CheckBox, name: Some("box".into()) }).unwrap();
+        let doc = s.get(id).unwrap();
+        let table = grid([30.0, 100.0, 230.0, 180.0], 2, &["a_N"]);
+        assert!(copy_edit(&table, 0, &doc.info.pages[0], &doc.form, "box", 0).is_ok());
+        // The same box as two widgets with an export value each (`/Opt`), as the forms layer reads it.
+        let mut form = doc.form.to_vec();
+        let boxes = form.iter_mut().find(|f| f.name == "box").unwrap();
+        boxes.widgets.push(boxes.widgets[0].clone());
+        boxes.options = vec![("Yes".into(), "Yes".into()), ("No".into(), "No".into())];
+        let refused = copy_edit(&table, 0, &doc.info.pages[0], &form, "box", 0);
+        assert_eq!(refused.err(), Some(TableError::Uncopyable("box".into())), "the preview can't call it valid");
     }
 
     #[test]

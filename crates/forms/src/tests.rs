@@ -63,9 +63,13 @@ fn grid_copy_checkbox_preserves_appearance_and_rejects_taken_names() {
     let all = fields(&doc);
     assert_eq!(field(&all, "agree_copy").kind, FieldKind::CheckBox);
     assert_eq!(field(&all, "agree_copy").widgets[0].on_state, field(&all, "agree").widgets[0].on_state);
-    let copied_ap = doc.get(field(&all, "agree_copy").widgets[0].obj).as_dict().unwrap().get(b"AP").cloned();
-    let source_ap = doc.get(field(&all, "agree").widgets[0].obj).as_dict().unwrap().get(b"AP").cloned();
-    assert_eq!(copied_ap, source_ap, "custom checkbox appearance is preserved");
+    let (copied, source) = (normal_states(&doc, field(&all, "agree_copy")), normal_states(&doc, field(&all, "agree")));
+    assert_eq!(copied.len(), source.len(), "every appearance state is copied");
+    for ((state, copy_ref), (source_state, source_ref)) in copied.iter().zip(&source) {
+        assert_eq!(state, source_state);
+        assert_ne!(copy_ref, source_ref, "the copy has a stream of its own");
+        assert_eq!(doc.get(*copy_ref), doc.get(*source_ref), "and it draws the same custom look");
+    }
     set_value(&mut doc, "agree_copy", &FieldValue::Check(true)).unwrap();
     let reopened = reopen(&doc);
     let all = fields(&reopened);
@@ -145,6 +149,63 @@ fn grid_copy_keeps_widget_overrides_when_field_and_widget_are_separate() {
     assert!(dict.contains(b"Foo"));
     assert!(!dict.contains(b"NM"), "an annotation name must not be duplicated");
     assert_eq!(copy.da, "/Helv 8 Tf 1 0 0 rg");
+}
+
+#[test]
+fn grid_copy_keeps_a_transparent_borderless_multiline_look() {
+    let mut doc = fixture();
+    let bare = FieldProps {
+        appearance: Some(LookPatch { fill: Some(None), border: Some(None), width: Some(0.0), ..Default::default() }),
+        ..Default::default()
+    };
+    set_props(&mut doc, "notes", &bare).unwrap();
+    let source = field(&fields(&doc), "notes").clone();
+    let styled = look(&doc, &source);
+    assert!(source.has(flags::MULTILINE) && styled.fill.is_none() && styled.border.is_none());
+    copy_field(&mut doc, "notes", 0, 0, [50.0, 400.0, 250.0, 480.0], "notes_2").unwrap();
+    set_value(&mut doc, "notes_2", &FieldValue::Text("one\ntwo".into())).unwrap();
+    let reopened = reopen(&doc);
+    let all = fields(&reopened);
+    let copy = field(&all, "notes_2");
+    assert!(copy.has(flags::MULTILINE), "the copy stays multi-line");
+    assert_eq!(look(&reopened, copy), styled, "the copy keeps no background and no border");
+}
+
+#[test]
+fn grid_copy_is_no_longer_part_of_an_xfa_template() {
+    let mut doc = fixture();
+    let source = field(&fields(&doc), "notes").obj;
+    doc.update_dict(source, |d| d.set(b"PCSom".to_vec(), Object::String(PdfString::text("form1[0].notes[0]")))).unwrap();
+    copy_field(&mut doc, "notes", 0, 0, [50.0, 400.0, 250.0, 480.0], "notes_3").unwrap();
+    let all = fields(&doc);
+    assert!(doc.get(field(&all, "notes").obj).as_dict().unwrap().contains(b"PCSom"));
+    assert!(!doc.get(field(&all, "notes_3").obj).as_dict().unwrap().contains(b"PCSom"), "a new layout would drop a copy bound to the template");
+}
+
+#[test]
+fn grid_copy_redraws_its_own_appearance_not_the_sources() {
+    let mut doc = fixture();
+    // A password field's edited appearance is redrawn in place.
+    set_value(&mut doc, "pin", &FieldValue::Text("12".into())).unwrap();
+    copy_field(&mut doc, "pin", 0, 0, [50.0, 400.0, 150.0, 420.0], "pin_copy").unwrap();
+    let source = normal(&doc, field(&fields(&doc), "pin"));
+    let before = doc.get(source);
+    set_value(&mut doc, "pin_copy", &FieldValue::Text("123456".into())).unwrap();
+    assert_eq!(normal(&doc, field(&fields(&doc), "pin")), source);
+    assert_eq!(doc.get(source), before, "setting the copy leaves the source's look as it was");
+}
+
+/// The widget's `/AP /N` stream.
+fn normal(doc: &Document, f: &Field) -> pdfcraft_cos::ObjRef {
+    let ap = doc.resolve(doc.get(f.widgets[0].obj).as_dict().unwrap().get(b"AP").unwrap());
+    ap.as_dict().unwrap().reference(b"N").unwrap()
+}
+
+/// The widget's `/AP /N` states and their streams.
+fn normal_states(doc: &Document, f: &Field) -> Vec<(Vec<u8>, pdfcraft_cos::ObjRef)> {
+    let ap = doc.resolve(doc.get(f.widgets[0].obj).as_dict().unwrap().get(b"AP").unwrap());
+    let states = doc.resolve(ap.as_dict().unwrap().get(b"N").unwrap());
+    states.as_dict().unwrap().iter().map(|(k, v)| (k.clone(), v.as_ref().unwrap())).collect()
 }
 
 /// A PDF of the given objects (numbered from 1).

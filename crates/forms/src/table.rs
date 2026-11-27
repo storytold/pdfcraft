@@ -317,6 +317,8 @@ pub enum TableError {
     Twice(String),
     /// The form already has a field of this name.
     Taken(String),
+    /// The field a grid would copy is not a text field or a check box with one export value.
+    Uncopyable(String),
 }
 
 const ROWS: &str = "a table has 1 to {max} rows";
@@ -329,10 +331,11 @@ const COLUMN_TOO_NARROW: &str =
 const PERIOD: &str = "field names can't contain a period: {name}";
 const TWICE: &str = "two cells would both be named {name}";
 const TAKEN: &str = "a field named {name} already exists";
+const UNCOPYABLE: &str = "{name} can't be copied into a grid: only text fields and check boxes with one export value can";
 
 /// Every sentence a [`TableError`] says, in English with its holes still in it, for an interface
 /// to translate; `wordings_are_said` keeps the list in step with the errors.
-pub const WORDINGS: &[&str] = &[ROWS, COLUMNS, FIRST_ROW, NUMBERS, ROWS_TOO_SHORT, COLUMN_TOO_NARROW, PERIOD, TWICE, TAKEN];
+pub const WORDINGS: &[&str] = &[ROWS, COLUMNS, FIRST_ROW, NUMBERS, ROWS_TOO_SHORT, COLUMN_TOO_NARROW, PERIOD, TWICE, TAKEN, UNCOPYABLE];
 
 /// How an interface says one of our wordings in its own language, holes and all: given the English
 /// in [`WORDINGS`], the same wording in that language. [`in_english`] keeps the English.
@@ -361,6 +364,7 @@ impl TableError {
             TableError::Period(name) => named(PERIOD, name),
             TableError::Twice(name) => named(TWICE, name),
             TableError::Taken(name) => named(TAKEN, name),
+            TableError::Uncopyable(name) => named(UNCOPYABLE, name),
         }
     }
 }
@@ -612,6 +616,7 @@ mod tests {
             TableError::Period("a.1".into()),
             TableError::Twice("a_1".into()),
             TableError::Taken("a_1".into()),
+            TableError::Uncopyable("a".into()),
         ];
         assert_eq!(WORDINGS.len(), mistakes.len(), "one wording per mistake");
         // Each mistake says one of the wordings: translated to a marker, only the values remain.
