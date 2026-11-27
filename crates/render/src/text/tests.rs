@@ -2377,7 +2377,8 @@ fn columns_of_prose_are_no_table_rows() {
         }
     }
     let t = layout(v).plain_text();
-    assert_eq!(t.lines().filter(|l| l.starts_with('0') && l.contains("Aaron R Eichholz Not Billable")).count(), 3, "{t}");
+    let entries: Vec<&str> = t.lines().filter(|l| l.contains("Aaron R Eichholz Not Billable")).map(|l| l.split(' ').next().unwrap_or("")).collect();
+    assert_eq!(entries, ["07/02/2026", "06/30/2026", "07/02/2026"], "{t}");
     assert!(t.lines().any(|l| l == "818 - Tear Down and Clean Up"), "{t}");
     // Narrow columns of prose: 26 letters a line, 15.6 heights, narrower than a cell may be. Their
     // lines fill their column, so they are no cells and the page keeps its columns (review on #8548,
