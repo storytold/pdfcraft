@@ -307,7 +307,6 @@ mod idle_tests {
     use std::time::Duration;
 
     use craft::host::{AppInfo, Host, ManualJobs, ScriptedFiles};
-    use craft::platform::autosave::RecoveryStore;
 
     pub(super) struct TestDir(PathBuf);
 
@@ -373,6 +372,8 @@ mod idle_tests {
     #[cfg(unix)]
     #[test]
     fn a_snapshot_that_is_not_a_regular_file_is_refused_at_once() {
+        use craft::platform::autosave::RecoveryStore;
+
         let dir = TestDir::new();
         let folder = dir.path().join("recovery");
         let meta = |name: &str| craft::platform::autosave::RecoveryMeta {
