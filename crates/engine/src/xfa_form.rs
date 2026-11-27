@@ -28,7 +28,10 @@ pub(crate) fn xfa_apply_static_comb_fields(doc: &mut pdfcraft_cos::Document) -> 
     // leave the fields as the file has them, as they do for every other reader of them on opening
     // (the data's values, the form's scripts), rather than add a warning to a form that opens.
     let Ok(Some(packets)) = pdfcraft_xfa::read_packets(doc) else { return Ok(Vec::new()) };
-    if packets.needs_rendering || !packets.has_fields || !has_comb_element(&packets.xdp) {
+    // A `<comb>` element is all the template is read for here, and the word alone is not one: the
+    // OPM SF-86 has no comb field but asks about "combat" and "combined" service, and reading its
+    // 14 MB template for that found nothing to apply and a template past the XML reader's limits.
+    if packets.needs_rendering || !packets.has_fields || !pdfcraft_xfa::may_have_element(&packets.xdp, "comb") {
         return Ok(Vec::new());
     }
     // Converting existing widgets would modify the field flags and appearances covered by a signature.
@@ -111,20 +114,6 @@ fn write_static_comb_fields(
         pdfcraft_forms::redraw_fields(doc, |_, field| changed_objects.contains(&field.obj)).map_err(|e| e.to_string())?;
     }
     Ok(changed)
-}
-
-/// Whether the XDP text has a `<comb>` element, with or without a namespace prefix: the only
-/// thing [`xfa_apply_static_comb_fields`] reads the template for. The word alone is not one. The
-/// OPM SF-86 has no comb field, but asks about "combat" and "combined" service, and reading its
-/// 14 MB template for that found nothing to apply and a template past the XML reader's limits.
-pub(crate) fn has_comb_element(xdp: &str) -> bool {
-    let name_char = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.');
-    xdp.match_indices("comb").any(|(at, word)| {
-        let ends_the_name = xdp[at + word.len()..].chars().next().is_none_or(|c| c == '>' || c == '/' || c.is_whitespace());
-        let before = &xdp[..at];
-        let before = before.strip_suffix(':').map_or(before, |prefixed| prefixed.trim_end_matches(name_char));
-        ends_the_name && before.ends_with('<')
-    })
 }
 
 fn collect_static_comb_fields(
@@ -478,15 +467,24 @@ pub(crate) fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Resu
     // All at once (one by one, each value would read the whole form again, which took minutes on
     // a form with thousands of fields), and on a copy. A value its field refuses is left out and
     // the others are kept: the data of a form filled elsewhere routinely holds some a field here
-    // cannot take. Only a failed recalculation discards the copy: no value counts as filled
+    // cannot take. Only a failed recalculation discards everything: no value counts as filled
     // then, though each was written, so no caller keeps half-applied data.
-    let mut working = doc.clone();
-    let results = pdfcraft_forms::set_values(&mut working, &updates).map_err(|e| e.to_string())?;
-    let taken: Vec<String> = updates.into_iter().zip(results).filter(|(_, r)| r.is_ok()).map(|((name, _), _)| name).collect();
-    if !taken.is_empty() {
-        *doc = working;
+    loop {
+        let mut working = doc.clone();
+        let results = pdfcraft_forms::set_values(&mut working, &updates).map_err(|e| e.to_string())?;
+        if results.iter().all(Result::is_ok) {
+            *doc = working;
+            return Ok(updates.into_iter().map(|(name, _)| name).collect());
+        }
+        // A refusal can come after the field's `/V` was stored (its appearance could not be
+        // drawn), so this copy may hold values reported as not taken. It is dropped, and the
+        // values that were taken go into a fresh one on their own: one fewer each time at least.
+        let mut refused = results.iter().map(Result::is_err);
+        updates.retain(|_| !refused.next().unwrap_or(true));
+        if updates.is_empty() {
+            return Ok(Vec::new());
+        }
     }
-    Ok(taken)
 }
 
 /// Whether a choice field takes the empty value an empty data element stands for, by the rules

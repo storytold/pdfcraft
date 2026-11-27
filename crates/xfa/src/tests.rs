@@ -451,6 +451,54 @@ fn comb_settings_use_explicit_cells_or_the_text_limit_and_ignore_scroll_policies
     assert!(!born.no_scroll);
 }
 
+/// The question asked before a template is parsed for its combs has the parser's own answer: a
+/// `<comb>` start tag under any prefix the parser reads (ones with U+00B7 or a combining mark
+/// too) is found, and the same markup in a comment, a CDATA section, a processing instruction,
+/// text or an attribute is not an element to either of them.
+#[test]
+fn asking_for_an_element_agrees_with_the_template_parser() {
+    const NS: &str = "http://www.xfa.org/schema/xfa-template/3.3/";
+    // The root subform's attributes and its text widget's content.
+    let xdp = |attrs: &str, text_edit: &str| {
+        format!(
+            r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="{NS}"><subform name="form1"{attrs}><field name="f"><ui><textEdit>{text_edit}</textEdit></ui></field></subform></template></xdp:xdp>"#
+        )
+    };
+    let parsed_comb = |xml: &str| {
+        let (tpl, _) = parse(xml).unwrap_or_else(|e| panic!("{xml}: {e}"));
+        tpl.root.children.iter().any(|n| matches!(n, Node::Field(f) if f.comb_cells.is_some()))
+    };
+    let with_comb = [
+        xdp("", r#"<comb numberOfCells="3"/>"#),
+        xdp("", "<comb\n numberOfCells=\"3\"></comb>"),
+        xdp(&format!(r#" xmlns:x="{NS}""#), r#"<x:comb numberOfCells="3"/>"#),
+        xdp(&format!(" xmlns:a\u{b7}b=\"{NS}\""), "<a\u{b7}b:comb numberOfCells=\"3\"/>"),
+        xdp(&format!(" xmlns:e\u{301}=\"{NS}\""), "<e\u{301}:comb numberOfCells=\"3\"/>"),
+        format!("\u{feff}{}", xdp("", "<comb/>")),
+    ];
+    for xml in &with_comb {
+        assert!(parsed_comb(xml), "the parser reads a comb: {xml}");
+        assert!(may_have_element(xml, "comb"), "{xml}");
+    }
+    let without = [
+        xdp("", "<!-- <comb numberOfCells=\"3\"/> -->"),
+        xdp("", "<![CDATA[<comb numberOfCells=\"3\"/>]]>"),
+        xdp("", "<?note <comb numberOfCells=\"3\"/> ?>"),
+        xdp("", "combat, or combined service: a comb "),
+        xdp(r#" desc="&lt;comb/>" id="x:comb""#, r#"<border name="comb"/>"#),
+        xdp("", "<combo/><x-comb/>"),
+        xdp("", ""),
+    ];
+    for xml in &without {
+        assert!(!parsed_comb(xml), "the parser reads no comb: {xml}");
+        assert!(!may_have_element(xml, "comb"), "{xml}");
+    }
+    assert!(!may_have_element("", "comb"));
+    // What the tokenizer refuses is left to the parser to refuse.
+    let broken = "<template><subform><!-- comb --></template>";
+    assert!(parse(broken).is_err() && may_have_element(broken, "comb"));
+}
+
 #[test]
 fn the_xdp_template_wins_over_the_config_packets_template_element() {
     // The config packet has a <template> too; the real one is in the xfa-template namespace.

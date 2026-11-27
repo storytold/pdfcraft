@@ -103,7 +103,7 @@ pub use data::{
 };
 pub use layout::{Action, BorderShape, Form, Item, MAX_PAGES, Page, Widget, WidgetKind, formatted_value, layout};
 pub use packets::{Encoding, Packets, decode as decode_packet, encode as encode_packet, read_packets};
-pub use parse::{measure, numbers_pages, parse};
+pub use parse::{may_have_element, measure, numbers_pages, parse};
 pub use pdf::{AREA_KEY, CLICK_KEY, COMB_BORDER_KEY, DATE_KEY, LAYOUT_KEY, NODE_KEY, SOM_KEY, Stripped, XfaShape, existing_layout, strip, xfa_shape};
 pub use picture::typed_date;
 pub use script::{

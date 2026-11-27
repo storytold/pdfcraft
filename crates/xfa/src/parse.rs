@@ -1255,6 +1255,34 @@ fn collect_page_roles(nodes: &[Node], out: &mut Vec<(String, PageRole)>, depth: 
     }
 }
 
+/// Whether `xml` may hold an element whose local name is `local`, whatever its prefix: `false`
+/// only when the text was read to its end and has none. The cheap question to ask before
+/// [`parse`] reads a large template for one kind of element: no tree is built.
+///
+/// The text goes through the tokenizer [`parse`] reads a template with, so an element is what it
+/// is there (a start tag, with any prefix an XML name can have), and the same letters in text,
+/// an attribute value, a comment, a CDATA section or a processing instruction are not one.
+/// Markup the tokenizer refuses answers `true`: [`parse`] is the one to say what is wrong with it.
+pub fn may_have_element(xml: &str, local: &str) -> bool {
+    // A start tag spells its name out, so text without the letters has no such element.
+    if !xml.contains(local) {
+        return false;
+    }
+    // As `crate::xml::Document` reads a template: strictly, no document type, to the same depth,
+    // and past one byte order mark.
+    let mut opts = craft_xml::Options { strict: true, doctype: craft_xml::Doctype::Reject, ..Default::default() };
+    opts.limits.max_depth = crate::MAX_XML_DEPTH;
+    let mut events = opts.events(xml.strip_prefix('\u{feff}').unwrap_or(xml).as_bytes());
+    loop {
+        match events.next() {
+            Ok(Some(craft_xml::Event::Start { name, .. })) if name.split_once(':').map_or(name.as_str(), |(_, l)| l) == local => return true,
+            Ok(Some(_)) => {}
+            Ok(None) => return false,
+            Err(_) => return true,
+        }
+    }
+}
+
 /// Parse a template packet. Returns the template and the warnings met on the way.
 pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     // No bigger than a packet the reader accepts can come to as text ([`crate::read_packets`]), so

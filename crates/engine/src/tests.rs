@@ -8893,16 +8893,145 @@ fn a_static_xfa_template_that_cannot_be_read_adds_no_comb_warning() {
     }
 }
 
-/// Only a `<comb>` element sends a static form's template to be read for comb settings.
+/// A comb is a `<comb>` element under whatever prefix its template gives the XFA namespace: any
+/// XML name, a middle dot or a combining mark in it included. The check made before the template
+/// is read for combs once took only letters, digits and `_-.` for a prefix, and such a form
+/// silently got no comb settings.
 #[test]
-fn the_comb_check_finds_comb_elements_and_not_the_word() {
-    use crate::xfa_form::has_comb_element;
-    for xdp in ["<textEdit><comb numberOfCells=\"9\"/></textEdit>", "<textEdit><comb/></textEdit>", "<x:comb>", "<comb\n numberOfCells=\"2\"/>"] {
-        assert!(has_comb_element(xdp), "{xdp}");
+fn a_static_xfa_comb_is_applied_under_any_namespace_prefix() {
+    const NS: &str = "http://www.xfa.org/schema/xfa-template/3.3/";
+    // Every prefix is tried before any is judged, so a failure names each one that is wrong.
+    let mut wrong = Vec::new();
+    for prefix in ["x", "a\u{b7}b", "e\u{301}"] {
+        let template = format!(
+            r#"<subform name="form1" xmlns:{prefix}="{NS}"><subform name="page1"><field name="name"><ui><textEdit><{prefix}:comb numberOfCells="3"/></textEdit></ui></field></subform></subform>"#
+        );
+        let bytes = pdfcraft_xfa::fixtures::static_shell_with_template(&template, "");
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("comb.pdf", None, Arc::new(bytes), None).expect("opens");
+        let doc = s.get(id).unwrap();
+        let field = doc.form.iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap();
+        let comb_warning = doc.info.warnings.iter().any(|w| w.contains("comb settings"));
+        if !field.is_comb() || field.max_len != Some(3) || comb_warning {
+            wrong.push(format!("prefix {prefix:?}: comb {}, cells {:?}, warnings {:?}", field.is_comb(), field.max_len, doc.info.warnings));
+        }
     }
-    for xdp in ["<text>combat, or combined service</text>", "<combo/>", "<draw name=\"comb\"/>", "<p>a comb </p>", "<a b=\"x:comb\"/>", ""] {
-        assert!(!has_comb_element(xdp), "{xdp}");
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// `<comb/>` written in a comment, a CDATA section or a processing instruction is not a comb
+/// field, so the template is not read for comb settings on its account. Seen here on a form too
+/// large for that reading: it opens with no comb warning, as it does without the markup.
+#[test]
+fn comb_markup_outside_an_element_does_not_have_the_template_read_for_combs() {
+    // Five levels of subforms that each repeat 50 times: past the form tree's limit.
+    let mut rows = r#"<field name="leaf"><ui><textEdit/></ui></field>"#.to_string();
+    for level in (0..5).rev() {
+        rows = format!(r#"<subform name="s{level}"><occur min="50" max="-1" initial="50"/>{rows}</subform>"#);
     }
+    let template = |extra: &str| format!(r#"<subform name="form1"><subform name="page1"><field name="name"/>{extra}</subform>{rows}</subform>"#);
+    let comb_warnings = |template: String| {
+        let bytes = pdfcraft_xfa::fixtures::static_shell_with_template(&template, "");
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("large.pdf", None, Arc::new(bytes), None).expect("opens");
+        let warnings = &s.get(id).unwrap().info.warnings;
+        warnings.iter().filter(|w| w.contains("comb settings")).cloned().collect::<Vec<_>>()
+    };
+    // With a comb field the template is read for it, and this one is too large: the warning
+    // the cases below must not show.
+    let real = comb_warnings(template(r#"<field name="code"><ui><textEdit><comb numberOfCells="3"/></textEdit></ui></field>"#));
+    assert!(real.iter().any(|w| w.contains("exceeded its limit")), "{real:?}");
+    // Every case is tried before any is judged, so a failure names each one that is wrong.
+    let not_elements = [
+        r#"<!-- was: <comb numberOfCells="3"/> -->"#,
+        r#"<draw><value><text><![CDATA[<comb numberOfCells="3"/>]]></text></value></draw>"#,
+        r#"<?note <comb numberOfCells="3"/> ?>"#,
+    ];
+    let wrong: Vec<String> = not_elements
+        .into_iter()
+        .filter_map(|markup| Some(comb_warnings(template(markup))).filter(|w| !w.is_empty()).map(|w| format!("{markup}: {w:?}")))
+        .collect();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// Put the form dictionary behind a reference to a reference. The form reads as before, but its
+/// dictionary cannot be written through the catalog's entry, which is what asking other viewers
+/// to redraw a value this build cannot draw does: that write fails after the value is stored.
+fn acroform_behind_two_references(source: &mut pdfcraft_cos::Document) {
+    use pdfcraft_cos::Object;
+    let root = source.root().unwrap();
+    let form = source.get(root).as_dict().unwrap().get(b"AcroForm").cloned().unwrap();
+    let form = source.add(form);
+    let hop = source.add(Object::Ref(form));
+    source.update_dict(root, |d| d.set(b"AcroForm".to_vec(), Object::Ref(hop))).unwrap();
+}
+
+/// A value whose write fails part-way is not left in its field. Here the text is stored and then
+/// its appearance cannot be finished, so the field refuses it; the check box after it is taken.
+/// The copy both were written to was once adopted as it stood, so the form showed a value that
+/// was reported as not taken.
+#[test]
+fn an_xfa_data_value_whose_write_fails_after_storing_it_is_not_left_in_its_field() {
+    let name = "form1[0].page1[0].name[0]";
+    let agree = "form1[0].page1[0].agree[0]";
+    let data = "<form1><page1><name>\u{5f20}\u{4e09}</name><agree>1</agree></page1></form1>";
+    let mut source = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::static_shell(data))).unwrap();
+    acroform_behind_two_references(&mut source);
+    // The case this is about: the text's write fails, with its value already in the field.
+    let mut direct = source.clone();
+    let updates = [(name.to_string(), FieldValue::Text("\u{5f20}\u{4e09}".into())), (agree.to_string(), FieldValue::Check(true))];
+    let results = pdfcraft_forms::set_values(&mut direct, &updates).expect("no calculation to fail");
+    assert!(results[0].is_err() && results[1].is_ok(), "{results:?}");
+    let stored = pdfcraft_forms::fields(&direct).into_iter().find(|f| f.name == name).unwrap().value;
+    assert_eq!(stored, vec!["\u{5f20}\u{4e09}".to_string()], "the failed write had stored its value");
+
+    let bytes = Arc::new(pdfcraft_cos::write_incremental(&source, &pdfcraft_cos::SaveOptions::default()).unwrap());
+    let (name_value, agree_value, warnings) = opened_static_values(bytes);
+    assert!(name_value.is_empty(), "the value whose write failed is not in its field: {name_value:?}");
+    assert_eq!(agree_value, vec!["1".to_string()], "the value after it is still taken");
+    assert!(!warnings.iter().any(|w| w.contains("could not be applied")), "a refused value is not a warning: {warnings:?}");
+    let note = warnings.iter().find(|w| w.contains("taken from this form's XFA data")).expect("the value taken is noted");
+    assert!(note.starts_with("1 form field value ") && note.contains(agree) && !note.contains(name), "{note}");
+}
+
+/// When the recalculation after the data's values fails, none of them is kept, the ones already
+/// written included, and the form says so. Here a calculated drop-down takes the option the
+/// check box's value names, and drawing that option's label fails as above.
+#[test]
+fn xfa_data_values_are_all_dropped_when_the_recalculation_after_them_fails() {
+    use pdfcraft_cos::{Dict, Object, PdfString};
+    let agree = "form1[0].page1[0].agree[0]";
+    let data = "<form1><page1><agree>1</agree></page1></form1>";
+    let mut source = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::static_shell(data))).unwrap();
+    let total = pdfcraft_forms::fields(&source).into_iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap().obj;
+    source
+        .update_dict(total, |d| {
+            d.set(b"FT".to_vec(), Object::name("Ch"));
+            d.set(b"Ff".to_vec(), Object::Int(i64::from(pdfcraft_forms::flags::COMBO)));
+            // One option: saved as `1`, shown with a label this build's font cannot draw.
+            let option = ["1", "\u{5f20}\u{4e09}"].map(|s| Object::String(PdfString::text(s)));
+            d.set(b"Opt".to_vec(), Object::Array(vec![Object::Array(option.to_vec())]));
+            let mut calculate = Dict::new();
+            calculate.set(b"S".to_vec(), Object::name("JavaScript"));
+            calculate.set(b"JS".to_vec(), PdfString::text(&format!("AFSimple_Calculate(\"SUM\", new Array(\"{agree}\"));")));
+            let mut actions = Dict::new();
+            actions.set(b"C".to_vec(), Object::Dict(calculate));
+            d.set(b"AA".to_vec(), Object::Dict(actions));
+        })
+        .unwrap();
+    acroform_behind_two_references(&mut source);
+    // The case this is about: the check box is written, then the calculation it starts fails.
+    let mut direct = source.clone();
+    let failed = pdfcraft_forms::set_values(&mut direct, &[(agree.to_string(), FieldValue::Check(true))]);
+    assert!(failed.is_err(), "the recalculation fails: {failed:?}");
+    let written = pdfcraft_forms::fields(&direct).into_iter().find(|f| f.name == agree).unwrap().value;
+    assert_eq!(written, vec!["1".to_string()], "the check box was written before it");
+
+    let bytes = Arc::new(pdfcraft_cos::write_incremental(&source, &pdfcraft_cos::SaveOptions::default()).unwrap());
+    let (total_value, agree_value, warnings) = opened_static_values(bytes);
+    assert!(agree_value.is_empty() && total_value.is_empty(), "no value is kept: {agree_value:?}, {total_value:?}");
+    assert!(warnings.iter().any(|w| w.contains("The values in this form's XFA data could not be applied")), "{warnings:?}");
+    assert!(!warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "{warnings:?}");
 }
 
 /// A static XFA exclusion group laid out as a radio group with `/Opt [(1) (2)]` and on states

@@ -187,7 +187,7 @@ impl Session {
                 };
                 let mut comb_fields = Vec::new();
                 if report.is_none() {
-                    // All or nothing, like the values: a failure leaves `work` with the values only.
+                    // All or nothing: a failure leaves `work` with the values only.
                     match guard(|| xfa_apply_static_comb_fields(&mut work))
                         .unwrap_or_else(|m| Err(format!("applying comb settings failed unexpectedly ({m})")))
                     {
