@@ -8902,3 +8902,176 @@ fn hostile_image_aspect_and_resolution_headers_produce_sane_rects() {
     let r = first_image_rect(&items);
     assert!(r.w.is_finite() && r.h.is_finite() && r.h <= 100_000.0, "clamped strip: {r:?}");
 }
+
+fn tiff_with_resolution(le: bool, w: u32, h: u32, x_res: (u32, u32), y_res: (u32, u32), unit: Option<u16>) -> Vec<u8> {
+    let push_u16 = |buf: &mut Vec<u8>, v: u16| {
+        buf.extend_from_slice(&if le { v.to_le_bytes() } else { v.to_be_bytes() });
+    };
+    let push_u32 = |buf: &mut Vec<u8>, v: u32| {
+        buf.extend_from_slice(&if le { v.to_le_bytes() } else { v.to_be_bytes() });
+    };
+    let mut b = if le { b"II*\0".to_vec() } else { b"MM\0*".to_vec() };
+    push_u32(&mut b, 8);
+    let count: u16 = if unit.is_some() { 5 } else { 4 };
+    push_u16(&mut b, count);
+    // Header (8) + count (2) + entries (12 * count) + next-IFD (4).
+    let x_off = 8 + 2 + 12 * u32::from(count) + 4;
+    let y_off = x_off + 8;
+    let push_entry = |buf: &mut Vec<u8>, tag: u16, ty: u16, num: u32, val: [u8; 4]| {
+        push_u16(buf, tag);
+        push_u16(buf, ty);
+        push_u32(buf, num);
+        buf.extend_from_slice(&val);
+    };
+    let u32_bytes = |v: u32| if le { v.to_le_bytes() } else { v.to_be_bytes() };
+    let u16_field = |v: u16| {
+        let lo = if le { v.to_le_bytes() } else { v.to_be_bytes() };
+        [lo[0], lo[1], 0, 0]
+    };
+    push_entry(&mut b, 256, 4, 1, u32_bytes(w));
+    push_entry(&mut b, 257, 4, 1, u32_bytes(h));
+    push_entry(&mut b, 282, 5, 1, u32_bytes(x_off));
+    push_entry(&mut b, 283, 5, 1, u32_bytes(y_off));
+    if let Some(u) = unit {
+        push_entry(&mut b, 296, 3, 1, u16_field(u));
+    }
+    push_u32(&mut b, 0);
+    push_u32(&mut b, x_res.0);
+    push_u32(&mut b, x_res.1);
+    push_u32(&mut b, y_res.0);
+    push_u32(&mut b, y_res.1);
+    b
+}
+
+fn bmp_with_resolution(w: u32, h: u32, xp: i32, yp: i32) -> Vec<u8> {
+    // 1-bit monochrome BMP with a 2-entry colour table and zeroed rows so probe_size accepts it.
+    let row_bytes = (w as usize).div_ceil(32) * 4;
+    let pixel_bytes = row_bytes * h as usize;
+    let offset = 54u32 + 8;
+    let file_size = offset + pixel_bytes as u32;
+    let mut b = Vec::with_capacity(file_size as usize);
+    b.extend_from_slice(b"BM");
+    b.extend_from_slice(&file_size.to_le_bytes());
+    b.extend_from_slice(&[0; 4]);
+    b.extend_from_slice(&offset.to_le_bytes());
+    b.extend_from_slice(&40u32.to_le_bytes());
+    b.extend_from_slice(&w.to_le_bytes());
+    b.extend_from_slice(&h.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&0u32.to_le_bytes());
+    b.extend_from_slice(&(pixel_bytes as u32).to_le_bytes());
+    b.extend_from_slice(&xp.to_le_bytes());
+    b.extend_from_slice(&yp.to_le_bytes());
+    b.extend_from_slice(&2u32.to_le_bytes());
+    b.extend_from_slice(&0u32.to_le_bytes());
+    b.extend_from_slice(&[0, 0, 0, 0, 255, 255, 255, 0]);
+    b.resize(file_size as usize, 0);
+    b
+}
+
+#[test]
+fn tiff_and_bmp_resolution_reads_headers_and_rejects_bad_metadata() {
+    use crate::image::resolution;
+
+    for le in [true, false] {
+        // Explicit inch unit (2) and omitted unit (defaults to 2).
+        for unit in [Some(2), None] {
+            let tiff = tiff_with_resolution(le, 554, 194, (350, 1), (350, 1), unit);
+            let (dx, dy) = resolution(&tiff).expect("TIFF inch dpi");
+            assert!((dx - 350.0).abs() < 1e-6 && (dy - 350.0).abs() < 1e-6, "le={le} unit={unit:?}: ({dx}, {dy})");
+        }
+        // Centimetre unit (3): 100 dpcm == 254 dpi.
+        let cm = tiff_with_resolution(le, 20, 10, (100, 1), (100, 1), Some(3));
+        let (dx, dy) = resolution(&cm).expect("TIFF cm dpi");
+        assert!((dx - 254.0).abs() < 1e-6 && (dy - 254.0).abs() < 1e-6, "le={le} cm: ({dx}, {dy})");
+        // Unit 1 (no absolute unit) and unknown units -> None.
+        assert_eq!(resolution(&tiff_with_resolution(le, 20, 10, (350, 1), (350, 1), Some(1))), None);
+        assert_eq!(resolution(&tiff_with_resolution(le, 20, 10, (350, 1), (350, 1), Some(4))), None);
+        // Zero denominator -> None.
+        assert_eq!(resolution(&tiff_with_resolution(le, 20, 10, (350, 0), (350, 1), Some(2))), None);
+        assert_eq!(resolution(&tiff_with_resolution(le, 20, 10, (350, 1), (350, 0), Some(2))), None);
+        // Out-of-bounds DPI -> None.
+        assert_eq!(resolution(&tiff_with_resolution(le, 20, 10, (1, 2), (1, 2), Some(2))), None);
+        assert_eq!(resolution(&tiff_with_resolution(le, 20, 10, (20_000, 1), (20_000, 1), Some(2))), None);
+        // Truncated IFD and truncated rational data -> None, no panic.
+        let full = tiff_with_resolution(le, 20, 10, (350, 1), (350, 1), Some(2));
+        for cut in [4, 8, 10, 20, full.len() - 4] {
+            assert_eq!(resolution(&full[..cut]), None, "le={le} cut={cut}");
+        }
+    }
+
+    // BMP 1200 dpi (47244 px/m ≈ 1199.9976 dpi).
+    let bmp_1200 = bmp_with_resolution(1899, 664, 47_244, 47_244);
+    let (dx, dy) = resolution(&bmp_1200).expect("BMP 1200 dpi");
+    let expected = 47_244.0 * 0.0254;
+    assert!((dx - expected).abs() < 1e-6 && (dy - expected).abs() < 1e-6 && (dx - 1200.0).abs() < 0.01);
+
+    // Zero, negative and out-of-bounds ppm -> None.
+    assert_eq!(resolution(&bmp_with_resolution(20, 10, 0, 0)), None);
+    assert_eq!(resolution(&bmp_with_resolution(20, 10, -47_244, 47_244)), None);
+    assert_eq!(resolution(&bmp_with_resolution(20, 10, 1, 1)), None);
+    assert_eq!(resolution(&bmp_with_resolution(20, 10, 500_000, 500_000)), None);
+
+    // OS/2 12-byte BITMAPCOREHEADER -> None even when padded past offset 46 with ppm-like bytes.
+    let mut core = b"BM".to_vec();
+    core.extend_from_slice(&64u32.to_le_bytes());
+    core.extend_from_slice(&[0; 4]);
+    core.extend_from_slice(&26u32.to_le_bytes());
+    core.extend_from_slice(&12u32.to_le_bytes());
+    core.extend_from_slice(&2u16.to_le_bytes());
+    core.extend_from_slice(&1u16.to_le_bytes());
+    core.extend_from_slice(&1u16.to_le_bytes());
+    core.extend_from_slice(&24u16.to_le_bytes());
+    core.resize(38, 0);
+    core.extend_from_slice(&47_244i32.to_le_bytes());
+    core.extend_from_slice(&47_244i32.to_le_bytes());
+    assert_eq!(resolution(&core), None);
+
+    // GIF has no physical resolution header -> None.
+    assert_eq!(resolution(TINY_GIF), None);
+}
+
+#[test]
+fn aspect_actual_uses_tiff_and_bmp_header_resolution() {
+    use base64::Engine;
+    let draw_actual = |bytes: &[u8], content_type: &str| {
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let items = positioned(&format!(
+            r#"<draw name="pic" x="0pt" y="0pt" w="200pt" h="200pt"><value><image contentType="{content_type}" aspect="actual">{data}</image></value></draw>"#
+        ));
+        first_image_rect(&items)
+    };
+
+    let tiff = tiff_with_resolution(true, 554, 194, (350, 1), (350, 1), Some(2));
+    let rt = draw_actual(&tiff, "image/tiff");
+    let (tw, th) = (554.0 * 72.0 / 350.0, 194.0 * 72.0 / 350.0);
+    assert!((rt.w - tw).abs() < 1e-6 && (rt.h - th).abs() < 1e-6, "TIFF actual: expected {tw}x{th}, got {rt:?}");
+    assert!(rt.w < 554.0 && rt.h < 194.0, "TIFF actual should scale by 350 dpi, not 72 dpi: {rt:?}");
+
+    let bmp = bmp_with_resolution(1899, 664, 47_244, 47_244);
+    let rb = draw_actual(&bmp, "image/bmp");
+    let dpi = 47_244.0 * 0.0254;
+    let (bw, bh) = (1899.0 * 72.0 / dpi, 664.0 * 72.0 / dpi);
+    assert!((rb.w - bw).abs() < 1e-6 && (rb.h - bh).abs() < 1e-6, "BMP actual: expected {bw}x{bh}, got {rb:?}");
+    assert!(rb.w < 1899.0 && rb.h < 664.0, "BMP actual should scale by 1200 dpi, not 72 dpi: {rb:?}");
+}
+
+#[test]
+fn aspect_none_with_large_negative_margins_stays_within_extent_bound() {
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode(png_with_header(20, 10, None));
+    let items = positioned(&format!(
+        r#"<draw name="pic" x="0pt" y="0pt" w="50000pt" h="50000pt"><margin leftInset="-60000pt" rightInset="-60000pt" topInset="-60000pt" bottomInset="-60000pt"/><value><image contentType="image/png" aspect="none">{data}</image></value></draw>"#
+    ));
+    let r = first_image_rect(&items);
+    assert!(r.w.is_finite() && r.h.is_finite() && r.w <= 100_000.0 && r.h <= 100_000.0, "aspect=none clamped: {r:?}");
+
+    // Unknown-size fallback under large negative margins is also clamped.
+    let bad = base64::engine::general_purpose::STANDARD.encode(b"not an image");
+    let items_bad = positioned(&format!(
+        r#"<draw name="pic" x="0pt" y="0pt" w="50000pt" h="50000pt"><margin leftInset="-60000pt" rightInset="-60000pt" topInset="-60000pt" bottomInset="-60000pt"/><value><image contentType="image/png" aspect="fit">{bad}</image></value></draw>"#
+    ));
+    let rb = first_image_rect(&items_bad);
+    assert!(rb.w.is_finite() && rb.h.is_finite() && rb.w <= 100_000.0 && rb.h <= 100_000.0, "unknown-size clamped: {rb:?}");
+}

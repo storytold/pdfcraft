@@ -473,26 +473,27 @@ impl Layouter<'_> {
         if self.image_bytes > MAX_IMAGE_BYTES {
             return Err(XfaError::TooLarge("the form's pictures are too large together to lay out".into()));
         }
+        let inner = Rect::new(inner.x, inner.y, clamp(inner.w, 0.0), clamp(inner.h, 0.0));
         let fitted = match aspect {
             Aspect::None => inner,
             Aspect::Fit => match crate::image::size(data) {
-                Some((iw, ih)) if iw > 0 && ih > 0 && inner.w > 0.0 && inner.h > 0.0 && inner.w.is_finite() && inner.h.is_finite() => {
+                Some((iw, ih)) if iw > 0 && ih > 0 && inner.w > 0.0 && inner.h > 0.0 => {
                     let k = (inner.w / f64::from(iw)).min(inner.h / f64::from(ih));
                     Rect::new(inner.x, inner.y, clamp(f64::from(iw) * k, inner.w), clamp(f64::from(ih) * k, inner.h))
                 }
                 _ => inner,
             },
             Aspect::Width => match crate::image::size(data) {
-                Some((iw, ih)) if iw > 0 && ih > 0 && inner.w > 0.0 && inner.w.is_finite() => {
+                Some((iw, ih)) if iw > 0 && ih > 0 && inner.w > 0.0 => {
                     let k = inner.w / f64::from(iw);
-                    Rect::new(inner.x, inner.y, clamp(inner.w, 0.0), clamp(f64::from(ih) * k, inner.h))
+                    Rect::new(inner.x, inner.y, inner.w, clamp(f64::from(ih) * k, inner.h))
                 }
                 _ => inner,
             },
             Aspect::Height => match crate::image::size(data) {
-                Some((iw, ih)) if iw > 0 && ih > 0 && inner.h > 0.0 && inner.h.is_finite() => {
+                Some((iw, ih)) if iw > 0 && ih > 0 && inner.h > 0.0 => {
                     let k = inner.h / f64::from(ih);
-                    Rect::new(inner.x, inner.y, clamp(f64::from(iw) * k, inner.w), clamp(inner.h, 0.0))
+                    Rect::new(inner.x, inner.y, clamp(f64::from(iw) * k, inner.w), inner.h)
                 }
                 _ => inner,
             },
