@@ -16,11 +16,15 @@ const MAX_ZONE_STREAM: u64 = 64 * 1024;
 
 /// Give `target` the zone of `source`: its `Zone.Identifier` stream, copied as it is, or the
 /// Internet zone when `source` is `None` or has no zone. Windows only; elsewhere nothing is
-/// written. Fails where the volume keeps no alternate data streams (FAT32, exFAT, some network
-/// shares), so callers treat the mark as best effort.
+/// written. Returns [`std::io::ErrorKind::NotFound`] without creating a file when `target` is not
+/// an existing file, and fails where the volume keeps no alternate data streams (FAT32, exFAT, some
+/// network shares), so callers treat the mark as best effort.
 pub fn mark_from(target: &Path, source: Option<&Path>) -> std::io::Result<()> {
     #[cfg(windows)]
     {
+        if !target.is_file() {
+            return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "target file does not exist"));
+        }
         let zone = source.and_then(read_zone).unwrap_or_else(|| INTERNET_ZONE.as_bytes().to_vec());
         std::fs::write(zone_stream(target), zone)
     }
@@ -146,5 +150,15 @@ mod tests {
         std::fs::write(zone_stream(&source), huge).unwrap();
         mark_from(&target, Some(&source)).unwrap();
         assert_eq!(read_zone(&target).unwrap(), INTERNET_ZONE.as_bytes());
+    }
+
+    #[test]
+    fn mark_from_does_not_create_a_missing_target_file() {
+        let dir = Dir::new("missing");
+        let missing = dir.0.join("not-on-disk.exe");
+        let err = mark_from(&missing, None).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(!missing.exists(), "must not create a 0-byte NTFS file");
+        assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 0);
     }
 }

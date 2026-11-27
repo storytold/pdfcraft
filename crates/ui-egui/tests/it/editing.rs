@@ -813,6 +813,7 @@ fn the_last_session_reopens_its_files_pages_and_active_tab() {
             app.open_path(f);
         })
     });
+    support::wait_until(&mut h, "opened files", |app| app.views.len() == 3);
     h.state_mut().views[1].go_to_page(3);
     h.state_mut().active = Some(1);
     h.run_steps(4);
@@ -822,6 +823,7 @@ fn the_last_session_reopens_its_files_pages_and_active_tab() {
         app.apply_settings(&settings);
         app.reopen_last_files(&[]);
     });
+    support::wait_until(&mut h, "reopened files", |app| app.views.len() == 3);
     h.run_steps(4);
     let app = h.state();
     assert_eq!(open_paths(app), files, "the same files, in the same order");
@@ -839,6 +841,7 @@ fn quitting_with_unsaved_changes_still_remembers_every_file() {
             app.open_path(f);
         })
     });
+    support::wait_until(&mut h, "opened files", |app| app.views.len() == 2);
     for tab in 0..2 {
         h.state_mut().active = Some(tab);
         h.state_mut().views[tab].select_pages(&[0]);
