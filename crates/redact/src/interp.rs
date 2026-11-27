@@ -598,10 +598,6 @@ impl Walk {
                 self.text_state(&op);
                 Some(op)
             }
-            b"Tj" | b"TJ" | b"'" | b"\"" if self.hidden_shows.contains(&op.span.start) => {
-                self.hidden_show(&op, piece);
-                None
-            }
             b"Tj" | b"TJ" | b"'" | b"\"" => self.show_text(scope, op, piece),
             b"BI" => Self::inline_image(&self.gs, scope, &mut self.out, op, piece),
             b"sh" if scope.mode == Mode::Apply => Self::shading(&self.gs, scope, &mut self.clipped, op, piece),
@@ -828,6 +824,10 @@ impl Walk {
 
     /// `Tj`, `TJ`, `'` and `"`: glyphs under a region are cut out (or counted, when verifying).
     fn show_text(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) -> Option<Op> {
+        if self.hidden_shows.contains(&op.span.start) {
+            self.hidden_show(&op, piece);
+            return None;
+        }
         // Text paints with the fill pattern, and with the stroke pattern in the stroking render
         // modes. Mode 3 paints nothing and mode 7 only clips.
         let mode = self.gs.render_mode;
@@ -903,8 +903,9 @@ impl Walk {
 
     /// A text-showing operator of a hidden layer: its glyphs aren't drawn, but the text position
     /// moves as they would have moved it (ISO 32000-1 §8.11.3.1), written as a `TJ` of a number
-    /// alone. At font size 0 a `TJ` number moves nothing, so the spacing such glyphs add is lost;
-    /// vertical writing is laid out horizontally, as [`show`] lays it out.
+    /// alone. At font size 0 a `TJ` number moves nothing, while such glyphs still move by their
+    /// character and word spacing (§9.4.4): that move can't be written, so it is refused.
+    /// Vertical writing is laid out horizontally, as [`show`] lays it out.
     fn hidden_show(&mut self, op: &Op, piece: &mut Piece) {
         piece.changed = true;
         self.line_move(op);
@@ -912,6 +913,7 @@ impl Walk {
         let (gs, f) = (&self.gs, &self.gs.font);
         // In thousandths of a text space unit, as a `TJ` number moves: -n/1000 × size.
         let mut moved = 0.0;
+        let mut lost = false;
         for item in shown_items(op) {
             match item {
                 Object::String(s) => {
@@ -919,11 +921,19 @@ impl Walk {
                         let spacing = gs.char_spacing + if f.is_space(code, len) { gs.word_spacing } else { 0.0 };
                         if gs.size != 0.0 {
                             moved -= (f.width(code) * gs.size + spacing) * 1000.0 / gs.size;
+                        } else {
+                            lost |= spacing != 0.0;
                         }
                     }
                 }
                 other => moved += other.as_f64().unwrap_or(0.0),
             }
+        }
+        if lost && self.out.error.is_none() {
+            self.out.error = Some(RedactError::Refused(
+                "hidden text at font size 0 moves the text after it by its character or word spacing, a move that can't be written without its glyphs"
+                    .into(),
+            ));
         }
         if moved != 0.0 && moved.is_finite() {
             self.tm = Matrix::translate(-moved / 1000.0 * gs.size * gs.scale, 0.0).then(&self.tm);

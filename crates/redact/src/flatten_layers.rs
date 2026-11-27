@@ -40,15 +40,24 @@
 //!   left as it is, and still drawn;
 //! - a content stream without `/Resources` reads its layer names in the resources of what draws
 //!   it ([`Drawers`]): each resource dictionary whose `/XObject` or `/Pattern` names it, whose
-//!   `/ExtGState` holds it as a soft mask's group (`/SMask /G`), or, for a Type 3 glyph whose font
-//!   has no `/Resources`, whose `/Font` names that font. One drawn as an annotation's appearance,
-//!   where no such resources are given, or whose names mean a hidden layer in one place and not
-//!   in another, is refused with the same error.
+//!   `/ExtGState` (or a shading pattern's own `/ExtGState`) holds it as a soft mask's group
+//!   (`/SMask /G`), or, for a Type 3 glyph whose font has no `/Resources`, whose `/Font` names
+//!   that font, and any resource dictionary at all that holds the name (text state, and so the
+//!   font, passes into what is drawn after `Tf`). A name none of these holds is refused with the
+//!   same error, never read as shown: the stream may be drawn some other way. So is one drawn as
+//!   an annotation's appearance, where no such resources are given, and one whose names mean a
+//!   hidden layer in one place and not in another;
+//! - last, the result is checked whatever drew it: a stream a full save writes that may still hold
+//!   a layer's block, read as far as a reader reads it, is refused with the same error, since the
+//!   layers are gone and a reader would show it; so is one that can't be read at all, unless what
+//!   it is says no reader draws it ([`refuse_layer_blocks_left`]).
 
 use std::collections::{HashMap, HashSet};
 
 use pdfcraft_content::{Op, Pieces, serialize_ops};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
+
+use left::refuse_layer_blocks_left;
 
 use crate::hidden_block::{Residue, is_show};
 use crate::sanitize::{LayerPass, ListedStates, catalog, content_pass_with, listed_states, sub, view_states};
@@ -107,6 +116,7 @@ fn flatten(doc: &mut Document) -> Result<Flattened, RedactError> {
     doc.update_dict(root, |d| {
         d.remove(b"OCProperties");
     })?;
+    refuse_layer_blocks_left(doc)?;
     doc.require_full_save_with_new_id();
     Ok(done)
 }
@@ -166,6 +176,11 @@ fn layer_state(doc: &Document, o: &Object, hidden: &HashSet<ObjRef>) -> Result<b
     Ok(o.as_ref().is_some_and(|r| hidden.contains(&r)))
 }
 
+/// Is `op` a layer's marked-content block: `/OC` with a name or property list, then `BDC`?
+fn opens_layer_block(op: &Op) -> bool {
+    op.is("BDC") && op.name_back(1) == Some(b"OC") && matches!(op.back(0), Some(Object::Name(_) | Object::Dict(_)))
+}
+
 /// What a marked-content operator opens.
 enum Block {
     /// A layer that is shown: the operator and its `EMC` go, what it draws stays.
@@ -201,11 +216,16 @@ enum Unwrapped {
 }
 
 /// Whether a string a hidden block showed still sets where the next one goes: a string moves the
-/// text position, and only a new line or text object starts it afresh.
+/// text position, and only a new line or text object starts it afresh. Inside a text object `q`
+/// and `Q` save and restore the text matrices (ISO 32000-2 §9.4.1 and §8.4.2, as amended by
+/// erratum 368), so `Q` brings back a debt the `q` saved, and keeps any debt incurred since its
+/// `q`. `saved` is not cleared at `BT` or `ET`, so a `Q` after `ET` popping a `q` from inside the
+/// text object may set a debt that isn't there: it over-refuses, never under.
 #[derive(Default)]
 struct TextRun {
     open: bool,
     owed: bool,
+    saved: Vec<bool>,
 }
 
 impl TextRun {
@@ -218,6 +238,8 @@ impl TextRun {
                 self.owed = false;
             }
             b"Td" | b"TD" | b"Tm" | b"T*" => self.owed = false,
+            b"q" => self.saved.push(self.owed),
+            b"Q" => self.owed |= self.saved.pop().unwrap_or(false),
             b"Tj" | b"TJ" if !hidden => return !self.owed,
             b"'" | b"\"" if !hidden => self.owed = false,
             o if hidden && is_show(o) => self.owed = self.open,
@@ -355,15 +377,30 @@ fn unwrap_forms(doc: &mut Document, mut drawers: Drawers, hidden: &HashSet<ObjRe
 const MAX_NAME_LOOKUPS: usize = 1 << 20;
 
 /// What draws each content stream that has no `/Resources` of its own (module docs): one
-/// mechanism for every way a stream is drawn, so a name in it is read where it is drawn.
+/// mechanism for every way a stream is drawn, so a name in it is read where it is drawn. A name
+/// no indexed caller holds is refused, never read as shown: a stream may be drawn some way the
+/// index doesn't follow.
 struct Drawers {
-    /// The `/Properties` of each resource dictionary that draws one, by the one it draws.
-    by: HashMap<ObjRef, Vec<Dict>>,
+    /// The resource dictionaries each one is drawn with, by the one drawn.
+    by: HashMap<ObjRef, Vec<Caller>>,
     /// Type 3 glyph programs: content streams their dictionaries don't mark as such.
     glyphs: HashSet<ObjRef>,
+    /// Glyphs of a Type 3 font without `/Resources`: text state passes into the forms and
+    /// patterns drawn after `Tf`, so one may be shown under any resource dictionary.
+    inherits: HashSet<ObjRef>,
+    /// The `/Properties` of every resource dictionary that has one, for [`Drawers::inherits`].
+    anywhere: Vec<Dict>,
     /// Those drawn as an annotation's appearance.
     appearances: HashSet<ObjRef>,
     lookups: usize,
+}
+
+/// A resource dictionary's `/Properties`, as a stream without `/Resources` drawn with it reads them.
+struct Caller {
+    props: Dict,
+    /// The `/Resources` of the glyph's own font, which it always reads: a name absent there names
+    /// no layer, and shows.
+    own: bool,
 }
 
 /// Is `r` a form or tiling pattern without `/Resources`?
@@ -377,9 +414,25 @@ fn soft_mask_group(doc: &Document, gs: &Object) -> Option<ObjRef> {
     sub(doc, &gs, b"SMask")?.get(b"G")?.as_ref()
 }
 
+/// The soft-mask group a shading pattern's own `/ExtGState` sets, if any.
+fn shading_mask_group(doc: &Document, pattern: &Object) -> Option<ObjRef> {
+    let p = doc.resolve(pattern).as_dict()?.clone();
+    if p.get(b"PatternType").map(|t| crate::resolve_chain(doc, t).as_int()) != Some(Some(2)) {
+        return None;
+    }
+    soft_mask_group(doc, p.get(b"ExtGState")?)
+}
+
 impl Drawers {
     fn read(doc: &Document) -> Self {
-        let mut drawers = Drawers { by: HashMap::new(), glyphs: HashSet::new(), appearances: appearances(doc), lookups: 0 };
+        let mut drawers = Drawers {
+            by: HashMap::new(),
+            glyphs: HashSet::new(),
+            inherits: HashSet::new(),
+            anywhere: Vec::new(),
+            appearances: appearances(doc),
+            lookups: 0,
+        };
         let (mut seen, mut fonts) = (HashSet::new(), HashSet::new());
         for n in doc.object_numbers() {
             let o = doc.get(ObjRef::new(n, doc.generation(n)));
@@ -397,8 +450,8 @@ impl Drawers {
     }
 
     /// Records what `res` draws: the forms and tiling patterns its `/XObject` and `/Pattern` name,
-    /// the soft-mask groups its `/ExtGState` sets, and its Type 3 fonts' glyphs (each font with
-    /// `/Resources` of its own, in `fonts`, once).
+    /// the soft-mask groups its `/ExtGState` and its shading patterns' own `/ExtGState` set, and
+    /// its Type 3 fonts' glyphs (each font with `/Resources` of its own, in `fonts`, once).
     fn index(&mut self, doc: &Document, res: &Dict, fonts: &mut HashSet<ObjRef>) {
         let props = sub(doc, res, b"Properties").unwrap_or_default();
         let entries = |key: &[u8]| sub(doc, res, key).unwrap_or_default();
@@ -407,63 +460,85 @@ impl Drawers {
             drawn.extend(entries(key).iter().filter_map(|(_, v)| v.as_ref()));
         }
         drawn.extend(entries(b"ExtGState").iter().filter_map(|(_, gs)| soft_mask_group(doc, gs)));
+        drawn.extend(entries(b"Pattern").iter().filter_map(|(_, p)| shading_mask_group(doc, p)));
         for t in drawn.into_iter().filter(|&t| resourceless(doc, t)) {
-            self.by.entry(t).or_default().push(props.clone());
+            self.by.entry(t).or_default().push(Caller { props: props.clone(), own: false });
         }
         for (_, f) in entries(b"Font").iter() {
             let Some(font) = doc.resolve(f).as_dict().cloned().filter(|d| has_name(doc, d, b"Subtype", b"Type3")) else { continue };
             // Its glyphs read names in its own `/Resources`, or else in what shows them.
-            let reads = match font.get(b"Resources") {
+            let (reads, own) = match font.get(b"Resources") {
                 Some(_) if f.as_ref().is_some_and(|r| !fonts.insert(r)) => continue,
-                Some(own) => properties(doc, Some(own)),
-                None => props.clone(),
+                Some(own) => (properties(doc, Some(own)), true),
+                None => (props.clone(), false),
             };
             for g in sub(doc, &font, b"CharProcs").unwrap_or_default().iter().filter_map(|(_, g)| g.as_ref()) {
                 self.glyphs.insert(g);
-                self.by.entry(g).or_default().push(reads.clone());
+                if !own {
+                    self.inherits.insert(g);
+                }
+                self.by.entry(g).or_default().push(Caller { props: reads.clone(), own });
             }
+        }
+        if !props.is_empty() {
+            self.anywhere.push(props);
         }
     }
 
     /// The `/Properties` the layer names in `ops`, the content of `r` (which has no `/Resources`),
-    /// mean where it is drawn: a name means a hidden layer if it does in every resource
-    /// dictionary naming `r`, and a shown one (absent here) if it does in none. A form nothing
-    /// names, which nothing draws, reads none.
+    /// mean where it is drawn ([`Drawers::hidden_target`]). A stream drawn as an annotation's
+    /// appearance, where no resources are given, is refused.
     fn properties(&mut self, doc: &Document, r: ObjRef, ops: &[Op], hidden: &HashSet<ObjRef>) -> Result<Dict, RedactError> {
-        let refused = RedactError::LayerContentUnreadable(r.num);
         let names: HashSet<&[u8]> =
             ops.iter().filter(|op| op.is("BDC") && op.name_back(1) == Some(b"OC")).filter_map(|op| op.back(0).and_then(Object::as_name)).collect();
         if names.is_empty() {
             return Ok(Dict::new());
         }
         if self.appearances.contains(&r) {
-            return Err(refused);
+            return Err(RedactError::LayerContentUnreadable(r.num));
         }
-        let callers = self.by.get(&r).map_or(&[][..], Vec::as_slice);
         let mut out = Dict::new();
         for name in names {
-            let mut first: Option<(bool, Option<&Object>)> = None;
-            for props in callers {
-                self.lookups = self.lookups.saturating_add(1);
-                if self.lookups > MAX_NAME_LOOKUPS {
-                    return Err(refused);
-                }
-                let target = props.get(name);
-                let off = match target {
-                    Some(t) => layer_state(doc, t, hidden)?,
-                    None => false,
-                };
-                match first {
-                    None => first = Some((off, target)),
-                    Some((was, _)) if was != off => return Err(refused),
-                    Some(_) => {}
-                }
-            }
-            if let Some((true, Some(t))) = first {
-                out.set(name.to_vec(), t.clone());
+            if let Some(t) = self.hidden_target(doc, r, name, hidden)? {
+                out.set(name.to_vec(), t);
             }
         }
         Ok(out)
+    }
+
+    /// The hidden layer `name` means in `r`, or `None` for a shown one. Each caller answers: a
+    /// name it holds means what it names, and one it lacks shows, except in a resource dictionary
+    /// a glyph may only inherit, where a lack says nothing. Callers that disagree are refused, and
+    /// so is a name none holds, unless every caller is the glyph's own font resources.
+    fn hidden_target(&mut self, doc: &Document, r: ObjRef, name: &[u8], hidden: &HashSet<ObjRef>) -> Result<Option<Object>, RedactError> {
+        let refused = RedactError::LayerContentUnreadable(r.num);
+        let callers = self.by.get(&r).map_or(&[][..], Vec::as_slice);
+        let anywhere = if self.inherits.contains(&r) { self.anywhere.as_slice() } else { &[][..] };
+        let answers = callers.iter().map(|c| (&c.props, true)).chain(anywhere.iter().map(|p| (p, false)));
+        let (mut state, mut found) = (None, None);
+        for (props, lack_shows) in answers {
+            self.lookups = self.lookups.saturating_add(1);
+            if self.lookups > MAX_NAME_LOOKUPS {
+                return Err(refused);
+            }
+            let target = props.get(name);
+            let off = match target {
+                Some(t) => layer_state(doc, t, hidden)?,
+                None if lack_shows => false,
+                None => continue,
+            };
+            if state.is_some_and(|was| was != off) {
+                return Err(refused);
+            }
+            state = Some(off);
+            found = found.or(target);
+        }
+        let own = !callers.is_empty() && callers.iter().all(|c| c.own);
+        match (state, found) {
+            (Some(true), Some(t)) => Ok(Some(t.clone())),
+            (_, None) if !own => Err(refused),
+            _ => Ok(None),
+        }
     }
 }
 
@@ -667,6 +742,8 @@ fn drop_layer_properties(doc: &mut Document, listed: &HashSet<ObjRef>) -> Result
     }
     Ok(())
 }
+
+mod left;
 
 #[cfg(test)]
 mod tests;
