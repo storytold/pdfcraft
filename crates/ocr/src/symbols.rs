@@ -183,7 +183,43 @@ fn has_candidate(text: &[char], next_digit: bool) -> bool {
 
 /// A digit or a fraction character: what a `±`, a `Ø` or a `°` goes with.
 fn is_numeral(c: char) -> bool {
-    c.is_ascii_digit() || FRACTIONS.iter().any(|&(_, _, f)| f == c)
+    c.is_ascii_digit() || is_fraction(c)
+}
+
+/// One of the fraction characters a glyph is named.
+fn is_fraction(c: char) -> bool {
+    FRACTIONS.iter().any(|&(_, _, f)| f == c)
+}
+
+/// Whether a word that starts with `c` is a number to a sign or a symbol before it: a digit, a
+/// decimal point or a fraction character.
+pub(crate) fn leads_with_a_number(c: char) -> bool {
+    is_numeral(c) || c == '.'
+}
+
+/// Check every word of a line: `repair(i, next_digit, prev_right)` checks word `i`, told
+/// whether the next word is a number and where the word before now ends when its repair grew it
+/// (a glyph it took is not looked for again by the word after). A sign is checked against the
+/// next word as the decoder read it; when that word's own repair makes it a number (`?` for
+/// the glyph `½`, after `±` read as `+`), the word before is checked again (`± ½`).
+pub(crate) fn repair_words(
+    count: usize,
+    next_digit: impl Fn(usize) -> bool,
+    repair: impl Fn(usize, bool, Option<f32>) -> Option<Repair>,
+) -> Vec<Option<Repair>> {
+    let mut fixes: Vec<Option<Repair>> = Vec::with_capacity(count);
+    for i in 0..count {
+        let prev_right = i.checked_sub(1).and_then(|p| fixes[p].as_ref()).and_then(|f| f.right);
+        fixes.push(repair(i, next_digit(i), prev_right));
+    }
+    for i in (0..count).rev() {
+        let next_is_now_a_number = fixes.get(i + 1).and_then(|f| f.as_ref()).and_then(|f| f.text.chars().next()).is_some_and(leads_with_a_number);
+        if next_is_now_a_number && !next_digit(i) {
+            let prev_right = i.checked_sub(1).and_then(|p| fixes[p].as_ref()).and_then(|f| f.right);
+            fixes[i] = repair(i, true, prev_right);
+        }
+    }
+    fixes
 }
 
 /// A digit, or a decimal point and a digit, follows position `i` (in this word, or at the start
@@ -242,7 +278,11 @@ fn fractions(
         // A glyph before the word and clear of its columns is a word of its own the detector
         // missed (`¾ HEX`), not a part of this one; one after the word, within the region's
         // reach, is the word's own that the decoder's columns stopped short of (`3½`), and
-        // is appended as a dropped `°` is.
+        // is appended as a dropped `°` is, even when the next word is boxed over it (a `?`
+        // over the stroke): the word grows over the glyph, and the next word's region begins
+        // where this one now ends (`repair_words`), so the glyph is named once. Two words
+        // never see the same ink alike (each region sets its own threshold), so the glyph
+        // stays with the word that found it.
         if right + slack < start {
             continue;
         }
@@ -331,10 +371,16 @@ fn drop_consumed(out: &mut Vec<char>, chars: &[ReadChar], shapes: &Shapes, slack
 /// digit's glyph; returns the word's new right edge when the ring lay past the word.
 fn degree(out: &mut Vec<char>, chars: &[ReadChar], shapes: &Shapes, slack: f32, next_left: Option<f32>) -> Option<f32> {
     for digit in degree_candidates(out) {
-        let Some((_, glyph)) = chars.get(digit).and_then(|c| shapes.main_glyph(*c, slack)) else {
-            continue;
+        let Some(c) = chars.get(digit) else { continue };
+        // A fraction character's columns are its whole glyph's, set by `fractions`; a digit's
+        // glyph is looked up, the decoder's columns being coarse.
+        let right = if is_fraction(out[digit]) {
+            c.right as i64 - 1
+        } else {
+            let Some((_, glyph)) = shapes.main_glyph(*c, slack) else { continue };
+            glyph.left + glyph.w as i64 - 1
         };
-        let Some(ring) = shapes.ring_after(&glyph, next_left) else {
+        let Some(ring) = shapes.ring_after(right, next_left) else {
             continue;
         };
         if !shapes.is_degree(&ring) {
@@ -552,10 +598,9 @@ impl<'a> Shapes<'a> {
         Some((ids.clone(), self.glyph(&ids)?))
     }
 
-    /// The nearest component that lies wholly to the right of `glyph`, within [`TAIL`] line
-    /// heights of it and before the next word.
-    fn ring_after(&self, glyph: &Glyph, next_left: Option<f32>) -> Option<Component> {
-        let right = glyph.left + glyph.w as i64 - 1;
+    /// The nearest component that lies wholly to the right of column `right`, within [`TAIL`]
+    /// line heights of it and before the next word.
+    fn ring_after(&self, right: i64, next_left: Option<f32>) -> Option<Component> {
         let limit = right + ((self.line.1 - self.line.0) as f32 * TAIL) as i64;
         self.components
             .iter()
@@ -624,17 +669,21 @@ impl<'a> Shapes<'a> {
                 continue;
             }
             let (left, right) = (numerator.left.min(stroke.left), denominator.right.max(stroke.right));
-            // Nothing else of any size within the glyph, and no further small numeral right
-            // beside it: `1/64` set with small numerals is no sixth (a full-size digit beside
-            // the glyph is the whole number, `1½`, and stays).
+            // Nothing else of any size within the glyph, and no further small numeral reaching
+            // into the glyph's neighbourhood, however little of it: `1/64` set with small
+            // numerals is no sixth, at any spacing of the `4`. A numeral sits at the
+            // numerator's level or the denominator's; a `±` beside the glyph spans the line
+            // (`±½`), a full-size digit is the whole number (`1½`), and a small ring after the
+            // glyph is the `°` of `22½°`.
             let within = |k: &Component, l: i64, r: i64| (k.right.min(r) - k.left.max(l) + 1) * 2 > k.width();
-            let small = |k: &Component| (0.28 * text_h..=0.75 * text_h).contains(&(k.height() as f32));
+            let reaches = |k: &Component, l: i64, r: i64| k.left <= r && k.right >= l;
+            let small_numeral = |k: &Component| numeral(k) && (at_the_top(k) || at_the_foot(k)) && !self.is_degree(k);
             let intruder = self.components.iter().enumerate().any(|(id, k)| {
                 id != s
                     && id != n
                     && id != d
                     && ((within(k, left, right) && k.height() as f32 >= 0.28 * text_h)
-                        || (within(k, left - reach as i64, right + reach as i64) && small(k)))
+                        || (reaches(k, left - reach as i64, right + reach as i64) && small_numeral(k)))
             });
             if intruder {
                 continue;
@@ -969,6 +1018,15 @@ mod tests {
         (x as f32, (x + 32) as f32)
     }
 
+    /// A fraction glyph whose numerator holds the most ink of its parts: a bold `2` over a thin
+    /// `1`, with the stroke between.
+    fn top_heavy_fraction(c: &mut Canvas, x: usize) -> (f32, f32) {
+        c.rect(x + 2, BASE - CAP, x + 14, BASE - CAP + 20);
+        c.line(x as f32 + 15.0, BASE as f32, x as f32 + 29.0, (BASE - CAP + 1) as f32, 3.0);
+        c.rect(x + 28, BASE - 20, x + 31, BASE);
+        (x as f32, (x + 33) as f32)
+    }
+
     /// A hyphen between a fraction and the thread pitch after it.
     fn hyphen(c: &mut Canvas, x: usize) -> (f32, f32) {
         c.rect(x + 2, BASE - 22, x + 10, BASE - 18);
@@ -1075,6 +1133,15 @@ mod tests {
             None,
             "the numerator belongs to the word before"
         );
+        // Seen from the word before, with the next word boxed over the glyph's last columns:
+        // the word before takes the glyph and grows over it, and the word boxed over it, told
+        // where the word before now ends, finds nothing, so the glyph is named once.
+        let fixed = word_read(&sliver, &[read('1', x)], Some((glyph.1 - 4.0, false)), &numerals("3", "4", &shown)).expect("the ¾ is appended");
+        assert_eq!(fixed.text, "1¾");
+        assert!(fixed.right.is_some_and(|r| r >= glyph.1 - 4.0 && r <= glyph.1), "{fixed:?}: the word grows over the glyph");
+        let after = [read('?', (glyph.1 - 4.0, glyph.1 + 2.0))];
+        let beside = Neighbours { prev_right: fixed.right, next_left: None, next_digit: false };
+        assert_eq!(repair_word(&after, (BASE - CAP) as f32, (BASE + 1) as f32, beside, &sliver.gray(), &numerals("3", "4", &shown)), None);
         // Named for nothing at all after the whole number, the glyph is appended and the word
         // grows to it.
         let fixed = word_read(&c, &[read('1', one)], None, &numerals("1", "2", &shown)).expect("the dropped ½ is appended");
@@ -1108,6 +1175,78 @@ mod tests {
         let chars = [read('/', (glyph.0, glyph.0 + 14.0)), read('6', (glyph.0 + 14.0, glyph.1)), read('4', (glyph.1, glyph.1 + 14.0))];
         assert_eq!(word_read(&c, &chars, None, &numerals("1", "6", &shown)), None);
         assert!(shown.borrow().is_empty(), "no numeral was shown to the recogniser");
+        // The same numeral set a little further off, where only its first columns lie within
+        // the glyph's reach: still beside it.
+        let mut spaced = Canvas::new(200, 70);
+        let glyph = fraction(&mut spaced, 36);
+        let (l, t) = (36 + 40, BASE - 20);
+        spaced.rect(l, t, l + 3, BASE);
+        spaced.rect(l + 8, t, l + 11, BASE);
+        spaced.rect(l, t + 9, l + 11, t + 11);
+        let chars = [read('/', (glyph.0, glyph.0 + 14.0)), read('6', (glyph.0 + 14.0, glyph.1)), read('4', (glyph.1 + 7.0, glyph.1 + 21.0))];
+        assert_eq!(word_read(&spaced, &chars, None, &numerals("1", "6", &shown)), None);
+        assert!(shown.borrow().is_empty(), "no numeral was shown to the recogniser");
+    }
+
+    /// `1½°` read as `112?`: the ring is looked for after the whole glyph, not after whichever
+    /// of its parts holds the most ink, and a ring beside the glyph is no numeral that vetoes it.
+    #[test]
+    fn a_degree_ring_after_a_fraction_glyph_is_found_past_the_whole_glyph() {
+        let mut c = Canvas::new(200, 70);
+        let one = digit(&mut c, 10);
+        let glyph = top_heavy_fraction(&mut c, 36);
+        let ring = degree(&mut c, 72);
+        let shown = std::cell::RefCell::new(Vec::new());
+        let chars = [read('1', one), read('1', (glyph.0, glyph.0 + 14.0)), read('2', (glyph.0 + 14.0, glyph.1)), read('?', ring)];
+        assert_eq!(word_read(&c, &chars, None, &numerals("1", "2", &shown)).map(|r| r.text).as_deref(), Some("1½°"));
+        // Dropped, the ring is appended and the word grows to it.
+        let fixed = word_read(&c, &chars[..3], None, &numerals("1", "2", &shown)).expect("the dropped ° is appended");
+        assert_eq!(fixed.text, "1½°");
+        assert!(fixed.right.is_some_and(|r| r > glyph.1 && r <= ring.1), "{fixed:?}: the word now ends at the ring");
+    }
+
+    /// `± ½` read as `+ ?`: the sign is checked against the next word as read, no number, then
+    /// again once that word's own repair makes it one.
+    #[test]
+    fn a_sign_before_a_word_that_becomes_a_number_is_checked_again() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let repair = |i: usize, next_digit: bool, prev_right: Option<f32>| {
+            calls.borrow_mut().push((i, next_digit, prev_right));
+            match (i, next_digit) {
+                (0, true) => Some(Repair { text: "±".into(), left: None, right: None }),
+                (1, _) => Some(Repair { text: "½".into(), left: None, right: Some(70.0) }),
+                _ => None,
+            }
+        };
+        let fixes = repair_words(3, |_| false, repair);
+        assert_eq!(fixes.iter().map(|f| f.as_ref().map(|f| f.text.as_str())).collect::<Vec<_>>(), [Some("±"), Some("½"), None]);
+        // Only the sign before the new number is checked again, and the word after a word that
+        // grew is told where it now ends.
+        assert_eq!(calls.borrow().as_slice(), [(0, false, None), (1, false, None), (2, false, Some(70.0)), (0, true, None)]);
+        // A next word read as a number from the start is checked once.
+        let count = std::cell::Cell::new(0);
+        repair_words(
+            2,
+            |i| i == 0,
+            |_, _, _| {
+                count.set(count.get() + 1);
+                Some(Repair { text: "½".into(), left: None, right: None })
+            },
+        );
+        assert_eq!(count.get(), 2);
+    }
+
+    /// `±½`: the sign beside the glyph, within its reach, is no numeral (its cross spans the
+    /// line from near the cap to near the baseline), and both are repaired.
+    #[test]
+    fn a_sign_beside_a_fraction_glyph_is_no_numeral_and_both_are_repaired() {
+        let mut c = Canvas::new(200, 70);
+        plus(&mut c, 10, BASE - 36, BASE - 8);
+        c.rect(11, BASE - 4, 35, BASE);
+        let glyph = fraction(&mut c, 40);
+        let shown = std::cell::RefCell::new(Vec::new());
+        let chars = [read('+', (10.0, 37.0)), read('1', (glyph.0, glyph.0 + 14.0)), read('2', (glyph.0 + 14.0, glyph.1))];
+        assert_eq!(word_read(&c, &chars, None, &numerals("1", "2", &shown)).map(|r| r.text).as_deref(), Some("±½"));
     }
 
     #[test]

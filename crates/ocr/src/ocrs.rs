@@ -290,32 +290,36 @@ fn gray_reader(rgb: &[u8], width: u32, height: u32) -> impl Fn(i64, i64) -> u8 +
 fn read_line(line: &ocrs::TextLine, before: Option<RectF>, upright: bool, gray: &dyn Fn(i64, i64) -> u8, numeral: symbols::Numeral) -> Line {
     use ocrs::TextItem;
     let words: Vec<ocrs::TextWord<'_>> = line.words().collect();
-    let read = |i: usize, w: &ocrs::TextWord<'_>| {
+    let next_digit = |i: usize| words.get(i + 1).and_then(|n| n.chars().first()).is_some_and(|c| symbols::leads_with_a_number(c.char));
+    let repair = |i: usize, next_digit: bool, prev_grown: Option<f32>| {
+        let (w, line_box) = (words.get(i)?, before?);
+        let chars: Vec<symbols::ReadChar> =
+            w.chars().iter().map(|c| symbols::ReadChar { ch: c.char, left: c.rect.left() as f32, right: c.rect.right() as f32 }).collect();
+        let prev_right = i.checked_sub(1).and_then(|p| words.get(p)).map(|p| p.bounding_rect().right() as f32);
+        let beside = symbols::Neighbours {
+            prev_right: prev_right.map(|r| prev_grown.map_or(r, |g| g.max(r))),
+            next_left: words.get(i + 1).map(|n| n.bounding_rect().left() as f32),
+            next_digit,
+        };
+        symbols::repair_word(&chars, line_box.top(), line_box.bottom(), beside, gray, numeral)
+    };
+    let mut fixes = if upright { symbols::repair_words(words.len(), next_digit, repair) } else { Vec::new() }.into_iter();
+    let read = |w: &ocrs::TextWord<'_>| {
         let r = w.bounding_rect();
         let mut rect = clip([r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32], before);
         let mut text = w.to_string();
-        if upright && let Some(line_box) = before {
-            let chars: Vec<symbols::ReadChar> =
-                w.chars().iter().map(|c| symbols::ReadChar { ch: c.char, left: c.rect.left() as f32, right: c.rect.right() as f32 }).collect();
-            let next = words.get(i + 1);
-            let beside = symbols::Neighbours {
-                prev_right: i.checked_sub(1).and_then(|p| words.get(p)).map(|p| p.bounding_rect().right() as f32),
-                next_left: next.map(|n| n.bounding_rect().left() as f32),
-                next_digit: next.and_then(|n| n.chars().first()).is_some_and(|c| c.char.is_ascii_digit() || c.char == '.'),
-            };
-            if let Some(fix) = symbols::repair_word(&chars, line_box.top(), line_box.bottom(), beside, gray, numeral) {
-                text = fix.text;
-                if let Some(left) = fix.left {
-                    rect[0] = rect[0].min(left);
-                }
-                if let Some(right) = fix.right {
-                    rect[2] = rect[2].max(right);
-                }
+        if let Some(fix) = fixes.next().flatten() {
+            text = fix.text;
+            if let Some(left) = fix.left {
+                rect[0] = rect[0].min(left);
+            }
+            if let Some(right) = fix.right {
+                rect[2] = rect[2].max(right);
             }
         }
         Word::new(text, rect, "ocrs")
     };
-    Line { words: words.iter().enumerate().map(|(i, w)| read(i, w)).filter(|w| !w.text.trim().is_empty()).collect() }
+    Line { words: words.iter().map(read).filter(|w| !w.text.trim().is_empty()).collect() }
 }
 
 /// The detection model's input size, (width, height) pixels, if its input is an NCHW image of a
