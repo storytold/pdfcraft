@@ -4510,6 +4510,71 @@ fn replacing_an_image_preserves_occupied_resource_names() {
     }
 }
 
+/// A page whose image `/Im0` (black, at 10,650) is replaced by object 6 (red), and five things
+/// it draws besides that each draw an image by a name the page doesn't bind, so draw nothing:
+/// a form drawn by a form (at 150,650), a tiling pattern (290,650), a Type 3 glyph (430,650),
+/// a soft mask's group (masking a blue square at 10,500) and an annotation's appearance
+/// (150,500). None has resources that bind the name, so a renderer looks it up in the page's.
+fn inherited_names_page() -> Document {
+    let page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Annots [13 0 R] /Resources << /XObject << /Im0 5 0 R /Fm0 7 0 R >> /Pattern << /P0 9 0 R >> /Font << /T3 10 0 R >> /ExtGState << /Masked << /SMask << /S /Luminosity /G 12 0 R >> >> >> >> >>";
+    let content = "q 100 0 0 100 10 650 cm /Im0 Do Q q 1 0 0 1 150 650 cm /Fm0 Do Q q /Pattern cs /P0 scn 290 650 100 100 re f Q BT /T3 100 Tf 430 650 Td (a) Tj ET q /Masked gs 0 0 1 rg 10 500 100 100 re f Q";
+    let image = "/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /Filter /ASCIIHexDecode";
+    let form = "/Type /XObject /Subtype /Form /BBox [0 0 100 100]";
+    build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        page,
+        &stream("", content),
+        &stream(&format!("{image} /ColorSpace /DeviceGray"), "00>"),
+        &stream(&format!("{image} /ColorSpace /DeviceRGB"), "FF0000>"),
+        // The outer form's resources name the inner form, and the outer form itself (a cycle).
+        &stream(&format!("{form} /Resources << /XObject << /Fm1 8 0 R /Again 7 0 R >> >>"), "/Fm1 Do"),
+        &stream(form, "100 0 0 100 0 0 cm /PCImg6 Do"),
+        &stream(
+            "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 100 100] /XStep 100 /YStep 100 /Matrix [1 0 0 1 290 650]",
+            "100 0 0 100 0 0 cm /PCImg61 Do",
+        ),
+        "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 100 100] /FontMatrix [0.01 0 0 0.01 0 0] /CharProcs << /a 11 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [100] >>",
+        &stream("", "100 0 d0 100 0 0 100 0 0 cm /PCImg62 Do"),
+        &stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 600 800] /Group << /S /Transparency /CS /DeviceRGB >>",
+            "q 100 0 0 100 10 500 cm /PCImg63 Do Q",
+        ),
+        "<< /Type /Annot /Subtype /Square /Rect [150 500 250 600] /AP << /N 14 0 R >> >>",
+        &stream(form, "100 0 0 100 0 0 cm /PCImg64 Do"),
+    ])
+}
+
+/// #7763: the name a replacement is drawn by must not be one that content drawing with the
+/// page's resources uses unbound, or that content starts drawing the replacement too.
+#[test]
+fn replacing_an_image_leaves_names_inherited_by_nested_content_unbound() {
+    let mut doc = inherited_names_page();
+    let replacement = pdfcraft_cos::ObjRef::new(6, 0);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Replace(replacement)).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(images::page_images(&doc, 0).unwrap()[0].object, Some(replacement));
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(bytes), pdfcraft_render::RenderConfig::default());
+    let page = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    // At user-space point x, y.
+    let colour_at = |x: usize, y: usize| {
+        let at = ((page.height as usize - y) * page.width as usize + x) * 4;
+        <[u8; 4]>::try_from(&page.rgba[at..at + 4]).unwrap()
+    };
+    const WHITE: [u8; 4] = [255, 255, 255, 255];
+    assert_eq!(colour_at(60, 700), [255, 0, 0, 255], "the selected image is replaced");
+    for (x, y, what) in [
+        (200, 700, "a nested form"),
+        (340, 700, "a tiling pattern"),
+        (480, 700, "a Type 3 glyph"),
+        (60, 550, "a soft mask"),
+        (200, 550, "an annotation"),
+    ] {
+        assert_eq!(colour_at(x, y), WHITE, "{what} still draws nothing");
+    }
+}
+
 /// Arrange, Crop and Remove crop as the engine asks for them, through [`images::change_image`].
 fn arrange(doc: &mut Document, page: usize, index: usize, order: images::ArrangeOrder) -> Result<(), EditError> {
     images::change_image(doc, page, index, &images::ImageChange::Arrange(order))

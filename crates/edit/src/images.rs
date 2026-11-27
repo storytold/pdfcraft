@@ -1646,6 +1646,114 @@ fn remove_image_crop(doc: &mut Document, p: &pdfcraft_model::Page, all: &[Conten
     Ok(())
 }
 
+/// The XObject names used by `Do` in what draws with the page's resources besides the page's own
+/// content: the Form XObjects, tiling patterns, Type 3 glyphs and soft-mask groups the page's
+/// resources hold, those the resources of each of them hold in turn, and the page's annotation
+/// appearances. Such content that doesn't bind a name itself looks it up in the resources it is
+/// drawn with, down to the page's: a form without `/Resources` does so in any reader, and the
+/// bundled renderer does even for one with resources of its own. A name it uses must stay unbound
+/// on the page, or binding it there would make that content draw an image too. Names the content
+/// binds itself count as well, which costs only a suffix. Each object is read once (a cycle ends),
+/// within one page's [`pdfcraft_cos::DecodeBudget`]: past it an error, as content left unread may
+/// use any name. A stream that doesn't decode draws nothing and uses none.
+fn inherited_xobject_names(doc: &Document, page: &Dict) -> Result<std::collections::HashSet<Vec<u8>>, EditError> {
+    struct Walk<'a> {
+        doc: &'a Document,
+        budget: pdfcraft_cos::DecodeBudget,
+        names: std::collections::HashSet<Vec<u8>>,
+        /// Resource dictionaries still to look through.
+        pending: Vec<Object>,
+    }
+    impl Walk<'_> {
+        /// Whether `o` is a reference already walked; from the first time on, it is.
+        fn seen(&mut self, o: &Object) -> bool {
+            o.as_ref().is_some_and(|r| !self.budget.first_visit(r))
+        }
+        /// Read stream `o` for its names when `content` says it is content, and queue its
+        /// resources.
+        fn read(&mut self, o: &Object, content: impl Fn(&Dict) -> bool) -> Result<(), EditError> {
+            let resolved = self.doc.resolve(o);
+            // Content is checked before the stream counts as walked: it may be used another way too.
+            let Object::Stream(s) = &*resolved else { return Ok(()) };
+            if !content(&s.dict) || self.seen(o) {
+                return Ok(());
+            }
+            let too_much = || {
+                EditError::Invalid("the page draws too much nested content to tell which image names are free, so the image isn't replaced".into())
+            };
+            if !self.budget.enter_form() {
+                return Err(too_much());
+            }
+            match self.budget.decode_with_damage(self.doc, s, usize::MAX) {
+                Ok((data, _)) => self.names.extend(parse(&data).ops.iter().filter(|op| op.is("Do")).filter_map(Op::last_name).map(<[u8]>::to_vec)),
+                Err(_) if self.budget.remaining() == 0 => return Err(too_much()),
+                Err(_) => {}
+            }
+            self.pending.extend(s.dict.get(b"Resources").cloned());
+            Ok(())
+        }
+    }
+    let value = |d: &Dict, key: &[u8]| d.get(key).map(|v| doc.resolve(v));
+    let name_is = |d: &Dict, key: &[u8], want: &[u8]| value(d, key).is_some_and(|v| v.as_name() == Some(want));
+    let any = |_: &Dict| true;
+    let mut walk = Walk {
+        doc,
+        budget: pdfcraft_cos::DecodeBudget::page(),
+        names: Default::default(),
+        pending: page.get(b"Resources").cloned().into_iter().collect(),
+    };
+    let annots = value(page, b"Annots");
+    for annot in annots.as_deref().and_then(Object::as_array).into_iter().flatten() {
+        let annot = doc.resolve(annot);
+        let Some(ap) = annot.as_dict().and_then(|a| value(a, b"AP")) else { continue };
+        let Some(normal) = ap.as_dict().and_then(|ap| ap.get(b"N")) else { continue };
+        // One appearance, or one for each state.
+        match &*doc.resolve(normal) {
+            Object::Dict(states) => {
+                for (_, o) in states.iter() {
+                    walk.read(o, any)?;
+                }
+            }
+            _ => walk.read(normal, any)?,
+        }
+    }
+    while let Some(o) = walk.pending.pop() {
+        if walk.seen(&o) {
+            continue;
+        }
+        let resources = doc.resolve(&o);
+        let Some(resources) = resources.as_dict() else { continue };
+        let entries = |key: &[u8]| -> Vec<Object> {
+            value(resources, key).and_then(|d| d.as_dict().map(|d| d.iter().map(|(_, o)| o.clone()).collect())).unwrap_or_default()
+        };
+        for o in entries(b"XObject") {
+            walk.read(&o, |d| name_is(d, b"Subtype", b"Form"))?;
+        }
+        for o in entries(b"Pattern") {
+            walk.read(&o, |d| value(d, b"PatternType").is_some_and(|t| t.as_int() == Some(1)))?;
+        }
+        for o in entries(b"ExtGState") {
+            let mask = doc.resolve(&o).as_dict().and_then(|gs| value(gs, b"SMask"));
+            if let Some(group) = mask.as_deref().and_then(Object::as_dict).and_then(|m| m.get(b"G")) {
+                walk.read(group, any)?;
+            }
+        }
+        for o in entries(b"Font") {
+            let font = doc.resolve(&o);
+            let Some(font) = font.as_dict().filter(|f| name_is(f, b"Subtype", b"Type3")) else { continue };
+            if walk.seen(&o) {
+                continue;
+            }
+            walk.pending.extend(font.get(b"Resources").cloned());
+            let procs = value(font, b"CharProcs");
+            for (_, o) in procs.as_deref().and_then(Object::as_dict).into_iter().flat_map(Dict::iter) {
+                walk.read(o, any)?;
+            }
+        }
+    }
+    Ok(walk.names)
+}
+
 /// Change image `index` (from [`page_images`]) on `page`.
 pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &ImageChange) -> Result<(), EditError> {
     let images = page_images(doc, page)?;
@@ -1703,10 +1811,13 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
             let base = format!("PCImg{}", r.num);
             let mut name = base.clone();
             let mut suffix = 0usize;
-            // An unbound Do must stay invisible: giving its name a resource would draw an
-            // unrelated placement. Collect once rather than rescan every operation per suffix.
-            let used: std::collections::HashSet<&[u8]> =
-                ops.iter().enumerate().filter(|(index, op)| *index != img.op && op.is("Do")).filter_map(|(_, op)| op.last_name()).collect();
+            // An unbound Do must stay invisible, on the page or in what looks names up in its
+            // resources: giving its name a resource would draw an unrelated placement. Collect
+            // once rather than rescan every operation per suffix.
+            let mut used = inherited_xobject_names(doc, &p.dict)?;
+            used.extend(
+                ops.iter().enumerate().filter(|(index, op)| *index != img.op && op.is("Do")).filter_map(|(_, op)| op.last_name()).map(<[u8]>::to_vec),
+            );
             // Resource names need not match object numbers. Only an existing binding to this
             // replacement can be reused, even when other operations use the name too.
             while match xo.get(name.as_bytes()) {
