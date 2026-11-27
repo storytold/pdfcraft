@@ -2268,6 +2268,66 @@ fn page_text(ops: &str) -> String {
     extract_page(&text_page(ops), 0, &InterpreterSettings::default()).unwrap().plain_text()
 }
 
+/// The reporter's table (#8534): reportlab draws each cell as its own text object, row by row, in
+/// Helvetica 10 pt, 18 pt between rows and a 6 pt pad each side of the widest cell of a column.
+fn reportlab_table() -> String {
+    let cells = [
+        ["Item", "Description", "Qty", "Price"],
+        ["R1C1 Bolts", "R1C2 Stainless bolts M8", "R1C3 250", "R1C4 12.50"],
+        ["R2C1 Nuts", "R2C2 Hex nuts M8", "R2C3 400", "R2C4 8.00"],
+        ["R3C1 Washers", "R3C2 Flat washers 8 mm", "R3C3 600", "R3C4 3.20"],
+    ];
+    let xs = [26.0, 105.79, 230.59, 287.61];
+    let mut ops = String::from("BT /F1 10 Tf 12 TL ET\n");
+    for (r, row) in cells.iter().enumerate() {
+        let y = 300.0 - 18.0 * r as f32;
+        for (c, cell) in row.iter().enumerate() {
+            ops.push_str(&format!("BT 1 0 0 1 {} {y} Tm ({cell}) Tj T* ET\n", xs[c]));
+        }
+    }
+    ops
+}
+
+#[test]
+fn table_rows_of_cells_drawn_one_by_one_read_across() {
+    assert_eq!(
+        page_text(&reportlab_table()),
+        "Item Description Qty Price\nR1C1 Bolts R1C2 Stainless bolts M8 R1C3 250 R1C4 12.50\nR2C1 Nuts R2C2 Hex nuts M8 R2C3 400 R2C4 8.00\nR3C1 Washers R3C2 Flat washers 8 mm R3C3 600 R3C4 3.20"
+    );
+    // The same cells spread wide enough that no two of a row touch: every cell is a segment of its own.
+    let mut v = Vec::new();
+    for (r, row) in [["Item", "Description", "Qty", "Price"], ["R1C1", "R1C2", "R1C3", "R1C4"], ["R2C1", "R2C2", "R2C3", "R2C4"]].iter().enumerate() {
+        for (c, cell) in row.iter().enumerate() {
+            word(&mut v, cell, 20.0 + 90.0 * c as f32, 100.0 + 18.0 * r as f32, 6.0);
+        }
+    }
+    assert_eq!(layout(v).plain_text(), "Item Description Qty Price\nR1C1 R1C2 R1C3 R1C4\nR2C1 R2C2 R2C3 R2C4");
+    // A description column wider than a cell (28 letters, 16.8 heights) is one wide segment per row
+    // among narrow ones: still a table. The cells are 3.6 heights apart, so no two are one run.
+    let mut v = Vec::new();
+    for (r, row) in [["Item", "Description", "Qty"], ["R1C1", "R1C2", "R1C3"], ["R2C1", "R2C2", "R2C3"]].iter().enumerate() {
+        let y = 100.0 + 18.0 * r as f32;
+        word(&mut v, row[0], 20.0, y, 6.0);
+        word(&mut v, &format!("{}{}", row[1], "x".repeat(28 - row[1].len())), 80.0, y, 6.0);
+        word(&mut v, row[2], 285.0, y, 6.0);
+    }
+    let t = layout(v).plain_text();
+    assert_eq!(t.lines().count(), 3, "{t}");
+    assert!(t.starts_with("Item Description") && t.lines().nth(1).is_some_and(|l| l.starts_with("R1C1 R1C2") && l.ends_with("R1C3")), "{t}");
+    // Three columns of prose (28 letters a line, 16.8 heights) 2.2 heights apart whose lines share
+    // baselines keep reading as columns, also where one paragraph's last line is short.
+    let mut v = Vec::new();
+    for (c, (x, name)) in [(10.0, "left"), (200.0, "mid"), (390.0, "right")].iter().enumerate() {
+        for l in 0..3 {
+            let text = if c == 1 && l == 1 { "end.".to_string() } else { format!("{name}{l}{}", "x".repeat(27 - name.len())) };
+            word(&mut v, &text, *x, 100.0 + 12.0 * l as f32, 6.0);
+        }
+    }
+    let t = layout(v).plain_text();
+    assert_eq!(t.lines().count(), 9, "{t}");
+    assert!(t.starts_with("left0xxxxxxxxxxxxxxxxxxxxxxx\nleft1xxxxxxxxxxxxxxxxxxxxxxx\nleft2xxxxxxxxxxxxxxxxxxxxxxx\nmid0"), "{t}");
+}
+
 #[test]
 fn short_doubled_word_at_same_origin_does_not_interleave() {
     let ops = "BT /F1 12 Tf 50 Tz 1 0 0 1 100 200 Tm (world) Tj ET\n".repeat(2);

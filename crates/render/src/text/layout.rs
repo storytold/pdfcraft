@@ -1,7 +1,7 @@
 use super::device::{DIRECTION_TOLERANCE, Drawn, WORD_GAP};
 use super::order::{
-    NONE, REDRAW_CANDIDATES, Run, SAME_LINE_GAP, Scratch, Seg, fingerprint, ink_of, is_script_on, mark_barcode_rows, measure_cluster_gaps,
-    place_glyphs, redraws, restarts_run, reverse_rtl, same_line,
+    CELL_WIDTH, NONE, REDRAW_CANDIDATES, ROW_CELLS, Run, SAME_LINE_GAP, Scratch, Seg, fingerprint, ink_of, is_script_on, mark_barcode_rows,
+    measure_cluster_gaps, place_glyphs, redraws, restarts_run, reverse_rtl, same_line,
 };
 use super::{HashMap, PageText, TextGlyph};
 
@@ -173,7 +173,14 @@ pub(super) fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 ///    A smaller glyph right next to the previous one (a sub- or superscript) stays in the segment.
 ///    Segments on the same baseline that nearly touch are merged (text drawn out of order), and so
 ///    is a table cell padded with spaces with the next cell of its row (`PADDED_FIELD`).
-/// 2. *Blocks:* segments stacked with line-sized gaps and overlapping horizontally.
+/// 2. *Blocks:* segments stacked with line-sized gaps and overlapping horizontally. A segment
+///    reaching under [`UNDER_ROW`] or more segments of one line stacks under none of them (a table
+///    row is not a heading over the row below it). The cells of a table row, [`ROW_CELLS`] or more segments on
+///    one baseline each within [`SAME_LINE_GAP`] of the next and mostly narrower than
+///    [`CELL_WIDTH`], leave the blocks they stacked in and stand alone (#8534): the row is read
+///    across in step 3 and the cells join one line in step 4, where a column of cells had read top
+///    to bottom like a paragraph. Two aligned segments keep their blocks: a label and its value
+///    read as a line anyway, and two columns of prose whose lines share a baseline stay columns.
 /// 3. *Block order:* repeatedly take the top-most remaining block, preferring a block to its left
 ///    that overlaps it vertically (so columns read left, then right). A column goes on first (#3658):
 ///    the nearest block below the last one, overlapping it horizontally and at most 2.5 heights of
@@ -372,31 +379,14 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     }
 
     // 2. Blocks.
-    let mut by_top: Vec<usize> = (0..segs.len()).collect();
-    by_top.sort_by(|a, b| segs[*a].bbox[1].total_cmp(&segs[*b].bbox[1]));
-    let mut blocks: Vec<(Vec<usize>, [f32; 4])> = Vec::new();
-    for si in by_top {
-        let s = &segs[si];
-        let target = blocks.iter().position(|(members, bb)| {
-            let Some(&m) = members.last() else { return false };
-            let last = &segs[m];
-            let vgap = s.bbox[1] - last.bbox[3];
-            let overlap = s.bbox[2].min(bb[2]) - s.bbox[0].max(bb[0]);
-            let minw = (s.bbox[2] - s.bbox[0]).min(bb[2] - bb[0]).max(1.0);
-            vgap > -last.h * 0.5
-                && vgap < last.h.max(s.h) * 1.1
-                && overlap > minw * 0.3
-                && (last.h / s.h - 1.0).abs() < 0.6
-                && last.barcode == s.barcode
-        });
-        match target {
-            Some(b) => {
-                blocks[b].0.push(si);
-                let bb = s.bbox;
-                union(&mut blocks[b].1, &bb);
-            }
-            None => blocks.push((vec![si], s.bbox)),
-        }
+    let lines = Lines::new(&segs);
+    let mut blocks = stack_blocks(&segs, &lines);
+    // A cell of a table row stacked in a block with the cells above and below it, as the lines of a
+    // paragraph, and the table read column by column (#8534); it leaves that block and stands alone,
+    // so the row is read across in step 3 and its cells join one line in step 4.
+    let row_cell = row_cells(&segs, &lines.members);
+    if row_cell.iter().any(|&c| c) {
+        blocks = split_at_cells(&segs, blocks, &row_cell);
     }
 
     // 3. Block order.
@@ -553,6 +543,165 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
         }
     }
     (order.into_iter().map(|i| kept[i]).collect(), line_of, space_before)
+}
+
+/// The segments on each baseline, within a fifth of a height of the one before as [`same_line`]
+/// reads it.
+struct Lines {
+    /// The line of each segment.
+    of_seg: Vec<usize>,
+    /// Each line's segments, by their left edge.
+    members: Vec<Vec<usize>>,
+    /// Each line's segments' right edges, in order. With `members`, how many segments of a line
+    /// reach over a span is two binary searches, not a scan of the line, which a page of thousands
+    /// of segments on one baseline cannot afford.
+    rights: Vec<Vec<f32>>,
+}
+
+/// A segment reaching under this many other segments of the line above it lies under a row of
+/// cells, not under a heading, and stacks under none of them (#8534). Under one, it may be the
+/// second line of a cell whose text runs under the next column.
+const UNDER_ROW: usize = 2;
+
+impl Lines {
+    fn new(segs: &[Seg]) -> Lines {
+        let baseline = |s: &Seg| s.bbox[3] - 0.2 * s.h;
+        let mut by_base: Vec<usize> = (0..segs.len()).collect();
+        by_base.sort_by(|a, b| baseline(&segs[*a]).total_cmp(&baseline(&segs[*b])));
+        let mut of_seg = vec![0usize; segs.len()];
+        let mut members: Vec<Vec<usize>> = Vec::new();
+        for (k, &si) in by_base.iter().enumerate() {
+            let continues = k.checked_sub(1).and_then(|p| by_base.get(p)).is_some_and(|&p| {
+                let (a, b) = (&segs[p], &segs[si]);
+                baseline(b) - baseline(a) < 0.2 * a.h.min(b.h)
+            });
+            if !continues {
+                members.push(Vec::new());
+            }
+            if let Some(slot) = of_seg.get_mut(si) {
+                *slot = members.len().saturating_sub(1);
+            }
+            if let Some(line) = members.last_mut() {
+                line.push(si);
+            }
+        }
+        let mut rights = Vec::with_capacity(members.len());
+        for line in &mut members {
+            line.sort_by(|a, b| segs[*a].bbox[0].total_cmp(&segs[*b].bbox[0]));
+            let mut ends: Vec<f32> = line.iter().map(|&m| segs[m].bbox[2]).collect();
+            ends.sort_by(f32::total_cmp);
+            rights.push(ends);
+        }
+        Lines { of_seg, members, rights }
+    }
+
+    /// How many segments of `last`'s line other than `last` sit over `s`: they start before the
+    /// ink of `s` ends (its box may run on with trailing spaces) and reach past where `s` starts.
+    fn mates_over(&self, segs: &[Seg], last: usize, s: &Seg) -> usize {
+        let Some((members, rights)) = self.of_seg.get(last).and_then(|&l| self.members.get(l).zip(self.rights.get(l))) else { return 0 };
+        let right = if s.ink.is_finite() { s.ink } else { s.bbox[2] };
+        // Every segment that ends before `s` starts also starts before `s` ends, so the ones over
+        // `s` are the first count less the second.
+        let starting_before = members.partition_point(|&m| segs[m].bbox[0] < right);
+        let ending_before = rights.partition_point(|&r| r <= s.bbox[0]);
+        let over = starting_before.saturating_sub(ending_before);
+        let l = &segs[last];
+        over.saturating_sub(usize::from(l.bbox[0] < right && l.bbox[2] > s.bbox[0]))
+    }
+}
+
+/// The blocks: segments stacked with line-sized gaps and overlapping horizontally, each as its
+/// segments in top-down order and its box. A segment reaching under [`UNDER_ROW`] or more other
+/// segments of the block's last line (its line-mates in `lines`) stacks under none of them: it lies
+/// under a row of cells, not under a heading. Without this the first cell of a table row adopted a
+/// whole row below it as a heading adopts its paragraph, that block swallowed the column, and the
+/// row's other cells were read after the table (#8534).
+fn stack_blocks(segs: &[Seg], lines: &Lines) -> Vec<(Vec<usize>, [f32; 4])> {
+    let mut by_top: Vec<usize> = (0..segs.len()).collect();
+    by_top.sort_by(|a, b| segs[*a].bbox[1].total_cmp(&segs[*b].bbox[1]));
+    let mut blocks: Vec<(Vec<usize>, [f32; 4])> = Vec::new();
+    for si in by_top {
+        let s = &segs[si];
+        let target = blocks.iter().position(|(members, bb)| {
+            let Some(&m) = members.last() else { return false };
+            let last = &segs[m];
+            let vgap = s.bbox[1] - last.bbox[3];
+            let overlap = s.bbox[2].min(bb[2]) - s.bbox[0].max(bb[0]);
+            let minw = (s.bbox[2] - s.bbox[0]).min(bb[2] - bb[0]).max(1.0);
+            vgap > -last.h * 0.5
+                && vgap < last.h.max(s.h) * 1.1
+                && overlap > minw * 0.3
+                && (last.h / s.h - 1.0).abs() < 0.6
+                && last.barcode == s.barcode
+                && lines.mates_over(segs, m, s) < UNDER_ROW
+        });
+        match target {
+            Some(b) => {
+                blocks[b].0.push(si);
+                let bb = s.bbox;
+                union(&mut blocks[b].1, &bb);
+            }
+            None => blocks.push((vec![si], s.bbox)),
+        }
+    }
+    blocks
+}
+
+/// Which segments are the cells of a table row: [`ROW_CELLS`] or more segments of one of `lines`
+/// (each line's segments by their left edge), each within [`SAME_LINE_GAP`] of the next, more than
+/// half of them narrower than [`CELL_WIDTH`] heights (#8534).
+fn row_cells(segs: &[Seg], lines: &[Vec<usize>]) -> Vec<bool> {
+    let mut row_cell = vec![false; segs.len()];
+    for line in lines {
+        let mut start = 0;
+        for k in 1..=line.len() {
+            let chained = line.get(k).zip(k.checked_sub(1).and_then(|p| line.get(p))).is_some_and(|(&n, &p)| same_line(&segs[p], &segs[n]));
+            if chained {
+                continue;
+            }
+            let chain = line.get(start..k).unwrap_or_default();
+            let narrow = chain.iter().filter(|&&c| segs[c].bbox[2] - segs[c].bbox[0] < CELL_WIDTH * segs[c].h).count();
+            if chain.len() >= ROW_CELLS && narrow * 2 > chain.len() {
+                for &c in chain {
+                    if let Some(cell) = row_cell.get_mut(c) {
+                        *cell = true;
+                    }
+                }
+            }
+            start = k;
+        }
+    }
+    row_cell
+}
+
+/// `blocks` with every segment that is a cell of a table row (`row_cell`) as a block of its own,
+/// and the segments between two cells as one; each block's box is that of its segments.
+fn split_at_cells(segs: &[Seg], blocks: Vec<(Vec<usize>, [f32; 4])>, row_cell: &[bool]) -> Vec<(Vec<usize>, [f32; 4])> {
+    let boxed = |members: Vec<usize>| {
+        let bb = members.iter().skip(1).fold(members.first().map_or([0.0; 4], |&m| segs[m].bbox), |mut bb, &m| {
+            union(&mut bb, &segs[m].bbox);
+            bb
+        });
+        (members, bb)
+    };
+    let mut split: Vec<(Vec<usize>, [f32; 4])> = Vec::with_capacity(blocks.len());
+    for (members, _) in blocks {
+        let mut run: Vec<usize> = Vec::new();
+        for m in members {
+            if row_cell.get(m).copied().unwrap_or(false) {
+                if !run.is_empty() {
+                    split.push(boxed(std::mem::take(&mut run)));
+                }
+                split.push(boxed(vec![m]));
+            } else {
+                run.push(m);
+            }
+        }
+        if !run.is_empty() {
+            split.push(boxed(run));
+        }
+    }
+    split
 }
 
 /// Puts the reading-order glyphs `glyphs` of segment `seg` on their line: `line`, or the line
