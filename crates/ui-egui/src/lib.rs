@@ -215,6 +215,7 @@ struct PendingDestination {
 pub struct PdfCraftApp {
     /// The app's services: jobs, files, settings sections, commands. Every queue is built from it.
     pub(crate) host: std::sync::Arc<craft::host::Host>,
+    host_date_language: Option<String>,
     /// Asks for a frame from any thread; every queue calls it when a job finishes.
     pub(crate) wake: craft::host::Wake,
     /// Files the operating system, another launch, a drop or the embedding page asked to open.

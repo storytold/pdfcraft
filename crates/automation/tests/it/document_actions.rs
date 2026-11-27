@@ -123,3 +123,30 @@ fn js_event_runs_the_field_its_field_id_names() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Printer marks that would widen a 14,400 pt page past the largest page a PDF can have are
+/// refused before Will Print runs, so its field change isn't left behind by a print that fails.
+#[test]
+fn marks_that_cannot_fit_fail_before_will_print() {
+    let pdf = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /AA << /WP 6 0 R >> /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 14400 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (log) /V () /Rect [20 250 180 270] /P 3 0 R /F 4 >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /S /JavaScript /JS (getField\\('log'\\).value += 'print;';) >>".into(),
+    ]);
+    let dir = std::env::temp_dir().join(format!("pdfcraft-marks-will-print-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("wide.pdf"), pdf).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap().with_clock(|| 1_700_000_000);
+    let doc = tool(&mut a, "doc_open", json!({ "path": "wide.pdf" }))["doc"].as_u64().unwrap();
+    let refused = a.call("doc_print", &json!({ "doc": doc, "marks": ["trim"], "path": "marked.pdf" }));
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(log(&mut a, doc).as_str().unwrap_or_default(), "", "Will Print didn't run");
+    assert!(!dir.join("marked.pdf").exists());
+    // Without marks the page prints, and Will Print runs.
+    tool(&mut a, "doc_print", json!({ "doc": doc, "path": "plain.pdf" }));
+    assert_eq!(log(&mut a, doc), "print;");
+    let _ = std::fs::remove_dir_all(dir);
+}
