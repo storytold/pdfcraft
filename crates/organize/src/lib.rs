@@ -26,7 +26,8 @@ mod prune;
 mod templates;
 mod transition;
 pub use templates::{
-    Template, create_template, delete_script_pages, remove_template, set_template_hidden, spawn_template, template_geometry, templates,
+    Template, create_template, delete_script_pages, remove_template, set_template_hidden, spawn_template, template_fallback, template_geometry,
+    template_geometry_with_fallback, templates,
 };
 pub mod view;
 mod xmp;
@@ -292,7 +293,7 @@ pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organiz
         return Err(OrganizeError::WouldRemoveAllPages);
     }
     rebuild(doc, &keep)?;
-    labels::drop_deleted_pages(doc, indices)?;
+    labels::drop_deleted_pages(doc, indices, keep.len())?;
     // The deleted pages go for good: bookmarks, links and widgets that still point at one would
     // otherwise keep it, with its content, in the saved file. Their form widgets leave the form,
     // and bookmarks and links that went to them lose that destination.

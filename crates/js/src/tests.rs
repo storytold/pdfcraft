@@ -785,6 +785,7 @@ fn app_alert_titles_are_clipped_and_charged() {
     // The title's bytes count against the budget with the text's, and a message the budget
     // has no room for is left out and counted.
     let mut h = Host {
+        last_spawned_field: 0,
         page_changes: Vec::new(),
         calculate: true,
         calculations_current: false,
@@ -2959,7 +2960,7 @@ fn templated() -> DocInfo {
             name: name.into(),
             source: source as u64,
             page,
-            field_names: Default::default(),
+            fields: Default::default(),
             boxes: [[0.0; 4]; 5],
             rotation: 0,
         })
@@ -2992,6 +2993,45 @@ fn spawn_asks_for_a_page_from_the_template() {
     // The arguments by name.
     let o = run_templated("getTemplate('More').spawn({ nPage: 1, bOverlay: false });");
     assert_eq!(o.page_changes, [crate::templates::Change::Spawn { name: "More".into(), page: 1, rename: true, overlay: false }]);
+}
+
+#[test]
+fn spawning_a_template_keeps_its_field_identity_and_pdf_rectangle() {
+    let mut doc = templated();
+    let template = &mut doc.templates[0];
+    template.fields = Arc::new(vec![crate::templates::FieldIdentity::Object(2)]);
+    let crop = [15.0, 30.0, 205.0, 320.0];
+    template.boxes[1] = crop;
+    template.rotation = 90;
+    doc.page_boxes = vec![[[0.0; 4]; 5]; doc.num_pages];
+    doc.page_rotations = vec![0; doc.num_pages];
+    let mut unrelated = FieldState::new("note", FieldType::Text, vec!["unrelated".into()]);
+    unrelated.object_id = Some(1);
+    let mut selected = FieldState::new("note", FieldType::Text, vec!["selected".into()]);
+    selected.object_id = Some(2);
+    selected.page_crop = [0.0, 0.0, 200.0, 300.0];
+    let rect = [20.0, 40.0, 90.0, 60.0];
+    selected.rect = Some(crate::rotate_rect(rect, selected.page_crop, 0));
+    let o = run(
+        "getTemplate('More').spawn(1, true, false);
+         var first = getField('P1.More.note');
+         createTemplate('Copy', 1).spawn(2, true, false);
+         first.value = 'edited';",
+        &Event::doc("Console"),
+        &doc,
+        &[unrelated, selected],
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.changed.len(), 2);
+    assert_eq!(o.changed[0].value, ["edited"]);
+    assert_eq!(o.changed[1].value, ["selected"]);
+    assert_ne!(o.changed[0].instance_id, o.changed[1].instance_id);
+    for field in o.changed {
+        assert_eq!(field.page_crop, crop);
+        assert_eq!(crate::unrotate_rect(field.rect.unwrap(), field.page_crop, field.page_rotation), rect);
+    }
 }
 
 #[test]

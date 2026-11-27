@@ -6,6 +6,7 @@ use super::{
 };
 
 pub(crate) struct Host {
+    pub(crate) last_spawned_field: u64,
     pub(crate) page_changes: Vec<crate::templates::Change>,
     pub(crate) calculate: bool,
     pub(crate) calculations_current: bool,

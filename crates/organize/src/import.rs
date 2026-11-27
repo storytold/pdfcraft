@@ -135,6 +135,7 @@ pub(crate) fn copy_template_page(
     pages.insert(page, new_page);
     let mut copier = Copier::new(&src, map, pages);
     copier.kept = Some(Rc::new(kept));
+    copier.keep_reset_targets = template_name.is_none();
     copier.map.insert(page, new_page);
     let mut body = Dict::new();
     for (k, v) in source.iter() {
@@ -232,10 +233,10 @@ pub(crate) fn copy_template_page(
             add_kid(dst, parent, widget)?;
         }
     }
-    order.insert(at.min(order.len()), (new_page, Dict::new()));
     // Rebuild removes inherited attributes from the old root. Hidden templates
     // are outside `order`, but later spawns still need their effective attributes.
     crate::templates::preserve_hidden_attributes(dst, &order)?;
+    order.insert(at.min(order.len()), (new_page, Dict::new()));
     rebuild(dst, &order)?;
     Ok(new_page)
 }

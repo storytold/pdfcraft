@@ -403,7 +403,7 @@ fn changes_from(
     before: &[pdfcraft_js::FieldState],
     after: &[pdfcraft_js::FieldState],
     formatted: &std::collections::BTreeSet<String>,
-    display_before: Option<&[pdfcraft_js::FieldState]>,
+    live_before: Option<&[pdfcraft_js::FieldState]>,
 ) -> Vec<FieldChange> {
     if after.is_empty() {
         return Vec::new();
@@ -418,25 +418,26 @@ fn changes_from(
     let mut names = std::collections::HashSet::new();
     let duplicates: std::collections::HashSet<_> =
         before.iter().filter_map(|f| (!names.insert(f.name.as_str())).then_some(f.name.as_str())).collect();
-    let mut display_by_name = std::collections::HashMap::new();
-    let mut display_by_id = std::collections::HashMap::new();
-    for field in display_before.into_iter().flatten() {
-        display_by_name.entry(field.name.as_str()).or_insert(field.display);
+    let mut live_by_name = std::collections::HashMap::new();
+    let mut live_by_id = std::collections::HashMap::new();
+    for field in live_before.into_iter().flatten() {
+        live_by_name.entry(field.name.as_str()).or_insert(field);
         if let Some(id) = field.object_id {
-            display_by_id.insert(id, field.display);
+            live_by_id.insert(id, field);
         }
     }
     after
         .iter()
         .filter_map(|a| {
             let b = if let Some(id) = a.object_id { by_id.get(&id)? } else { by_name.get(a.name.as_str())? };
-            let original_display = match a.object_id {
-                Some(id) => display_by_id.get(&id),
-                None => display_by_name.get(a.name.as_str()),
+            let live = match a.object_id {
+                Some(id) => live_by_id.get(&id),
+                None if a.instance_id != 0 => None, // A field spawned during this run.
+                None => live_by_name.get(a.name.as_str()),
             }
-            .copied()
-            .or(a.display_before_write)
-            .unwrap_or(b.display);
+            .copied();
+            let original_display = live.map(|f| f.display).or(a.display_before_write).unwrap_or(b.display);
+            let original_icon = live.unwrap_or(b);
             let c = FieldChange {
                 name: a.name.clone(),
                 object: a
@@ -457,7 +458,8 @@ fn changes_from(
                 user_name: (a.user_name != b.user_name).then(|| a.user_name.clone()),
                 submit_name: (a.submit_name != b.submit_name).then(|| a.submit_name.clone()),
                 default_value: (a.default != b.default).then(|| a.default.clone()),
-                icon: (a.icon != b.icon || (a.icon_written && b.icon_mixed)).then_some(a.icon),
+                icon: (a.icon != original_icon.icon || (a.icon_written && (a.icon != b.icon || b.icon_mixed || original_icon.icon_mixed)))
+                    .then_some(a.icon),
                 text_color: a.text_color.as_deref().filter(|_| a.text_color != b.text_color).map(<[_]>::to_vec),
                 fill_color: a.fill_color.as_deref().filter(|_| a.fill_color != b.fill_color).map(<[_]>::to_vec),
                 caption: (a.caption != b.caption || (a.caption_written && b.caption_mixed)).then(|| a.caption.clone()).flatten(),
@@ -529,12 +531,13 @@ fn template_states(cos: &pdfcraft_cos::Document) -> Vec<pdfcraft_js::templates::
             widget_fields.entry(widget.obj).or_default().push(index);
         }
     }
-    let mut names_left = 100_000usize;
+    let fallback = pdfcraft_organize::template_fallback(cos);
+    let mut fields_left = 100_000usize;
     templates
         .into_iter()
         .map(|t| {
             let mut indices = std::collections::HashSet::new();
-            if names_left > 0
+            if fields_left > 0
                 && let Some(annots) = cos.get(t.page).as_dict().and_then(|d| d.get(b"Annots").map(|v| cos.resolve(v)))
             {
                 let widgets: std::collections::HashSet<_> =
@@ -543,15 +546,19 @@ fn template_states(cos: &pdfcraft_cos::Document) -> Vec<pdfcraft_js::templates::
             }
             let mut indices: Vec<_> = indices.into_iter().collect();
             indices.sort_unstable();
-            let field_names = indices.into_iter().take(names_left).map(|i| fields[i].name.clone()).collect::<Vec<_>>();
-            names_left = names_left.saturating_sub(field_names.len());
-            let (dict, boxes) = pdfcraft_organize::template_geometry(cos, t.page);
+            let field_ids = indices
+                .into_iter()
+                .take(fields_left)
+                .map(|i| pdfcraft_js::templates::FieldIdentity::Object(field_object_id(fields[i].obj)))
+                .collect::<Vec<_>>();
+            fields_left -= field_ids.len();
+            let (dict, boxes) = pdfcraft_organize::template_geometry_with_fallback(cos, t.page, &fallback);
             let page = pdfcraft_model::Page { obj: t.page, dict };
             pdfcraft_js::templates::Template {
                 name: t.name,
-                source: (u64::from(t.page.num) << 16) | u64::from(t.page.generation),
+                source: field_object_id(t.page),
                 page: t.visible_page,
-                field_names: field_names.into(),
+                fields: field_ids.into(),
                 boxes,
                 rotation: page.rotation(cos),
             }
@@ -2401,6 +2408,22 @@ mod widget_budget_review_tests {
 #[cfg(test)]
 mod icon_mixed_review_tests {
     use super::*;
+    #[test]
+    fn page_edits_only_persist_a_live_icon_when_the_script_writes_it() {
+        let mut pdf = pdfcraft_js::FieldState::new("go", pdfcraft_js::FieldType::Button, vec![]);
+        pdf.object_id = Some(7);
+        let mut live = pdf.clone();
+        live.icon = Some(9);
+        let mut after = live.clone();
+        after.user_name = "Changed".into();
+        let compare = |field: &pdfcraft_js::FieldState| {
+            changes_from(std::slice::from_ref(&pdf), std::slice::from_ref(field), &Default::default(), Some(std::slice::from_ref(&live)))[0].icon
+        };
+        assert_eq!(compare(&after), None);
+        after.icon_written = true;
+        assert_eq!(compare(&after), Some(live.icon));
+    }
+
     /// Mixed widgets need a field-wide icon delta even when the first icon is already correct.
     #[test]
     fn mixed_icons_emit_only_after_an_explicit_setter() {

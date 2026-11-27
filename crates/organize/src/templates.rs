@@ -1,5 +1,5 @@
 //! Named page templates (ISO 32000-2 7.7.4), retaining their hidden pages and field graphs.
-use crate::{Dict, Document, ObjRef, Object, OrganizeError, PdfString, rebuild, walk};
+use crate::{Dict, Document, ObjRef, Object, OrganizeError, PageWalk, PdfString, rebuild, walk};
 use std::collections::{HashMap, HashSet};
 
 const MAX_NAMES: usize = 4096;
@@ -216,16 +216,28 @@ pub(crate) fn inherited(doc: &Document, page: ObjRef) -> Dict {
     }
     out
 }
-/// A standalone template may omit attributes normally inherited from the page tree.
-fn template_attributes(doc: &Document, page: ObjRef, order: &[(ObjRef, Dict)]) -> Dict {
-    let mut attrs = inherited(doc, page);
+/// Fallback inherited attributes for standalone templates in this document snapshot.
+pub fn template_fallback(doc: &Document) -> Dict {
+    let first = crate::pages_root(doc).ok().and_then(|root| PageWalk::new(doc, root).next());
+    fallback_attributes(doc, first.as_ref().map(|(_, attrs)| attrs))
+}
+
+fn fallback_attributes(doc: &Document, first: Option<&Dict>) -> Dict {
+    let mut attrs = Dict::new();
     let root = crate::pages_root(doc).ok().map(|r| doc.get(r));
     for key in crate::INHERITABLE {
-        if !attrs.contains(key)
-            && let Some(value) =
-                root.as_deref().and_then(Object::as_dict).and_then(|d| d.get(key)).or_else(|| order.first().and_then(|(_, attrs)| attrs.get(key)))
-        {
+        if let Some(value) = root.as_deref().and_then(Object::as_dict).and_then(|d| d.get(key)).or_else(|| first.and_then(|attrs| attrs.get(key))) {
             attrs.set(key.to_vec(), value.clone());
+        }
+    }
+    attrs
+}
+
+fn template_attributes(doc: &Document, page: ObjRef, fallback: &Dict) -> Dict {
+    let mut attrs = inherited(doc, page);
+    for (key, value) in fallback.iter() {
+        if !attrs.contains(key) {
+            attrs.set(key.clone(), value.clone());
         }
     }
     attrs
@@ -233,7 +245,12 @@ fn template_attributes(doc: &Document, page: ObjRef, order: &[(ObjRef, Dict)]) -
 
 /// Effective inherited page dictionary and boxes (media, crop, bleed, trim, art) of a template.
 pub fn template_geometry(doc: &Document, page: ObjRef) -> (Dict, [[f64; 4]; 5]) {
-    let attrs = template_attributes(doc, page, &[]);
+    template_geometry_with_fallback(doc, page, &template_fallback(doc))
+}
+
+/// Effective template geometry using fallback attributes from the same document snapshot.
+pub fn template_geometry_with_fallback(doc: &Document, page: ObjRef, fallback: &Dict) -> (Dict, [[f64; 4]; 5]) {
+    let attrs = template_attributes(doc, page, fallback);
     let original = doc.get(page);
     let leaf = original.as_dict().cloned().unwrap_or_default();
     let boxes = crate::boxes::effective_boxes(doc, &leaf, &attrs);
@@ -248,8 +265,9 @@ pub(crate) fn preserve_hidden_attributes(doc: &mut Document, order: &[(ObjRef, D
         .map(|(_, page)| page)
         .filter(|page| !visible.contains(page) && doc.get(*page).as_dict().is_some_and(|d| matches!(d.name(b"Type"), Some(b"Page" | b"Template"))))
         .collect();
+    let fallback = fallback_attributes(doc, order.first().map(|(_, attrs)| attrs));
     for page in hidden {
-        let attrs = template_attributes(doc, page, order);
+        let attrs = template_attributes(doc, page, &fallback);
         doc.update_dict(page, |d| {
             for (key, value) in attrs.iter() {
                 if !d.contains(key) {
@@ -283,8 +301,13 @@ fn complete_entries(doc: &Document, kind: &[u8]) -> Result<Vec<(String, ObjRef)>
 /// ```
 pub fn set_template_hidden(doc: &mut Document, name: &str, hidden: bool) -> Result<(), OrganizeError> {
     let template = named(doc, name)?;
+    set_page_hidden(doc, template.page, hidden)
+}
+
+fn set_page_hidden(doc: &mut Document, page: ObjRef, hidden: bool) -> Result<(), OrganizeError> {
     let mut pages = walk(doc)?;
-    if hidden == template.visible_page.is_none() {
+    let visible_page = pages.iter().position(|(r, _)| *r == page);
+    if hidden == visible_page.is_none() {
         return Ok(());
     }
     if hidden && pages.len() <= 1 {
@@ -293,17 +316,17 @@ pub fn set_template_hidden(doc: &mut Document, name: &str, hidden: bool) -> Resu
     let visible_names = complete_entries(doc, b"Pages")?;
     let hidden_names = complete_entries(doc, b"Templates")?;
     let entries: Vec<_> = visible_names.iter().chain(&hidden_names).collect();
-    let keys: HashSet<_> = entries.iter().filter(|(_, page)| *page == template.page).map(|(name, _)| name.as_str()).collect();
-    if entries.iter().any(|(name, page)| *page != template.page && keys.contains(name.as_str())) {
+    let keys: HashSet<_> = entries.iter().filter(|(_, r)| *r == page).map(|(name, _)| name.as_str()).collect();
+    if entries.iter().any(|(name, r)| *r != page && keys.contains(name.as_str())) {
         return Err(OrganizeError::Invalid("a template alias also names a different page".into()));
     }
     let (source, destination) = if hidden { (b"Pages".as_slice(), b"Templates".as_slice()) } else { (b"Templates".as_slice(), b"Pages".as_slice()) };
     set_entries(doc, source, &keys, None)?;
-    set_entries(doc, destination, &keys, Some(template.page))?;
-    if let Some(index) = template.visible_page {
+    set_entries(doc, destination, &keys, Some(page))?;
+    if let Some(index) = visible_page {
         preserve_hidden_attributes(doc, &pages)?;
         let (_, attrs) = pages.remove(index);
-        doc.update_dict(template.page, |d| {
+        doc.update_dict(page, |d| {
             d.set(b"Type".to_vec(), Object::name("Template"));
             d.remove(b"Parent");
             for (key, value) in attrs.iter() {
@@ -313,12 +336,12 @@ pub fn set_template_hidden(doc: &mut Document, name: &str, hidden: bool) -> Resu
             }
         })?;
         rebuild(doc, &pages)?;
-        crate::labels::drop_deleted_pages(doc, &[index])?;
+        crate::labels::drop_deleted_pages(doc, &[index], pages.len())?;
     } else {
         preserve_hidden_attributes(doc, &pages)?;
-        let attrs = template_attributes(doc, template.page, &pages);
-        pages.push((template.page, attrs));
-        doc.update_dict(template.page, |d| d.set(b"Type".to_vec(), Object::name("Page")))?;
+        let attrs = template_attributes(doc, page, &fallback_attributes(doc, pages.first().map(|(_, attrs)| attrs)));
+        pages.push((page, attrs));
+        doc.update_dict(page, |d| d.set(b"Type".to_vec(), Object::name("Page")))?;
         rebuild(doc, &pages)?;
     }
     Ok(())
@@ -334,7 +357,7 @@ pub fn spawn_template(doc: &mut Document, name: &str, at: usize, rename: bool) -
 
 fn spawn_template_page(doc: &mut Document, name: &str, at: usize, rename: bool) -> Result<ObjRef, OrganizeError> {
     let template = named(doc, name)?;
-    let attrs = template_attributes(doc, template.page, &walk(doc)?);
+    let attrs = template_attributes(doc, template.page, &template_fallback(doc));
     crate::import::copy_template_page(doc, template.page, attrs, at, rename.then_some(name))
 }
 /// Deleting a visible named template hides it; ordinary spawned pages are removed normally.
@@ -350,14 +373,12 @@ pub fn delete_script_pages(doc: &mut Document, pages: &[usize]) -> Result<(), Or
     if unique.is_empty() {
         return Ok(());
     }
-    let mut named_pages = HashMap::new();
-    for (name, page) in complete_entries(doc, b"Templates")?.into_iter().chain(complete_entries(doc, b"Pages")?) {
-        named_pages.insert(page, name);
-    }
+    let named_pages: HashSet<_> =
+        complete_entries(doc, b"Templates")?.into_iter().chain(complete_entries(doc, b"Pages")?).map(|(_, page)| page).collect();
     let (mut named, mut ordinary) = (Vec::new(), Vec::new());
     for (index, (page, _)) in all.iter().enumerate().rev().filter(|(i, _)| unique.contains(i)) {
-        if let Some(name) = named_pages.get(page) {
-            named.push(name);
+        if named_pages.contains(page) {
+            named.push(*page);
         } else {
             ordinary.push(index);
         }
@@ -366,8 +387,8 @@ pub fn delete_script_pages(doc: &mut Document, pages: &[usize]) -> Result<(), Or
         preserve_hidden_attributes(doc, &all)?;
         crate::delete_pages(doc, &ordinary)?;
     }
-    for name in named {
-        set_template_hidden(doc, name, true)?;
+    for page in named {
+        set_page_hidden(doc, page, true)?;
     }
     Ok(())
 }
@@ -430,7 +451,26 @@ mod tests {
         }
     }
     #[test]
-    fn renamed_template_copies_indirect_action_containers() {
+    fn prepending_preserves_the_hidden_templates_fallback_crop() {
+        let mut doc = fixture();
+        let original = ObjRef::new(3, 0);
+        let hidden = ObjRef::new(4, 0);
+        let crop = Object::Array([10, 20, 180, 260].into_iter().map(Object::Int).collect());
+        doc.update_dict(original, |d| d.set(b"CropBox".to_vec(), crop)).unwrap();
+        doc.update_dict(hidden, |d| {
+            d.remove(b"Parent");
+        })
+        .unwrap();
+        let expected = crate::page_boxes(&doc).unwrap()[0];
+        assert_eq!(template_geometry(&doc, hidden).1[1], expected[1]);
+        spawn_template_page(&mut doc, "Notes", 0, true).unwrap();
+        assert_eq!(template_geometry(&doc, hidden).1[1], expected[1]);
+        spawn_template_page(&mut doc, "Notes", 0, true).unwrap();
+        assert_eq!(crate::page_boxes(&doc).unwrap()[0][1], expected[1]);
+    }
+
+    #[test]
+    fn template_spawns_reset_the_fields_that_own_their_widgets() {
         let mut doc = fixture();
         let mut action = Dict::new();
         action.set(b"S".to_vec(), Object::name("ResetForm"));
@@ -449,7 +489,19 @@ mod tests {
         let fields = doc.get(copied_action).as_dict().unwrap().get(b"Fields").unwrap().as_array().unwrap().clone();
         assert_eq!(fields, vec![Object::Ref(widget)]);
         assert_eq!(doc.get(action).as_dict().unwrap().get(b"Fields").unwrap().as_array().unwrap(), &vec![Object::Ref(ObjRef::new(5, 0))]);
+
+        for at in [2, 3] {
+            let page = spawn_template_page(&mut doc, "Notes", at, false).unwrap();
+            let widget = doc.resolve(doc.get(page).as_dict().unwrap().get(b"Annots").unwrap()).as_array().unwrap()[0].as_ref().unwrap();
+            let widget = doc.get(widget);
+            let widget = widget.as_dict().unwrap();
+            let parent = widget.reference(b"Parent").unwrap();
+            let aa = doc.resolve(widget.get(b"AA").unwrap());
+            let action = doc.resolve(aa.as_dict().unwrap().get(b"U").unwrap());
+            assert_eq!(action.as_dict().unwrap().get(b"Fields"), Some(&Object::Array(vec![Object::Ref(parent)])));
+        }
     }
+
     #[test]
     fn template_name_tree_sorts_encoded_bytes_including_indirect_keys() {
         let mut doc = fixture();
@@ -561,8 +613,33 @@ mod tests {
         assert!(doc.get(copy).as_dict().unwrap().contains(b"Resources"));
 
         set_template_hidden(&mut doc, "Alias", false).unwrap();
-        assert_eq!(named(&doc, "Main").unwrap().visible_page, named(&doc, "Alias").unwrap().visible_page);
+        for name in ["Main", "Alias"] {
+            assert_eq!(named(&doc, name).unwrap().visible_page, Some(3));
+        }
         assert!(entries(&doc, b"Templates", MAX_NAMES).0.iter().all(|(name, _)| name == "Notes"));
+    }
+
+    #[test]
+    fn deleting_a_template_page_does_not_follow_a_conflicting_visible_name() {
+        let mut doc = fixture();
+        create_template(&mut doc, "Shared", 0).unwrap();
+        let selected = spawn_template_page(&mut doc, "Notes", 1, true).unwrap();
+        set_entry(&mut doc, b"Templates", "Shared", Some(selected)).unwrap();
+        assert!(delete_script_pages(&mut doc, &[1]).is_err());
+        assert_eq!(walk(&doc).unwrap().len(), 2);
+        assert_eq!(walk(&doc).unwrap()[1].0, selected);
+    }
+
+    #[test]
+    fn hiding_a_trailing_template_drops_its_label_range() {
+        let mut doc = fixture();
+        spawn_template_page(&mut doc, "Notes", 1, true).unwrap();
+        create_template(&mut doc, "Last", 1).unwrap();
+        crate::number_pages(&mut doc, 0, 0, crate::LabelStyle::Decimal, "First-", 1).unwrap();
+        crate::number_pages(&mut doc, 1, 1, crate::LabelStyle::Decimal, "Last-", 1).unwrap();
+        delete_script_pages(&mut doc, &[1]).unwrap();
+        assert_eq!(crate::page_labels(&doc).unwrap(), ["First-1"]);
+        assert!(crate::page_label_ranges(&doc).iter().all(|range| range.start < 1));
     }
 
     #[test]

@@ -12,10 +12,27 @@ pub struct Template {
     /// Shared identity for names that refer to the same source page.
     pub source: u64,
     pub page: Option<usize>,
-    pub field_names: Arc<Vec<String>>,
+    pub fields: Arc<Vec<FieldIdentity>>,
     pub boxes: [[f64; 4]; 5],
     pub rotation: i64,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FieldIdentity {
+    Object(u64),
+    Spawned(u64),
+    Name(String),
+}
+
+impl FieldIdentity {
+    fn of(field: &crate::FieldState) -> Self {
+        match (field.object_id, field.instance_id) {
+            (Some(id), _) => Self::Object(id),
+            (None, 0) => Self::Name(field.name.clone()),
+            (None, id) => Self::Spawned(id),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Change {
     Spawn { name: String, page: usize, rename: bool, overlay: bool },
@@ -62,18 +79,14 @@ fn template(ctx: &Context, name: &str) -> JsResult<Template> {
         .ok_or_else(|| error(format!("there is no page template named {name:?}")))
 }
 /// Replace positions without invalidating held field objects, and remap calculation targets.
-fn fields(h: &mut crate::host::Host, next: Vec<crate::FieldState>, new_names: &HashSet<String>) {
+fn fields(h: &mut crate::host::Host, next: Vec<crate::FieldState>, added: &HashSet<FieldIdentity>) {
     h.calculations_current = false;
-    let key = |f: &crate::FieldState| (f.object_id, if f.object_id.is_some() { String::new() } else { f.name.clone() });
-    let changed: HashSet<_> = h.changed.iter().filter_map(|i| h.fields.get(*i)).map(&key).collect();
-    let calculations: Vec<_> =
-        h.calculations.iter().filter_map(|(i, s)| h.fields.get(*i).map(|f| (f.object_id, f.name.clone(), s.clone()))).collect();
-    h.changed = next.iter().enumerate().filter(|(_, f)| new_names.contains(&f.name) || changed.contains(&key(f))).map(|(i, _)| i).collect();
+    let key = FieldIdentity::of;
+    let changed: HashSet<_> = h.changed.iter().filter_map(|i| h.fields.get(*i)).map(key).collect();
+    let calculations: Vec<_> = h.calculations.iter().filter_map(|(i, s)| h.fields.get(*i).map(|f| (key(f), s.clone()))).collect();
+    h.changed = next.iter().enumerate().filter(|(_, f)| added.contains(&key(f)) || changed.contains(&key(f))).map(|(i, _)| i).collect();
     let by_key: HashMap<_, _> = next.iter().enumerate().map(|(i, f)| (key(f), i)).collect();
-    h.calculations = calculations
-        .into_iter()
-        .filter_map(|(id, name, s)| by_key.get(&(id, if id.is_some() { String::new() } else { name })).map(|i| (*i, s)))
-        .collect();
+    h.calculations = calculations.into_iter().filter_map(|(id, s)| by_key.get(&id).map(|i| (*i, s))).collect();
     h.formatted = h.formatted.iter().filter_map(|i| h.fields.get(*i).and_then(|f| by_key.get(&key(f)).copied())).collect();
     h.field_keys = crate::host::field_indices(&next);
     h.objects.retain(|key, _| h.field_keys.contains_key(key));
@@ -104,8 +117,8 @@ fn insert(h: &mut crate::host::Host, template: &Template, page: usize, rename: b
     } else {
         String::new()
     };
-    let names: HashSet<_> = template.field_names.iter().map(String::as_str).collect();
-    let source: Vec<_> = h.fields.iter().enumerate().filter(|(_, f)| names.contains(f.name.as_str())).collect();
+    let identities: HashSet<_> = template.fields.iter().collect();
+    let source: Vec<_> = h.fields.iter().enumerate().filter(|(_, f)| identities.contains(&FieldIdentity::of(f))).collect();
     let bytes = h.fields.iter().map(field_bytes).fold(0usize, usize::saturating_add);
     let extra = if rename { source.iter().map(|(_, f)| field_bytes(f).saturating_add(prefix.len())).fold(0usize, usize::saturating_add) } else { 0 };
     if bytes.saturating_add(extra) > 64 << 20 {
@@ -131,11 +144,16 @@ fn insert(h: &mut crate::host::Host, template: &Template, page: usize, rename: b
             f.name = format!("{prefix}{}", f.name);
             f.object_id = None;
             f.display_before_write.get_or_insert(f.display);
-            f.instance_id = 0;
+            h.last_spawned_field += 1;
+            f.instance_id = h.last_spawned_field;
             f.pages = vec![i32::try_from(page).map_err(|_| error("page index is too large"))?];
-            f.page_crop = template.boxes[1];
+            let crop = template.boxes[1];
+            if f.page_crop != crop || f.page_rotation != template.rotation {
+                f.rect = f.rect.map(|r| crate::rotate_rect(crate::unrotate_rect(r, f.page_crop, f.page_rotation), crop, template.rotation));
+            }
+            f.page_crop = crop;
             f.page_rotation = template.rotation;
-            added.insert(f.name.clone());
+            added.insert(FieldIdentity::of(&f));
             copies.insert(old, index);
             next.push(f);
         } else if let Some(field) = next.get_mut(old) {
@@ -168,7 +186,7 @@ fn delete(h: &mut crate::host::Host, start: usize, end: usize) -> JsResult<()> {
     if count >= h.doc.num_pages {
         return Err(error("a document must keep at least one page"));
     }
-    let originals: HashSet<_> = h.doc.templates.iter().flat_map(|t| t.field_names.iter().cloned()).collect();
+    let originals: HashSet<_> = h.doc.templates.iter().flat_map(|t| t.fields.iter()).collect();
     let mut next = Vec::new();
     for mut f in h.fields.iter().cloned() {
         let hidden = f.pages.iter().all(|p| *p < 0);
@@ -179,7 +197,7 @@ fn delete(h: &mut crate::host::Host, start: usize, end: usize) -> JsResult<()> {
             }
         }
         if f.pages.is_empty() {
-            if hidden || originals.contains(&f.name) {
+            if hidden || originals.contains(&FieldIdentity::of(&f)) {
                 f.pages.push(-1);
             } else {
                 continue;
@@ -307,7 +325,7 @@ fn create(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
         }
         let max = h.doc.num_pages.checked_sub(1).ok_or_else(|| error("createTemplate requires an existing page"))?;
         let p = page(p, max, 0);
-        let field_names = Arc::new(h.fields.iter().filter(|f| f.pages.contains(&(i32::try_from(p).unwrap_or(-1)))).map(|f| f.name.clone()).collect());
+        let fields = Arc::new(h.fields.iter().filter(|f| f.pages.contains(&(i32::try_from(p).unwrap_or(-1)))).map(FieldIdentity::of).collect());
         let boxes = h.doc.page_boxes.get(p).copied().unwrap_or_default();
         let rotation = h.doc.page_rotations.get(p).copied().unwrap_or(0);
         let source = h
@@ -317,7 +335,7 @@ fn create(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
             .find(|t| t.page == Some(p))
             .map_or_else(|| h.doc.templates.iter().map(|t| t.source).max().unwrap_or(0).saturating_add(1), |t| t.source);
         h.doc.templates.retain(|t| t.name != name);
-        h.doc.templates.push(Template { name: name.clone(), source, page: Some(p), field_names, boxes, rotation });
+        h.doc.templates.push(Template { name: name.clone(), source, page: Some(p), fields, boxes, rotation });
         h.page_changes.push(Change::Create { name: name.clone(), page: p });
     }
     Ok(object(ctx, &name).into())

@@ -294,7 +294,7 @@ pub(crate) fn run_in_context(
 ) -> Outcome {
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
-    let (icons, mut objects, cached_keys, calculate, calculations_current) = ctx
+    let (icons, mut objects, cached_keys, calculate, calculations_current, last_spawned_field) = ctx
         .remove_data::<Shared>()
         .map(|h| {
             let h = h.into_inner();
@@ -312,9 +312,9 @@ pub(crate) fn run_in_context(
                     .enumerate()
                     .all(|(i, f)| h.field_keys.get(&crate::host::field_cache_key(&f.name, f.object_id, f.instance_id)) == Some(&i));
             let current = h.calculations_current && Arc::ptr_eq(&h.fields, &fields) && h.calculations == setup.calculations;
-            (icons, h.objects, same_fields.then_some(h.field_keys), h.calculate, current)
+            (icons, h.objects, same_fields.then_some(h.field_keys), h.calculate, current, h.last_spawned_field)
         })
-        .unwrap_or_else(|| (Vec::new(), Default::default(), None, true, false));
+        .unwrap_or_else(|| (Vec::new(), Default::default(), None, true, false, 0));
     let field_keys = cached_keys.unwrap_or_else(|| crate::host::field_indices(&fields));
     objects.retain(|key, _| field_keys.contains_key(key));
     let may_change_pages = !matches!(event.name.as_str(), "Calculate" | "Format" | "Validate" | "Keystroke")
@@ -322,6 +322,7 @@ pub(crate) fn run_in_context(
             fields.iter().any(|f| f.name == *target && f.kind == crate::FieldType::Button && event.target_id.is_none_or(|id| f.object_id == Some(id)))
         });
     ctx.insert_data(RefCell::new(Host {
+        last_spawned_field,
         page_changes: Vec::new(),
         calculate,
         calculations_current,
