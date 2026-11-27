@@ -2302,14 +2302,18 @@ fn table_rows_of_cells_drawn_one_by_one_read_across() {
         }
     }
     assert_eq!(layout(v).plain_text(), "Item Description Qty Price\nR1C1 R1C2 R1C3 R1C4\nR2C1 R2C2 R2C3 R2C4");
-    // A description column wider than a cell (28 letters, 16.8 heights) is one wide segment per row
-    // among narrow ones: still a table. The cells are 3.6 heights apart, so no two are one run.
+    // A description column wider than a cell (up to 28 letters, 16.8 heights) is one wide segment
+    // per row among narrow ones: still a table, its descriptions ragged (28, 21 and 25 letters) as
+    // a table's are, not a column of prose. The cells are 3 to 7 heights apart, so no two are one
+    // run and each is within the same-line gap of the next.
     let mut v = Vec::new();
-    for (r, row) in [["Item", "Description", "Qty"], ["R1C1", "R1C2", "R1C3"], ["R2C1", "R2C2", "R2C3"]].iter().enumerate() {
+    for (r, (row, letters)) in
+        [(["Item", "Description", "Qty"], 28), (["R1C1", "R1C2", "R1C3"], 21), (["R2C1", "R2C2", "R2C3"], 25)].iter().enumerate()
+    {
         let y = 100.0 + 18.0 * r as f32;
         word(&mut v, row[0], 20.0, y, 6.0);
-        word(&mut v, &format!("{}{}", row[1], "x".repeat(28 - row[1].len())), 80.0, y, 6.0);
-        word(&mut v, row[2], 285.0, y, 6.0);
+        word(&mut v, &format!("{}{}", row[1], "x".repeat(letters - row[1].len())), 80.0, y, 6.0);
+        word(&mut v, row[2], 280.0, y, 6.0);
     }
     let t = layout(v).plain_text();
     assert_eq!(t.lines().count(), 3, "{t}");
@@ -2326,6 +2330,18 @@ fn table_rows_of_cells_drawn_one_by_one_read_across() {
     let t = layout(v).plain_text();
     assert_eq!(t.lines().count(), 9, "{t}");
     assert!(t.starts_with("left0xxxxxxxxxxxxxxxxxxxxxxx\nleft1xxxxxxxxxxxxxxxxxxxxxxx\nleft2xxxxxxxxxxxxxxxxxxxxxxx\nmid0"), "{t}");
+    // A column of prose (20 letters a line, 12 heights) with two short segments beside each line,
+    // such as line numbers or margin notes: the lines stay together, and the two short columns
+    // read after them as the two columns they are (review on #8548: the pairs made a row of each
+    // baseline and the lines were interleaved with them).
+    let mut v = Vec::new();
+    for l in 0..3 {
+        let y = 100.0 + 12.0 * l as f32;
+        word(&mut v, &format!("prose{l}{}", "x".repeat(14)), 10.0, y, 6.0);
+        word(&mut v, &format!("ab{l}"), 170.0, y, 6.0);
+        word(&mut v, &format!("cd{l}"), 250.0, y, 6.0);
+    }
+    assert_eq!(layout(v).plain_text(), "prose0xxxxxxxxxxxxxx\nprose1xxxxxxxxxxxxxx\nprose2xxxxxxxxxxxxxx\nab0\nab1\nab2\ncd0\ncd1\ncd2");
     // Narrow columns of prose: 26 letters a line, 15.6 heights, narrower than a cell may be. Their
     // lines fill their column, so they are no cells and the page keeps its columns (review on #8548,
     // seven public pages whose lines run 13.3 to 15.7 heights read across).

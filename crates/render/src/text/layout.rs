@@ -681,11 +681,14 @@ fn prose_members(segs: &[Seg], blocks: &[(Vec<usize>, [f32; 4])]) -> Vec<bool> {
 
 /// Which segments are the cells of a table row: [`ROW_CELLS`] or more segments of one of `lines`
 /// (each line's segments by their left edge), each within [`SAME_LINE_GAP`] of the next, more than
-/// half of them cells: narrower than [`CELL_WIDTH`] heights and not a line of a column of prose
-/// (`prose`, from [`prose_members`]) (#8534). The rows of a barcode drawn with a font join no chain
-/// and are never cells: they join no other text (see [`mark_barcode_rows`]).
+/// half of them cells, narrower than [`CELL_WIDTH`] heights (#8534). A chain that holds a line of
+/// a column of prose (`prose`, from [`prose_members`]) is no row, whatever is beside the line: the
+/// line stays in its paragraph and the short segments beside it (line numbers, margin notes) read
+/// after the column. The rows of a barcode drawn with a font join no chain and are never cells:
+/// they join no other text (see [`mark_barcode_rows`]).
 fn row_cells(segs: &[Seg], lines: &[Vec<usize>], prose: &[bool]) -> Vec<bool> {
-    let cell = |c: usize| segs[c].bbox[2] - segs[c].bbox[0] < CELL_WIDTH * segs[c].h && !prose.get(c).copied().unwrap_or(false);
+    let cell = |c: usize| segs[c].bbox[2] - segs[c].bbox[0] < CELL_WIDTH * segs[c].h;
+    let is_prose = |c: usize| prose.get(c).copied().unwrap_or(false);
     let mut row_cell = vec![false; segs.len()];
     for line in lines {
         let mut start = 0;
@@ -699,7 +702,7 @@ fn row_cells(segs: &[Seg], lines: &[Vec<usize>], prose: &[bool]) -> Vec<bool> {
             }
             let chain = line.get(start..k).unwrap_or_default();
             let cells = chain.iter().filter(|&&c| cell(c)).count();
-            if chain.len() >= ROW_CELLS && cells * 2 > chain.len() && chain.iter().all(|&c| !segs[c].barcode) {
+            if chain.len() >= ROW_CELLS && cells * 2 > chain.len() && chain.iter().all(|&c| !segs[c].barcode && !is_prose(c)) {
                 for &c in chain {
                     if let Some(cell) = row_cell.get_mut(c) {
                         *cell = true;
