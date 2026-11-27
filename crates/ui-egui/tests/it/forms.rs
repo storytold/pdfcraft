@@ -875,8 +875,8 @@ fn the_calendar_picks_today_in_the_fields_format_from_any_month() {
 }
 
 #[test]
-fn lithuanian_calendar_localizes_months_and_weekdays_without_changing_field_values() {
-    if crate::support::skip_without_catalogs("lithuanian_calendar_localizes_months_and_weekdays_without_changing_field_values") {
+fn lithuanian_calendar_localizes_months_and_days_without_changing_field_values() {
+    if crate::support::skip_without_catalogs("lithuanian_calendar_localizes_months_and_days_without_changing_field_values") {
         return;
     }
     use egui_kittest::kittest::Queryable;
@@ -892,16 +892,46 @@ fn lithuanian_calendar_localizes_months_and_weekdays_without_changing_field_valu
     let (y, m, _) = h.state().session.today();
     let months = ["sausis", "vasaris", "kovas", "balandis", "gegužė", "birželis", "liepa", "rugpjūtis", "rugsėjis", "spalis", "lapkritis", "gruodis"];
     h.get_by_label(&format!("{y} m. {}", months[(m - 1) as usize]));
+    // Weekday headers are drawn, not access nodes, so they are read from the painted text.
+    let painted: Vec<String> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
     for day in ["Sk", "Pr", "An", "Tr", "Kt", "Pn", "Št"] {
-        h.get_by_label(day);
+        assert!(painted.iter().any(|text| text == day), "the Lithuanian weekday header {day} is painted: {painted:?}");
     }
-    h.get_by_label("›").click();
+    // A real day cell exposes its full date.
+    let dates = craft_i18n::DateFormat::new(&craft_i18n::Region::from_tag("lt"));
+    let day_label = |year, month| {
+        dates.format(
+            craft_i18n::DateTime { date: craft_i18n::CalendarDate::new(year, month, 15).unwrap(), hour: 0, minute: 0, second: 0 },
+            craft_i18n::DateStyle { date: Some(craft_i18n::DateLength::Long), time: None },
+        )
+    };
+    h.get_by_label(&day_label(y, u8::try_from(m).unwrap()));
+    h.get_by_label("Pirmyn").click();
     h.run_steps(2);
     let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
     h.get_by_label(&format!("{ny} m. {}", months[(nm - 1) as usize]));
-    h.get_by_label("15").click();
+    h.get_by_label(&day_label(ny, u8::try_from(nm).unwrap())).click();
     h.run_steps(4);
-    assert_eq!(value(&h, "due"), vec![format!("{nm:02}/15/{ny}")], "the PDF field keeps its own date format");
+    let saved = vec![format!("{nm:02}/15/{ny}")];
+    assert_eq!(value(&h, "due"), saved, "the PDF field keeps its own date format");
+
+    // An explicit date language overrides the names in the calendar without changing either
+    // the Lithuanian interface controls or the value in the already-filled PDF field.
+    h.set_option("date-language", "en").unwrap();
+    h.run_steps(2);
+    click_field(&mut h, "due", 0);
+    let english = craft_i18n::DateFormat::new(&craft_i18n::Region::from_tag("en"));
+    h.get_by_label(&english.year_month(ny, u8::try_from(nm).unwrap()));
+    h.get_by_label("Pirmyn");
+    assert_eq!(value(&h, "due"), saved, "changing the calendar language must not edit the field");
 }
 
 /// The value of `name` in the PDF saved at `path` in `files`, read back by opening it in a fresh app.
