@@ -12,13 +12,14 @@
 /// PdfCraft as craft-update knows it, with its 128 px icon and accent colour: the update
 /// prompt shows both, and an AppImage's menu entry gets the icon.
 #[cfg(not(target_arch = "wasm32"))]
-pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
+pub const UPDATE_APP: craft::update::app::App = craft::update::app::App {
     icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.pdfcraft.png")),
     accent: Some([0xb7, 0x02, 0x28]),
-    ..craft_update::suite::PDFCRAFT
+    ..craft::update::suite::PDFCRAFT
 };
 
-use crate::control::Host as _;
+/// PdfCraft as the framework's services know it (the host, About, recovery).
+pub const APP_INFO: craft::host::AppInfo = craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: env!("CARGO_PKG_VERSION") };
 
 /// Translate an English UI string into the current language (see [`i18n`]).
 macro_rules! tl {
@@ -36,25 +37,21 @@ macro_rules! tl_ctx {
 }
 pub mod canvas;
 mod chrome;
-mod image_engine;
-pub use combine_grid::ThumbState as CombineThumb;
-pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
+pub use combine_ui::{CombineView, Lock as CombineLock, SortKey};
 mod commands;
 pub mod control;
 mod menus;
 mod properties_session;
 /// Header & footer / watermark / background dialog types (tests and automation).
 pub mod marks {
-    pub use crate::marks_ui::{MarksDraft, PageRange, Subset};
+    pub use crate::marks_ui::MarksDraft;
+    pub use craft::pages::{PageRange, PageScope, Subset};
 }
 pub use content_ui::TextDraft;
 pub use create_ui::Clip;
-pub use link_ui::LinkDraft;
-pub use optimize_ui::{OptimizeDraft, OptimizeTab};
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignGraphic, SignStep};
-mod bidi;
 mod dialogs;
-pub use edit_text_ui::{CropMode, DragTarget, ImageDrag, ImageHandle, ImageSelection};
+pub use edit_text_ui::{CropMode, ImageSelection};
 mod editing;
 mod home;
 mod hotbar;
@@ -64,32 +61,39 @@ pub use print_ui::{
     DefaultPaperSource, Handling as PrintHandling, OptionsSource, PrintDraft, PrinterPapersSource, PrinterSetup, PrinterSource, Spooler,
     TwoSidedSource, Which as PrintWhich, system_printers, system_two_sided,
 };
-pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
+pub use redact_ui::{HiddenDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
-pub mod theme;
 pub mod viewer_prefs;
-mod widgets;
+// PLAN: the lead adds `mod notices; mod icons; mod brand; mod colour_picker; pub mod fonts;` here, and `pub mod settings;` in app.rs, at combine (L-212).
 
 use pdfcraft_engine::{DocId, Session};
 
-pub use canvas::{DocView, RasterMemory};
-#[doc(hidden)]
-pub use editing::download_mime_type;
+pub use app::AppServices;
+#[cfg(not(target_arch = "wasm32"))]
+pub use app::UpdateSource;
+pub use canvas::DocView;
 
 /// Smallest window the shell is laid out for, in egui points (logical pixels, so the OS scale
 /// factor is already applied: 480 points are 600 px at 125 % and 720 px at 150 %). 480 is half of a
 /// 1440-wide screen at 150 % scaling, the tightest common half-screen split on Windows; the mode
 /// bar, tab strip and notice bars adapt below the old 820 minimum (#1913).
 pub const MIN_WINDOW_SIZE: [f32; 2] = [480.0, 520.0];
-pub use editing::{CloseRequest, SaveTarget};
-pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
-pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore, default_dictionary_dir};
-use theme::{ThemeKind, ThemePreference};
+pub use dialogs::properties::PropsTab;
+pub use editing::SaveTarget;
+pub use files::{ExtractOptions, FilePurpose, SplitPlan};
+pub use recovery::AUTOSAVE_SECS;
+pub use workflows::js_dialogs::JsDialog;
 pub use workflows::ocr_verify::{OcrVerify, Phase};
 
 mod app;
+pub(crate) mod brand;
+pub(crate) mod colour_picker;
+pub(crate) mod credits_data;
+pub mod fonts;
 mod frame_guard;
 mod hooks;
+pub(crate) mod icons;
+pub(crate) mod notices;
 mod persist;
 mod platform;
 #[cfg(not(target_arch = "wasm32"))]
@@ -98,82 +102,47 @@ mod state;
 mod tools;
 mod workflows;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod os_clipboard;
-
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use app::same_file;
+pub use app::settings;
 pub(crate) use app::{MAX_AUTHOR_CHARS, copy_refused, date_text_for_pdf, print_refused};
-use canvas::autoscroll;
-use canvas::crop;
-use canvas::fling;
 use canvas::image_pick;
-use canvas::page_cursor;
-use canvas::page_keys;
-use canvas::page_pointer;
-use canvas::page_router;
 pub use canvas::scroll_speed;
 use canvas::signature_drag;
-use canvas::wheel_boost;
-use canvas::wheel_pager;
 use canvas::zoom_snap;
-use dialogs::appearance;
 pub use dialogs::bookmark_styles_ui;
 use dialogs::comment_props;
 use dialogs::convert_colours_ui;
-use dialogs::credits;
 use dialogs::hairlines_ui;
 use dialogs::marks_ui;
 use dialogs::pageboxes;
-use dialogs::palette;
 use dialogs::printer_marks_ui;
-use dialogs::protect;
+use dialogs::rename_ui;
 use dialogs::standards_ui;
 use dialogs::word_count_ui;
 pub use home::folders_ui;
-pub use hooks::{FailedInbox, HostDirtyFn, HostSaveFn, Inbox, OsEvent, OsEventsFn};
+pub use hooks::HostDirtyFn;
 use menus::tab_context;
 use panels::all_tools_ui;
 use panels::comments_panel;
 use panels::format_text_ui;
 use panels::organize_panel;
-use panels::page_selection_ui;
-use panels::search_ui;
 pub use panels::side_panels;
 pub use persist::last_session;
 pub use persist::last_view;
 pub use persist::paper;
 use persist::recovery;
 pub use persist::units;
-#[cfg(not(target_arch = "wasm32"))]
-pub use persist::window_state;
-use platform::drag_pointer;
-use platform::file_filter;
-#[cfg(not(target_arch = "wasm32"))]
-pub use platform::file_watch;
 #[cfg(target_os = "macos")]
 use platform::macos_association;
-pub use platform::motion;
 #[cfg(not(target_arch = "wasm32"))]
 use platform::open_worker;
-#[cfg(not(target_arch = "wasm32"))]
-use platform::pickers;
-pub use platform::portable;
-#[cfg(not(target_arch = "wasm32"))]
-use platform::system_fonts;
 pub use platform::ui_scale;
-pub use platform::updates;
-pub use platform::window_controls;
-#[cfg(test)]
-use state::CopyPage;
 #[cfg(not(target_arch = "wasm32"))]
 use state::OpenRequest;
 pub use state::{
-    CommentClip, CustomDraft, Dialog, DuplicateDraft, LeftPanel, LinkOrigin, Mode, NumberDraft, OpenOutcome, PageClip, PagePropsDraft,
-    PasswordPrompt, PendingLink, PendingRemoteLink, PropsTab, QuickTool, RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel,
-    UnlockPrompt,
+    CommentClip, LeftPanel, LinkOrigin, Mode, OpenOutcome, PageClip, PagePropsDraft, PasswordPrompt, PendingLink, PendingRemoteLink, QuickTool,
+    RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel, UnlockPrompt,
 };
-use state::{DocumentCopyJob, GridFile};
 pub use tools::bulk_fields;
 use tools::calc_order_ui;
 use tools::camera_ui;
@@ -191,8 +160,6 @@ use tools::redact_ui;
 use tools::sign_ui;
 use tools::stamps_ui;
 use tools::tags_ui;
-use widgets::icon_data;
-pub use widgets::icons;
 use workflows::a11y_ui;
 use workflows::actions_ui;
 use workflows::combine_grid;
@@ -201,6 +168,8 @@ use workflows::compare_ui;
 use workflows::create_ui;
 use workflows::export_ui;
 use workflows::files;
+pub(crate) use workflows::job_count::JobCount;
+use workflows::js_dialogs;
 use workflows::js_ui;
 #[cfg(target_arch = "wasm32")]
 use workflows::ocr_route;
@@ -214,109 +183,83 @@ use workflows::print_ui;
 use workflows::scan_clean_ui;
 use workflows::web_print;
 
-/// Files dropped on a document's page grid or its Pages panel.
-struct GridDrop {
-    doc: pdfcraft_engine::DocId,
-    /// Dropped on the Pages panel (its gap decides where they go), not the page grid.
-    panel: bool,
-    files: Vec<GridFile>,
-    /// When to stop waiting for the pointer (monotonic: `logic` may run without a UI pass).
-    deadline: web_time::Instant,
-}
+/// A background job queue of the app, built over the host's jobs and the app's wake.
+type Queue<K, R> = craft::host::queue::JobQueue<K, R>;
 
-/// A whole-document copy reading its pages off the UI thread (in place on the web, which has no
-/// threads). Dropping it (a new copy, the document closed) stops the reading.
-struct DocumentCopy {
-    doc: DocId,
-    rx: std::sync::mpsc::Receiver<String>,
-    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl DocumentCopy {
-    fn start(doc: DocId, job: DocumentCopyJob, ctx: &egui::Context) -> DocumentCopy {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let (stop, ctx) = (cancel.clone(), ctx.clone());
-            let spawned = std::thread::Builder::new().name("copy-document-text".into()).spawn(move || {
-                if let Some(text) = job.text(&stop) {
-                    let _ = tx.send(text);
-                    ctx.request_repaint();
-                }
-            });
-            if let Err(e) = spawned {
-                log::warn!("copying the document's text: {e}");
-            }
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = ctx;
-            if let Some(text) = job.text(&cancel) {
-                let _ = tx.send(text);
-            }
-        }
-        DocumentCopy { doc, rx, cancel }
-    }
-}
-
-impl Drop for DocumentCopy {
-    fn drop(&mut self) {
-        self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-}
-
+/// A file being opened in the background, waiting for the open queue's answer.
 #[cfg(not(target_arch = "wasm32"))]
 struct PendingOpen {
     token: u64,
-    receiver: std::sync::mpsc::Receiver<open_worker::ResultMessage>,
     name: String,
     path: Option<String>,
-    stamp: Option<file_watch::Stamp>,
+    stamp: Option<craft::platform::watch::FileStamp>,
     activate: bool,
     after_open: Option<pdfcraft_render::RemoteDestination>,
-    recovered: Option<RecoveryMeta>,
+    recovered: Option<craft::platform::autosave::RecoveryEntry>,
     then: Option<&'static str>,
-    display_override: Option<(canvas::PageLayout, bool)>,
-    /// A reply taken from `receiver` and kept back for later (a password prompt waiting for an
+    display_override: Option<(craft::pages::PageDisplay, bool)>,
+    /// An answer taken from the queue and kept back for later (a password prompt waiting for an
     /// earlier file's password retry).
     ready: Option<open_worker::ResultKind>,
+    /// Reopen Closed Tab asked for it: its closed-tab entry goes once it has opened, and stays when it fails.
+    reopen: bool,
 }
 
-/// A file named while the worker's queue was full: submitted once it has room.
-#[cfg(not(target_arch = "wasm32"))]
-struct DeferredOpen {
-    path: String,
-    after_open: Option<pdfcraft_render::RemoteDestination>,
-    then: Option<&'static str>,
-    display_override: Option<(canvas::PageLayout, bool)>,
-}
-
-/// Puts `(html, plain_text)` on a clipboard; `false` when it couldn't, and plain-text Copy is
-/// used instead.
-pub type HtmlClipboard = Box<dyn FnMut(&str, &str) -> bool>;
-
-/// A named destination being looked up off the UI thread: reading a large document's name tree
-/// takes a noticeable moment.
+/// A named destination being looked up in a document.
 #[cfg(not(target_arch = "wasm32"))]
 struct PendingDestination {
     doc: DocId,
     name: String,
-    receiver: std::sync::mpsc::Receiver<Option<(usize, pdfcraft_render::DestView)>>,
 }
 
 pub struct PdfCraftApp {
+    /// The app's services: jobs, files, settings sections, commands. Every queue is built from it.
+    pub(crate) host: std::sync::Arc<craft::host::Host>,
+    /// Asks for a frame from any thread; every queue calls it when a job finishes.
+    pub(crate) wake: craft::host::Wake,
+    /// Files the operating system, another launch, a drop or the embedding page asked to open.
+    intake: craft::platform::open::FileIntake,
+    /// The native file panels the host's file service asks through; pumped every pass.
+    #[cfg(not(target_arch = "wasm32"))]
+    file_panels: Option<craft::dialogs::service::FilePanels>,
+    /// The settings store the preferences are read from and written to.
+    pub(crate) settings: Option<settings::Store>,
+    /// The dialogs, prompts and notices the app has open, and their results.
+    pub dialogs: craft::ui::dialog::DialogHost,
+    /// The questions an open asks (password, unlock, links, full screen) on the dialog host.
+    pub(crate) prompts: dialogs::prompts::OpenPrompts,
+    /// Preferences, while its window is open.
+    pub(crate) preferences: Option<dialogs::preferences::PreferencesSession>,
+    /// Keyboard Shortcuts, while its window is open.
+    pub(crate) shortcuts: Option<dialogs::shortcuts::ShortcutsSession>,
     /// Split view (`panes`); which pane shows each tab is its view's.
     pub panes: panes::Panes,
-    /// Tools side and pane widths; which panes are open is `left_open` and `right`.
-    pub side_panels: side_panels::SidePanels,
+    /// Where the side panels are docked, their sizes and which are open. One `Arc` across frames: the dock area keys
+    /// what it derives on the workspace's revision, so edits go through `Arc::make_mut`.
+    pub dock: std::sync::Arc<craft::behavior::dock::Workspace<side_panels::PanelId>>,
+    /// The app-scope command states the runtime reads, written each frame only when a command's state changed.
+    pub(crate) command_states: craft::ui::contract::Tracked<craft::ui::runtime::commands::CommandStates>,
+    /// What the dock reads of the panels' specs, refreshed before each dock pass.
+    pub(crate) dock_specs: craft::ui::contract::Tracked<side_panels::DockSpecs>,
+    /// The dock panels shown this pass (the rest hidden), moved only when the set changes.
+    pub(crate) dock_shown: craft::ui::contract::Tracked<std::collections::BTreeSet<craft::ui::docking::PanelKey>>,
+    /// The side the rail of panel buttons sits on.
+    pub rail_side: craft::behavior::DockSide,
     pub session: Session,
     /// The interface language signature status captions were last drawn in.
     pub(crate) status_captions_lang: Option<i18n::Lang>,
     pub views: Vec<DocView>,
     pub(crate) closed_tabs: Vec<String>,
+    /// The Rename dialog's name being typed.
+    pub(crate) rename_draft: Option<rename_ui::RenameDraft>,
+    /// A name typed in Rename whose "Save and Rename" save did not go through; the dialog opens
+    /// again with it on the next frame.
+    pub(crate) rename_returned: rename_ui::Returned,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
+    /// The active document during the previous frame, so a deferred keyboard Save from that frame
+    /// never saves a different document that became active before the next frame's `before_input`.
+    pub(crate) last_frame_active: Option<DocId>,
     pub mode: Mode,
     /// Workspace used for newly opened PDFs; independent of PDF Initial View metadata.
     pub default_mode: Mode,
@@ -324,20 +267,26 @@ pub struct PdfCraftApp {
     /// Documents and view). Continuous scrolling at fit width by default, which never snaps
     /// between pages.
     pub view_defaults: canvas::ViewDefaults,
+    /// Preferences ▸ Highlight fields for newly opened forms (saved as `highlight_fields`).
+    pub(crate) highlight_fields: bool,
     /// The unit page sizes and margins are shown in (Preferences ▸ Documents and view).
     pub units: units::Unit,
     /// The paper Create ▸ Blank page makes (#5644): the system region's.
     pub blank_paper: paper::Paper,
-    /// The Preferences ▸ Date format box while it's being edited, or while it holds an invalid
-    /// pattern (the session keeps the last valid one).
-    pub date_format_draft: Option<String>,
     /// Explicit CLI/control mode lasts for this session and is never persisted.
     mode_override: Option<Mode>,
     pub left: LeftPanel,
-    pub left_open: bool,
-    pub right: Option<RightPanel>,
     /// The side panel F4 reopens: the one open last.
     pub(crate) last_right: RightPanel,
+    /// The height of the notice bars over the document, as the last pass drew them: the dock keeps the floating
+    /// toolbar below them.
+    pub(crate) notice_inset: f32,
+    /// Whether the Tools pane was in the dock when the floating toolbar was last placed: the toolbar follows the page area's
+    /// left edge as the pane closes and opens.
+    pub(crate) toolbar_tools_open: bool,
+    /// Whether the window was narrow (under [`panels::side_panels::NARROW_WINDOW`]) when the Tools pane's width was last set: a
+    /// narrow window keeps the pane at production's width, a wide one gives it the width Format text needs.
+    pub(crate) window_narrow: bool,
     /// The right panel that was open when the user switched to Read mode, which starts with the
     /// panes closed; leaving Read mode brings it back unless the user opened or closed a pane in
     /// Read mode meanwhile.
@@ -354,52 +303,48 @@ pub struct PdfCraftApp {
     portfolio_initial: Option<(DocId, String)>,
     /// The document whose tab [`Self::present_portfolios`] last saw active.
     portfolio_seen: Option<DocId>,
-    /// Browser file reads still under way (drops, the web file picker): each file opens in front
-    /// when it arrives.
-    #[cfg(target_arch = "wasm32")]
-    web_reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// A portfolio's file list is showing in place of this panel (`None`: the panel was
     /// closed), given back when its tab is left.
     portfolio_panel: Option<Option<RightPanel>>,
     pub quick_tool: QuickTool,
-    /// The tool to go back to when Space, held for a temporary Hand, is released.
-    space_hand: Option<QuickTool>,
     /// The tool before full screen, given back on leaving it (see [`Self::apply_full_screen`]).
     full_screen_tool: Option<QuickTool>,
     /// Comment author, per-tool colours and widths, pin.
     pub comment_prefs: comments::CommentPrefs,
+    /// The colours picked last in the comment tools' colour pickers.
+    pub(crate) recent_colours: comments::RecentColours,
+    /// The continuations of the colour pickers open on the dialog host.
+    pub(crate) colour_picks: colour_picker::ColourPicks,
     pub(crate) hotbar: hotbar::Hotbar,
-    /// Resolved colours, including the current OS theme when following the system.
-    pub theme: ThemeKind,
-    pub theme_preference: ThemePreference,
+    /// Preferences ▸ Appearance: light, dark, or as the system says.
+    pub theme_preference: craft::theme::ModeChoice,
+    /// The suite the Appearance page reads its themes from: an in-memory one, as PdfCraft keeps
+    /// its own appearance in its settings rather than in the suite's shared selection.
+    pub(crate) suite: craft::theme_store::SuiteClient,
     /// The reading-colours preference (Preferences ▸ Reading colours): applied to every open
     /// document, and documents open with it (Acrobat's Replace Document Colors).
     pub reading_colors: pdfcraft_render::ReadingColors,
     /// App-wide page decoration only; never part of a PDF edit or render request.
     pub show_page_edge_shadows: bool,
-    /// The Linux portal is enabled only by the native host, and starts on the first System choice.
-    #[cfg(target_os = "linux")]
-    desktop_theme: Option<pdfcraft_platform::desktop_theme::DesktopTheme>,
-    #[cfg(target_os = "linux")]
-    desktop_theme_enabled: bool,
     /// How far a mouse-wheel notch scrolls.
     pub scroll_speed: scroll_speed::ScrollSpeed,
     /// Preferences ▸ Invert middle-button drag: the middle button's pan or auto-scroll moves the
     /// view the other way. Off by default.
     pub invert_middle_drag: bool,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
-    pub animation_effects: motion::AnimationEffects,
-    /// Whether the system asked for no animations, and how the desktop app asks it.
-    pub motion: motion::Motion,
+    pub animation_effects: craft::theme::MotionChoice,
+    /// Preferences ▸ Esc leaves full screen (on by default). Off, only ⌘L / Ctrl+L leaves it, as
+    /// for a kiosk display; Esc still closes the find bar and the like.
+    pub full_screen_escape_exits: bool,
+    /// Preferences ▸ Full screen fills the screen with one page at a time (on by default). Off,
+    /// full screen keeps the normal page display and the reading position.
+    pub full_screen_fill: bool,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
-    /// Preferences ▸ Interface size as a factor, or `None` to follow [`Self::system_text_scale`].
+    /// Preferences ▸ Interface size as a factor, or `None` for the usual size.
     pub ui_scale: Option<f32>,
-    /// The desktop's text scaling (GNOME's text scaling factor), which the desktop app reads at
-    /// launch. 1.0 elsewhere, so tests and screenshots don't depend on the machine.
-    pub system_text_scale: f32,
-    /// The interface size last given to egui ([`ui_scale::sync`]).
-    ui_scale_applied: Option<f32>,
+    /// Preferences ▸ Use system title bar.
+    pub title_bar_choice: craft::window::policy::TitleBarPref,
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
     pub flatten_fill_sign_on_save: bool,
     /// Ask on the first save after Fill & Sign places a signature or initials whether to lock
@@ -408,13 +353,12 @@ pub struct PdfCraftApp {
     /// Documents with a Fill & Sign signature placed since their last save, asked about on
     /// saving (#2149). Not part of the recovery data: a recovered document isn't asked.
     pub(crate) placed_signatures: std::collections::HashSet<pdfcraft_engine::DocId>,
-    /// A save waiting behind [`Dialog::LockSignatures`], and its Don't ask again box.
+    /// A save waiting behind the Lock signatures question.
     pub(crate) pending_lock: Option<editing::PendingLock>,
     /// The document whose lock question was just answered: the save that follows the answer
     /// doesn't ask again. The placed-signature mark itself stays until that save succeeds, so a
     /// save that fails or is cancelled asks again next time.
     pub(crate) lock_answered: Option<pdfcraft_engine::DocId>,
-    pub(crate) lock_remember: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,
     pub fill_tool: fill_sign::FillTool,
@@ -430,9 +374,11 @@ pub struct PdfCraftApp {
     /// The border new Fill & Sign text starts each launch with, kept across launches: what Make
     /// Current Properties Default last took from typed text (none at first).
     pub fill_text_default: fill_sign::TextBorder,
-    pub dialog: Option<Dialog>,
-    /// How to ask for the latest release (the desktop app sets it; see `updates`).
-    pub(crate) updates: updates::Updates,
+    /// The update check, its prompt and the self-update.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) updater: craft::update::updater::Updater,
+    /// The desktop app asks for a newer release once it has started (Preferences permitting).
+    pub(crate) startup_check: bool,
     /// Lists the Print dialog's printers in the background (the desktop app sets it; see
     /// [`PrinterSource`]).
     pub printer_source: Option<PrinterSource>,
@@ -451,7 +397,6 @@ pub struct PdfCraftApp {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) print_tasks: print_ui::PrintTasks,
     pub palette_open: bool,
-    pub palette_query: String,
     pub all_tools_expanded: bool,
     /// The All tools view fills the workspace (its sidebar's expand button).
     pub all_tools_full: bool,
@@ -462,6 +407,10 @@ pub struct PdfCraftApp {
     pub recent: Vec<RecentFile>,
     /// How many recent files to keep, 0 for no list (Preferences ▸ Documents and view, #5572).
     pub recent_limit: usize,
+    /// Home's recent files as cards or as a list.
+    pub recent_view: craft::ui::shell::RecentView,
+    /// Home's recent files' order.
+    pub recent_sort: craft::ui::shell::RecentSort,
     /// Preferences: reopen the files that were open when PdfCraft last closed (#442).
     pub reopen_last_session: bool,
     /// Restore last view settings when reopening documents (Preferences ▸ Documents and view;
@@ -471,9 +420,9 @@ pub struct PdfCraftApp {
     pub last_views: Vec<last_view::LastView>,
     /// The files open when PdfCraft last closed, read from the settings for
     /// [`PdfCraftApp::reopen_last_files`].
-    pub last_session: last_session::LastSession,
-    /// Quitting closes unsaved tabs one by one: what was open when the quit began.
-    quit_session: Option<last_session::LastSession>,
+    pub last_session: craft::platform::session::Session,
+    /// What a quit that closes unsaved tabs one by one began with.
+    session_keeper: craft::platform::session::SessionKeeper,
     /// Preferences: reload a document when its file changes on disk (#431).
     pub reload_changed_files: bool,
     /// Preferences: ask for a newer release when the desktop app starts (#5737). Off, the app
@@ -490,125 +439,87 @@ pub struct PdfCraftApp {
     pub always_default_view: bool,
     /// Open documents' files, watched for changes on disk.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) watch: file_watch::FileWatch,
-    /// One native worker prepares opened documents without owning app or session state.
+    pub(crate) watch: craft::platform::watch::FileWatch<DocId>,
+    // PLAN: assumed Option<DocId>, the document whose changed file waits to be reloaded (pdf-shell-w14).
+    /// A document whose changed file waits to be reloaded.
     #[cfg(not(target_arch = "wasm32"))]
-    open_worker: Option<open_worker::OpenWorker>,
+    pub(crate) reload_request: Option<DocId>,
+    /// Opened files read and prepared off the UI thread, by open token.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) opens: Queue<u64, open_worker::ResultKind>,
     #[cfg(not(target_arch = "wasm32"))]
     pending_opens: Vec<PendingOpen>,
-    /// Files waiting for room in the worker's bounded queue, in the order they were named.
-    #[cfg(not(target_arch = "wasm32"))]
-    deferred_opens: std::collections::VecDeque<DeferredOpen>,
     /// The open retrying a closed password prompt's file with its password: replies behind it
     /// wait for it.
     #[cfg(not(target_arch = "wasm32"))]
     password_retry: Option<u64>,
+    /// Named destinations being looked up off the UI thread: reading a large document's name tree
+    /// takes a noticeable moment.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) named_destinations: Queue<DocId, Option<(usize, pdfcraft_render::DestView)>>,
+    /// The documents a lookup in `named_destinations` is for, and the name asked.
     #[cfg(not(target_arch = "wasm32"))]
     pending_destinations: Vec<PendingDestination>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.
     #[cfg(not(target_arch = "wasm32"))]
-    launch_layout: Option<(canvas::PageLayout, bool)>,
+    launch_layout: Option<(craft::pages::PageDisplay, bool)>,
     #[cfg(not(target_arch = "wasm32"))]
     launch_display_target: Option<DocId>,
-    #[cfg(all(test, not(target_arch = "wasm32")))]
-    open_prepare_gate: Option<std::sync::Arc<open_worker::PrepareGate>>,
+    /// The file picks asked of the host's file service and not answered yet.
+    pub(crate) picks: app::picks::Picks,
+    /// Where a save that asks first (Save As, a replace question) stands. The web saves through the
+    /// browser's own picker instead ([`editing::save::PendingSave`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) save_flow: craft::dialogs::save::SaveFlow<DocId>,
+    /// A save waiting for the answer to a question it asked.
+    pub(crate) pending_save: Option<editing::save::PendingSave>,
     /// Folders pinned to Home, and what they held when last listed.
     pub pinned: folders_ui::PinnedFolders,
+    /// The pinned folders being listed off the UI thread.
+    pub(crate) pinned_jobs: Queue<(), Vec<folders_ui::FolderListing>>,
     /// The recent files restored from settings, checked off the UI thread (#5682).
     recent_check: persist::recent_check::RecentCheck,
-    /// Failures of the Reveal worker, taken each frame and shown as a notification.
-    #[cfg(not(target_arch = "wasm32"))]
-    reveal_errors: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     /// Tools pinned to Home, in user-defined order.
     pub pinned_tools: Vec<String>,
-    /// Search query for the Pin a tool selection dialog.
-    pub pin_tool_search: String,
-    pub toast: Option<(String, f64)>,
-    /// The form script message the toast shows now, if it shows one: drawn with its title and
-    /// icon (#4293).
-    pub toast_script: Option<pdfcraft_engine::js::Message>,
-    /// Form script messages waiting for the toast, in the order the scripts showed them: each
-    /// takes the toast when the one before it is gone, so every one is seen (#4294).
+    /// Form script messages waiting for a notice, in the order the scripts showed them, so every
+    /// one is seen (#4294).
     pub script_messages: std::collections::VecDeque<pdfcraft_engine::js::Message>,
-    /// Form script messages the waiting queue had no room for, since the toast last said how many.
+    /// Form script messages the waiting queue had no room for, since a notice last said how many.
     pub script_messages_dropped: u64,
-    /// The left-out count the toast is saying now ([`Self::next_script_message`]): put back to be
-    /// said again if another notice replaces the toast before it has been shown its time.
-    pub toast_dropped: u64,
-    /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
-    pub integrated_titlebar: bool,
-    /// Set when the desktop leaves the window frame to the app (GNOME on Wayland): the tab strip
-    /// carries these window buttons and the window's edges resize it.
-    pub window_controls: Option<window_controls::Layout>,
-    /// Preferences ▸ Use system title bar: where `window_controls` is set, give the window back
-    /// winit's frame instead of drawing the header bar (#1001).
-    pub system_title_bar: bool,
-    /// Whether the window currently has the app's header bar (`None` until the first frame).
-    app_frame_shown: Option<bool>,
+    /// The form script message a notice shows now, drawn with its title and icon (#4293).
+    pub(crate) script_shown: Option<js_ui::ScriptShown>,
+    /// The notices posted since the last pass, which `notices::show` hands to the toast service.
+    pub(crate) posted_notices: Vec<craft::ui::notices::PostedNotice>,
+    /// The text of the last refused edit's notice, for a dialog that shows the refusal in place.
+    pub(crate) last_edit_refusal: Option<String>,
+    /// The notice center that posts them and shows the cards.
+    pub(crate) notices: craft::ui::notices::NoticeCenter,
+    /// The changes to progress cards made since the last pass, which `notices::show` applies in order.
+    pub(crate) progress_requests: Vec<notices::ProgressRequest>,
+    /// The progress card of each background job that shows one.
+    pub(crate) progress_cards: std::collections::HashMap<crate::notices::ProgressKey, craft::ui::runtime::toast::ToastId>,
     pub password_prompt: Option<PasswordPrompt>,
-    /// Copy of a whole document's text (#2639) whose pages are being read off the UI thread.
-    document_copy: Option<DocumentCopy>,
+    /// Whole-document text copies (#2639) reading their pages off the UI thread.
+    pub(crate) text_copies: Queue<DocId, String>,
+    /// Reveal-in-file-manager calls, which can block on a slow mount; their failures are shown by `drain_reveals`.
+    pub(crate) reveal_jobs: Queue<std::path::PathBuf, Result<(), String>>,
     pub unlock_prompt: Option<UnlockPrompt>,
-    pub full_screen: bool,
-    /// Files delivered asynchronously (web drag-and-drop, web file picker).
-    pub inbox: Inbox,
-    /// The browser's startup `?file=` download. Unlike a deliberate Open or drop, a late
-    /// arrival opens in the background once the user has started working (#171).
-    pub startup_inbox: Inbox,
-    startup_superseded: bool,
-    /// Asynchronous opens that failed (web `?file=` fetches), shown as a notice.
-    pub failed_inbox: FailedInbox,
-    /// Mirrors "some document has unsaved work, or an OCR review is open" each frame, so the web page's `beforeunload` handler can read it (#812).
-    pub unsaved_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Requests from the operating system, polled every frame (macOS Apple events).
-    pub os_events: Option<OsEventsFn>,
-    /// Save delivers to the embedding page instead of downloading (web, see [`HostSaveFn`]).
-    pub host_save: Option<HostSaveFn>,
+    /// Standard, full screen with the menu bar, or full screen.
+    pub screen_mode: craft::ui::shell::ScreenMode,
     /// Reports unsaved work, or an open OCR review, to the embedding page (web, see [`HostDirtyFn`]).
     pub host_dirty: Option<HostDirtyFn>,
-    /// A pending "save changes?" question (closing a dirty tab or quitting).
-    pub close_request: Option<CloseRequest>,
-    /// The button of the "save changes?" question the keyboard has chosen; Save when it opens.
-    pub(crate) save_prompt_button: dialogs::PromptButton,
-    /// `attend_save_prompt` has seen the pending "save changes?" question. It is false again once
-    /// the question is answered, so the next document's question is told apart from it.
-    save_prompt_seen: bool,
-    /// The "save changes?" question asked for the user's attention and the request still stands
-    /// (see `attend_save_prompt`).
-    save_prompt_attention: bool,
-    /// A save waiting behind [`Dialog::OverwriteChanged`] (the web build has no files to check).
-    #[cfg(not(target_arch = "wasm32"))]
-    pub pending_overwrite: Option<editing::PendingOverwrite>,
-    /// Save to this path instead of asking (tests and automation).
-    pub save_override: Option<String>,
-    /// Document Properties ▸ Description fields being edited: (document, Title/Author/Subject/Keywords).
-    pub props_draft: Option<(DocId, [String; 4])>,
-    /// Attachment description being edited: (document, name-tree key, description).
-    pub attachment_description_draft: Option<(DocId, u64, String, String, String, bool)>,
-    /// Document Properties ▸ Initial View (and reading options) being edited.
-    pub view_draft: Option<(DocId, pdfcraft_engine::InitialView)>,
-    /// Document Properties ▸ Custom being edited.
-    pub custom_draft: Option<(DocId, CustomDraft)>,
+    /// The "save changes?" questions of a closing tab or a quit, asked one document at a time.
+    pub(crate) close_guard: Option<craft::quit::CloseGuard<DocId>>,
+    /// The open `UnsavedChangesDialog` belonging to `close_guard`, kept across a frame panic.
+    pub(crate) close_guard_dialog: Option<craft::ui::dialog::DialogId>,
     /// Original values and document revision for the editable Properties tabs.
     pub(crate) props_session: Option<properties_session::Draft>,
-    /// Files picked asynchronously for combine / insert (web).
-    pub requests: files::Requests,
-    /// Native file pickers in flight (they never block the frame; see `pickers`).
-    #[cfg(not(target_arch = "wasm32"))]
-    pickers: pickers::Pickers,
-    /// Pick these files instead of showing a picker (tests and automation).
-    #[cfg(not(target_arch = "wasm32"))]
-    pub pick_override: Option<Vec<String>>,
-    /// Write exported files (split) here instead of asking (tests and automation).
-    pub export_dir_override: Option<String>,
-    /// Split dialog settings.
-    pub split_draft: SplitDraft,
-    pub extract_draft: ExtractDraft,
-    pub rotate_draft: RotateDraft,
     /// Summarize Comments: sort order.
     pub summary_sort: pdfcraft_engine::SummarySort,
+    /// The Summarize Comments dialog, while it is open.
+    pub(crate) summarize_dialog: Option<craft::ui::dialog::DialogId>,
     /// The signing dialogs' state.
     pub sign_draft: Option<SignDraft>,
     /// A dynamic form's preSign step, run when signing a field began: the document and its undo
@@ -617,13 +528,17 @@ pub struct PdfCraftApp {
     /// Digital ID files the user has created or added.
     pub digital_ids: Vec<DigitalIdEntry>,
     /// Signatures panel: expanded entries (field names).
-    pub sig_expanded: Vec<String>,
+    pub sig_open: craft::ui::list::OpenSet<String>,
     /// Accessibility Checker: options, the last check, and rules skipped by hand.
     pub a11y_options: a11y_ui::A11yOptions,
-    /// Scan & OCR: the Recognize Text choices, the running job, and (tests) run it inline.
+    /// Scan & OCR: the Recognize Text choices and the running job.
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
-    pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    pub ocr_batch: Option<std::sync::Arc<JobCount>>,
+    /// Pages being recognized, by document.
+    pub(crate) ocr_runs: Queue<DocId, Result<Vec<pdfcraft_engine::ocr::OcrPage>, String>>,
+    /// Recognize Text in Multiple Files: the batch's summary.
+    pub(crate) ocr_batches: Queue<(), String>,
     /// The web build's files being read in Web Workers (progress in `ocr_batch`).
     #[cfg(target_arch = "wasm32")]
     ocr_web_batch: Option<ocr_web::Batch>,
@@ -633,8 +548,8 @@ pub struct PdfCraftApp {
     ocr_web_waiting: Option<ocr_ui::WaitingFiles>,
     /// Scan & OCR ▸ Correct recognized text: the OCR Verify screen (its state, never persisted).
     pub ocr_verify: ocr_verify::OcrVerify,
-    /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
-    pub run_inline: bool,
+    /// The OCR Verify screen's runs and re-reads.
+    pub(crate) verify_jobs: Queue<ocr_verify::VerifyJob, ocr_verify::VerifyDone>,
     /// Frames in a row whose logic or drawing panicked, and whether this frame's did
     /// (`frame_guard`, #3914).
     panicking_frames: u32,
@@ -645,36 +560,35 @@ pub struct PdfCraftApp {
     /// Tests: the part of the next frame that panics on purpose.
     #[cfg(test)]
     panic_next: Option<frame_guard::FramePart>,
-    /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
-    /// files to use instead of a picker.
+    /// Action Wizard: the user's actions and the running action.
     pub custom_actions: Vec<pdfcraft_engine::actions::Action>,
-    pub wizard: actions_ui::Wizard,
-    pub action_run: Option<std::sync::Arc<std::sync::Mutex<actions_ui::RunProgress>>>,
-    pub action_files_override: Option<Vec<String>>,
-    /// Standards ▸ PDF/A: level and last result.
+    pub action_run: Option<std::sync::Arc<JobCount>>,
+    pub(crate) action_jobs: actions_ui::ActionJobs,
+    /// Standards ▸ PDF/A: the level.
     pub pdfa: standards_ui::PdfaState,
     /// Compare files: the chosen older document and the last result.
     pub compare_old: Option<DocId>,
     /// The Compare Files dialog's Pages field: the new file's pages to compare, empty for all.
     pub compare_pages: String,
     pub compare: Option<compare_ui::CompareState>,
-    /// The JavaScript console and the Document JavaScripts draft.
+    /// The JavaScript console.
     pub js_console: js_ui::JsConsole,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) script_pending: Option<script_dialog::Pending>,
-    pub doc_js: js_ui::DocJsDraft,
+    /// The JavaScript dialog open (the console, the document's scripts), if any.
+    pub js_dialog: Option<js_dialogs::JsDialog>,
     pub a11y: a11y_ui::A11yState,
     pub(crate) tags_state: tags_ui::State,
     /// Rules skipped by hand, for the document they were skipped in.
     pub a11y_skipped: std::collections::HashSet<(DocId, pdfcraft_engine::a11y::Rule)>,
-    pub alt_draft: a11y_ui::AltDraft,
     /// List the OS key store's signing identities among the digital IDs (the desktop app).
     pub os_key_store_ids: bool,
     pub cert_viewer: Option<sign_ui::CertViewer>,
-    /// The last space audit.
-    pub space_audit: Vec<pdfcraft_engine::optimize::SpaceUse>,
+    /// The last space audit, written by its job and read by the dialog.
+    pub space_audit: std::sync::Arc<std::sync::RwLock<Vec<pdfcraft_engine::optimize::SpaceUse>>>,
     /// The document and edit generation `space_audit` was measured from.
     pub(crate) space_audit_of: Option<(DocId, u64)>,
+    pub(crate) space_audit_jobs: optimize_ui::SpaceAuditJobs,
     /// Combine files: the files staged so far.
     pub combine_draft: Vec<combine_ui::CombineFile>,
     /// The combine list's field-name conflict preview (computed once per list, never saved).
@@ -682,31 +596,27 @@ pub struct PdfCraftApp {
     /// The Combine files tab: whether it is open, shown, its selection and undo history.
     pub combine_tab: combine_ui::CombineTab,
     /// The Combine files table's column order and widths (kept in the settings).
-    pub combine_columns: combine_ui::Columns,
+    pub combine_columns: craft::ui::contract::ColumnLayout,
     /// Combine files as thumbnails or as the table (kept in the settings).
     pub combine_view: combine_ui::CombineView,
-    /// How large the Combine grid draws its cards (1.0 = the usual; kept in the settings). Set
-    /// with [`PdfCraftApp::set_combine_zoom`].
-    pub combine_zoom: f32,
+    /// How large the Combine grid draws its cards (1.0 = the usual; kept in the settings).
+    pub combine_zoom: f64,
     /// How large Organize pages draws its grid, for every document (1.0 = the usual; kept in
     /// the settings).
-    pub organize_zoom: f32,
-    /// The Combine grid's thumbnails: rendered off the UI thread, a few at a time.
-    pub(crate) combine_thumbs: combine_grid::Thumbs,
+    pub organize_zoom: f64,
     /// Images waiting for the resolution choice (released on cancel).
     pub image_import: Option<create_ui::ImageImport>,
-    /// The custom stamp library, and the stamp being created.
+    /// The custom stamp library.
     pub custom_stamps: Vec<stamps_ui::CustomStamp>,
-    pub stamp_draft: stamps_ui::StampDraft,
-    /// PDF Optimizer choices.
-    pub optimize_draft: OptimizeDraft,
+    /// Create custom stamp, while it is open.
+    pub(crate) stamp_dialog: Option<stamps_ui::CreateStampDialog>,
     /// The running optimization (Optimize PDF ▸ Advanced optimization).
     pub optimize_run: Option<optimize_ui::OptimizeRun>,
+    pub(crate) optimize_jobs: optimize_ui::OptimizeJobs,
     /// Scan & OCR ▸ Enhance scanned file: the dialog's choices and the running clean-up.
     pub scan_clean_draft: scan_clean_ui::ScanCleanDraft,
     pub scan_clean_run: Option<scan_clean_ui::ScanCleanRun>,
-    /// A background job's progress card (see [`widgets::progress_notice`]).
-    pub progress_notice: Option<widgets::ProgressNotice>,
+    pub(crate) scan_cleans: Queue<DocId, Result<pdfcraft_engine::scan_clean::ScanCleaned, pdfcraft_engine::EditError>>,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
     /// Copied comments (XFDF), to paste into this or another document (M14).
@@ -715,94 +625,56 @@ pub struct PdfCraftApp {
     pub object_clipboard: Option<pdfcraft_engine::ObjectClipboard>,
     /// What copying them put on the system clipboard (see [`app::ObjectClipMark`]).
     pub(crate) object_clip_mark: app::ObjectClipMark,
-    /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
-    grid_drop: Option<GridDrop>,
-    /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the
-    /// system clipboard (tests turn that off).
+    /// The last snapshot (width, height, RGBA), also put on the clipboard.
     pub last_snapshot: Option<(u32, u32, pdfcraft_render::Pixels)>,
     /// What `last_snapshot` was taken of: (document, page, rectangle in page view points).
     last_snapshot_of: Option<(DocId, usize, [f32; 4])>,
     /// The last image copied with Copy Image (width, height, straight RGBA), also put on the
-    /// system clipboard when `system_clipboard` is on.
+    /// clipboard.
     pub last_copied_image: Option<(u32, u32, Vec<u8>)>,
     /// The last image copied in its original format (file name, bytes), also put on the
-    /// system clipboard as a file when `system_clipboard` is on.
+    /// clipboard as a file.
     pub last_copied_file: Option<(String, Vec<u8>)>,
-    pub system_clipboard: bool,
-    /// Where Copy with formatting puts its HTML and the plain alternative instead of the system
-    /// clipboard, when `system_clipboard` is on (tests).
-    pub html_clipboard_override: Option<HtmlClipboard>,
-    /// The system clipboard Copy with formatting writes to, kept open so that X11 goes on
-    /// serving the copy after the frame.
-    #[cfg(not(target_arch = "wasm32"))]
-    os_clipboard: Option<arboard::Clipboard>,
-    /// What ⌘V reads instead of the system clipboard (tests).
-    pub clipboard_override: Option<create_ui::Clip>,
-    /// Attach file: the file to attach instead of asking (tests, automation).
-    pub attach_override: Option<(String, Vec<u8>)>,
-    /// Duplicate Field: which field and onto which pages.
-    pub duplicate_draft: Option<DuplicateDraft>,
-    /// Page Properties: which pages, and the tab order chosen for them.
+    /// The clipboard every copy and paste goes through.
+    pub(crate) clipboard: craft::platform::clipboard::Clipboard,
+    /// Page Properties: which pages, and the tab order they have.
     pub page_props_draft: Option<PagePropsDraft>,
-    /// Text field table: the table being set up, and the page it goes on.
-    pub field_table_draft: Option<field_table_ui::FieldTableDraft>,
     /// Prepare a form ▸ Preview: fill the form instead of editing its fields.
     pub form_preview: bool,
     /// Where autosaves go (`None`: autosave off, e.g. on the web and in tests).
-    pub recovery: Option<RecoveryStore>,
-    /// Entries left by a previous session, offered in the Recovery dialog.
-    pub recoverable: Vec<RecoveryMeta>,
-    recovery_keys: std::collections::HashMap<DocId, String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) recovery: Option<std::sync::Arc<craft::platform::autosave::RecoveryStore>>,
+    /// Copies an earlier run left, offered for recovery (none on the web, which keeps no recovery folder).
+    pub(crate) recovered: Vec<craft::platform::autosave::RecoveryEntry>,
+    /// When each document is due for its next autosave.
+    pub(crate) autosave: craft::platform::autosave::Autosave,
     /// Recovered documents whose path came from a recovery sidecar and no save has confirmed
     /// yet: their first Save asks where, starting at that path, instead of writing it (#3923).
     recovered_paths: std::collections::HashSet<DocId>,
-    last_autosave: Option<web_time::Instant>,
-    allow_quit: bool,
-    /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
-    /// `registry_shortcuts`).
-    deferred_commands: Vec<(&'static str, Option<DocId>)>,
     /// The native menu bar (macOS), while it is installed; the in-window bar shows otherwise.
-    pub(crate) native_menu: Option<craft_menu::NativeMenu>,
-    /// Input a menu click stands for (⌘C, Delete…), waiting to join a pass's input (see
-    /// `release_menu_input`).
-    pub(crate) menu_input: Vec<egui::Event>,
-    /// Edit ▸ Paste clicks waiting to ask the platform for the clipboard (see
-    /// `release_menu_input`).
-    pub(crate) menu_pastes: usize,
-    /// This frame's keys as the pages see them: none while something is over them.
-    pub(crate) page_keys: page_keys::PageKeys,
-    /// The dialog seen at the last check, and a counter bumped whenever it changes (see
-    /// [`Self::dialog_epoch`]).
-    dialog_seen: Option<Dialog>,
-    dialog_epoch: u64,
-    /// The egui context, for commands that change window or theme state.
-    ctx: Option<egui::Context>,
-    /// The window's size and place kept across a minimized close (desktop).
-    #[cfg(not(target_arch = "wasm32"))]
-    pub window_state: window_state::WindowState,
-    styled: bool,
-    fonts_ready: bool,
-    /// The CJK fallback order the installed fonts follow (see `theme::installed_font_definitions`).
-    fonts_cjk: theme::CjkPreference,
+    pub(crate) native_menu: Option<craft::menu::NativeMenu>,
+    /// The in-window menu bar's model, kept across passes so its revision moves only when a menu changed.
+    pub(crate) window_menu_bar: craft::ui::contract::Tracked<craft::menu::MenuBar>,
     /// The window title last sent to the platform.
     pub window_title: String,
     /// The web page's title last set: the window title, but always with the file's name.
     pub page_title: String,
     /// The UI control channel, when enabled (`--control`; off by default).
-    control: Option<control::Control>,
-    /// A bookmark being renamed in the Bookmarks panel: (path, text so far).
-    pub bookmark_rename: Option<(Vec<usize>, String)>,
+    control: Option<craft::automation::ControlChannel>,
+    /// The control server, while it listens (the desktop app's `--control`).
+    #[cfg(not(target_arch = "wasm32"))]
+    control_server: Option<craft::automation::server::Listening>,
+    /// Changes whenever what injected input aims at changes, so the control channel withdraws
+    /// input aimed at what was there before.
+    pub(crate) control_epoch: u64,
     /// Bookmarks copied or cut in the Bookmarks panel, with their subtrees, ready to paste into
     /// any document. Destinations are page indices.
     pub bookmark_clipboard: Option<Vec<pdfcraft_engine::OutlineNode>>,
-    /// Number pages dialog settings (1-based pages).
-    pub number_draft: NumberDraft,
-    pub(crate) word_count_draft: word_count_ui::Draft,
+    /// Word Count's options, kept between showings.
+    pub(crate) word_count_options: word_count_ui::WordCountOptions,
     pub printer_marks_draft: printer_marks_ui::PrinterMarksDraft,
     pub convert_colours_draft: convert_colours_ui::ConvertColoursDraft,
     pub hairlines_draft: hairlines_ui::HairlinesDraft,
-    /// Protect Using Password dialog state.
-    pub protect_draft: protect::ProtectDraft,
     /// New bookmarks from text styles dialog state (#1693).
     pub text_style_draft: bookmark_styles_ui::TextStyleDraft,
     /// Set Page Boxes dialog state.
@@ -810,52 +682,59 @@ pub struct PdfCraftApp {
     /// Header & footer / watermark / background dialog state.
     pub marks_draft: marks_ui::MarksDraft,
     /// The Update dialogs' preview page without the marks they replace.
-    pub(crate) unmarked_page: marks_ui::UnmarkedPage,
+    pub(crate) marks_preview: Option<marks_ui::MarksPreview>,
+    /// An attachment's Edit description dialog, and what it was opened for.
+    pub(crate) attachment_description: Option<(craft::ui::dialog::DialogId, dialogs::attachment_description::AttachmentOpen)>,
     /// Export dialog settings.
     pub export_draft: export_ui::ExportDraft,
     /// A running export's progress.
-    export_status: Option<export_ui::ExportStatus>,
-    /// The saved Fill & Sign signature and initials (drawn or typed).
-    pub signature: Option<fill_sign::SavedSig>,
-    pub initials: Option<fill_sign::SavedSig>,
-    /// The Create signature / initials dialog, and its typed preview.
-    pub signature_draft: fill_sign::SigDraft,
-    pub(crate) signature_preview: Option<(fill_sign::SavedSig, egui::TextureHandle)>,
-    /// The Scan tab's photo, keyed by its version.
-    pub(crate) signature_photo: Option<(u64, egui::TextureHandle)>,
-    pub(crate) saved_signature_previews: [Option<(fill_sign::SavedSig, egui::TextureHandle)>; 2],
-    /// What visible digital signatures show on their left, and its preview in Sign as.
+    export_status: Option<std::sync::Arc<JobCount>>,
+    pub(crate) export_jobs: export_ui::ExportJobs,
+    /// The saved Fill & Sign signature and initials (drawn, typed or an image).
+    pub signature: Option<craft::review::SavedSignature>,
+    pub initials: Option<craft::review::SavedSignature>,
+    /// What visible digital signatures show on their left.
     pub sign_graphic: sign_ui::SignGraphic,
-    pub(crate) sign_graphic_preview: Option<(fill_sign::SavedSig, egui::TextureHandle)>,
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) signature_images: fill_sign::ImageInbox,
-    /// The Comment Properties dialog's state.
-    pub comment_props: Option<comment_props::PropsDraft>,
-    pub field_props: Option<prepare::FieldDraft>,
-    pub bulk_field_props: Option<bulk_fields::Draft>,
+    /// The Comment Properties dialog, while it is open.
+    pub comment_props: Option<comment_props::CommentPropsDialog>,
     pub redact_prefs: RedactPrefs,
     /// The Redaction Tool Properties kept for the next run (what the last OK with "Make
-    /// properties default" ticked left), and the values before the dialog opened, for Cancel.
+    /// properties default" ticked left).
     pub redact_defaults: RedactPrefs,
-    pub redact_before: Option<RedactPrefs>,
-    pub redact_pages_draft: RedactPagesDraft,
+    /// Redaction Tool Properties, while it is open: the values before it opened, for Cancel.
+    pub redact_props: Option<RedactPrefs>,
     pub redact_search: RedactSearchDraft,
-    pub hidden_draft: HiddenDraft,
+    /// Find text to redact, while it is open.
+    pub(crate) redact_search_open: bool,
+    /// Remove hidden information, while it is open.
+    pub hidden_draft: Option<HiddenDraft>,
     pub print_draft: PrintDraft,
-    pub link_draft: Option<LinkDraft>,
     /// The style new text gets (Edit a PDF ▸ Format text).
     pub text_style: pdfcraft_engine::AddedText,
-    /// The Replace Pages dialog's state.
-    pub replace_draft: Option<files::ReplaceDraft>,
-    /// The last web link the app asked the system to open (tests and automation).
-    pub last_opened_url: Option<String>,
+    /// Edit a PDF shows its More tools.
+    pub(crate) edit_more: bool,
+    /// The file Replace pages takes its pages from, once picked.
+    pub(crate) replace_source: Option<std::sync::Arc<dialogs::page_dialogs::ReplaceSource>>,
+    /// The fonts installed on this machine, for Add text and font embedding (desktop).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) document_fonts: Option<files::InstalledFonts>,
+    /// The installed fonts being listed off the UI thread.
+    pub(crate) font_scan: Queue<(), Vec<pdfcraft_engine::text_fonts::FontFile>>,
+    /// Web links the app asked the system to open, waiting for the pass that hands them to the
+    /// runtime.
+    pub(crate) pending_urls: Vec<String>,
+    /// A file the user opened, or a dialog or document that came up, since the app started: the
+    /// browser's startup `?file=` download then opens in the background instead of in front
+    /// (#171).
+    pub(crate) startup_superseded: bool,
+    /// Files that arrived as bytes through the intake (the browser's startup `?file=` download, a
+    /// host's file), held while a prompt, dialog or open is under way so that they don't take its
+    /// place.
+    pub(crate) startup_files: Vec<(String, std::sync::Arc<[u8]>)>,
     /// The home screen's community card was closed; it comes back next launch (not remembered).
     pub community_card_closed: bool,
     /// A document asked to open this address; the user hasn't answered yet (#90, #91).
     pub pending_link: Option<PendingLink>,
-    /// A document just opened asks to be shown in Full Screen mode (`/PageMode /FullScreen`):
-    /// the person is asked first, as in Acrobat, and this is the document waiting for the answer.
-    pub pending_full_screen: Option<DocId>,
     /// A document just opened asks for its window to fit its first page or to be centred
     /// (`FitWindow`, `CenterWindow`): done once the page is laid out.
     pub pending_window: Option<viewer_prefs::PendingWindow>,

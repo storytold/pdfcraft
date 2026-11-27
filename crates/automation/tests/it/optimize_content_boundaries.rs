@@ -79,12 +79,8 @@ fn check_page(a: &mut Automation, doc: u64, hidden: bool, phase: &str) {
     let rendered = a.call("page_render", &json!({"doc": doc, "page": 1, "dpi": 72})).unwrap();
     let Content::Png { data, width, height } = &rendered[0] else { panic!("expected page PNG") };
     assert_eq!((*width, *height), (600, 800));
-    let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
-    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
-    let info = reader.next_frame(&mut pixels).unwrap();
-    let channels = info.color_type.samples();
-    assert!(channels >= 3);
-    let pixel = |x: usize, y: usize| &pixels[(y * 600 + x) * channels..(y * 600 + x) * channels + 3];
+    let rgba = craft_image_codecs::decode(data).unwrap().to_rgba8();
+    let pixel = |x: usize, y: usize| &rgba[(y * 600 + x) * 4..(y * 600 + x) * 4 + 3];
     let dark = |left, top, right, bottom| {
         (top..bottom).flat_map(|y| (left..right).map(move |x| (x, y))).filter(|&(x, y)| pixel(x, y).iter().any(|v| *v < 128)).count()
     };

@@ -10,8 +10,10 @@ workspace = true
 
 [dependencies]
 craft-docpath = { workspace = true }
+craft-font-catalog = { workspace = true }
+craft-image-codecs = { workspace = true }
 pdfcraft-measure = { workspace = true }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
+image = { version = "0.25", default-features = false }
 pdfcraft-render = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-organize = { workspace = true }
@@ -37,10 +39,6 @@ pdfcraft-create = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-geom = { workspace = true }
 thiserror = { workspace = true }
-png = "0.18"
-# Already in the graph (through image and pdfcraft-create): image's TiffEncoder can't set the
-# resolution or the compression of an exported page.
-tiff = "0.11"
 # Already in the graph (url and idna through webbrowser, icu_properties through boa): they show
 # the host of a document's link the way the browser reads it (links::display_host).
 url = "2.5"
@@ -54,12 +52,18 @@ unicode-segmentation = "1.13"
 chrono = { workspace = true, features = ["clock"] }
 getrandom = "0.4"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Already in the graph (platform, automation): the rename an automation root confines is made
+# below the root's open folder (rename::rooted).
+rustix = { version = "1", features = ["fs"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 # Synthetic printer profiles for the app-managed print colour tests.
 craft-cms = { workspace = true }
+craft-tiff = { workspace = true }
 pdfcraft-testkit = { workspace = true }
 # JBIG2 fixtures (`encode_jbig2_generic`).
 pdfcraft-filters = { workspace = true }

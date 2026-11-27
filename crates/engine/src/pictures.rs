@@ -2,8 +2,6 @@
 
 use std::sync::Arc;
 
-use image::ImageDecoder;
-
 use crate::EditError;
 
 /// A picture for a watermark or background (Acrobat: Source ▸ File): an image, or `page`
@@ -74,30 +72,27 @@ pub(crate) fn model_poster(doc: &mut pdfcraft_cos::Document, rect: [f64; 4], fil
 
 /// The dimensions of an image from its bytes (JPEG, PNG, TIFF), without decoding the full raster.
 pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    let format = image::guess_format(bytes).ok()?;
-    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(64_000_000 * 4);
-    reader.limits(limits);
-    let mut decoder = reader.into_decoder().ok()?;
-    let (mut w, mut h) = image::ImageDecoder::dimensions(&decoder);
-    if w == 0 || h == 0 {
-        return None;
+    match craft_image_codecs::detect(bytes)? {
+        craft_image_codecs::Format::Tiff => {
+            let info = craft_image_codecs::tiff_info(bytes).ok()?;
+            let page = info.default_page().and_then(|i| info.pages.get(i))?;
+            let (w, h) = (page.width, page.height);
+            if (5..=8).contains(&craft_image_codecs::tiff_orientation(bytes)) { Some((h, w)) } else { Some((w, h)) }
+        }
+        craft_image_codecs::Format::Png => {
+            if bytes.get(12..16)? != b"IHDR" {
+                return None;
+            }
+            let w = u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?);
+            let h = u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?);
+            (w > 0 && h > 0).then_some((w, h))
+        }
+        craft_image_codecs::Format::Jpeg => {
+            let (w, h) = pdfcraft_xfa::image::size(bytes)?;
+            if (5..=8).contains(&pdfcraft_create::jpeg_exif_orientation(bytes)) { Some((h, w)) } else { Some((w, h)) }
+        }
+        _ => craft_image_codecs::probe_size(bytes).ok(),
     }
-    if format == image::ImageFormat::Jpeg
-        && u64::from(w) * u64::from(h) <= (64 << 20)
-        && let Ok(orientation) = decoder.orientation()
-        && matches!(
-            orientation,
-            image::metadata::Orientation::Rotate90
-                | image::metadata::Orientation::Rotate270
-                | image::metadata::Orientation::Rotate90FlipH
-                | image::metadata::Orientation::Rotate270FlipH
-        )
-    {
-        std::mem::swap(&mut w, &mut h);
-    }
-    Some((w, h))
 }
 
 #[cfg(test)]
@@ -105,10 +100,8 @@ mod tests {
     use super::*;
 
     fn phone_jpeg(w: u32, h: u32, orientation: u8) -> Vec<u8> {
-        use image::codecs::jpeg::JpegEncoder;
-        let mut jpeg = Vec::new();
-        let mut encoder = JpegEncoder::new(&mut jpeg);
-        encoder.encode_image(&image::RgbImage::from_pixel(w, h, image::Rgb([20, 20, 20]))).expect("valid jpeg");
+        let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgb, [20u8; 3].repeat((w * h) as usize)).unwrap();
+        let jpeg = craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &craft_image_codecs::EncodeOptions::default()).unwrap();
         let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
         exif.extend_from_slice(&[orientation, 0, 0, 0, 0, 0, 0, 0]);
         let mut out = jpeg[..2].to_vec();

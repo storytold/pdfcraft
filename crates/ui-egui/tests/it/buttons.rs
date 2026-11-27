@@ -1,8 +1,9 @@
 //! Push buttons run their actions (Reset form, Named, …) without a JavaScript engine.
 
+use craft::print::ui::HostedPrint;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
+use pdfcraft_ui_egui::PdfCraftApp;
 
 /// Two pages; page 1 has a text field "name" (filled), a Reset button, a Next page button and a
 /// Print button (a JavaScript one-liner).
@@ -55,12 +56,15 @@ fn buttons_reset_navigate_and_print() {
     let path = dir.join("buttons.pdf");
     std::fs::write(&path, fixture()).unwrap();
     let path_str = path.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("buttons.pdf", Some(path_str), fixture()).unwrap();
-        app.set_option("zoom", "150").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "buttons.pdf", Some(path_str), fixture()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     click_field(&mut h, "reset");
@@ -70,8 +74,9 @@ fn buttons_reset_navigate_and_print() {
         assert!(doc.form.iter().find(|f| f.name == "name").unwrap().value.is_empty(), "Reset form cleared the field");
     }
     click_field(&mut h, "print");
-    assert_eq!(h.state().dialog, Some(Dialog::Print), "this.print() opens the Print dialog");
-    h.state_mut().dialog = None;
+    assert!(h.state().dialogs.is_open::<HostedPrint>(), "this.print() opens the Print dialog");
+    let ctx = h.ctx.clone();
+    h.state_mut().dialogs.cancel::<HostedPrint>(&ctx);
     h.run_steps(2);
     // A document's Save named action never writes the file unasked (PdfCraft's XFA buttons
     // use SaveAs, which opens the Save As dialog, as a script's `execMenuItem` does): the
@@ -84,7 +89,7 @@ fn buttons_reset_navigate_and_print() {
     assert_eq!(std::fs::read(&path).unwrap(), before, "the file is untouched");
     click_field(&mut h, "next");
     h.run_steps(4);
-    assert_eq!(h.state().views[0].current, 1, "the NextPage action");
+    assert_eq!(h.state().views[0].current(), 1, "the NextPage action");
 }
 
 /// One page: a text field "name" and two push buttons whose Hide actions hide it and show it again.
@@ -123,12 +128,15 @@ fn name_hidden(h: &Harness<'static, PdfCraftApp>) -> bool {
 
 #[test]
 fn hide_actions_hide_and_show_fields() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("show-hide.pdf", None, show_hide_fixture()).unwrap();
-        app.set_option("zoom", "150").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "show-hide.pdf", None, show_hide_fixture()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     assert!(!name_hidden(&h));
@@ -146,7 +154,7 @@ fn hide_actions_hide_and_show_fields() {
     assert!(name_hidden(&h), "the Hide action hid the field");
     // A hidden field takes no clicks: clicking where it was doesn't start editing it.
     click_field(&mut h, "name");
-    assert!(h.state().views[0].forms.focus.is_none(), "a hidden field can't be focused");
+    assert!(h.state().views[0].session.forms.focus.is_none(), "a hidden field can't be focused");
     click_field(&mut h, "show");
     assert!(!name_hidden(&h), "the Hide action with /H false showed it again");
 }
