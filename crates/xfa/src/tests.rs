@@ -597,6 +597,58 @@ fn tables_break_across_pages_and_repeat_their_header_row() {
     assert_eq!(all.len(), all.iter().collect::<std::collections::HashSet<_>>().len(), "field names are unique");
 }
 
+/// A form a viewer saved with its pages drawn, holding only its signature box, is laid out from
+/// its template when its configuration says it must be rendered dynamically: its other fields
+/// live there. Signed, it is left as saved (laying it out would change what was signed), as it is
+/// without that configuration or with `forbidden`.
+#[test]
+fn a_form_saved_with_its_pages_is_laid_out_when_it_requires_dynamic_rendering() {
+    let open = |render: &str, signed: bool| Document::open(Arc::new(crate::fixtures::saved_with_pages_shell(render, signed))).unwrap();
+    let mut doc = open("required", false);
+    assert!(is_dynamic(&doc));
+    let report = render_into(&mut doc).unwrap();
+    assert_eq!(report.fields, 2, "the text field from the template, and the signature box");
+    assert!(!is_dynamic(&open("required", true)), "signed: left as saved");
+    assert!(!is_dynamic(&open("", false)), "no configuration: the fields it has are the form's");
+    assert!(!is_dynamic(&open("forbidden", false)));
+    // A box under nested fields is found; past the 32 levels looked at, the form counts as signed.
+    let deep = |depth: usize| Document::open(Arc::new(crate::fixtures::deep_saved_with_pages_shell(depth))).unwrap();
+    assert!(is_dynamic(&deep(5)), "nested, unsigned");
+    assert!(!is_dynamic(&deep(40)), "too deep to tell: as if signed");
+    // The page lists the box under its new number, and the box knows its parent.
+    let doc = deep(5);
+    let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0));
+    let annot = page.as_dict().and_then(|d| d.get(b"Annots")).and_then(|a| a.as_array().and_then(|a| a.first().cloned())).and_then(|a| a.as_ref());
+    let widget = annot.map(|r| doc.get(r));
+    assert_eq!(widget.as_ref().and_then(|w| w.as_dict().and_then(|d| d.name(b"FT")).map(<[u8]>::to_vec)), Some(b"Sig".to_vec()));
+    assert!(widget.as_ref().and_then(|w| w.as_dict().map(|d| d.contains(b"Parent"))).unwrap_or(false));
+}
+
+/// Only the configuration packet's `acrobat/acrobat7/dynamicRender` asks for dynamic rendering:
+/// not the same element elsewhere, another element that starts with `config`, or another value.
+#[test]
+fn dynamic_rendering_is_read_from_the_configuration_only() {
+    let required = crate::packets::requires_dynamic_render;
+    let config = |inner: &str| {
+        format!(
+            r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><config xmlns="http://www.xfa.org/schema/xci/3.1/">{inner}</config><template/></xdp:xdp>"#
+        )
+    };
+    assert!(required(&config("<acrobat><acrobat7><dynamicRender> required </dynamicRender></acrobat7></acrobat>")));
+    assert!(!required(&config("<acrobat><acrobat7><dynamicRender>forbidden</dynamicRender></acrobat7></acrobat>")));
+    assert!(!required(&config("<acrobat><dynamicRender>required</dynamicRender></acrobat>")), "not under acrobat7");
+    assert!(!required(&config("")));
+    assert!(!required("<configuration><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></configuration>"));
+    assert!(!required("<template><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></template>"));
+    assert!(!required("<config><acrobat><acrobat7><dynamicRender>required"), "no end tag");
+    // A data node named `config` before the configuration packet is not the configuration.
+    let data_first = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><config>x</config></form></xfa:data></xfa:datasets><config xmlns="http://www.xfa.org/schema/xci/3.1/"><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></config><template/></xdp:xdp>"#;
+    assert!(required(data_first), "the configuration packet after a data node named config");
+    let only_data = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><config><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></config></xfa:data></xfa:datasets><template/></xdp:xdp>"#;
+    assert!(!required(only_data), "a data node shaped like a configuration");
+    assert!(required("<config><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></config>"), "a bare config packet");
+}
+
 /// Laying a dynamic form out into its PDF replaces the placeholder page with the template's pages
 /// and adds its fields (a radio group once), keeps the XFA packets and `/NeedsRendering` for Adobe's
 /// viewers, writes each `/DR` font as an object of its own, and marks the form so it isn't laid out
@@ -4031,6 +4083,163 @@ fn a_zero_caption_reserve_sizes_the_caption_as_none_does() {
     let x_of = |name: &str| widgets(&form.pages[0]).iter().find(|w| w.name == name).map(|w| w.rect.x).unwrap();
     assert!(x_of("withZero") > 36.0 + 1.0, "the caption takes its text's width: {}", x_of("withZero"));
     assert!((x_of("withZero") - x_of("without")).abs() < 0.01, "as without a reserve: {} {}", x_of("withZero"), x_of("without"));
+}
+
+/// A date field is shown through its display picture and typed in its edit picture's pattern: its
+/// format action takes the display picture's letters (weekday and month names included), its
+/// keystroke action the edit picture's; without a display picture both take the edit pattern.
+#[test]
+fn date_fields_are_shown_through_their_display_picture() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="plain" w="2in" h="0.3in"><ui><dateTimeEdit/></ui><value><date/></value><format><picture>date{YYYYMMDD}</picture></format></field>
+ <field name="long" w="3in" h="0.3in"><ui><dateTimeEdit/></ui><value><date/></value><format><picture>date{EEEE, MMMM D, YYYY}</picture></format></field>
+ <field name="both" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYYMMDD}|date{DDMMMYY}</picture></ui><value><date/></value><format><picture>date{YYYYMMMDD}</picture></format></field>
+ <field name="none" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date/></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let form = layout_xml(xdp).unwrap();
+    let w = widgets(&form.pages[0]);
+    let shown = |n: &str| w.iter().find(|w| w.name == n).unwrap().display_date.clone();
+    assert_eq!(shown("plain").as_deref(), Some("yyyymmdd"));
+    assert_eq!(shown("long").as_deref(), Some("dddd, mmmm d, yyyy"));
+    assert_eq!(shown("both").as_deref(), Some("yyyymmmdd"));
+    assert_eq!(shown("none"), None);
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let action = |n: &str, k: &[u8]| {
+        let d = fields.iter().find(|(name, _)| name == n).map(|(_, d)| d.clone()).unwrap();
+        let aa = doc.resolve(d.get(b"AA").unwrap()).as_dict().unwrap().clone();
+        let a = doc.resolve(aa.get(k).unwrap()).as_dict().unwrap().clone();
+        doc.resolve(a.get(b"JS").unwrap()).as_string().unwrap().to_text()
+    };
+    assert_eq!(action("plain", b"F"), r#"AFDate_FormatEx("yyyymmdd");"#);
+    assert_eq!(action("plain", b"K"), r#"AFDate_KeystrokeEx("yyyy-mm-dd");"#, "typed in the default edit pattern");
+    assert_eq!(action("long", b"F"), r#"AFDate_FormatEx("dddd, mmmm d, yyyy");"#);
+    assert_eq!(
+        (action("both", b"F"), action("both", b"K")),
+        (r#"AFDate_FormatEx("yyyymmmdd");"#.to_string(), r#"AFDate_KeystrokeEx("yyyymmdd");"#.to_string())
+    );
+    assert_eq!(action("none", b"F"), r#"AFDate_FormatEx("dd/mm/yyyy");"#);
+}
+
+/// A date field with a format action but no keystroke action (as another tool may lay one out)
+/// keeps its data in the format action's pattern: the date it shows is written to the datasets as
+/// ISO and read back in that pattern, rather than kept as text.
+#[test]
+fn a_date_field_without_a_keystroke_action_keeps_its_data_in_the_format_pattern() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="when" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date/></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let mut fields = field_data(&doc);
+    let when = fields.iter().find(|f| f.name == "when").map(|f| f.obj).unwrap();
+    doc.update_dict(when, |d| {
+        let Some(Object::Dict(aa)) = d.get_mut(b"AA") else { panic!("the layout gives a date field its actions") };
+        assert!(aa.remove(b"K").is_some(), "a keystroke action to take away");
+        assert!(aa.get(b"F").is_some(), "the format action stays");
+    })
+    .unwrap();
+    for f in &mut fields {
+        if f.name == "when" {
+            f.data = FieldData::Text("18/10/2016".into());
+        }
+    }
+    let w = write_datasets(&mut doc, &fields).unwrap();
+    assert!(w.written && w.warnings.is_empty(), "{w:?}");
+    let p = read_packets(&doc).unwrap().unwrap();
+    let data = parse_datasets(&p.xdp).unwrap();
+    assert_eq!(data.text_at(&som_to_path("form[0].when[0]")), Some("2016-10-18"));
+    let values = read_values(&doc, &fields);
+    assert!(values.contains(&("when".to_string(), FieldData::Text("18/10/2016".into()))), "{values:?}");
+}
+
+/// Taking the XFA out makes each date field one a static form keeps working: held and typed as
+/// it shows, as another viewer checks typing against the keystroke pattern but reads the value
+/// again in the format's. Its keystroke takes the format's pattern and its value (held in the
+/// edit pattern) is written in it; the report counts the fields changed.
+#[test]
+fn taking_the_xfa_out_types_dates_as_they_show() {
+    use crate::pdf::strip;
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="dayFirst" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date>2016-10-18</date></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
+ <field name="same" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date>2016-10-18</date></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let r = strip(&mut doc).unwrap();
+    assert_eq!(r.date_fields, 1, "{r:?}");
+    assert!(r.notes().iter().any(|n| n.contains("1 date field(s)")), "{:?}", r.notes());
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let field = |n: &str| fields.iter().find(|(name, _)| name == n).map(|(_, d)| d.clone()).unwrap();
+    let action = |n: &str, k: &[u8]| {
+        let aa = doc.resolve(field(n).get(b"AA").unwrap()).as_dict().unwrap().clone();
+        let a = doc.resolve(aa.get(k).unwrap()).as_dict().unwrap().clone();
+        doc.resolve(a.get(b"JS").unwrap()).as_string().unwrap().to_text()
+    };
+    let value = |n: &str| doc.resolve(field(n).get(b"V").unwrap()).as_string().unwrap().to_text();
+    assert_eq!(action("dayFirst", b"K"), r#"AFDate_KeystrokeEx("mm/dd/yyyy");"#);
+    assert_eq!(action("dayFirst", b"F"), r#"AFDate_FormatEx("mm/dd/yyyy");"#);
+    assert_eq!(value("dayFirst"), "10/18/2016");
+    assert!(!field("dayFirst").contains(DATE_KEY), "the private mark goes as before");
+    // Typed and shown alike: the layout already holds its value in that pattern.
+    assert_eq!((action("same", b"K"), value("same")), (r#"AFDate_KeystrokeEx("dd/mm/yyyy");"#.to_string(), "18/10/2016".to_string()));
+}
+
+/// A template's default date is canonical: ISO (`2016-10-11`, October 11) or its basic form. The
+/// layout holds it in the field's edit pattern, as it holds the data's dates and typed ones, so
+/// an edit pattern laid out like ISO with day and month swapped (`yyyy-dd-mm`) doesn't read it
+/// as November 10, before or after the XFA is taken out.
+#[test]
+fn template_default_dates_are_held_in_the_edit_pattern() {
+    use crate::pdf::strip;
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="swapped" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYY-DD-MM}</picture></ui><value><date>2016-10-11</date></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
+ <field name="basic" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date>20161011</date></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let form = layout_xml(xdp).unwrap();
+    let w = widgets(&form.pages[0]);
+    let held = |n: &str| w.iter().find(|w| w.name == n).unwrap().value.clone();
+    assert_eq!(held("swapped").as_deref(), Some("2016-11-10"), "October 11 in yyyy-dd-mm");
+    assert_eq!(held("basic").as_deref(), Some("11/10/2016"));
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    strip(&mut doc).unwrap();
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let value = |n: &str, key: &[u8]| {
+        let d = fields.iter().find(|(name, _)| name == n).map(|(_, d)| d.clone()).unwrap();
+        doc.resolve(d.get(key).unwrap()).as_string().unwrap().to_text()
+    };
+    assert_eq!(value("swapped", b"V"), "10/11/2016", "still October 11 once static");
+    assert_eq!(value("swapped", b"DV"), "10/11/2016", "and so is its default");
 }
 
 /// The terminal fields by full name, down the field tree.
