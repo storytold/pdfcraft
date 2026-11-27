@@ -14,6 +14,7 @@ pub(crate) struct Host {
     /// Dynamic compilation is charged before converting strings or entering Boa's parser.
     pub(crate) compiled_units: usize,
     pub(crate) event_name: String,
+    pub(crate) may_change_pages: bool,
     pub(crate) fields: Arc<Vec<FieldState>>,
     pub(crate) icons: Vec<(super::JsObject, u64)>,
     pub(crate) objects: std::collections::HashMap<(String, Option<u64>, u64), super::JsObject>,
@@ -96,8 +97,8 @@ impl Host {
         let bytes = match &r {
             Request::Reset(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
             Request::LaunchUrl(u) | Request::Submit(u) | Request::Focus(u) | Request::OpenDoc(u) => u.len(),
-            Request::FocusField { name, .. } => name.len(),
             Request::OpenAttachment { name, .. } => name.len(),
+            Request::FocusField { name, .. } => name.len(),
             _ => 0,
         };
         let kept = self.room(bytes);

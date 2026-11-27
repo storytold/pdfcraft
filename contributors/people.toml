@@ -195,5 +195,16 @@ sync_github_name = false
 [people.enriquemelzer-bit]
 sync_github_name = true
 
+[people.Yousef-Dev921]
+sync_github_name = true
+
+[people.marcoarnulfo]
+real_name = "Marco Arnulfo"
+display_name = "Marco Arnulfo"
+sync_github_name = false
+
+[people.gmrmad1]
+real_name = "Madhav Agarwal"
+
 [people.FloThePro]
 sync_github_name = true

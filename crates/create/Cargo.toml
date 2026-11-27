@@ -15,11 +15,11 @@ pdfcraft-model = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 # For `image::bmp_with_pixel_offset`, shared with XFA pictures.
 pdfcraft-xfa = { workspace = true }
-png = "0.18"
-tiff = "0.11"
-image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }
-# Already in the graph through image; read directly for CMYK JPEG samples, which image converts to RGB.
-zune-jpeg = "0.5"
+craft-image-codecs = { workspace = true }
+craft-jpeg = { workspace = true }
+craft-tiff = { workspace = true }
+# Keep `image` (no codec features) only for `imageops::resize` of soft masks in `extract.rs`.
+image = { version = "0.25", default-features = false }
 thiserror = { workspace = true }
 # Already in the graph through lopdf; used only to read plain-text files (decode_text).
 encoding_rs = "0.8"
@@ -32,6 +32,5 @@ rustix = { version = "1", features = ["process"] }
 [dev-dependencies]
 # An independent CCITT decoder, to check Create PDF's Group 4 images.
 hayro-ccitt.workspace = true
-image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }
 hayro-syntax = { workspace = true }
 pdfcraft-filters = { workspace = true }

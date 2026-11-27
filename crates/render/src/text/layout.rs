@@ -1,7 +1,7 @@
 use super::device::{DIRECTION_TOLERANCE, Drawn, WORD_GAP};
 use super::order::{
-    NONE, REDRAW_CANDIDATES, Run, SAME_LINE_GAP, Scratch, Seg, fingerprint, is_script_on, measure_cluster_gaps, place_glyphs, redraws, restarts_run,
-    reverse_rtl, same_line,
+    NONE, REDRAW_CANDIDATES, Run, SAME_LINE_GAP, Scratch, Seg, fingerprint, ink_of, is_script_on, mark_barcode_rows, measure_cluster_gaps,
+    place_glyphs, redraws, restarts_run, reverse_rtl, same_line,
 };
 use super::{HashMap, PageText, TextGlyph};
 
@@ -105,6 +105,15 @@ fn is_complex(c: char) -> bool {
     matches!(c as u32, 0x0300..=0x036F | 0x0900..=0x0DFF | 0x0E00..=0x0EFF | 0x1000..=0x109F | 0x1780..=0x17FF)
 }
 
+/// Hangul, which [`is_cjk`] counts as CJK: syllables, the two jamo blocks, the compatibility
+/// jamo and the halfwidth jamo. Korean is written with spaces between its words (띄어쓰기), unlike Chinese and Japanese,
+/// so a gap between two Korean syllables may be a word gap and is read as one from half a line
+/// height upwards -- a document that writes its spaces as position rather than as space
+/// characters would otherwise lose them (#3722 review).
+fn is_hangul(c: char) -> bool {
+    matches!(c as u32, 0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7AF | 0xFFA0..=0xFFDC)
+}
+
 /// Whether `text` is only combining marks (Unicode Mn and Me, which take bidi class NSM) of a
 /// left-to-right script: Thai tone marks and above or below vowels, Indic signs such as virama,
 /// Latin combining accents. Right-to-left marks are ordered with their script by [`reverse_rtl`].
@@ -171,7 +180,8 @@ pub(super) fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 /// Heuristics (documented so they can be tuned and tested; plan/architecture.md §8):
 /// 1. *Segments:* consecutive glyphs (content order) on one baseline with no column-sized gap.
 ///    A smaller glyph right next to the previous one (a sub- or superscript) stays in the segment.
-///    Segments on the same baseline that nearly touch are merged (text drawn out of order).
+///    Segments on the same baseline that nearly touch are merged (text drawn out of order), and so
+///    is a table cell padded with spaces with the next cell of its row (`PADDED_FIELD`).
 /// 2. *Blocks:* segments stacked with line-sized gaps and overlapping horizontally.
 /// 3. *Block order:* repeatedly take the top-most remaining block, preferring a block to its left
 ///    that overlaps it vertically (so columns read left, then right). A column goes on first (#3658):
@@ -183,6 +193,8 @@ pub(super) fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 ///    Known limit: when a paragraph in the next column starts on the same line as the continuation
 ///    (text on a baseline grid), it counts as a row and the top-most rule applies, so the column
 ///    order of #3658 is lost there. Telling prose from a row in that case needs more evidence.
+///    The rows of a barcode drawn with a font (a QR or Aztec code) join no other text and are read
+///    after everything else, top to bottom.
 /// 4. Within a segment glyphs run left to right; runs of right-to-left script are reversed so the
 ///    text comes out in logical order. A block whose first line sits on the baseline of the line read
 ///    just before it, to its right and less than [`SAME_LINE_GAP`] heights away, continues that line
@@ -197,27 +209,127 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
     PageText { glyphs, line_of, space_before, truncated: false }
 }
 
-/// [`layout`] as the reading order of indices into `glyphs`, with each one's line and word gap.
-fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
+/// The word-gap threshold between neighbouring glyphs `p` and `c` on a line whose threshold is `threshold`: it follows
+/// the smaller of the two, not the tallest glyph of the line (#3172). A sub- or superscript keeps the line's threshold,
+/// since its smaller height says nothing about the gap next to its host.
+fn pair_threshold(p: &TextGlyph, c: &TextGlyph, typical: f32, threshold: f32) -> f32 {
+    let height = |g: &TextGlyph| (g.rect[3] - g.rect[1]).max(0.1);
+    let (hp, hc) = (height(p), height(c));
+    // A glyph under the script test's size floor (a small `²`) is still a script when it sits off its neighbour's
+    // baseline inside its line, unlike body text beside a big digit, which shares the digit's baseline.
+    let off_baseline = |host: &[f32; 4], host_h: f32, s: &[f32; 4], s_h: f32| {
+        s_h < host_h * 0.45 && (host[3] - s[3]).abs() >= host_h * 0.15 && s[3] > host[1] && s[1] < host[3]
+    };
+    if is_script_on(&p.rect, hp, &c.rect, hc)
+        || is_script_on(&c.rect, hc, &p.rect, hp)
+        || off_baseline(&p.rect, hp, &c.rect, hc)
+        || off_baseline(&c.rect, hc, &p.rect, hp)
+    {
+        return threshold;
+    }
+    let h = hp.min(hc);
+    (typical + h * WORD_GAP).max(h * WORD_GAP).min(threshold)
+}
+
+/// How many grid cells around a glyph the far redraw check looks at in each direction, however large the glyph is next to
+/// the page's median glyph.
+const MAX_REDRAW_REACH: i32 = 8;
+
+/// A 64-bit FNV-1a hash of one glyph text.
+fn text_hash(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3))
+}
+
+/// Marks glyphs retained after the bounded near and far redraw checks.
+fn glyphs_without_redraws(glyphs: &[TextGlyph]) -> Vec<bool> {
     // Drop "fake bold" duplicates: the same character redrawn at (almost) the same place. A redraw
     // also overlaps most of its own width: a narrow letter in condensed text (80 Tz and below) sits
     // closer than a fifth of its height to its double, as the second "l" of "Alle" (#1467), and
     // OCR layers squeeze words to 20 Tz and below (#2457). Only a zero-width mark, which has no
     // width to overlap, is matched by its height alone.
+    //
+    // The twin is usually among the last few glyphs. A page drawn once per column clip also redraws the glyph on the clip
+    // edge thousands of glyphs later: the last glyph of one run is the first of another (#3173). So a glyph that starts a
+    // run is also checked against the kept glyphs of its text in the grid cells around it, if one of them ends a run. A
+    // glyph inside a run stays for the redraw check on whole runs below, which keeps a run that only starts like an
+    // earlier one. The grid has one cell size for the whole page (a fifth of the median glyph height), so equal places
+    // land in equal cells whatever the glyph sizes. `older[k]` links each kept glyph to the previous one with the same
+    // key, so the earlier candidates are checked newest first, up to `REDRAW_CANDIDATES`, as the runs are below.
     let mut keep = vec![true; glyphs.len()];
-    for i in 1..glyphs.len() {
+    // `q` continues the run of `p` as `arrange` joins glyphs into a segment: a sub- or superscript right next to
+    // its glyph may sit off the line by up to half the taller one's height.
+    let follows = |p: usize, q: usize| {
+        let (a, b) = (&glyphs[p].rect, &glyphs[q].rect);
+        let (ha, hb) = ((a[3] - a[1]).max(0.1), (b[3] - b[1]).max(0.1));
+        let ph = ha.min(hb);
+        let gap = b[0] - a[2];
+        let centre_limit = if gap.abs() < ph { ha.max(hb) * 0.5 } else { ph * 0.5 };
+        ((a[1] + a[3]) / 2.0 - (b[1] + b[3]) / 2.0).abs() < centre_limit && gap < ph * 3.0 && b[0] > a[0] - ph * 2.0
+    };
+    let mut heights: Vec<f32> = glyphs.iter().map(|g| (g.rect[3] - g.rect[1]).max(0.1)).collect();
+    let cell = match heights.len() {
+        0 => 0.02,
+        n => 0.2 * *heights.select_nth_unstable_by(n / 2, f32::total_cmp).1,
+    };
+    let mut latest: HashMap<(u64, i32, i32), usize> = HashMap::new();
+    let mut older = vec![NONE; glyphs.len()];
+    // `next_kept[j]`: the kept glyph after kept glyph `j`, recorded when it is kept, so a dropped
+    // fake-bold copy does not count and no lookup rescans the dropped glyphs in between.
+    let mut next_kept = vec![NONE; glyphs.len()];
+    let mut prev_kept: Option<usize> = None;
+    for i in 0..glyphs.len() {
         let g = &glyphs[i];
         let h = (g.rect[3] - g.rect[1]).max(0.1);
         let w = g.rect[2] - g.rect[0];
         let dx = if w > 0.0 { (h * 0.2).min(w * 0.5) } else { h * 0.2 };
-        for j in (i.saturating_sub(4)..i).rev() {
+        let same = |j: usize| {
             let p = &glyphs[j];
-            if keep[j] && p.text == g.text && (p.rect[0] - g.rect[0]).abs() < dx && (p.rect[1] - g.rect[1]).abs() < h * 0.2 {
-                keep[i] = false;
-                break;
+            keep[j] && p.text == g.text && (p.rect[0] - g.rect[0]).abs() < dx && (p.rect[1] - g.rect[1]).abs() < h * 0.2
+        };
+        // The last kept glyph is checked too: copies of it drawn more than four times in a row
+        // are all past the window, and the far check is skipped for a glyph that follows it.
+        let near = (i.saturating_sub(4)..i).rev().any(&same) || prev_kept.is_some_and(&same);
+        let (fp, cx, cy_) = (text_hash(&g.text), (g.rect[0] / cell).floor() as i32, (g.rect[1] / cell).floor() as i32);
+        // The glyph after a kept one is the next kept glyph (or this one, while it has none).
+        let next_of = |j: usize| next_kept.get(j).copied().filter(|&k| k != NONE).unwrap_or(i);
+        let mut far = false;
+        if prev_kept.is_none_or(|p| !follows(p, i)) {
+            // `same` takes a horizontal offset below `dx` and a vertical one below a fifth of the height.
+            let reach = ((dx.max(h * 0.2) / cell).ceil() as i32).clamp(1, MAX_REDRAW_REACH);
+            let mut checks = REDRAW_CANDIDATES;
+            'cells: for ox in -reach..=reach {
+                for oy in -reach..=reach {
+                    let mut link = latest.get(&(fp, cx.saturating_add(ox), cy_.saturating_add(oy))).copied();
+                    while let Some(j) = link {
+                        if checks == 0 {
+                            break 'cells;
+                        }
+                        checks -= 1;
+                        if same(j) && !follows(j, next_of(j)) {
+                            far = true;
+                            break 'cells;
+                        }
+                        link = older.get(j).copied().filter(|&o| o != NONE);
+                    }
+                }
             }
         }
+        if near || far {
+            keep[i] = false;
+        } else {
+            older[i] = latest.insert((fp, cx, cy_), i).unwrap_or(NONE);
+            if let Some(slot) = prev_kept.and_then(|p| next_kept.get_mut(p)) {
+                *slot = i;
+            }
+            prev_kept = Some(i);
+        }
     }
+    keep
+}
+
+/// [`layout`] as the reading order of indices into `glyphs`, with each one's line and word gap.
+fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
+    let keep = glyphs_without_redraws(glyphs);
     let kept: Vec<usize> = (0..glyphs.len()).filter(|i| keep[*i]).collect();
     let glyphs: Vec<&TextGlyph> = kept.iter().map(|i| &glyphs[*i]).collect();
     let n = glyphs.len();
@@ -263,9 +375,10 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             attach_mark(&glyphs, &mut anchor, i);
             s.first.end = i + 1;
             s.extend_box(&g, hi);
+            s.ink = s.ink.max(ink_of(glyphs[i]));
             furthest_progress = furthest_progress.max((g[0] - run_start_x).abs()).max((g[2] - run_start_x).abs());
         } else {
-            segs.push(Seg::new(Run { start: i, end: i + 1 }, g, hi));
+            segs.push(Seg::new(Run { start: i, end: i + 1 }, g, hi, ink_of(glyphs[i])));
             run_start_x = g[0];
             furthest_progress = 0.0;
         }
@@ -314,7 +427,8 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
         kept_runs
     };
     segs.truncate(retained);
-    // Merge same-baseline segments that nearly touch, then attach any remaining superscript or
+    mark_barcode_rows(&mut segs);
+    // Merge same-baseline segments that nearly touch, and a padded cell with the next of its row, then attach any remaining superscript or
     // subscript segments to the closest host line segment they sit on.
     let mut merged = true;
     while merged {
@@ -327,7 +441,8 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                 let (sa, sb) = (&segs[a], &segs[b]);
                 let h = sa.h.min(sb.h);
                 let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
-                if (sa.cy() - sb.cy()).abs() < h * 0.3 && (sa.h / sb.h - 1.0).abs() < 0.35 && gap < h * 1.2 {
+                let joined = (gap < h * 1.2 || sa.padded_towards(sb, h)) && sa.barcode == sb.barcode;
+                if (sa.cy() - sb.cy()).abs() < h * 0.3 && (sa.h / sb.h - 1.0).abs() < 0.35 && joined {
                     let sb = segs.remove(b);
                     let a = if b < a { a - 1 } else { a };
                     segs[a].merge(sb);
@@ -347,7 +462,10 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                         }
                         let sa = &segs[a];
                         let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
-                        sa.bbox[2] - sa.bbox[0] > sb.bbox[2] - sb.bbox[0] && gap < sa.h * 1.2 && is_script_on(&sa.bbox, sa.h, &sb.bbox, sb.h)
+                        sa.bbox[2] - sa.bbox[0] > sb.bbox[2] - sb.bbox[0]
+                            && gap < sa.h * 1.2
+                            && sa.barcode == sb.barcode
+                            && is_script_on(&sa.bbox, sa.h, &sb.bbox, sb.h)
                     })
                     .min_by(|&a1, &a2| (segs[a1].cy() - sb.cy()).abs().total_cmp(&(segs[a2].cy() - sb.cy()).abs()));
                 if let Some(a) = best_host {
@@ -374,7 +492,11 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             let vgap = s.bbox[1] - last.bbox[3];
             let overlap = s.bbox[2].min(bb[2]) - s.bbox[0].max(bb[0]);
             let minw = (s.bbox[2] - s.bbox[0]).min(bb[2] - bb[0]).max(1.0);
-            vgap > -last.h * 0.5 && vgap < last.h.max(s.h) * 1.1 && overlap > minw * 0.3 && (last.h / s.h - 1.0).abs() < 0.6
+            vgap > -last.h * 0.5
+                && vgap < last.h.max(s.h) * 1.1
+                && overlap > minw * 0.3
+                && (last.h / s.h - 1.0).abs() < 0.6
+                && last.barcode == s.barcode
         });
         match target {
             Some(b) => {
@@ -387,7 +509,10 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     }
 
     // 3. Block order.
-    let mut remaining: Vec<usize> = (0..blocks.len()).collect();
+    // A barcode drawn with a font is a picture, not text to read: it comes after the page's text
+    // and does not hold up the column beside it.
+    let (mut remaining, barcodes): (Vec<usize>, Vec<usize>) =
+        (0..blocks.len()).partition(|&b| blocks[b].0.first().and_then(|&s| segs.get(s)).is_none_or(|s| !s.barcode));
     let mut block_order: Vec<usize> = Vec::with_capacity(blocks.len());
     // A block to the left of `cb` that shares at least half the height of the shorter one: it reads first.
     let beside_left = |cb: &[f32; 4], lb: &[f32; 4]| {
@@ -450,6 +575,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
         remaining.retain(|r| *r != pick);
         block_order.push(pick);
     }
+    block_order.extend(barcodes);
 
     // 4. Emit each segment in block order. Its glyphs are placed here, into scratch that every segment reuses, and
     // appended straight to the output. Blocks and their order use only segment boxes, so placement can wait until now.
@@ -499,8 +625,32 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             for (w, pair) in sc.placed.windows(2).enumerate() {
                 let &[p, c] = pair else { continue };
                 let Some(&Some(gap)) = sc.cluster_gap.get(w + 1) else { continue };
+                // A combining mark is measured by its cluster's base, as its text is: its own small box would lower the
+                // threshold next to it.
+                let base = |i: usize| glyphs.get(sc.anchor.get(i).copied().unwrap_or(i)).copied().unwrap_or(glyphs[i]);
+                let pair_threshold = pair_threshold(base(p), base(c), typical, threshold);
                 let (pt, ct) = (cluster_text(p), cluster_text(c));
-                let cjk = pt.chars().any(is_cjk) && ct.chars().any(is_cjk) && gap < h * 0.5;
+                // Character spacing is added after every glyph of a show (`Tc`, ISO 32000-2 §9.3.2), so text spread to a
+                // wider column -- a Chinese label on a form, 分散對齊 -- repeats one gap, while the gap between two cells
+                // of a row stands on its own. A repeated gap is therefore spacing at any width. Chinese and Japanese
+                // write no spaces between these characters, so a space inferred inside a label changes what Copy gives
+                // and stops Find matching it (#3713). The whole-line typical gap cannot tell the two apart: on these
+                // lines most gaps are the zero of the value beside the label.
+                //
+                // A gap of its own is read as spacing only below half a line height, the same width Hangul uses. A
+                // whole line height swallowed the gap between two cells of a form row whenever it was under one em --
+                // 9pt on a 12pt line -- so 姓名 followed by 王小明 copied as 姓名王小明 (noted in review). Repetition,
+                // not width, is what tells spread text apart from two cells.
+                // `cluster_gap[w + 1]` is this pair's gap, so the pairs beside it are at `w` and `w + 2`.
+                let spread = |w: usize| {
+                    let same = |other: Option<&Option<f32>>| other.copied().flatten().is_some_and(|o| (o - gap).abs() <= h * 0.02);
+                    same(sc.cluster_gap.get(w)) || same(sc.cluster_gap.get(w + 2))
+                };
+                // Korean keeps the narrower tolerance and no repetition: its words are separated by spaces, which
+                // a file may write as position rather than as space characters. Measured on three Korean words at
+                // one em, drawn without space glyphs: with the Chinese rule they read as 안녕하세요여러분.
+                let hangul = pt.chars().any(is_hangul) || ct.chars().any(is_hangul);
+                let cjk = pt.chars().any(is_cjk) && ct.chars().any(is_cjk) && (gap < h * 0.5 || (!hangul && spread(w)));
                 // A combining sign that rides on no glyph before it (drawn apart from its base, or in a run of its own)
                 // may sit anywhere over its base, so it never takes a space next to it. Two base letters of these
                 // scripts are measured like any others: a Thai or Indic word gap is narrower than half an em.
@@ -508,7 +658,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                 let tight_cluster = (loose_sign(pt) || loose_sign(ct)) && gap < h * 0.6;
                 let run_start = sc.breaks.binary_search(&c).is_ok();
                 if let Some(space) = spaces.get_mut(w + 1) {
-                    *space = (gap > threshold || run_start)
+                    *space = (gap > pair_threshold || run_start)
                         && !cjk
                         && !tight_cluster
                         && !pt.trim().is_empty()
@@ -563,7 +713,8 @@ fn put_on_line(line_of: &mut Vec<u32>, space_before: &mut [bool], glyphs: std::o
 /// takes it: the short last line of a column of several lines is no label (review on #4468). One-line
 /// paragraphs of two columns that share a baseline cannot be told from a table row, and are further
 /// apart than [`same_line`] allows unless the left one fills its column. Right-to-left lines are
-/// left alone: their blocks still read left first.
+/// left alone: their blocks still read left first. A row of a barcode drawn with a font joins no
+/// line of text, nor text a code row.
 fn joins_line(segs: &[Seg], last: Option<(usize, bool, bool)>, si: usize, first: bool, paragraph: bool, has_rtl: bool) -> Option<&Seg> {
     let (p, p_rtl, p_alone) = last?;
     if !first || p_rtl || has_rtl {
@@ -571,5 +722,5 @@ fn joins_line(segs: &[Seg], last: Option<(usize, bool, bool)>, si: usize, first:
     }
     let (p, s) = (segs.get(p)?, segs.get(si)?);
     let label = p_alone && p.bbox[2] - p.bbox[0] < SAME_LINE_GAP * p.h;
-    (same_line(p, s) && (!paragraph || label)).then_some(p)
+    (same_line(p, s) && (!paragraph || label) && p.barcode == s.barcode).then_some(p)
 }

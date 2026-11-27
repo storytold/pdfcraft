@@ -224,6 +224,26 @@ pub(super) fn add_kid(dst: &mut Document, field: ObjRef, kid: ObjRef) -> Result<
     Ok(())
 }
 
+/// Take `kid` out of field `field`'s `/Kids` (direct or held in an array object of its own).
+pub(super) fn remove_kid(dst: &mut Document, field: ObjRef, kid: ObjRef) -> Result<(), OrganizeError> {
+    match dst.get(field).as_dict().and_then(|f| f.get(b"Kids").cloned()) {
+        // Only an array is rewritten: `/Kids` pointing at anything else (a font, in a hostile
+        // file) is left as it is rather than overwritten.
+        Some(Object::Ref(list)) => {
+            if let Some(mut kids) = dst.get(list).as_array().cloned() {
+                kids.retain(|k| k.as_ref() != Some(kid));
+                dst.set(list, Object::Array(kids));
+            }
+        }
+        Some(Object::Array(mut kids)) => {
+            kids.retain(|k| k.as_ref() != Some(kid));
+            dst.update_dict(field, |f| f.set(b"Kids".to_vec(), Object::Array(kids)))?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// PdfCraft patch (#1810): split a widget that doubles as its own field into a parent field
 /// holding the field keys (name, value, flags…) and a widget child holding the annotation keys
 /// (rectangle, appearance, page). The parent takes the widget's place among the top-level fields;
@@ -303,6 +323,49 @@ pub(super) fn register_fields(dst: &mut Document, fields: &[ObjRef]) -> Result<(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod template_tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    fn doc(bodies: &[&str]) -> Document {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, b) in bodies.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{b}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+        Document::open(Arc::new(out)).expect("opens")
+    }
+
+    /// `/Kids` held in an array object of its own loses the kid; `/Kids` pointing at something
+    /// that isn't an array (here a font) is never overwritten.
+    #[test]
+    fn removing_a_kid_rewrites_only_an_array() {
+        let mut d = doc(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [] /Count 0 >>",
+            "<< /T (G) /Kids 4 0 R >>",
+            "[6 0 R 7 0 R]",
+            "<< /T (H) /Kids 8 0 R >>",
+            "<< /T (a) /Parent 3 0 R >>",
+            "<< /T (b) /Parent 3 0 R >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        ]);
+        remove_kid(&mut d, ObjRef::new(3, 0), ObjRef::new(6, 0)).unwrap();
+        assert_eq!(d.get(ObjRef::new(4, 0)).as_array().cloned(), Some(vec![Object::Ref(ObjRef::new(7, 0))]));
+        remove_kid(&mut d, ObjRef::new(5, 0), ObjRef::new(6, 0)).unwrap();
+        assert_eq!(d.get(ObjRef::new(8, 0)).as_dict().and_then(|f| f.name(b"Type")), Some(&b"Font"[..]), "the font is untouched");
+    }
 }
 
 #[cfg(test)]

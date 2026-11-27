@@ -32,9 +32,6 @@ pub struct Document {
     pub dirty: bool,
     /// Bumped on every change to the working file (edit, undo, redo, save); autosave compares it.
     pub(crate) generation: u64,
-    /// The generation last handed out by `autosave_snapshots`, or another one when storing that
-    /// snapshot failed (`autosave_failed`), so it is due again.
-    pub(crate) snapshot_generation: u64,
     /// Why the document cannot be edited (e.g. encryption), if so.
     pub read_only_reason: Option<String>,
     /// Interactive form fields of the current state (empty without a form).
@@ -83,7 +80,7 @@ pub struct Document {
 }
 
 /// Something the last successful edit did that the user should hear about, never left silent
-/// (AGENTS.md §4).
+/// (app-agents.md rule 13).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditNotice {
     /// Text stored as typed but drawn with `?`.
@@ -194,6 +191,21 @@ pub struct TextNotice {
     pub redrawn_elsewhere: bool,
 }
 
+/// A measurement of how the file's bytes are spent, owning what it reads so it can run off the UI thread
+/// ([`Document::space_audit_job`]).
+pub struct SpaceAuditJob {
+    /// The document as the editor holds it; `None` when the document can't be read for editing.
+    cos: Option<pdfcraft_cos::Document>,
+    size: u64,
+}
+
+impl SpaceAuditJob {
+    /// The measurement [`Document::audit_space`] makes; empty when the document can't be read for editing.
+    pub fn run(self) -> Vec<optimize::SpaceUse> {
+        self.cos.map(|cos| optimize::audit_space(&cos, self.size)).unwrap_or_default()
+    }
+}
+
 impl std::fmt::Display for TextNotice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let ch = format!("\"{}\" (U+{:04X})", self.ch.escape_debug(), u32::from(self.ch));
@@ -296,6 +308,11 @@ impl Document {
     /// PDF Optimizer ▸ Audit space usage.
     pub fn audit_space(&self) -> Vec<optimize::SpaceUse> {
         self.editor.as_ref().map(|e| optimize::audit_space(&e.cos, self.bytes.len() as u64)).unwrap_or_default()
+    }
+
+    /// [`Self::audit_space`] as a job over a copy of the document's state, to run in the background.
+    pub fn space_audit_job(&self) -> SpaceAuditJob {
+        SpaceAuditJob { cos: self.editor.as_ref().map(|e| e.cos.clone()), size: self.bytes.len() as u64 }
     }
 
     /// The backdrop `page` (0-based) paints itself, which hides a background (Add Background).
@@ -426,6 +443,16 @@ impl Document {
             return Vec::new();
         }
         self.editor.as_ref().map(|e| crate::text_style_bookmarks::styles(&e.cos)).unwrap_or_default()
+    }
+
+    /// Suggest outline (#6020): the bookmark tree proposed for the document, from its tagged
+    /// headings or else from how its text looks. `None` when the document doesn't allow copying
+    /// (the titles are its text) or can't be read for editing.
+    pub fn suggest_outline(&self) -> Option<crate::suggest_outline::OutlineSuggestion> {
+        if !self.allows_copying() {
+            return None;
+        }
+        self.editor.as_ref().map(|e| crate::suggest_outline::suggest(&e.cos))
     }
 
     /// Edit a PDF ▸ Edit text: the lines of existing text on `page` (0-based).
@@ -734,6 +761,17 @@ impl Document {
     /// Every page's media, crop, bleed, trim and art boxes (user space), for Set Page Boxes.
     pub fn page_boxes(&self) -> Vec<[[f64; 4]; 5]> {
         self.editor.as_ref().and_then(|e| pdfcraft_organize::page_boxes(&e.cos).ok()).unwrap_or_default()
+    }
+
+    /// Every page's `/UserUnit`: points per user-space unit, read as Acrobat reads it (1 when absent or invalid).
+    pub fn page_user_units(&self) -> Vec<f64> {
+        self.editor.as_ref().map(|e| pdfcraft_model::pages(&e.cos).iter().map(|p| p.user_unit(&e.cos)).collect()).unwrap_or_default()
+    }
+
+    /// Page `page`'s `/UserUnit` (see [`Self::page_user_units`]); 1 when there is no such page.
+    pub fn page_user_unit(&self, page: usize) -> f64 {
+        let Some(e) = self.editor.as_ref() else { return 1.0 };
+        pdfcraft_model::page_at(&e.cos, page).map_or(1.0, |p| p.user_unit(&e.cos))
     }
 
     /// Current value of a document-information entry (Title, Author, …).

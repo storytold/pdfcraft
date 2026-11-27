@@ -87,38 +87,6 @@ pub(crate) fn js_output_json(out: &pdfcraft_engine::js::JsOutput) -> Value {
 }
 
 impl Automation {
-    pub(crate) fn page_templates(&self, a: &Args) -> Result<Value> {
-        Ok(
-            json!({"templates":self.doc(a)?.page_templates().into_iter().map(|t|json!({"name":t.name,"hidden":t.visible_page.is_none(),"page":t.visible_page.map(|p|p+1)})).collect::<Vec<_>>()}),
-        )
-    }
-    pub(crate) fn page_template_spawn(&mut self, a: &Args) -> Result<Value> {
-        let doc = self.doc(a)?;
-        let id = doc.id;
-        let count = doc.info.pages.len();
-        let at = self.opt_position(a, "at")?.unwrap_or(count);
-        self.apply_with_warnings(
-            id,
-            pdfcraft_engine::Edit::ScriptPages {
-                changes: vec![pdfcraft_engine::js::TemplateChange::Spawn {
-                    name: a.str("name")?.into(),
-                    page: at,
-                    rename: a.opt_bool("rename")?.unwrap_or(true),
-                    overlay: false,
-                }],
-            },
-        )?;
-        self.page_templates(a)
-    }
-    pub(crate) fn page_template_set_hidden(&mut self, a: &Args) -> Result<Value> {
-        let id = self.doc(a)?.id;
-        let hidden = a.opt_bool("hidden")?.ok_or_else(|| ToolError::InvalidArgs("hidden is required".into()))?;
-        self.apply_with_warnings(
-            id,
-            pdfcraft_engine::Edit::ScriptPages { changes: vec![pdfcraft_engine::js::TemplateChange::Hidden { name: a.str("name")?.into(), hidden }] },
-        )?;
-        self.page_templates(a)
-    }
     pub(crate) fn js_tool_buttons(&self, a: &Args) -> Result<Value> {
         Ok(
             json!({"buttons":self.doc(a)?.script_tool_buttons().iter().map(|b|json!({"name":b.name,"label":b.label,"tooltip":b.tooltip})).collect::<Vec<_>>()}),

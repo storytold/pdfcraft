@@ -23,17 +23,29 @@ pub enum Change {
     Delete { start: usize, end: usize },
 }
 
-fn guard(h: &crate::host::Host) -> JsResult<()> {
-    if h.page_changes.len() >= 100 {
-        return Err(error("a script may change at most 100 template pages"));
+fn guard(h: &mut crate::host::Host) -> bool {
+    let problem =
+        if !h.may_change_pages || h.calculate_depth > 0 || matches!(h.event_name.as_str(), "Calculate" | "Format" | "Validate" | "Keystroke") {
+            "only a button may change the pages in a field script"
+        } else if h.page_changes.len() >= 100 {
+            "a script may change at most 100 pages in one run"
+        } else {
+            return true;
+        };
+    if !h.console.iter().any(|line| line == problem) {
+        h.print(problem.into());
     }
-    if h.calculate_depth > 0 || matches!(h.event_name.as_str(), "Calculate" | "Format" | "Validate" | "Keystroke") {
-        return Err(error("field calculations cannot change pages"));
-    }
-    Ok(())
+    false
 }
 fn template(ctx: &Context, name: &str) -> JsResult<Template> {
-    host(ctx)?.borrow().doc.templates.iter().find(|t| t.name == name).cloned().ok_or_else(|| error("that page template no longer exists"))
+    host(ctx)?
+        .borrow()
+        .doc
+        .templates
+        .iter()
+        .find(|t| t.name == name)
+        .cloned()
+        .ok_or_else(|| error(format!("there is no page template named {name:?}")))
 }
 /// Replace positions without invalidating held field objects, and remap calculation targets.
 fn fields(h: &mut crate::host::Host, next: Vec<crate::FieldState>, new_names: &HashSet<String>) {
@@ -63,10 +75,20 @@ fn field_bytes(f: &crate::FieldState) -> usize {
         .fold(0usize, usize::saturating_add)
 }
 fn insert(h: &mut crate::host::Host, template: &Template, page: usize, rename: bool) -> JsResult<()> {
-    let prefix = format!("P{page}.{}.", template.name);
-    if rename && h.fields.iter().any(|f| f.name.starts_with(&prefix)) {
-        return Err(error("template field prefix is already in use; choose another insertion position"));
-    }
+    let prefix = if rename {
+        let roots: HashSet<_> = h.fields.iter().filter_map(|f| f.name.split('.').next()).collect();
+        let base = format!("P{page}");
+        let mut root = base.clone();
+        for suffix in 1..=roots.len() {
+            if !roots.contains(root.as_str()) {
+                break;
+            }
+            root = format!("{base}-{suffix}");
+        }
+        format!("{root}.{}.", template.name)
+    } else {
+        String::new()
+    };
     let names: HashSet<_> = template.field_names.iter().map(String::as_str).collect();
     let source: Vec<_> = h.fields.iter().enumerate().filter(|(_, f)| names.contains(f.name.as_str())).collect();
     let bytes = h.fields.iter().map(field_bytes).fold(0usize, usize::saturating_add);
@@ -173,15 +195,12 @@ fn page(value: &JsValue, ctx: &mut Context, max: usize, default: usize) -> JsRes
         return Ok(default.min(max));
     }
     let n = value.to_number(ctx)?;
-    if !n.is_finite() {
-        return Err(error("page index must be finite"));
-    }
     Ok(n.max(0.0).min(max as f64) as usize)
 }
 fn spawn(_: &JsValue, args: &[JsValue], name: &crate::JsString, ctx: &mut Context) -> JsResult<JsValue> {
     let t = template(ctx, &name.to_std_string_escaped())?;
     let first = arg(args, 0);
-    let (p, r, o) = if let Some(obj) = first.as_object() {
+    let (p, r, o) = if let Some(obj) = first.as_object().filter(|o| !o.is_array()) {
         (obj.get(js_string!("nPage"), ctx)?, obj.get(js_string!("bRename"), ctx)?, obj.get(js_string!("bOverlay"), ctx)?)
     } else {
         (first, arg(args, 1), arg(args, 2))
@@ -190,11 +209,17 @@ fn spawn(_: &JsValue, args: &[JsValue], name: &crate::JsString, ctx: &mut Contex
     let p = page(&p, ctx, max, 0)?;
     let rename = r.is_undefined() || r.to_boolean();
     let overlay = o.is_undefined() || o.to_boolean();
-    if overlay {
-        return Err(error("overlay template spawning is not supported; use bOverlay=false"));
-    }
     let mut h = host(ctx)?.borrow_mut();
-    guard(&h)?;
+    if !guard(&mut h) {
+        return Ok(JsValue::undefined());
+    }
+    if overlay {
+        let message = format!("Laying template {} over an existing page isn't supported; use bOverlay=false", t.name);
+        if !h.console.iter().any(|line| line.contains("use bOverlay=false")) {
+            h.print(message);
+        }
+        return Ok(JsValue::undefined());
+    }
     insert(&mut h, &t, p, rename)?;
     h.page_changes.push(Change::Spawn { name: t.name, page: p, rename, overlay });
     Ok(JsValue::undefined())
@@ -206,7 +231,9 @@ fn hidden_set(_: &JsValue, args: &[JsValue], name: &crate::JsString, ctx: &mut C
     let t = template(ctx, &name.to_std_string_escaped())?;
     let hidden = arg(args, 0).to_boolean();
     let mut h = host(ctx)?.borrow_mut();
-    guard(&h)?;
+    if !guard(&mut h) {
+        return Ok(JsValue::undefined());
+    }
     if hidden == t.page.is_none() {
         return Ok(JsValue::undefined());
     }
@@ -258,7 +285,9 @@ fn create(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
     let p = page(&p, ctx, max, 0)?;
     {
         let mut h = host(ctx)?.borrow_mut();
-        guard(&h)?;
+        if !guard(&mut h) {
+            return Ok(JsValue::undefined());
+        }
         if h.doc.templates.len() >= 4096 {
             return Err(error("too many templates"));
         }
@@ -275,7 +304,9 @@ fn remove(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
     let name = text_with_budget(&arg(args, 0), ctx, 4096, "template name is too long")?;
     template(ctx, &name)?;
     let mut h = host(ctx)?.borrow_mut();
-    guard(&h)?;
+    if !guard(&mut h) {
+        return Ok(JsValue::undefined());
+    }
     h.doc.templates.retain(|t| t.name != name);
     h.page_changes.push(Change::Remove { name });
     Ok(JsValue::undefined())
@@ -288,7 +319,9 @@ fn delete_pages(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<Js
     let start = page(&start, ctx, max, 0)?;
     let end = page(&end, ctx, max, start)?;
     let mut h = host(ctx)?.borrow_mut();
-    guard(&h)?;
+    if !guard(&mut h) {
+        return Ok(JsValue::undefined());
+    }
     delete(&mut h, start, end)?;
     h.page_changes.push(Change::Delete { start, end });
     Ok(JsValue::undefined())

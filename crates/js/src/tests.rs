@@ -792,6 +792,7 @@ fn app_alert_titles_are_clipped_and_charged() {
         tool_buttons: Vec::new(),
         compiled_units: 0,
         event_name: "Open".into(),
+        may_change_pages: true,
         icons: Vec::new(),
         objects: Default::default(),
         field_keys: Default::default(),
@@ -2946,6 +2947,89 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.error, None);
     assert_eq!(o.value, "undefined number 3.5");
     assert_eq!(o.alerts, [Message::plain("old viewer")]);
+}
+
+/// A document with a hidden template `More` and a visible named page `Cover` (#1429).
+fn templated() -> DocInfo {
+    let templates = [("More", None), ("Cover", Some(0))]
+        .into_iter()
+        .map(|(name, page)| crate::templates::Template { name: name.into(), page, field_names: Default::default(), crop: [0.0; 4], rotation: 0 })
+        .collect();
+    DocInfo { templates, num_pages: 4, ..doc() }
+}
+
+fn run_templated(script: &str) -> Outcome {
+    run(script, &Event::doc("Console"), &templated(), &fields(), &[], Limits::default())
+}
+
+#[test]
+fn templates_are_listed_and_found_by_name() {
+    let o = run_templated(
+        "var t = this.getTemplate('More'); \
+         console.println(this.templates.length + ' ' + this.templates[1].name + ' ' + t.name + ' ' + t.hidden + ' ' + this.getTemplate('Cover').hidden + ' ' + this.getTemplate('Nope'));",
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.console, ["2 Cover More true false null"]);
+}
+
+#[test]
+fn spawn_asks_for_a_page_from_the_template() {
+    let o = run_templated("getTemplate('More').spawn(2, false, false);");
+    assert_eq!(o.page_changes, [crate::templates::Change::Spawn { name: "More".into(), page: 2, rename: false, overlay: false }]);
+    // As in Acrobat: page 0, renamed and laid over unless asked otherwise.
+    let o = run_templated("getTemplate('More').spawn();");
+    assert!(o.page_changes.is_empty());
+    assert!(o.console.iter().any(|line| line.contains("bOverlay")));
+    // The arguments by name.
+    let o = run_templated("getTemplate('More').spawn({ nPage: 1, bOverlay: false });");
+    assert_eq!(o.page_changes, [crate::templates::Change::Spawn { name: "More".into(), page: 1, rename: true, overlay: false }]);
+}
+
+#[test]
+fn spawn_page_from_template_takes_its_arguments_both_ways() {
+    let o = run_templated("this.spawnPageFromTemplate('More', 3, false, false);");
+    assert_eq!(o.page_changes, [crate::templates::Change::Spawn { name: "More".into(), page: 3, rename: false, overlay: false }]);
+    let o = run_templated("this.spawnPageFromTemplate({ cTemplate: 'More', nPage: 1, bRename: false, bOverlay: false });");
+    assert_eq!(o.page_changes, [crate::templates::Change::Spawn { name: "More".into(), page: 1, rename: false, overlay: false }]);
+    let o = run_templated("this.spawnPageFromTemplate('Nope', 1);");
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("Nope")), "{o:?}");
+    assert!(o.page_changes.is_empty());
+}
+
+#[test]
+fn hiding_and_showing_a_template_is_asked_for_and_read_back() {
+    let o = run_templated("var t = getTemplate('More'); t.hidden = false; console.println(t.hidden);");
+    assert_eq!(o.page_changes, [crate::templates::Change::Hidden { name: "More".into(), hidden: false }]);
+    assert_eq!(o.console, ["false"]);
+}
+
+/// Page numbers that aren't one land on the first page or past the last, where the document
+/// clamps them.
+#[test]
+fn spawn_pages_that_are_not_numbers_are_clamped() {
+    for (arg, page) in [("NaN", 0), ("-5", 0), ("Infinity", 4), ("-Infinity", 0), ("1e300", 4), ("'2'", 2)] {
+        let o = run_templated(&format!("getTemplate('More').spawn({arg}, true, false);"));
+        assert_eq!(o.page_changes, [crate::templates::Change::Spawn { name: "More".into(), page, rename: true, overlay: false }], "{arg}");
+    }
+}
+
+/// A template name longer than a console line is asked for whole, never clipped: a cut name
+/// could name another template.
+#[test]
+fn long_template_names_are_asked_for_whole() {
+    let long = "T".repeat(5000);
+    let mut doc = templated();
+    doc.templates[0].name = long.clone();
+    let script = "var t = this.templates[0]; t.spawn(0, false, false); t.hidden = false;";
+    let o = run(script, &Event::doc("Console"), &doc, &fields(), &[], Limits::default());
+    assert_eq!(o.error, None);
+    assert_eq!(
+        o.page_changes,
+        [
+            crate::templates::Change::Spawn { name: long.clone(), page: 0, rename: false, overlay: false },
+            crate::templates::Change::Hidden { name: long, hidden: false },
+        ]
+    );
 }
 
 /// Arrays assigned to several fields are held to one run-wide budget, and replacing a field's

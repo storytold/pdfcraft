@@ -558,7 +558,10 @@ pub(crate) fn apply_page_changes(doc: &mut pdfcraft_cos::Document, changes: &[pd
         use pdfcraft_js::templates::Change;
         match change {
             Change::Spawn { name, page, rename, overlay } => {
-                pdfcraft_organize::spawn_template(doc, name, *page, *rename, *overlay)?;
+                if *overlay {
+                    return Err(EditError::Invalid("overlay template spawning is not supported; use bOverlay=false".into()));
+                }
+                pdfcraft_organize::spawn_template(doc, name, *page, *rename)?;
             }
             Change::Hidden { name, hidden } => pdfcraft_organize::set_template_hidden(doc, name, *hidden)?,
             Change::Create { name, page } => pdfcraft_organize::create_template(doc, name, *page)?,
@@ -1470,6 +1473,15 @@ impl Session {
         self.after_script(id, &o, &written);
         Ok(o)
     }
+
+    /// The script errors not taken yet, out of what [`Session::take_js_output`] returns; the
+    /// alerts, console lines and requests stay for that call. A document script's error taken
+    /// here is reported again when the document scripts fail again on a later edit.
+    pub fn take_js_errors(&mut self, id: DocId) -> Vec<String> {
+        let Some(d) = self.docs.iter_mut().find(|d| d.id == id) else { return Vec::new() };
+        d.js_output.doc_errors.clear();
+        std::mem::take(&mut d.js_output.errors)
+    }
 }
 
 /// A page's words for form-field detection, in user space (underscore runs split from the
@@ -1896,6 +1908,7 @@ impl Session {
         drop_failed_link_effects(&mut o);
         self.keep_read_only_link_requests(id, &states, &mut o);
         let discard = o.execution_refused && !o.realm_untouched;
+        // A link's script has the document as its target, as a document script does.
         let result = self.apply_script_outcome(id, &states, o, false);
         if discard || result.is_err() {
             self.invalidate_javascript(id);

@@ -64,6 +64,7 @@ impl Automation {
             }
             "doc_close" => self.doc_close(&a)?,
             "doc_save" => self.doc_save(&a)?,
+            "doc_rename" => self.doc_rename(&a)?,
             "doc_set_info" => {
                 let edit = Edit::SetInfo { key: a.str("key")?.into(), value: a.str("value")?.into() };
                 self.apply(&a, edit)?
@@ -202,6 +203,7 @@ impl Automation {
             "bookmark_export" => self.bookmark_export(&a)?,
             "bookmark_import" => self.bookmark_import(&a)?,
             "bookmark_copy" => self.bookmark_copy(&a)?,
+            "bookmark_suggest" => self.bookmark_suggest(&a)?,
             "bookmark_add" => {
                 let page = self.page(&a)?;
                 let parent = a.opt_path("parent")?.unwrap_or_default();
@@ -315,6 +317,23 @@ impl Automation {
                 let at = self.opt_position(&a, "at")?;
                 self.apply(&a, Edit::DuplicatePages { pages, at })?
             }
+            "page_templates" => {
+                let templates: Vec<Value> =
+                    self.doc(&a)?.page_templates().into_iter().map(|t| json!({ "name": t.name, "hidden": t.hidden })).collect();
+                json!({ "templates": templates })
+            }
+            "page_template_spawn" => {
+                let at = self.opt_position(&a, "at")?.unwrap_or(self.doc(&a)?.info.pages.len());
+                let edit = Edit::SpawnTemplate { name: a.str("name")?.into(), at, rename: a.opt_bool("rename")?.unwrap_or(true) };
+                self.apply(&a, edit)?
+            }
+            "page_template_set_hidden" => self.apply(
+                &a,
+                Edit::SetTemplateHidden {
+                    name: a.str("name")?.into(),
+                    hidden: a.opt_bool("hidden")?.ok_or_else(|| ToolError::InvalidArgs("hidden is required".into()))?,
+                },
+            )?,
             "page_set_box" => self.page_set_box(&a)?,
             "page_transition_set" => self.page_transition_set(&a)?,
             "doc_create" => self.doc_create(&a)?,
@@ -614,6 +633,7 @@ impl Automation {
                     size: a.opt_num("size")?,
                     underline: a.opt_bool("underline")?,
                     line_spacing: a.opt_num("line_spacing")?,
+                    paragraph_spacing: a.opt_num("paragraph_spacing")?,
                     char_spacing: a.opt_num("char_spacing")?,
                     scale: a.opt_num("scale")?,
                     width,
@@ -837,9 +857,6 @@ impl Automation {
             "accessibility_autotag_form_fields" => self.accessibility_autotag_form_fields(&a)?,
             "ocr_recognize" => self.ocr_recognize(&a)?,
             "js_run" => self.js_run(&a)?,
-            "page_templates" => self.page_templates(&a)?,
-            "page_template_spawn" => self.page_template_spawn(&a)?,
-            "page_template_set_hidden" => self.page_template_set_hidden(&a)?,
             "js_tool_buttons" => self.js_tool_buttons(&a)?,
             "js_tool_button" => self.js_tool_button(&a)?,
             "js_event" => self.js_event(&a)?,

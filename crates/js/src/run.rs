@@ -325,6 +325,9 @@ pub(crate) fn run_in_context(
         tool_buttons: Vec::new(),
         compiled_units: 0,
         event_name: event.name.clone(),
+        may_change_pages: event.target.as_ref().is_none_or(|target| {
+            fields.iter().any(|f| f.name == *target && f.kind == crate::FieldType::Button && event.target_id.is_none_or(|id| f.object_id == Some(id)))
+        }),
         fields,
         icons,
         objects,
