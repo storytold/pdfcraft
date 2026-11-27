@@ -42,14 +42,18 @@ include!(concat!(env!("OUT_DIR"), "/craft_i18n.rs"));
 
 /// The embedded catalogs, offering exactly the languages in [`LANGUAGES`]. Built on first use; a
 /// locale is parsed on its first lookup.
-static I18N: LazyLock<Arc<I18n>> = LazyLock::new(|| {
+static I18N: LazyLock<Arc<I18n>> = LazyLock::new(host_catalogs);
+
+/// A catalog instance for one app host. Its date format follows that app's preferences without
+/// changing another app's date format, or the process-wide catalogs used for app text.
+pub fn host_catalogs() -> Arc<I18n> {
     let offered: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
     let (i18n, problems) = I18n::new(CRAFT_I18N, &offered);
     for problem in problems {
         log::warn!("interface catalogs: {problem}");
     }
     Arc::new(i18n)
-});
+}
 
 /// The embedded catalogs, shared with the framework's host.
 pub fn shared() -> Arc<I18n> {
