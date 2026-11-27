@@ -320,6 +320,17 @@ fn wait_for_prompt(h: &mut Harness<'static, PdfCraftApp>, label: &str, ready: im
     }
     panic!("script dialog did not show {label}");
 }
+/// Click the script prompt's OK once it has stopped moving. The prompt recentres for a few frames
+/// after it opens; a click in that window misses the button, and the worker never hears it (#8222).
+fn click_ok(h: &mut Harness<'static, PdfCraftApp>) {
+    h.run_steps(30);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline && h.query_by_label("OK").is_some() {
+        h.get_by_label("OK").click();
+        h.run_steps(2);
+    }
+}
+
 /// Advance bounded UI frames until the worker completion updates the expected synthetic field value.
 fn wait_value(h: &mut Harness<'static, PdfCraftApp>, name: &str, expected: &str) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
@@ -395,6 +406,8 @@ fn native_button_popup_and_response_resume_without_replaying_the_script() {
         wait_for(&mut h, "Morning");
         h.get_by_label("Morning").click();
         wait_for(&mut h, "Suffix");
+        // Settle before typing or confirming: click_ok also waits, and the field has to be the one that stays.
+        h.run_steps(30);
         if typed {
             h.get_by(|n| n.role() == egui::accesskit::Role::TextInput && n.label().as_deref() == Some("Answer") && n.value().as_deref() == Some("x"))
                 .focus();
@@ -409,7 +422,7 @@ fn native_button_popup_and_response_resume_without_replaying_the_script() {
             let crop = image::imageops::crop_imm(&image, 400, 220, 600, 460).to_image();
             crop.save(path).unwrap();
         }
-        h.get_by_label("OK").click();
+        click_ok(&mut h);
         wait_value(&mut h, "greeting", if typed { "08:00/typed answer/1" } else { "08:00/x/1" });
     }
 }
