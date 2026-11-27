@@ -288,6 +288,43 @@ pub(crate) fn info(d: &Document) -> Value {
     if let Some(s) = d.security_summary() {
         security["opened_as_owner"] = json!(s.owner);
     }
+    if let Some(purview) = d.purview() {
+        security["purview"] = json!({
+            "protected": purview.protected,
+            "label": purview.label.as_ref().map(|label| json!({
+                "id": label.id,
+                "name": label.name,
+                "description": label.description,
+                "tooltip": label.tooltip,
+                "color": label.color,
+                "sensitivity": label.sensitivity,
+                "active": label.active,
+                "protection": label.protection
+            })),
+            "rights": {
+                "owner": purview.rights.owner,
+                "view": purview.rights.view,
+                "edit": purview.rights.edit,
+                "save": purview.rights.save,
+                "comment": purview.rights.comment,
+                "extract": purview.rights.extract,
+                "export": purview.rights.export,
+                "print": purview.rights.print,
+                "forward": purview.rights.forward,
+                "reply": purview.rights.reply,
+                "reply_all": purview.rights.reply_all,
+                "view_rights": purview.rights.view_rights,
+                "change_rights": purview.rights.change_rights,
+                "object_model": purview.rights.object_model,
+                "document_edit": purview.rights.document_edit
+            },
+            "owner": purview.owner,
+            "content_id": purview.content_id,
+            "labeling_required": purview.labeling_required,
+            "default_label_id": purview.default_label_id,
+            "downgrade_justification_required": purview.downgrade_justification_required
+        });
+    }
     json!({
         "document": summary(d),
         "pdf_version": i.pdf_version,

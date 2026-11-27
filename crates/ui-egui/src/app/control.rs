@@ -478,6 +478,7 @@ impl PdfCraftApp {
         match value {
             "properties" => self.open_properties(ctx, PropsTab::Description),
             "security" => self.open_properties(ctx, PropsTab::Security),
+            "purview" => self.open_purview(),
             "fonts" => self.open_properties(ctx, PropsTab::Fonts),
             "custom" => self.open_properties(ctx, PropsTab::Custom),
             "advanced" => self.open_properties(ctx, PropsTab::Advanced),
@@ -546,6 +547,7 @@ impl PdfCraftApp {
             }
             "none" => {
                 self.cancel_dialogs(ctx);
+                self.purview_signin_prompt = None;
                 // Preferences is a separate live window, not part of the dialog host.
                 self.preferences = None;
                 self.redact_props = None;

@@ -21,6 +21,8 @@ struct Recipe<'a> {
     ocr: ocr::OcrSettings,
     /// The calling session's JavaScript preference, carried into each file's own session.
     javascript: bool,
+    /// The calling session's Purview provider, including its authenticated account and tokens.
+    purview_provider: Option<Arc<dyn pdfcraft_engine::PurviewProvider>>,
 }
 
 impl<'a> Recipe<'a> {
@@ -64,7 +66,14 @@ impl<'a> Recipe<'a> {
         if args.opt_num("dpi")?.is_some_and(|dpi| !(72.0..=600.0).contains(&dpi)) {
             return Err(Args::wrong("dpi", "72 to 600"));
         }
-        Ok(Self { steps, images, mono, ocr: auto.ocr_settings(args)?, javascript: auto.session.javascript() })
+        Ok(Self {
+            steps,
+            images,
+            mono,
+            ocr: auto.ocr_settings(args)?,
+            javascript: auto.session.javascript(),
+            purview_provider: auto.session.purview_provider(),
+        })
     }
 
     fn accepts(&self, path: &Path) -> bool {
@@ -72,13 +81,21 @@ impl<'a> Recipe<'a> {
         extension == "pdf" || (self.steps.contains(&"convert") && pdfcraft_engine::CONVERTIBLE.contains(&extension.as_str()))
     }
 
+    fn session(&self) -> Session {
+        let mut session = Session::new();
+        session.set_javascript(self.javascript);
+        if let Some(provider) = &self.purview_provider {
+            session.set_purview_provider(provider.clone());
+        }
+        session
+    }
+
     /// Run the recipe's steps on the file at `path` in a fresh session; returns the output bytes
     /// and a report entry per step.
     fn process(&self, path: &Path) -> Result<(Arc<Vec<u8>>, Vec<Value>)> {
         // A fresh session per file bounds retained document state and never touches caller tabs.
         // It keeps the caller's JavaScript preference, set before any open runs open-time scripts.
-        let mut session = Session::new();
-        session.set_javascript(self.javascript);
+        let mut session = self.session();
         let mut input = Vec::new();
         std::fs::File::open(path).map_err(failed)?.take(MAX_INPUT + 1).read_to_end(&mut input).map_err(failed)?;
         if input.len() as u64 > MAX_INPUT {
@@ -86,6 +103,11 @@ impl<'a> Recipe<'a> {
         }
         let name = path.file_name().and_then(std::ffi::OsStr::to_str).ok_or_else(|| failed("input name is not UTF-8"))?;
         let mut bytes = Arc::new(input);
+        if self.steps.first() != Some(&"convert")
+            && path.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+        {
+            bytes = session.convert_to_pdf(name, &bytes)?.1;
+        }
         let mut log = Vec::new();
         for step in &self.steps {
             let before = bytes.len();
@@ -334,5 +356,23 @@ mod tests {
         assert_eq!(report["files"][0]["status"], "planned", "{report}");
         assert!(report["files"][0]["output"].as_str().unwrap().ends_with("out/a.pdf"), "{report}");
         assert!(!dir.path().join("out").exists());
+    }
+
+    #[test]
+    fn batch_files_share_the_calling_sessions_purview_provider() {
+        let provider: Arc<dyn pdfcraft_engine::PurviewProvider> =
+            Arc::new(pdfcraft_purview::NativePurviewProvider::new(Some("e16b2bcd-0a3c-414a-8255-0bcc5f6a7246")));
+        let mut auto = Automation::new();
+        auto.session.set_purview_provider(provider.clone());
+        let recipe = Recipe {
+            steps: vec![],
+            images: optimize::ImageSettings::REDUCE,
+            mono: optimize::MonoSettings::REDUCE,
+            ocr: ocr::OcrSettings::default(),
+            javascript: false,
+            purview_provider: auto.session.purview_provider(),
+        };
+        let batch_provider = recipe.session().purview_provider().expect("batch retains the caller provider");
+        assert!(Arc::ptr_eq(&provider, &batch_provider));
     }
 }

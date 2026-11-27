@@ -749,6 +749,7 @@ fn apply_notice(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, notice
         Some(Notice::Reload) => {}
         Some(Notice::Repairs) => app.open_properties(ctx, crate::PropsTab::Advanced),
         Some(Notice::Security) => app.open_properties(ctx, crate::PropsTab::Security),
+        Some(Notice::PurviewLabel) => app.open_purview(),
         Some(Notice::Unlock) => {
             if let Some(doc) = app.views.get(index).and_then(|view| app.session.get(view.id)) {
                 app.unlock_prompt = Some(crate::UnlockPrompt::new(doc, None));

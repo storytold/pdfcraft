@@ -71,6 +71,7 @@ impl Document {
     /// missing comment appearances, and the signature states of named-layer signature
     /// appearances. Exports and Print as Image follow the page as shown; the viewer's badges
     /// are not document content and never enter them. Saving uses the working file.
+    /// Callers producing unprotected files must first check [`Self::check_unprotected_export`].
     pub fn export_source(&self) -> ExportSource {
         ExportSource {
             bytes: self.display.clone(),

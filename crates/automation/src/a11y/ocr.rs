@@ -245,7 +245,7 @@ impl Automation {
             OutputMode::EditableText => {
                 // The editable output writes the recognized text out of the document: a
                 // document that forbids copying refuses here, before anything runs.
-                self.doc_to_copy(a)?;
+                self.doc_to_copy(a)?.check_unprotected_export().map_err(failed)?;
                 // A write: the file does not exist yet, and write_atomic makes its folder.
                 let out = self.resolve(a.str("out")?, true)?;
                 if let Some(source) = self.session.get(id).and_then(|d| d.path.clone())

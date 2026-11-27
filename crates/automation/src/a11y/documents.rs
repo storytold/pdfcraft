@@ -13,7 +13,9 @@ impl Automation {
             (_, "rich") => format,
             (_, _) => return Err(ToolError::InvalidArgs("html_mode is only available for HTML exports (rich or simple)".into())),
         };
-        let export = self.doc_to_copy(a)?.export_office_checked(format);
+        let doc = self.doc_to_copy(a)?;
+        doc.check_unprotected_export().map_err(failed)?;
+        let export = doc.export_office_checked(format);
         write_atomic(&path, &export.bytes)?;
         // Text left out to keep a hostile page bounded is said, not silent (#3120).
         let truncated: Vec<usize> = export.truncated_pages.iter().map(|p| p.saturating_add(1)).collect();

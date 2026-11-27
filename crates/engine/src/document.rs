@@ -18,6 +18,12 @@ pub struct Document {
     pub id: DocId,
     pub name: String,
     pub path: Option<String>,
+    /// Microsoft Purview / MIP protection and label state. It is separate from
+    /// the PDF's standard password encryption, so rights remain enforceable
+    /// after the MIP SDK decrypts a temporary working copy.
+    pub purview: Option<crate::PurviewDocumentState>,
+    /// The protection and label state at the last successful open or save.
+    pub(crate) saved_purview: Option<crate::PurviewDocumentState>,
     /// The working file: what Save writes.
     pub bytes: Arc<Vec<u8>>,
     /// What is displayed (the page view, `page_render`, page images): `bytes`, plus what is drawn
@@ -355,6 +361,7 @@ impl Document {
     /// Save image as: image `index` on `page` as a file (extension, bytes).
     pub fn page_image_file(&self, page: usize, index: usize) -> Result<(&'static str, Vec<u8>), String> {
         self.check_copying().map_err(|e| e.to_string())?;
+        self.check_unprotected_export().map_err(|e| e.to_string())?;
         let editor = self.editor.as_ref().ok_or("the document can't be read")?;
         let img = self.page_images(page).into_iter().nth(index).ok_or_else(|| format!("page {} has no image {}", page + 1, index + 1))?;
         if img.is_form {
@@ -560,6 +567,14 @@ impl Document {
         self.editor.as_ref().and_then(|e| e.cos.permissions())
     }
 
+    pub fn purview(&self) -> Option<&crate::PurviewDocument> {
+        self.purview.as_ref().map(|state| &state.document)
+    }
+
+    pub fn purview_state(&self) -> Option<&crate::PurviewDocumentState> {
+        self.purview.as_ref()
+    }
+
     /// The renderer opened an encrypted file that the editing parser did not, so its permission
     /// bits are unknown. Unknown is not unrestricted: printing and copying are refused.
     fn permissions_unknown(&self) -> bool {
@@ -568,14 +583,26 @@ impl Document {
 
     /// Printing is allowed (Table 22, bit 3).
     pub fn allows_printing(&self) -> bool {
-        !self.permissions_unknown() && self.permissions().is_none_or(|p| p.print())
+        let password_allowed = !self.permissions_unknown() && self.permissions().is_none_or(|p| p.print());
+        if let Some(purview) = self.purview()
+            && purview.protected
+        {
+            return password_allowed && purview.rights.can_print();
+        }
+        password_allowed
     }
 
     /// Copying or otherwise extracting text and images is allowed (Table 22, bit 5): copying
     /// selected text, snapshots, Save Image As, exporting. Assistive technology may read the
     /// content regardless (§7.6.4.2), so reading aloud and accessibility tools don't ask.
     pub fn allows_copying(&self) -> bool {
-        !self.permissions_unknown() && self.permissions().is_none_or(|p| p.copy())
+        let password_allowed = !self.permissions_unknown() && self.permissions().is_none_or(|p| p.copy());
+        if let Some(purview) = self.purview()
+            && purview.protected
+        {
+            return password_allowed && purview.rights.can_copy();
+        }
+        password_allowed
     }
 
     /// [`Self::allows_copying`], as the error to report when it isn't.
@@ -583,14 +610,41 @@ impl Document {
         if self.allows_copying() { Ok(()) } else { Err(EditError::NotPermitted("copying text and images")) }
     }
 
+    pub fn check_viewing(&self) -> Result<(), EditError> {
+        if self.purview().is_some_and(|state| state.protected && !state.rights.can_view()) {
+            Err(EditError::Protection("Microsoft Purview viewing rights must be revalidated".into()))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Require explicit export rights before producing an unprotected derivative of an MIP file.
+    pub fn check_unprotected_export(&self) -> Result<(), EditError> {
+        if self.purview().is_some_and(|state| state.protected && !state.rights.can_export()) {
+            Err(EditError::NotPermitted("exporting unprotected content"))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Page changes (insert, delete, rotate, move) are allowed.
     pub fn allows_assembly(&self) -> bool {
+        if let Some(purview) = self.purview()
+            && purview.protected
+        {
+            return purview.rights.can_edit() && self.editable() && self.permissions().is_none_or(|p| p.assemble());
+        }
         self.editable() && self.permissions().is_none_or(|p| p.assemble())
     }
 
     /// Pages may be taken out into new files (Extract, Split): the page changes above and copying,
     /// since the new files don't keep the document's protection (#5081).
     pub fn allows_page_extraction(&self) -> bool {
+        if let Some(purview) = self.purview()
+            && purview.protected
+        {
+            return purview.rights.can_export() && self.editable() && self.permissions().is_none_or(|p| p.extract_pages());
+        }
         self.editable() && self.permissions().is_none_or(|p| p.extract_pages())
     }
 
@@ -649,6 +703,11 @@ impl Document {
 
     /// Changes to content and document information are allowed.
     pub fn allows_modification(&self) -> bool {
+        if let Some(purview) = self.purview()
+            && purview.protected
+        {
+            return self.editable() && purview.rights.can_edit() && self.permissions().is_none_or(|p| p.modify());
+        }
         self.editable() && self.permissions().is_none_or(|p| p.modify())
     }
 
@@ -665,23 +724,43 @@ impl Document {
 
     /// Filling in form fields is allowed (Table 22, bits 6 and 9).
     pub fn allows_form_filling(&self) -> bool {
+        if let Some(purview) = self.purview()
+            && purview.protected
+        {
+            return self.editable() && purview.rights.can_edit() && self.permissions().is_none_or(|p| p.fill_forms());
+        }
         self.editable() && self.permissions().is_none_or(|p| p.fill_forms())
     }
 
     /// Adding and changing comments is allowed (Table 22, bit 6).
     pub fn allows_annotation(&self) -> bool {
+        if let Some(purview) = self.purview()
+            && purview.protected
+        {
+            return self.editable() && purview.rights.can_comment() && self.permissions().is_none_or(|p| p.annotate());
+        }
         self.editable() && self.permissions().is_none_or(|p| p.annotate())
     }
 
     /// The document's security may be changed (Protect, Remove security): it is editable and,
     /// if encrypted, was opened with the owner password.
     pub fn allows_security_change(&self) -> bool {
+        if let Some(purview) = self.purview()
+            && purview.protected
+        {
+            return self.editable() && purview.rights.can_change_security() && self.permissions().is_none_or(|p| unrestricted(&p));
+        }
         self.editable() && self.permissions().is_none_or(|p| unrestricted(&p))
     }
 
     /// A password restricts the document and it wasn't opened with the owner password: entering
     /// that password ([`Session::unlock`](crate::Session::unlock)) lifts the restrictions.
     pub fn can_unlock(&self) -> bool {
+        if let Some(purview) = self.purview()
+            && purview.protected
+        {
+            return false;
+        }
         self.editable() && self.permissions().is_some_and(|p| !unrestricted(&p))
     }
 
@@ -804,9 +883,12 @@ impl Document {
         self.editor.as_ref().map(|e| e.cos.revision_ends()).unwrap_or_default()
     }
 
-    /// The file as last opened or saved, without unsaved edits: what an incremental save appends
-    /// to. This stays that file when undo has restored an older snapshot.
+    /// The file as last opened or saved, without unsaved edits. For MIP this is the protected
+    /// original; the editor separately retains its decrypted incremental-save baseline.
     pub fn saved_bytes(&self) -> Arc<Vec<u8>> {
+        if let Some(saved) = self.saved_purview.as_ref().filter(|state| state.document.protected) {
+            return saved.original.clone();
+        }
         self.editor.as_ref().map_or_else(|| self.bytes.clone(), |e| e.saved.clone())
     }
 

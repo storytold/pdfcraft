@@ -1,4 +1,6 @@
-use super::state::{DocumentCopyJob, LeftPanel, LinkOrigin, Mode, PasswordPrompt, PendingLink, QuickTool, RecentFile, RightPanel, UnlockPrompt};
+use super::state::{
+    DocumentCopyJob, LeftPanel, LinkOrigin, Mode, PasswordPrompt, PendingLink, PurviewSignInPrompt, QuickTool, RecentFile, RightPanel, UnlockPrompt,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use super::state::{OpenOutcome, OpenRequest, PendingRemoteLink};
 #[cfg(not(target_arch = "wasm32"))]
@@ -244,6 +246,8 @@ impl PdfCraftApp {
             let _ = recovery_dir;
             (Vec::new(), Autosave::new(None))
         };
+        let mut session = Session::new();
+        session.set_purview_provider(Arc::new(pdfcraft_purview::NativePurviewProvider::new(None)));
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             // PLAN: assumed open_worker::queue(&Host, Wake) -> JobQueue<u64, ResultKind> (pdf-shell-w13).
@@ -283,7 +287,7 @@ impl PdfCraftApp {
             dock_shown: Default::default(),
             command_states: Default::default(),
             rail_side: craft::behavior::DockSide::End,
-            session: Session::new(),
+            session,
             status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),
@@ -478,6 +482,16 @@ impl PdfCraftApp {
             control_server: None,
             control_epoch: 0,
             bookmark_clipboard: None,
+            purview_signin_prompt: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            purview_sign_in_job: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            purview_labels_job: None,
+            purview_labels: Vec::new(),
+            purview_labels_error: None,
+            purview_login_hint: String::new(),
+            purview_label_id: String::new(),
+            purview_justification: String::new(),
             word_count_options: Default::default(),
             printer_marks_draft: Default::default(),
             convert_colours_draft: Default::default(),
@@ -609,6 +623,7 @@ impl PdfCraftApp {
         let fs_open = self.prompts.full_screen.is_some_and(|(id, _)| self.dialogs.open_dialogs().iter().any(|d| d.id == id));
         self.dialogs.open_dialogs().len() > usize::from(fs_open) + usize::from(self.dialogs.is_open::<craft::ui::dialog::RecoveryDialog>())
             || self.password_prompt.is_some()
+            || self.purview_signin_prompt.is_some()
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()
             || self.pending_remote_link.is_some()
@@ -748,6 +763,10 @@ impl PdfCraftApp {
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);
         self.apply_status_captions(lang);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_purview_sign_in(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_purview_labels();
         // Form date fields name months in the date language (Preferences ▸ Date format), which
         // follows the interface language until one is picked (#5303).
         pdfcraft_engine::dates::use_form_date_language(self.session.date_language().unwrap_or(lang.code()));
@@ -768,7 +787,6 @@ impl PdfCraftApp {
         // The picks first: a file the user picked opens ahead of a startup file that arrived with it, which then waits
         // for that open and goes to a background tab.
         self.process_picks(ctx);
-        // PLAN: assumed PdfCraftApp::open_intake(&mut self, &egui::Context), which opens what the intake holds (pdf-shell-w13).
         self.open_intake(ctx);
         self.present_portfolios(ctx);
         if let Some((_, id)) = self.active_ids() {

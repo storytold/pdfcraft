@@ -140,8 +140,8 @@ pub use platform::ui_scale;
 #[cfg(not(target_arch = "wasm32"))]
 use state::OpenRequest;
 pub use state::{
-    CommentClip, LeftPanel, LinkOrigin, Mode, OpenOutcome, PageClip, PagePropsDraft, PasswordPrompt, PendingLink, PendingRemoteLink, QuickTool,
-    RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel, UnlockPrompt,
+    CommentClip, LeftPanel, LinkOrigin, Mode, OpenOutcome, PageClip, PagePropsDraft, PasswordPrompt, PendingLink, PendingRemoteLink,
+    PurviewSignInPrompt, QuickTool, RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel, UnlockPrompt,
 };
 pub use tools::bulk_fields;
 use tools::calc_order_ui;
@@ -186,6 +186,12 @@ use workflows::web_print;
 /// A background job queue of the app, built over the host's jobs and the app's wake.
 type Queue<K, R> = craft::host::queue::JobQueue<K, R>;
 
+#[cfg(not(target_arch = "wasm32"))]
+type PurviewSignInResult = (bool, Result<(), pdfcraft_engine::PurviewError>);
+
+#[cfg(not(target_arch = "wasm32"))]
+type PurviewLabelsResult = (Option<String>, Result<Vec<pdfcraft_engine::PurviewLabel>, pdfcraft_engine::PurviewError>);
+
 /// A file being opened in the background, waiting for the open queue's answer.
 #[cfg(not(target_arch = "wasm32"))]
 struct PendingOpen {
@@ -201,6 +207,10 @@ struct PendingOpen {
     /// An answer taken from the queue and kept back for later (a password prompt waiting for an
     /// earlier file's password retry).
     ready: Option<open_worker::ResultKind>,
+    /// This result has already been inspected again after a successful Purview sign-in.
+    purview_retried: bool,
+    /// Do not inspect a document under an account that is being changed.
+    deferred: Option<(open_worker::Job, craft::host::queue::Priority)>,
     /// Reopen Closed Tab asked for it: its closed-tab entry goes once it has opened, and stays when it fails.
     reopen: bool,
 }
@@ -502,6 +512,11 @@ pub struct PdfCraftApp {
     /// The progress card of each background job that shows one.
     pub(crate) progress_cards: std::collections::HashMap<crate::notices::ProgressKey, craft::ui::runtime::toast::ToastId>,
     pub password_prompt: Option<PasswordPrompt>,
+    pub purview_signin_prompt: Option<PurviewSignInPrompt>,
+    #[cfg(not(target_arch = "wasm32"))]
+    purview_sign_in_job: Option<std::sync::mpsc::Receiver<PurviewSignInResult>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    purview_labels_job: Option<std::sync::mpsc::Receiver<PurviewLabelsResult>>,
     /// Whole-document text copies (#2639) reading their pages off the UI thread.
     pub(crate) text_copies: Queue<DocId, String>,
     /// Reveal-in-file-manager calls, which can block on a slow mount; their failures are shown by `drain_reveals`.
@@ -676,6 +691,12 @@ pub struct PdfCraftApp {
     pub printer_marks_draft: printer_marks_ui::PrinterMarksDraft,
     pub convert_colours_draft: convert_colours_ui::ConvertColoursDraft,
     pub hairlines_draft: hairlines_ui::HairlinesDraft,
+    /// Microsoft Purview label selection and downgrade justification.
+    pub purview_labels: Vec<pdfcraft_purview::PurviewLabel>,
+    pub(crate) purview_labels_error: Option<String>,
+    pub(crate) purview_login_hint: String,
+    pub purview_label_id: String,
+    pub purview_justification: String,
     /// New bookmarks from text styles dialog state (#1693).
     pub text_style_draft: bookmark_styles_ui::TextStyleDraft,
     /// Set Page Boxes dialog state.

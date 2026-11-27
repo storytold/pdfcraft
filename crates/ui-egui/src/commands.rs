@@ -327,6 +327,11 @@ impl PdfCraftApp {
 
     /// Why the command can't run right now, for the user.
     fn disabled_reason(&self, spec: &CommandSpec) -> String {
+        if matches!(spec.id, "sign.digital" | "sign.certify" | "sign.certify_invisible")
+            && self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|doc| doc.purview().is_some_and(|state| state.protected))
+        {
+            return tl!("Digitally signing a Microsoft Purview-protected document is not available yet.").to_string();
+        }
         match spec.needs {
             commands::Needs::Undo => tl!("Nothing to undo").to_string(),
             commands::Needs::Redo => tl!("Nothing to redo").to_string(),
@@ -445,6 +450,71 @@ impl PdfCraftApp {
                     self.notify_tr("Security will be removed when you save");
                 }
             }
+            "purview.sign_in" => self.start_purview_sign_in(ctx),
+            "purview.sign_out" => {
+                if let Some(reason) = self.purview_account_change_reason() {
+                    self.notify_tr(reason);
+                } else {
+                    match self.purview_status() {
+                        pdfcraft_engine::PurviewStatus::Ready => match self.session.purview_sign_out() {
+                            Ok(()) => {
+                                self.clear_purview_labels();
+                                self.clear_purview_justification();
+                                if self.session.purview_status() == pdfcraft_engine::PurviewStatus::Ready {
+                                    self.refresh_purview_labels(ctx);
+                                }
+                                self.notify_tr("Signed out");
+                            }
+                            Err(error) => self.notify_fmt("Sign-out failed: {e}", &[("e", &error.to_string())]),
+                        },
+                        pdfcraft_engine::PurviewStatus::SigningIn => self.notify_tr("Wait for Microsoft sign-in to finish"),
+                        _ => self.notify_tr("No Microsoft account is signed in"),
+                    }
+                }
+            }
+            "purview.status" => {
+                let status = format!("{:?}", self.purview_status());
+                let account = self.session.purview_account().map(|account| format!("; account: {}", account.label()));
+                if let Some((_, id)) = self.active_ids()
+                    && let Some(document) = self.session.get(id)
+                {
+                    if let Some(purview) = document.purview() {
+                        let label = purview.label.as_ref().map(|label| format!("; label: {}", label.name)).unwrap_or_default();
+                        self.notify_fmt(
+                            "Microsoft Purview: {status}{account}{label}",
+                            &[("status", &status), ("account", &account.clone().unwrap_or_default()), ("label", &label)],
+                        );
+                    } else {
+                        self.notify_fmt(
+                            "Microsoft Purview: {status}{account}; no label or protection detected",
+                            &[("status", &status), ("account", &account.clone().unwrap_or_default())],
+                        );
+                    }
+                } else {
+                    self.notify_fmt(
+                        "Microsoft Purview: {status}{account}",
+                        &[("status", &status), ("account", &account.clone().unwrap_or_default())],
+                    );
+                }
+            }
+            "purview.apply_label" => self.open_purview(),
+            "purview.remove_label" => match self.active_ids().map(|(_, id)| id) {
+                Some(id) => {
+                    let justification = if self.purview_justification.trim().is_empty() { None } else { Some(self.purview_justification.as_str()) };
+                    match self.session.purview_remove_label(id, justification) {
+                        Ok(()) => self.notify_tr("Microsoft Purview label removed"),
+                        Err(error) => self.notify_fmt("Couldn't remove the Microsoft Purview label: {e}", &[("e", &error.to_string())]),
+                    }
+                }
+                None => self.notify_tr("Open a PDF first"),
+            },
+            "purview.remove_protection" => match self.active_ids().map(|(_, id)| id) {
+                Some(id) => match self.session.purview_remove_protection(id) {
+                    Ok(()) => self.notify_tr("Microsoft Purview protection removed"),
+                    Err(error) => self.notify_fmt("Couldn't remove Microsoft Purview protection: {e}", &[("e", &error.to_string())]),
+                },
+                None => self.notify_tr("Open a PDF first"),
+            },
             link if pdfcraft_engine::links::for_command(link).is_some() => {
                 if let Some(l) = pdfcraft_engine::links::for_command(link) {
                     self.open_url(l.url);

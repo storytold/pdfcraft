@@ -100,13 +100,25 @@ Ordinary saves append your changes and leave the original bytes untouched. Edits
 <td width="33%" valign="top">
 
 ### Yours
-No account, no telemetry, no cloud. It works offline and opens instantly. The engine, CLI and app are all open source.
+No account for ordinary use, no telemetry in the default build, and it works offline. Microsoft Purview is an explicit opt-in for organizations that require it. The engine, CLI and app are all open source.
 
 </td>
 </tr>
 </table>
 
 ---
+
+### Microsoft Purview
+
+PdfCraft has a native Microsoft Purview / MIP integration boundary for sensitivity labels,
+IRM-protected PDF viewing, rights enforcement, label application and re-publishing. Native SDK
+support is opt-in and uses Microsoft's official SDK; setup and public-release requirements are
+documented in [docs/storytold-purview-onetime-setup.md](docs/storytold-purview-onetime-setup.md).
+
+**Proof of concept only:** use synthetic documents, not real sensitive files. Protected saves
+and recovery are checked before output; optimization, digital signing and label/protection changes on protected
+documents are disabled until they can preserve and verify protection. Other paths and live
+tenant rights still require validation before release.
 
 ## Read anything, beautifully
 

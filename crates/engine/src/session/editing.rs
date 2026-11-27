@@ -2,9 +2,9 @@
 use super::check_refresh_panic;
 use super::{
     Arc, DocId, Document, Edit, EditCtx, EditError, Label, MAX_UNDO, ObjectKind, OnceLock, RenderPool, SaveOptions, Scope, Session,
-    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, editor_signatures,
-    guard, info_fields, inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions,
-    sync_xfa_state, undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets,
+    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, check_purview_permission, comment_list, display_bytes,
+    display_config, editor_signatures, guard, info_fields, inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of,
+    shown_under_redactions, sync_xfa_state, undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets,
 };
 use crate::{EditNotice, MarkKind, print_preview_layers};
 
@@ -123,6 +123,22 @@ fn sync_script_history(doc: &Document, previous: &pdfcraft_cos::Document, restor
 }
 
 impl Session {
+    fn authorize_edit_sources(&self, edit: Edit) -> Result<Edit, EditError> {
+        match edit {
+            Edit::ReplacePages { pages, name, bytes, src_pages } => {
+                Ok(Edit::ReplacePages { pages, bytes: self.source_export_bytes(&name, &bytes)?, name, src_pages })
+            }
+            Edit::InsertPagesFrom { name, bytes, pages, at, field_conflicts } => {
+                Ok(Edit::InsertPagesFrom { bytes: self.source_export_bytes(&name, &bytes)?, name, pages, at, field_conflicts })
+            }
+            Edit::ImportData { name, bytes } => Ok(Edit::ImportData { bytes: self.source_export_bytes(&name, &bytes)?, name }),
+            Edit::Batch { label, edits } => {
+                Ok(Edit::Batch { label, edits: edits.into_iter().map(|edit| self.authorize_edit_sources(edit)).collect::<Result<Vec<_>, _>>()? })
+            }
+            edit => Ok(edit),
+        }
+    }
+
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
         self.apply_reporting(id, edit).map(|_| ())
@@ -138,6 +154,7 @@ impl Session {
 
     /// [`Session::apply`], giving back what an [`Edit::PrepareText`] did (`None` for other edits).
     fn apply_reporting(&mut self, id: DocId, edit: Edit) -> Result<Option<pdfcraft_edit::text::forms::Preparation>, EditError> {
+        let edit = self.authorize_edit_sources(edit)?;
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
@@ -165,6 +182,11 @@ impl Session {
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
+        if let Some(purview) = doc.purview.as_ref()
+            && purview.document.protected
+        {
+            check_purview_permission(&edit, &purview.document.rights)?;
+        }
         if let Some(p) = editor.cos.permissions() {
             check_permission(&edit, &p)?;
         }

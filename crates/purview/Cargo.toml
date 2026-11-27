@@ -1,0 +1,28 @@
+[package]
+name = "pdfcraft-purview"
+description = "Microsoft Purview Information Protection integration for PdfCraft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+mip-auth = ["dep:craft-mime", "dep:oauth2", "dep:reqwest", "dep:serde", "dep:serde_json", "dep:thiserror", "dep:webbrowser"]
+mip-sdk = ["mip-auth"]
+
+[dependencies]
+pdfcraft-purview-policy = { workspace = true }
+log = { workspace = true }
+craft-mime = { workspace = true, optional = true }
+oauth2 = { workspace = true, optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"], optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+webbrowser = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+craft-platform = { workspace = true }

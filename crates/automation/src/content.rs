@@ -300,6 +300,9 @@ impl Automation {
             }
             None => from,
         };
+        if to_doc != from {
+            source.check_unprotected_export().map_err(failed)?;
+        }
         let doc = self.session.get(to_doc).ok_or_else(|| failed("the document is no longer open"))?;
         let n = doc.info.pages.len();
         let to_page = match a.opt_int("to_page")? {

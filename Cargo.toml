@@ -14,6 +14,8 @@ repository = "https://github.com/storytold/pdfcraft"
 [workspace.dependencies]
 # The framework facade: every framework crate is reached through it (contract head); its features pick the crates.
 craft = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", default-features = false }
+# Windows Purview staging needs the platform helper without the UI facade.
+craft-platform = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", default-features = false }
 craft-markdown = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
 # Small, revision-bound UI drafts; the existing engine remains the owner of PDF edits/history.
 edit-session = { path = "vendor/edit-session", version = "=0.1.0-alpha.2" }
@@ -43,6 +45,8 @@ craft-fonts-build = { version = "0.1.0", git = "https://github.com/storytold/cra
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", features = ["ui"] }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", features = ["cos", "crypt", "filters", "fonts"] }
+oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest-blocking"] }
+webbrowser = "1.2.7"
 # The writers the Word and RTF exports map onto (storytold/craft-libs#793), at storytold/craft-libs#1467:
 # its font and colour lookups take constant time, as PdfCraft's own writer did. craft-rtf, craft-wordmodel and
 # craft-docx move together: craft_rtf::doc::export takes its own revision's Document.
@@ -99,6 +103,8 @@ pdfcraft-automation = { path = "crates/automation", version = "0.22.0", default-
 pdfcraft-prc = { package = "craft-prc", git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
 craft-prc = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
 pdfcraft-prc-render = { path = "crates/prc-render", version = "0.22.0" }
+pdfcraft-purview = { path = "crates/purview", version = "0.22.0", default-features = false }
+pdfcraft-purview-policy = { path = "crates/purview-policy", version = "0.22.0" }
 
 # pdf
 hayro = "0.7.1"

@@ -164,6 +164,7 @@ impl crate::PdfCraftApp {
             "notice": notice,
             "progress": progress,
             "password_prompt": self.password_prompt.is_some(),
+            "purview_signin_prompt": self.purview_signin_prompt.is_some(),
             "close_prompt": self.close_guard.is_some(),
         })
     }
@@ -197,7 +198,11 @@ impl crate::PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open(&mut self, path: &str) -> Result<Value, String> {
         match self.open_path(path) {
-            crate::OpenOutcome::Opened => Ok(json!({ "opened": path, "password_prompt": self.password_prompt.is_some() })),
+            crate::OpenOutcome::Opened => Ok(json!({
+                "opened": path,
+                "password_prompt": self.password_prompt.is_some(),
+                "purview_signin_prompt": self.purview_signin_prompt.is_some()
+            })),
             crate::OpenOutcome::Focused => Ok(json!({ "opened": path, "focused": true })),
             crate::OpenOutcome::Pending => Ok(json!({ "accepted": path, "pending": true })),
             crate::OpenOutcome::Failed(error) => Err(error.to_string()),

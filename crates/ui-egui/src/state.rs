@@ -240,6 +240,22 @@ pub struct PasswordPrompt {
     pub(crate) display_override: Option<(craft::pages::PageDisplay, bool)>,
 }
 
+/// An open that reached Microsoft Purview and now waits for Entra sign-in. A successful sign-in
+/// retries the same snapshot and keeps the original tab/tool/destination context.
+pub struct PurviewSignInPrompt {
+    pub name: String,
+    pub path: Option<String>,
+    pub bytes: std::sync::Arc<Vec<u8>>,
+    pub error: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) stamp: Option<craft::platform::watch::FileStamp>,
+    pub(crate) activate: bool,
+    pub(crate) recovered: Option<craft::platform::autosave::RecoveryEntry>,
+    pub(crate) then: Option<&'static str>,
+    pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
+    pub(crate) display_override: Option<(craft::pages::PageDisplay, bool)>,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct OpenRequest {
     pub(crate) name: String,

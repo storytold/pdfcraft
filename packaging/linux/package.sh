@@ -54,9 +54,17 @@ echo "==> PdfCraft $VERSION$LABEL_SUFFIX for Linux $ARCH ($FORMATS)"
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
   if [[ -n "${CROSS_TARGET:-}" ]]; then
-    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target "$CROSS_TARGET")
+    if [[ -n "${MIP_SDK_ROOT:-}" || -n "${PDFCRAFT_MIP_SDK_ROOT:-}" ]]; then
+      (cd "$ROOT" && cargo build --release --locked --features mip-sdk -p pdfcraft -p pdfcraft-cli --target "$CROSS_TARGET")
+    else
+      (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target "$CROSS_TARGET")
+    fi
   else
-    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli)
+    if [[ -n "${MIP_SDK_ROOT:-}" || -n "${PDFCRAFT_MIP_SDK_ROOT:-}" ]]; then
+      (cd "$ROOT" && cargo build --release --locked --features mip-sdk -p pdfcraft -p pdfcraft-cli)
+    else
+      (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli)
+    fi
   fi
 fi
 BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
@@ -67,7 +75,62 @@ rm -rf "$WORK"
 # ---- stage an FHS tree (shared by every format) -------------------------------------------------
 install -Dm755 "$BIN/pdfcraft" "$STAGE/usr/bin/pdfcraft"
 install -Dm755 "$BIN/pdfcraft-cli" "$STAGE/usr/bin/pdfcraft-cli"
+mkdir -p "$STAGE/usr/lib"
 "${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/pdfcraft" "$STAGE/usr/bin/pdfcraft-cli" 2>/dev/null || true
+if [[ -n "${MIP_SDK_ROOT:-}" || -n "${PDFCRAFT_MIP_SDK_ROOT:-}" ]]; then
+  MIP_SDK_ROOT="${MIP_SDK_ROOT:-${PDFCRAFT_MIP_SDK_ROOT:-}}"
+  case "$ARCH" in
+    aarch64) MIP_ARCH=arm64 ;;
+    x86_64) MIP_ARCH=amd64 ;;
+    *) MIP_ARCH="$ARCH" ;;
+  esac
+  MIP_BIN="$MIP_SDK_ROOT/bins/release/$MIP_ARCH"
+  if [[ ! -d "$MIP_BIN" ]]; then
+    echo "error: MIP SDK binary directory is missing: $MIP_BIN" >&2
+    exit 1
+  fi
+  HELPER="$BIN/pdfcraft-purview-helper"
+  if [[ ! -f "$HELPER" ]]; then
+    HELPER=""
+    while IFS= read -r candidate; do
+      if [[ -z "$HELPER" || "$candidate" -nt "$HELPER" ]]; then HELPER="$candidate"; fi
+    done < <(find "$BIN/build" -path '*/out/pdfcraft-purview-helper' -type f 2>/dev/null)
+  fi
+  if [[ -z "$HELPER" || ! -f "$HELPER" ]]; then
+    echo "error: sdk build did not produce pdfcraft-purview-helper" >&2
+    exit 1
+  fi
+  case "$ARCH" in
+    x86_64) HELPER_MACHINE=3e00 ;;
+    aarch64) HELPER_MACHINE=b700 ;;
+    riscv64) HELPER_MACHINE=f300 ;;
+  esac
+  helper_ident="$(od -An -tx1 -N6 "$HELPER" | tr -d '[:space:]')"
+  helper_machine="$(od -An -tx1 -j18 -N2 "$HELPER" | tr -d '[:space:]')"
+  if [[ "$helper_ident" != 7f454c460201 || "$helper_machine" != "$HELPER_MACHINE" ]]; then
+    echo "error: pdfcraft-purview-helper is not a little-endian 64-bit ELF for $ARCH" >&2
+    exit 1
+  fi
+  install -Dm755 "$HELPER" "$STAGE/usr/lib/pdfcraft/pdfcraft-purview-helper"
+  for required in mip_core mip_file_sdk mip_protection_sdk mip_upe_sdk; do
+    matches=("$MIP_BIN/lib$required.so"*)
+    if [[ ! -f "${matches[0]}" ]]; then
+      echo "error: required MIP SDK library is missing: lib$required.so" >&2
+      exit 1
+    fi
+  done
+  for lib in "$MIP_BIN"/*.so*; do
+    [[ -f "$lib" ]] || continue
+    install -Dm755 "$lib" "$STAGE/usr/lib/pdfcraft/$(basename "$lib")"
+  done
+  for notice in LICENSE.txt LicenseTerms.rtf ThirdPartyNotice.txt; do
+    if [[ ! -s "$MIP_SDK_ROOT/$notice" ]]; then
+      echo "error: required MIP SDK notice is missing: $MIP_SDK_ROOT/$notice" >&2
+      exit 1
+    fi
+    install -Dm644 "$MIP_SDK_ROOT/$notice" "$STAGE/usr/share/doc/pdfcraft/MIP-$notice"
+  done
+fi
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"
@@ -114,6 +177,10 @@ if has cli; then
   CLI_DIR="$WORK/cli/$CLI_NAME"
   mkdir -p "$CLI_DIR"
   cp "$STAGE/usr/bin/pdfcraft-cli" "$CLI_DIR/"
+  if [[ -n "${MIP_SDK_ROOT:-}" || -n "${PDFCRAFT_MIP_SDK_ROOT:-}" ]]; then
+    cp "$STAGE/usr/lib/pdfcraft/"* "$CLI_DIR/"
+    cp "$STAGE/usr/share/doc/pdfcraft/"MIP-* "$CLI_DIR/"
+  fi
   copy_docs "$CLI_DIR"
   tar -C "$WORK/cli" -czf "$DIST/$CLI_NAME.tar.gz" "$CLI_NAME"
   echo "wrote $DIST/$CLI_NAME.tar.gz"

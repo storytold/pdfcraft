@@ -1,0 +1,12 @@
+[package]
+name = "pdfcraft-purview-policy"
+description = "Microsoft Purview policy types and provider contract for PdfCraft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }

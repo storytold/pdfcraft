@@ -58,7 +58,11 @@ echo "==> PdfCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $N
 if [[ "$SKIP_BUILD" = 0 ]]; then
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli "${args[@]}")
+  if [[ -n "${MIP_SDK_ROOT:-}" || -n "${PDFCRAFT_MIP_SDK_ROOT:-}" ]]; then
+    (cd "$ROOT" && cargo build --release --locked --features mip-sdk -p pdfcraft -p pdfcraft-cli "${args[@]}")
+  else
+    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli "${args[@]}")
+  fi
 fi
 
 rm -rf "$WORK"
@@ -74,10 +78,14 @@ done
 sign() {
   # Hardened runtime + secure timestamp for a real identity; ad-hoc can't be timestamped.
   local ts=(--timestamp)
-  [[ "$IDENTITY" = "-" ]] && ts=(--timestamp=none)
   local kc=()
   [[ -n "${MACOS_KEYCHAIN:-}" ]] && kc=(--keychain "$MACOS_KEYCHAIN")
-  codesign --force --sign "$IDENTITY" ${kc[@]+"${kc[@]}"} "${ts[@]}" "$@"
+  if [[ "$IDENTITY" = "-" ]]; then
+    ts=(--timestamp=none)
+    codesign --force --sign "$IDENTITY" ${kc[@]+"${kc[@]}"} "${ts[@]}" "$@"
+  else
+    codesign --force --sign "$IDENTITY" ${kc[@]+"${kc[@]}"} --options runtime "${ts[@]}" "$@"
+  fi
 }
 
 # `stapler staple` and `stapler validate` both fetch the ticket from Apple's CloudKit, and a dropped
@@ -114,10 +122,88 @@ notarize() {
 
 # ---- PdfCraft.app ----------------------------------------------------------------------------
 echo "==> assembling $APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
 cp "$WORK/bin/pdfcraft" "$APP/Contents/MacOS/PdfCraft"
 cp "$ROOT/assets/app-icon/pdfcraft.icns" "$APP/Contents/Resources/PdfCraft.icns"
+if [[ -n "${MIP_SDK_ROOT:-}" || -n "${PDFCRAFT_MIP_SDK_ROOT:-}" ]]; then
+  MIP_SDK_ROOT="${MIP_SDK_ROOT:-${PDFCRAFT_MIP_SDK_ROOT:-}}"
+  MIP_BIN="$MIP_SDK_ROOT/bins/release"
+  case "$ARCH" in
+    universal)
+      MIP_ARM64="$MIP_BIN/arm64"
+      MIP_X86="$MIP_BIN/x86_64"
+      ;;
+    aarch64)
+      MIP_ARM64="$MIP_BIN/arm64"
+      MIP_X86=
+      ;;
+    x86_64)
+      MIP_ARM64=
+      MIP_X86="$MIP_BIN/x86_64"
+      ;;
+  esac
+  find_mip_helper() {
+    local target="$1" arch="$2" found="" candidate
+    while IFS= read -r candidate; do
+      if lipo -verify_arch "$arch" "$candidate" >/dev/null 2>&1 &&
+         otool -L "$candidate" | grep -F 'libmip_file_sdk.dylib' >/dev/null; then
+        if [[ -z "$found" || "$candidate" -nt "$found" ]]; then found="$candidate"; fi
+      fi
+    done < <(find "$CARGO_TARGET_DIR/$target/release/build" -path '*/out/pdfcraft-purview-helper' -type f 2>/dev/null)
+    if [[ -z "$found" ]]; then
+      echo "error: sdk build did not produce an $arch pdfcraft-purview-helper for $target" >&2
+      return 1
+    fi
+    printf '%s\n' "$found"
+  }
+  HELPERS=()
+  for t in "${TARGETS[@]}"; do
+    case "$t" in aarch64-apple-darwin) helper_arch=arm64 ;; x86_64-apple-darwin) helper_arch=x86_64 ;; esac
+    found="$(find_mip_helper "$t" "$helper_arch")" || exit 1
+    HELPERS+=("$found")
+  done
+  lipo -create -output "$APP/Contents/MacOS/pdfcraft-purview-helper" "${HELPERS[@]}"
+  copy_mip_dylibs() {
+    local source_dir="$1" dest_arch="${2:-}"
+    local lib
+    for lib in "$source_dir"/*.dylib; do
+      [[ -f "$lib" ]] || continue
+      [[ "$lib" != *_nostrip.dylib ]] || continue
+      local name
+      name="$(basename "$lib")"
+      if [[ "$dest_arch" = universal && -f "$APP/Contents/Frameworks/$name" ]]; then
+        lipo -create -output "$APP/Contents/Frameworks/$name.universal" "$APP/Contents/Frameworks/$name" "$lib"
+        mv "$APP/Contents/Frameworks/$name.universal" "$APP/Contents/Frameworks/$name"
+      else
+        cp "$lib" "$APP/Contents/Frameworks/$name"
+      fi
+    done
+  }
+  if [[ -n "$MIP_ARM64" ]]; then copy_mip_dylibs "$MIP_ARM64" ""; fi
+  if [[ -n "$MIP_X86" ]]; then copy_mip_dylibs "$MIP_X86" universal; fi
+  for required in mip_core mip_file_sdk mip_protection_sdk mip_upe_sdk; do
+    if [[ ! -f "$APP/Contents/Frameworks/lib$required.dylib" ]]; then
+      echo "error: required MIP SDK library is missing: lib$required.dylib" >&2
+      exit 1
+    fi
+  done
+  for notice in LICENSE.txt LicenseTerms.rtf ThirdPartyNotice.txt; do
+    if [[ ! -s "$MIP_SDK_ROOT/$notice" ]]; then
+      echo "error: required MIP SDK notice is missing: $MIP_SDK_ROOT/$notice" >&2
+      exit 1
+    fi
+    cp "$MIP_SDK_ROOT/$notice" "$APP/Contents/Resources/MIP-$notice"
+  done
+  for lib in "$APP"/Contents/Frameworks/*.dylib; do
+    [[ -f "$lib" ]] || continue
+    if [[ "$ARCH" = universal ]]; then
+      lipo -verify_arch arm64 x86_64 "$lib"
+    fi
+    sign --entitlements "$HERE/entitlements.plist" "$lib"
+  done
+  sign --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/pdfcraft-purview-helper"
+fi
 # Required embedded-font notices are independent of optional font inputs.
 cp "$ROOT/NOTICE" "$APP/Contents/Resources/NOTICE"
 # The standard About panel (PdfCraft menu > About PdfCraft) shows Credits.rtf under the version:
@@ -182,15 +268,14 @@ hdiutil_retry create create -srcfolder "$STAGE" -volname "PdfCraft" -fs HFS+ -fo
 sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
 # The app inside the image must still pass --strict, so a makehybrid-style regression can't ship.
-MOUNT="$WORK/dmg-check"
-rm -rf "$MOUNT"
-mkdir -p "$MOUNT"
+MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/pdfcraft-dmg-check.XXXXXX")"
 hdiutil_retry attach attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG" >/dev/null
 if ! codesign --verify --strict --deep --verbose=2 "$MOUNT/PdfCraft.app"; then
   hdiutil_retry detach detach "$MOUNT" >/dev/null || true
   exit 1
 fi
 hdiutil_retry detach detach "$MOUNT" >/dev/null
+rmdir "$MOUNT"
 if [[ "$NOTARIZE" = 1 ]]; then
   notarize "$DMG"
   stapler_retry staple "$DMG"
@@ -203,6 +288,16 @@ echo "==> building $CLI_ZIP"
 CLI_DIR="$WORK/pdfcraft-cli-$VERSION-macos-$ARCH"
 mkdir -p "$CLI_DIR"
 cp "$WORK/bin/pdfcraft-cli" "$CLI_DIR/"
+if [[ -n "${MIP_SDK_ROOT:-}" || -n "${PDFCRAFT_MIP_SDK_ROOT:-}" ]]; then
+  cp "$APP/Contents/MacOS/pdfcraft-purview-helper" "$CLI_DIR/"
+  for lib in "$APP"/Contents/Frameworks/*.dylib; do
+    [[ -f "$lib" ]] || continue
+    cp "$lib" "$CLI_DIR/"
+  done
+  for notice in LICENSE.txt LicenseTerms.rtf ThirdPartyNotice.txt; do
+    cp "$APP/Contents/Resources/MIP-$notice" "$CLI_DIR/"
+  done
+fi
 copy_docs "$CLI_DIR"
 sign --options runtime "$CLI_DIR/pdfcraft-cli"
 codesign --verify --strict --verbose=2 "$CLI_DIR/pdfcraft-cli"

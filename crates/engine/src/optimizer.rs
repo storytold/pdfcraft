@@ -68,6 +68,11 @@ impl Session {
     /// `discard` categories needs. A full rewrite: signed documents are refused.
     pub fn optimize_job(&self, id: DocId, settings: &optimize::Settings, discard: &[Hidden]) -> Result<OptimizeJob, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if doc.purview().is_some_and(|state| state.protected) {
+            return Err(EditError::Protection(
+                "optimizing Microsoft Purview-protected documents is not supported until protection can be retained".into(),
+            ));
+        }
         if doc.is_signed() {
             return Err(EditError::Signed);
         }

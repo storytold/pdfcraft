@@ -86,3 +86,58 @@ fn editing_restrictions_via_advanced_options() {
     // Remove security is disabled for nobody here: this session set it.
     assert!(h.state().session.get(id).unwrap().allows_security_change());
 }
+
+#[test]
+fn an_open_password_and_a_permissions_password_together() {
+    let mut h = harness();
+    h.execute("protect.password");
+    h.run_steps(2);
+    h.get_by_label("Viewing");
+    type_into(&mut h, "Type Password", "Open-Sesame-42");
+    type_into(&mut h, "Re-type Password", "Open-Sesame-42");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Advanced Options").click();
+    h.run_steps(2);
+    h.get_by_label("Also set a permissions password").click();
+    h.run_steps(2);
+    type_into(&mut h, "Permissions password", "Boss-Key-7");
+    type_into(&mut h, "Re-type permissions password", "Boss-Key-7");
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Apply").is_none());
+    let id = h.state().views[0].id;
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    let auth = |pw: Option<&str>| {
+        pdfcraft_cos::Document::open_with_password(bytes.clone(), pw).ok().and_then(|doc| doc.security().map(|security| security.auth()))
+    };
+    assert_eq!(auth(None), None, "the open password is needed");
+    assert_eq!(auth(Some("Open-Sesame-42")), Some(pdfcraft_cos::Auth::User));
+    assert_eq!(auth(Some("Boss-Key-7")), Some(pdfcraft_cos::Auth::Owner));
+}
+
+#[test]
+fn editing_protection_can_require_an_open_password_too() {
+    let mut h = harness();
+    h.execute("protect.password");
+    h.run_steps(2);
+    h.get_by_label("Editing").click();
+    h.run_steps(2);
+    type_into(&mut h, "Type Password", "Boss-Key-7");
+    type_into(&mut h, "Re-type Password", "Boss-Key-7");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Advanced Options").click();
+    h.run_steps(2);
+    h.get_by_label("Also set a document open password").click();
+    h.run_steps(2);
+    type_into(&mut h, "Document open password", "Open-Sesame-42");
+    type_into(&mut h, "Re-type document open password", "Open-Sesame-42");
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Apply").is_none());
+    let id = h.state().views[0].id;
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    let auth = |pw: Option<&str>| {
+        pdfcraft_cos::Document::open_with_password(bytes.clone(), pw).ok().and_then(|doc| doc.security().map(|security| security.auth()))
+    };
+    assert_eq!(auth(None), None, "the open password is required and not blank");
+    assert_eq!(auth(Some("Open-Sesame-42")), Some(pdfcraft_cos::Auth::User));
+    assert_eq!(auth(Some("Boss-Key-7")), Some(pdfcraft_cos::Auth::Owner));
+}

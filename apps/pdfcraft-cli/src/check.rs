@@ -1,4 +1,4 @@
-use super::commands::{parse_dpi, read};
+use super::commands::{parse_dpi, purview_session, read};
 use super::options::{AUDIT_OPTIONS, CHECK_ONE_OPTIONS, CHECK_OPTIONS, flag, positional, validate_options};
 use super::{
     Arc, CliError, Command, Duration, Instant, PageRenderer, Path, PathBuf, RenderConfig, RenderRequest, RequestKind, Stdio, inspect, stdout_line,
@@ -11,16 +11,17 @@ pub(crate) fn audit(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args, AUDIT_OPTIONS).first().ok_or("audit: missing file")?;
     let bytes = read(path)?;
     let password = flag(args, "--password");
+    let mut session = purview_session();
+    let id = session.open(path, Some(path.to_string()), bytes, password).map_err(|error| format!("audit: {error}"))?;
+    let document = session.get(id).ok_or("audit: the document could not be opened")?;
+    document.check_copying().map_err(|error| format!("audit: {error}"))?;
+    let bytes = document.bytes.clone();
     let doc = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).map_err(|e| format!("{path}: {e}"))?;
     let findings = pdfcraft_audit::audit_redactions(&doc).map_err(|e| format!("{path}: {e}"))?;
     // Rectangles in points from the top-left of the displayed page, as `doc_audit_redactions`
     // reports them; the page geometry is read only when there is something to place.
-    let info = if findings.is_empty() {
-        None
-    } else {
-        let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
-        Some(inspect(bytes, render_password.as_deref()).map_err(|e| format!("{path}: {e}"))?)
-    };
+    let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
+    let info = if findings.is_empty() { None } else { Some(inspect(bytes, render_password.as_deref()).map_err(|e| format!("{path}: {e}"))?) };
     let items: Vec<serde_json::Value> = findings
         .into_iter()
         .map(|f| {
@@ -55,10 +56,22 @@ pub(crate) fn check_one(args: &[String]) -> Result<(), CliError> {
             return Err(e.into());
         }
     };
-    let (status, pages, failed, detail, warnings) = match inspect(bytes.clone(), None) {
-        Err(e) => (format!("open-error:{}", short(&e.to_string())), 0, 0, e.to_string(), 0),
-        Ok(info) => {
-            let mut r = PageRenderer::new(bytes, RenderConfig::default());
+    let mut session = purview_session();
+    let (status, pages, failed, detail, warnings, working) = match session.open(path, Some(path.to_string()), bytes, None) {
+        Err(error) => (format!("open-error:{}", short(&error.to_string())), 0, 0, error.to_string(), 0, None),
+        Ok(id) => {
+            let document = match session.get(id) {
+                Some(document) => document,
+                None => {
+                    let error = "the document could not be opened";
+                    return Err(error.into());
+                }
+            };
+            let info = document.info.clone();
+            let mut r = PageRenderer::new(
+                document.display.clone(),
+                RenderConfig { password: document.password.clone().map(Arc::from), ..Default::default() },
+            );
             let mut failed = Vec::new();
             for i in 0..info.pages.len().min(500) {
                 let p = r.render(RenderRequest { page: i, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });
@@ -70,13 +83,15 @@ pub(crate) fn check_one(args: &[String]) -> Result<(), CliError> {
                 }
             }
             let status = if failed.is_empty() { "ok".to_string() } else { "page-errors".to_string() };
-            (status, info.pages.len(), failed.len(), failed.join(" | "), info.warnings.len())
+            (status, info.pages.len(), failed.len(), failed.join(" | "), info.warnings.len(), Some(document.bytes.clone()))
         }
     };
     // `--edit` (fuzzing): also run our own object layer end to end, with no panic safety net,
     // so a panic in cos shows up as a crash of this process.
-    if args.iter().any(|a| a == "--edit") {
-        edit_round_trip(&read(path)?);
+    if args.iter().any(|a| a == "--edit")
+        && let Some(bytes) = working
+    {
+        edit_round_trip(&bytes);
     }
     let line = serde_json::json!({ "file": path, "status": status, "pages": pages, "failed_pages": failed, "warnings": warnings,
         "ms": start.elapsed().as_millis() as u64, "detail": detail.chars().take(400).collect::<String>() });

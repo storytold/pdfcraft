@@ -291,7 +291,16 @@ impl PdfCraftApp {
             self.discard_properties();
             if let Some(n) = action.strip_prefix("revision:").and_then(|n| n.parse().ok()) {
                 self.open_revision(n);
-            } else if matches!(action.as_str(), "protect.password" | "protect.unlock" | "protect.remove") {
+            } else if matches!(
+                action.as_str(),
+                "protect.password"
+                    | "protect.unlock"
+                    | "protect.remove"
+                    | "purview.sign_in"
+                    | "purview.apply_label"
+                    | "purview.remove_label"
+                    | "purview.remove_protection"
+            ) {
                 self.execute(ctx, &action);
             }
             return;
@@ -348,7 +357,7 @@ impl PdfCraftApp {
         vec![
             own(tab("Description", self.description_rows(doc))),
             own(tab("Initial View", initial_view_rows(doc))),
-            tab("Security", security_rows(doc)),
+            tab("Security", security_rows(doc, self.purview_status())),
             tab("Fonts", font_rows(doc)),
             tab("Custom", vec![custom_row(doc.custom_info().len(), editable, doc.custom_info())]),
             tab("Advanced", self.advanced_rows(doc, editable)),
@@ -452,14 +461,71 @@ fn initial_view_rows(doc: &Document) -> Vec<PropertyRow> {
     ]
 }
 
-fn security_rows(doc: &Document) -> Vec<PropertyRow> {
+fn security_rows(doc: &Document, status: pdfcraft_engine::PurviewStatus) -> Vec<PropertyRow> {
     let button = |id: &str, text: &str| (id.to_owned(), tl!(text).to_string());
+    let mut purview_rows = Vec::new();
+    if let Some(state) = doc.purview() {
+        purview_rows.push(value("Microsoft Purview", tl!(if state.protected { "Protected" } else { "Sensitivity label" }).to_string()));
+        if let Some(label) = &state.label {
+            purview_rows.push(value("Sensitivity label", label.name.clone()));
+        }
+        if let Some(owner) = state.owner.as_ref().filter(|owner| !owner.trim().is_empty()) {
+            purview_rows.push(value("Microsoft Purview owner", owner.clone()));
+        }
+        if state.protected {
+            let allowed = |on: bool| tl!(if on { "Allowed" } else { "Not allowed" }).to_string();
+            purview_rows.extend([
+                value("MIP view", allowed(state.rights.view)),
+                value("MIP edit", allowed(state.rights.can_edit())),
+                value("MIP save", allowed(state.rights.can_save())),
+                value("MIP print", allowed(state.rights.can_print())),
+                value("MIP copy/extract", allowed(state.rights.can_copy())),
+                value("MIP export", allowed(state.rights.can_export())),
+                value("MIP change security", allowed(state.rights.can_change_security())),
+            ]);
+            purview_rows.push(value(
+                "Microsoft Purview limitations",
+                tl!("Changing labels or protection on protected documents is not available yet.").to_string(),
+            ));
+        }
+    }
+    let mut actions = Vec::new();
+    match status {
+        pdfcraft_engine::PurviewStatus::Ready => {
+            let purview = doc.purview();
+            let protected = purview.is_some_and(|state| state.protected);
+            let change_allowed = !protected || purview.is_some_and(|state| state.rights.can_change_security()) || doc.allows_security_change();
+            if change_allowed {
+                let label = if purview.is_some_and(|state| state.label.is_some()) {
+                    "Change sensitivity label / Microsoft Purview…"
+                } else {
+                    "Apply sensitivity label / Microsoft Purview…"
+                };
+                actions.push(button("purview.apply_label", label));
+                if purview.is_some_and(|state| state.label.is_some()) {
+                    actions.push(button("purview.remove_label", "Remove sensitivity label…"));
+                }
+            }
+            if purview.is_some_and(|state| state.protected && state.rights.can_export()) {
+                actions.push(button("purview.remove_protection", "Remove protection"));
+            }
+        }
+        pdfcraft_engine::PurviewStatus::SignedOut => actions.push(button("purview.sign_in", "Sign in to Microsoft Purview…")),
+        _ => {}
+    }
+    if !actions.is_empty() {
+        purview_rows.push(action_row("purview.actions", "Microsoft Purview", None, actions));
+    }
     let Some(sec) = doc.security_summary() else {
-        let mut rows =
-            vec![value("Security method", tl!("No security").to_string()), value("Restrictions", tl!("None — everything is allowed").to_string())];
-        if doc.allows_security_change() {
+        let protected = doc.purview().is_some_and(|state| state.protected);
+        let mut rows = vec![
+            value("Security method", tl!(if protected { "Microsoft Purview" } else { "No security" }).to_string()),
+            value("Restrictions", tl!(if protected { "Managed by Microsoft Purview" } else { "None — everything is allowed" }).to_string()),
+        ];
+        if !protected && doc.allows_security_change() {
             rows.push(action_row("security.actions", "Security", None, vec![button("protect.password", "Protect using password…")]));
         }
+        rows.extend(purview_rows);
         return rows;
     };
     let opened = if sec.pending {
@@ -502,6 +568,7 @@ fn security_rows(doc: &Document) -> Vec<PropertyRow> {
         value("Commenting", allowed(p.annotate())),
         value("Filling of form fields", allowed(p.fill_forms())),
     ]);
+    rows.extend(purview_rows);
     rows
 }
 

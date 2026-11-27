@@ -31,9 +31,12 @@ standalone and publishable.
 | L1 objects | `cos` | Lazy, tolerant parser with xref repair; copy-on-write object graph; incremental and full writers with object streams; decryption on load and re-encryption on save |
 | L2 core model | `content`, `model`, `fonts` | Content-stream operators with source spans and a serializer; typed page tree with inherited attributes and display geometry (`/UserUnit`, `/Rotate`); font metrics and encodings for generated appearances |
 | L3 core services | `render`, `annot`, `forms`, `js`, `xfa` | Rendering and inspection (bootstrap: vendored `hayro`, `lopdf`); annotation builders and appearance streams; AcroForm model, filling, appearances; sandboxed JavaScript (boa) and FormCalc; XFA template layout and data |
-| L4 features | `edit`, `organize`, `redact`, `xfdf`, `sign`, `ocr`, `create`, `export`, `optimize`, `preflight`, `a11y`, `compare`, `measure`, `print` | One crate per Acrobat tool family |
+| L4 features | `edit`, `organize`, `redact`, `xfdf`, `sign`, `ocr`, `create`, `export`, `optimize`, `preflight`, `a11y`, `compare`, `measure`, `print`, `purview-policy` | Feature implementations and the Purview provider contract |
 | L6 façade | `engine` | Session, open documents, edit history, the command registry and tool catalogue. Frontends never reach past it |
-| L7 platform and frontends | `platform`, `ui-egui`, `automation` | OS services; the egui shell (desktop and web); headless JSON-Schema tools, CLI and MCP |
+| L7 platform and frontends | `platform`, `purview`, `ui-egui`, `automation` | OS services; the optional native Purview adapter; the egui shell (desktop and web); headless JSON-Schema tools, CLI and MCP |
+
+The Purview adapter uses the platform's Windows owner-only staging and is installed into the
+engine by the frontends. The engine depends only on the lower-layer policy contract.
 
 Planned crates that the layer table already reserves (`arlington`, `color`, `ops`, `text`, `ml`,
 `security`, `prepress`, `search`, `media`, `ai`, `viewport`, `tools`, `ui-common`) don't exist yet.

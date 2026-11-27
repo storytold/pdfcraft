@@ -9,6 +9,9 @@ rust-version = "1.95"
 [lints]
 workspace = true
 
+[features]
+mip-sdk = ["pdfcraft-purview/mip-sdk"]
+
 [dependencies]
 # The framework facade with the crates the UI uses (owed by pdf-hub-w1, which owns this manifest).
 craft = { workspace = true, features = ["ui", "ui-app","draw", "pages", "print", "review", "docpath", "font-catalog", "text", "text-font-picker", "text-find", "font-manager", "theme-store", "imaging", "window", "settings", "platform", "platform-clipboard", "atomic", "automation", "keymap", "menu", "quit", "web-host"] }
@@ -30,6 +33,7 @@ pdfcraft-ocr = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-platform = { workspace = true }
+pdfcraft-purview = { workspace = true }
 egui = { workspace = true, features = ["bytemuck", "default_fonts", "monochrome_emoji_fonts"] }
 egui_extras = { workspace = true }
 # `glow` is always on: `eframe::App::on_exit` takes a GL context when that feature is enabled.

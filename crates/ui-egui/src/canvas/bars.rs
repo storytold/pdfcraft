@@ -50,6 +50,8 @@ pub(super) enum Notice {
     Unlock,
     /// Close this historical snapshot tab (View signed version / View revision).
     Close,
+    /// Open the sensitivity-label dialog from the document message bar.
+    PurviewLabel,
     /// Stop showing the secured-document notice, in every document (#4035).
     HideSecured,
     /// Lock the placed signatures into the page (#2149).
@@ -193,8 +195,20 @@ pub(super) fn notices(
     } else {
         None
     };
+    let purview = doc.purview();
+    let purview_message = purview.and_then(|state| {
+        state.label.as_ref().map(|label| {
+            let protection = if state.protected { tl!("Protected") } else { tl!("Label applied") };
+            crate::i18n::fmt(tl!("Sensitivity label: {label} — {status}"), &[("label", label.name.as_str()), ("status", protection)])
+        })
+    });
+    let showing_purview = !scripts_off && (purview_message.is_some() || purview.is_some_and(|state| state.labeling_required));
     let msg = if scripts_off {
         Some(("triangle-alert", Tone::Info, crate::js_ui::scripts_off_notice(), true))
+    } else if let Some(message) = purview_message {
+        Some(("tag", Tone::Info, message, false))
+    } else if showing_purview {
+        Some(("tag", Tone::Info, tl!("A sensitivity label is required before save").to_string(), false))
     } else if secured {
         // A secured form still says what it is, and keeps Highlight fields: the security
         // sentence follows the form's.
@@ -218,20 +232,24 @@ pub(super) fn notices(
     let mut notice = bar(tone, icon, text).dismiss();
     // Production lays the buttons out right to left, so the bar reads, left to right: Details, Don't show again,
     // Unlock, Security settings, JavaScript Console, then the field highlights next to the dismiss control.
-    if repaired && !secured && info.fields.is_empty() {
+    if showing_purview {
+        notice = notice.action(NoticeAction::new(tl!("Sensitivity label").to_string()));
+        results.push(Some(Notice::PurviewLabel));
+    }
+    if !showing_purview && repaired && !secured && info.fields.is_empty() {
         notice = notice.action(NoticeAction::new(tl!("Details").to_string()));
         results.push(Some(Notice::Repairs));
     }
     // Only when the bar shows the security message: a form's stopped scripts come first.
-    if secured && !scripts_off {
+    if !showing_purview && secured && !scripts_off {
         notice = notice.action(NoticeAction::new(tl!("Don't show again").to_string()));
         results.push(Some(Notice::HideSecured));
     }
-    if secured && doc.can_unlock() {
+    if !showing_purview && secured && doc.can_unlock() {
         notice = notice.action(NoticeAction::new(tl!("Unlock…").to_string()).default_action());
         results.push(Some(Notice::Unlock));
     }
-    if secured {
+    if !showing_purview && secured {
         notice = notice.action(NoticeAction::new(tl!("Security settings").to_string()));
         results.push(Some(Notice::Security));
     }

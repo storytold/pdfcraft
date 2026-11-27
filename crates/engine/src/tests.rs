@@ -2998,12 +2998,594 @@ fn combine_source_check_says_why_a_file_cannot_be_combined() {
 }
 
 #[test]
+fn mandatory_sensitivity_policy_blocks_save_until_a_label_is_selected() {
+    let (mut s, id) = session_with(1);
+    let provider = Arc::new(pdfcraft_purview_policy::UnavailablePurviewProvider);
+    let bytes = s.get(id).unwrap().bytes.clone();
+    s.doc_mut(id).unwrap().purview = Some(crate::PurviewDocumentState {
+        handle: 1,
+        original: bytes.clone(),
+        document: crate::PurviewDocument {
+            protected: false,
+            label: None,
+            rights: crate::PurviewRights { view: true, edit: true, save: true, ..crate::PurviewRights::default() },
+            owner: None,
+            content_id: None,
+            labeling_required: true,
+            default_label_id: None,
+            downgrade_justification_required: false,
+        },
+        provider,
+    });
+    assert!(matches!(s.save_bytes(id), Err(EditError::Protection(_))));
+    s.doc_mut(id).unwrap().purview.as_mut().unwrap().document.default_label_id = Some("default-label".into());
+    assert!(matches!(s.save_bytes(id), Err(EditError::Protection(_))), "a configured default is not an applied label");
+    assert!(matches!(s.save_full_bytes(id), Err(EditError::Protection(_))));
+}
+
+#[test]
+fn label_only_purview_save_checks_the_output_like_an_ordinary_pdf() {
+    let (mut session, id) = session_with(1);
+    let original = session.get(id).unwrap().bytes.clone();
+    session.doc_mut(id).unwrap().purview = Some(crate::PurviewDocumentState {
+        handle: 1,
+        original,
+        document: crate::PurviewDocument {
+            label: Some(crate::PurviewLabel {
+                id: "label".into(),
+                name: "Internal".into(),
+                description: String::new(),
+                tooltip: String::new(),
+                color: None,
+                parent_id: None,
+                sensitivity: 0,
+                active: true,
+                protection: false,
+            }),
+            ..Default::default()
+        },
+        provider: Arc::new(pdfcraft_purview_policy::UnavailablePurviewProvider),
+    });
+    let invalid = Arc::new(b"not a PDF".to_vec());
+    assert!(matches!(session.check_save(id, &invalid), Err(EditError::Reopen(_))));
+}
+
+fn protect_for_test(session: &mut Session, id: DocId, rights: crate::PurviewRights) -> Arc<Vec<u8>> {
+    let original = Arc::new(b"synthetic protected original".to_vec());
+    session.doc_mut(id).unwrap().purview = Some(crate::PurviewDocumentState {
+        handle: 1,
+        original: original.clone(),
+        document: crate::PurviewDocument { protected: true, rights, ..crate::PurviewDocument::default() },
+        provider: Arc::new(pdfcraft_purview_policy::UnavailablePurviewProvider),
+    });
+    original
+}
+
+type TestMutationInput = (Arc<Vec<u8>>, Arc<Vec<u8>>);
+
+struct TestProtectedProvider {
+    original: Arc<Vec<u8>>,
+    protected_output: Arc<Vec<u8>>,
+    original_working: Arc<Vec<u8>>,
+    rights: crate::PurviewRights,
+    published_working: std::sync::Mutex<Option<Arc<Vec<u8>>>>,
+    mutation_input: std::sync::Mutex<Option<TestMutationInput>>,
+    mutation_calls: std::sync::atomic::AtomicUsize,
+    inspect_calls: std::sync::atomic::AtomicUsize,
+    close_calls: std::sync::atomic::AtomicUsize,
+}
+
+impl crate::PurviewProvider for TestProtectedProvider {
+    fn status(&self) -> crate::PurviewStatus {
+        crate::PurviewStatus::Ready
+    }
+
+    fn account(&self) -> Option<crate::PurviewAccount> {
+        Some(crate::PurviewAccount {
+            id: "test-account".into(),
+            display_name: "Test account".into(),
+            email: "test@example.com".into(),
+            principal_name: "test@example.com".into(),
+        })
+    }
+
+    fn accounts(&self) -> Vec<crate::PurviewAccount> {
+        self.account().into_iter().collect()
+    }
+
+    fn switch_account(&self, _account_id: &str) -> Result<(), crate::PurviewError> {
+        Err(crate::PurviewError::SdkUnavailable)
+    }
+
+    fn sign_in(&self, _username_hint: Option<&str>) -> Result<(), crate::PurviewError> {
+        Err(crate::PurviewError::SdkUnavailable)
+    }
+
+    fn sign_out(&self) -> Result<(), crate::PurviewError> {
+        Ok(())
+    }
+
+    fn inspect(&self, _name: &str, bytes: &Arc<Vec<u8>>) -> Result<Option<crate::PurviewOpen>, crate::PurviewError> {
+        self.inspect_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let working = if bytes == &self.original {
+            self.original_working.clone()
+        } else if bytes == &self.protected_output {
+            self.published_working.lock().unwrap().clone().ok_or(crate::PurviewError::SdkUnavailable)?
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(crate::PurviewOpen {
+            handle: 1,
+            original: bytes.clone(),
+            bytes: working,
+            document: crate::PurviewDocument { protected: true, rights: self.rights.clone(), ..Default::default() },
+        }))
+    }
+
+    fn labels(&self) -> Result<Vec<crate::PurviewLabel>, crate::PurviewError> {
+        Err(crate::PurviewError::SdkUnavailable)
+    }
+
+    fn apply_label(
+        &self,
+        _handle: u64,
+        original: &Arc<Vec<u8>>,
+        working: &Arc<Vec<u8>>,
+        _label_id: &str,
+        _justification: Option<&str>,
+    ) -> Result<crate::PurviewOpen, crate::PurviewError> {
+        self.mutation_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *self.mutation_input.lock().unwrap() = Some((original.clone(), working.clone()));
+        let protected = original == &self.original || original == &self.protected_output;
+        Ok(crate::PurviewOpen {
+            handle: 1,
+            original: if protected { self.protected_output.clone() } else { original.clone() },
+            bytes: working.clone(),
+            document: crate::PurviewDocument {
+                protected,
+                rights: if protected {
+                    crate::PurviewRights { owner: true, view: true, export: true, ..Default::default() }
+                } else {
+                    Default::default()
+                },
+                ..Default::default()
+            },
+        })
+    }
+
+    fn remove_label(
+        &self,
+        _handle: u64,
+        original: &Arc<Vec<u8>>,
+        working: &Arc<Vec<u8>>,
+        _justification: Option<&str>,
+    ) -> Result<crate::PurviewOpen, crate::PurviewError> {
+        self.mutation_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *self.mutation_input.lock().unwrap() = Some((original.clone(), working.clone()));
+        let protected = original == &self.original || original == &self.protected_output;
+        Ok(crate::PurviewOpen {
+            handle: 1,
+            original: if protected { self.protected_output.clone() } else { original.clone() },
+            bytes: working.clone(),
+            document: crate::PurviewDocument {
+                protected,
+                rights: if protected {
+                    crate::PurviewRights { owner: true, view: true, export: true, ..Default::default() }
+                } else {
+                    Default::default()
+                },
+                ..Default::default()
+            },
+        })
+    }
+
+    fn remove_protection(&self, _handle: u64, _original: &Arc<Vec<u8>>, working: &Arc<Vec<u8>>) -> Result<crate::PurviewOpen, crate::PurviewError> {
+        self.mutation_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(crate::PurviewOpen { handle: 1, original: working.clone(), bytes: working.clone(), document: Default::default() })
+    }
+
+    fn republish(&self, _handle: u64, _original: &Arc<Vec<u8>>, working: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, crate::PurviewError> {
+        *self.published_working.lock().unwrap() = Some(working.clone());
+        Ok(self.protected_output.clone())
+    }
+
+    fn close(&self, _handle: u64) {
+        self.close_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+fn protected_session_for_test() -> (Session, DocId, Arc<TestProtectedProvider>) {
+    protected_session_with_working_for_test(fixture(1))
+}
+
+fn protected_session_with_working_for_test(working: Vec<u8>) -> (Session, DocId, Arc<TestProtectedProvider>) {
+    let working = Arc::new(working);
+    let provider = Arc::new(TestProtectedProvider {
+        original: Arc::new(b"synthetic protected original".to_vec()),
+        protected_output: working.clone(),
+        original_working: working,
+        rights: crate::PurviewRights { owner: true, view: true, edit: true, save: true, ..Default::default() },
+        published_working: std::sync::Mutex::new(None),
+        mutation_input: std::sync::Mutex::new(None),
+        mutation_calls: std::sync::atomic::AtomicUsize::new(0),
+        inspect_calls: std::sync::atomic::AtomicUsize::new(0),
+        close_calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    session.set_purview_provider(provider.clone());
+    let id = session.open("protected.pdf", None, provider.original.clone(), None).unwrap();
+    (session, id, provider)
+}
+
+fn protected_source_provider_for_test(working: Vec<u8>, rights: crate::PurviewRights) -> Arc<TestProtectedProvider> {
+    Arc::new(TestProtectedProvider {
+        original: Arc::new(b"synthetic protected source".to_vec()),
+        protected_output: Arc::new(b"synthetic protected result".to_vec()),
+        original_working: Arc::new(working),
+        rights,
+        published_working: std::sync::Mutex::new(None),
+        mutation_input: std::sync::Mutex::new(None),
+        mutation_calls: std::sync::atomic::AtomicUsize::new(0),
+        inspect_calls: std::sync::atomic::AtomicUsize::new(0),
+        close_calls: std::sync::atomic::AtomicUsize::new(0),
+    })
+}
+
+#[test]
+fn purview_full_save_refreshes_renumbered_runtime_state() {
+    let content = b"/OC /R BDC 1 0 0 rg 10 10 40 80 re f EMC /OC /B BDC 0 0 1 rg 110 10 40 80 re f EMC";
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [9 0 R 10 0 R] /D << /BaseState /ON /Order [9 0 R 10 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Properties << /R 9 0 R /B 10 0 R >> >> >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+    ];
+    objs.extend((5..=8).map(|_| b"null".to_vec()));
+    objs.push(b"<< /Type /OCG /Name (Red rectangle) >>".to_vec());
+    objs.push(b"<< /Type /OCG /Name (Blue rectangle) >>".to_vec());
+    let original = pdf_of_objects(&objs);
+    let (mut session, id, provider) = protected_session_with_working_for_test(original.clone());
+    session.doc_mut(id).unwrap().purview.as_mut().unwrap().document.protected = false;
+    assert!(session.set_layer_visible(id, 0, false));
+    let before = session.get(id).unwrap().info.layers.iter().map(|layer| layer.id).collect::<Vec<_>>();
+    let saved = session.save_full_bytes(id).unwrap();
+    session.mark_saved(id, saved, Some("/tmp/out/labeled.pdf".into())).unwrap();
+    let after = session.get(id).unwrap().info.layers.iter().map(|layer| layer.id).collect::<Vec<_>>();
+    assert_ne!(before, after);
+    assert_eq!(
+        session.get(id).unwrap().info.layers.iter().map(|layer| (layer.name.as_str(), layer.visible)).collect::<Vec<_>>(),
+        [("Red rectangle", false), ("Blue rectangle", true)]
+    );
+    assert!(provider.published_working.lock().unwrap().is_some());
+}
+
+#[test]
+fn purview_export_sources_use_decrypted_bytes_and_close_the_temporary_handle() {
+    let working = fixture(2);
+    let provider = protected_source_provider_for_test(working.clone(), crate::PurviewRights { view: true, export: true, ..Default::default() });
+    let mut session = Session::new();
+    session.set_purview_provider(provider.clone());
+
+    let (_, converted) = session.convert_to_pdf("protected.pfile", &provider.original).unwrap();
+    assert_eq!(converted.as_slice(), working);
+    let combined = session.combine(&[("protected.pfile".into(), provider.original.clone()), ("ordinary.pdf".into(), Arc::new(working))]).unwrap();
+    let reopened = pdfcraft_cos::Document::open(combined).unwrap();
+    assert_eq!(pdfcraft_model::pages(&reopened).len(), 4);
+    assert_eq!(provider.inspect_calls.load(std::sync::atomic::Ordering::Relaxed), 3);
+    assert_eq!(provider.close_calls.load(std::sync::atomic::Ordering::Relaxed), 2);
+}
+
+#[test]
+fn purview_export_sources_fail_closed_without_export_rights() {
+    let provider = protected_source_provider_for_test(fixture(1), crate::PurviewRights { view: true, extract: true, ..Default::default() });
+    let mut session = Session::new();
+    session.set_purview_provider(provider.clone());
+    assert!(matches!(session.convert_to_pdf("protected.pfile", &provider.original), Err(EditError::Protection(_))));
+    assert!(matches!(session.combine(&[("protected.pfile".into(), provider.original.clone())]), Err(EditError::Protection(_))));
+
+    let id = session.open("target.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    let edit = crate::Edit::InsertPagesFrom {
+        name: "protected.pfile".into(),
+        bytes: provider.original.clone(),
+        pages: None,
+        at: 1,
+        field_conflicts: Default::default(),
+    };
+    assert!(matches!(session.apply(id, edit), Err(EditError::Protection(_))));
+    assert_eq!(provider.inspect_calls.load(std::sync::atomic::Ordering::Relaxed), 4);
+    assert_eq!(provider.close_calls.load(std::sync::atomic::Ordering::Relaxed), 3);
+}
+
+#[test]
+fn purview_label_changes_discard_history_that_could_restore_old_security() {
+    let (mut session, id) = session_with(1);
+    session.apply(id, crate::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    assert!(!session.get(id).unwrap().editor.as_ref().unwrap().undo.is_empty());
+    let provider = protected_source_provider_for_test(fixture(1), crate::PurviewRights::default());
+    session.set_purview_provider(provider);
+
+    session.purview_apply_label(id, "label", None).unwrap();
+    let editor = session.get(id).unwrap().editor.as_ref().unwrap();
+    assert!(editor.undo.is_empty());
+    assert!(editor.redo.is_empty());
+}
+
+#[test]
+fn purview_account_changes_require_closing_protected_documents() {
+    let (mut session, id, _) = protected_session_for_test();
+    assert!(matches!(session.purview_sign_in(None), Err(crate::PurviewError::SdkUnavailable)));
+    for result in [session.purview_switch_account("other"), session.purview_sign_out()] {
+        assert!(matches!(result, Err(crate::PurviewError::Native(message)) if message.contains("Close all")));
+    }
+    session.close(id);
+    assert!(session.purview_sign_out().is_ok());
+    assert!(matches!(session.purview_sign_in(None), Err(crate::PurviewError::SdkUnavailable)));
+}
+
+#[test]
+fn purview_reauthentication_revalidates_rights_without_changing_working_edits() {
+    let (mut session, id, _provider) = protected_session_for_test();
+    session.apply(id, crate::Edit::SetInfo { key: "Title".into(), value: "unsaved".into() }).unwrap();
+    session.doc_mut(id).unwrap().purview.as_mut().unwrap().document.rights = crate::PurviewRights::default();
+
+    session.purview_revalidate_protected_documents().unwrap();
+
+    assert!(session.get(id).unwrap().purview().unwrap().rights.owner);
+    assert_eq!(session.get(id).unwrap().info_value("Title").as_deref(), Some("unsaved"));
+    assert!(session.get(id).unwrap().check_viewing().is_ok());
+    assert!(!session.get(id).unwrap().display.is_empty());
+}
+
+#[test]
+fn failed_purview_revalidation_clears_stale_rights() {
+    let (mut session, id, _provider) = protected_session_for_test();
+    session.doc_mut(id).unwrap().purview.as_mut().unwrap().original = Arc::new(b"not a recognized protected original".to_vec());
+
+    let error = session.purview_revalidate_protected_documents().unwrap_err();
+    assert!(matches!(error, crate::PurviewError::Native(_)));
+    let rights = &session.get(id).unwrap().purview().unwrap().rights;
+    assert!(!rights.owner);
+    assert!(!rights.view);
+    assert!(!rights.can_save());
+    assert!(!rights.can_export());
+    assert!(session.get(id).unwrap().check_viewing().is_err());
+    assert!(session.get(id).unwrap().display.is_empty());
+}
+
+#[test]
+fn purview_read_only_save_returns_the_protected_original() {
+    let (mut s, id) = session_with(1);
+    let original = protect_for_test(&mut s, id, crate::PurviewRights { view: true, ..Default::default() });
+    s.doc_mut(id).unwrap().editor = None;
+    assert_eq!(s.save_bytes(id).unwrap(), original);
+}
+
+#[test]
+fn purview_extract_right_does_not_authorize_unprotected_page_exports() {
+    let (mut s, id) = session_with(2);
+    protect_for_test(&mut s, id, crate::PurviewRights { view: true, extract: true, ..Default::default() });
+    assert!(!s.get(id).unwrap().allows_page_extraction());
+    assert!(matches!(s.extract(id, &[0]), Err(EditError::NotPermitted(_))));
+    assert!(matches!(s.split(id, &pdfcraft_organize::SplitBy::PageCount(1)), Err(EditError::NotPermitted(_))));
+    assert!(matches!(s.split_by_size(id, 1024), Err(EditError::NotPermitted(_))));
+    assert!(matches!(s.export_data(id, crate::DataFormat::Xml, false, true), Err(EditError::NotPermitted(_))));
+    assert!(s.editable_ocr_bytes(id, &[]).unwrap_err().contains("exporting unprotected content"));
+    assert!(s.open_revision(id, 1).unwrap_err().contains("exporting unprotected content"));
+    assert!(s.get(id).unwrap().page_image_file(0, 0).unwrap_err().contains("exporting unprotected content"));
+    assert!(matches!(s.get(id).unwrap().copy_objects(0, &[]), Err(EditError::NotPermitted(_))));
+    assert!(matches!(s.compare_report(id, id), Err(EditError::NotPermitted(_))));
+    assert!(matches!(s.summarize_comments(id, SummarySort::Page), Err(EditError::NotPermitted(_))));
+    assert!(s.export_comments(id, &[]).is_ok(), "EXTRACT permits copying comments");
+
+    s.doc_mut(id).unwrap().purview.as_mut().unwrap().document.rights.export = true;
+    assert!(s.extract(id, &[0]).is_ok());
+    assert!(s.split(id, &pdfcraft_organize::SplitBy::PageCount(1)).is_ok());
+    assert!(s.export_data(id, crate::DataFormat::Xml, false, true).is_ok());
+    assert!(s.editable_ocr_bytes(id, &[]).unwrap_err().contains("no words"));
+
+    s.doc_mut(id).unwrap().purview.as_mut().unwrap().document.rights.extract = false;
+    assert!(matches!(s.export_comments(id, &[]), Err(EditError::NotPermitted(_))));
+}
+
+#[test]
+fn purview_optimization_does_not_emit_an_unprotected_pdf() {
+    let (mut s, id) = session_with(1);
+    protect_for_test(&mut s, id, crate::PurviewRights { owner: true, view: true, ..Default::default() });
+    assert!(matches!(s.optimized_bytes(id, &optimize::Settings::default(), &[]), Err(EditError::Protection(_))));
+    assert!(matches!(s.reduced_bytes(id), Err(EditError::Protection(_))));
+}
+
+#[test]
+fn purview_signing_never_returns_an_unprotected_pdf() {
+    let (mut session, id) = session_with(1);
+    protect_for_test(&mut session, id, crate::PurviewRights { owner: true, view: true, ..Default::default() });
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let signer = sign::pkcs12::open(&p12, "test").unwrap();
+    assert!(
+        matches!(session.sign(id, &signer, SignOptions::default()), Err(EditError::Protection(message)) if message.contains("not yet supported"))
+    );
+    for command in ["sign.digital", "sign.certify", "sign.certify_invisible"] {
+        assert!(!crate::commands::is_enabled(crate::commands::command(command).unwrap(), &session, Some(id)));
+    }
+}
+
+#[test]
+fn purview_autosave_never_persists_unverified_plaintext() {
+    let (mut s, id) = session_with(1);
+    protect_for_test(&mut s, id, crate::PurviewRights { owner: true, view: true, edit: true, save: true, ..Default::default() });
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "private".into() }).unwrap();
+    assert!(s.recovery_snapshot(id).is_none(), "an unavailable provider must not emit a plaintext recovery file");
+    assert!(s.autosave_docs().any(|(doc, _, dirty)| doc == id && dirty), "failed protected recovery remains due");
+}
+
+#[test]
+fn purview_save_rejects_a_provider_result_that_is_not_protected() {
+    let (mut s, id) = session_with(1);
+    protect_for_test(&mut s, id, crate::PurviewRights { owner: true, view: true, edit: true, save: true, ..Default::default() });
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "private".into() }).unwrap();
+    assert!(matches!(s.save_bytes(id), Err(EditError::Protection(_))));
+    assert!(matches!(s.save_full_bytes(id), Err(EditError::Protection(_))));
+    let plain = s.get(id).unwrap().bytes.clone();
+    assert!(matches!(s.check_save(id, &plain), Err(EditError::Protection(_))));
+    assert!(matches!(s.mark_saved(id, plain, None), Err(EditError::Protection(_))));
+    assert!(s.get(id).unwrap().purview().unwrap().protected);
+}
+
+#[test]
+fn purview_autosave_publishes_and_verifies_a_protected_snapshot() {
+    let (mut s, id, provider) = protected_session_for_test();
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "private".into() }).unwrap();
+    let snapshot = s.recovery_snapshot(id).unwrap();
+    assert_eq!(snapshot.bytes, provider.protected_output);
+    assert!(snapshot.encrypted);
+    assert!(provider.published_working.lock().unwrap().is_some());
+}
+
+#[test]
+fn purview_revert_restores_the_last_protected_version() {
+    let (mut s, id, provider) = protected_session_for_test();
+    assert_eq!(s.get(id).unwrap().saved_bytes(), provider.original);
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "first".into() }).unwrap();
+    s.revert(id).unwrap();
+    assert!(s.get(id).unwrap().purview().unwrap().protected);
+    assert_eq!(s.get(id).unwrap().info_value("Title"), None);
+
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "saved".into() }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    s.check_save(id, &saved).unwrap();
+    s.mark_saved(id, saved.clone(), None).unwrap();
+    assert_eq!(s.get(id).unwrap().saved_bytes(), saved);
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "later".into() }).unwrap();
+    s.revert(id).unwrap();
+    assert!(s.get(id).unwrap().purview().unwrap().protected);
+    assert_eq!(s.get(id).unwrap().info_value("Title").as_deref(), Some("saved"));
+}
+
+#[test]
+fn purview_protected_label_mutations_use_the_protected_original() {
+    let (mut s, id, provider) = protected_session_for_test();
+    s.purview_apply_label(id, "label", None).unwrap();
+    assert_eq!(provider.mutation_input.lock().unwrap().as_ref().unwrap().0, provider.original);
+    assert!(s.get(id).unwrap().purview().unwrap().protected);
+    s.purview_remove_label(id, None).unwrap();
+    assert_eq!(provider.mutation_input.lock().unwrap().as_ref().unwrap().0, provider.protected_output);
+    assert!(s.get(id).unwrap().purview().unwrap().protected);
+    s.purview_remove_protection(id).unwrap();
+    assert_eq!(provider.mutation_calls.load(std::sync::atomic::Ordering::Relaxed), 3);
+    assert!(!s.get(id).unwrap().purview().unwrap().protected);
+}
+
+#[test]
+fn purview_protected_label_mutations_require_change_security_rights() {
+    let (mut session, id) = session_with(1);
+    protect_for_test(&mut session, id, crate::PurviewRights { view: true, extract: true, ..Default::default() });
+    assert!(matches!(session.purview_apply_label(id, "label", None), Err(EditError::NotPermitted(_))));
+    assert!(matches!(session.purview_remove_label(id, None), Err(EditError::NotPermitted(_))));
+    assert!(matches!(session.purview_remove_protection(id), Err(EditError::NotPermitted(_))));
+}
+
+#[test]
+fn purview_nested_password_security_edits_are_rejected() {
+    let (mut session, id, _) = protected_session_for_test();
+    for edit in [Edit::Protect(protection(Some("open"), Some("owner"))), Edit::RemoveProtection] {
+        let nested = Edit::Batch { label: "outer".into(), edits: vec![Edit::Batch { label: "inner".into(), edits: vec![edit] }] };
+        assert!(matches!(session.apply(id, nested), Err(EditError::Protection(message)) if message.contains("cannot be composed")));
+        assert!(!session.get(id).unwrap().dirty);
+    }
+}
+
+#[test]
+fn purview_save_after_undo_republishes_the_displayed_state() {
+    let (mut session, id, provider) = protected_session_for_test();
+    session.apply(id, Edit::SetInfo { key: "Title".into(), value: "saved title".into() }).unwrap();
+    let saved = session.save_bytes(id).unwrap();
+    session.mark_saved(id, saved, None).unwrap();
+    session.undo(id).unwrap();
+    assert_eq!(session.get(id).unwrap().info_value("Title"), None);
+
+    session.save_bytes(id).unwrap();
+    let working = provider.published_working.lock().unwrap().clone().unwrap();
+    let reopened = pdfcraft_cos::Document::open(working).unwrap();
+    assert_eq!(pdfcraft_organize::info(&reopened, "Title"), None, "save must publish the undone document, not the last saved title");
+}
+
+#[test]
+fn purview_label_mutations_do_not_stage_typed_password_fields() {
+    let (_, _, provider) = protected_session_for_test();
+    for (fixture, field_name) in [
+        (String::from_utf8(form_fixture()).unwrap().replace("/T (name)", "/T (name) /Ff 8192").into_bytes(), "name"),
+        (pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::fields_template("")), "pin"),
+    ] {
+        let mut session = Session::new().with_clock(|| 1_700_000_000);
+        session.set_purview_provider(provider.clone());
+        let id = session.open("form.pdf", None, Arc::new(fixture), None).unwrap();
+        let name = session.get(id).unwrap().form.iter().find(|field| field.name.contains(field_name)).unwrap().name.clone();
+        session.apply(id, Edit::SetFieldValue { name: name.clone(), value: FieldValue::Text("poc_secret".into()) }).unwrap();
+        for apply in [true, false] {
+            if apply {
+                session.purview_apply_label(id, "label", None).unwrap();
+            } else {
+                session.purview_remove_label(id, None).unwrap();
+            }
+            let (original, working) = provider.mutation_input.lock().unwrap().clone().unwrap();
+            assert!(!appears_in_pdf(&original, "poc_secret"), "the SDK original must not contain a typed password");
+            assert!(!appears_in_pdf(&working, "poc_secret"), "the SDK working file must not contain a typed password");
+            assert_eq!(session.get(id).unwrap().form.iter().find(|field| field.name == name).unwrap().value, ["poc_secret"]);
+        }
+        let saved = provider.mutation_input.lock().unwrap().as_ref().unwrap().1.clone();
+        session.mark_saved(id, saved, None).unwrap();
+        assert_eq!(session.get(id).unwrap().form.iter().find(|field| field.name == name).unwrap().value, ["poc_secret"]);
+        assert!(!session.get(id).unwrap().dirty);
+    }
+}
+
+#[test]
+fn purview_labeling_does_not_rewrite_a_digitally_signed_pdf() {
+    let (_, _, provider) = protected_session_for_test();
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let signer = sign::pkcs12::open(&p12, "test").unwrap();
+    let mut session = Session::new().with_clock(|| 1_800_000_000);
+    let id = session.open("form.pdf", None, Arc::new(form_fixture()), None).unwrap();
+    let signed = session.sign(id, &signer, SignOptions::default()).unwrap();
+    let signed_id = session.open("signed.pdf", None, signed, None).unwrap();
+    session.set_purview_provider(provider.clone());
+    assert!(
+        matches!(session.purview_apply_label(signed_id, "label", None), Err(EditError::Protection(message)) if message.contains("digitally signed"))
+    );
+    assert_eq!(provider.mutation_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[test]
+fn purview_rebase_keeps_typed_passwords_only_in_memory() {
+    for (fixture, field_name) in [
+        (String::from_utf8(form_fixture()).unwrap().replace("/T (name)", "/T (name) /Ff 8192").into_bytes(), "name"),
+        (pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::fields_template("")), "pin"),
+    ] {
+        let (mut session, id, provider) = protected_session_with_working_for_test(fixture);
+        let name = session.get(id).unwrap().form.iter().find(|field| field.name.contains(field_name)).unwrap().name.clone();
+        session.apply(id, Edit::SetFieldValue { name: name.clone(), value: FieldValue::Text("poc_secret".into()) }).unwrap();
+        let saved = session.save_bytes(id).unwrap();
+        let working = provider.published_working.lock().unwrap().clone().unwrap();
+        assert!(!appears_in_pdf(&working, "poc_secret"));
+        session.mark_saved(id, saved, None).unwrap();
+        assert_eq!(session.get(id).unwrap().form.iter().find(|field| field.name == name).unwrap().value, ["poc_secret"]);
+        assert!(!session.get(id).unwrap().dirty);
+        session.save_bytes(id).unwrap();
+        assert!(!appears_in_pdf(&provider.published_working.lock().unwrap().clone().unwrap(), "poc_secret"));
+    }
+}
+
+#[test]
 fn protection_is_validated_undoable_and_never_logged() {
     let (mut s, id) = session_with(1);
     assert!(matches!(s.apply(id, Edit::Protect(protection(None, None))), Err(EditError::Protection(_))));
     assert!(matches!(s.apply(id, Edit::Protect(protection(Some("same"), Some("same")))), Err(EditError::Protection(_))));
     let rc4 = Protection { algorithm: pdfcraft_cos::Algorithm::Rc4_128, ..protection(Some("pässword"), None) };
     assert!(matches!(s.apply(id, Edit::Protect(rc4)), Err(EditError::Protection(_))));
+    let rc4_40_low = Protection { algorithm: pdfcraft_cos::Algorithm::Rc4_40, printing: Printing::Low, ..protection(Some("open"), Some("owner")) };
+    assert!(matches!(s.apply(id, Edit::Protect(rc4_40_low)), Err(EditError::Protection(_))));
+    let effective_collision = Protection { open_password: Some("a\u{00ad}".into()), permissions_password: Some("a".into()), ..Protection::default() };
+    assert!(matches!(s.apply(id, Edit::Protect(effective_collision)), Err(EditError::Protection(_))));
     assert!(!format!("{:?}", Edit::Protect(protection(Some("hunter2"), Some("x")))).contains("hunter2"));
     s.apply(id, Edit::Protect(protection(Some("pw"), Some("owner")))).unwrap();
     assert!(s.get(id).unwrap().info.encrypted);
