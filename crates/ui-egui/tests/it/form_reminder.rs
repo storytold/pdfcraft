@@ -2,7 +2,7 @@
 
 use egui_kittest::{Harness, kittest::Queryable};
 use pdfcraft_testkit::Pdf;
-use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::{PdfCraftApp, settings::PdfCraftSettings};
 
 const REMINDER: &str = "This document contains 1 interactive form fields.";
 const PREFERENCE: &str = "Show form field reminder";
@@ -17,17 +17,27 @@ fn form() -> Vec<u8> {
         .build()
 }
 
+/// Serialize and reload the current preferences in the format of config.toml.
+fn snapshot(app: &PdfCraftApp) -> PdfCraftSettings {
+    toml::from_str(&toml::to_string(&app.settings_snapshot()).unwrap()).unwrap()
+}
+
+fn legacy(json: &str) -> PdfCraftSettings {
+    pdfcraft_ui_egui::settings::import_json(json).0
+}
+
 /// Restore optional saved preferences and open the synthetic document in a headless UI.
-fn harness(saved: Option<String>, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        if let Some(saved) = saved {
-            app.restore(&saved);
+fn harness(saved: Option<PdfCraftSettings>, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        if let Some(settings) = saved {
+            app.apply_settings(&settings);
         }
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("synthetic-form.pdf", None, bytes).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "none").unwrap();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+        app.open_bytes(&cc.egui_ctx, "synthetic-form.pdf", None, bytes).unwrap();
+        app.set_option(&cc.egui_ctx, "left", "closed").unwrap();
+        app.set_option(&cc.egui_ctx, "panel", "none").unwrap();
         app
     });
     h.run_steps(6);
@@ -52,16 +62,17 @@ fn dismissing_form_reminder_survives_new_documents_and_restart() {
     let original = h.state().session.get(id).unwrap().bytes.clone();
     assert!(h.state().session.get(id).unwrap().repair_log().is_empty(), "use a valid fixture");
     h.get_by_label(REMINDER);
-    let highlights = h.state().views[0].highlight_fields;
+    let highlights = h.state().views[0].session.highlight_fields;
     h.get_by_label("Dismiss").click();
     h.run_steps(4);
     assert!(h.query_by_label(REMINDER).is_none());
     assert!(!h.state().views[0].notice_dismissed, "the general warning dismissal must remain session-local");
     assert!(!h.state().session.get(id).unwrap().dirty);
-    assert_eq!(h.state().views[0].highlight_fields, highlights);
+    assert_eq!(h.state().views[0].session.highlight_fields, highlights);
     assert_eq!(h.state().session.get(id).unwrap().bytes, original, "a UI preference must not change PDF bytes");
-    let saved = h.state().persist();
-    h.state_mut().open_bytes("another-form.pdf", None, form()).unwrap();
+    let saved = snapshot(h.state());
+    let ctx = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx, "another-form.pdf", None, form()).unwrap();
     h.run_steps(4);
     assert!(h.query_by_label(REMINDER).is_none(), "another form must keep the preference");
     let h = harness(Some(saved), form());
@@ -77,7 +88,8 @@ fn preferences_can_restore_the_form_reminder() {
     h.get_by_label("Dismiss").click();
     h.run_steps(4);
     shot(&mut h, "reminder-dismissed");
-    h.state_mut().set_option("dialog", "preferences").unwrap();
+    let ctx = h.ctx.clone();
+    h.state_mut().set_option(&ctx, "dialog", "preferences").unwrap();
     h.run_steps(4);
     h.get_by_role_and_label(Role::CheckBox, PREFERENCE).scroll_to_me();
     h.run_steps(4);
@@ -88,10 +100,10 @@ fn preferences_can_restore_the_form_reminder() {
     h.run_steps(4);
     h.get_by_label("OK").click();
     h.run_steps(4);
-    assert!(h.state().dialog.is_none(), "Preferences must actually close before checking the restored reminder");
+    assert!(h.state().dialogs.is_empty(), "Preferences must actually close before checking the restored reminder");
     h.get_by_label(REMINDER);
     shot(&mut h, "reminder-restored");
-    let saved = h.state().persist();
+    let saved = snapshot(h.state());
     let h = harness(Some(saved), form());
     h.get_by_label(REMINDER);
 }
@@ -107,7 +119,7 @@ fn stored_form_reminder_choice_preserves_old_settings_defaults() {
         (r#"{"show_form_field_reminder":true}"#, true),
         (r#"{"show_form_field_reminder":false}"#, false),
     ] {
-        let h = harness(Some(saved.to_string()), form());
+        let h = harness(Some(legacy(saved)), form());
         assert_eq!(h.query_by_label(REMINDER).is_some(), expected, "{saved}");
     }
 }
@@ -119,13 +131,13 @@ fn a_hidden_form_reminder_does_not_hide_repair_warnings() {
     let xref = bytes.windows(5).position(|w| w == b"xref\n").unwrap();
     bytes.truncate(xref);
     bytes.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
-    let saved = r#"{"show_form_field_reminder":false}"#.to_string();
+    let saved = legacy(r#"{"show_form_field_reminder":false}"#);
     let mut h = harness(Some(saved), bytes.clone());
     assert!(h.query_by_label(REMINDER).is_none());
     h.get_by_label("This file was damaged and has been repaired. Saving keeps the repaired version.");
     h.get_by_label("Dismiss").click();
     h.run_steps(4);
-    let h = harness(Some(h.state().persist()), bytes);
+    let h = harness(Some(snapshot(h.state())), bytes);
     h.get_by_label("This file was damaged and has been repaired. Saving keeps the repaired version.");
 }
 
@@ -136,7 +148,7 @@ fn a_dismissed_repair_warning_does_not_block_restoring_the_form_reminder() {
     let xref = bytes.windows(5).position(|w| w == b"xref\n").unwrap();
     bytes.truncate(xref);
     bytes.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
-    let mut h = harness(Some(r#"{"show_form_field_reminder":false}"#.to_string()), bytes);
+    let mut h = harness(Some(legacy(r#"{"show_form_field_reminder":false}"#)), bytes);
     let warning = "This file was damaged and has been repaired. Saving keeps the repaired version.";
     h.get_by_label(warning);
     h.get_by_label("Dismiss").click();
@@ -144,7 +156,8 @@ fn a_dismissed_repair_warning_does_not_block_restoring_the_form_reminder() {
     assert!(h.state().views[0].notice_dismissed);
     assert!(h.query_by_label(warning).is_none());
     shot(&mut h, "warning-dismissed");
-    h.state_mut().set_option("form-reminder", "on").unwrap();
+    let ctx = h.ctx.clone();
+    h.state_mut().set_option(&ctx, "form-reminder", "on").unwrap();
     h.run_steps(4);
     h.get_by_label(REMINDER);
     assert!(h.query_by_label(warning).is_none());
@@ -171,16 +184,16 @@ fn a_hidden_form_reminder_does_not_hide_security_notices() {
     .unwrap();
     let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
     for show in [true, false] {
-        let saved = serde_json::json!({"show_form_field_reminder":show}).to_string();
+        let saved = legacy(&serde_json::json!({"show_form_field_reminder":show}).to_string());
         let mut h = harness(Some(saved), bytes.clone());
         let id = h.state().views[0].id;
         h.get_by_label_contains("interactive form fields. This document is secured. Some changes are restricted by its security settings.");
         h.get_by_label("Security settings");
-        let before = h.state().views[0].highlight_fields;
+        let before = h.state().views[0].session.highlight_fields;
         let label = if before { "Hide field highlights" } else { "Highlight fields" };
         h.get_by_label(label).click();
         h.run_steps(4);
-        assert_eq!(h.state().views[0].highlight_fields, !before);
+        assert_eq!(h.state().views[0].session.highlight_fields, !before);
         assert_eq!(h.state().session.get(id).unwrap().bytes.as_ref(), bytes.as_slice());
         assert!(!h.state().session.get(id).unwrap().dirty);
         if !show {
@@ -190,8 +203,8 @@ fn a_hidden_form_reminder_does_not_hide_security_notices() {
         h.run_steps(4);
         assert!(h.query_by_label_contains("This document is secured").is_none());
         assert!(h.state().views[0].notice_dismissed);
-        let saved = h.state().persist();
-        assert_eq!(serde_json::from_str::<serde_json::Value>(&saved).unwrap()["show_form_field_reminder"], show);
+        let saved = snapshot(h.state());
+        assert_eq!(h.state().settings_snapshot().behavior.show_form_field_reminder.unwrap(), show);
         let h = harness(Some(saved), bytes.clone());
         h.get_by_label_contains("interactive form fields. This document is secured.");
         h.get_by_label("Security settings");
@@ -219,8 +232,8 @@ fn form_and_security_notice_preferences_remain_independent() {
                 "show_secured_notice": show_security,
             })
             .to_string();
-            let h = harness(Some(settings), bytes.clone());
-            let settings = h.state().persist();
+            let h = harness(Some(legacy(&settings)), bytes.clone());
+            let settings = snapshot(h.state());
             let h = harness(Some(settings), bytes.clone());
             assert_eq!(h.query_by_label_contains("This document is secured").is_some(), show_security);
             assert_eq!(h.query_by_label(REMINDER).is_some(), show_form && !show_security);
@@ -235,14 +248,16 @@ fn form_and_security_notice_preferences_remain_independent() {
 #[test]
 fn a_hidden_form_reminder_does_not_hide_xfa_notices() {
     let template = pdfcraft_xfa::fixtures::scripted_template();
-    let h = harness(Some(r#"{"show_form_field_reminder":false}"#.to_string()), pdfcraft_xfa::fixtures::shell(&template));
+    let h = harness(Some(legacy(r#"{"show_form_field_reminder":false}"#)), pdfcraft_xfa::fixtures::shell(&template));
     h.get_by_label_contains("Dynamic XFA form laid out from its template:");
     let runaway = "function f() { for (var j = 0; j &lt; 99999; j++) {} } for (var k = 0; k &lt; 5000; k++) f();";
     let template = template.replace("if (qty.rawValue === null) qty.rawValue = 2;", runaway);
-    let mut h = harness(Some(r#"{"show_form_field_reminder":false}"#.to_string()), pdfcraft_xfa::fixtures::shell(&template));
+    let mut h = harness(Some(legacy(r#"{"show_form_field_reminder":false}"#)), pdfcraft_xfa::fixtures::shell(&template));
     let id = h.state().views[0].id;
     assert!(h.state().session.get(id).unwrap().xfa_scripts_off());
-    h.state_mut().toast = None;
+    for card in craft::ui::runtime::toast::cards(&h.ctx, &craft::ui::runtime::env::WindowKey::main()) {
+        craft::ui::runtime::toast::dismiss(&h.ctx, card.id);
+    }
     h.run_steps(4);
     h.get_by_label_contains("This form's scripts are turned off because one ran too long.");
     h.get_by_label("JavaScript Console");
@@ -253,28 +268,19 @@ fn a_hidden_form_reminder_does_not_hide_xfa_notices() {
 fn control_form_reminder_is_persistent_and_rejects_invalid_values() {
     use serde_json::json;
     let mut h = harness(None, form());
-    let ctx = h.ctx.clone();
-    let control = h.state_mut().attach_control(&ctx);
-    let call = |h: &mut Harness<'static, PdfCraftApp>, method: &str, params| {
-        let reply = control.send(method, params);
-        for _ in 0..30 {
-            h.step();
-            if let Ok(result) = reply.try_recv() {
-                return result;
-            }
-        }
-        panic!("no control reply for {method}");
-    };
+    let (client, rx) = std::sync::mpsc::channel();
+    h.state_mut().attach_control(craft::automation::ControlChannel::new(rx), None);
+    let call = |h: &mut Harness<'static, PdfCraftApp>, method: &str, params| crate::control::call(h, &client, method, params);
     call(&mut h, "ui.set", json!({"key":"form-reminder","value":"off"})).unwrap();
     h.run_steps(4);
     assert!(h.query_by_label(REMINDER).is_none());
     assert_eq!(call(&mut h, "ui.state", json!({})).unwrap()["show_form_field_reminder"], false);
     assert!(call(&mut h, "ui.set", json!({"key":"form-reminder","value":"maybe"})).is_err());
     assert_eq!(call(&mut h, "ui.state", json!({})).unwrap()["show_form_field_reminder"], false);
-    let saved = h.state().persist();
+    let saved = snapshot(h.state());
     let h = harness(Some(saved), form());
     assert!(h.query_by_label(REMINDER).is_none());
-    let mut app = PdfCraftApp::new();
-    app.set_option("form-reminder", "off").unwrap();
-    assert_eq!(serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()["show_form_field_reminder"], false);
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "form-reminder", "off").unwrap();
+    assert_eq!(app.settings_snapshot().behavior.show_form_field_reminder.unwrap(), false);
 }

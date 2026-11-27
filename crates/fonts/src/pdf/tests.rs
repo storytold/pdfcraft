@@ -135,6 +135,161 @@ fn embedded_editor_fonts_are_validated_without_installing_or_exporting() {
     assert!(embedded_sfnt(&doc, &Dict::new()).is_none());
 }
 
+/// #3803: OCR placeholder fonts (`/Glyphless`, `/GlyphlessFont`, `/HiddenHorzOCR`, or a
+/// dummy TrueType program whose non-zero CIDs all share a single rectangle glyph) still decode
+/// and measure the invisible OCR layer, but never encode replacement text or expose their
+/// dummy program to the inline editor.
+#[test]
+fn glyphless_ocr_fonts_decode_and_measure_without_encoding_or_exposing_sfnt() {
+    use pdfcraft_cos::Stream;
+    // Build a 1-outline TrueType program (only GID 1 has an outline) from Inter-Regular.ttf.
+    let mut one_glyph_ttf = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let count = u16::from_be_bytes(one_glyph_ttf[4..6].try_into().unwrap()) as usize;
+    let loca_rec = (0..count).map(|i| 12 + i * 16).find(|i| &one_glyph_ttf[*i..*i + 4] == b"loca").unwrap();
+    let loca_off = u32::from_be_bytes(one_glyph_ttf[loca_rec + 8..loca_rec + 12].try_into().unwrap()) as usize;
+    let loca_len = u32::from_be_bytes(one_glyph_ttf[loca_rec + 12..loca_rec + 16].try_into().unwrap()) as usize;
+    let mut zero_glyph_ttf = one_glyph_ttf.clone();
+    zero_glyph_ttf[loca_off..loca_off + loca_len].fill(0);
+    // Set loca[0] = 0, loca[1] = 0, and loca[2..] = 4 so only GID 1 has start < end.
+    one_glyph_ttf[loca_off..loca_off + 8].fill(0);
+    for chunk in one_glyph_ttf[loca_off + 8..loca_off + loca_len].as_chunks_mut::<4>().0 {
+        *chunk = 4u32.to_be_bytes();
+    }
+
+    for base in ["Glyphless", "GlyphlessFont", "ABCDEF+GlyphlessFont", "HiddenHorzOCR", "HiddenVertOCR", "CustomOCR"] {
+        let mut doc = Document::new_empty();
+        let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &one_glyph_ttf)));
+        let cmap = b"1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfrange <0000> <00FF> <0000> endbfrange";
+        let tu = doc.add(Object::Stream(Stream::flate(Dict::new(), cmap)));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
+        descriptor.set(b"FontName".to_vec(), Object::name(base));
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+        let mut desc = Dict::new();
+        desc.set(b"Type".to_vec(), Object::name("Font"));
+        desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+        desc.set(b"BaseFont".to_vec(), Object::name(base));
+        if base == "CustomOCR" {
+            let cid_to_gid = doc.add(Object::Stream(Stream::flate(Dict::new(), &[0, 1].repeat(256))));
+            desc.set(b"CIDToGIDMap".to_vec(), Object::Ref(cid_to_gid));
+        }
+        desc.set(b"DW".to_vec(), Object::Int(500));
+        desc.set(b"W".to_vec(), Object::Array(vec![Object::Int(32), Object::Array(vec![Object::Int(285)])]));
+        desc.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+        let f = font(
+            &mut doc,
+            vec![
+                ("Subtype", Object::name("Type0")),
+                ("BaseFont", Object::name(base)),
+                ("Encoding", Object::name("Identity-H")),
+                ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
+                ("ToUnicode", Object::Ref(tu)),
+            ],
+        );
+        assert!(embedded_sfnt(&doc, &f).is_none(), "{base} must not be exposed as an editor sfnt");
+        let m = Metrics::from_dict(&doc, &f);
+        assert_eq!(m.decode(b"\x00D\x00e\x00 \x00k"), "De k", "{base} still decodes OCR text");
+        assert!((m.width(32) - 0.285).abs() < 1e-9 && (m.width(68) - 0.5).abs() < 1e-9, "{base} still measures OCR widths");
+        assert_eq!(m.encode("De"), None, "{base} must not encode visible replacement text");
+        assert_eq!(m.encode(" "), None, "{base} must not encode spaces");
+        assert_eq!(m.encode(""), None, "{base} must not claim empty words");
+    }
+
+    // Regression fixture 1: a valid whitespace-only subset (0 outlined glyphs in `loca` because
+    // space has no contours) remains exposed as an editor sfnt and encodes whitespace.
+    let mut doc = Document::new_empty();
+    let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &zero_glyph_ttf)));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontName".to_vec(), Object::name("ABCDEF+WhitespaceSubset"));
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+    let whitespace_subset = font(
+        &mut doc,
+        vec![
+            ("Subtype", Object::name("TrueType")),
+            ("BaseFont", Object::name("ABCDEF+WhitespaceSubset")),
+            ("Encoding", Object::name("WinAnsiEncoding")),
+            ("FirstChar", Object::Int(32)),
+            ("LastChar", Object::Int(32)),
+            ("Widths", Object::Array(vec![Object::Int(250)])),
+            ("FontDescriptor", Object::Dict(descriptor)),
+        ],
+    );
+    assert!(embedded_sfnt(&doc, &whitespace_subset).is_some(), "whitespace-only subset keeps its sfnt");
+    assert_eq!(Metrics::from_dict(&doc, &whitespace_subset).encode(" ").as_deref(), Some(&[32][..]));
+
+    // Regression fixture 2: a 1-glyph font with intentional cmap aliases (e.g. U+002D, U+2010,
+    // U+2011 hyphen variants sharing GID 1) remains exposed and encodes its characters.
+    let mut alias_cmap_ttf = one_glyph_ttf.clone();
+    append_editor_cmap(&mut alias_cmap_ttf, &std::collections::BTreeMap::from([(0x002D, 1), (0x2010, 1), (0x2011, 1)])).unwrap();
+    let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &alias_cmap_ttf)));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontName".to_vec(), Object::name("ABCDEF+HyphenSubset"));
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+    let cmap_alias_font = font(
+        &mut doc,
+        vec![
+            ("Subtype", Object::name("TrueType")),
+            ("BaseFont", Object::name("ABCDEF+HyphenSubset")),
+            ("Encoding", Object::name("WinAnsiEncoding")),
+            ("FirstChar", Object::Int(45)),
+            ("LastChar", Object::Int(45)),
+            ("Widths", Object::Array(vec![Object::Int(333)])),
+            ("FontDescriptor", Object::Dict(descriptor)),
+        ],
+    );
+    assert!(embedded_sfnt(&doc, &cmap_alias_font).is_some(), "intentional cmap alias subset keeps its sfnt");
+    assert_eq!(Metrics::from_dict(&doc, &cmap_alias_font).encode("-").as_deref(), Some(&[45][..]));
+
+    // Regression fixture 3: a legitimate 1-glyph composite subset with intentional CIDToGIDMap
+    // aliases (CIDs 1..=3 all mapping to GID 1) stays usable and keeps its sfnt.
+    let mut single_char_ttf = one_glyph_ttf;
+    append_editor_cmap(&mut single_char_ttf, &std::collections::BTreeMap::from([(65, 1), (0xFF21, 1)])).unwrap();
+    let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &single_char_ttf)));
+    let cid_to_gid = doc.add(Object::Stream(Stream::flate(Dict::new(), &[0, 0, 0, 1, 0, 1, 0, 1])));
+    let tu = doc.add(Object::Stream(Stream::flate(Dict::new(), b"2 beginbfchar <0001> <0041> <0002> <FF21> endbfchar")));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontName".to_vec(), Object::name("ABCDEF+SingleCharSubset"));
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+    let mut desc = Dict::new();
+    desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+    desc.set(b"BaseFont".to_vec(), Object::name("ABCDEF+SingleCharSubset"));
+    desc.set(b"CIDToGIDMap".to_vec(), Object::Ref(cid_to_gid));
+    desc.set(b"W".to_vec(), Object::Array(vec![Object::Int(1), Object::Array(vec![Object::Int(600), Object::Int(600)])]));
+    desc.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+    let valid_subset = font(
+        &mut doc,
+        vec![
+            ("Subtype", Object::name("Type0")),
+            ("BaseFont", Object::name("ABCDEF+SingleCharSubset")),
+            ("Encoding", Object::name("Identity-H")),
+            ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
+            ("ToUnicode", Object::Ref(tu)),
+        ],
+    );
+    assert!(embedded_sfnt(&doc, &valid_subset).is_some(), "legitimate 1-glyph subset with CID aliases keeps its sfnt");
+    assert_eq!(Metrics::from_dict(&doc, &valid_subset).encode("A").as_deref(), Some(&[0, 1][..]));
+
+    // Distinct non-zero GIDs across >= 64 CIDs, or a single-GID map whose FontFile2 has 0 or
+    // multiple outlined glyphs (or a different outlined GID), are not classified as glyphless.
+    let mut multi_gid_map = [0u8, 1].repeat(65);
+    multi_gid_map.extend_from_slice(&[0, 2]);
+    let multi_gid = doc.add(Object::Stream(Stream::flate(Dict::new(), &multi_gid_map)));
+    let single_gid_64 = doc.add(Object::Stream(Stream::flate(Dict::new(), &[0u8, 1].repeat(65))));
+    let single_gid_2_64 = doc.add(Object::Stream(Stream::flate(Dict::new(), &[0u8, 2].repeat(65))));
+    let full_ttf = doc.add(Object::Stream(Stream::flate(Dict::new(), include_bytes!("../../../../assets/fonts/Inter-Regular.ttf"))));
+    let zero_ttf = doc.add(Object::Stream(Stream::flate(Dict::new(), &zero_glyph_ttf)));
+    for (map_ref, prog_ref) in [(multi_gid, program), (single_gid_64, full_ttf), (single_gid_64, zero_ttf), (single_gid_2_64, program)] {
+        let mut fd = Dict::new();
+        fd.set(b"FontFile2".to_vec(), Object::Ref(prog_ref));
+        let mut desc = Dict::new();
+        desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+        desc.set(b"CIDToGIDMap".to_vec(), Object::Ref(map_ref));
+        desc.set(b"FontDescriptor".to_vec(), Object::Dict(fd));
+        let d = font(&mut doc, vec![("Subtype", Object::name("Type0")), ("DescendantFonts", Object::Array(vec![Object::Dict(desc)]))]);
+        assert!(!is_glyphless(&doc, &d));
+    }
+}
+
 /// #2130: with no `/Widths`, an embedded program's advances win over a guess from the name
 /// ("Mono" would mean Courier, 600 units for every glyph), the program's `/DecodeParms` given
 /// directly or by reference.
@@ -299,27 +454,38 @@ fn a_fonts_streams_are_paid_for_from_its_allowance() {
     let m = Metrics::from_dict_within(&doc, &f, &mut budget);
     assert!(m.past_allowance && m.outlined_cids.is_empty());
     assert_eq!(m.codes, Codes::Two, "the Encoding CMap was left unread");
-    // Only a subset's program says which glyphs it lacks: the whole font pays for its CMaps alone.
+    // Only a subset's program says which glyphs it lacks: the whole font inspects `/CIDToGIDMap`
+    // once for shared-glyph placeholders and leaves the `FontFile2` program unread.
     let mut whole_font = f.clone();
     whole_font.set(b"BaseFont".to_vec(), Object::name("Inter"));
     let mut budget = DecodeBudget::new(cost, 0);
     let m = Metrics::from_dict_within(&doc, &whole_font, &mut budget);
     assert!(!m.past_allowance && m.outlined_cids.is_empty());
-    assert_eq!(cost - budget.remaining(), sizes[0] + sizes[3]);
+    assert_eq!(cost - budget.remaining(), sizes[0] + sizes[2] + sizes[3]);
 }
 
 /// With nothing left, an empty stream still reads, as the allowance reads one, and is no reason to
-/// call the font read past it; a stream with data is left unread, and is.
+/// call the font read past it; a stream with data is left unread, and is. An empty stream behind a
+/// filter nothing decodes is unread with any allowance, so it isn't either: the font is read past
+/// its allowance exactly when the allowance counts a refusal, which is what callers refuse on.
 #[test]
 fn an_empty_stream_reads_with_nothing_left() {
-    let past = |data: &[u8]| {
+    let past = |filter: Option<&str>, data: &[u8]| {
         let mut doc = Document::new_empty();
-        let unicode = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), data.to_vec()))));
+        let mut dict = Dict::new();
+        if let Some(filter) = filter {
+            dict.set(b"Filter".to_vec(), Object::name(filter));
+        }
+        let unicode = Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, data.to_vec()))));
         let f = font(&mut doc, vec![("Subtype", Object::name("TrueType")), ("ToUnicode", unicode)]);
-        Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(0, 0)).past_allowance
+        let mut budget = DecodeBudget::new(0, 0);
+        let past = Metrics::from_dict_within(&doc, &f, &mut budget).past_allowance;
+        assert_eq!(past, budget.refused() > 0, "{filter:?}");
+        past
     };
-    assert!(!past(b""));
-    assert!(past(b"1 beginbfchar <41> <0058> endbfchar"));
+    assert!(!past(None, b""));
+    assert!(!past(Some("NoSuchFilter"), b""));
+    assert!(past(None, b"1 beginbfchar <41> <0058> endbfchar"));
 }
 
 /// A stream behind one filter past its own limit, with more left than its limit, is left unread as
@@ -422,6 +588,45 @@ fn each_stage_of_a_metrics_stream_is_held_to_its_limit() {
     // 0.6 of the limit: its hex text, 1.2 of it, is past the limit; the stages make 1.8 of it.
     assert_eq!(read(MAX_CID_TO_GID * 6 / 20), (true, true));
     assert_eq!(read(MAX_CID_TO_GID / 4), (false, false));
+}
+
+/// The editor's program list reads a legacy Thai font's metrics after its program. With the program
+/// spending the allowance to the byte, a ToUnicode that is an empty stream behind a filter nothing
+/// decodes, unread with any allowance, doesn't put the metrics past the allowance: the program is
+/// listed. A ToUnicode with data is refused by the allowance, and the program isn't.
+#[test]
+fn an_editors_program_is_listed_past_a_stream_unread_on_its_own() {
+    let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let listed = |filter: Option<&str>, data: &[u8]| {
+        let mut doc = Document::new_empty();
+        let mut dict = Dict::new();
+        if let Some(filter) = filter {
+            dict.set(b"Filter".to_vec(), Object::name(filter));
+        }
+        let unicode = Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, data.to_vec()))));
+        let program = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), bytes.to_vec()))));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), program);
+        let f = font(
+            &mut doc,
+            vec![
+                ("Subtype", Object::name("TrueType")),
+                ("BaseFont", Object::name("THSarabunPSK")),
+                ("FirstChar", Object::Int(65)),
+                ("LastChar", Object::Int(65)),
+                ("Widths", Object::Array(vec![Object::Int(500)])),
+                ("Encoding", Object::name("WinAnsiEncoding")),
+                ("FontDescriptor", Object::Dict(descriptor)),
+                ("ToUnicode", unicode),
+            ],
+        );
+        let mut budget = DecodeBudget::new(bytes.len(), 0);
+        let listed = embedded_sfnt_within(&doc, &f, &mut budget).is_some();
+        assert_eq!(budget.remaining(), 0, "the program spends the allowance to the byte");
+        (listed, budget.refused())
+    };
+    assert_eq!(listed(Some("NoSuchFilter"), b""), (true, 0));
+    assert_eq!(listed(None, b"1 beginbfchar <41> <0058> endbfchar"), (false, 1));
 }
 
 /// The editor's program is held to its limit as the metrics reads' streams are: a 12 MiB program
@@ -969,6 +1174,41 @@ fn type3_glyph_boxes_are_paid_for_from_the_allowance() {
     assert!(m.past_allowance, "a byte short, the second description is left unread");
 }
 
+/// A glyph description that fails on its own once the allowance is spent to the byte, an empty one
+/// behind a filter nothing decodes, fails the same with more left: it doesn't make the metrics read
+/// past the allowance, and the descriptions after it are read, or refused by the allowance.
+#[test]
+fn a_type3_description_unread_on_its_own_is_not_past_the_allowance() {
+    let mut doc = Document::new_empty();
+    let procs = ["1 0 0 -20 1 300 d1", "", "1 0 0 0 1 400 d1"];
+    let mut f = type3(&mut doc, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, 0, 0, 0], &procs);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let unread = Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, Vec::new()))));
+    let Some(Object::Dict(mut charprocs)) = f.get(b"CharProcs").cloned() else { panic!("CharProcs") };
+    charprocs.set(b"g1".to_vec(), unread);
+    f.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
+    with_differences(&mut f, &["g0", "g1", "g2"].map(String::from));
+    let first = procs[0].len();
+    let whole = Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(usize::MAX, 0));
+    assert!(!whole.past_allowance);
+    assert_eq!((whole.ascent, whole.descent), (400.0, -20.0));
+    // The first description spends it to the byte; the third, which has data, is refused.
+    let mut budget = DecodeBudget::new(first, 0);
+    let m = Metrics::from_dict_within(&doc, &f, &mut budget);
+    assert_eq!(budget.refused(), 1);
+    assert!(m.past_allowance);
+    // Without the third, nothing is refused, and the metrics aren't past the allowance.
+    let Some(Object::Dict(mut charprocs)) = f.get(b"CharProcs").cloned() else { panic!("CharProcs") };
+    charprocs.remove(b"g2");
+    f.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
+    let mut budget = DecodeBudget::new(first, 0);
+    let m = Metrics::from_dict_within(&doc, &f, &mut budget);
+    assert_eq!((budget.refused(), budget.remaining()), (0, 0));
+    assert!(!m.past_allowance);
+    assert_eq!((m.ascent, m.descent), (300.0, -20.0));
+}
+
 /// A Type 3 font measured from its glyphs' `d1` boxes keeps them over a descriptor's `/Ascent`
 /// and `/Descent`, which are optional for Type 3 (ISO 32000-2 Table 120).
 #[test]
@@ -1473,7 +1713,7 @@ fn cmap_tokens_need_no_space_between_them() {
     let mut got: Vec<_> = map.iter().map(|(c, u)| (*c, u.as_str())).collect();
     got.sort_unstable();
     assert_eq!(got, [(3, " "), (0x10, "é"), (0x24, "A"), (0x25, "B"), (0x26, "C"), (0x30, "H"), (0x31, "i")]);
-    let (spaces, cids) = parse_cmap(b"1 begincodespacerange<00><FF>endcodespacerange 1 begincidrange<20><7E>1 endcidrange");
+    let (spaces, cids, _) = parse_cmap(b"1 begincodespacerange<00><FF>endcodespacerange 1 begincidrange<20><7E>1 endcidrange");
     assert_eq!(spaces, [(1, vec![0], vec![0xff])]);
     assert_eq!(cids, [(0x20, 0x7e, 1)]);
 }
@@ -1737,6 +1977,26 @@ fn low_codes_resolve_to_the_covering_range() {
     let covered: Vec<u32> = (0..0x70).filter(|&c| u.covering(c).is_some()).collect();
     assert_eq!(covered, [5, 6, 7, 100, 101]);
     assert_eq!((u.covering(0xFFFF).is_some(), u.covering(0x1_0001).is_some(), u.covering(0x1_0002).is_none()), (true, true, true));
+}
+
+#[test]
+fn codespaces_are_deduplicated_and_at_most_four_bytes() {
+    let cmap = "3 begincodespacerange <00> <7F> <00> <7F> <0000000000> <FFFFFFFFFF> endcodespacerange";
+    let (spaces, ..) = parse_cmap(cmap.as_bytes());
+    assert_eq!(spaces, vec![(1, vec![0x00], vec![0x7F])]);
+    let many: String = (0..2000).map(|_| "<0000> <FFFF>\n").collect();
+    let (spaces, ..) = parse_cmap(format!("2000 begincodespacerange\n{many}endcodespacerange").as_bytes());
+    assert_eq!(spaces.len(), 1);
+}
+
+#[test]
+fn base_font_name_matches_the_metrics_name() {
+    let doc = Document::new_empty();
+    let mut f = Dict::new();
+    f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+Body"));
+    assert_eq!(base_font_name(&doc, &f), "ABCDEF+Body");
+    assert_eq!(base_font_name(&doc, &f), Metrics::from_dict(&doc, &f).base_font);
+    assert_eq!(base_font_name(&doc, &Dict::new()), "");
 }
 
 #[test]
@@ -2051,4 +2311,52 @@ fn a_full_cid_map_rebuilds_a_composite_subsets_cmap_behind_two_filters() {
     source.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
     let editor = embedded_sfnt(&doc, &source).expect("the map behind two filters is read");
     assert_eq!(skrifa::FontRef::new(&editor).unwrap().charmap().map('Ω'), Some(expected));
+}
+
+/// A codespace range of five bytes, or one whose ends differ in length, can't be kept and is said
+/// to be dropped; a repeated range is not a loss.
+#[test]
+fn a_dropped_codespace_range_is_reported() {
+    assert!(parse_cmap(b"1 begincodespacerange <0000000000> <FFFFFFFFFF> endcodespacerange").2);
+    assert!(parse_cmap(b"1 begincodespacerange <00> <FFFF> endcodespacerange").2);
+    assert!(!parse_cmap(b"2 begincodespacerange <0000> <FFFF> <0000> <FFFF> endcodespacerange").2);
+}
+
+#[test]
+fn widths_the_font_declares_are_told_from_fallbacks() {
+    let mut doc = Document::new_empty();
+    let simple = |doc: &mut Document, base: &str, widths: Option<Vec<Object>>| {
+        let mut entries = vec![("Subtype", Object::name("Type1")), ("BaseFont", Object::name(base))];
+        if let Some(w) = widths {
+            entries.extend([("FirstChar", Object::Int(65)), ("Widths", Object::Array(w))]);
+        }
+        let dict = font(doc, entries);
+        Metrics::from_dict(doc, &dict)
+    };
+    let listed = simple(&mut doc, "HouseFont", Some(vec![Object::Int(500)]));
+    assert!(listed.width_declared(65));
+    assert!(!listed.width_declared(66), "a code past /Widths takes /MissingWidth");
+    assert!(simple(&mut doc, "Helvetica", None).width_declared(65));
+    assert!(simple(&mut doc, "Arial", None).width_declared(65), "a common alias names the face");
+    assert!(!simple(&mut doc, "HouseSerif", None).width_declared(65), "Times is a guess from the name");
+    assert!(!simple(&mut doc, "HouseFont", None).width_declared(65), "Helvetica is a guess");
+    let cid = |doc: &mut Document, dw: Option<i64>| {
+        let mut desc = Dict::new();
+        desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+        desc.set(b"W".to_vec(), Object::Array(vec![Object::Int(1), Object::Array(vec![Object::Int(600)])]));
+        if let Some(dw) = dw {
+            desc.set(b"DW".to_vec(), Object::Int(dw));
+        }
+        let entries = vec![
+            ("Subtype", Object::name("Type0")),
+            ("Encoding", Object::name("Identity-H")),
+            ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
+        ];
+        let dict = font(doc, entries);
+        Metrics::from_dict(doc, &dict)
+    };
+    let implied = cid(&mut doc, None);
+    assert!(implied.width_declared(1));
+    assert!(!implied.width_declared(2), "a CID /W leaves out, with no /DW, takes the implied 1000");
+    assert!(cid(&mut doc, Some(500)).width_declared(2));
 }

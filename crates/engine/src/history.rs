@@ -38,7 +38,11 @@ pub(crate) enum Scope {
 /// Edits during which field scripts run.
 pub(crate) fn uses_scripts(edit: &Edit) -> bool {
     match edit {
-        Edit::SetFieldValue { .. } | Edit::ApplyScriptChanges { .. } | Edit::SetFieldScript { .. } | Edit::SetCalculationOrder { .. } => true,
+        Edit::SetFieldValue { .. }
+        | Edit::ResetForm { .. }
+        | Edit::ApplyScriptChanges { .. }
+        | Edit::SetFieldScript { .. }
+        | Edit::SetCalculationOrder { .. } => true,
         Edit::Batch { edits, .. } => edits.iter().any(uses_scripts),
         _ => false,
     }
@@ -77,7 +81,11 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::BorderShapeAnnotation { .. }
         | Edit::SetAnnotationInfo { .. } => Scope::Comments,
         Edit::AddLink { .. } | Edit::SetLink { .. } | Edit::DeleteLink { .. } | Edit::RemoveLinks { .. } | Edit::AddLinks { .. } => Scope::Links,
-        Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::ApplyScriptChanges { .. } => Scope::Form,
+        Edit::SetFieldValue { .. }
+        | Edit::ResetForm { .. }
+        | Edit::SetFieldImage { .. }
+        | Edit::SetFieldImageTarget { .. }
+        | Edit::ApplyScriptChanges { .. } => Scope::Form,
         // Page content, resources and added content/marks only: the page tree, annotations,
         // fields, links and document metadata are untouched (see `refresh_content`).
         Edit::MoveObjects { .. }
@@ -142,6 +150,17 @@ pub(crate) struct Editor {
     pub(crate) field_appearances: pdfcraft_forms::FieldAppearanceCache,
     /// The text blocks last computed for one page, reused while the document is unchanged.
     pub(crate) text_blocks: TextBlocksCache,
+    /// A signed file that opening appended revisions to (an XFA form's layout, the values from
+    /// its data, its open scripts): the file as it was read, which the signatures are validated
+    /// against until the user changes something or saves (#2759).
+    pub(crate) as_opened: Option<AsOpened>,
+}
+
+/// The file as read, before opening appended PdfCraft's own revisions to it.
+#[derive(Clone)]
+pub(crate) struct AsOpened {
+    pub(crate) cos: pdfcraft_cos::Document,
+    pub(crate) bytes: Arc<Vec<u8>>,
 }
 
 /// One page's text blocks ([`pdfcraft_edit::text_blocks`]) and the document state they were read

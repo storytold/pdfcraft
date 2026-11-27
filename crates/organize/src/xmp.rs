@@ -16,6 +16,9 @@
 //! none, and a packet this can't edit safely (not UTF-8, no `rdf:RDF`, too large to decode) is
 //! left as it was.
 
+use std::cell::RefCell;
+use std::sync::{Arc, Weak};
+
 use pdfcraft_cos::{Document, Object, Stream};
 
 use crate::OrganizeError;
@@ -177,10 +180,41 @@ pub(crate) fn info_value(doc: &Document, key: &str) -> Option<String> {
     let (name, _, shape) = property(key)?;
     let root = doc.root()?;
     let r = doc.get(root).as_dict()?.reference(b"Metadata")?;
-    let obj = doc.get(r);
-    let Object::Stream(stream) = &*obj else { return None };
-    let xmp = String::from_utf8(stream.decoded_within(MAX_XMP).ok()?).ok()?;
+    let xmp = decoded_packet(&doc.get(r))?;
     get_property(&xmp, name, shape)
+}
+
+/// A decoded packet (`None`: unreadable) and the stream object it came from.
+type Held = (Weak<Object>, Option<Arc<str>>);
+
+thread_local! {
+    /// The packet [`decoded_packet`] last decoded (`None`: unreadable), with the stream object it
+    /// came from. The tab title can come from XMP and is read every frame; a packet decodes to
+    /// up to [`MAX_XMP`] bytes.
+    static PACKET: RefCell<Option<Held>> = const { RefCell::new(None) };
+}
+
+/// The text of the XMP stream `obj`, `None` when it isn't a stream or isn't UTF-8 within
+/// [`MAX_XMP`]. Decoded once while the document keeps handing out the same object: an edit or
+/// another document gives another one. The [`Weak`] keeps its address from being reused.
+fn decoded_packet(obj: &Arc<Object>) -> Option<Arc<str>> {
+    let same = |held: &Held| std::ptr::eq(held.0.as_ptr(), Arc::as_ptr(obj));
+    if let Ok(Some(text)) = PACKET.try_with(|p| p.borrow().as_ref().filter(|held| same(held)).map(|held| held.1.clone())) {
+        return text;
+    }
+    let Object::Stream(stream) = &**obj else { return None };
+    #[cfg(test)]
+    XMP_DECODES.with(|n| n.set(n.get() + 1));
+    let text = stream.decoded_within(MAX_XMP).ok().and_then(|b| String::from_utf8(b).ok()).map(Arc::<str>::from);
+    // Past the thread's end (a destructor reading it) the packet just isn't kept.
+    let _ = PACKET.try_with(|p| *p.borrow_mut() = Some((Arc::downgrade(obj), text.clone())));
+    text
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Packets [`decoded_packet`] decoded on this thread.
+    pub(crate) static XMP_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The text of the property `name` in `xmp`, element or attribute form (see [`info_value`]).

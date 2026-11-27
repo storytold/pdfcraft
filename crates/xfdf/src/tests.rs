@@ -4,6 +4,7 @@ use pdfcraft_annot::{Markup, Meta, NewAnnotation, Shape, Style, TextReplacement,
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
 use pdfcraft_forms::{NewField, add_field, fields, set_value};
 
+use super::common::walk_xfdf;
 use super::xfdf::PDFCRAFT_NS;
 use super::*;
 
@@ -245,13 +246,13 @@ fn an_unnamed_group_primary_gets_an_export_only_name() {
         add_annotation(&mut src, &note, &Meta { date: None, id: clash.clone() }).unwrap();
 
         let xfdf = export_xfdf(&src, true, false, "a.pdf");
-        let doc = roxmltree::Document::parse(&xfdf).unwrap();
-        let el = |t: &str| doc.descendants().find(|n| n.has_tag_name(t)).unwrap_or_else(|| panic!("no <{t}>: {xfdf}"));
+        let doc = common::parse_form_xml(&xfdf).unwrap();
+        let el = |t: &str| doc.descendants().find(|n| n.local() == t).unwrap_or_else(|| panic!("no <{t}>: {xfdf}"));
         let (tag, sub_tag) = if caret_primary { ("caret", "strikeout") } else { ("strikeout", "caret") };
-        let name = el(tag).attribute("name").unwrap_or_else(|| panic!("the unnamed primary gets a name ({caret_primary}): {xfdf}"));
-        assert_eq!(el(sub_tag).attribute("inreplyto"), Some(name), "{xfdf}");
+        let name = el(tag).attr("name").unwrap_or_else(|| panic!("the unnamed primary gets a name ({caret_primary}): {xfdf}"));
+        assert_eq!(el(sub_tag).attr("inreplyto"), Some(name), "{xfdf}");
         assert_ne!(name, clash, "a made-up name never repeats a real /NM");
-        assert_eq!(doc.descendants().filter(|n| n.attribute("name") == Some(name)).count(), 1, "{xfdf}");
+        assert_eq!(doc.descendants().filter(|n| n.attr("name") == Some(name)).count(), 1, "{xfdf}");
         assert!(src.get(primary).as_dict().unwrap().get(b"NM").is_none(), "the name is for the export only");
         assert!(src.get(sub).as_dict().unwrap().get(b"NM").is_none());
 
@@ -306,11 +307,11 @@ fn an_export_only_name_never_repeats_an_inline_annotations_nm() {
     src.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(annots))).unwrap();
 
     let xfdf = export_xfdf(&src, true, false, "a.pdf");
-    let doc = roxmltree::Document::parse(&xfdf).unwrap();
-    let caret = doc.descendants().find(|n| n.has_tag_name("caret")).unwrap_or_else(|| panic!("no <caret>: {xfdf}"));
-    let name = caret.attribute("name").unwrap_or_else(|| panic!("the unnamed primary gets a name: {xfdf}"));
+    let doc = common::parse_form_xml(&xfdf).unwrap();
+    let caret = doc.descendants().find(|n| n.local() == "caret").unwrap_or_else(|| panic!("no <caret>: {xfdf}"));
+    let name = caret.attr("name").unwrap_or_else(|| panic!("the unnamed primary gets a name: {xfdf}"));
     assert_ne!(name, clash, "a made-up name never repeats an inline annotation's /NM: {xfdf}");
-    assert_eq!(doc.descendants().filter(|n| n.attribute("name") == Some(&clash[..])).count(), 1, "{xfdf}");
+    assert_eq!(doc.descendants().filter(|n| n.attr("name") == Some(&clash[..])).count(), 1, "{xfdf}");
 }
 
 #[test]
@@ -318,15 +319,15 @@ fn xml_exports_drop_xml_noncharacters() {
     let mut src = filled();
     set_value(&mut src, "Name", &FieldValue::Text("a\u{FFFE}b\u{FFFF}c".into())).unwrap();
     let xfdf = export_xfdf(&src, false, true, "f.pdf");
-    let doc = roxmltree::Document::parse(&xfdf).unwrap_or_else(|e| panic!("XFDF is not well-formed: {e}: {xfdf:?}"));
+    let doc = common::parse_form_xml(&xfdf).unwrap_or_else(|e| panic!("XFDF is not well-formed: {e}: {xfdf:?}"));
     let value = doc
         .descendants()
-        .find(|n| n.has_tag_name("field") && n.attribute("name") == Some("Name"))
-        .and_then(|n| n.children().find(|c| c.has_tag_name("value")))
-        .and_then(|n| n.text());
-    assert_eq!(value, Some("abc"));
+        .find(|n| n.local() == "field" && n.attr("name") == Some("Name"))
+        .and_then(|n| n.child(craft_xml::Local("value")))
+        .map(|n| n.text());
+    assert_eq!(value.as_deref(), Some("abc"));
     let data = export_data(&src, Format::Xml);
-    roxmltree::Document::parse(&data).unwrap_or_else(|e| panic!("XML is not well-formed: {e}: {data:?}"));
+    common::parse_form_xml(&data).unwrap_or_else(|e| panic!("XML is not well-formed: {e}: {data:?}"));
 }
 
 #[test]
@@ -347,15 +348,11 @@ fn xml_exports_preserve_whitespace_in_field_names() {
     let src = Document::open(Arc::new(source_bytes.clone())).unwrap();
     for format in [Format::Xml, Format::Xfdf] {
         let exported = if format == Format::Xfdf { export_xfdf(&src, false, true, "form.pdf") } else { export_data(&src, format) };
-        let xml = roxmltree::Document::parse(&exported).unwrap();
+        let xml = common::parse_form_xml(&exported).unwrap();
         let exported_names: Vec<_> = if format == Format::Xfdf {
-            xml.descendants().filter(|n| n.has_tag_name("field")).map(|n| n.attribute("name").unwrap()).collect()
+            xml.descendants().filter(|n| n.local() == "field").map(|n| n.attr("name").unwrap()).collect()
         } else {
-            xml.root_element()
-                .children()
-                .filter(|n| n.is_element())
-                .map(|n| n.attribute(("http://ns.adobe.com/xfdf-transition/", "original")).unwrap())
-                .collect()
+            xml.elements().map(|n| n.attr("xfdf:original").unwrap()).collect()
         };
         assert_eq!(exported_names, names, "{format:?}: {exported}");
         let mut dst = Document::open(Arc::new(source_bytes.clone())).unwrap();
@@ -409,14 +406,14 @@ fn xfdf_exports_preserve_whitespace_in_comment_attributes() {
     let mut dst = Document::open(Arc::new(source_bytes)).unwrap();
     let file = "form\twith\nlines.pdf";
     let xfdf = export_xfdf(&dst, true, false, file);
-    let xml = roxmltree::Document::parse(&xfdf).unwrap();
-    let notes: Vec<_> = xml.descendants().filter(|n| n.has_tag_name("text")).collect();
-    assert_eq!(notes.iter().map(|n| n.attribute("name").unwrap()).collect::<Vec<_>>(), names);
+    let xml = common::parse_form_xml(&xfdf).unwrap();
+    let notes: Vec<_> = xml.descendants().filter(|n| n.local() == "text").collect();
+    assert_eq!(notes.iter().map(|n| n.attr("name").unwrap()).collect::<Vec<_>>(), names);
     for note in notes {
-        assert_eq!(note.attribute("title"), Some(author));
-        assert_eq!(note.attribute("subject"), Some(subject));
+        assert_eq!(note.attr("title"), Some(author));
+        assert_eq!(note.attr("subject"), Some(subject));
     }
-    assert_eq!(xml.descendants().find(|n| n.has_tag_name("f")).unwrap().attribute("href"), Some(file));
+    assert_eq!(xml.descendants().find(|n| n.local() == "f").unwrap().attr("href"), Some(file));
     let before = annotation_refs(&dst);
     let report = import(&mut dst, xfdf.as_bytes()).unwrap();
     assert_eq!(report.comments, names.len());
@@ -646,12 +643,12 @@ fn xml_field_names_remain_valid_and_round_trip_without_collisions() {
     let want = values(&src);
     for format in [Format::Xml, Format::Xdp] {
         let text = export_data(&src, format);
-        let xml = roxmltree::Document::parse(&text).unwrap();
-        let children: Vec<_> = xml.root_element().children().filter(|n| n.is_element()).collect();
+        let xml = common::parse_form_xml(&text).unwrap();
+        let children: Vec<_> = xml.elements().collect();
         assert_eq!(children.len(), names.len());
         for (child, (original, tag)) in children.iter().zip(names) {
-            assert_eq!(child.tag_name().name(), tag);
-            assert_eq!(child.attribute(("http://ns.adobe.com/xfdf-transition/", "original")), (original != tag).then_some(original));
+            assert_eq!(child.local(), tag);
+            assert_eq!(child.attr("xfdf:original"), (original != tag).then_some(original));
         }
         assert!(!src.is_modified(), "export must not change the source PDF");
         assert_eq!(src.bytes().as_slice(), source.as_slice());
@@ -2101,11 +2098,11 @@ fn xfdf_line_ending_names_are_escaped() {
     let line = doc.add(line);
     doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(line)]))).unwrap();
     let xml = export_xfdf(&doc, true, false, "form.pdf");
-    let parsed = roxmltree::Document::parse(&xml).unwrap();
-    assert!(!parsed.descendants().any(|n| n.has_tag_name("field")), "{xml}");
-    let el = parsed.descendants().find(|n| n.has_tag_name("line")).unwrap();
+    let parsed = common::parse_form_xml(&xml).unwrap();
+    assert!(!parsed.descendants().any(|n| n.local() == "field"), "{xml}");
+    let el = parsed.descendants().find(|n| n.local() == "line").unwrap();
     let want = String::from_utf8(hostile).unwrap();
-    assert_eq!((el.attribute("head"), el.attribute("tail")), (Some(want.as_str()), Some(want.as_str())));
+    assert_eq!((el.attr("head"), el.attr("tail")), (Some(want.as_str()), Some(want.as_str())));
 }
 
 /// A comment locked through an indirect `/F` is as protected from a same-named import as one
@@ -2269,6 +2266,100 @@ fn an_fdf_comment_popup_without_a_rect_is_dropped() {
     let page = pdfcraft_model::pages(&dst)[0].dict.get(b"Annots").map(|a| dst.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap();
     let popups = page.iter().filter(|a| dst.resolve(a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Popup".as_slice()))).count();
     assert_eq!(popups, 0);
+}
+
+/// Tab-delimited export guards a formula-like cell as CSV does, and the import takes the guard
+/// off, so a spreadsheet never runs form data and the value survives the round trip.
+#[test]
+fn tab_delimited_export_guards_formula_cells_and_round_trips() {
+    let mut doc = blank();
+    set_value(&mut doc, "Name", &FieldValue::Text("=SUM(A1:A9)".into())).unwrap();
+    let text = export_data(&doc, Format::Txt);
+    let row = text.lines().nth(1).unwrap();
+    assert!(row.starts_with("'=SUM(A1:A9)"), "{row:?}");
+    let mut again = blank();
+    import(&mut again, text.as_bytes()).unwrap();
+    assert_eq!(values(&again).iter().find(|(k, _)| k == "Name").map(|(_, v)| v.clone()), Some(vec!["=SUM(A1:A9)".to_string()]));
+}
+
+/// Merging many files with many distinct names stays linear: every column once, in first-seen
+/// order, and a row looks its names up rather than scanning them.
+#[test]
+fn merge_csv_lists_each_column_once_in_order() {
+    let files: Vec<Vec<(String, Vec<String>)>> =
+        (0..3).map(|f| (0..4).map(|i| (format!("c{}", (i + f) % 5), vec![format!("{f}-{i}")])).collect()).collect();
+    let csv = merge_csv(&files);
+    let mut lines = csv.lines();
+    assert_eq!(lines.next(), Some("c0,c1,c2,c3,c4"));
+    assert_eq!(lines.next(), Some("0-0,0-1,0-2,0-3,"));
+    assert_eq!(lines.next(), Some(",1-0,1-1,1-2,1-3"));
+    assert_eq!(lines.next(), Some("2-3,,2-0,2-1,2-2"));
+}
+
+/// A long parent name is written into every descendant's full name: past the import's text
+/// bound the file is refused rather than expanded.
+#[test]
+fn xfdf_field_names_past_the_text_bound_are_refused() {
+    let parent = "p".repeat(1 << 20);
+    let kids: String = (0..100).map(|i| format!("<field name=\"k{i}\"><value>v</value></field>")).collect();
+    let xfdf =
+        format!("<?xml version=\"1.0\"?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><fields><field name=\"{parent}\">{kids}</field></fields></xfdf>");
+    let mut doc = blank();
+    match import(&mut doc, xfdf.as_bytes()) {
+        Err(DataError::Malformed(m)) => assert!(m.contains("64 MiB"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A same-name import never replaces a widget whose field type is inherited, or whose subtype is
+/// written as a reference: the field keeps its dictionary and the import goes beside it.
+#[test]
+fn same_name_import_keeps_a_widget_with_an_inherited_field_type() {
+    let mut doc = blank();
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    // A field with one widget kid: /FT on the field, the widget names it as /Parent.
+    let mut field = Dict::new();
+    field.set(b"FT".to_vec(), Object::name("Tx"));
+    field.set(b"T".to_vec(), Object::String(PdfString::text("inherited")));
+    let field = doc.add(field);
+    let subtype = doc.add(Object::name("Widget"));
+    let mut widget = Dict::new();
+    widget.set(b"Type".to_vec(), Object::name("Annot"));
+    widget.set(b"Subtype".to_vec(), Object::Ref(subtype));
+    widget.set(b"Rect".to_vec(), arr(&[10.0, 10.0, 60.0, 30.0]));
+    widget.set(b"NM".to_vec(), Object::String(PdfString::text("w1")));
+    widget.set(b"Parent".to_vec(), Object::Ref(field));
+    let widget = doc.add(widget);
+    doc.update_dict(field, |d| d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(widget)]))).unwrap();
+    doc.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(widget)]))).unwrap();
+    let mut note = Dict::new();
+    note.set(b"Type".to_vec(), Object::name("Annot"));
+    note.set(b"Subtype".to_vec(), Object::name("Text"));
+    note.set(b"Rect".to_vec(), arr(&[10.0, 10.0, 30.0, 30.0]));
+    note.set(b"NM".to_vec(), Object::String(PdfString::text("w1")));
+    let added = xfdf::place(&mut doc, page, note).unwrap();
+    assert_ne!(added, widget);
+    assert_eq!(doc.get(widget).as_dict().unwrap().name(b"Type"), Some(b"Annot".as_slice()));
+    assert!(doc.get(widget).as_dict().unwrap().reference(b"Parent").is_some(), "the widget was replaced");
+    let annots = doc.get(page).as_dict().unwrap().get(b"Annots").unwrap().as_array().unwrap().len();
+    assert_eq!(annots, 2);
+}
+
+#[test]
+fn a_field_type_up_to_64_parents_away_protects_the_annotation() {
+    // the forms crate follows /Parent 64 levels: so does the import's protection check
+    let mut doc = blank();
+    let mut top = Dict::new();
+    top.set(b"FT".to_vec(), Object::name("Tx"));
+    let mut parent = doc.add(Object::Dict(top));
+    for _ in 0..40 {
+        let mut d = Dict::new();
+        d.set(b"Parent".to_vec(), Object::Ref(parent));
+        parent = doc.add(Object::Dict(d));
+    }
+    let mut annot = Dict::new();
+    annot.set(b"Parent".to_vec(), Object::Ref(parent));
+    assert!(crate::xfdf::is_field(&doc, &annot));
 }
 
 /// A check box field whose two kids have the on states `A` and `B`.
@@ -2644,4 +2735,151 @@ fn copies_keep_their_intent_cloud_and_pdfcraft_keys() {
     assert_eq!(got[0].get(b"PCAngle").and_then(Object::as_f64), Some(45.0));
     assert_eq!(got[0].name(b"Subtype"), Some(b"Square".as_slice()), "not taken from the attribute");
     assert!(got[0].get(b"PCRef").is_none() && got[1].get(b"PCAngle").is_none(), "{got:?}");
+}
+
+#[test]
+fn xfdf_charges_non_emitted_parent_names_before_recursing() {
+    let fields = common::parse_form_xml("<fields><field name='parent'><value-richtext/></field></fields>").unwrap();
+    let mut out = Vec::new();
+    let mut bytes = common::MAX_XFDF_TEXT - 5;
+    assert!(walk_xfdf(&fields, "", &mut out, 0, &mut bytes).is_err());
+    assert!(out.is_empty());
+    let mut bytes = common::MAX_XFDF_TEXT - 6;
+    walk_xfdf(&fields, "", &mut out, 0, &mut bytes).unwrap();
+    assert_eq!(bytes, common::MAX_XFDF_TEXT);
+}
+
+#[test]
+fn xfdf_charges_split_text_before_copying_values() {
+    let fields = common::parse_form_xml("<fields><field name='x'><value>a<!--split-->bc</value></field></fields>").unwrap();
+    let mut out = Vec::new();
+    let mut bytes = common::MAX_XFDF_TEXT - 3;
+    assert!(walk_xfdf(&fields, "", &mut out, 0, &mut bytes).is_err());
+    assert!(out.is_empty());
+}
+
+#[test]
+fn merge_csv_keeps_first_repeated_value() {
+    let rows = vec![("Name".into(), vec!["first".into()]), ("Name".into(), vec!["second".into()])];
+    assert_eq!(merge_csv(&[rows]), "Name\nfirst\n");
+}
+
+#[test]
+fn shared_xfdf_fields_match_retained_reader() -> Result<(), Box<dyn std::error::Error>> {
+    // Independent retained app walker remains used by annotation imports.
+    for xml in [
+        "<xfdf/>",
+        "<xfdf><fields><field name='parent'><field name='child'><value>a<!--split-->b</value><value>c</value></field></field><field name='empty'/><field name='rich'><value-richtext>skip</value-richtext></field><field name='parent.child'><value>last</value></field></fields></xfdf>",
+        "<x:xfdf xmlns:x='urn:xfdf'><x:fields><x:field name='n'><x:value>v</x:value></x:field></x:fields></x:xfdf>",
+    ] {
+        let root = parse_form_xml(xml)?;
+        let mut expected = Vec::new();
+        if let Some(fields) = root.child(craft_xml::Local("fields")) {
+            walk_xfdf(fields, "", &mut expected, 0, &mut 0)?;
+        }
+        assert_eq!(data_values(xml.as_bytes())?, expected);
+    }
+    assert!(matches!(data_values(b"<other/>"), Err(DataError::UnknownFormat)));
+    assert!(matches!(data_values(b"<xfdf a='1' a='2'/>"), Err(DataError::UnknownFormat)));
+    let deep = format!("<xfdf><fields>{}{}</fields></xfdf>", "<field name='n'>".repeat(65), "</field>".repeat(65));
+    assert!(matches!(data_values(deep.as_bytes()), Err(DataError::Malformed(_))));
+    assert_eq!(
+        data_values(b"\xef\xbb\xbf <xfdf><fields><field name='n'><value>\xff</value></field></fields></xfdf>")?,
+        vec![("n".into(), vec!["\u{fffd}".into()])]
+    );
+    Ok(())
+}
+
+#[test]
+fn xfdf_annotation_formatting_round_trips_via_shared_grammar() {
+    let mut src = blank();
+    let shape = Shape::Rectangle { rect: [24.0, 48.0, 144.0, 108.0] };
+    add_annotation(
+        &mut src,
+        &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: "Dashed box".into(), author: "Ada".into() },
+        &Meta { id: "fmt-rt-1".into(), date: Some("D:20261119120000Z".into()) },
+    )
+    .unwrap();
+    let page = pdfcraft_model::pages(&src)[0].obj;
+    let annot_ref =
+        src.get(page).as_dict().unwrap().get(b"Annots").map(|a| src.resolve(a)).unwrap().as_array().unwrap().last().unwrap().as_ref().unwrap();
+    let mut bs = Dict::new();
+    bs.set(b"W".to_vec(), Object::Real(2.5));
+    bs.set(b"S".to_vec(), Object::name("D"));
+    bs.set(b"D".to_vec(), Object::Array(vec![Object::Real(4.0), Object::Real(2.0)]));
+    src.update_dict(annot_ref, |d| {
+        d.set(b"BS".to_vec(), Object::Dict(bs));
+        d.set(b"F".to_vec(), Object::Int(4 | 128));
+    })
+    .unwrap();
+
+    let xfdf = export_xfdf(&src, true, false, "fmt.pdf");
+    assert!(is_xfdf_comments(&xfdf), "{xfdf}");
+    assert!(xfdf.contains("style=\"dash\""), "{xfdf}");
+    assert!(xfdf.contains("dashes=\"4,2\""), "{xfdf}");
+    assert!(xfdf.contains("flags=\"print,locked\""), "{xfdf}");
+
+    let mut dst = blank();
+    let report = import_comments(&mut dst, &xfdf, None, None, None).unwrap();
+    assert_eq!(report.comments, 1, "{report:?}");
+    let dst_page = pdfcraft_model::pages(&dst)[0].obj;
+    let dst_ref =
+        dst.get(dst_page).as_dict().unwrap().get(b"Annots").map(|a| dst.resolve(a)).unwrap().as_array().unwrap().last().unwrap().as_ref().unwrap();
+    let dst_obj = dst.get(dst_ref);
+    let dst_dict = dst_obj.as_dict().unwrap();
+    assert_eq!(dst_dict.get(b"F").and_then(|f| dst.resolve(f).as_int()), Some(4 | 128));
+    let dst_bs = dst_dict.get(b"BS").map(|o| dst.resolve(o)).unwrap();
+    let dst_bs = dst_bs.as_dict().unwrap();
+    assert_eq!(dst_bs.name(b"S"), Some(b"D".as_slice()));
+    assert_eq!(dst_bs.get(b"W").and_then(|w| dst.resolve(w).as_f64()), Some(2.5));
+}
+
+/// Check boxes sharing one name with different on states (`/A`, `/B`) are one field whose value
+/// picks the box. Importing `B` turned on the first box's state instead, whatever the data said.
+fn check_box_pair(value: &str) -> Document {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".to_string(),
+        "<< /Fields [5 0 R] >>".to_string(),
+        format!("<< /FT /Btn /T (choice) /V /{value} /Kids [6 0 R 7 0 R] >>"),
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /P 3 0 R /Rect [50 700 64 714] /AS /{} /AP << /N << /A 8 0 R /Off 8 0 R >> >> >>",
+            if value == "A" { "A" } else { "Off" }
+        ),
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /P 3 0 R /Rect [80 700 94 714] /AS /{} /AP << /N << /B 8 0 R /Off 8 0 R >> >> >>",
+            if value == "B" { "B" } else { "Off" }
+        ),
+        "<< /Length 0 >>\nstream\n\nendstream".to_string(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+#[test]
+fn a_check_box_group_value_selects_its_own_box_on_import() {
+    let src = check_box_pair("B");
+    assert_eq!(values(&src), vec![("choice".to_string(), vec!["B".to_string()])]);
+    let exports = [
+        ("xfdf", export_xfdf(&src, false, true, "form.pdf").into_bytes()),
+        ("fdf", export_fdf(&src, false, true, "form.pdf").unwrap()),
+        ("xml", export_data(&src, Format::Xml).into_bytes()),
+    ];
+    for (format, data) in exports {
+        let mut dst = check_box_pair("Off");
+        let report = import(&mut dst, &data);
+        assert_eq!(values(&dst), values(&src), "{format}: {report:?}: {}", String::from_utf8_lossy(&data));
+    }
 }

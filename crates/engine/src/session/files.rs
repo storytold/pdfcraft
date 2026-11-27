@@ -1,8 +1,19 @@
 use super::{
     Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hairlines, HairlinesFixed, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI,
-    OptimizeReport, SaveOptions, Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print,
+    OptimizeReport, SaveOptions, Session, SourceKind, SplitPart, decode_text, guard, office_to_pdf, open_source, open_source_with, optimize, print,
     print_layer_states, print_raster, set_default_layer_state, source_kind, writable, write_full,
 };
+
+/// Why printer's marks were refused for a print that goes as pictures.
+const MARKS_AS_PICTURES: &str = "printer marks print with the pages as they are, not as pictures: leave out as_image and app-managed colour (a document that allows only low-resolution printing always prints as pictures)";
+
+/// Whether a conversion may run LibreOffice for an Office document (seconds, in another
+/// process) or must refuse it because the caller is on the frame thread.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Office {
+    Convert,
+    Refuse,
+}
 
 impl Session {
     /// The page count of another PDF (Replace Pages, Insert Pages dialogs).
@@ -41,33 +52,96 @@ impl Session {
         self.write_new(&doc)
     }
 
-    /// Convert a file Create understands (an image or plain text) to PDF bytes; a PDF is checked
-    /// (it must open and allow copying pages) and returned as it is.
+    /// Convert a file Create understands (an image, plain text or an Office document) to PDF
+    /// bytes; a PDF is checked (it must open and allow copying pages) and returned as it is.
+    /// An Office document runs LibreOffice ([`office_to_pdf`]), which takes seconds: keep it off
+    /// the frame thread ([`Self::convert_to_pdf_inline`] there).
     pub fn convert_to_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
+        self.convert(name, bytes, Office::Convert)
+    }
+
+    /// [`Self::convert_to_pdf`] for a caller on the frame thread, which must not wait seconds for
+    /// LibreOffice: an Office document is refused, pointing to File ▸ Open, which converts it in
+    /// the background.
+    pub fn convert_to_pdf_inline(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
+        self.convert(name, bytes, Office::Refuse)
+    }
+
+    fn convert(&self, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
         let Some(kind) = source_kind(name, bytes) else {
-            return Err(EditError::Source(format!("{name}: this file type can't be converted; use a PDF, an image or a .txt file")));
+            return Err(EditError::Source(format!(
+                "{name}: this file type can't be converted; use a PDF, an image, a .txt file or a Word, Excel or PowerPoint file"
+            )));
         };
+        if kind == SourceKind::Office && office == Office::Refuse {
+            return Err(EditError::Source(format!(
+                "{name}: Word, Excel and PowerPoint files can't be added here yet; open it with File ▸ Open, which converts it to a PDF"
+            )));
+        }
         let title = name.rsplit_once('.').map_or(name, |(s, _)| s);
         // Image decoders read untrusted bytes: a panic in one must not take the app down.
         let created = guard(|| match kind {
             SourceKind::Pdf => open_source(name, bytes).map(|_| bytes.clone()),
             SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
             SourceKind::Text => self.create_from_text(title, &decode_text(bytes)),
+            SourceKind::Office => office_to_pdf(name, bytes),
         })
         .map_err(|_| EditError::Source(format!("{name}: the file could not be read")))?;
         Ok((kind, created?))
     }
 
-    /// A file for Combine as PDF bytes: an image or text file is converted; a PDF is returned as
-    /// it is, unchecked (Combine reads it itself, with its password), as is a file named .pdf
-    /// without a `%PDF-` header, which the reader may still open.
+    /// A file for Insert Pages into `dest`, as PDF bytes and its page count: an image, text or
+    /// Office file is converted, and a PDF is checked as the insert itself checks it, so a file
+    /// under `dest`'s own protection that withholds only page extraction is accepted, as pasted
+    /// pages are (#5081). An Office document runs LibreOffice: keep it off the frame thread
+    /// ([`Self::insert_source_inline`] there).
+    pub fn insert_source(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(usize, Arc<Vec<u8>>), EditError> {
+        self.insert_source_with(dest, name, bytes, Office::Convert)
+    }
+
+    /// [`Self::insert_source`] on the frame thread: Office documents are refused, as
+    /// [`Self::convert_to_pdf_inline`] refuses them. PDFs are still checked as the insert itself
+    /// checks them (#5081).
+    pub fn insert_source_inline(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(usize, Arc<Vec<u8>>), EditError> {
+        self.insert_source_with(dest, name, bytes, Office::Refuse)
+    }
+
+    fn insert_source_with(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<(usize, Arc<Vec<u8>>), EditError> {
+        if !matches!(source_kind(name, bytes), Some(SourceKind::Pdf)) {
+            let (_, pdf) = self.convert(name, bytes, office)?;
+            return Ok((self.page_count_of(name, &pdf)?, pdf));
+        }
+        let src = crate::sources::open_source_into(name, bytes, self.cos(dest)?)?;
+        Ok((pdfcraft_organize::page_count(&src)?, bytes.clone()))
+    }
+
+    /// The page count of a PDF for Replace Pages in `dest`, checked as the replace itself checks
+    /// it: as with [`Self::insert_source`], a file under `dest`'s own protection that withholds
+    /// only page extraction is accepted (#5081).
+    pub fn replace_source(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>) -> Result<usize, EditError> {
+        Ok(pdfcraft_organize::page_count(&crate::sources::open_source_into(name, bytes, self.cos(dest)?)?)?)
+    }
+
+    /// A file for Combine as PDF bytes: an image, text or Office file is converted; a PDF is
+    /// returned as it is, unchecked (Combine reads it itself, with its password), as is a file
+    /// named .pdf without a `%PDF-` header, which the reader may still open.
     pub fn as_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
+        self.as_pdf_with(name, bytes, Office::Convert)
+    }
+
+    /// [`Self::as_pdf`] on the frame thread: Office documents are refused, as
+    /// [`Self::convert_to_pdf_inline`] refuses them.
+    pub fn as_pdf_inline(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
+        self.as_pdf_with(name, bytes, Office::Refuse)
+    }
+
+    fn as_pdf_with(&self, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<Arc<Vec<u8>>, EditError> {
         let pdf = match source_kind(name, bytes) {
             Some(SourceKind::Pdf) => true,
-            Some(SourceKind::Image | SourceKind::Text) => false,
+            Some(SourceKind::Image | SourceKind::Text | SourceKind::Office) => false,
             None => name.to_ascii_lowercase().ends_with(".pdf"),
         };
-        if pdf { Ok(bytes.clone()) } else { self.convert_to_pdf(name, bytes).map(|(_, pdf)| pdf) }
+        if pdf { Ok(bytes.clone()) } else { self.convert(name, bytes, office).map(|(_, pdf)| pdf) }
     }
 
     /// Reduce File Size: Acrobat's defaults (colour and grey images above 225 ppi to 150 ppi,
@@ -158,6 +232,36 @@ impl Session {
 
     /// The print-ready PDF for `settings` (sheets laid out for the paper; see `pdfcraft-print`).
     pub fn print_pdf(&self, id: DocId, settings: &print::Settings) -> Result<Vec<u8>, EditError> {
+        self.print_pdf_marked(id, settings, None)
+    }
+
+    /// Whether printer's marks fit around `pages` (0-based): [`pdfcraft_edit::add_printer_marks`]
+    /// run on a scratch copy, so a page the marks would widen past the largest page a PDF can
+    /// have is refused before anything (the Will Print actions) changes the document. The copy
+    /// is dropped; [`Session::print_pdf_marked`] adds the marks again on the print copy.
+    pub fn check_printer_marks(&self, id: DocId, pages: &[usize], marks: &crate::PrinterMarks) -> Result<(), EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let mut cos = match doc.editor.as_ref() {
+            Some(e) => e.cos.clone(),
+            None => {
+                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
+            }
+        };
+        let mut pages = pages.to_vec();
+        pages.sort_unstable();
+        pages.dedup();
+        pdfcraft_edit::add_printer_marks(&mut cos, &pages, marks, true)?;
+        Ok(())
+    }
+
+    /// [`Session::print_pdf`] with printer's marks (Acrobat's Marks and Bleeds) drawn around each
+    /// printed page on the print copy only: the document itself gets none. A page is widened for
+    /// them as [`pdfcraft_edit::add_printer_marks`] widens it, and marks the document already
+    /// carries are replaced, so a page never prints two sets. With form fields only, the fields
+    /// and the marks print and the page content doesn't. The pages print as they are, so
+    /// marks can't go with a print as pictures (Print as image, app-managed colour, or a document
+    /// that allows only low-resolution printing).
+    pub fn print_pdf_marked(&self, id: DocId, settings: &print::Settings, marks: Option<&crate::PrinterMarks>) -> Result<Vec<u8>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if !doc.allows_printing() {
             return Err(EditError::NotPermitted("printing"));
@@ -165,12 +269,16 @@ impl Session {
         // Table 22, bit 12 clear: only a low-level representation may be printed, so the pages
         // always go as pictures, at no more than the low resolution.
         let low_res = doc.permissions().is_some_and(|p| !p.print_high_quality()).then(|| print::Raster {
-            dpi: settings.raster.map_or(LOW_RESOLUTION_PRINT_DPI, |r| r.dpi.min(LOW_RESOLUTION_PRINT_DPI)),
-            grayscale: settings.raster.is_some_and(|r| r.grayscale),
+            dpi: settings.raster.as_ref().map_or(LOW_RESOLUTION_PRINT_DPI, |r| r.dpi.min(LOW_RESOLUTION_PRINT_DPI)),
+            grayscale: settings.raster.as_ref().is_some_and(|r| r.grayscale),
+            colour: settings.raster.as_ref().and_then(|r| r.colour.clone()),
         });
         // Print as image: the pages used become pictures first, then the picture document is
         // imposed in their place (its page k is the k-th distinct source page used).
         if let Some(raster) = low_res.as_ref().or(settings.raster.as_ref()) {
+            if marks.is_some() {
+                return Err(EditError::Print(MARKS_AS_PICTURES.into()));
+            }
             let mut distinct: Vec<usize> = Vec::new();
             for &p in &settings.pages {
                 if !distinct.contains(&p) {
@@ -214,6 +322,21 @@ impl Session {
         // written. This copy is only printed, never saved.
         if doc.signatures.iter().any(|s| s.verdict_shown) {
             let _ = pdfcraft_sign::show_status_layers(&mut cos, &mut doc.signatures.to_vec(), &doc.captions);
+        }
+        let marked;
+        let mut settings = settings;
+        if let Some(marks) = marks {
+            // Form fields only prints no page content, so the page content goes before the
+            // marks are added, and the marks then print as the page content does.
+            if settings.content == print::Content::FormFieldsOnly {
+                pdfcraft_print::keep_printed(&mut cos, print::Content::FormFieldsOnly);
+                marked = print::Settings { content: print::Content::Document, ..settings.clone() };
+                settings = &marked;
+            }
+            let mut pages = settings.pages.clone();
+            pages.sort_unstable();
+            pages.dedup();
+            pdfcraft_edit::add_printer_marks(&mut cos, &pages, marks, true)?;
         }
         pdfcraft_print::impose(&cos, settings).map_err(|e| EditError::Print(e.to_string()))
     }
@@ -397,7 +520,7 @@ impl Session {
     /// New PDF bytes containing copies of `pages` of the document (Extract Pages).
     pub fn extract(&self, id: DocId, pages: &[usize]) -> Result<Arc<Vec<u8>>, EditError> {
         let src = self.cos(id)?;
-        if src.permissions().is_some_and(|p| !p.assemble()) {
+        if src.permissions().is_some_and(|p| !p.extract_pages()) {
             return Err(EditError::NotPermitted("extracting pages"));
         }
         let out = pdfcraft_organize::extract_pages(src, pages)?;
@@ -407,7 +530,7 @@ impl Session {
     /// Split the document into several new PDFs.
     pub fn split(&self, id: DocId, by: &pdfcraft_organize::SplitBy) -> Result<Vec<SplitPart>, EditError> {
         let src = self.cos(id)?;
-        if src.permissions().is_some_and(|p| !p.assemble()) {
+        if src.permissions().is_some_and(|p| !p.extract_pages()) {
             return Err(EditError::NotPermitted("splitting the document"));
         }
         let n = pdfcraft_organize::page_count(src)?;
@@ -425,7 +548,7 @@ impl Session {
     /// images count once per part) fits; a page larger than the limit is a part of its own.
     pub fn split_by_size(&self, id: DocId, max_bytes: usize) -> Result<Vec<SplitPart>, EditError> {
         let src = self.cos(id)?;
-        if src.permissions().is_some_and(|p| !p.assemble()) {
+        if src.permissions().is_some_and(|p| !p.extract_pages()) {
             return Err(EditError::NotPermitted("splitting the document"));
         }
         let n = pdfcraft_organize::page_count(src)?;

@@ -336,9 +336,11 @@ impl Session {
     }
 
     /// How the document's pages are drawn for viewing: its password and view settings (layer
-    /// visibility, hidden comments, reading colours). `None` when no such document is open.
+    /// visibility, hidden comments, reading colours), and the fields as its page actions and
+    /// timers show them (#169). `None` when no such document is open.
     pub fn render_config(&self, id: DocId) -> Option<RenderConfig> {
-        Some(self.get(id)?.config.clone())
+        let doc = self.get(id)?;
+        Some(crate::live_scripts::with_live_view(doc, doc.config.clone()))
     }
 
     /// Acrobat's Summarize Comments ("Comments only" layout): a new PDF listing every comment

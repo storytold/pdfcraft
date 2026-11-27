@@ -21,6 +21,7 @@ mod proto;
 pub mod script;
 pub mod text;
 mod traverse;
+mod xml;
 
 use pdfcraft_cos::Document;
 
@@ -107,8 +108,8 @@ pub use pdf::{AREA_KEY, CLICK_KEY, DATE_KEY, LAYOUT_KEY, NODE_KEY, SOM_KEY, Stri
 pub use picture::typed_date;
 pub use script::{
     FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, embedded_fields,
-    field_grows_with_text, field_is_embedded, fields_by_som, form_tree, form_tree_paged, has_focus_scripts, has_scripts, overrides, page_area_uses,
-    path_is_embedded, refresh_value, rerender, reset_default, set_overrides, template_of,
+    field_grows_with_text, field_is_embedded, field_objects_by_som, fields_by_som, form_tree, form_tree_paged, has_focus_scripts, has_scripts,
+    overrides, page_area_uses, path_is_embedded, refresh_value, rerender, reset_default, set_overrides, template_of,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -135,9 +136,16 @@ pub struct Report {
 }
 
 /// Is this a dynamic XFA form still showing its placeholder pages (one PdfCraft has not laid
-/// out yet)?
+/// out yet)? That is a form that asks to be laid out (`/NeedsRendering`), one with no fields of
+/// its own, or one a viewer saved with its pages drawn whose configuration says it must be
+/// rendered dynamically (`<dynamicRender>required</dynamicRender>`): its fields live in the
+/// template. A signature on such a form covers the pages as saved, so a signed one is left as it
+/// is: laying it out would change what was signed.
 pub fn is_dynamic(doc: &Document) -> bool {
-    existing_layout(doc).is_none() && matches!(read_packets(doc), Ok(Some(p)) if p.needs_rendering || !p.has_fields)
+    existing_layout(doc).is_none()
+        && matches!(read_packets(doc), Ok(Some(p)) if p.needs_rendering
+            || !p.has_fields
+            || (packets::requires_dynamic_render(&p.xdp) && !packets::has_signature(doc)))
 }
 
 /// Lay a template packet (or whole XDP, whose datasets then fill the fields) out.
