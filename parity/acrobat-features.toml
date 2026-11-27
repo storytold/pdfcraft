@@ -3944,8 +3944,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.attach"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::files_attach_as_comments", "crates/ui-egui/tests/it/comments.rs::attaching_a_file_as_a_comment", "crates/ui-egui/tests/it/comments.rs::comment_menu_rows_follow_permissions_and_run_their_action", "crates/ui-egui/tests/it/comments.rs::panel_and_card_actions_become_engine_edits", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools"]
-notes = "push pin, paperclip, graph or tag icon; the file is embedded and listed in the Attachments panel. The comment's menu, on the page and in the Comments panel, saves the file or opens a PDF in a new tab (#2565)"
+evidence = ["crates/annot/src/tests.rs::files_attach_as_comments", "crates/ui-egui/tests/it/comments.rs::attaching_a_file_as_a_comment", "crates/ui-egui/tests/it/comments.rs::comment_menu_rows_follow_permissions_and_run_their_action", "crates/ui-egui/tests/it/comments.rs::panel_and_card_actions_become_engine_edits", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools", "crates/ui-egui/tests/it/comments.rs::add_comments_attach_file_places_an_icon_where_clicked"]
+notes = "All tools ▸ Add comments ▸ Attach file, or the quick toolbar's comment tools: click the page where the icon goes, then pick the file (#8172). Push pin, paperclip, graph or tag icon; the file is embedded and listed in the Attachments panel. The comment's menu, on the page and in the Comments panel, saves the file or opens a PDF in a new tab (#2565)"
 
 [[feature]]
 id = "comment.record-audio"

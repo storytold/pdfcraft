@@ -2754,6 +2754,31 @@ fn attaching_a_file_as_a_comment() {
     assert_eq!(s.quick_tool, QuickTool::Select);
 }
 
+/// #8172: All tools ▸ Add comments ▸ Attach file places the file as an icon where the page is clicked, not as a
+/// document attachment with no icon.
+#[test]
+fn add_comments_attach_file_places_an_icon_where_clicked() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-attach-tool-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("photo.webp");
+    std::fs::write(&file, b"RIFF....WEBP").unwrap();
+    let files = std::sync::Arc::new(ScriptedFiles::answering([Picked::Paths(vec![file])]));
+    let mut h = harness_on_files(files, |_| {});
+    h.set_option("tool", "comment").unwrap();
+    h.run_steps(3);
+    h.get_by(|n| n.role() == Role::ListItem && n.label().is_some_and(|l| l.starts_with("Attach file"))).click();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::Attach));
+    click_pt(&mut h, (120.0, 150.0));
+    h.run_steps(3);
+    std::fs::remove_dir_all(&dir).unwrap();
+    let c = comments(&h);
+    assert_eq!(c.len(), 1, "one comment on the page");
+    assert_eq!(c[0].subtype, "FileAttachment", "an icon comment, not a document attachment");
+    let r = c[0].rect.map(f64::from);
+    assert!(r[0] <= 121.0 && r[2] >= 120.0 && r[1] <= 150.0 && r[3] >= 149.0, "the icon is at the clicked spot: {r:?}");
+}
+
 /// One 300×200 page with a paperclip FileAttachment comment at (100, 100)–(120, 124) carrying
 /// `inner.pdf`, and no /Contents: the card shows only "Attachment" (#2565). The cross-reference
 /// table keeps the reader from mistaking the embedded PDF's objects for the outer ones.

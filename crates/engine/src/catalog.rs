@@ -230,6 +230,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                     item("Strikethrough", "text_strikethrough", "comment.strikeout", Ready),
                     item("Squiggly underline", "spline", "comment.squiggly", Ready),
                     item("Text box", "type", "comment.freetext", Ready),
+                    item("Attach file", "paperclip", "comment.attach", Ready),
                 ],
             },
             ToolSection {
