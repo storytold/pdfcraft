@@ -260,6 +260,8 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_unchanged: bool,
     /// What the XFA scripts' time limits are multiplied by ([`Session::with_xfa_time_scale`]).
     pub(crate) xfa_time_scale: u32,
+    /// The form's scripts or new data laid it out again: its pages and widgets were replaced.
+    pub(crate) xfa_relaid: bool,
     /// The edit took the XFA out of the form: what went with it, for the document's warnings.
     pub(crate) xfa_removed: Vec<String>,
     /// Pages in the document, for `xfa.layout.pageCount()`.
@@ -331,6 +333,7 @@ impl EditCtx {
             xfa_ran_away: false,
             xfa_unchanged: false,
             xfa_time_scale: 1,
+            xfa_relaid: false,
             xfa_removed: Vec::new(),
             pages: 0,
             highlight: false,
@@ -609,11 +612,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::import_outline(doc, parent, *index, bookmarks, *replace)?;
         }
         Edit::BookmarksFromStructure => {
-            let entries: Vec<_> = pdfcraft_a11y::headings(doc)
-                .into_iter()
-                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj, left: None, top: None })
-                .collect();
-            pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
+            pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &crate::suggest_outline::structure_entries(doc).0)?;
         }
         Edit::BookmarksFromTextStyles { levels } => {
             if levels.is_empty() {
@@ -795,6 +794,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 ran_away: false,
                 highlight,
                 time_scale: cx.xfa_time_scale,
+                relaid: false,
             };
             let ran = if matches!(activity.as_str(), "enter" | "exit") {
                 xfa::on_focus(doc, &tpl, som, activity, &mut run).map(|changes| changes.is_empty())
@@ -803,10 +803,14 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             };
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;
+            // The next XFA run of a batch starts from the page count this one left.
+            cx.pages = run.page_count;
+            cx.xfa_relaid |= run.relaid;
             // The next edit of a batch reads the highlight this one's scripts set.
             let on = run.highlight;
             cx.set_highlight(on);
-            cx.xfa_unchanged = ran.map_err(EditError::Invalid)?;
+            // A form laid out again changed, whatever its scripts counted.
+            cx.xfa_unchanged = ran.map_err(EditError::Invalid)? && !cx.xfa_relaid;
         }
         Edit::SetFieldImage { name, image } | Edit::SetFieldImageTarget { name, image, .. } => {
             let object = match edit {

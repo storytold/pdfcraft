@@ -20,7 +20,7 @@ fn harness_with(files: Arc<ScriptedFiles>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
-            let mut app = crate::control::app_with_files(files);
+            let mut app = crate::support::test_app(crate::support::host_with_files(files));
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes(&egui::Context::default(), "a.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
             app.open_bytes(&egui::Context::default(), "b.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();

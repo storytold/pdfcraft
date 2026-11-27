@@ -1642,8 +1642,16 @@ fn long_german_tool_labels_stay_within_the_sidebar() {
     // A long sub-tool name must stop before its status chip, not paint over the PDF.
     h.set_option("tool", "protect").unwrap();
     h.run_steps(4);
-    let item =
-        painted_text(&h).into_iter().find(|(s, ..)| s == "Ausgeblendete Informationen entfernen").expect("long translated sub-tool is painted");
+    let label = "Ausgeblendete Informationen entfernen";
+    let row = h.get_by_role_and_label(egui::accesskit::Role::ListItem, label).rect();
+    // The framework now submits a shortened galley to egui, while accessibility keeps the full label.
+    let item = painted_text(&h)
+        .into_iter()
+        .find(|(text, _, bounds)| {
+            let prefix = text.trim_end_matches('…');
+            !prefix.is_empty() && label.starts_with(prefix) && row.contains(bounds.center())
+        })
+        .expect("the translated sub-tool has a painted label in its accessible row");
     assert!(item.2.right() <= 330.0, "translated tool item runs past the sidebar: {:?}", item.2);
 }
 
