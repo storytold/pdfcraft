@@ -1,4 +1,4 @@
-use super::{Arc, EditError, Hidden, SignatureInfo, TrustStore, optimize};
+use super::{Arc, ArrangeOrder, EditError, Hidden, SignatureInfo, TrustStore, optimize};
 
 /// A change to an existing page image.
 #[derive(Clone, Debug, PartialEq)]
@@ -20,6 +20,15 @@ pub enum ImageEdit {
         bytes: Arc<Vec<u8>>,
     },
     Delete,
+    /// Affine transform [a, b, c, d, e, f] applied to the image's matrix.
+    Transform([f64; 6]),
+    /// Change the stacking order.
+    Arrange(ArrangeOrder),
+    /// Remove any private crop on the image.
+    RemoveCrop,
+    /// Grouped Form artwork: draw its content in place, so its text and pictures can be edited
+    /// one by one (#2964).
+    Ungroup,
 }
 
 /// Forms ▸ Merge data files into spreadsheet: the field values of each file (FDF, XFDF or a
@@ -88,7 +97,7 @@ pub(crate) fn writable(cos: &pdfcraft_cos::Document) -> Result<std::borrow::Cow<
     Ok(std::borrow::Cow::Owned(copy))
 }
 
-/// The last-resort guard (AGENTS.md §4): run `f`, turning a panic that escapes it into an error
+/// The last-resort guard (app-agents.md rule 13): run `f`, turning a panic that escapes it into an error
 /// message, so one bad file or edit can't take the app and its other documents down. It is a
 /// safety net for bugs, not a substitute for returning errors.
 pub fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
@@ -105,6 +114,21 @@ pub(crate) fn signatures_of(
     cache: &pdfcraft_sign::DigestCache,
 ) -> Vec<SignatureInfo> {
     pdfcraft_sign::pdf::list_cached(cos, bytes, trust, cache)
+}
+
+/// Validate the signature fields of `editor`'s working state (written as `bytes`). While that
+/// state is still the file as opened plus only what opening appended, the file as read is
+/// validated instead: PdfCraft's own open-time revisions are not changes made since signing.
+pub(crate) fn editor_signatures(
+    editor: &crate::history::Editor,
+    bytes: &[u8],
+    trust: &TrustStore,
+    cache: &pdfcraft_sign::DigestCache,
+) -> Vec<SignatureInfo> {
+    match &editor.as_opened {
+        Some(o) if !editor.cos.is_modified() && Arc::ptr_eq(editor.cos.bytes(), &editor.saved) => signatures_of(&o.cos, &o.bytes, trust, cache),
+        _ => signatures_of(&editor.cos, bytes, trust, cache),
+    }
 }
 
 /// What Optimize PDF did.

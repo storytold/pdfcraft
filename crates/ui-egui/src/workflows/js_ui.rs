@@ -1,12 +1,13 @@
 //! Acrobat JavaScript in the shell: what scripts ask for (alerts, printing, navigation, links),
-//! the JavaScript console (⌘J), Document JavaScripts, and Preferences ▸ JavaScript.
+//! and the JavaScript console's state.
 
-use egui::{Align, Layout};
+use craft::theme::variant::Tone;
+use craft::ui::notices::{NoticeEnd, PostedNotice};
+use craft::ui::runtime::{frame, toast::ToastId};
+use pdfcraft_engine::DocId;
 use pdfcraft_engine::js::{JsOutput, Message, MessageIcon, Panel, Request};
-use pdfcraft_engine::{DocId, Edit};
 
-use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use crate::PdfCraftApp;
 
 /// The JavaScript console: the input and the output so far.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -15,25 +16,36 @@ pub struct JsConsole {
     pub log: Vec<String>,
 }
 
-/// Document JavaScripts: the script being edited.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct DocJsDraft {
-    pub name: String,
-    pub script: String,
-}
-
-/// Most form script messages that wait for the toast; past it, more are left out and counted, and
-/// the toast says how many once the rest have been shown. One run shows at most this many (the
+/// Most form script messages that wait for a notice; past it, more are left out and counted, and
+/// a notice says how many once the rest have been shown. One run shows at most this many (the
 /// script engine's own limit), so only runs in quick succession reach it.
 const MAX_WAITING_MESSAGES: usize = 100;
 
-/// The icon a script message's toast shows for `icon`.
-pub(crate) fn message_icon(icon: MessageIcon) -> &'static str {
+/// The script notice on screen, so its end is known for the app's own: one message is shown at a time, each
+/// when the one before it has gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScriptShown {
+    /// A script message.
+    Message(ToastId),
+    /// The count of messages the queue had no room for, with that count: said again if the notice was dropped
+    /// before it was shown its time.
+    Count(ToastId, u64),
+}
+
+impl ScriptShown {
+    fn id(self) -> ToastId {
+        match self {
+            ScriptShown::Message(id) | ScriptShown::Count(id, _) => id,
+        }
+    }
+}
+
+/// The tone a script message's notice reads in for `icon`.
+pub(crate) fn message_tone(icon: MessageIcon) -> Tone {
     match icon {
-        MessageIcon::Error => "circle-x",
-        MessageIcon::Warning => "triangle-alert",
-        MessageIcon::Question => "circle-help",
-        MessageIcon::Status => "info",
+        MessageIcon::Error => Tone::Bad,
+        MessageIcon::Warning => Tone::Warn,
+        MessageIcon::Question | MessageIcon::Status => Tone::Info,
     }
 }
 
@@ -47,7 +59,7 @@ impl PdfCraftApp {
     /// Act on what scripts produced in document `id`: alerts are shown, console output goes to
     /// the console, print and page requests are carried out, links wait for the user's permission
     /// (form submissions are reported, never sent).
-    pub fn handle_js(&mut self, id: DocId, out: JsOutput) {
+    pub fn handle_js(&mut self, ctx: &egui::Context, id: DocId, out: JsOutput) {
         let view = self.views.iter().position(|v| v.id == id);
         // A script that ran away turned the form's scripts off: calculations and buttons stop
         // working, and the error is only in the console. Say so once, and bring the notice bar
@@ -70,18 +82,31 @@ impl PdfCraftApp {
         }
         for r in out.requests {
             match r {
-                Request::Print => self.open_print(),
+                Request::Print => {
+                    if let Some(i) = view {
+                        // The print dialog reads the active document throughout its lifetime.
+                        // Keep the source selected; restoring the comparison tab would retarget it.
+                        self.active = Some(i);
+                        self.open_print();
+                    }
+                }
                 Request::GoToPage(p) => {
                     if let Some(i) = view {
                         self.views[i].go_to_page(p);
                     }
                 }
+                Request::OpenDoc(path) => self.request_script_document(id, &path),
                 Request::LaunchUrl(u) => self.request_document_url(&u, crate::LinkOrigin::Script),
                 Request::Submit(u) => self.notify_fmt(
                     "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.",
                     &[("u", &u)],
                 ),
-                Request::SaveAs => self.run_command("file.save_as"),
+                Request::SaveAs => {
+                    if let Some(i) = view {
+                        self.save_view(ctx, i, crate::SaveTarget::As);
+                    }
+                }
+                Request::OpenAttachment { name, open } => self.open_script_attachment(ctx, id, &name, open),
                 Request::ShowPanel(p) => {
                     let panel = match p {
                         Panel::Bookmarks => crate::RightPanel::Bookmarks,
@@ -91,64 +116,224 @@ impl PdfCraftApp {
                         Panel::Layers => crate::RightPanel::Layers,
                     };
                     // Show/Hide: a panel already showing closes.
-                    self.right = (self.right != Some(panel)).then_some(panel);
+                    self.set_right((self.right() != Some(panel)).then_some(panel));
                 }
-                Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
+                Request::Zoom(z) => {
+                    if let Some(i) = view {
+                        self.views[i].view.zoom = z / 100.0;
+                        self.views[i].view.fit = craft::pages::Fit::None;
+                    }
+                }
+                Request::Highlight(on) => self.script_highlight(id, on),
+                Request::Focus(name) => self.focus_script_field(id, view, &name, None),
+                Request::FocusField { name, object_id } => self.focus_script_field(id, view, &name, Some(object_id)),
+                // The engine applies these with the script's other changes (resets, templates).
+                Request::Beep | Request::Reset(_) | Request::SpawnTemplate { .. } | Request::SetTemplateHidden { .. } => {}
             }
         }
         self.show_script_messages(out.alerts);
     }
 
-    /// Show form script messages `messages` in order, each in the toast with its title and icon.
-    /// The first takes the toast at once when it is free; otherwise it waits, like the rest, for
-    /// what the toast shows (another message, or a notice such as the run's own submit request)
-    /// to go ([`Self::next_script_message`]).
+    fn focus_script_field(&mut self, id: DocId, view: Option<usize>, name: &str, object_id: Option<u64>) {
+        if let Some(i) = view
+            && let Some(f) = self.session.get(id).and_then(|d| {
+                d.form.iter().find(|f| object_id.map_or_else(|| f.name == name, |key| pdfcraft_engine::js::field_object_id(f.obj) == key))
+            })
+            && let Some((wi, widget)) = f.widgets.iter().enumerate().find(|(_, w)| !w.hidden && w.page.is_some())
+        {
+            let page = widget.page.unwrap_or(0);
+            if self.views[i].page_screen_rect(page).is_none() {
+                self.views[i].go_to_page(page);
+            }
+            self.views[i].session.forms.focus = Some(crate::forms_ui::open_focus(f, wi));
+        }
+    }
+
+    /// Show form script messages `messages` in order, each as a notice with its title and tone.
+    /// The first is posted on the next pass ([`Self::script_tick`]) when no script notice is on
+    /// screen; otherwise it waits, like the rest, for the one shown to end ([`Self::script_notice_ended`]).
     pub fn show_script_messages(&mut self, messages: Vec<Message>) {
         let room = MAX_WAITING_MESSAGES.saturating_sub(self.script_messages.len());
         let left_out = u64::try_from(messages.len().saturating_sub(room)).unwrap_or(u64::MAX);
         self.script_messages_dropped = self.script_messages_dropped.saturating_add(left_out);
         self.script_messages.extend(messages.into_iter().take(room));
-        if self.toast.is_none() {
-            self.next_script_message();
-        }
     }
 
-    /// Put the next waiting script message in the toast, or, once none waits, a notice of how many
-    /// the queue had no room for. False when there is neither.
-    pub fn next_script_message(&mut self) -> bool {
+    /// A form button's `exportDataObject`: the attached file `name` (its key in the document's
+    /// embedded files, else its file name), opened in a new tab when the script asks to open a
+    /// PDF, and otherwise offered to save. Other files aren't launched in other programs.
+    fn open_script_attachment(&mut self, ctx: &egui::Context, id: DocId, name: &str, open: bool) {
+        let Some(doc) = self.session.get(id) else { return };
+        let keyed = |a: &pdfcraft_render::Attachment| matches!(&a.source, pdfcraft_render::AttachmentSource::Document { key } if key == name);
+        let index = doc.info.attachments.iter().position(keyed).or_else(|| doc.info.attachments.iter().position(|a| a.name == name));
+        let Some(i) = index else {
+            // The name is the form's own text: shortened, as file names are elsewhere.
+            let shown = crate::dialogs::shorten_middle(name, 80);
+            self.notify_fmt("The form asks for the attached file {name}, which this document doesn't have.", &[("name", &shown)]);
+            return;
+        };
+        // Whether it is a PDF is decided by its bytes, not its name (`attachment_action`).
+        self.attachment_action(ctx, id, i, open);
+    }
+
+    /// A form's script turned field highlighting on or off (`app.runtimeHighlight`): as the
+    /// Highlight fields button does, for document `id` and the next ones.
+    pub(crate) fn script_highlight(&mut self, id: DocId, on: bool) {
+        if let Some(v) = self.views.iter_mut().find(|v| v.id == id) {
+            v.session.highlight_fields = on;
+        }
+        self.highlight_fields = on;
+        self.session.set_field_highlight(on);
+    }
+
+    /// Post the next waiting script message, or, once none waits, a notice of how many the queue had
+    /// no room for. False when there is neither.
+    pub fn next_script_message(&mut self, ctx: &egui::Context) -> bool {
         let Some(m) = self.script_messages.pop_front() else {
             // Every message the queue held has been shown: say how many it had no room for.
             if self.script_messages_dropped == 0 {
                 return false;
             }
             let n = std::mem::take(&mut self.script_messages_dropped);
-            self.notify(crate::i18n::trn(
+            let text = crate::i18n::trn(
                 crate::i18n::current(),
                 n,
                 "{n} more message from the form's scripts was left out.",
                 "{n} more messages from the form's scripts were left out.",
-            ));
-            // Kept with the toast until it has been shown its time (the toast's own expiry).
-            self.toast_dropped = n;
+            );
+            let Some(id) = self.notices.post(ctx, &PostedNotice::new(text.to_string()), &[]) else { return false };
+            self.script_shown = Some(ScriptShown::Count(id, n));
             return true;
         };
-        self.toast = Some((m.text.clone(), 0.0));
-        self.toast_script = Some(m);
-        true
+        let notice = match m.title.as_ref().filter(|title| !title.is_empty()) {
+            Some(title) => PostedNotice::new(title.clone()).message(m.text.clone()),
+            None => PostedNotice::new(m.text.clone()),
+        }
+        .tone(message_tone(m.icon));
+        match self.notices.post(ctx, &notice, &[]) {
+            Some(id) => {
+                self.script_shown = Some(ScriptShown::Message(id));
+                true
+            }
+            // Nothing silences a script message, so this does not happen; the next one takes its place.
+            None => self.next_script_message(ctx),
+        }
+    }
+
+    /// A notice ended: when it is the script notice on screen, the next message is posted. A count notice
+    /// the card limit dropped before its time is said again.
+    pub(crate) fn script_notice_ended(&mut self, ctx: &egui::Context, end: &NoticeEnd) {
+        let (NoticeEnd::Closed(id) | NoticeEnd::Expired(id) | NoticeEnd::Dropped(id) | NoticeEnd::Silenced { id, .. }) = end else { return };
+        let Some(shown) = self.script_shown.filter(|shown| shown.id() == *id) else { return };
+        self.script_shown = None;
+        if let ScriptShown::Count(_, n) = shown
+            && matches!(end, NoticeEnd::Dropped(_))
+        {
+            self.script_messages_dropped = self.script_messages_dropped.saturating_add(n);
+        }
+        self.next_script_message(ctx);
+    }
+
+    /// Each frame: the live scripts of the document being read (#169). Its page's open actions
+    /// run when the page changes (after the close actions of the page it was at), and its timers
+    /// when they fall due, such as an animation's frames (LaTeX `animate`). Only the active tab
+    /// runs: an animation in another tab waits until its tab shows again.
+    pub(crate) fn script_tick(&mut self, ctx: &egui::Context) {
+        // A message queued before the window had a context is posted on the first pass.
+        if self.script_shown.is_none() && !self.script_messages.is_empty() {
+            // Requests from the same script may already have queued notices; post those first.
+            crate::notices::post_queued(self, ctx);
+            self.next_script_message(ctx);
+        }
+        // Nothing acts on the document under a dialog or prompt (`modal_open`): page actions and
+        // timers wait, and an interval that fell behind runs once when it closes.
+        if self.modal_open() {
+            return;
+        }
+        let Some((i, id)) = self.active_ids() else { return };
+        let now_ms = ctx.input(|input| input.time) * 1000.0;
+        let page = self.views[i].current();
+        // The page's actions, then its timers, if what the actions asked for left the viewer as it
+        // was: a page they went to runs its close and open actions (next frame) before any timer,
+        // and a dialog they opened holds the timers too.
+        for timers in [false, true] {
+            if timers && (self.modal_open() || self.active_ids() != Some((i, id)) || self.views[i].current() != page) {
+                frame::request_repaint_after(ctx, 0.0);
+                break;
+            }
+            // The field being edited as it was, so a script changing it shows in its editor while
+            // a draft the user already typed into is kept (as `run_field_triggers` does).
+            let before: Option<(String, Vec<String>)> = self.views[i].session.forms.focus.as_ref().and_then(|e| {
+                crate::forms_ui::focused_field(e, &self.session.get(id)?.form).map(|f| (crate::forms_ui::draft_text(f), f.value.clone()))
+            });
+            let run = if timers { self.session.run_timers(id, now_ms) } else { self.session.show_page(id, page, now_ms) };
+            if run.is_empty() {
+                continue;
+            }
+            if run.edited {
+                if let Some(info) = self.session.get(id).map(|d| d.info.clone()) {
+                    self.views[i].document_changed(ctx, &info);
+                }
+                if let Some(before) = &before
+                    && let Some(draft) = self.views[i].session.forms.focus.as_mut()
+                    && let Some(f) = self.session.get(id).and_then(|d| crate::forms_ui::focused_field(draft, &d.form))
+                {
+                    crate::forms_ui::refresh_draft(draft, (&before.0, &before.1), (crate::forms_ui::draft_text(f), &f.value));
+                }
+            } else if run.layers {
+                self.views[i].invalidate_content();
+            } else {
+                for p in &run.pages {
+                    self.views[i].page_changed(*p);
+                }
+            }
+            self.handle_js(ctx, id, run.output);
+            frame::request_repaint_after(ctx, 0.0);
+        }
+        if let Some(at) = self.session.next_timer(id) {
+            let wait = ((at - now_ms) / 1000.0).clamp(0.0, 3600.0);
+            frame::request_repaint_after(ctx, wait);
+        }
+    }
+
+    /// Run document `id`'s catalog JavaScript for `event` (Will Save before a save, Will Print
+    /// before printing) and show what it said. What it changed is part of what is saved or
+    /// printed. A failing script is reported and the save or print still goes ahead.
+    pub(crate) fn run_document_actions(&mut self, ctx: &egui::Context, id: DocId, event: pdfcraft_engine::js::DocumentScriptEvent) {
+        let before = self.session.get(id).map(|d| d.edit_generation());
+        let out = self.session.run_document_actions(id, event);
+        if self.session.get(id).map(|d| d.edit_generation()) != before
+            && let Some(i) = self.views.iter().position(|v| v.id == id)
+            && let Some(info) = self.session.get(id).map(|d| d.info.clone())
+        {
+            self.views[i].document_changed(ctx, &info);
+        }
+        if !out.is_empty() {
+            self.handle_js(ctx, id, out);
+        }
     }
 
     /// Run a push button's JavaScript (its Mouse Up action).
-    pub fn run_button_script(&mut self, id: DocId, field: &str, script: &str) {
+    pub fn run_button_script(&mut self, ctx: &egui::Context, id: DocId, field: &str, script: &str) {
+        self.run_button_script_target(ctx, id, field, None, script);
+    }
+    /// Run the action of the exact clicked button, preserving legacy name-only entry points.
+    pub fn run_button_script_target(&mut self, ctx: &egui::Context, id: DocId, field: &str, identity: Option<u64>, script: &str) {
         // A script reads the fields: include what's still being typed in one (#166).
-        if !self.commit_form_typing() {
+        if !self.commit_form_typing(ctx) {
             return;
         }
-        match self.session.run_javascript(id, script, Some(field)) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.session.get(id).is_some_and(|d| d.info.xfa.is_none()) {
+            self.start_ui_script(id, script, Some(field), identity);
+            return;
+        }
+        match self.session.run_javascript_target(id, script, Some(field), identity) {
             Ok(o) => {
                 if let Some(i) = self.views.iter().position(|v| v.id == id)
                     && let Some(info) = self.session.get(id).map(|d| d.info.clone())
                 {
-                    self.views[i].document_changed(&info);
+                    self.views[i].document_changed(ctx, &info);
                 }
                 let out = JsOutput {
                     alerts: o.alerts,
@@ -157,20 +342,81 @@ impl PdfCraftApp {
                     errors: o.error.into_iter().collect(),
                     doc_errors: Vec::new(),
                 };
-                self.handle_js(id, out);
+                self.handle_js(ctx, id, out);
             }
             Err(e) => self.notify_fmt("{field}: {e}", &[("field", field), ("e", &e.to_string())]),
         }
     }
 
+    /// `app.openDoc(path)`: resolve the path against document `id`'s folder (no file is touched)
+    /// and ask before opening it, as for a link to another PDF given by an absolute path; a script
+    /// never opens a file unasked. A request while another link waits for an answer is dropped,
+    /// as a link's is (#2081).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn request_script_document(&mut self, id: DocId, path: &str) {
+        if self.pending_remote_link.is_some() || self.pending_link.is_some() {
+            return;
+        }
+        let source = self.session.get(id).and_then(|d| d.path.clone());
+        match pdfcraft_engine::js::resolve_javascript_document_path(source.as_deref().map(std::path::Path::new), path) {
+            Ok(path) => {
+                self.pending_remote_link =
+                    Some(crate::PendingRemoteLink { source: id, path, destination: pdfcraft_render::RemoteDestination::Default })
+            }
+            Err(e) => self.notify_fmt("Couldn't follow linked PDF: {reason}", &[("reason", &e.to_string())]),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn request_script_document(&mut self, _id: DocId, _path: &str) {
+        self.notify_tr("Local cross-PDF links require the desktop app");
+    }
+
+    /// Run the JavaScript action of link `index` on page `page` (0-based; its place in the page's
+    /// annotations), clicked in document `id` (#2081). A failed script changes nothing.
+    pub fn run_link_script(&mut self, ctx: &egui::Context, id: DocId, page: usize, index: usize) {
+        if !self.commit_form_typing(ctx) {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.start_link_script(id, page, index);
+        }
+        // Script getters read the clicked view's zoom, page and field highlight, as on the
+        // desktop, where starting the script sets them.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(view) = self.views.iter().find(|v| v.id == id) {
+            let (zoom, current, highlight) = (view.zoom(), view.current(), view.session.highlight_fields);
+            self.session.set_javascript_view(id, zoom * 100.0, highlight, current);
+        }
+        #[cfg(target_arch = "wasm32")]
+        match self.session.run_link_javascript(id, page, index, &[]) {
+            Ok(o) => {
+                if let Some(i) = self.views.iter().position(|v| v.id == id)
+                    && let Some(info) = self.session.get(id).map(|d| d.info.clone())
+                {
+                    self.views[i].document_changed(ctx, &info);
+                }
+                let out = JsOutput {
+                    alerts: o.alerts,
+                    console: o.console,
+                    requests: o.requests,
+                    errors: o.error.into_iter().collect(),
+                    doc_errors: Vec::new(),
+                };
+                self.handle_js(ctx, id, out);
+            }
+            Err(e) => self.notify(e.to_string()),
+        }
+    }
+
     /// Prepare a form ▸ detect fields from the page's blanks, lines and boxes.
-    pub fn detect_fields(&mut self) {
+    pub fn detect_fields(&mut self, ctx: &egui::Context) {
         let Some((i, id)) = self.active_ids() else { return };
         match self.session.auto_detect_fields(id, &[]) {
             Ok(names) if names.is_empty() => self.notify_tr("No form fields were detected"),
             Ok(names) => {
                 if let Some(info) = self.session.get(id).map(|d| d.info.clone()) {
-                    self.views[i].document_changed(&info);
+                    self.views[i].document_changed(ctx, &info);
                 }
                 if names.len() == 1 {
                     self.notify_tr("Detected 1 form field");
@@ -183,7 +429,7 @@ impl PdfCraftApp {
     }
 
     /// The console's Run: evaluate the input in the active document.
-    pub fn run_console(&mut self) {
+    pub fn run_console(&mut self, ctx: &egui::Context) {
         let Some((i, id)) = self.active_ids() else { return };
         let script = self.js_console.input.clone();
         if script.trim().is_empty() {
@@ -193,552 +439,17 @@ impl PdfCraftApp {
         match self.session.run_javascript(id, &script, None) {
             Ok(o) => {
                 if let Some(info) = self.session.get(id).map(|d| d.info.clone()) {
-                    self.views[i].document_changed(&info);
+                    self.views[i].document_changed(ctx, &info);
                 }
                 let (error, result) = (o.error.clone(), o.result.clone());
                 let out = JsOutput { alerts: o.alerts, console: o.console, requests: o.requests, errors: Vec::new(), doc_errors: Vec::new() };
-                self.handle_js(id, out);
+                self.handle_js(ctx, id, out);
                 match error {
                     Some(e) => self.js_console.log.push(format!("Error: {e}")),
                     None => self.js_console.log.extend(result),
                 }
             }
             Err(e) => self.js_console.log.push(format!("Error: {e}")),
-        }
-    }
-}
-
-fn buttons(ui: &mut egui::Ui, primary: &str, others: &[&str]) -> Option<String> {
-    let mut clicked = None;
-    ui.horizontal(|ui| {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            // Stable ids: the console's output above changes how many widgets come first.
-            // Labels are translated for display; the returned id stays English.
-            if ui.push_id(primary, |ui| widgets::pill_button(ui, tl!(primary), true)).inner.clicked() {
-                clicked = Some(primary.to_string());
-            }
-            for o in others {
-                if ui.push_id(o, |ui| widgets::pill_button(ui, tl!(o), false)).inner.clicked() {
-                    clicked = Some(o.to_string());
-                }
-            }
-        })
-    });
-    clicked
-}
-
-/// The JavaScript console. Returns `true` to close.
-pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
-    ui.label(egui::RichText::new(tl!("JavaScript Console")).font(theme::semibold(18.0)));
-    ui.add_space(6.0);
-    if !app.session.javascript() {
-        ui.label(egui::RichText::new(tl!("JavaScript is turned off (Preferences ▸ JavaScript).")).small().color(t.text_muted));
-    }
-    egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        egui::ScrollArea::vertical().max_height(220.0).stick_to_bottom(true).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.set_min_height(160.0);
-            if app.js_console.log.is_empty() {
-                ui.label(egui::RichText::new(tl!("Output appears here.")).color(t.text_muted));
-            }
-            for line in &app.js_console.log {
-                ui.label(egui::RichText::new(line).monospace());
-            }
-        });
-    });
-    ui.add_space(6.0);
-    let input = ui.add(
-        crate::widgets::block(&mut app.js_console.input)
-            .code_editor()
-            .desired_rows(4)
-            .desired_width(f32::INFINITY)
-            .hint_text(tl!("JavaScript, e.g. getField(\"total\").value"))
-            .id_salt("js-console-input"),
-    );
-    let run_key = input.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
-    ui.add_space(8.0);
-    match buttons(ui, "Run", &["Close", "Clear"]).as_deref() {
-        Some("Run") => app.run_console(),
-        Some("Clear") => app.js_console.log.clear(),
-        Some("Close") => return true,
-        _ if run_key => app.run_console(),
-        _ => {}
-    }
-    false
-}
-
-/// Document JavaScripts: list, edit, add and delete. Returns `true` to close.
-pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
-    ui.label(egui::RichText::new(tl!("Document JavaScripts")).font(theme::semibold(18.0)));
-    ui.add_space(6.0);
-    let scripts = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.document_scripts()).unwrap_or_default();
-    let mut edit: Option<Edit> = None;
-    ui.horizontal(|ui| {
-        ui.label(tl!("Script Name:"));
-        ui.add(crate::widgets::line(&mut app.doc_js.name).desired_width(240.0).id_salt("doc-js-name"));
-    });
-    ui.add_space(4.0);
-    egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        egui::ScrollArea::vertical().max_height(120.0).id_salt("doc-js-list").show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            if scripts.is_empty() {
-                ui.label(egui::RichText::new(tl!("This document has no document-level scripts.")).color(t.text_muted));
-            }
-            for (name, js) in &scripts {
-                if ui.selectable_label(app.doc_js.name == *name, name).clicked() {
-                    app.doc_js = DocJsDraft { name: name.clone(), script: js.clone() };
-                }
-            }
-        });
-    });
-    ui.add_space(6.0);
-    ui.add(crate::widgets::block(&mut app.doc_js.script).code_editor().desired_rows(8).desired_width(f32::INFINITY).id_salt("doc-js-script"));
-    ui.add_space(8.0);
-    let name = app.doc_js.name.trim().to_string();
-    let close = match buttons(ui, "Save", &["Close", "Delete"]).as_deref() {
-        Some("Save") if !name.is_empty() => {
-            edit = Some(Edit::SetDocumentScript { name, script: Some(app.doc_js.script.clone()) });
-            false
-        }
-        Some("Delete") if scripts.iter().any(|(n, _)| *n == name) => {
-            edit = Some(Edit::SetDocumentScript { name, script: None });
-            app.doc_js = DocJsDraft::default();
-            false
-        }
-        Some("Close") => true,
-        _ => false,
-    };
-    if let Some(e) = edit {
-        app.apply_edit(e);
-    }
-    close
-}
-
-/// The height the Preferences dialog keeps below its scrolling settings for the OK row: the
-/// button, and the space above it.
-pub(crate) const PREFERENCES_BUTTON_ROW: f32 = 52.0;
-
-/// The least height the scrolling settings are given. The dialog around them takes about 80 more,
-/// so this still fits the smallest window (520 pt) at the largest interface size (300%, which
-/// leaves 173 pt): a taller floor would push OK off the screen again.
-pub(crate) const PREFERENCES_MIN_SCROLL: f32 = 60.0;
-
-/// Whether the interface can draw a language picker's native name. On the web the browser's glyph
-/// rasterizer draws scripts no embedded face has, so the native names stay; on native, ask the
-/// fonts this build installed (including an installed fallback face, unless system fonts are off).
-fn picker_text_is_drawable(ui: &egui::Ui, text: &str) -> bool {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (ui, text);
-        true
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        ui.fonts_mut(|fonts| fonts.has_glyphs(&egui::FontId::proportional(13.0), text))
-    }
-}
-
-/// The date picker's displayed name. Its languages are the interface languages, so it uses the
-/// same drawable-name fallback: a native name whose script this build has no face for would
-/// otherwise abort under egui 0.37's `MissingGlyphPolicy::Panic` (for example Hindi without a
-/// Devanagari face and installed system fonts turned off).
-fn date_language_picker_name(l: &pdfcraft_engine::dates::DateLanguage, drawable: impl FnOnce(&str) -> bool) -> &'static str {
-    match crate::i18n::Lang::from_code(l.code) {
-        Some(language) => language.picker_name(drawable),
-        None => l.name,
-    }
-}
-
-/// Preferences: interface language and size, appearance, identity and JavaScript. Drawn in a scroll
-/// area; [`preferences_buttons`] goes below it, outside the scroll, so OK is always in reach.
-pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
-    ui.label(egui::RichText::new(tl!("Preferences")).font(theme::semibold(18.0)));
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Interface language"));
-        // A native name is only drawn when these fonts can draw it; otherwise the English name
-        // keeps the list readable instead of aborting on a missing glyph (for example Hindi
-        // without a Devanagari face, and installed system fonts turned off).
-        let (selected, picker) = {
-            let drawable = |text: &str| picker_text_is_drawable(ui, text);
-            let selected = crate::i18n::Lang::from_code(&app.language)
-                .map_or_else(|| tl!("Auto").to_owned(), |language| language.picker_name(drawable).to_owned());
-            let picker = crate::i18n::Lang::for_picker_by(|language| language.picker_name(drawable))
-                .into_iter()
-                .map(|language| (language, language.picker_name(drawable)))
-                .collect::<Vec<_>>();
-            (selected, picker)
-        };
-        let before = app.language.clone();
-        craft_ui::ComboBox::from_id_salt("interface-language")
-            .selected_text(selected)
-            .show_ui(ui, |ui| {
-                if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
-                    ui.close();
-                }
-                for (language, name) in &picker {
-                    if ui.selectable_value(&mut app.language, language.code().to_string(), *name).clicked() {
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .labelled_by(label.id);
-        // Relabel the rest of this dialog in the new language right away, not next frame.
-        if app.language != before {
-            crate::i18n::set_current(crate::i18n::Lang::from_pref(&app.language));
-        }
-    });
-    ui.horizontal(|ui| {
-        use crate::ui_scale;
-        let label = ui.label(tl!("Interface size"));
-        // Auto shows the size it draws at: the display's scale times the system's text scale.
-        let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
-        let auto_percent = ui_scale::percent(ui_scale::drawn(None, app.system_text_scale, native));
-        let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &auto_percent.to_string())]);
-        let selected = app.ui_scale.map_or_else(|| auto.clone(), |f| format!("{}%", ui_scale::percent(f)));
-        craft_ui::ComboBox::from_id_salt("interface-size")
-            .selected_text(selected)
-            .show_ui(ui, |ui| {
-                if ui.selectable_value(&mut app.ui_scale, None, auto).clicked() {
-                    ui.close();
-                }
-                for p in ui_scale::PRESETS {
-                    let factor = f32::from(p) / 100.0;
-                    if ui.selectable_label(app.ui_scale.is_some_and(|f| ui_scale::percent(f) == u32::from(p)), format!("{p}%")).clicked() {
-                        app.ui_scale = Some(factor);
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .labelled_by(label.id);
-    });
-    ui.label(
-        egui::RichText::new(tl!("Auto follows the system's text size. Pages always render at the display's full resolution."))
-            .small()
-            .color(t.text_muted),
-    );
-    ui.horizontal(|ui| {
-        ui.label(tl!("Tools panel side"));
-        let right = app.side_panels.tools_on_right();
-        if ui.selectable_label(!right, tl!("Left")).clicked() {
-            app.side_panels.tools_side = crate::side_panels::ToolsSide::Left;
-        }
-        if ui.selectable_label(right, tl!("Right")).clicked() {
-            app.side_panels.tools_side = crate::side_panels::ToolsSide::Right;
-        }
-    });
-    ui.add_space(8.0);
-    crate::appearance::preferences_section(ui, app, t);
-    ui.add_space(8.0);
-    reading_colours_section(ui, app, t);
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new(tl!("Documents and view")).font(theme::semibold(13.0)));
-    ui.horizontal(|ui| {
-        ui.label(tl!("Default workspace mode"));
-        for (mode, label) in [
-            (crate::Mode::AllTools, "All tools"),
-            (crate::Mode::Read, "Read"),
-            (crate::Mode::Edit, "Edit"),
-            (crate::Mode::Convert, "Convert"),
-            (crate::Mode::Sign, "E-Sign"),
-        ] {
-            widgets::radio_value(ui, &mut app.default_mode, mode, tl!(label));
-        }
-    });
-    ui.label(
-        egui::RichText::new(tl!("Used when opening PDFs. An explicit launch or control mode takes precedence for the session."))
-            .small()
-            .color(t.text_muted),
-    );
-    let defaults = &mut app.view_defaults;
-    ui.horizontal(|ui| {
-        ui.label(tl!("Default page display"));
-        for l in crate::canvas::PageLayout::ORDER {
-            widgets::radio_value(ui, &mut defaults.layout, l, tl!(l.label()));
-        }
-        ui.add(widgets::checkbox(&mut defaults.continuous, tl!("Continuous scrolling")));
-    });
-    ui.add(widgets::checkbox(&mut defaults.show_page_gaps, tl!("Show gaps between pages")));
-    ui.label(egui::RichText::new(tl!("Hide gaps to join page edges. Margins inside the PDF remain unchanged.")).small().color(t.text_muted));
-    ui.horizontal(|ui| {
-        use crate::canvas::Fit;
-        ui.label(tl!("Default zoom"));
-        widgets::radio_value(ui, &mut defaults.fit, Fit::Width, tl!("Fit to width"));
-        widgets::radio_value(ui, &mut defaults.fit, Fit::Page, tl!("Zoom to page level"));
-        widgets::radio_value(ui, &mut defaults.fit, Fit::None, tl!("Custom"));
-        // Editing the percentage selects Custom.
-        let mut percent = defaults.zoom * 100.0;
-        if ui.add(egui::DragValue::new(&mut percent).range(8.0..=6400.0).max_decimals(0).suffix("%")).changed() {
-            (defaults.fit, defaults.zoom) = (Fit::None, percent / 100.0);
-        }
-    });
-    ui.label(
-        egui::RichText::new(tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages."))
-            .small()
-            .color(t.text_muted),
-    );
-    ui.add(widgets::checkbox(&mut app.always_default_view, tl!("Always use my default zoom and page layout")));
-    ui.horizontal(|ui| {
-        ui.label(tl!("Units"));
-        for u in crate::units::Unit::ALL {
-            widgets::radio_value(ui, &mut app.units, u, u.label());
-        }
-    });
-    ui.label(egui::RichText::new(tl!("For page sizes and margins.")).small().color(t.text_muted));
-    // The web build has no file paths to reopen.
-    #[cfg(not(target_arch = "wasm32"))]
-    ui.add(widgets::checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed")));
-    // Acrobat's "Restore last view settings when reopening documents" (#1767).
-    #[cfg(not(target_arch = "wasm32"))]
-    ui.add(widgets::checkbox(&mut app.restore_last_view, tl!("Restore the last view (page, zoom and page display) when a document is opened again")));
-    // The web build has no files on disk to watch.
-    #[cfg(not(target_arch = "wasm32"))]
-    ui.add(widgets::checkbox(&mut app.reload_changed_files, tl!("Reload documents when their files change on disk")));
-    // The notice's "Don't show again" turns this off (#4035); the restrictions stay either way.
-    ui.add(widgets::checkbox(&mut app.show_secured_notice, tl!("Show a notice when a document is secured")));
-    ui.horizontal(|ui| {
-        ui.label(tl!("Scroll speed (mouse wheel and arrow keys)"));
-        for speed in crate::scroll_speed::ScrollSpeed::ALL {
-            widgets::radio_value(ui, &mut app.scroll_speed, speed, tl_ctx!("scroll speed", speed.label()));
-        }
-    });
-    // Whether anything animates, the wheel's scrolling and zooming included; left alone it
-    // follows the system's animation setting.
-    ui.horizontal(|ui| {
-        ui.label(tl!("Animation effects"));
-        for choice in crate::motion::AnimationEffects::ALL {
-            widgets::radio_value(ui, &mut app.animation_effects, choice, tl_ctx!("animation effects", choice.label()));
-        }
-    });
-    // Only where the app draws the title bar (GNOME on Wayland); elsewhere the desktop draws it.
-    if app.window_controls.is_some() {
-        ui.add(widgets::checkbox(&mut app.system_title_bar, tl!("Use system title bar")))
-            .on_hover_text(tl!("Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme."));
-    }
-    ui.add_space(8.0);
-    // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
-    ui.label(egui::RichText::new(tl!("Identity")).font(theme::semibold(13.0)));
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Name on new comments"));
-        ui.add(crate::widgets::line(&mut app.comment_prefs.author).desired_width(220.0).char_limit(crate::MAX_AUTHOR_CHARS)).labelled_by(label.id);
-    });
-    ui.add(widgets::checkbox(&mut app.comment_prefs.hide_empty_highlight_hover, tl!("Hide hover previews for highlights without comment text")));
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new(tl!("Fill & Sign")).font(theme::semibold(13.0)));
-    ui.add(widgets::checkbox(&mut app.flatten_fill_sign_on_save, tl!("Flatten Fill & Sign when saving")));
-    ui.label(
-        egui::RichText::new(tl!("Text, marks and signatures become part of the page. Other comments stay editable.")).small().color(t.text_muted),
-    );
-    ui.add_space(8.0);
-    date_format(ui, app, t);
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new("JavaScript").font(theme::semibold(13.0)));
-    egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        let mut on = app.session.javascript();
-        if ui.add(widgets::checkbox(&mut on, tl!("Enable Acrobat JavaScript"))).changed() {
-            app.session.set_javascript(on);
-        }
-        ui.label(
-            egui::RichText::new(tl!("Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."))
-                .small()
-                .color(t.text_muted),
-        );
-    });
-}
-
-/// The Preferences dialog's OK row. Returns `true` to close.
-pub(crate) fn preferences_buttons(ui: &mut egui::Ui) -> bool {
-    ui.add_space(10.0);
-    buttons(ui, tl!("OK"), &[]).is_some()
-}
-
-/// Preferences ▸ Date format: a preset, or any pattern typed in, for Fill & Sign dates, and the
-/// language of its month and weekday names. A valid pattern applies as it's typed; an invalid
-/// one stays in the box with the reason, and the last valid one stays in use.
-fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
-    use pdfcraft_engine::dates::{DATE_FORMATS, DATE_LANGUAGES, MAX_DATE_FORMAT_CHARS};
-    ui.label(egui::RichText::new(tl!("Date format")).font(theme::semibold(13.0)));
-    let sample = |app: &PdfCraftApp, f: &str| format!("{}   {f}", app.date_text(Some(f)).unwrap_or_default());
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Fill & Sign dates"));
-        let current = app.session.date_format().to_string();
-        let selected = if DATE_FORMATS.contains(&current.as_str()) { sample(app, &current) } else { tl!("Custom").to_string() };
-        craft_ui::ComboBox::from_id_salt("date-format")
-            .selected_text(selected)
-            .width(240.0)
-            .show_ui(ui, |ui| {
-                for f in DATE_FORMATS {
-                    if ui.selectable_label(current == f, sample(app, f)).clicked() && app.session.set_date_format(f).is_ok() {
-                        app.date_format_draft = None;
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .labelled_by(label.id);
-    });
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Pattern"));
-        let mut text = app.date_format_draft.clone().unwrap_or_else(|| app.session.date_format().to_string());
-        let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(160.0).char_limit(MAX_DATE_FORMAT_CHARS)).labelled_by(label.id);
-        // The box keeps the text as typed (a trailing space included) while it has focus; the
-        // setting takes the trimmed pattern whenever it's valid.
-        if edit.changed() {
-            let _ = app.session.set_date_format(&text);
-            app.date_format_draft = Some(text.clone());
-        }
-        if !edit.has_focus() && pdfcraft_engine::dates::check_date_format(&text).is_ok() {
-            app.date_format_draft = None;
-        }
-        match app.date_text(Some(&text)) {
-            Ok(today) => ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Today: {date}"), &[("date", &today)])).color(t.text_muted)),
-            // The engine's reason, in English.
-            Err(e) => ui.label(egui::RichText::new(e).color(egui::Color32::from_rgb(0xD1, 0x3B, 0x3B))),
-        };
-    });
-    // Fill & Sign refuses a date it would save as "?"; say so before anyone tries.
-    let bad = app.date_text(None).map(|today| pdfcraft_engine::dates::unwritable(&today)).unwrap_or_default();
-    if !bad.is_empty() {
-        ui.label(
-            egui::RichText::new(crate::i18n::fmt(
-                tl!(
-                    "{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy."
-                ),
-                &[("chars", &bad)],
-            ))
-            .color(egui::Color32::from_rgb(0xD1, 0x3B, 0x3B)),
-        );
-    }
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Language"));
-        // Build every label before the combo box mutably borrows `ui`, with the same drawable
-        // fallback the interface language picker uses.
-        let (follow, selected, current, names) = {
-            let drawable = |text: &str| picker_text_is_drawable(ui, text);
-            let interface = crate::i18n::current().picker_name(drawable);
-            let follow = crate::i18n::fmt(tl!("Same as interface ({language})"), &[("language", interface)]);
-            let current = app.session.date_language().map(str::to_string);
-            let selected = DATE_LANGUAGES
-                .iter()
-                .find(|l| current.as_deref() == Some(l.code))
-                .map_or_else(|| follow.clone(), |l| date_language_picker_name(l, drawable).to_string());
-            let names = DATE_LANGUAGES.iter().map(|l| (l, date_language_picker_name(l, drawable))).collect::<Vec<_>>();
-            (follow, selected, current, names)
-        };
-        craft_ui::ComboBox::from_id_salt("date-language")
-            .selected_text(selected)
-            .width(240.0)
-            .show_ui(ui, |ui| {
-                if ui.selectable_label(current.is_none(), follow).clicked() && app.session.set_date_language(None).is_ok() {
-                    ui.close();
-                }
-                for (l, name) in &names {
-                    if ui.selectable_label(current.as_deref() == Some(l.code), *name).clicked() && app.session.set_date_language(Some(l.code)).is_ok()
-                    {
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .labelled_by(label.id);
-    });
-    ui.label(
-        egui::RichText::new(crate::i18n::fmt(
-            tl!("yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is."),
-            &[("escape", "\\")],
-        ))
-        .small()
-        .color(t.text_muted),
-    );
-}
-
-fn reading_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
-    // Reading colours (Acrobat: Replace Document Colors): solid text and line-art paints are
-    // remapped while rendering, and the page clears to the background colour. The preference
-    // is app-wide: every open document follows it, and documents open with it.
-    ui.label(egui::RichText::new(tl!("Reading colours")).font(theme::semibold(13.0)));
-    let mode = app.reading_colors.mode_name();
-    ui.horizontal_wrapped(|ui| {
-        for (name, label, colors) in [
-            ("off", "Off", pdfcraft_render::ReadingColors::default()),
-            ("black-on-white", "Black on white", pdfcraft_render::ReadingColors::BLACK_ON_WHITE),
-            ("white-on-black", "White on black", pdfcraft_render::ReadingColors::WHITE_ON_BLACK),
-            ("yellow-on-black", "Yellow on black", pdfcraft_render::ReadingColors::YELLOW_ON_BLACK),
-            ("green-on-black", "Green on black", pdfcraft_render::ReadingColors::GREEN_ON_BLACK),
-        ] {
-            let params = colors.params.unwrap_or(pdfcraft_render::ReadingParams {
-                text: [0, 0, 0],
-                background: [255, 255, 255],
-                only_black: false,
-                line_art: true,
-            });
-            ui.vertical(|ui| {
-                ui.set_width(104.0);
-                let sample = egui::RichText::new("Aa").size(22.0).color(egui::Color32::from_rgb(params.text[0], params.text[1], params.text[2]));
-                let button = egui::Button::new(sample)
-                    .fill(egui::Color32::from_rgb(params.background[0], params.background[1], params.background[2]))
-                    .min_size(egui::vec2(94.0, 44.0))
-                    .stroke(egui::Stroke::new(if mode == name { 2.0 } else { 1.0 }, if mode == name { t.accent } else { t.border }));
-                let response = ui.add(button);
-                response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, mode == name, tl!(label)));
-                if response.clicked() {
-                    app.set_reading_colors(colors);
-                }
-                ui.label(tl!(label));
-            });
-        }
-    });
-    ui.add_space(8.0);
-    if let Some(params) = app.reading_colors.params {
-        let text = egui::Color32::from_rgb(params.text[0], params.text[1], params.text[2]);
-        let background = egui::Color32::from_rgb(params.background[0], params.background[1], params.background[2]);
-        egui::Frame::new().fill(background).inner_margin(16.0).show(ui, |ui| {
-            ui.set_min_width((ui.available_width() - 32.0).max(0.0));
-            ui.label(egui::RichText::new(tl!("Reading colours")).size(18.0).color(text));
-            ui.label(egui::RichText::new(tl!("Colours are remapped while rendering; the document itself never changes.")).color(text));
-        });
-    } else {
-        ui.label(tl!("Original"));
-    }
-    egui::CollapsingHeader::new(tl!("Custom")).default_open(mode == "custom").show(ui, |ui| {
-        let mut colors = if app.reading_colors.params.is_some() { app.reading_colors } else { pdfcraft_render::ReadingColors::BLACK_ON_WHITE };
-        let mut changed = false;
-        if let Some(params) = colors.params.as_mut() {
-            ui.horizontal(|ui| {
-                let text = ui.label(tl!("Text"));
-                changed |= ui.color_edit_button_srgb(&mut params.text).labelled_by(text.id).changed();
-                let background = ui.label(tl!("Page background"));
-                changed |= ui.color_edit_button_srgb(&mut params.background).labelled_by(background.id).changed();
-            });
-            changed |= ui.add(crate::widgets::checkbox(&mut params.only_black, tl!("Only change the colour of black text or line art"))).changed();
-            changed |= ui.add(crate::widgets::checkbox(&mut params.line_art, tl!("Change the colour of line art as well as text"))).changed();
-        }
-        if changed {
-            app.set_reading_colors(colors);
-        }
-    });
-    ui.label(egui::RichText::new(tl!("Colours are remapped while rendering; the document itself never changes.")).small().color(t.text_muted));
-    ui.add_space(8.0);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn date_language_names_fall_back_when_the_native_name_cannot_be_drawn() {
-        let date_language = |code: &str| pdfcraft_engine::dates::DATE_LANGUAGES.iter().find(|l| l.code == code).expect("date language");
-        let hindi = date_language("hi");
-        assert_eq!(date_language_picker_name(hindi, |_| true), hindi.name, "the native name is kept when it can be drawn");
-        assert_eq!(date_language_picker_name(hindi, |_| false), "Hindi", "no Devanagari face: show the English name");
-        let chinese = date_language("zh-hans");
-        assert_eq!(date_language_picker_name(chinese, |_| false), "Simplified Chinese");
-        for language in &pdfcraft_engine::dates::DATE_LANGUAGES {
-            assert!(!date_language_picker_name(language, |_| false).is_empty(), "{}", language.code);
         }
     }
 }
