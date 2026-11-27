@@ -733,11 +733,12 @@ impl eframe::App for PdfCraftApp {
         if let Some(panels) = self.file_panels.as_mut() {
             panels.pump_with(&mut self.dialogs, Some(&*frame));
         }
-        // After the pump, which shows and answers the panels.
-        #[cfg(target_os = "macos")]
-        self.sync_panel_menu();
         let ctx = ui.ctx().clone();
         self.guarded_frame(&ctx, |app| app.ui_unguarded(ui));
+        // After the pump, which shows and answers the panels, and after `menus::frame`: a native bar it
+        // rebuilds replaces the panel's, which this puts back in the same pass.
+        #[cfg(target_os = "macos")]
+        self.sync_panel_menu();
         self.end_ui();
     }
 }
