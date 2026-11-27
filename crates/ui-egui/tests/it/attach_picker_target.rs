@@ -90,6 +90,6 @@ fn an_attachment_pick_is_dropped_when_the_user_switches_tabs() {
     h.run_steps(2);
     assert!(!dirty(h.state(), 0), "the document the pick was for is unchanged");
     assert!(!dirty(h.state(), 1), "the newly active document did not get the attachment");
-    assert!(support::shown_notice(&mut h).is_some(), "the user is told why nothing happened");
+    assert!(support::shown_notice(&h).is_some(), "the user is told why nothing happened");
     let _ = std::fs::remove_dir_all(&dir);
 }

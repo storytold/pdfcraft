@@ -167,7 +167,7 @@ fn a_column_selection_copies_plain_text_only() {
     drag(&mut h, from, to, Modifiers::ALT);
     assert!(h.execute("edit.copy"));
     h.step();
-    let html = clipboard.writes().iter().flatten().any(|flavor| flavor.mime.to_string() == "text/html");
+    let html = clipboard.writes().iter().flatten().any(|flavor| flavor.mime == "text/html");
     assert!(!html, "no HTML for a column selection");
     assert_eq!(clipboard.copied().as_deref(), Some("Name\tQty\nApple\t12"), "the plain text goes out the usual way");
 }

@@ -232,6 +232,10 @@ pub(super) struct Scratch {
     pub(super) logical: Vec<usize>,
     /// `placed` with the marks merged in, built before it is swapped in.
     pub(super) merged: Vec<usize>,
+    /// The merged ink intervals of the current segment, each with the ink length before it, for `drop_covered_blanks`.
+    pub(super) ink: Vec<[f32; 3]>,
+    /// The ink glyphs of the current segment as (left, right, run), by left edge, for `drop_covered_blanks`.
+    pub(super) ink_runs: Vec<(f32, f32, usize)>,
     /// For each glyph of the page, the glyph a combining mark drawn right after it rides on (the start of its cluster),
     /// or the glyph itself. Placement sorts clusters, so a mark keeps its content-stream place after its base (#6517).
     /// A glyph past its end is its own anchor.
@@ -395,6 +399,8 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
         sc.placed.sort_unstable_by(|a, b| by_cluster(glyphs, &sc.anchor, *a, *b));
     } else {
         collide(glyphs, height, s.h, sc);
+        // Only another run can draw over a run's blanks: a single run is left as it is.
+        drop_covered_blanks(glyphs, sc);
     }
     // Each mark goes before the first placed glyph whose x is greater than its own, or its letter's when it is a
     // combining mark riding on one. Marks are visited in that order, and that position never moves back, so one pass
@@ -530,6 +536,99 @@ fn keep_taken_back_blanks(glyphs: &[&TextGlyph], placed: &mut [usize]) {
             }
         }
     }
+}
+
+/// Removes blank glyphs from `sc.placed` that are mostly covered by the ink of other glyphs on the line. A run of blanks
+/// drawn over the digits of an earlier run (a cover headline that overprints a number with spaces) would otherwise sort
+/// between the digits and show as spaces inside the number (#3172). Only other runs' ink counts: a blank its own run's
+/// letters overlap (kerned into a tight word gap) is that run's word break. A blank that stands in a gap is kept. A
+/// forced word break on a removed blank moves to the next glyph of its run that is kept. Each blank costs two binary
+/// searches over the line's ink, and a blank that ink mostly covers then a scan of the glyphs that can reach it.
+fn drop_covered_blanks(glyphs: &[&TextGlyph], sc: &mut Scratch) {
+    let blank = |i: usize| glyphs[i].text.trim().is_empty();
+    if !sc.placed.iter().any(|&i| blank(i)) {
+        return;
+    }
+    let ink = &mut sc.ink;
+    ink.clear();
+    ink.extend(sc.placed.iter().filter(|&&i| !blank(i)).map(|&i| [glyphs[i].rect[0], glyphs[i].rect[2], 0.0]));
+    ink.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    // Merge into disjoint intervals.
+    ink.dedup_by(|cur, prev| {
+        let overlaps = cur[0] <= prev[1];
+        if overlaps {
+            prev[1] = prev[1].max(cur[1]);
+        }
+        overlaps
+    });
+    // `iv[2]` is the ink length of all intervals before this one.
+    let mut total = 0.0;
+    for iv in ink.iter_mut() {
+        iv[2] = total;
+        total += iv[1] - iv[0];
+    }
+    let ink = &sc.ink;
+    let covered = |l: f32, r: f32| {
+        let first = ink.partition_point(|iv| iv[1] <= l);
+        let end = ink.partition_point(|iv| iv[0] < r);
+        let (Some(head), Some(last)) = (ink.get(first), end.checked_sub(1).and_then(|k| ink.get(k))) else { return 0.0 };
+        if end <= first {
+            return 0.0;
+        }
+        let after = ink.get(end).map_or(total, |iv| iv[2]);
+        after - head[2] - (l - head[0]).max(0.0) - (last[1] - r).max(0.0)
+    };
+    // The ink glyphs with their runs, by left edge, and the widest of them: only a glyph starting less than that left
+    // of a blank can reach it.
+    let by_x = &mut sc.ink_runs;
+    by_x.clear();
+    by_x.extend(sc.owner.iter().filter(|&&(i, _)| !blank(i)).map(|&(i, r)| (glyphs[i].rect[0], glyphs[i].rect[2], r)));
+    by_x.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let widest = by_x.iter().map(|g| g.1 - g.0).fold(0.0f32, f32::max);
+    let by_x = &sc.ink_runs;
+    // How much of [l, r] the ink of runs other than `run` covers. The intervals come in order of their left edges.
+    let covered_by_others = |l: f32, r: f32, run: usize| {
+        let (from, to) = (by_x.partition_point(|g| g.0 < l - widest), by_x.partition_point(|g| g.0 < r));
+        let (mut sum, mut reach) = (0.0, l);
+        for &(a, b, _) in by_x.get(from..to).unwrap_or_default().iter().filter(|g| g.2 != run) {
+            let (a, b) = (a.max(reach), b.min(r));
+            if b > a {
+                sum += b - a;
+                reach = b;
+            }
+        }
+        sum
+    };
+    sc.merged.clear();
+    for &(i, run) in &sc.owner {
+        let (l, r) = (glyphs[i].rect[0], glyphs[i].rect[2]);
+        if blank(i) && r - l > 0.0 && covered(l, r) > 0.5 * (r - l) && covered_by_others(l, r, run) > 0.5 * (r - l) {
+            sc.merged.push(i);
+        }
+    }
+    if sc.merged.is_empty() {
+        return;
+    }
+    // `placed` is not sorted by index, so the dropped glyphs are sorted for the lookups.
+    sc.merged.sort_unstable();
+    let dropped = &sc.merged;
+    sc.placed.retain(|i| dropped.binary_search(i).is_err());
+    for b in sc.breaks.iter_mut() {
+        if dropped.binary_search(b).is_err() {
+            continue;
+        }
+        let x0 = |i: usize| glyphs[i].rect[0];
+        let run = sc.text.iter().find(|run| run.range().contains(b));
+        let kept = run.and_then(|run| {
+            let left = run.range().filter(|j| dropped.binary_search(j).is_err());
+            left.min_by(|a, c| x0(*a).total_cmp(&x0(*c)).then(a.cmp(c)))
+        });
+        *b = kept.unwrap_or(NONE);
+    }
+    sc.breaks.retain(|&b| b != NONE);
+    sc.breaks.sort_unstable();
+    sc.breaks.dedup();
+    sc.merged.clear();
 }
 
 /// `place_glyphs` for a segment of two or more text runs. `h` is the segment's line height. Returns whether the segment

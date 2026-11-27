@@ -191,7 +191,7 @@ fn trust_signer_and_inspect_certificate(h: &mut Harness<'static, PdfCraftApp>) {
     // Seed a find so the trust path proves it invalidates the view: trust rebuilds
     // the display copy, and the next frame must draw from it without any zoom change.
     let mut find = pdfcraft_ui_egui::canvas::Find::default();
-    find.matches.set_page(0, vec![0..5]);
+    find.matches.set_page(0, std::iter::once(0..5).collect::<Vec<_>>());
     h.state_mut().views[0].find = Some(find);
     h.get_by_label("Add to trusted certificates").click();
     h.run_steps(3);

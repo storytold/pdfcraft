@@ -70,18 +70,10 @@ fn fixture(n: usize) -> Vec<u8> {
 
 /// What the app wrote to its clipboard: the `(mime, data)` flavours of each write.
 #[derive(Clone, Default)]
-struct Written(Arc<Mutex<Vec<Vec<(String, Vec<u8>)>>>>);
+struct Written(Arc<Mutex<Writes>>);
 
-impl Written {
-    fn writes(&self) -> Vec<Vec<(String, Vec<u8>)>> {
-        self.0.lock().unwrap().clone()
-    }
-
-    /// Whether a write held a flavour of `mime`.
-    fn has(&self, mime: &str) -> bool {
-        self.writes().iter().flatten().any(|(m, _)| m == mime)
-    }
-}
+/// Each clipboard write, as its `(mime, data)` flavours.
+type Writes = Vec<Vec<(String, Vec<u8>)>>;
 
 /// An app whose pickers answer from `files` and whose clipboard writes land in `written`.
 fn app_on(files: Arc<ScriptedFiles>, written: &Written) -> PdfCraftApp {
@@ -1068,7 +1060,7 @@ trailer << /Root 1 0 R >>
 
 #[test]
 fn initial_view_is_edited_and_honoured_on_open() {
-    use pdfcraft_engine::{InitialLayout, Magnification, Navigation};
+    use pdfcraft_engine::{InitialLayout, Navigation};
     let mut h = harness();
     open_properties(&mut h, PropsTab::InitialView);
     // The form row names its field group; the field inside carries the same name.
@@ -1519,10 +1511,7 @@ fn an_earlier_revision_opens_from_document_properties() {
     h.state_mut().open_revision(99);
     h.run_steps(1);
     assert_eq!(h.state().views.len(), views);
-    assert!(
-        crate::support::shown_notice(&mut h).is_some_and(|notice| notice.contains("revision 99")),
-        "unknown revisions error without opening a tab"
-    );
+    assert!(crate::support::shown_notice(&h).is_some_and(|notice| notice.contains("revision 99")), "unknown revisions error without opening a tab");
     // Another tab over the same original shares the snapshot: b.pdf's first revision is
     // byte-identical to updated.pdf's (incremental saves append), so it reuses the tab.
     let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();

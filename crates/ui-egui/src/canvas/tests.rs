@@ -1,7 +1,7 @@
 use super::area::{MARK_SIDE_SHARE, mark_anchor, verdict_mark_rect};
 use super::cache::grayscale;
 use super::*;
-use craft::pages::ui::{PageBody, PlacedPage};
+use craft::pages::ui::PlacedPage;
 use craft::ui::primitives::textures::{LoadFailure, Revision, TextureState, TextureStore, TextureStoreOptions};
 
 #[test]

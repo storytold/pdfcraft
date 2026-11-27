@@ -246,7 +246,7 @@ impl Rig {
 
     /// Whether the preview shows why the draft can't print a document of `pages` pages, as the draft gives the reason.
     fn preview_says_why(&self, pages: usize) -> bool {
-        let why = self.state().print_draft.settings(pages, &[]).err().expect("the draft can't print");
+        let why = self.state().print_draft.settings(pages, &[]).expect_err("the draft can't print");
         self.query_by_label_contains(&why).is_some()
     }
 

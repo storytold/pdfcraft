@@ -209,10 +209,7 @@ impl PdfCraftApp {
 mod tests {
     use super::*;
     use craft::host::ManualJobs;
-    use egui_kittest::{
-        Harness,
-        kittest::{NodeT as _, Queryable},
-    };
+    use egui_kittest::{Harness, kittest::Queryable};
 
     /// An app whose background jobs wait on `jobs` until the test runs them.
     fn app_on(jobs: Arc<ManualJobs>) -> PdfCraftApp {

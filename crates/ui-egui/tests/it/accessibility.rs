@@ -128,7 +128,7 @@ fn checking_fixing_skipping_and_reporting() {
     assert_eq!(requests.len(), 1, "the report asks where to be saved once");
     assert_eq!(requests[0].kind, PickKind::Folder, "the report uses the export folder picker");
     let saved = std::path::Path::new("/reports/notes Accessibility Report.html");
-    let html = String::from_utf8(files.file(&saved).expect("the report was written")).unwrap();
+    let html = String::from_utf8(files.file(saved).expect("the report was written")).unwrap();
     assert!(html.contains("Accessibility Report") && html.contains("Skipped"));
 }
 
