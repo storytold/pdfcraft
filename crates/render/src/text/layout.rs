@@ -181,6 +181,8 @@ pub(super) fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 ///    across in step 3 and the cells join one line in step 4, where a column of cells had read top
 ///    to bottom like a paragraph. Two aligned segments keep their blocks: a label and its value
 ///    read as a line anyway, and two columns of prose whose lines share a baseline stay columns.
+///    A short last line under a wide line of its paragraph is no cell, and a barcode's rows are
+///    never cells.
 /// 3. *Block order:* repeatedly take the top-most remaining block, preferring a block to its left
 ///    that overlaps it vertically (so columns read left, then right). A column goes on first (#3658):
 ///    the nearest block below the last one, overlapping it horizontally and at most 2.5 heights of
@@ -384,7 +386,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     // A cell of a table row stacked in a block with the cells above and below it, as the lines of a
     // paragraph, and the table read column by column (#8534); it leaves that block and stands alone,
     // so the row is read across in step 3 and its cells join one line in step 4.
-    let row_cell = row_cells(&segs, &lines.members);
+    let row_cell = row_cells(&segs, &lines.members, &members_above(segs.len(), &blocks));
     if row_cell.iter().any(|&c| c) {
         blocks = split_at_cells(&segs, blocks, &row_cell);
     }
@@ -647,21 +649,46 @@ fn stack_blocks(segs: &[Seg], lines: &Lines) -> Vec<(Vec<usize>, [f32; 4])> {
     blocks
 }
 
+/// For each of `n` segments, the member of its block (in `blocks`) just above it, or [`NONE`] for
+/// a block's first.
+fn members_above(n: usize, blocks: &[(Vec<usize>, [f32; 4])]) -> Vec<usize> {
+    let mut above = vec![NONE; n];
+    for (members, _) in blocks {
+        for pair in members.windows(2) {
+            if let [a, b] = pair
+                && let Some(slot) = above.get_mut(*b)
+            {
+                *slot = *a;
+            }
+        }
+    }
+    above
+}
+
 /// Which segments are the cells of a table row: [`ROW_CELLS`] or more segments of one of `lines`
 /// (each line's segments by their left edge), each within [`SAME_LINE_GAP`] of the next, more than
-/// half of them narrower than [`CELL_WIDTH`] heights (#8534).
-fn row_cells(segs: &[Seg], lines: &[Vec<usize>]) -> Vec<bool> {
+/// half of them cells, narrower than [`CELL_WIDTH`] heights (#8534). A narrow segment under a wide
+/// line of its own block (`above`, the member before it, or [`NONE`]) is the short last line of a
+/// paragraph, not a cell, so three columns of prose whose paragraphs end together keep their
+/// columns. The rows of a barcode drawn with a font join no chain and are never cells: they join no
+/// other text (see [`mark_barcode_rows`]).
+fn row_cells(segs: &[Seg], lines: &[Vec<usize>], above: &[usize]) -> Vec<bool> {
+    let wide = |c: usize| segs[c].bbox[2] - segs[c].bbox[0] >= CELL_WIDTH * segs[c].h;
+    let cell = |c: usize| !wide(c) && !above.get(c).is_some_and(|&a| a != NONE && wide(a));
     let mut row_cell = vec![false; segs.len()];
     for line in lines {
         let mut start = 0;
         for k in 1..=line.len() {
-            let chained = line.get(k).zip(k.checked_sub(1).and_then(|p| line.get(p))).is_some_and(|(&n, &p)| same_line(&segs[p], &segs[n]));
+            let chained = line
+                .get(k)
+                .zip(k.checked_sub(1).and_then(|p| line.get(p)))
+                .is_some_and(|(&n, &p)| same_line(&segs[p], &segs[n]) && segs[p].barcode == segs[n].barcode);
             if chained {
                 continue;
             }
             let chain = line.get(start..k).unwrap_or_default();
-            let narrow = chain.iter().filter(|&&c| segs[c].bbox[2] - segs[c].bbox[0] < CELL_WIDTH * segs[c].h).count();
-            if chain.len() >= ROW_CELLS && narrow * 2 > chain.len() {
+            let narrow = chain.iter().filter(|&&c| cell(c)).count();
+            if chain.len() >= ROW_CELLS && narrow * 2 > chain.len() && chain.iter().all(|&c| !segs[c].barcode) {
                 for &c in chain {
                     if let Some(cell) = row_cell.get_mut(c) {
                         *cell = true;

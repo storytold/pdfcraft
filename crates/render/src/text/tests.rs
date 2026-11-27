@@ -2326,6 +2326,29 @@ fn table_rows_of_cells_drawn_one_by_one_read_across() {
     let t = layout(v).plain_text();
     assert_eq!(t.lines().count(), 9, "{t}");
     assert!(t.starts_with("left0xxxxxxxxxxxxxxxxxxxxxxx\nleft1xxxxxxxxxxxxxxxxxxxxxxx\nleft2xxxxxxxxxxxxxxxxxxxxxxx\nmid0"), "{t}");
+    // Two of the three paragraphs end on the same baseline with a short last line (22 letters,
+    // 13.2 heights, under a wide line of their own paragraph): not a table row (review on #8534).
+    let mut v = Vec::new();
+    for (c, (x, name)) in [(10.0, "left"), (200.0, "mid"), (390.0, "right")].iter().enumerate() {
+        for l in 0..3 {
+            let letters = if c < 2 && l == 2 { 21 } else { 27 };
+            word(&mut v, &format!("{name}{l}{}", "x".repeat(letters - name.len())), *x, 100.0 + 12.0 * l as f32, 6.0);
+        }
+    }
+    let t = layout(v).plain_text();
+    assert_eq!(t.lines().count(), 9, "{t}");
+    assert!(t.starts_with("left0xxxxxxxxxxxxxxxxxxxxxxx\nleft1xxxxxxxxxxxxxxxxxxxxxxx\nleft2xxxxxxxxxxxxxxxxx\nmid0"), "{t}");
+    // A barcode drawn with a font beside two columns of short words, one on each of its rows: the
+    // code's rows join no chain, so two words on a baseline are no row and the columns stay
+    // columns, read before the code (review on #8534).
+    let mut v = Vec::new();
+    for r in 0..4 {
+        let y = 100.0 + 10.0 * r as f32;
+        word(&mut v, "########", 10.0, y, 6.0);
+        word(&mut v, &format!("Ab{r}"), 100.0, y, 6.0);
+        word(&mut v, &format!("Cd{r}"), 160.0, y, 6.0);
+    }
+    assert_eq!(layout(v).plain_text(), "Ab0\nAb1\nAb2\nAb3\nCd0\nCd1\nCd2\nCd3\n########\n########\n########\n########");
 }
 
 #[test]
