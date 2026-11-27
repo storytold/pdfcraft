@@ -57,6 +57,21 @@ fn keyboard_key_names_have_a_separate_context_and_english_fallback() {
     set_current(previous);
 }
 
+#[test]
+fn shortcuts_are_written_with_the_key_names_of_the_current_language() {
+    use pdfcraft_engine::commands::Shortcut;
+    let chord = Shortcut::cmd_shift("S");
+    let german = fixture_lang("x-chords", "key\tCtrl\tStrg\nkey\tShift\tUmschalt\nkey\tDelete\tEntf\n");
+    let previous = current();
+    set_current(german);
+    assert_eq!(crate::commands::shortcut_text(chord, false), "Strg+Umschalt+S");
+    assert_eq!(crate::commands::shortcut_text(Shortcut::cmd("Delete"), false), "Strg+Entf");
+    assert_eq!(crate::commands::shortcut_text(chord, true), "⇧⌘S", "macOS keeps its symbols");
+    set_current(Lang::EN);
+    assert_eq!(crate::commands::shortcut_text(chord, false), "Ctrl+Shift+S");
+    set_current(previous);
+}
+
 /// Regression test: a language picker uses its native name only when a face can draw it, otherwise its
 /// English name.
 #[test]
