@@ -621,6 +621,22 @@ thread_local! {
 
 /// Remove flattened widgets from the AcroForm field tree, and fields left without widgets. With
 /// `on_page`, also the widgets (fields without kids) that are on no page.
+/// Whether the field at `r` is a signature field: its `/FT`, or the nearest one up its `/Parent`
+/// chain (field types are inherited). The walk stops after 64 parents, so a cycle ends.
+fn is_signature_field(doc: &Document, r: ObjRef) -> bool {
+    let mut node = r;
+    for _ in 0..=64 {
+        let obj = doc.get(node);
+        let Some(d) = obj.as_dict() else { return false };
+        if let Some(ft) = d.get(b"FT").map(|v| doc.resolve(v)).and_then(|v| v.as_name().map(|n| n.to_vec())) {
+            return ft == b"Sig";
+        }
+        let Some(parent) = d.get(b"Parent").and_then(|p| p.as_ref()) else { return false };
+        node = parent;
+    }
+    false
+}
+
 fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&HashSet<ObjRef>>) -> Result<(), EditError> {
     let Some(root) = doc.root() else { return Ok(()) };
     let Some(af) = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) else { return Ok(()) };
@@ -680,10 +696,45 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
     let mut known = HashMap::new();
     let survivors: Vec<Object> =
         fields.iter().filter(|f| f.as_ref().is_none_or(|r| keep(doc, r, widgets, on_page, &mut known, 0).0)).cloned().collect();
-    if survivors.len() == fields.len() && widgets.is_empty() {
+    // A field taken out of a kept parent's `/Kids` leaves `/Fields` as long as it was, and still
+    // needs `/CO` and `/SigFlags` cleaned.
+    let removed_any = known.values().any(|&(survives, _)| !survives);
+    if survivors.len() == fields.len() && widgets.is_empty() && !removed_any {
         return Ok(()); // only looked for fields on no page, and there were none
     }
+    // Every field left in the tree, however deep: `known` stops at the depth cutoff, so walk the
+    // kept tree again from `/Fields`, each node once (a cycle ends where it began).
+    let mut surviving: HashSet<ObjRef> = HashSet::new();
+    let mut stack: Vec<ObjRef> = survivors.iter().filter_map(Object::as_ref).collect();
+    while let Some(r) = stack.pop() {
+        if widgets.contains(&r) || matches!(known.get(&r), Some(&(false, _))) || !surviving.insert(r) {
+            continue;
+        }
+        let Some(d) = doc.get(r).as_dict().cloned() else { continue };
+        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
+            stack.extend(kids.iter().filter_map(Object::as_ref));
+        }
+    }
     af_dict.set(b"Fields".to_vec(), Object::Array(survivors));
+    // #2670: the calculation order keeps only the fields that are left, and goes once it is empty.
+    // Only the form's keys change: an indirect `/CO` or `/SigFlags` may be shared, so it is neither
+    // freed (that would null the other references) nor rewritten (they would see the shorter
+    // list). A shortened order is the form's own direct array; once nothing refers to the old
+    // object, a full save leaves it out.
+    if let Some(co_obj) = af_dict.get(b"CO").cloned() {
+        let co_array = doc.resolve(&co_obj).as_array().cloned().unwrap_or_default();
+        let before = co_array.len();
+        let co_survivors: Vec<Object> = co_array.into_iter().filter(|item| item.as_ref().is_some_and(|r| surviving.contains(&r))).collect();
+        if co_survivors.is_empty() {
+            af_dict.remove(b"CO");
+        } else if co_survivors.len() != before {
+            af_dict.set(b"CO".to_vec(), Object::Array(co_survivors));
+        }
+    }
+    // #2670: with no signature field left, the form no longer claims to hold signatures.
+    if !surviving.iter().any(|&r| is_signature_field(doc, r)) {
+        af_dict.remove(b"SigFlags");
+    }
     match af_ref {
         Some(r) => doc.set(r, Object::Dict(af_dict)),
         None => doc.update_dict(root, |d| d.set(b"AcroForm".to_vec(), Object::Dict(af_dict)))?,
