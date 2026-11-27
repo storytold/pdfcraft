@@ -187,6 +187,20 @@ impl PdfCraftApp {
         }
     }
 
+    /// Reflect an external format update without replacing the draft's language.
+    pub(crate) fn sync_open_date_format(&mut self) {
+        if let Some(prefs) = self.preferences.as_mut() {
+            prefs.draft.date_format = self.session.date_format().to_owned();
+        }
+    }
+
+    /// Reflect an external language update without replacing a partially typed pattern.
+    pub(crate) fn sync_open_date_language(&mut self) {
+        if let Some(prefs) = self.preferences.as_mut() {
+            prefs.draft.date_language = self.session.date_language().map(str::to_owned);
+        }
+    }
+
     /// Shows the Preferences window for this pass while it is open, and closes it when answered.
     pub(crate) fn show_preferences(&mut self, ui: &mut Ui) {
         let Some(mut session) = self.preferences.take() else {
