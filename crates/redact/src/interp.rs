@@ -174,6 +174,10 @@ pub(crate) struct Scope<'a> {
     /// Whether this pass is evaluating optional-content rules. An empty off set is meaningful:
     /// policies such as `/AllOff` can still hide content when every group is on.
     pub layers_enabled: bool,
+    /// Apply: a form XObject that can't be read (it doesn't decode, or it is nested too deep) is
+    /// left drawn rather than removed. Flatten Layers sets it: it reads every form again on its
+    /// own and refuses one that could name a layer, so the forms that stay hold none.
+    pub keep_unreadable_forms: bool,
     /// Off groups referenced by optional content that remains visible and therefore still needs
     /// its original default state after sanitization.
     pub retained_off_layers: HashSet<ObjRef>,
@@ -224,6 +228,7 @@ impl<'a> Scope<'a> {
             hidden_text: None,
             hidden_layers: HashSet::new(),
             layers_enabled: false,
+            keep_unreadable_forms: false,
             retained_off_layers: HashSet::new(),
             ocmd_cache: HashMap::new(),
             xobject_oc_cache: HashMap::new(),
@@ -1141,6 +1146,7 @@ fn form_data(doc: &Document, scope: &mut Scope<'_>, s: &Stream, name: &[u8], r: 
             }
             Err(None)
         }
+        Err(_) if scope.mode == Mode::Apply && scope.keep_unreadable_forms => Err(None),
         Err(_) if scope.mode == Mode::Apply => {
             scope.report.forms_removed += 1;
             scope.removed_cut = true;
@@ -1259,6 +1265,9 @@ fn xobject(
             // (Verify), as a form that will not decode does. The page's decode budget, which
             // `form_data` reads within, is what keeps a fan-out or a cycle from costing 2^50 walks.
             if scope.depth >= MAX_DEPTH {
+                if scope.mode == Mode::Apply && scope.keep_unreadable_forms {
+                    return None;
+                }
                 if scope.mode == Mode::Verify {
                     // Sanitization removes a Form it cannot enter, so the verification scan
                     // must count that conservative removal or it may decide to skip the pass.

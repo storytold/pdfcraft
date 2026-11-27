@@ -150,9 +150,11 @@ pub enum RedactError {
         "the document combines layers through a membership dictionary (or a visibility expression), which flattening layers does not resolve; the layers were not flattened"
     )]
     LayerMembership,
-    /// Flatten Layers can't read a content stream whole (object number given), so a layer in it
-    /// could be neither merged nor removed.
-    #[error("object {0} holds content that can't be read whole, so its layers can't be flattened safely; the layers were not flattened")]
+    /// Flatten Layers can't read a content stream whole, or can't tell which layers the names in
+    /// it mean (object number given), so a layer in it could be neither merged nor removed.
+    #[error(
+        "object {0} holds content that can't be read whole, or whose layer names can't be told, so its layers can't be flattened safely; the layers were not flattened"
+    )]
     LayerContentUnreadable(u32),
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),

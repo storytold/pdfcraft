@@ -364,3 +364,80 @@ fn an_unreadable_form_refuses_only_when_it_can_name_a_layer() {
     let mut plain_form = Layered { d: "<< >>", extra: vec![form("<< >>")], ..Default::default() }.build();
     assert_eq!(flatten_layers(&mut plain_form).unwrap(), Flattened { visible: 2, hidden: 0 });
 }
+
+#[test]
+fn a_view_usage_rule_shows_a_layer_the_lists_leave_off() {
+    // Draft (6) is off by /OFF, then by /BaseState /OFF; its View usage turns it on as the
+    // document opens, as the renderer shows it.
+    for d in [
+        "<< /OFF [6 0 R] /AS [<< /Event /View /Category [/View] /OCGs [6 0 R] >>] >>",
+        "<< /BaseState /OFF /ON [5 0 R] /AS [<< /Event /View /Category [/View] /OCGs [6 0 R] >>] >>",
+    ] {
+        let draft = "<< /Type /OCG /Name (DraftLayer) /Usage << /View << /ViewState /ON >> >> >>";
+        let mut doc = Layered { d, draft, ..Default::default() }.build();
+        assert_eq!(flatten_layers(&mut doc).unwrap(), Flattened { visible: 2, hidden: 0 }, "{d}");
+        let ops = page_ops(&doc);
+        assert!(ops.iter().any(|o| o == "10 10 l") && ops.iter().any(|o| o == "9 9 l"), "{d}: {ops:?}");
+    }
+}
+
+#[test]
+fn an_unreadable_form_in_no_layer_stays_drawn_while_a_hidden_layer_goes() {
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Filter /FlateDecode /Resources << >>", b"not flate");
+    let contents = stream("", b"5 5 m 6 6 l S /OC /L1 BDC 0 0 m 10 10 l S EMC /OC /L2 BDC 1 1 m 9 9 l S EMC /Fm Do");
+    let mut doc = Layered { extra_res: "/XObject << /Fm 7 0 R >>", contents, extra: vec![form], ..Default::default() }.build();
+    assert_eq!(flatten_layers(&mut doc).unwrap(), Flattened { visible: 1, hidden: 1 });
+    merged_as_expected(&doc);
+    let (_, saved) = saved(&doc);
+    assert!(page_ops(&saved).iter().any(|o| o == "/Fm Do"), "the form in no layer is still drawn: {:?}", page_ops(&saved));
+}
+
+/// A comment whose appearance (8), with the page's layer names, draws form 9, which has no
+/// `/Resources`, drawing `inner`.
+fn drawn_by_an_appearance(ap_props: &str, inner: &[u8], more: Vec<Vec<u8>>) -> Document {
+    let mut extra = vec![
+        b"<< /Type /Annot /Subtype /Square /Rect [0 0 10 10] /AP << /N 8 0 R >> >>".to_vec(),
+        stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /Properties {ap_props} /XObject << /In 9 0 R >> >>"),
+            b"/In Do",
+        ),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", inner),
+    ];
+    extra.extend(more);
+    Layered { page_extra: "/Annots [7 0 R]", extra, ..Default::default() }.build()
+}
+
+fn form_9(doc: &Document) -> String {
+    let Object::Stream(s) = &*doc.get(ObjRef::new(9, 0)) else { panic!("object 9 is not a stream") };
+    String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+}
+
+#[test]
+fn a_form_without_resources_reads_its_layers_where_it_is_drawn() {
+    let inner = b"/OC /L2 BDC 2 2 m 8 8 l S EMC /OC /L1 BDC 3 3 m 7 7 l S EMC";
+    let mut doc = drawn_by_an_appearance("<< /L1 5 0 R /L2 6 0 R >>", inner, Vec::new());
+    flatten_layers(&mut doc).unwrap();
+    let form = form_9(&doc);
+    assert!(!form.contains("8 8 l"), "the hidden layer's drawing is gone: {form}");
+    assert!(form.contains("7 7 l") && !form.contains("BDC"), "the visible one stays, unwrapped: {form}");
+}
+
+#[test]
+fn a_form_without_resources_whose_layers_cant_be_told_refuses() {
+    let inner = b"/OC /L2 BDC 2 2 m 8 8 l S EMC";
+    // Drawn as an appearance itself: no resources say what L2 is.
+    let direct = Layered {
+        page_extra: "/Annots [7 0 R]",
+        extra: vec![
+            b"<< /Type /Annot /Subtype /Square /Rect [0 0 10 10] /AP << /N 8 0 R >> >>".to_vec(),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", inner),
+        ],
+        ..Default::default()
+    };
+    refused_unchanged(direct.build(), |e| matches!(e, RedactError::LayerContentUnreadable(8)));
+    // L2 is the hidden layer where the appearance draws it, and the shown one where form 10 does.
+    let other =
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /Properties << /L2 5 0 R >> /XObject << /In 9 0 R >> >>", b"/In Do");
+    let doc = drawn_by_an_appearance("<< /L2 6 0 R >>", inner, vec![other]);
+    refused_unchanged(doc, |e| matches!(e, RedactError::LayerContentUnreadable(9)));
+}

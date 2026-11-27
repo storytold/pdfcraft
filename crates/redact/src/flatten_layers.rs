@@ -1,10 +1,12 @@
 //! Flatten Layers: what the default optional-content configuration shows becomes plain content,
 //! and the layers go.
 //!
-//! [`flatten_layers`] reads each layer's state as the document opens on screen: the default
-//! configuration's `/BaseState`, `/ON` and `/OFF`, and its `/AS` usage rules for the View event
-//! (a layer whose `/Usage /View /ViewState` is OFF is hidden). Print and Export usage is not
-//! read, so a visible layer set not to print prints once merged. Then:
+//! [`flatten_layers`] reads each layer's state as the document opens on screen, as the renderer
+//! shows it: the default configuration's `/BaseState`, `/ON` and `/OFF`, then its `/AS` usage
+//! rules for the View event in the View category, which give each layer they name its
+//! `/Usage /View /ViewState`, ON or OFF, whatever the lists say (ISO 32000-1 §8.11.4.4). Zoom,
+//! User and Language usage give no state at open, and Print and Export usage is not read, so a
+//! visible layer set not to print prints once merged. Then:
 //!
 //! - hidden layers' content is removed, as Remove Hidden Information removes it
 //!   ([`crate::sanitize`]), and their marked blocks in every other content stream (forms and
@@ -31,14 +33,18 @@
 //! - a form or tiling pattern that can't be read whole while its resources can name a layer (its
 //!   `/Properties` holds one, or it has no `/Resources` and may use its page's):
 //!   [`RedactError::LayerContentUnreadable`] (its object number). One that can name no layer is
-//!   left as it is.
+//!   left as it is, and still drawn;
+//! - a form or tiling pattern without `/Resources` reads its layer names in the resources of what
+//!   draws it (each resource dictionary whose `/XObject` or `/Pattern` names it). One drawn as an
+//!   annotation's appearance, where no such resources are given, or whose names mean a hidden
+//!   layer in one place and not in another, is refused with the same error.
 
 use std::collections::{HashMap, HashSet};
 
 use pdfcraft_content::{Op, Pieces, serialize_ops};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
-use crate::sanitize::{catalog, content_pass, hidden_layers, sub};
+use crate::sanitize::{LayerPass, ListedStates, catalog, content_pass_with, listed_states, sub, view_states};
 use crate::{RedactError, annots_of};
 
 /// What [`flatten_layers`] did.
@@ -71,12 +77,13 @@ fn flatten(doc: &mut Document) -> Result<Flattened, RedactError> {
     let Some((root, cat)) = catalog(doc) else { return Ok(Flattened::default()) };
     let Some(oc) = sub(doc, &cat, b"OCProperties") else { return Ok(Flattened::default()) };
     refuse_memberships(doc)?;
-    let hidden: HashSet<ObjRef> = hidden_layers(doc).into_iter().collect();
+    let hidden = hidden_at_open(doc);
     let listed: HashSet<ObjRef> =
         oc.get(b"OCGs").and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default();
     let done = Flattened { visible: listed.difference(&hidden).count(), hidden: listed.intersection(&hidden).count() };
     if !hidden.is_empty() {
-        content_pass(doc, false, true, true)?;
+        // The forms it can't read stay drawn: `unwrap_forms` refuses those that could name a layer.
+        content_pass_with(doc, false, Some(LayerPass { off: hidden.iter().copied().collect(), keep_unreadable_forms: true }), true)?;
     }
     clear_xobjects(doc, &hidden)?;
     unwrap_pages(doc, &hidden)?;
@@ -88,6 +95,21 @@ fn flatten(doc: &mut Document) -> Result<Flattened, RedactError> {
     })?;
     doc.require_full_save_with_new_id();
     Ok(done)
+}
+
+/// The layers hidden as the document opens (module docs): those the lists leave off, then each
+/// one a View usage rule names takes its ViewState.
+fn hidden_at_open(doc: &Document) -> HashSet<ObjRef> {
+    let Some(ListedStates { all, hidden, d }) = listed_states(doc) else { return HashSet::new() };
+    let mut hidden: HashSet<ObjRef> = hidden.into_iter().collect();
+    for (g, on) in view_states(doc, &d, &all, |_| true) {
+        if on {
+            hidden.remove(&g);
+        } else {
+            hidden.insert(g);
+        }
+    }
+    hidden
 }
 
 /// Is `o`, followed through references, a dictionary whose `/Type` is `name`?
@@ -229,6 +251,7 @@ fn may_name_layers(doc: &Document, d: &Dict, listed: &HashSet<ObjRef>) -> bool {
 
 /// Every form and tiling pattern with its layers' blocks unwrapped or removed.
 fn unwrap_forms(doc: &mut Document, hidden: &HashSet<ObjRef>, listed: &HashSet<ObjRef>) -> Result<(), RedactError> {
+    let mut drawers = Drawers::read(doc);
     for n in doc.object_numbers() {
         let r = ObjRef::new(n, doc.generation(n));
         let Object::Stream(s) = &*doc.get(r) else { continue };
@@ -242,13 +265,114 @@ fn unwrap_forms(doc: &mut Document, hidden: &HashSet<ObjRef>, listed: &HashSet<O
             }
             continue;
         };
-        let props = properties(doc, s.dict.get(b"Resources"));
+        let props = match s.dict.get(b"Resources") {
+            Some(res) => properties(doc, Some(res)),
+            None => drawers.properties(doc, r, &parsed.ops, hidden)?,
+        };
         let Some(ops) = unwrap_ops(doc, parsed.ops, &props, hidden)? else { continue };
         let mut dict = s.dict.clone();
         dict.remove(b"Length");
         doc.set_existing(r, Object::Stream(Stream::flate(dict, &serialize_ops(&ops))))?;
     }
     Ok(())
+}
+
+/// Most layer names [`Drawers::properties`] looks up, over every form it reads, before it refuses.
+const MAX_NAME_LOOKUPS: usize = 1 << 20;
+
+/// What draws the forms and tiling patterns that have no `/Resources` of their own.
+struct Drawers {
+    /// The `/Properties` of each resource dictionary that names one, by the one it names.
+    by: HashMap<ObjRef, Vec<Dict>>,
+    /// Those drawn as an annotation's appearance.
+    appearances: HashSet<ObjRef>,
+    lookups: usize,
+}
+
+impl Drawers {
+    fn read(doc: &Document) -> Self {
+        let resourceless = |r: ObjRef| matches!(&*doc.get(r), Object::Stream(s) if !s.dict.contains(b"Resources") && is_content_stream(doc, &s.dict));
+        let mut by: HashMap<ObjRef, Vec<Dict>> = HashMap::new();
+        let mut seen = HashSet::new();
+        for n in doc.object_numbers() {
+            let o = doc.get(ObjRef::new(n, doc.generation(n)));
+            let held = match &*o {
+                Object::Dict(d) => d.get(b"Resources"),
+                Object::Stream(s) => s.dict.get(b"Resources"),
+                _ => None,
+            };
+            // A resource dictionary many owners share is read once.
+            let Some(res) = held.filter(|r| r.as_ref().is_none_or(|r| seen.insert(r))) else { continue };
+            let Some(res) = doc.resolve(res).as_dict().cloned() else { continue };
+            let props = sub(doc, &res, b"Properties").unwrap_or_default();
+            for key in [&b"XObject"[..], b"Pattern"] {
+                for (_, v) in sub(doc, &res, key).unwrap_or_default().iter() {
+                    if let Some(t) = v.as_ref().filter(|&t| resourceless(t)) {
+                        by.entry(t).or_default().push(props.clone());
+                    }
+                }
+            }
+        }
+        Drawers { by, appearances: appearances(doc), lookups: 0 }
+    }
+
+    /// The `/Properties` the layer names in `ops`, the content of `r` (which has no `/Resources`),
+    /// mean where it is drawn: a name means a hidden layer if it does in every resource
+    /// dictionary naming `r`, and a shown one (absent here) if it does in none. A form nothing
+    /// names, which nothing draws, reads none.
+    fn properties(&mut self, doc: &Document, r: ObjRef, ops: &[Op], hidden: &HashSet<ObjRef>) -> Result<Dict, RedactError> {
+        let refused = RedactError::LayerContentUnreadable(r.num);
+        let names: HashSet<&[u8]> =
+            ops.iter().filter(|op| op.is("BDC") && op.name_back(1) == Some(b"OC")).filter_map(|op| op.back(0).and_then(Object::as_name)).collect();
+        if names.is_empty() {
+            return Ok(Dict::new());
+        }
+        if self.appearances.contains(&r) {
+            return Err(refused);
+        }
+        let callers = self.by.get(&r).map_or(&[][..], Vec::as_slice);
+        let mut out = Dict::new();
+        for name in names {
+            let mut first: Option<(bool, Option<&Object>)> = None;
+            for props in callers {
+                self.lookups = self.lookups.saturating_add(1);
+                if self.lookups > MAX_NAME_LOOKUPS {
+                    return Err(refused);
+                }
+                let target = props.get(name);
+                let off = match target {
+                    Some(t) => layer_state(doc, t, hidden)?,
+                    None => false,
+                };
+                match first {
+                    None => first = Some((off, target)),
+                    Some((was, _)) if was != off => return Err(refused),
+                    Some(_) => {}
+                }
+            }
+            if let Some((true, Some(t))) = first {
+                out.set(name.to_vec(), t.clone());
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// The streams the pages' annotations draw as appearances (`/AP` entries, and their states).
+fn appearances(doc: &Document) -> HashSet<ObjRef> {
+    let mut out = HashSet::new();
+    for p in pdfcraft_model::pages(doc) {
+        for a in annots_of(doc, &p.dict) {
+            let ap = doc.resolve(&a).as_dict().and_then(|d| sub(doc, d, b"AP")).unwrap_or_default();
+            for (_, v) in ap.iter() {
+                match &*doc.resolve(v) {
+                    Object::Dict(states) => out.extend(states.iter().filter_map(|(_, s)| s.as_ref())),
+                    _ => out.extend(v.as_ref()),
+                }
+            }
+        }
+    }
+    out
 }
 
 /// XObjects in a hidden layer become empty forms, wherever they are drawn; the others lose `/OC`.

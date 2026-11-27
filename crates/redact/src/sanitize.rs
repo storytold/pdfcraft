@@ -466,18 +466,26 @@ fn is_comment(subtype: &[u8]) -> bool {
     !matches!(subtype, b"FileAttachment" | b"Redact") && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
 }
 
-/// The layers that are off in the default configuration: listed off (or not listed on, under
-/// `/BaseState /OFF`), or turned off on screen by one of its usage rules (`/AS`, ISO 32000-2,
-/// 8.11.4.4): a rule for the View event in the View category hides a layer whose
-/// `/Usage /View /ViewState` is OFF. Rules that turn a layer on, or apply only when printing or
-/// exporting, leave it as the lists say.
-pub(crate) fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
-    let Some((_, cat)) = catalog(doc) else { return Vec::new() };
-    let Some(oc) = sub(doc, &cat, b"OCProperties") else { return Vec::new() };
-    let Some(d) = sub(doc, &oc, b"D") else { return Vec::new() };
-    let refs = |o: Option<&Object>| -> Vec<ObjRef> {
-        o.and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
-    };
+/// The groups an array (followed through a reference) lists by reference.
+pub(crate) fn layer_refs(doc: &Document, o: Option<&Object>) -> Vec<ObjRef> {
+    o.and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
+}
+
+/// The default configuration's lists, read: every group `/OCGs` lists, those the lists leave
+/// off, and the configuration (`/D`) itself.
+pub(crate) struct ListedStates {
+    pub all: Vec<ObjRef>,
+    pub hidden: Vec<ObjRef>,
+    pub d: Dict,
+}
+
+/// The groups listed off (or not listed on, under `/BaseState /OFF`) in the default
+/// configuration. `None` without one.
+pub(crate) fn listed_states(doc: &Document) -> Option<ListedStates> {
+    let (_, cat) = catalog(doc)?;
+    let oc = sub(doc, &cat, b"OCProperties")?;
+    let d = sub(doc, &oc, b"D")?;
+    let refs = |o: Option<&Object>| layer_refs(doc, o);
     let all = refs(oc.get(b"OCGs"));
     // sets: the lists are the document's, and a filter over every group would scan them each time
     let (on, off): (std::collections::HashSet<ObjRef>, std::collections::HashSet<ObjRef>) =
@@ -485,12 +493,32 @@ pub(crate) fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
     // The default state is /BaseState, then /ON turns groups on and /OFF turns them off, so a
     // group both lists name ends up off (§8.11.4.3, Table 101) — the viewer reads it the same way.
     let base_off = d.get(b"BaseState").map(|b| crate::resolve_chain(doc, b)).is_some_and(|b| b.as_name() == Some(b"OFF".as_slice()));
-    let mut hidden: Vec<ObjRef> = all.iter().copied().filter(|g| off.contains(g) || (base_off && !on.contains(g))).collect();
+    let hidden = all.iter().copied().filter(|g| off.contains(g) || (base_off && !on.contains(g))).collect();
+    Some(ListedStates { all, hidden, d })
+}
+
+/// The layers that are off in the default configuration: listed off (or not listed on, under
+/// `/BaseState /OFF`), or turned off on screen by one of its usage rules (`/AS`, ISO 32000-2,
+/// 8.11.4.4): a rule for the View event in the View category hides a layer whose
+/// `/Usage /View /ViewState` is OFF. Rules that turn a layer on, or apply only when printing or
+/// exporting, leave it as the lists say.
+fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
+    let Some(ListedStates { all, mut hidden, d }) = listed_states(doc) else { return Vec::new() };
+    let listed_off: std::collections::HashSet<ObjRef> = hidden.iter().copied().collect();
+    hidden.extend(view_states(doc, &d, &all, |g| !listed_off.contains(&g)).into_iter().filter(|(_, on)| !on).map(|(g, _)| g));
+    hidden
+}
+
+/// The `/Usage /View /ViewState` (ON = `true`) of each group in `all` that `wanted` accepts and a
+/// usage rule of `d` (`/AS`) for the View event in the View category names, each group once.
+/// Groups without a ViewState of ON or OFF are left out.
+pub(crate) fn view_states(doc: &Document, d: &Dict, all: &[ObjRef], wanted: impl Fn(ObjRef) -> bool) -> Vec<(ObjRef, bool)> {
     // Each rule, layer list and layer is read once, however often the rules name them: many rules
     // can share one long list.
     let known: std::collections::HashSet<ObjRef> = all.iter().copied().collect();
-    let mut looked: std::collections::HashSet<ObjRef> = hidden.iter().copied().collect();
+    let mut looked = std::collections::HashSet::new();
     let mut read = std::collections::HashSet::new();
+    let mut out = Vec::new();
     let rules = d.get(b"AS").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
     for rule in &rules {
         if let Some(r) = rule.as_ref()
@@ -508,17 +536,19 @@ pub(crate) fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
         {
             continue;
         }
-        for g in refs(rule.get(b"OCGs")) {
-            if !known.contains(&g) || !looked.insert(g) {
+        for g in layer_refs(doc, rule.get(b"OCGs")) {
+            if !known.contains(&g) || !wanted(g) || !looked.insert(g) {
                 continue;
             }
             let usage = doc.get(g).as_dict().and_then(|layer| sub(doc, layer, b"Usage"));
-            if usage.and_then(|u| sub(doc, &u, b"View")).is_some_and(|v| v.name(b"ViewState") == Some(b"OFF")) {
-                hidden.push(g);
+            match usage.and_then(|u| sub(doc, &u, b"View")).as_ref().and_then(|v| v.name(b"ViewState")) {
+                Some(b"ON") => out.push((g, true)),
+                Some(b"OFF") => out.push((g, false)),
+                _ => {}
             }
         }
     }
-    hidden
+    out
 }
 
 /// The objects a layer cleanup has reached by reference, and whether the lists naming each keep it.
@@ -616,14 +646,31 @@ fn config_without(doc: &mut Document, mut d: Dict, keep: &impl Fn(&Object) -> bo
     Ok(d)
 }
 
-/// Glyphs of hidden text, or content of hidden layers, on every page (`write` = remove them).
-pub(crate) fn content_pass(
+/// The layers a content pass removes, and whether it keeps a form it can't read (see
+/// `Scope::keep_unreadable_forms`).
+pub(crate) struct LayerPass {
+    pub off: Vec<ObjRef>,
+    pub keep_unreadable_forms: bool,
+}
+
+/// Glyphs of hidden text, or content of hidden layers ([`hidden_layers`]), on every page
+/// (`write` = remove them).
+fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Result<(usize, std::collections::HashSet<ObjRef>), RedactError> {
+    let layers = layers.then(|| LayerPass { off: hidden_layers(doc), keep_unreadable_forms: false });
+    content_pass_with(doc, text, layers, write)
+}
+
+/// [`content_pass`] with the layers to remove given.
+pub(crate) fn content_pass_with(
     doc: &mut Document,
     text: bool,
-    layers: bool,
+    layers: Option<LayerPass>,
     write: bool,
 ) -> Result<(usize, std::collections::HashSet<ObjRef>), RedactError> {
-    let off = if layers { hidden_layers(doc) } else { Vec::new() };
+    let (layers, off, keep_unreadable_forms) = match layers {
+        Some(LayerPass { off, keep_unreadable_forms }) => (true, off, keep_unreadable_forms),
+        None => (false, Vec::new(), false),
+    };
     if !text && !layers {
         return Ok((0, std::collections::HashSet::new()));
     }
@@ -661,6 +708,7 @@ pub(crate) fn content_pass(
         }
         scope.hidden_layers = off.iter().copied().collect();
         scope.layers_enabled = layers;
+        scope.keep_unreadable_forms = keep_unreadable_forms;
         let out = process(doc, &mut scope, &data, &resources, Matrix::IDENTITY);
         if let Some(error) = out.error {
             return Err(error.on_page(pi + 1));
