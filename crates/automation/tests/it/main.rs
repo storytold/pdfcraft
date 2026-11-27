@@ -25,6 +25,7 @@ mod portfolio_info;
 mod redact_after_stray_q_form;
 mod redact_text_after_q;
 mod render_warnings;
+mod suggest_outline;
 mod text_copy;
 mod timesheet_compat;
 mod unreadable_objects;

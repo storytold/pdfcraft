@@ -66,7 +66,7 @@ that warning and keeps the existing layout and accepted widget values.
 - **PDF** (`pdf::write_form`): pages with content streams in the standard 14 fonts (Arial and
   friends → Helvetica, Courier New → Courier, serif faces → Times; nothing is embedded), JPEG
   XObjects, and widgets: text (multi-line, max length, alignment), date (Acrobat's `AFDate`
-  format and keystroke actions from the picture clause), check boxes and radio groups (from
+  format action from the display picture, keystroke action from the edit picture), check boxes and radio groups (from
   `exclGroup`), push buttons with Reset / Print / Save As / URI actions recognised from their
   scripts, and signature fields, each named by its SOM path (`form1[0].page1[0].sign[0]`, as
   fields under one for each step above it) because other viewers lay a dynamic form out again
@@ -184,6 +184,10 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   only their data is read and written. A form with no fields is also static when its `config`
   packet says `<dynamicRender>forbidden</dynamicRender>` (Designer's static PDF form): its pages
   are the form and are not laid out again (#3180). Without that, no fields means dynamic.
+  The other way round, a form with fields is dynamic when its `config` packet says
+  `<dynamicRender>required</dynamicRender>`: a viewer saved it with its pages drawn and only its
+  signature boxes as fields, so its other fields live in the template. Once one of those boxes
+  is signed it stays as saved, since laying it out would change the pages the signature covers.
 - **Flattening and converting.** `strip` takes the XFA out of a document: the packets,
   `/NeedsRendering`, the layout mark, the overrides and the private keys on the fields. The
   engine calls it after flattening an XFA form's fields (so Adobe's viewers show the baked
