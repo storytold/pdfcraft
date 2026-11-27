@@ -8,8 +8,6 @@ use std::process::Command;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
 /// A folder for one test, removed when the test ends.
 struct Scratch(PathBuf);
 
@@ -71,24 +69,12 @@ impl Spy {
     }
 }
 
-/// Write a token file the way the app does: readable by the owner only.
-fn write_private(path: &Path, text: &str) {
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    opts.open(path).unwrap().write_all(text.as_bytes()).unwrap();
-}
-
 #[test]
 fn a_token_file_of_your_own_reaches_the_app() {
     let dir = scratch("own");
     let spy = spy();
     let token_file = dir.join("token");
-    write_private(&token_file, TOKEN);
+    let token = craft::automation::security::server_token(None, Some(&token_file)).unwrap();
     let o = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli"))
         .arg("ui")
         .arg("--control")
@@ -100,5 +86,5 @@ fn a_token_file_of_your_own_reaches_the_app() {
         .unwrap();
     let received = spy.received();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    assert!(received.contains(TOKEN) && received.contains("ui.state"), "{received}");
+    assert!(received.contains(&token) && received.contains("ui.state"), "the listener did not receive the fixture token and state request");
 }
