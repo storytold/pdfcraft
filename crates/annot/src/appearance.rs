@@ -35,18 +35,26 @@ pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
 }
 
 /// How far a text box's `lines` reach, in em: above the first baseline (0.9 of the 1.2 em line)
-/// and below the last (0.3), or further where Thai stacked marks or descenders reach, so the box
-/// is sized to their ink and doesn't clip them.
+/// and below the last (0.3), or further where their ink reaches, Thai stacked marks and
+/// descenders, or accented capitals (Á, Å, Ğ, İ rise past 0.9 em, #8550), so the box is sized to
+/// the ink and doesn't clip it.
 fn reach(lines: &[String]) -> [f64; 2] {
-    let ink = |line: Option<&String>| line.and_then(|l| shaped_text::thai_reach(l));
+    let ink = |line: Option<&String>| line.and_then(|l| shaped_text::line_reach(l));
     [ink(lines.first()).map_or(0.9, |r| r[1].max(0.9)), ink(lines.last()).map_or(0.3, |r| (-r[0]).max(0.3))]
 }
 
 /// The height a text box's `lines` take at `size`, inside its padding: 1.2 em a line, and more
-/// for Thai that reaches further ([`reach`]).
+/// for ink that reaches further ([`reach`]).
 pub fn text_lines_height(lines: &[String], size: f64) -> f64 {
     let [up, down] = reach(lines);
     lines.len().max(1) as f64 * size * 1.2 + (up - 0.9 + down - 0.3) * size
+}
+
+/// How much further than 1.2 em a line the ink of `lines` reaches at `size` ([`reach`]): 0 for text
+/// that stays within a line's 0.9 em above and 0.3 em below.
+pub fn text_lines_overreach(lines: &[String], size: f64) -> f64 {
+    let [up, down] = reach(lines);
+    (up - 0.9 + down - 0.3) * size
 }
 
 use crate::{Document, NOTE_SIZE, Rgb, n};
