@@ -27,13 +27,16 @@ pub const MAX_FLATTENED_SIDE: f64 = 16_000.0;
 const MAX_FLATTENED_BYTES: usize = 512 << 20;
 
 /// The print-ready PDF `bytes` ([`crate::Session::print_pdf`]) as they go to the system spooler
-/// with `job`. Three things happen on Windows only, in this order; elsewhere the bytes go as they
-/// are.
+/// with `job`, in this order:
 ///
-/// - A job in grayscale is made grey here first ([`greyed`]), and `job.grey_pages` says so.
-///   Windows has no colour conversion of its own, and a driver that lists no grey option (Microsoft
-///   Print to PDF, or one with only a vendor's own grey setting) refused the job outright
-///   (#5806). The driver is still asked for grey where it has it.
+/// - A job in grayscale is made grey here first ([`greyed`]), on every system, and
+///   `job.grey_pages` says so. The driver is still asked for grey, but it can't be relied on:
+///   on Windows a driver that lists no grey option (Microsoft Print to PDF, or one with only a
+///   vendor's own grey setting) refused the job outright (#5806), and under CUPS a vendor driver
+///   that reads only its own colour option (Canon's UFR II) printed in colour (#7192).
+///
+/// Two more things happen on Windows only; elsewhere the bytes go on as they are after greying.
+///
 /// - With `flatten_transparency`, each sheet that uses transparency becomes an opaque picture of
 ///   itself at [`FLATTEN_DPI`] ([`flattened`]). It is meant for GDI (v3) drivers, which get the
 ///   job through Windows' XPS-to-GDI conversion: that conversion fails on soft masks (#6155),
@@ -47,9 +50,6 @@ const MAX_FLATTENED_BYTES: usize = 512 << 20;
 /// and a grayscale job whose pages couldn't be made grey keeps asking the driver for grey,
 /// strictly, as before.
 pub fn spooler_copy(bytes: Vec<u8>, job: &mut crate::print::spool::Job, flatten_transparency: bool) -> Vec<u8> {
-    if !cfg!(windows) {
-        return bytes;
-    }
     let mut bytes = Arc::new(bytes);
     if job.grayscale {
         match greyed(bytes.clone()) {
@@ -60,6 +60,10 @@ pub fn spooler_copy(bytes: Vec<u8>, job: &mut crate::print::spool::Job, flatten_
             Some(None) => job.grey_pages = true,
             None => {}
         }
+    }
+    if !cfg!(windows) {
+        // `greyed` hands back a new document, so `bytes` has no other owner here: no copy.
+        return Arc::try_unwrap(bytes).unwrap_or_else(|shared| (*shared).clone());
     }
     if flatten_transparency && let Some(flat) = flattened(bytes.clone(), FLATTEN_DPI) {
         bytes = Arc::new(flat);
@@ -326,9 +330,14 @@ mod tests {
 
     /// A one-page PDF filling the page in red.
     fn red_page() -> Vec<u8> {
+        page_drawing(b"1 0 0 rg 0 0 612 792 re f")
+    }
+
+    /// A one-page PDF whose content is `operators`.
+    fn page_drawing(operators: &[u8]) -> Vec<u8> {
         let mut doc = Document::new_empty();
         let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
-        let content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"1 0 0 rg 0 0 612 792 re f".to_vec())));
+        let content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), operators.to_vec())));
         let mut page = Dict::new();
         page.set("Type", Object::name("Page"));
         page.set("Parent", Object::Ref(pages));
@@ -366,23 +375,31 @@ mod tests {
         assert_eq!(greyed(Arc::new(b"not a PDF".to_vec())), None);
     }
 
-    /// On Windows a grayscale job's copy is grey and the job says its pages are; elsewhere the
-    /// bytes go as they are and the driver is asked, as before. A colour job is never converted.
+    /// A grayscale job's copy is grey and the job says its pages are, on every system: a CUPS
+    /// driver that reads only its own colour option printed the colour copy in colour (#7192).
+    /// A colour job is never converted.
     #[test]
-    fn a_grayscale_job_sends_grey_pages_on_windows_only() {
+    fn a_grayscale_job_sends_grey_pages() {
         let red = red_page();
         let mut job = Job { grayscale: true, ..Job::default() };
         let sent = spooler_copy(red.clone(), &mut job, false);
-        if cfg!(windows) {
-            assert!(job.grey_pages);
-            assert!(!first_page_content(sent).contains(" rg"));
-        } else {
-            assert!(!job.grey_pages);
-            assert_eq!(sent, red);
-        }
+        assert!(job.grey_pages);
+        assert!(!first_page_content(sent).contains(" rg"));
         let mut colour = Job::default();
         assert_eq!(spooler_copy(red.clone(), &mut colour, false), red);
         assert!(!colour.grey_pages);
+    }
+
+    /// Bra1nZ on #7215: a grayscale job whose pages are already grey goes to the spooler as it is,
+    /// on every system, so a grey that the copy was already made into is never greyed again and
+    /// can't come out darker. The same holds for a copy this greying made.
+    #[test]
+    fn an_already_grey_page_is_not_greyed_again() {
+        for grey in [page_drawing(b"0.5 g 0 0 612 792 re f"), spooler_copy(red_page(), &mut Job { grayscale: true, ..Job::default() }, false)] {
+            let mut job = Job { grayscale: true, ..Job::default() };
+            assert_eq!(spooler_copy(grey.clone(), &mut job, false), grey);
+            assert!(job.grey_pages, "the pages are grey, so the job says so");
+        }
     }
 
     /// On Windows the spooler gets the tiled copy ([`tiled`]); elsewhere the bytes as they are.
