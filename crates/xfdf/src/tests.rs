@@ -538,6 +538,184 @@ fn non_utf8_check_box_states_round_trip() {
     }
 }
 
+/// A radio group with `/Opt [(1) (2)]` whose buttons' on states are their positions `/0` and
+/// `/1` (ISO 32000-2 Table 230), with nothing on (`blank`) or the button named by `on`.
+fn radio_with_opt(on: Option<&str>) -> Document {
+    let (v, a, b) = match on {
+        Some("0") => (" /V /0", "/0", "/Off"),
+        Some("1") => (" /V /1", "/Off", "/1"),
+        _ => ("", "/Off", "/Off"),
+    };
+    let group = format!("<< /FT /Btn /Ff 49152 /T (r) /Opt [(1) (2)]{v} /Kids [5 0 R 6 0 R] >>");
+    let first =
+        format!("<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [20 100 36 116] /P 3 0 R /AS {a} /AP << /N << /0 7 0 R /Off 7 0 R >> >> >>");
+    let second =
+        format!("<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [60 100 76 116] /P 3 0 R /AS {b} /AP << /N << /1 7 0 R /Off 7 0 R >> >> >>");
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>",
+        &group,
+        &first,
+        &second,
+        "<< /Length 0 >>
+stream
+
+endstream",
+    ];
+    let mut out = b"%PDF-1.7
+"
+    .to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(
+            format!(
+                "{} 0 obj
+{o}
+endobj
+",
+                i + 1
+            )
+            .as_bytes(),
+        );
+    }
+    let xref = out.len();
+    out.extend_from_slice(
+        format!(
+            "xref
+0 {}
+0000000000 65535 f 
+",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
+    for o in offsets {
+        out.extend_from_slice(
+            format!(
+                "{o:010} 00000 n 
+"
+            )
+            .as_bytes(),
+        );
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{xref}
+%%EOF
+",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
+    Document::open(Arc::new(out)).unwrap()
+}
+
+/// PDFBOX-5831: form data names a radio button by its `/Opt` export value, as export writes it
+/// ("1" for the first button). Imported, "1" turns on that button, not the second one, whose
+/// on state is `/1`; a state name no export value matches ("0") still selects its button.
+#[test]
+fn imported_data_names_a_radio_button_by_its_export_value() {
+    let on_widgets = |d: &Document| {
+        let f = fields(d).into_iter().next().unwrap();
+        (0..f.widgets.len()).filter(|&i| f.widget_on(i)).collect::<Vec<_>>()
+    };
+    for on in ["0", "1"] {
+        let src = radio_with_opt(Some(on));
+        for data in [export_xfdf(&src, false, true, "form.pdf").into_bytes(), export_fdf(&src, false, true, "form.pdf").unwrap()] {
+            let mut dst = radio_with_opt(None);
+            assert_eq!(import(&mut dst, &data).unwrap().fields, 1);
+            assert_eq!(on_widgets(&dst), on_widgets(&src), "button {on} round trip: {}", String::from_utf8_lossy(&data));
+        }
+    }
+    let state_name =
+        "<?xml version=\"1.0\"?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><fields><field name=\"r\"><value>0</value></field></fields></xfdf>";
+    let mut dst = radio_with_opt(None);
+    import(&mut dst, state_name.as_bytes()).unwrap();
+    assert_eq!(on_widgets(&dst), [0], "a state name no export value matches selects its button");
+}
+
+/// A check box whose kids' on states are `/A` and `/B#20` ("B" and a space), with `/Opt [(other)
+/// (A)]`: the export value "A" names the second kid, whose state keeps its space. Imported, "A"
+/// turns that kid on with its exact state, not a trimmed "B" that no kid has.
+#[test]
+fn an_export_value_turns_on_a_check_box_state_with_spaces_in_its_name() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>",
+        "<< /FT /Btn /T (c) /Opt [(other) (A)] /V /Off /Kids [5 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [20 100 36 116] /P 3 0 R /AS /Off /AP << /N << /A 7 0 R /Off 7 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [60 100 76 116] /P 3 0 R /AS /Off /AP << /N << /B#20 7 0 R /Off 7 0 R >> >> >>",
+        "<< /Length 0 >>
+stream
+
+endstream",
+    ];
+    let mut out = b"%PDF-1.7
+"
+    .to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(
+            format!(
+                "{} 0 obj
+{o}
+endobj
+",
+                i + 1
+            )
+            .as_bytes(),
+        );
+    }
+    let xref = out.len();
+    out.extend_from_slice(
+        format!(
+            "xref
+0 {}
+0000000000 65535 f 
+",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
+    for o in offsets {
+        out.extend_from_slice(
+            format!(
+                "{o:010} 00000 n 
+"
+            )
+            .as_bytes(),
+        );
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{xref}
+%%EOF
+",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
+    let mut doc = Document::open(Arc::new(out)).unwrap();
+    let data = "<?xml version=\"1.0\"?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><fields><field name=\"c\"><value>A</value></field></fields></xfdf>";
+    let report = import(&mut doc, data.as_bytes()).unwrap();
+    assert_eq!((report.fields, report.rejected.len()), (1, 0), "{:?}", report.rejected);
+    let f = fields(&doc).into_iter().next().unwrap();
+    assert_eq!((0..f.widgets.len()).filter(|&i| f.widget_on(i)).collect::<Vec<_>>(), [1]);
+    let second = f.widgets[1].obj;
+    assert_eq!(doc.get(second).as_dict().unwrap().name(b"AS"), Some(&b"B "[..]));
+    assert_eq!(doc.get(f.obj).as_dict().unwrap().name(b"V"), Some(&b"B "[..]));
+}
+
 /// Who each comment replies to, by name, with its review state.
 fn threads(doc: &Document) -> Vec<(Option<String>, Option<String>, Option<String>)> {
     summaries(doc).into_iter().map(|s| (s.name, s.in_reply_to, s.state)).collect()
