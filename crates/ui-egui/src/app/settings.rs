@@ -172,6 +172,9 @@ pub struct Dock {
     /// JSON text: the dock workspace.
     pub dock: Option<String>,
     pub rail_side: Option<String>,
+    /// Whether the rail's view controls (page number, page stepping, zoom, page display) sit in a bar above the
+    /// document instead of in the rail.
+    pub rail_controls_top: Option<bool>,
 }
 
 impl Dock {
@@ -645,17 +648,19 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
     let hotbar = Hotbar { tools: hotbar_tools };
 
     let dock = {
-        let r = Reader::new(&root, Dock::KEY, &mut errors);
+        let mut r = Reader::new(&root, Dock::KEY, &mut errors);
         let saved_side = r.text("rail_side").and_then(|t| serde_json::from_str::<String>(&t).ok());
+        let controls_top = r.bool("rail_controls_top");
         match r.text("dock") {
-            Some(workspace) => Dock { dock: Some(workspace), rail_side: saved_side },
+            Some(workspace) => Dock { dock: Some(workspace), rail_side: saved_side, rail_controls_top: controls_top },
             // Settings from before the dock keep their panels in `side_panels` or `docking`.
             None => match crate::side_panels::migrate(&Value::Object(root.clone())) {
                 Some(m) => Dock {
                     dock: serde_json::to_string(&m.workspace).ok(),
                     rail_side: serde_json::to_value(m.rail_side).ok().and_then(|v| v.as_str().map(str::to_string)),
+                    rail_controls_top: controls_top,
                 },
-                None => Dock { dock: None, rail_side: saved_side },
+                None => Dock { dock: None, rail_side: saved_side, rail_controls_top: controls_top },
             },
         }
     };

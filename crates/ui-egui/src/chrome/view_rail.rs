@@ -15,8 +15,20 @@ use egui::Ui;
 
 use crate::PdfCraftApp;
 
-/// Shows the rail's view cluster; nothing without an active document or a current page to view.
+/// Shows the rail's view cluster in its column; nothing without an active document or a current page to view, and
+/// nothing while the controls sit in the bar above the document (#5240).
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
+    if !app.rail_controls_top {
+        controls(app, ui, false);
+    }
+}
+
+/// Shows the same controls in a row, for the bar above the document.
+pub(crate) fn show_top(app: &mut PdfCraftApp, ui: &mut Ui) {
+    controls(app, ui, true);
+}
+
+fn controls(app: &mut PdfCraftApp, ui: &mut Ui, top: bool) {
     let Some((index, id)) = app.active_ids() else { return };
     let Some(doc) = app.session.get(id) else { return };
     let page_count = doc.info.pages.len();
@@ -72,7 +84,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
     IconButton::command(IconId::new("chevron_down"), "view.next_page").show(ui);
 
     // The percent suffix and three digits need the rail's full width, not an icon button's width.
-    let zoom_size = egui::vec2(ui.available_width(), field_size.y);
+    // In a row the field takes a fixed width, not what is left.
+    let zoom_width = if top { field_size.x * 1.75 } else { ui.available_width() };
+    let zoom_size = egui::vec2(zoom_width, field_size.y);
     let (zoom_rect, _) = ui.allocate_exact_size(zoom_size, egui::Sense::hover());
     let field = ZoomField::new("Zoom", view.canvas_view(), page_size).scale(ZoomScale::Points).show_at(ui, zoom_rect);
     if let Some(edited) = field.view.committed() {
@@ -106,9 +120,16 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
         }
     });
 
-    if rail_on_right {
-        IconButton::command(IconId::new("panel_left"), "view.rail.left").show(ui);
+    if top {
+        // Back into the rail, on the side the rail is docked.
+        let icon = if rail_on_right { "panel_right" } else { "panel_left" };
+        IconButton::command(IconId::new(icon), "view.rail.in_rail").show(ui);
     } else {
-        IconButton::command(IconId::new("panel_right"), "view.rail.right").show(ui);
+        if rail_on_right {
+            IconButton::command(IconId::new("panel_left"), "view.rail.left").show(ui);
+        } else {
+            IconButton::command(IconId::new("panel_right"), "view.rail.right").show(ui);
+        }
+        IconButton::command(IconId::new("panels_top_left"), "view.rail.top").show(ui);
     }
 }

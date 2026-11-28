@@ -661,6 +661,7 @@ pub fn state(app: &PdfCraftApp) -> Value {
         "tools_side": edge_name(edge_of(&app.dock, PanelId::Tools)),
         "tools_open": app.dock.layout().contains(&PanelId::Tools),
         "rail_side": edge_name(Some(rail_edge(app.rail_side))),
+        "rail_controls": if app.rail_controls_top { "top" } else { "rail" },
         "side_open": side.is_some(),
         "side_panel": side.and_then(PanelId::side).map(|r| format!("{r:?}")),
     })
@@ -760,7 +761,8 @@ fn edge_param(value: &str, key: &str) -> Result<DockEdge, String> {
     }
 }
 
-/// `ui.panel {panel, open?, edge?}`, `ui.panel {rail_side}` and `ui.dock.reset` (`reset`).
+/// `ui.panel {panel, open?, edge?}`, `ui.panel {rail_side}`, `ui.panel {rail_controls: "rail" | "top"}` (the view
+/// controls in the rail or in a bar above the document) and `ui.dock.reset` (`reset`).
 ///
 /// A request is checked whole before anything changes. Panel sizes are not parameters: they are the dock's, set by
 /// dragging a divider or by `ui.dock.apply`.
@@ -782,8 +784,13 @@ pub fn command(app: &mut PdfCraftApp, reset: bool, params: &Value) -> Result<Val
             Some(if edge == DockEdge::Start { DockSide::Start } else { DockSide::End })
         }
     };
+    let controls = match params.get("rail_controls") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(place)) if place == "top" || place == "rail" => Some(place == "top"),
+        Some(_) => return Err("rail_controls must be \"rail\" or \"top\"".into()),
+    };
     let panel = match params.get("panel") {
-        None | Some(Value::Null) if rail.is_some() => None,
+        None | Some(Value::Null) if rail.is_some() || controls.is_some() => None,
         value => {
             let name = value.and_then(Value::as_str).ok_or("panel must be \"tools\", \"toolbar\", \"side\" or a side panel's name")?;
             Some(if name == "side" {
@@ -811,6 +818,9 @@ pub fn command(app: &mut PdfCraftApp, reset: bool, params: &Value) -> Result<Val
     }
     if let Some(side) = rail {
         set_rail_side(app, side)?;
+    }
+    if let Some(top) = controls {
+        app.rail_controls_top = top;
     }
     Ok(json!({ "side_panels": state(app) }))
 }

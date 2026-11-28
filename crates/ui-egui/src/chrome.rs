@@ -31,7 +31,9 @@ pub(crate) fn shell(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let hidden = app.hidden_interface();
     let modes_visible = !hidden.mode_bar(app.native_menu.is_some());
     let window_ui = !hidden.window_ui;
-    let fallback_rail = window_ui && side_panels::rail_anchor(app).is_none();
+    let fallback_rail = window_ui && !app.rail_controls_top && side_panels::rail_anchor(app).is_none();
+    // The view controls in a bar above the document (#5240): the bar is its own row, so it never covers the page.
+    let controls_bar = window_ui && app.rail_controls_top && app.active_ids().is_some() && !app.full_screen_document();
     let out = AppShell::new(WindowKey::main())
         .toast_alignment(egui::Align2::CENTER_BOTTOM)
         .screen_mode(Bind::given(app.screen_mode))
@@ -42,6 +44,12 @@ pub(crate) fn shell(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .title_follows_lights(true)
         .title_bar(|ui, _, app: &mut PdfCraftApp| title_bar(app, ui))
         .top(Slot::new("modes").visible(modes_visible), |ui, _, app: &mut PdfCraftApp| mode_bar::show(app, ui))
+        .top(Slot::new("view-rail-top").visible(controls_bar), |ui, _, app: &mut PdfCraftApp| {
+            // A narrow window scrolls the row sideways, so every control stays reachable.
+            egui::ScrollArea::horizontal().id_salt("view-rail-top").auto_shrink([false, true]).show(ui, |ui| {
+                ui.horizontal(|ui| view_rail::show_top(app, ui));
+            });
+        })
         .start(
             Slot::new("view-rail-start").visible(fallback_rail && app.rail_side == craft::behavior::DockSide::Start),
             |ui, _, app: &mut PdfCraftApp| view_rail::show(app, ui),

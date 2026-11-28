@@ -29,6 +29,9 @@ const CATALOG_ONLY: &[(&str, &str, &str)] = &[
     // The rail's button names the side it moves the rail to.
     ("view.rail.left", "Dock navigation rail on Left", "panel-left"),
     ("view.rail.right", "Dock navigation rail on Right", "panel-right"),
+    // The view controls (page number, page stepping, zoom, page display) in a bar above the document, or back in the rail.
+    ("view.rail.top", "Show navigation controls at the Top", "panels-top-left"),
+    ("view.rail.in_rail", "Show navigation controls in the Rail", "panel-right"),
     ("view.fit_toggle", "Toggle fit", "scan"),
     ("bookmark.paste", "Paste bookmarks", "clipboard-paste"),
     ("bookmark.expand_all", "Expand all bookmarks", "chevrons-down"),
