@@ -15,5 +15,6 @@ pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+craft-xml = { workspace = true }
 pdfcraft-oracle = { workspace = true }
 hayro-syntax = { workspace = true }

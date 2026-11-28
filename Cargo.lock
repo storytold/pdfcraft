@@ -6509,6 +6509,7 @@ version = "0.22.0"
 name = "pdfcraft-organize"
 version = "0.22.0"
 dependencies = [
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "hayro-syntax",
  "pdfcraft-content",
  "pdfcraft-cos",
