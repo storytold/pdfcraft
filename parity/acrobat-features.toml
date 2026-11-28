@@ -3944,8 +3944,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.attach"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::files_attach_as_comments", "crates/ui-egui/tests/it/comments.rs::attaching_a_file_as_a_comment", "crates/ui-egui/tests/it/comments.rs::comment_menu_rows_follow_permissions_and_run_their_action", "crates/ui-egui/tests/it/comments.rs::panel_and_card_actions_become_engine_edits", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools"]
-notes = "push pin, paperclip, graph or tag icon; the file is embedded and listed in the Attachments panel. The comment's menu, on the page and in the Comments panel, saves the file or opens a PDF in a new tab (#2565)"
+evidence = ["crates/annot/src/tests.rs::files_attach_as_comments", "crates/ui-egui/tests/it/comments.rs::attaching_a_file_as_a_comment", "crates/ui-egui/tests/it/comments.rs::comment_menu_rows_follow_permissions_and_run_their_action", "crates/ui-egui/tests/it/comments.rs::panel_and_card_actions_become_engine_edits", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools", "crates/automation/tests/it/attachment_mime.rs::a_page_attachment_keeps_the_media_type_and_date_a_document_attachment_gets"]
+notes = "push pin, paperclip, graph or tag icon; the file is embedded, with the media type and date a document attachment gets, and listed in the Attachments panel. The comment's menu, on the page and in the Comments panel, saves the file or opens a PDF in a new tab (#2565)"
 
 [[feature]]
 id = "comment.record-audio"
