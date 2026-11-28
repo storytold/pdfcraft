@@ -314,6 +314,7 @@ impl Edit {
                 },
                 ImageEdit::RemoveCrop => "Remove crop",
                 ImageEdit::Ungroup => "Ungroup artwork",
+                ImageEdit::Opacity(_) => "Set opacity",
             }),
             Edit::AddHeaderFooter { replace: false, .. } => Label::of("Add header & footer"),
             Edit::AddHeaderFooter { .. } => Label::of("Update header & footer"),

@@ -49,6 +49,7 @@ mod folders;
 mod fonts;
 mod forms;
 mod identity;
+mod image_opacity;
 mod javascript;
 mod layer_actions;
 mod legacy_settings;

@@ -29,6 +29,8 @@ pub enum ImageEdit {
     /// Grouped Form artwork: draw its content in place, so its text and pictures can be edited
     /// one by one (#2964).
     Ungroup,
+    /// Draw it at this opacity, 0 (transparent) to 1 (opaque).
+    Opacity(f64),
 }
 
 /// Forms ▸ Merge data files into spreadsheet: the field values of each file (FDF, XFDF or a

@@ -52,7 +52,9 @@ pub use objects::{
 
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
+mod image_opacity;
 pub mod images;
+pub use image_opacity::image_opacities;
 mod ungroup;
 pub use images::{ArrangeOrder, ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
 pub mod bidi;
