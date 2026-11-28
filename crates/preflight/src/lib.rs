@@ -27,6 +27,7 @@ mod gstate;
 mod header;
 pub mod icc;
 mod limits;
+mod names;
 mod spot;
 mod trailer;
 mod transparency;
@@ -218,6 +219,9 @@ pub const WORDINGS: &[&str] = &[
     "A stream uses LZW compression",
     "A stream refers to an external file",
     "An image asks to be interpolated",
+    "The font name {} isn't valid UTF-8",
+    "The colorant name {} isn't valid UTF-8",
+    "The structure type {} isn't valid UTF-8",
     "An image has alternates or OPI information",
     "PostScript XObjects aren't allowed",
     "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)",
@@ -667,6 +671,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         push(Issue { clause, message, pattern, value: None, values, page: None, object: Some(object), fixable });
     };
     check_identification(doc, level, &mut issue);
+    check_names(doc, &mut issue);
     let objs = objects(doc);
     check_xmp_packets(&objs, &located_issue);
     check_output_intent(doc, &objs, &mut issue);
@@ -703,6 +708,21 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     let mut seen = std::collections::HashSet::new();
     out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
     out
+}
+
+/// 6.1.8: names that stand for text are UTF-8. The first name of each kind is named. Renaming a
+/// font or colorant would change what the file says, so none is fixable.
+fn check_names(doc: &Document, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    let found = names::check(doc);
+    if let Some(n) = found.font {
+        issue("6.1.8", "The font name {} isn't valid UTF-8", Some(n), None, false);
+    }
+    if let Some(n) = found.colorant {
+        issue("6.1.8", "The colorant name {} isn't valid UTF-8", Some(n), None, false);
+    }
+    if let Some(n) = found.structure_type {
+        issue("6.1.8", "The structure type {} isn't valid UTF-8", Some(n), None, false);
+    }
 }
 
 /// 6.1.2, 6.1.3 and 6.6: identification and metadata, the file header, the file identifier and
