@@ -14,7 +14,7 @@ use craft::ui::runtime::requests::ColorRequest;
 // PLAN: `mod colours;` is declared in `tools/comments.rs` (pdf-comments-w7).
 use super::colours::{self, RecentColours, fill_choice, palette, to_srgba};
 use super::state::{Composer, ComposerKind};
-use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, ReviewState, Rgb, defaultable};
+use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, ReviewState, Rgb, bulk_delete_counts, defaultable};
 
 /// A row of the attachment actions: its label and whether the file opens in a new tab rather than being saved.
 pub(crate) struct AttachmentRow {
@@ -223,6 +223,14 @@ pub(crate) fn context_rows(ui: &mut egui::Ui, cx: CommentMenuCx<'_>) -> Option<C
     // pages whose comments should no longer move.
     if !info.annotations.is_empty() {
         Divider::horizontal().show(ui);
+        // Shown when the selected comment's page has comments the command counts, enabled when one of them can go.
+        if let Some(page) = selected.map(|a| a.page) {
+            let (total, unlocked) = bulk_delete_counts(&info.annotations, Some(page));
+            if total > 0 && row(ui, tl!("Delete comments on this page"), allowed && unlocked > 0) {
+                view.session.comments.clear_selection();
+                action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotations { pages: Some(vec![page]) })));
+            }
+        }
         if row(ui, tl!("Flatten comments"), can_modify) {
             view.session.comments.select(None);
             action = Some(CanvasAction::Edit(Box::new(Edit::Flatten { comments: true, fields: false })));

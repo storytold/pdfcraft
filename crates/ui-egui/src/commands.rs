@@ -691,6 +691,7 @@ impl PdfCraftApp {
         Some(true)
     }
 
+    /// Execute an edit, commenting, or content-marking command on the active document.
     fn run_edit_command(&mut self, ctx: &egui::Context, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
             "edit.attach" => self.attach_file_dialog(),
@@ -737,6 +738,8 @@ impl PdfCraftApp {
             "comment.flatten" => {
                 self.apply_edit(ctx, Edit::Flatten { comments: true, fields: false });
             }
+            "comment.delete_all" => self.delete_all_comments(ctx),
+            "comment.delete_page" => self.delete_page_comments(ctx),
             "edit.header_footer"
             | "edit.watermark"
             | "edit.background"

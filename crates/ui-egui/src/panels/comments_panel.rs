@@ -18,7 +18,7 @@ use pdfcraft_render::{Annotation, AttachmentSource, DocInfo, ReviewStates};
 
 use crate::canvas::DocView;
 // PLAN: assumed `crate::comments::{kind_of, pdf_date_seconds, thread_id, rgb8}` re-exported (`rgb8` is private in w7's bridge) and `CommentView::{panel, select_keys, copy_text_request}` (pdf-comments-w7)
-use crate::comments::{CommentPrefs, CommentTool, kind_of, pdf_date_seconds, rgb8, thread_id};
+use crate::comments::{CommentPrefs, CommentTool, bulk_delete_counts, kind_of, pdf_date_seconds, rgb8, thread_id};
 use crate::panels::Nav;
 
 /// Where a new note goes: this far from the page's right edge and down from its top, in page units.
@@ -427,6 +427,9 @@ pub(crate) fn header(
     enabled: impl Fn(&str) -> bool,
 ) -> Option<&'static str> {
     let (list, _) = threads(doc, prefs);
+    // The unlocked comments the two delete commands would take, on the current page and in all.
+    let (_, on_page) = bulk_delete_counts(&doc.info.annotations, Some(view.current()));
+    let (_, in_all) = bulk_delete_counts(&doc.info.annotations, None);
     let more = IconButton::new(IconSpec::svg(IconId::new("more"))).label(tl!("More options").to_string()).show(ui);
     let hide_all = if doc.comments_hidden() { tl!("Show all comments") } else { tl!("Hide all comments") };
     let rows = [
@@ -437,6 +440,9 @@ pub(crate) fn header(
         // Into the pages, for good once saved: apart from the list's other commands.
         Entry::separator(),
         Entry::new("comment.flatten", tl!("Flatten comments").to_string()).enabled(enabled("comment.flatten")),
+        Entry::separator(),
+        Entry::new("comment.delete_page", tl!("Delete comments on this page").to_string()).enabled(on_page > 0 && enabled("comment.delete_page")),
+        Entry::new("comment.delete_all", tl!("Delete all comments").to_string()).enabled(in_all > 0 && enabled("comment.delete_all")),
     ];
     let command = comments_more_menu(ui, &more, &list, &mut view.session.comments.panel, &rows);
     let filter = IconButton::new(IconSpec::svg(IconId::new("funnel")))

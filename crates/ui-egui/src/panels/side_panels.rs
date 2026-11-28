@@ -517,10 +517,18 @@ impl DockPanels<PanelId> for Panels<'_> {
 impl Panels<'_> {
     fn comments_header(&mut self, ui: &mut Ui) {
         let Some((index, id)) = self.app.active_ids() else { return };
-        let enabled: Vec<&str> = ["comment.hide_all", "comment.summarize", "comment.export", "comment.import", "comment.flatten"]
-            .into_iter()
-            .filter(|id| pdfcraft_engine::commands::command(id).is_some_and(|spec| self.app.command_enabled(spec)))
-            .collect();
+        let enabled: Vec<&str> = [
+            "comment.hide_all",
+            "comment.summarize",
+            "comment.export",
+            "comment.import",
+            "comment.flatten",
+            "comment.delete_page",
+            "comment.delete_all",
+        ]
+        .into_iter()
+        .filter(|id| pdfcraft_engine::commands::command(id).is_some_and(|spec| self.app.command_enabled(spec)))
+        .collect();
         let command = {
             let Some(doc) = self.app.session.get(id) else { return };
             crate::comments_panel::header(ui, doc, &mut self.app.views[index], &self.app.comment_prefs, |id| enabled.contains(&id))

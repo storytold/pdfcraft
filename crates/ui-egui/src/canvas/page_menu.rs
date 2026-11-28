@@ -36,6 +36,8 @@ pub(crate) enum PageMenuAction {
     Find,
     DocProperties,
     FlattenComments,
+    /// Delete the unlocked comments on this page (Comment ▸ Delete comments on this page).
+    DeletePageComments(usize),
 }
 
 pub(crate) struct PageMenuPerms {
@@ -49,6 +51,8 @@ pub(crate) struct PageMenuPerms {
     /// Copied comments wait to be pasted, and comments may be added.
     pub can_paste_comments: bool,
     pub has_annotations: bool,
+    /// The comments Delete comments on this page counts on the menu's page, and how many of them would go.
+    pub page_comments: (usize, usize),
 }
 
 /// The prepare-mode field menu's choices.
@@ -156,6 +160,11 @@ pub(crate) fn default_rows(perms: &PageMenuPerms, page: usize, at: [f64; 2], pic
     rows.push(item(tl!("Add comment").to_string(), perms.can_annotate, A::AddComment(page, at)));
     if perms.has_annotations {
         rows.push(item(tl!("Flatten comments").to_string(), perms.can_modify, A::FlattenComments));
+    }
+    // Shown when the page has comments the command counts, enabled when one of them can go.
+    let (total, unlocked) = perms.page_comments;
+    if total > 0 {
+        rows.push(item(tl!("Delete comments on this page").to_string(), perms.can_annotate && unlocked > 0, A::DeletePageComments(page)));
     }
     rows.push(item(tl!("Add bookmark").to_string(), perms.can_assemble, A::AddBookmark));
     rows.push(item(tl!("Take a snapshot").to_string(), perms.can_copy, A::TakeSnapshot));
@@ -369,6 +378,7 @@ fn rows(ui: &mut egui::Ui, view: &mut DocView, cx: &PageMenuCx<'_>, menu_for: Op
         can_paste: cx.can_paste_image && can_modify,
         can_paste_comments: cx.rights.allowed && cx.can_paste_comments,
         has_annotations: !cx.info.annotations.is_empty(),
+        page_comments: comments::bulk_delete_counts(&cx.info.annotations, Some(page)),
     };
     show_rows(ui, default_rows(&perms, page, at, picture_under), pick);
 }

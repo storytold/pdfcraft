@@ -12,16 +12,18 @@
 //! Everything is turned into `pdfcraft_engine::Edit`s, queued on the view as `pending_edit` and
 //! applied by the app, so each change is one undo step.
 
+use std::collections::HashSet;
+
 use egui::{Color32, Pos2, Rect};
 use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
-use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText};
+use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText, thread_tops};
 
 use craft::review::{AnnotationKind, AnnotationTool};
 
-use crate::QuickTool;
 use crate::canvas::{DocView, PageXform};
 #[cfg(test)]
 use crate::icons;
+use crate::{PdfCraftApp, QuickTool};
 #[cfg(test)]
 use craft::review::ui::annotate::{AnnotateCommand, AnnotateIcons};
 #[cfg(test)]
@@ -548,6 +550,72 @@ pub fn tool_for(a: &Annotation) -> Option<CommentTool> {
         ("FileAttachment", _) => CommentTool::Attach,
         _ => return None,
     })
+}
+
+/// Whether Delete all comments counts `a`: a comment of its own (replies, statuses and checkmarks
+/// go with it), but not a redaction mark or a Fill & Sign item, which their own tools apply, clear
+/// and sign. Only unlocked ones go. Keep in step with `pdfcraft_annot::delete_all_annotations`.
+fn in_bulk_delete(a: &Annotation) -> bool {
+    a.is_comment() && a.subtype != "Redact" && !a.fill_sign
+}
+
+/// How many comments Delete all comments counts on `page` (every page when `None`), and how many
+/// of them would go (unlocked, with no locked reply, status or checkmark).
+pub(crate) fn bulk_delete_counts(annotations: &[Annotation], page: Option<usize>) -> (usize, usize) {
+    let tops = thread_tops(annotations);
+    let locked_threads: HashSet<(usize, usize)> =
+        annotations.iter().filter(|a| a.locked).filter_map(|a| tops.get(&(a.page, a.index)).copied()).collect();
+    annotations
+        .iter()
+        .filter(|a| page.is_none_or(|p| a.page == p) && in_bulk_delete(a))
+        .fold((0, 0), |(total, unlocked), a| (total + 1, unlocked + usize::from(!a.locked && !locked_threads.contains(&(a.page, a.index)))))
+}
+
+impl PdfCraftApp {
+    /// Delete all unlocked comments in the active document.
+    pub fn delete_all_comments(&mut self, ctx: &egui::Context) {
+        let Some((i, id)) = self.active_ids() else { return };
+        let (total, unlocked) = self.session.get(id).map_or((0, 0), |d| bulk_delete_counts(&d.info.annotations, None));
+        if total == 0 {
+            self.notify_tr("No comments to remove");
+            return;
+        }
+        if unlocked == 0 {
+            self.notify_tr("All comments are locked");
+            return;
+        }
+        self.views[i].session.comments.clear_selection();
+        if self.apply_edit(ctx, Edit::DeleteAnnotations { pages: None }) {
+            if unlocked == 1 {
+                self.notify_tr("Removed 1 comment");
+            } else {
+                self.notify_fmt("Removed {n} comments", &[("n", &unlocked.to_string())]);
+            }
+        }
+    }
+
+    /// Delete all unlocked comments on the current page of the active document.
+    pub fn delete_page_comments(&mut self, ctx: &egui::Context) {
+        let Some((i, id)) = self.active_ids() else { return };
+        let page = self.views[i].current();
+        let (total, unlocked) = self.session.get(id).map_or((0, 0), |d| bulk_delete_counts(&d.info.annotations, Some(page)));
+        if total == 0 {
+            self.notify_tr("No comments on this page");
+            return;
+        }
+        if unlocked == 0 {
+            self.notify_tr("All comments on this page are locked");
+            return;
+        }
+        self.views[i].session.comments.clear_selection();
+        if self.apply_edit(ctx, Edit::DeleteAnnotations { pages: Some(vec![page]) }) {
+            if unlocked == 1 {
+                self.notify_tr("Removed 1 comment");
+            } else {
+                self.notify_fmt("Removed {n} comments", &[("n", &unlocked.to_string())]);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

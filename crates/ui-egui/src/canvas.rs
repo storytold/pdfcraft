@@ -2244,6 +2244,10 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
             app.views[index].session.comments.select(None);
             app.views[index].session.pending_edit = Some(pdfcraft_engine::Edit::Flatten { comments: true, fields: false });
         }
+        Some(PageMenuAction::DeletePageComments(page)) => {
+            app.views[index].session.comments.clear_selection();
+            app.views[index].session.pending_edit = Some(pdfcraft_engine::Edit::DeleteAnnotations { pages: Some(vec![page]) });
+        }
         Some(PageMenuAction::AddBookmark) => {
             app.bookmark_action(ctx, crate::panels::BmAction::New);
         }

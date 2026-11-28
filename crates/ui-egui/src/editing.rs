@@ -1251,6 +1251,7 @@ fn one_page_changed(
     }
 }
 
+/// The single page whose raster a comment edit invalidates, or `None` when more than one page may change.
 fn comment_page(edit: &Edit) -> Option<usize> {
     match edit {
         Edit::AddAnnotation(a) => Some(a.page),
