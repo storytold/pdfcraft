@@ -1,4 +1,5 @@
 use super::layout::{Flow, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, union, unrolled};
+use super::order::{COLUMN_EMS, COLUMN_LINES};
 use super::{
     Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, HashMap, Image, InterpreterCache, InterpreterSettings,
     InterpreterWarning, PageText, Paint, PathDrawMode, Pdf, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt, interpret_page,
@@ -779,7 +780,9 @@ struct InPlace {
 /// Takes out of `flows` the lines that are turned a quarter from the page's main text (the unturned flow, when it
 /// holds more glyphs than any other) and sit inside that text's area: a label set upwards beside a row, a turned
 /// table heading. Each is placed where laying it out among the main text, by its box on the page, puts its first
-/// glyph, rather than after all the main text. Lines outside the area (a stamp in the margin) and every other flow
+/// glyph, rather than after all the main text. Lines outside the area (a stamp in the margin), lines set up beside
+/// three or more lines of running text on each side or right against them on one side (a stamp up the gutter between
+/// two columns), or across as many (a label drawn over the text), and every other flow
 /// keep their place, as does a page whose main text is vertical.
 ///
 /// Returns the main flow's index, the lines in place order, and each glyph's place in that layout.
@@ -798,6 +801,43 @@ fn turned_lines_in_place(glyphs: &[Drawn], flows: &mut [Flow]) -> (Option<usize>
         b
     };
     let Some(area) = flows.get(main).map(|f| bounds(&f.ids)) else { return nothing() };
+    // The main text's lines of running text: those whose visible glyphs span at least `COLUMN_EMS` heights, as the
+    // box around those glyphs. Runs of spaces (the empty paragraphs a word processor draws in a figure) are none.
+    let mut running: Vec<[f32; 4]> = Vec::new();
+    if let Some(flow) = flows.get(main) {
+        let mut k = 0;
+        while let Some(&line) = flow.line_of.get(k) {
+            let end = flow.line_of.get(k..).and_then(|rest| rest.iter().position(|l| *l != line)).map_or(flow.line_of.len(), |n| k + n);
+            let visible: Vec<usize> = flow
+                .ids
+                .get(k..end)
+                .unwrap_or_default()
+                .iter()
+                .copied()
+                .filter(|&i| glyphs.get(i).is_some_and(|g| !g.2.text.trim().is_empty()))
+                .collect();
+            let b = bounds(&visible);
+            if !visible.is_empty() && b[2] - b[0] >= (b[3] - b[1]) * COLUMN_EMS {
+                running.push(b);
+            }
+            k = end;
+        }
+    }
+    // A line set up the side of running text, level with `COLUMN_LINES` of its lines or more on each side of it (a
+    // stamp up the gutter between two columns), on one side and reaching to within its own width of it (the same
+    // stamp beside a figure in the next column), or across that many (a label drawn over the text), is no part of
+    // what those lines say: in place it would be read in the middle of a column. A chart's axis label inside a
+    // figure beside a column has running text on one side only, further off, and stays in place.
+    let up_the_side = |b: &[f32; 4]| {
+        let (cx, w) = ((b[0] + b[2]) / 2.0, b[2] - b[0]);
+        // The running lines level with it: left of its middle, right of it, or across it.
+        let level = |at: &dyn Fn(&[f32; 4]) -> bool| {
+            running.iter().filter(|r| (b[1]..=b[3]).contains(&((r[1] + r[3]) / 2.0)) && at(r)).take(COLUMN_LINES).count() >= COLUMN_LINES
+        };
+        let (left, right) = (level(&|r| r[2] <= cx), level(&|r| r[0] >= cx));
+        let touching = level(&|r| r[2] <= cx && r[2] >= b[0] - w) || level(&|r| r[0] >= cx && r[0] <= b[2] + w);
+        (left && right) || touching || level(&|r| r[0] < cx && r[2] > cx)
+    };
     let mut lines = Vec::new();
     for (fi, flow) in flows.iter_mut().enumerate() {
         // Upside-down text (a half turn) is not turned a quarter, and keeps its own flow.
@@ -811,7 +851,7 @@ fn turned_lines_in_place(glyphs: &[Drawn], flows: &mut [Flow]) -> (Option<usize>
             let (Some(line_ids), Some(line_spaces)) = (flow.ids.get(k..end), flow.space_before.get(k..end)) else { break };
             let b = bounds(line_ids);
             let (cx, cy) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
-            if (area[0]..=area[2]).contains(&cx) && (area[1]..=area[3]).contains(&cy) {
+            if (area[0]..=area[2]).contains(&cx) && (area[1]..=area[3]).contains(&cy) && !up_the_side(&b) {
                 lines.push(InPlace { at: usize::MAX, ids: line_ids.to_vec(), space_before: line_spaces.to_vec(), quarter: flow.quarter });
             } else {
                 ids.extend_from_slice(line_ids);

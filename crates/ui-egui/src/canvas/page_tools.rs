@@ -4,7 +4,7 @@
 //! ([`PageTool::finish`]) and applied to the session ([`ToolFinish::apply`]).
 
 use craft::behavior::press::PressState;
-use craft::behavior::{CancelReason, Cursor, PointerButton};
+use craft::behavior::{CancelReason, Cursor, PointerButton, PressPhase};
 use craft::host::{Host, Wake};
 use craft::keymap::Mods;
 use craft::pages::ui::{PageTextSource as _, PageTexts, PlacedPage, TextSelectState};
@@ -20,7 +20,7 @@ use pdfcraft_render::DocInfo;
 use super::crop::{CropResult, CropTool};
 use super::page_parts::{Owner, PagePress};
 use super::page_select::{PageSelectTool, PickSlots};
-use super::selection::DocTexts;
+use super::selection::{DocTexts, run_anchor};
 use super::zoom_snap::SnapshotTool;
 use super::{PageGeometry, PageSession, PageXform, presenter};
 use crate::QuickTool;
@@ -302,7 +302,13 @@ pub(crate) fn page_tool<'a>(
             Arm::Area(Box::new(PrepareTool::new(None, cx.can_modify, cx.form, &mut session.prepare, &session.placed, cx.info, xforms)))
         }
         QuickTool::Select | QuickTool::ColumnSelect | QuickTool::Comment(_) | QuickTool::Redact => {
-            let texts: &'a DocTexts<'a> = texts_slot.insert(DocTexts::new(&session.texts, &session.text_failed, cx.rotation, cx.sizes));
+            // A press that has dragged in an earlier pass and moves or comes up in this one: the selection it began is
+            // the drag's, and the drag stays in the column it began in. A press that begins in this pass reads the
+            // nearest glyph, whatever was selected before it.
+            let moving = matches!(press.phase, PressPhase::DragStart { .. } | PressPhase::Drag { .. } | PressPhase::Release { .. });
+            let dragged_from = session.text.selection.filter(|_| session.select_dragged && moving).and_then(|selection| run_anchor(&selection));
+            let texts: &'a DocTexts<'a> =
+                texts_slot.insert(DocTexts::new(&session.texts, &session.text_failed, cx.rotation, cx.sizes).dragged_from(dragged_from));
             let picks = PickSlots::new(&mut session.pending_pick, &mut session.picked_image, &mut session.actions_dismissed);
             let select = select_tool(&cx, &mut session.text, texts, picks, xforms, &mut session.select_dragged).cap_clicks(tool != QuickTool::Select);
             let over_text = {

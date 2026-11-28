@@ -21,12 +21,15 @@ pub(crate) struct AppText<'a> {
     rotation: i32,
     /// The page's size in view space.
     size: (f64, f64),
+    /// The glyph the drag in progress began at, on the page it began on: the drag stays in that glyph's column
+    /// until the pointer has crossed the gutter beside it ([`PageText::nearest_from`]).
+    dragged_from: Option<usize>,
 }
 
 impl<'a> AppText<'a> {
     /// The layer `text` of a page `size` points large in view space, shown turned by `rotation` degrees.
     pub(crate) fn new(text: &'a PageText, rotation: i32, size: (f32, f32)) -> Self {
-        Self { text, rotation: rotation.rem_euclid(360), size: (f64::from(size.0), f64::from(size.1)) }
+        Self { text, rotation: rotation.rem_euclid(360), size: (f64::from(size.0), f64::from(size.1)), dragged_from: None }
     }
 
     /// A point of the page as shown, in view space.
@@ -71,7 +74,10 @@ impl PageTextSource for AppText<'_> {
 
     fn glyph_at(&self, p: Point) -> Option<usize> {
         let (x, y) = self.to_view(p);
-        self.text.nearest(x, y)
+        match self.dragged_from {
+            Some(anchor) => self.text.nearest_from(anchor, x, y),
+            None => self.text.nearest(x, y),
+        }
     }
 
     fn glyph_box_at(&self, p: Point) -> Option<usize> {
@@ -106,13 +112,24 @@ impl PageTextSource for AppText<'_> {
     /// What a drag over table rows selects by rows, not reading order's detour down each column. Rows run along the
     /// text layer's x axis, which a quarter turn of the view makes the shown y axis: only an unturned or half-turned
     /// page has an `end_x` to take.
+    ///
+    /// A drag let go beside its head's line, in the white after it or in the gutter before the next column
+    /// ([`PageText::beside_column`]), or held back in its column from nearer text across that gutter
+    /// ([`PageText::nearest_from`]), ends at its head: the pointer has not gone into the next column, and from
+    /// where it is the rows would run on across the gutter. The tool keeps the x the drag was let go at, so this
+    /// is told level with the head.
     fn rows_between(&self, anchor: usize, head: usize, end_x: f64) -> Option<Vec<usize>> {
         let x = match self.rotation {
             0 => end_x,
             180 => self.size.0 - end_x,
             _ => return None,
-        };
-        self.text.visual_between(anchor, head, Some(x as f32))
+        } as f32;
+        let h = self.text.glyphs.get(head)?;
+        let level = (h.rect[1] + h.rect[3]) / 2.0;
+        let on_its_line = |near: usize| self.text.line_of.get(near) == self.text.line_of.get(head);
+        let held = self.text.beside_column(head, x, level) || !self.text.nearest(x, level).is_some_and(on_its_line);
+        let end = if held { (h.rect[0] + h.rect[2]) / 2.0 } else { x };
+        self.text.visual_between(anchor, head, Some(end))
     }
 }
 
@@ -133,6 +150,17 @@ impl<'a> DocTexts<'a> {
             pages.entry(p).or_insert_with(|| AppText::new(&NO_TEXT, rotation, size(p)));
         }
         Self { pages }
+    }
+
+    /// The layers for a pass in which a drag of the selection goes on, begun at glyph `from.1` of page `from.0`:
+    /// on that page the drag stays in the column it began in until the pointer has crossed the gutter beside it.
+    pub(crate) fn dragged_from(mut self, from: Option<(usize, usize)>) -> Self {
+        if let Some((page, anchor)) = from
+            && let Some(text) = self.pages.get_mut(&page)
+        {
+            text.dragged_from = Some(anchor);
+        }
+        self
     }
 
     /// Page `page`'s layer, with its mappings to view space.
@@ -191,6 +219,12 @@ fn reading_span(selection: &TextSelection) -> Option<TextSpan> {
         ((head_page, head), (selection.page, anchor))
     };
     Some(TextSpan { start, end })
+}
+
+/// The page and glyph a reading-order selection is anchored at, where its drag began; `None` for a column selection.
+pub(super) fn run_anchor(selection: &TextSelection) -> Option<(usize, usize)> {
+    let FwSpan::Run { anchor, .. } = selection.span else { return None };
+    Some((selection.page, anchor))
 }
 
 /// The page the selection ends on, where its drag finished: a reading-order selection's head page, a column
