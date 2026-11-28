@@ -5,6 +5,7 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M9: Arabic signature review fixes mixed-script fallback, bidi ordering, logical wrapping, line breaks and hidden-name shaping; estimates unchanged)
 > **Last reviewed:** 2026-11-04 | **Last updated:** 2026-11-04 | **Change:** minor (M7: paragraph boundaries respect row typography and page-wide filled panels; estimates unchanged)
 
 > **Last reviewed:** 2026-11-16 | **Last updated:** 2026-11-16 | **Change:** patch (M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged)
@@ -270,6 +271,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-11-18 (M7, #7687):** PDF-page watermarks clip the source CropBox to MediaBox before sizing and rotating the imported form. Synthetic geometry and save/reopen render regressions cover oversized and partially overlapping crops; estimates unchanged.
 
+- **2026-11-08 (M9, PR #6264 layout review):** Arabic visible signatures refuse text that cannot fit at 6 pt, including over-wide graphemes and RTL lines. Arabic labels select the Arabic renderer; tabs and breakable Unicode whitespace wrap, and both columns have inner padding. Bounded per-appearance shaping/advance/coverage caches and sequential Type 3 drawing codes avoid repeated work; unwrapped fitting is analytic and wrapped fitting uses five refinements. Missing-font guidance is user-facing. Reconciled current main's imports, M9 progress and revision history without dropping upstream updates. Cross-viewer visual qualification, font-enabled CI flag wiring and milestone estimates remain unchanged.
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
 
@@ -295,6 +297,17 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-10-13 (M8, redact by regex):** `redact_mark` takes `regex` (caller expression, linear-time engine, length/size/nesting caps, empty-matching refused) with optional `validate` (luhn, mod97, iban). Headless only; issue #1886.
 
+- **2026-11-06 (M9, PR #6264 test review):** Arabic appearance tests decode the actual drawn Type 3 codes and compare exact visual-order cluster text. Three font-dependent tests fail on a missing Arabic face when `PDFCRAFT_TEST_ARABIC_REQUIRED` is set; ordinary no-font builds still skip them. CI flag wiring remains a separate shared-workflow task under the repository's CI policy. No behavior or estimate changes.
+
+- **2026-11-05 (M9, PR #6264 Markdown review):** Removed unquoted blank separators introduced between the M9 roadmap blockquotes. Previously added Rust docstrings remain intact; CodeRabbit's current hosted review is still in progress. No behavior or estimate changes.
+
+- **2026-11-05 (M9, PR #6264 documentation review):** Documented the signature font, coverage, rendering and regression helpers introduced by this PR, including unbounded measurement semantics. No behavior, parity claims or estimates changed; hosted docstring coverage must be rechecked after publication.
+
+- **2026-11-05 (M9, PR #6264 performance review):** The unbounded signature-name measurement shapes each paragraph once, preserving leading-space removal, internal/trailing spaces and explicit breaks. A call-count regression covers empty paragraphs and a near-limit name; finite-width candidate measurements are unchanged. Estimates unchanged.
+
+- **2026-11-05 (M9, PR #6264 review):** Signature wrapping measures each complete word/grapheme candidate with the same bidi shaping as drawing. Tight mixed-script lines no longer overflow from independently measured spaces, and joined Arabic letters no longer wrap unnecessarily. Both regressions failed before the fix; estimates unchanged.
+
+- **2026-11-05 (M9, Arabic signature review):** Visible signatures use directional runs with Inter/Helvetica fallback beside Arabic outlines, wrap logical paragraphs before bidi shaping, preserve CR/LF and vowel-mark groups, and skip hidden signer-name shaping. Type 3 ToUnicode CMaps now declare their name and system information. Added regression coverage; 152 signing tests pass with craft-fonts, and the no-font refusal test passes separately. Scoped Clippy, formatting, assets, layering and parity checks pass. Cross-viewer visual fidelity is not qualified; estimates unchanged.
 - **2026-11-08 (M5, comment exchange):** Comments keep their formatting and appearance through XFDF and FDF. XFDF export and import carry rich text, default style, border width, style and dash pattern, rotation, justification, fringe, line leaders and captions, the caret symbol and redaction overlay text as XFDF 3.0 (ISO 19444-1) names them, and a stamp's appearance as `<appearance>` (the DICT/STREAM/DATA encoding, bounded); copy and paste carries every comment's appearance. FDF export keeps a stamp's /AP with its forms and images, as XFDF does, and FDF import keeps any /AP the file carries (ISO 32000-2 §12.7.8.3.4). The intent goes out as both `intent` and `IT`. An unreadable XFDF appearance is left out, said in the import report and the repair log, and the comment is drawn by PdfCraft; an FDF past the import budget is refused whole. A redaction mark is always drawn by PdfCraft.
 
 - **2026-11-07 (M2, #6449):** A non-embedded Times New Roman set as a TrueType CID font (`TimesNewRoman,Bold`, `TimesNewRomanPSMT` and the other faces) draws the glyphs its codes name, as the non-embedded Arial does: its first 258 glyphs follow the same standard Macintosh order, which the embedded Times New Roman subsets of a public French form confirm in 941 of 942 `/ToUnicode` entries (vendored hayro-interpret patch 88). That form drew "Salarié(e) du régime général" as "Salari²*g+f w't²i lo g'ì²p²tcn" and "changement" as "ej angement". Times and Times New Roman MT Std are not read this way.
