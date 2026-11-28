@@ -35,10 +35,13 @@ fn radial_luminosity_mask_fades_when_painted_by_one_shading() {
 
     let page = render_mask(bytes, RenderRequest { scale: 1.0, ..Default::default() });
 
-    for (x, blue) in [(160_u32, 0..=5), (250, 124..=132), (299, 200..=250), (300, 255..=255)] {
+    // Column 299 is the clip's edge pixel (the clip ends at 299.75): it lies wholly inside the
+    // clip (ISO 32000-2 §10.7.4; vendored hayro patch 36), so it shows the masked ink at its
+    // full mask value, about 0.23, not that blended with the white page.
+    for (x, blue) in [(160_u32, 0..=5), (250, 124..=132), (299, 190..=205), (300, 255..=255)] {
         let offset = usize::try_from((160 * page.width + x) * 4).unwrap();
         let pixel = &page.rgba[offset..offset + 4];
-        assert!(blue.contains(&pixel[2]), "centre/midpoint/antialiased clip/outside, x {x}: {pixel:?}, blue {blue:?}");
+        assert!(blue.contains(&pixel[2]), "centre/midpoint/clip edge/outside, x {x}: {pixel:?}, blue {blue:?}");
     }
 }
 

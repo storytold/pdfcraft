@@ -11919,3 +11919,8 @@ fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
     let unclosed = format!("{body}{}{}", "(".repeat(4096), "x".repeat(1 << 16));
     assert!(CMap::parse(unclosed.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x48).is_some()));
 }
+
+// A rectangular clip clips to the whole pixels it reaches into, and `sh` fills them (vendored
+// hayro patch 36, hayro-interpret patch 114): no seams between clipped strips (PDFBOX-956) and no
+// frame of the fill under a clipped shading (PDFBOX-833).
+mod clip_edge_seams;
