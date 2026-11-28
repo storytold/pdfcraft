@@ -375,6 +375,43 @@ fn choose_rewrite_path(
     })
 }
 
+/// The character spacing (text space) a lone word was set with beyond its text state's. A producer
+/// that places a value on its cell's character grid (TCPDF draws it in pieces a little apart) gives
+/// its glyphs more room than its font does; kept, the edited value is as wide as the one it
+/// replaces. Only for a paragraph of one upright word in its own font (`metrics`, whose widths are
+/// exact) with no spacing picked, and only a positive spacing of at most half an em: more is word
+/// or cell spacing. `[size, space, k]` are the paragraph's size and space width in text space and
+/// its text-to-user scale.
+fn source_tracking(
+    first: &TextLine,
+    b: &TextBlock,
+    style: &BlockStyle,
+    metrics: &Metrics,
+    state: &TextState,
+    [size, space, k]: [f64; 3],
+) -> Option<f64> {
+    let word = first.text.trim();
+    let glyphs = word.chars().count();
+    let scale = state.scale;
+    if style.char_spacing.is_some()
+        || b.lines.len() != 1
+        || !first.upright()
+        || first.visual_order
+        || glyphs < 2
+        || word.contains(char::is_whitespace)
+        || scale <= 0.0
+    {
+        return None;
+    }
+    // The word's pieces, from its first glyph to the end of its last (no spacing after that).
+    let left = first.ink.iter().map(|ink| ink[0]).fold(f64::INFINITY, f64::min);
+    let right = first.ink.iter().map(|ink| ink[2]).fold(f64::NEG_INFINITY, f64::max);
+    let natural = (source_width(metrics, word, size, space, state.char_spacing, state.word_spacing) - state.char_spacing) * scale * k;
+    let extra = ((right - left) - natural) / (glyphs - 1) as f64;
+    let em = size * scale * k;
+    (extra.is_finite() && extra > em * 1e-3 && extra <= em * 0.5 && k > 0.0).then(|| extra / (k * scale))
+}
+
 /// The paragraph's text for writing back: explicit line breaks stay (#1443), and so does each typed
 /// U+0020 space: a run of them is not folded into one (#4199, #3797). Every [`row_break`] is a break
 /// too; other white space is written as one space. A line break also starts a paragraph, with the
@@ -1105,9 +1142,14 @@ pub(crate) fn rewrite_block_from(
     let o = &first.origin;
     let last = members.last().copied().unwrap_or(first);
     let emit = &last.origin;
-    let (font_name, ParaStyle { state: o_state, size, old_size, k }) = paragraph_style(o, style, b.phrase_size())?;
+    let (font_name, ParaStyle { state: mut o_state, size, old_size, k }) = paragraph_style(o, style, b.phrase_size())?;
     let source = source_font(doc, &fonts_res, &font_name, first, &flat, style);
     let reuse = source.reuse;
+    if let Some(tracking) =
+        source.metrics.as_ref().filter(|_| reuse).and_then(|m| source_tracking(first, &b, style, m, &o_state, [size, source.space, k]))
+    {
+        o_state.char_spacing += tracking;
+    }
     // Preserve every drawable source glyph; cache missing-glyph lookups as well.
     let visual_indic = source.metrics.as_ref().is_some_and(|m| m.visual_order) || first.visual_order;
     let hebrew = flat.chars().any(crate::bidi::is_hebrew);
