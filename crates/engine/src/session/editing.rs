@@ -138,6 +138,7 @@ impl Session {
 
     /// [`Session::apply`], giving back what an [`Edit::PrepareText`] did (`None` for other edits).
     fn apply_reporting(&mut self, id: DocId, edit: Edit) -> Result<Option<pdfcraft_edit::text::forms::Preparation>, EditError> {
+        self.check_editable()?;
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
@@ -403,6 +404,7 @@ impl Session {
 
     /// Undo the last edit of document `id`, keeping it for [`Session::redo`]. Returns its label.
     pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {
+        self.check_editable()?;
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
         let (label, prev, keys, scope) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
@@ -440,6 +442,7 @@ impl Session {
 
     /// Redo the last edit of document `id` that [`Session::undo`] took back. Returns its label.
     pub fn redo(&mut self, id: DocId) -> Result<Label, EditError> {
+        self.check_editable()?;
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
         let (label, next, keys, scope) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;

@@ -315,6 +315,9 @@ impl Session {
         #[cfg(not(target_os = "linux"))]
         let _ = root;
         let doc = self.get(id).ok_or_else(|| RenameError::Failed("the document is no longer open".into()))?;
+        if self.read_only {
+            return Err(RenameError::Failed(crate::session::READ_ONLY.into()));
+        }
         let current = PathBuf::from(doc.path.clone().ok_or(RenameError::NoFile)?);
         if doc.dirty {
             return Err(RenameError::Unsaved);

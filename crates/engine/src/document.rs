@@ -34,6 +34,8 @@ pub struct Document {
     pub(crate) generation: u64,
     /// Why the document cannot be edited (e.g. encryption), if so.
     pub read_only_reason: Option<String>,
+    /// The session shows documents read-only ([`Session::set_read_only`](crate::Session::set_read_only)).
+    pub(crate) session_read_only: bool,
     /// Interactive form fields of the current state (empty without a form).
     pub form: Arc<Vec<pdfcraft_forms::Field>>,
     pub(crate) marker_scan: OnceLock<pdfcraft_edit::MarkerScan>,
@@ -543,16 +545,16 @@ impl Document {
 
     /// What Undo would undo, in parts, for an interface that says it in another language.
     pub fn undo_label(&self) -> Option<&Label> {
-        self.editor.as_ref().and_then(|e| e.undo.last()).map(|(l, ..)| l)
+        self.editor.as_ref().filter(|_| !self.session_read_only).and_then(|e| e.undo.last()).map(|(l, ..)| l)
     }
 
     /// What Redo would redo, in parts.
     pub fn redo_label(&self) -> Option<&Label> {
-        self.editor.as_ref().and_then(|e| e.redo.last()).map(|(l, ..)| l)
+        self.editor.as_ref().filter(|_| !self.session_read_only).and_then(|e| e.redo.last()).map(|(l, ..)| l)
     }
 
     pub fn editable(&self) -> bool {
-        self.editor.is_some()
+        self.editor.is_some() && !self.session_read_only
     }
 
     /// What the opening password allows; `None` when the document is not encrypted.
