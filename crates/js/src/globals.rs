@@ -78,11 +78,16 @@ pub(crate) fn message_box_message(args: &[JsValue], ctx: &mut Context) -> JsResu
 /// given in that order or as one object with those keys, and returns 1 (the OK button).
 fn alert(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let m = alert_message(args, ctx)?;
-    host(ctx)?.borrow_mut().alert(m.clone());
-    if !crate::interaction::has_host() {
+    let (index, recorded) = {
+        let mut host = host(ctx)?.borrow_mut();
+        let index = host.alerts.len();
+        host.alert(m.clone());
+        (index, host.alerts.len() != index)
+    };
+    if (matches!(m.buttons, MessageButtons::Ok) && crate::selected_pdf::defer_alert(ctx, index, recorded)) || !crate::interaction::has_host() {
         return Ok(JsValue::from(1));
     }
-    let answer = crate::interaction::ask(crate::interaction::Prompt::Alert(m.clone()))?;
+    let answer = crate::interaction::ask(ctx, crate::interaction::Prompt::Alert(m.clone()))?;
     let fallback = match m.buttons {
         MessageButtons::Ok => "1",
         MessageButtons::YesNo => "3",
@@ -140,10 +145,9 @@ fn launch_url(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     Ok(JsValue::undefined())
 }
 
-/// `app.openDoc(cPath, oDoc)` or `app.openDoc({cPath, oDoc, cFS})`: queues a request to open
-/// the local file `cPath`, relative to this document. Only this document may be the base and
-/// only the local file system is supported; other options are refused. The viewer asks the
-/// user first, so no document object can be returned: the call answers null (#2081).
+/// `app.openDoc(cPath, oDoc)` or `app.openDoc({cPath, oDoc, cFS})`. A selection path
+/// opens the temporary PDF. Other local paths queue a viewer request for separate consent
+/// (#2081). Only this document can be the base.
 fn open_doc(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let unset = |v: &JsValue| v.is_undefined() || v.is_null();
     // Only this context's own document object (not a lookalike, proxy or inherited object).
@@ -170,6 +174,12 @@ fn open_doc(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
     };
     if path.is_empty() || path.len() > 4096 {
         return Err(error("invalid openDoc path"));
+    }
+    if !crate::selected_pdf::primary(ctx) {
+        return Err(error("a selected PDF cannot open another document"));
+    }
+    if let Some(document) = crate::selected_pdf::open(&path, ctx)? {
+        return Ok(document);
     }
     let shared = host(ctx)?;
     let mut h = shared.borrow_mut();
@@ -530,7 +540,9 @@ fn document_info_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<
 
 /// Install the host API once; live document properties continue reading each job's snapshot.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
-    let globals: [(&str, usize, NativeFunction); 13] = [
+    crate::selected_pdf::install(ctx)?;
+    let globals: [(&str, usize, NativeFunction); 14] = [
+        ("bringToFront", 0, NativeFunction::from_fn_ptr(noop)),
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
@@ -591,6 +603,7 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
     for (name, getter) in [
         ("numPages", num_pages_get as fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>),
         ("documentFileName", document_file_name_get),
+        ("path", document_file_name_get),
         ("info", document_info_get),
     ] {
         let getter = function(ctx, NativeFunction::from_fn_ptr(getter));
@@ -648,6 +661,9 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .function(NativeFunction::from_fn_ptr(console_clear), js_string!("clear"), 0)
         .build();
     ctx.register_global_property(js_string!("console"), console, rw)?;
+    // Document scripts can keep temporary references here without sharing them with other PDFs.
+    let globals = ObjectInitializer::new(ctx).build();
+    ctx.register_global_property(js_string!("global"), globals, rw)?;
     let display = ObjectInitializer::new(ctx)
         .property(js_string!("visible"), DISPLAY_VISIBLE, Attribute::READONLY)
         .property(js_string!("hidden"), DISPLAY_HIDDEN, Attribute::READONLY)

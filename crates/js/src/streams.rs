@@ -7,7 +7,7 @@ pub(crate) fn read(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult
     if !path.is_null_or_undefined() && !text_with_budget(&path, ctx, 4096, "file path is too long")?.is_empty() {
         return Err(error("scripts cannot open paths; omit cDIPath and select a file explicitly"));
     }
-    let Some(source) = crate::interaction::ask(crate::interaction::Prompt::File)? else { return Ok(JsValue::null()) };
+    let Some(source) = crate::interaction::ask(ctx, crate::interaction::Prompt::File)? else { return Ok(JsValue::null()) };
     Ok(ObjectInitializer::new(ctx).property(js_string!("text"), s(&source), crate::Attribute::READONLY).build().into())
 }
 pub(crate) fn string(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {

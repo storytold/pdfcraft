@@ -54,7 +54,9 @@ fn emit(data: &JsObject, ctx: &mut Context) -> JsResult<JsValue> {
     let value = data.get(js_string!("value"), ctx)?.as_number().unwrap_or(0.0);
     let duration = data.get(js_string!("duration"), ctx)?.as_number().unwrap_or(100.0);
     let active = data.get(js_string!("active"), ctx)?.to_boolean();
-    crate::interaction::progress(text, value, duration, active);
+    if crate::selected_pdf::primary(ctx) {
+        crate::interaction::progress(text, value, duration, active);
+    }
     Ok(JsValue::undefined())
 }
 pub(crate) fn thermometer(ctx: &mut Context) -> JsResult<JsObject> {

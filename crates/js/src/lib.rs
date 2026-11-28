@@ -50,6 +50,7 @@ mod legacy;
 mod model;
 mod nesting;
 mod run;
+pub mod selected_pdf;
 mod source;
 mod streams;
 
@@ -60,6 +61,7 @@ pub use format::{set_date_names, with_english_printd};
 pub(crate) use globals::menu_item;
 use globals::platform;
 use host::{arg, as_number, error, function, s, text};
+pub use model::WidgetRect;
 pub use model::{
     DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, DocInfo, Event, FieldState, FieldType, Limits, Message, MessageButtons,
     MessageIcon, Outcome, Panel, Request,

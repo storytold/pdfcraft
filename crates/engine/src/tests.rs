@@ -7410,6 +7410,38 @@ fn javascript_field_rect_moves_first_widget_and_undoes() {
     assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().widgets[0].rect, [30.0, 40.0, 130.0, 60.0]);
 }
 
+#[test]
+fn javascript_indexed_rect_preserves_other_widgets() {
+    let mut session = Session::new();
+    let id = session.open("rect.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    session.apply(id, Edit::InsertBlankPage { at: 1, width: 200.0, height: 300.0 }).unwrap();
+    session.apply(id, Edit::DuplicateField { name: "price".into(), pages: vec![1] }).unwrap();
+    let rectangles = |session: &Session| {
+        session.get(id).unwrap().form.iter().find(|field| field.name == "price").unwrap().widgets.iter().map(|widget| widget.rect).collect::<Vec<_>>()
+    };
+    let before = rectangles(&session);
+    let out = session
+        .run_javascript(
+            id,
+            "
+        var widget = getField('price.1');
+        var rect = widget.rect;
+        rect[0] += 5;
+        widget.rect = rect;
+        widget.rect[0] > getField('price.0').rect[0] && getField('price.2') === null;
+    ",
+            None,
+        )
+        .unwrap();
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("true"));
+    let after = rectangles(&session);
+    assert_eq!(after[0], before[0]);
+    assert!(after[1][0] > before[1][0]);
+    session.undo(id).unwrap();
+    assert_eq!(rectangles(&session), before);
+}
+
 /// XFA forms check `xfa_installed` and `xfa_version` in a document script that runs before
 /// each of their scripts, and alert when either is missing.
 #[test]

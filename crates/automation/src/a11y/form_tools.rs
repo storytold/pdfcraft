@@ -1,3 +1,5 @@
+use pdfcraft_engine::js::Answer;
+
 use super::{Args, Automation, Result, ToolError, Value, failed, json, with_warnings, write_atomic};
 
 /// A script's request to the viewer as the JSON that running a script reports (page numbers
@@ -23,7 +25,8 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
 }
 
 /// The optional `answers` argument: the prompts' answers in order (null cancels one).
-fn answers(host: &Automation, a: &Args) -> Result<Vec<Option<String>>> {
+fn answers(host: &Automation, a: &Args, allow_pdf: bool) -> Result<Vec<Answer>> {
+    let mut pdf_selected = false;
     let mut file_budget = 16u64 << 20;
     match a.0.get("answers") {
         None => Ok(Vec::new()),
@@ -43,14 +46,21 @@ fn answers(host: &Automation, a: &Args) -> Result<Vec<Option<String>>> {
                         return Err(ToolError::InvalidArgs("selected text files exceed 8 MiB per file or 16 MiB per invocation".into()));
                     }
                     file_budget = file_budget.saturating_sub(text.len() as u64);
-                    Ok(Some(text))
+                    Ok(Answer::Text(text))
                 }
-                Value::Null => Ok(None),
+                Value::Object(o) if allow_pdf && !pdf_selected && o.len() == 1 && o.get("pdf").is_some_and(Value::is_string) => {
+                    let path = host.resolve(o.get("pdf").and_then(Value::as_str).unwrap_or_default(), false)?;
+                    pdf_selected = true;
+                    Ok(Answer::Pdf(pdfcraft_engine::js::read_selected_pdf(&path)))
+                }
+                Value::Null => Ok(Answer::Cancel),
                 Value::String(s) if s.len() <= 8 << 20 && s.len() as u64 <= file_budget => {
                     file_budget = file_budget.saturating_sub(s.len() as u64);
-                    Ok(Some(s.clone()))
+                    Ok(Answer::Text(s.clone()))
                 }
-                _ => Err(ToolError::InvalidArgs("answers must contain strings or null".into())),
+                _ => Err(ToolError::InvalidArgs(
+                    "answers must contain strings, null, selected text files, or at most one selected PDF for a document script".into(),
+                )),
             })
             .collect(),
         _ => Err(ToolError::InvalidArgs("answers must be an array of at most 128 strings or null".into())),
@@ -107,11 +117,11 @@ impl Automation {
     /// messages, console lines, requests, error, the failing document scripts' errors and result.
     pub(crate) fn js_run(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
-        let answers = answers(self, a)?;
+        let answers = answers(self, a, true)?;
         let identity = field_id(a)?;
         let (script, field) = (a.str("script")?, a.opt_str("field")?);
         let (mut o, edit) =
-            self.session.with_own_js_output(id, |s| s.run_javascript_answers_target(id, script, field, identity, &answers)).map_err(failed)?;
+            self.session.with_own_js_output(id, |s| s.run_javascript_prompt_answers(id, script, (field, identity), &answers)).map_err(failed)?;
         o.alerts.extend(edit.alerts);
         o.console.extend(edit.console);
         o.requests.extend(edit.requests);
@@ -127,7 +137,13 @@ impl Automation {
     /// 1-based, as link_list gives them), answering its prompts from `answers`, and report what
     /// it showed and asked for. A failed script commits nothing (#2081).
     pub(crate) fn link_run_javascript(&mut self, a: &Args) -> Result<Value> {
-        let answers = answers(self, a)?;
+        let answers: Vec<_> = answers(self, a, false)?
+            .into_iter()
+            .map(|reply| match reply {
+                Answer::Text(text) => Some(text),
+                _ => None,
+            })
+            .collect();
         let one_based = |key: &str| -> Result<usize> {
             let n = a.int(key)?;
             usize::try_from(n).ok().and_then(|n| n.checked_sub(1)).ok_or_else(|| ToolError::InvalidArgs(format!("{key} must be 1 or more")))

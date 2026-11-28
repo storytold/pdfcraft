@@ -444,7 +444,7 @@ pub(crate) fn execute(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRes
                 return Ok(ended);
             }
             let model = snapshot(&descriptor, &data, ctx)?;
-            let Some(reply) = crate::interaction::ask(crate::interaction::Prompt::Dialog(model.clone()))? else {
+            let Some(reply) = crate::interaction::ask(ctx, crate::interaction::Prompt::Dialog(model.clone()))? else {
                 return Ok(s("cancel"));
             };
             let reply: Value = serde_json::from_str(&reply).unwrap_or(Value::String(reply));

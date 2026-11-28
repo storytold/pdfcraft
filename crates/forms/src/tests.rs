@@ -3213,6 +3213,24 @@ fn locked_fields_only_take_unlocking() {
     assert!(set_props(&mut doc, &name, &FieldProps { required: Some(true), ..FieldProps::default() }).is_err(), "locked");
     // Values can still be filled in.
     set_value(&mut doc, &name, &FieldValue::Text("42".into())).unwrap();
+    // The document script can update its control while the widget stays locked.
+    let tooltip = "Identifier".to_string();
+    let fill = look(&doc, &fields(&doc)[0]).fill;
+    apply_script_changes(
+        &mut doc,
+        &[FieldChange {
+            name: name.clone(),
+            user_name: Some(tooltip.clone()),
+            fill_color: Some(["RGB", "0.2", "0.3", "0.4"].map(str::to_owned).into()),
+            ..Default::default()
+        }],
+        &mut NoScripts,
+    )
+    .unwrap();
+    let after = &fields(&doc)[0];
+    assert!(after.locked());
+    assert_eq!(after.tooltip.as_deref(), Some(tooltip.as_str()));
+    assert_ne!(look(&doc, after).fill, fill);
     set_props(&mut doc, &name, &FieldProps { locked: Some(false), required: Some(true), ..FieldProps::default() }).unwrap();
     let f = &fields(&doc)[0];
     assert!(!f.locked() && f.has(flags::REQUIRED));

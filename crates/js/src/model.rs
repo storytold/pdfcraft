@@ -33,6 +33,14 @@ pub const DISPLAY_NO_PRINT: i32 = 2;
 
 pub const DISPLAY_NO_VIEW: i32 = 3;
 
+/// Rectangle geometry for an individual widget after the first.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WidgetRect {
+    pub rect: [f64; 4],
+    pub crop: [f64; 4],
+    pub rotation: i64,
+}
+
 /// A field as scripts see it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldState {
@@ -67,6 +75,7 @@ pub struct FieldState {
     /// A setter ran, even if its text equals widget 0: other widgets may differ.
     pub caption_written: bool,
     pub rect: Option<[f64; 4]>,
+    pub additional_widget_rects: std::sync::Arc<[WidgetRect]>,
     pub page_rotation: i64,
     pub page_crop: [f64; 4],
     pub stroke_color: Option<std::sync::Arc<[String]>>,
@@ -109,6 +118,7 @@ impl FieldState {
             caption: None,
             caption_written: false,
             rect: None,
+            additional_widget_rects: Default::default(),
             page_rotation: 0,
             page_crop: [0.0; 4],
             stroke_color: None,
@@ -400,6 +410,8 @@ pub struct Outcome {
     pub formatted: std::collections::BTreeSet<String>,
     /// The messages the script showed, in order.
     pub alerts: Vec<Message>,
+    /// Informational import alerts which the viewer should show after destination writeback.
+    pub post_commit_alerts: Vec<Message>,
     pub console: Vec<String>,
     pub requests: Vec<Request>,
     /// The script's error (syntax error, exception, or a limit reached), if it failed.

@@ -115,6 +115,9 @@ pub(crate) type Shared = RefCell<Host>;
 
 /// The host state, installed before scripts run.
 pub(crate) fn host(ctx: &Context) -> JsResult<&Shared> {
+    if !crate::selected_pdf::primary(ctx) && !crate::selected_pdf::initializing(ctx) {
+        return crate::selected_pdf::source_host(ctx);
+    }
     ctx.get_data::<Shared>().ok_or_else(|| error("the script host is not set up"))
 }
 

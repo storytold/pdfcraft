@@ -243,7 +243,9 @@ impl Session {
             .iter()
             .find(|b| b.name == name)
             .ok_or_else(|| EditError::Invalid("no document tool button has that name".into()))?;
-        Ok(format!("event.rc=true;\n{}\n; if(event.rc){{\n{}\n}}", button.enable, button.execute))
+        // A document toolbar action has no field target. Some sheets use that distinction
+        // to choose their unprivileged import entry point.
+        Ok(format!("event.rc=true;\n{}\n; if(event.rc){{\nevent.target=undefined;\n{}\n}}", button.enable, button.execute))
     }
     /// Runs `f` and returns its value with the script output `f` added to document `id`. The
     /// output limits count that output alone, and the output that was waiting stays for
@@ -378,6 +380,17 @@ pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field, geometry: &pdfcraft_
             .map(|r| ((r.num as u64) << 16) | r.generation as u64);
     }
 
+    s.additional_widget_rects = f
+        .widgets
+        .iter()
+        .skip(1)
+        .map(|widget| {
+            let page = widget.page.unwrap_or(0);
+            let rotation = geometry.page_rotations.get(page).copied().unwrap_or(0);
+            let crop = geometry.page_boxes.get(page).map_or([0.0; 4], |boxes| boxes[1]);
+            pdfcraft_js::WidgetRect { rect: pdfcraft_js::rotate_rect(widget.rect, crop, rotation), crop, rotation }
+        })
+        .collect();
     s.icon_mixed = f.widgets.iter().any(|w| {
         let icon = doc
             .get(w.obj)
@@ -451,6 +464,14 @@ fn changes_from(
                 required: (a.required != b.required).then_some(a.required),
                 display: (a.display != original_display).then_some(a.display),
                 rect: (a.rect != b.rect).then(|| a.rect.map(|r| pdfcraft_js::unrotate_rect(r, b.page_crop, b.page_rotation))).flatten(),
+                widget_rects: a
+                    .additional_widget_rects
+                    .iter()
+                    .zip(b.additional_widget_rects.iter())
+                    .enumerate()
+                    .filter(|(_, (after, before))| after.rect != before.rect)
+                    .map(|(i, (after, _))| (i + 1, pdfcraft_js::unrotate_rect(after.rect, after.crop, after.rotation)))
+                    .collect(),
                 stroke_color: a.stroke_color.as_deref().filter(|_| a.stroke_color != b.stroke_color).map(<[_]>::to_vec),
                 text_size: (a.text_size != b.text_size).then_some(a.text_size),
                 line_width: (a.line_width != b.line_width).then_some(a.line_width),
@@ -463,7 +484,10 @@ fn changes_from(
                 text_color: a.text_color.as_deref().filter(|_| a.text_color != b.text_color).map(<[_]>::to_vec),
                 fill_color: a.fill_color.as_deref().filter(|_| a.fill_color != b.fill_color).map(<[_]>::to_vec),
                 caption: (a.caption != b.caption || (a.caption_written && b.caption_mixed)).then(|| a.caption.clone()).flatten(),
-                options: (a.options != b.options).then(|| a.options.clone()),
+                // Button options come from widget states. Page changes can add or remove
+                // widgets without having called setItems on a choice field.
+                options: (matches!(a.kind, pdfcraft_js::FieldType::ComboBox | pdfcraft_js::FieldType::ListBox) && a.options != b.options)
+                    .then(|| a.options.clone()),
                 actions: a.actions.clone(),
             };
             (c.value.is_some()
@@ -474,6 +498,7 @@ fn changes_from(
                 || c.text_color.is_some()
                 || c.fill_color.is_some()
                 || c.rect.is_some()
+                || !c.widget_rects.is_empty()
                 || c.stroke_color.is_some()
                 || c.text_size.is_some()
                 || c.line_width.is_some()
@@ -1249,7 +1274,18 @@ impl Session {
         target_id: Option<u64>,
         answers: &[Option<String>],
     ) -> Result<Outcome, EditError> {
-        self.run_javascript_job(id, script, (target, target_id), answers, None, false)
+        self.run_javascript_prompt_answers(id, script, (target, target_id), &answers.iter().map(Answer::from).collect::<Vec<_>>())
+    }
+
+    /// Run a script with typed, ordered replies, including an explicitly selected source PDF.
+    pub fn run_javascript_prompt_answers(
+        &mut self,
+        id: DocId,
+        script: &str,
+        target: (Option<&str>, Option<u64>),
+        answers: &[Answer],
+    ) -> Result<Outcome, EditError> {
+        self.run_javascript_job(id, script, target, answers, None, false)
     }
 
     pub(crate) fn run_opening_javascript(&mut self, id: DocId) -> Result<Outcome, EditError> {
@@ -1324,7 +1360,7 @@ impl Session {
         id: DocId,
         script: &str,
         (target, target_id): (Option<&str>, Option<u64>),
-        answers: &[Option<String>],
+        answers: &[Answer],
         event_name: Option<&'static str>,
         opening: bool,
     ) -> Result<Outcome, EditError> {
@@ -1365,7 +1401,7 @@ impl Session {
         };
         let calculations = calculation_scripts(&cos, &fields);
         let runtime = doc.js_runtime.clone();
-        let o = runtime.lock().map_err(|_| EditError::Invalid("document script runtime is unavailable".into()))?.run(
+        let o = runtime.lock().map_err(|_| EditError::Invalid("document script runtime is unavailable".into()))?.run_answers(
             pdfcraft_js::session::Job {
                 script: script.into(),
                 event,
@@ -1442,12 +1478,18 @@ impl Session {
         }
         o.requests.retain(|r| !matches!(r, Request::Reset(_)));
         // The calculations the script's changes set off read the field highlight it asked for.
+        let previous_highlight = self.field_highlight;
         if let Some(on) = last_highlight(&o.requests) {
             self.field_highlight = on;
         }
         let mut edits = Vec::new();
         if !o.page_changes.is_empty() {
             edits.push(Edit::ScriptPages { changes: o.page_changes.clone() });
+        }
+        if !o.document_changes.is_empty() {
+            // Bookmark edits do not read form values. Keep resets adjacent to the
+            // value writeback so they can defer intermediate calculation callbacks.
+            edits.push(Edit::ScriptBookmarks { changes: o.document_changes.clone() });
         }
         for names in resets {
             let names = (!names.is_empty())
@@ -1477,15 +1519,15 @@ impl Session {
                 change.calculation_complete = true;
             }
         }
-        if !o.document_changes.is_empty() {
-            edits.push(Edit::ScriptBookmarks { changes: o.document_changes.clone() });
-        }
         let written: Vec<String> = changes.iter().filter(|c| c.display.is_some() || c.icon.is_some()).map(|c| c.name.clone()).collect();
         if !changes.is_empty() {
             edits.push(Edit::ApplyScriptChanges { changes });
         }
-        if !edits.is_empty() {
-            self.apply(id, Edit::Batch { label: "Run JavaScript".into(), edits })?;
+        if !edits.is_empty()
+            && let Err(error) = self.apply(id, Edit::Batch { label: "Run JavaScript".into(), edits })
+        {
+            self.field_highlight = previous_highlight;
+            return Err(error);
         }
         // The timers the script left, the layers it turned, and how fields show (#169).
         self.after_script(id, &o, &written);
@@ -2065,6 +2107,58 @@ impl Session {
         result
     }
 }
+pub use pdfcraft_js::selected_pdf::SelectedPdf;
+pub use pdfcraft_js::session::Answer;
+
+/// Read a file explicitly picked by the host. Keep the source off the session and never save it.
+pub fn read_selected_pdf(path: &std::path::Path) -> Result<SelectedPdf, String> {
+    use std::{io::Read, sync::Arc};
+    const MAX_SOURCE_BYTES: u64 = 64 << 20;
+    if !std::fs::metadata(path).is_ok_and(|m| m.is_file()) {
+        return Err("The selected source must be a regular PDF file".into());
+    }
+    let file = std::fs::File::open(path).map_err(|_| "Could not open the selected PDF")?;
+    let metadata = file.metadata().map_err(|_| "Could not read the selected PDF")?;
+    if !metadata.is_file() || metadata.len() > MAX_SOURCE_BYTES {
+        return Err("The selected source must be a regular PDF file up to 64 MiB".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_SOURCE_BYTES + 1).read_to_end(&mut bytes).map_err(|_| "Could not read the selected PDF")?;
+    if bytes.len() as u64 > MAX_SOURCE_BYTES {
+        return Err("The selected PDF exceeds 64 MiB".into());
+    }
+    let cos =
+        crate::sources::source_document_if(&Arc::new(bytes), None, |d| d.permissions().is_none_or(|p| p.copy())).map_err(
+            |problem| match problem {
+                crate::SourceProblem::Password | crate::SourceProblem::WrongPassword => "The selected PDF requires a password",
+                crate::SourceProblem::NotPermitted => "The selected PDF does not permit copying",
+                crate::SourceProblem::Unreadable(_) => "The selected PDF could not be read",
+            },
+        )?;
+    if pdfcraft_forms::acroform(&cos).is_none() {
+        return Err("The selected PDF must be an AcroForm".into());
+    }
+    let file_name = path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("source.pdf");
+    let runner = JsRunner::new(&cos, file_name, false);
+    if runner.doc.xfa {
+        return Err("The selected PDF must be an AcroForm".into());
+    }
+    let fields = pdfcraft_forms::fields(&cos);
+    let calculation = calculation_scripts(&cos, &fields);
+    let mut scripts = runner.doc_scripts;
+    let actions = pdfcraft_forms::document_action_scripts(&cos, pdfcraft_forms::DocumentTrigger::Open);
+    Arc::make_mut(&mut scripts).extend(actions);
+    Ok(SelectedPdf(Arc::new(pdfcraft_js::session::Job {
+        script: String::new(),
+        event: pdfcraft_js::Event::doc("Open"),
+        fields: Arc::new(fields.iter().map(|f| field_state(&cos, f, &runner.doc)).collect()),
+        doc: runner.doc,
+        doc_scripts: scripts,
+        calculations: calculation,
+        timer: None,
+    })))
+}
+
 pub use pdfcraft_js::dialogs::{Dialog as CustomDialog, Element as DialogElement};
 pub use pdfcraft_js::interaction::{InteractiveEvent, MenuItem, Progress, Prompt};
 impl Session {

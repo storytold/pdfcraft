@@ -114,12 +114,47 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     set_props_target(doc, name, None, props)
 }
 
-/// An exact script target can share its name with another field.
-pub(crate) fn set_props_object(doc: &mut Document, name: &str, object: ObjRef, props: &FieldProps) -> Result<String, FormError> {
-    set_props_target(doc, name, Some(object), props)
+/// Patch a document script's exact field using the batch's field snapshot.
+/// The batch redraws the affected appearances after all its writes.
+pub(crate) fn set_script_props(doc: &mut Document, field: &Field, props: &FieldProps) -> Result<(), FormError> {
+    set_props_target(doc, &field.name, Some(field), props).map(|_| ())
 }
 
-fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, props: &FieldProps) -> Result<String, FormError> {
+fn patched_field_flags(f: &Field, props: &FieldProps) -> Result<u32, FormError> {
+    let mut ff = f.flags;
+    let mut set_flag = |flag: u32, on: Option<bool>| {
+        if let Some(on) = on {
+            if on {
+                ff |= flag;
+            } else {
+                ff &= !flag;
+            }
+        }
+    };
+    set_flag(flags::READ_ONLY, props.read_only);
+    set_flag(flags::REQUIRED, props.required);
+    if f.kind == FieldKind::Text {
+        set_flag(flags::MULTILINE, props.multiline);
+    }
+    for (flag, on) in &props.flags {
+        set_flag(*flag, Some(*on));
+    }
+    // A comb spreads a fixed number of characters across the field: it needs a limit and
+    // excludes multi-line, password, file selection and scrolling (ISO 32000-2 Table 229).
+    if f.kind == FieldKind::Text && ff & flags::COMB != 0 {
+        let limit = match props.max_len {
+            Some(m) => m,
+            None => f.max_len,
+        };
+        if limit.is_none_or(|m| m == 0) {
+            return invalid("a comb of characters needs a character limit");
+        }
+        ff &= !(flags::MULTILINE | flags::PASSWORD | flags::FILE_SELECT);
+    }
+    Ok(ff)
+}
+
+fn set_props_target(doc: &mut Document, name: &str, script_field: Option<&Field>, props: &FieldProps) -> Result<String, FormError> {
     if props.font_size.is_some_and(|size| !size.is_finite() || size < 0.0) {
         return invalid("font size must be a finite, non-negative number");
     }
@@ -135,8 +170,8 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
     {
         return invalid(crate::af::NOTATION_NOT_STORABLE);
     }
-    let all = fields(doc);
-    let f = all.iter().find(|f| f.name == name && object.is_none_or(|obj| f.obj == obj)).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
+    let all = if script_field.is_some() { Vec::new() } else { fields(doc) };
+    let f = script_field.or_else(|| all.iter().find(|f| f.name == name)).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
     let export_options = props.export_value.as_ref().map(|(index, value)| button_export_options(&f, *index, value)).transpose()?;
     if props.export_value.is_some() && props.options.is_some() {
         return invalid("give export_value or options, not both");
@@ -163,8 +198,10 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
     if let Some(rotation) = props.rotation {
         check_rotation(&f, name, rotation)?;
     }
-    // A locked field only takes unlocking (Acrobat greys its properties out).
-    if f.locked() && props.locked != Some(false) && *props != (FieldProps { locked: props.locked, ..FieldProps::default() }) {
+    // The Properties panel respects the authoring lock. A document script can
+    // update its own controls' captions and appearance without removing the lock.
+    if script_field.is_none() && f.locked() && props.locked != Some(false) && *props != (FieldProps { locked: props.locked, ..FieldProps::default() })
+    {
         return invalid(format!("{name} is locked: unlock it first"));
     }
     if let Some(options) = export_options.as_ref()
@@ -198,36 +235,7 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
     if props.look.is_some() || props.appearance.is_some_and(|p| p.font.is_some()) {
         ensure_form(doc)?;
     }
-    let mut ff = f.flags;
-    let mut set_flag = |flag: u32, on: Option<bool>| {
-        if let Some(on) = on {
-            if on {
-                ff |= flag;
-            } else {
-                ff &= !flag;
-            }
-        }
-    };
-    set_flag(flags::READ_ONLY, props.read_only);
-    set_flag(flags::REQUIRED, props.required);
-    if f.kind == FieldKind::Text {
-        set_flag(flags::MULTILINE, props.multiline);
-    }
-    for (flag, on) in &props.flags {
-        set_flag(*flag, Some(*on));
-    }
-    // A comb spreads a fixed number of characters across the field: it needs a limit and
-    // excludes multi-line, password, file selection and scrolling (ISO 32000-2 Table 229).
-    if f.kind == FieldKind::Text && ff & flags::COMB != 0 {
-        let limit = match props.max_len {
-            Some(m) => m,
-            None => f.max_len,
-        };
-        if limit.is_none_or(|m| m == 0) {
-            return invalid("a comb of characters needs a character limit");
-        }
-        ff &= !(flags::MULTILINE | flags::PASSWORD | flags::FILE_SELECT);
-    }
+    let ff = patched_field_flags(&f, props)?;
     if let Some(q) = props.quadding
         && !(0..=2).contains(&q)
     {
@@ -244,13 +252,11 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
     let parent_default = ancestor_sets(doc, f.obj, b"DV");
     let parent_limit = ancestor_sets(doc, f.obj, b"MaxLen");
     doc.update_dict(f.obj, |d| {
-        d.set(b"Ff".to_vec(), Object::Int(ff as i64));
+        if script_field.is_none() {
+            d.set(b"Ff".to_vec(), Object::Int(ff as i64));
+        }
         if let Some(t) = &props.tooltip {
-            if t.is_empty() {
-                d.remove(b"TU");
-            } else {
-                d.set(b"TU".to_vec(), PdfString::text(t));
-            }
+            super::write_tooltip(d, t);
         }
         if let Some(m) = props.max_len {
             match m {
@@ -378,7 +384,9 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
     }
     let only = apply_late_widget_props(doc, &f, props, &new_da)?;
     scroll_list(doc, f.obj, list_picked)?;
-    redraw_or_join(doc, &f, name, &new_name, join.as_ref(), only)?;
+    if script_field.is_none() {
+        redraw_or_join(doc, &f, name, &new_name, join.as_ref(), only)?;
+    }
     if props.calculate.is_some() {
         crate::recalculate(doc)?;
     }

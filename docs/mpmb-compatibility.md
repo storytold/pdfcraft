@@ -98,18 +98,33 @@ third-party add-ons may require additional APIs or exceed the documented bounds.
 
 ## Importing from another sheet
 
-The built-in import and upgrade workflow remains unsupported. The import dialog
-uses a form field's `browseForFileToSubmit` to select a source PDF. It passes the
-selection to `app.openDoc` and expects a document object during the same script
-invocation. PDFCraft's current `openDoc` returns `null` and queues a viewer
-request for a separate, user-approved open. The text-stream picker supplies
-UTF-8 text and cannot provide the document object the import expects.
+The import dialog uses a text field's `browseForFileToSubmit()` to select a
+source PDF. The field exposes a temporary selection path to the script. Passing
+that path to `app.openDoc` opens the selected source in the same invocation.
+The native viewer uses its PDF picker. For `js_run` and `js_tool_button`,
+supply `{"pdf":"source.pdf"}` in `answers` at the picker position. The path is
+resolved under the automation read root. The source must be a regular AcroForm
+PDF up to 64 MiB that permits copying. Cancelling a picker clears any earlier
+selection in the same invocation.
 
-The import checks the source's sheet type, version and build metadata. It then
-reads source fields and template state and invokes source-side functions over
-the source's character data. Some source field values and display flags change
-temporarily during the workflow. The destination receives form and template
-edits through its own document object. A read-only field snapshot would support
-the version check but cannot run the character transfer. Optional custom images
-also need cross-document icon transfer. An existing button icon handle identifies
-an object in its own document.
+The source realm exposes metadata, fields, templates and document functions.
+Its field and display changes live in memory for the duration of the script.
+The destination reset also uses indexed widget rectangles and lets document
+scripts update the appearance of controls that are locked in the form editor.
+The engine applies the destination changes in one permission-checked undo
+transaction. A cancelled picker or an unhandled transfer error discards staged
+destination edits. The source is never saved. Opening a script-supplied path
+outside the picker flow still uses the existing viewer request.
+
+The built-in toolbar workflow transferred the character name, Strength,
+Dexterity and maximum hit points between temporary copies of the supplied
+v13.2.3 Colorful A4 sheet. All four values survived save and reopen. Cancelling
+the picker left the destination alone, and the source and original files
+remained byte-identical. The successful copies had the pre-existing large
+add-on removed. With that add-on present, final initialization exceeded the
+existing dynamic compilation budget and the engine discarded the transfer.
+The version rejection and permission-denied writeback cases use synthetic forms.
+
+Custom-image import uses cross-document button icons and, for some paths,
+temporary source form edits and saves. Those operations are outside this
+workflow. Leave the sheet's custom-image option off.

@@ -299,6 +299,13 @@ impl Drop for FileReaderSlot {
     }
 }
 
+type PdfPickResult = Result<Option<pdfcraft_engine::js::SelectedPdf>, String>;
+
+struct PdfPick {
+    reply: Sender<PdfPickResult>,
+    result: std::sync::mpsc::Receiver<PdfPickResult>,
+}
+
 pub(crate) struct Pending {
     run: PendingScript,
     reply: Option<Sender<Option<String>>>,
@@ -308,6 +315,7 @@ pub(crate) struct Pending {
     dialog_state: DialogState,
     progress: Option<pdfcraft_engine::js::Progress>,
     token: std::sync::Arc<()>,
+    pdf_pick: Option<PdfPick>,
     file_read: Option<(u32, std::sync::mpsc::Receiver<Result<String, String>>)>,
     dialog: Option<DialogId>,
     asked: Option<Asked>,
@@ -327,7 +335,7 @@ impl Pending {
     }
     /// Whether this invocation is waiting for an explicit user reply rather than worker execution.
     pub(crate) fn has_prompt(&self) -> bool {
-        self.reply.is_some()
+        self.reply.is_some() || self.pdf_pick.is_some()
     }
 }
 
@@ -666,6 +674,7 @@ impl PdfCraftApp {
                     progress: None,
                     token: std::sync::Arc::new(()),
                     file_read: None,
+                    pdf_pick: None,
                 });
             }
             Err(e) => self.notify(e.to_string()),
@@ -730,6 +739,22 @@ impl PdfCraftApp {
             self.notify("The form script timed out; its result was discarded");
             return;
         }
+        if let Some(pick) = pending.pdf_pick.as_ref() {
+            let result = match pick.result.try_recv() {
+                Ok(answer) => Some(answer),
+                Err(TryRecvError::Disconnected) => Some(Ok(None)),
+                Err(TryRecvError::Empty) => None,
+            };
+            if let Some(result) = result
+                && let Some(pick) = pending.pdf_pick.take()
+            {
+                if let Err(error) = &result {
+                    self.notify(tl!(error));
+                }
+                pending.started = Instant::now();
+                let _ = pick.reply.send(result);
+            }
+        }
         if let Some((serial, read)) = pending.file_read.as_ref() {
             let serial = *serial;
             let result = match read.try_recv() {
@@ -765,6 +790,39 @@ impl PdfCraftApp {
                 Ok(InteractiveEvent::Progress(progress)) => {
                     pending.progress = Some(progress);
                     ctx.request_repaint();
+                }
+                Ok(InteractiveEvent::SelectPdf(_)) if pending.started.elapsed() >= pending.run.timeout => break,
+                Ok(InteractiveEvent::SelectPdf(reply)) => {
+                    let target = self.pick_target(Some(pending.run.id));
+                    let (send, result) = std::sync::mpsc::channel();
+                    pending.started = Instant::now();
+                    pending.pdf_pick = Some(PdfPick { reply, result });
+                    let request = craft::host::PickRequest::open("script-source-pdf")
+                        .title(tl!("Select a source PDF for this document"))
+                        .filter(tl!("PDF documents"), &["pdf"]);
+                    self.pick_file(request, target, move |_, ctx, picked| {
+                        let Some(path) = picked.first_path() else {
+                            let _ = send.send(Ok(None));
+                            return;
+                        };
+                        let Some(slot) = FileReaderSlot::acquire() else {
+                            let _ = send.send(Err("The selected-file reader is busy".into()));
+                            return;
+                        };
+                        let wake = ctx.clone();
+                        let report = send.clone();
+                        if std::thread::Builder::new()
+                            .name("pdfcraft-script-source".into())
+                            .spawn(move || {
+                                let _slot = slot;
+                                let _ = send.send(pdfcraft_engine::js::read_selected_pdf(&path).map(Some));
+                                wake.request_repaint();
+                            })
+                            .is_err()
+                        {
+                            let _ = report.send(Err("Couldn't start the selected-file reader".into()));
+                        }
+                    });
                 }
                 Ok(InteractiveEvent::Prompt(_, _)) if pending.started.elapsed() >= pending.run.timeout => break,
                 Ok(InteractiveEvent::Prompt(prompt @ (ScriptPrompt::Dialog(_) | ScriptPrompt::File), reply)) => {
@@ -807,7 +865,7 @@ impl PdfCraftApp {
                                 ctx,
                                 id,
                                 JsOutput {
-                                    alerts: Vec::new(),
+                                    alerts: out.post_commit_alerts,
                                     console: out.console,
                                     requests: out.requests,
                                     errors: out.error.into_iter().chain(out.doc_errors).collect(),
@@ -835,7 +893,10 @@ impl PdfCraftApp {
             return;
         }
         // Input events wake egui immediately; idle prompts only need a coarse timeout check.
-        frame::request_repaint_after(ctx, if pending.has_prompt() && pending.file_read.is_none() { 1.0 } else { 0.016 });
+        frame::request_repaint_after(
+            ctx,
+            if pending.has_prompt() && pending.file_read.is_none() && pending.pdf_pick.is_none() { 1.0 } else { 0.016 },
+        );
         self.script_pending = Some(pending);
     }
     /// Display the current typed prompt and send one answer/cancellation without replaying script side effects.
@@ -1305,6 +1366,7 @@ mod link_script_tests {
         let (prompt, reply) = loop {
             match app.script_pending.as_ref().unwrap().run.receiver.try_recv() {
                 Ok(InteractiveEvent::Prompt(prompt, reply)) => break (prompt, reply),
+                Ok(InteractiveEvent::SelectPdf(_)) => panic!("the script requested an unexpected PDF"),
                 Ok(InteractiveEvent::Complete(_)) | Err(TryRecvError::Disconnected) => panic!("the script ended without asking"),
                 Ok(InteractiveEvent::Progress(_)) | Err(TryRecvError::Empty) => {
                     assert!(Instant::now() < deadline, "the script did not ask");

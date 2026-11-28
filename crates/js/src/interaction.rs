@@ -24,6 +24,7 @@ pub enum Prompt {
 #[allow(clippy::large_enum_variant)]
 pub enum InteractiveEvent {
     Progress(Progress),
+    SelectPdf(Sender<Result<Option<crate::selected_pdf::SelectedPdf>, String>>),
     Prompt(Prompt, Sender<Option<String>>),
     Complete(Outcome),
 }
@@ -106,7 +107,17 @@ fn reserve() -> JsResult<Option<Sender<InteractiveEvent>>> {
     reserve_with_limit(32)
 }
 /// Send a bounded prompt and await its reply, treating disconnect/timeout as cancellation.
-pub(crate) fn ask(prompt: Prompt) -> JsResult<Option<String>> {
+pub(crate) fn select_pdf() -> JsResult<Option<crate::selected_pdf::SelectedPdf>> {
+    let Some(sender) = reserve()? else { return Ok(None) };
+    let (tx, rx) = mpsc::channel();
+    sender.send(InteractiveEvent::SelectPdf(tx)).map_err(|_| error("interactive host closed"))?;
+    rx.recv_timeout(std::time::Duration::from_secs(300)).unwrap_or(Ok(None)).map_err(error)
+}
+
+pub(crate) fn ask(ctx: &Context, prompt: Prompt) -> JsResult<Option<String>> {
+    if !crate::selected_pdf::primary(ctx) {
+        return Ok(None);
+    }
     let bytes = if matches!(prompt, Prompt::File | Prompt::Dialog(_)) { 8 << 20 } else { 4096 };
     let Some(sender) = reserve_with_limit(if matches!(prompt, Prompt::Dialog(_)) { 128 } else { 32 })? else { return Ok(None) };
     let (tx, rx) = mpsc::channel();
@@ -174,7 +185,7 @@ pub(crate) fn popup_menu(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
         reserve()?;
         return Ok(JsValue::null());
     }
-    match ask(Prompt::Menu(items.clone()))? {
+    match ask(ctx, Prompt::Menu(items.clone()))? {
         Some(answer) if allowed(&items, &answer) => Ok(s(&answer)),
         Some(_) => Err(error("invalid popup menu selection")),
         None => Ok(JsValue::null()),
@@ -200,7 +211,7 @@ pub(crate) fn response(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
             response_text(&arg(args, 4), ctx)?,
         )
     };
-    Ok(ask(Prompt::Text { question, title, default, password, label })?.map_or_else(JsValue::null, |v| s(&v)))
+    Ok(ask(ctx, Prompt::Text { question, title, default, password, label })?.map_or_else(JsValue::null, |v| s(&v)))
 }
 
 #[cfg(test)]

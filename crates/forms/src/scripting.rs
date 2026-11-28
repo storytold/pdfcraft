@@ -54,6 +54,8 @@ pub struct FieldChange {
     pub text_color: Option<Vec<String>>,
     pub fill_color: Option<Vec<String>>,
     pub rect: Option<[f64; 4]>,
+    /// Rectangles of individually addressed widgets after the first.
+    pub widget_rects: Vec<(usize, [f64; 4])>,
     pub stroke_color: Option<Vec<String>>,
     pub text_size: Option<f64>,
     pub line_width: Option<f64>,
@@ -332,6 +334,7 @@ pub(crate) fn apply_changes(
     }
 
     let mut formatted = Vec::new();
+    let mut redraw = HashSet::new();
     for c in changes {
         let Some(f) = all.iter().find(|f| f.name == c.name && c.object.is_none_or(|obj| f.obj == obj)) else { continue };
         // New items go first, so a value among them is written against them.
@@ -408,26 +411,30 @@ pub(crate) fn apply_changes(
         };
         apply_submit_name(doc, f.obj, c.submit_name.as_deref())?;
         apply_default(doc, f, c.default_value.as_ref())?;
-        if appearance != crate::LookPatch::default() || c.text_size.is_some() || c.user_name.is_some() {
-            crate::author::set_props_object(
+        if let Some(tooltip) = &c.user_name {
+            doc.update_dict(f.obj, |dict| crate::author::write_tooltip(dict, tooltip))?;
+        }
+        if appearance != crate::LookPatch::default() || c.text_size.is_some() {
+            crate::author::set_script_props(
                 doc,
-                &c.name,
-                f.obj,
+                f,
                 &crate::FieldProps {
                     appearance: (appearance != crate::LookPatch::default()).then_some(appearance),
                     font_size: c.text_size,
-                    tooltip: c.user_name.clone(),
                     ..Default::default()
                 },
             )?;
+            redraw.insert(f.obj);
         }
-        if let Some(rect) = c.rect {
+        for (index, rect) in c.rect.map(|rect| (0, rect)).into_iter().chain(c.widget_rects.iter().copied()) {
             if !rect.iter().all(|v| v.is_finite() && v.abs() <= 1e7) || rect[2] < rect[0] || rect[3] < rect[1] {
                 return Err(FormError::Invalid("invalid script rectangle".into()));
             }
-            let widget = f.widgets.first().ok_or_else(|| FormError::Invalid("field has no widget rectangle".into()))?;
+            let widget = f.widgets.get(index).ok_or_else(|| FormError::Invalid("field has no widget rectangle".into()))?;
             doc.update_dict(widget.obj, |d| d.set(b"Rect".to_vec(), Object::Array(rect.into_iter().map(Object::Real).collect())))?;
-            crate::author::redraw_field_object(doc, &c.name, f.obj)?;
+        }
+        if c.rect.is_some() || !c.widget_rects.is_empty() {
+            redraw.insert(f.obj);
         }
         if let Some(icon) = c.icon {
             if f.kind != FieldKind::PushButton {
@@ -468,8 +475,12 @@ pub(crate) fn apply_changes(
             if f.kind != FieldKind::PushButton {
                 return Err(FormError::Invalid(format!("{} is not a push button", f.name)));
             }
-            crate::author::set_props_object(doc, &f.name, f.obj, &crate::FieldProps { caption_all: Some(caption.clone()), ..Default::default() })?;
+            crate::author::set_script_props(doc, f, &crate::FieldProps { caption_all: Some(caption.clone()), ..Default::default() })?;
+            redraw.insert(f.obj);
         }
+    }
+    if !redraw.is_empty() {
+        crate::author::redraw_fields(doc, |_, field| redraw.contains(&field.obj))?;
     }
     crate::values::redraw_calculated_values(doc, &formatted, scripts)
 }

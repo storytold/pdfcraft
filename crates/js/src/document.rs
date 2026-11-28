@@ -40,7 +40,16 @@ pub(crate) fn field_object_by_id(ctx: &mut Context, name: &str, id: Option<u64>)
 /// Construct live accessors whose identity survives host snapshot refreshes.
 fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) -> JsObject {
     let n = (JsString::from(name), id, token);
-    let value_get = getter!(ctx, n, |f, c| value_of(&f, c));
+    let value_get = function(
+        ctx,
+        NativeFunction::from_copy_closure_with_captures(
+            |_, _, key, ctx| match crate::selected_pdf::field_path(ctx, key) {
+                Some(path) => Ok(path),
+                None => Ok(value_of(&read(ctx, key)?, ctx)),
+            },
+            n.clone(),
+        ),
+    );
     let default_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let values = value_for(kind_of(c, name)?, strings(&arg(args, 0), c)?);
@@ -57,15 +66,28 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let vals = value_for(kind_of(c, name)?, strings(&arg(args, 0), c)?);
             charge(c, name, |f| text_bytes(&f.value), text_bytes(&vals))?;
+            crate::selected_pdf::clear_field_path(c, name);
             write(c, name, |f| f.value = vals)?;
             Ok(JsValue::undefined())
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
     };
-    let as_string = getter!(ctx, n, |f, _c| s(&match f.kind {
-        FieldType::CheckBox | FieldType::RadioButton => f.value.first().cloned().unwrap_or_else(|| "Off".into()),
-        _ => f.value.join(","),
-    }));
+    let as_string = function(
+        ctx,
+        NativeFunction::from_copy_closure_with_captures(
+            |_, _, key, ctx| {
+                if let Some(path) = crate::selected_pdf::field_path(ctx, key) {
+                    return Ok(path);
+                }
+                let f = read(ctx, key)?;
+                Ok(s(&match f.kind {
+                    FieldType::CheckBox | FieldType::RadioButton => f.value.first().cloned().unwrap_or_else(|| "Off".into()),
+                    _ => f.value.join(","),
+                }))
+            },
+            n.clone(),
+        ),
+    );
     let default = getter!(ctx, n, |f, _c| s(&f.default.first().cloned().unwrap_or_default()));
     let kind = getter!(ctx, n, |f, _c| s(f.kind.name()));
     let fname = getter!(ctx, n, |f, _c| s(&f.name));
@@ -222,22 +244,7 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let rect_set = {
         /// Validate finite ordered rectangle coordinates while permitting zero-sized script overlays.
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
-            let a = arg(args, 0).as_object().ok_or_else(|| error("rect needs an array"))?;
-            let a = JsArray::from_object(a)?;
-            if a.length(c)? != 4 {
-                return Err(error("rect needs four coordinates"));
-            }
-            let mut coords = [0.0; 4];
-            for (i, v) in coords.iter_mut().enumerate() {
-                *v = a.get(i as u32, c)?.to_number(c)?;
-                if !v.is_finite() || v.abs() > 1e7 {
-                    return Err(error("rect coordinates are out of range"));
-                }
-            }
-            if coords[2] < coords[0] || coords[1] < coords[3] {
-                return Err(error("rect must use left, top, right, bottom order"));
-            }
-            let v = Some(coords);
+            let v = Some(rect_value(args, c)?);
             write(c, name, |f| f.rect = v)?;
             Ok(JsValue::undefined())
         }
@@ -417,6 +424,7 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         .function(get_item_at, js_string!("getItemAt"), 2)
         .function(is_box_checked, js_string!("isBoxChecked"), 1)
         .function(check_this_box, js_string!("checkThisBox"), 2)
+        .function(NativeFunction::from_copy_closure_with_captures(crate::selected_pdf::browse, n.clone()), js_string!("browseForFileToSubmit"), 0)
         .function(set_focus, js_string!("setFocus"), 0)
         .function(set_action, js_string!("setAction"), 2)
         .function(set_items, js_string!("setItems"), 1)
@@ -438,6 +446,77 @@ const MAX_ITEM_BYTES: usize = 1 << 20;
 
 // ── the document (global object) ────────────────────────────────────────────────────────────
 
+fn rect_value(args: &[JsValue], c: &mut Context) -> JsResult<[f64; 4]> {
+    let a = arg(args, 0).as_object().ok_or_else(|| error("rect needs an array"))?;
+    let a = JsArray::from_object(a)?;
+    if a.length(c)? != 4 {
+        return Err(error("rect needs four coordinates"));
+    }
+    let mut coords = [0.0; 4];
+    for (i, v) in coords.iter_mut().enumerate() {
+        *v = a.get(i as u32, c)?.to_number(c)?;
+        if !v.is_finite() || v.abs() > 1e7 {
+            return Err(error("rect coordinates are out of range"));
+        }
+    }
+    if coords[2] < coords[0] || coords[1] < coords[3] {
+        return Err(error("rect must use left, top, right, bottom order"));
+    }
+    Ok(coords)
+}
+
+/// A widget selector provides its own rectangle, while the unqualified field uses widget 0.
+fn widget_rect_field(ctx: &mut Context, name: &str) -> JsResult<JsValue> {
+    let Some((base, index)) = name.rsplit_once('.').and_then(|(base, index)| index.parse::<usize>().ok().map(|index| (base, index))) else {
+        return Ok(JsValue::null());
+    };
+    let key = host(ctx)?
+        .borrow()
+        .fields
+        .iter()
+        .find(|f| f.name == base)
+        .and_then(|f| (f.rect.is_some() && index <= f.additional_widget_rects.len()).then(|| (JsString::from(base), f.object_id, f.instance_id)));
+    let Some(key) = key else { return Ok(JsValue::null()) };
+    let get = function(
+        ctx,
+        NativeFunction::from_copy_closure_with_captures(
+            |_, _, (key, index), ctx| {
+                let field = read(ctx, key)?;
+                let rect = if *index == 0 { field.rect } else { field.additional_widget_rects.get(index - 1).map(|widget| widget.rect) };
+                let rect = rect.ok_or_else(|| error("the widget is no longer available"))?;
+                Ok(JsArray::from_iter(rect.map(JsValue::from), ctx).into())
+            },
+            (key.clone(), index),
+        ),
+    );
+    let set = function(
+        ctx,
+        NativeFunction::from_copy_closure_with_captures(
+            |_, args, (key, index), ctx| {
+                let rect = rect_value(args, ctx)?;
+                let field = read(ctx, key)?;
+                if field.rect.is_none() || *index > field.additional_widget_rects.len() {
+                    return Err(error("the widget is no longer available"));
+                }
+                write(ctx, key, |field| {
+                    if *index == 0 {
+                        field.rect = Some(rect);
+                    } else {
+                        std::sync::Arc::make_mut(&mut field.additional_widget_rects)[index - 1].rect = rect;
+                    }
+                })?;
+                Ok(JsValue::undefined())
+            },
+            (key, index),
+        ),
+    );
+    Ok(ObjectInitializer::new(ctx)
+        .property(js_string!("name"), s(name), Attribute::READONLY)
+        .accessor(js_string!("rect"), Some(get), Some(set), Attribute::CONFIGURABLE)
+        .build()
+        .into())
+}
+
 pub(crate) fn get_field(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let name = text(&arg(args, 0), ctx)?;
     let exists = host(ctx)?.borrow().fields.iter().any(|f| f.name == name);
@@ -447,7 +526,7 @@ pub(crate) fn get_field(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
     // A parent name (e.g. "total" for "total.0"): its first kid stands in, as for groups.
     let prefix = format!("{name}.");
     let kid = host(ctx)?.borrow().fields.iter().find(|f| f.name.starts_with(&prefix)).map(|f| f.name.clone());
-    let Some(kid) = kid else { return Ok(JsValue::null()) };
+    let Some(kid) = kid else { return widget_rect_field(ctx, &name) };
     let (id, token) = host(ctx)?.borrow().fields.iter().find(|f| f.name == kid).map_or((None, 0), |f| (f.object_id, f.instance_id));
     let group = field_object_new(ctx, &kid, id, token);
     group.define_property_or_throw(

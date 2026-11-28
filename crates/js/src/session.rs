@@ -1,4 +1,4 @@
-//! One sandboxed realm per open document. No context crosses a document boundary.
+//! A retained realm per open document, with temporary realms for explicitly selected sources.
 #[cfg(not(target_arch = "wasm32"))]
 use crate::interaction::InteractiveEvent;
 use crate::{DocInfo, Event, FieldState, Limits, Outcome};
@@ -20,6 +20,20 @@ pub struct Job {
     /// (#169). A timer the realm no longer has runs nothing; nor does any timer of a realm that
     /// has not started, or whose document scripts changed (its timers went with it).
     pub timer: Option<u32>,
+}
+
+/// A typed reply supplied by a trusted host. PDF snapshots only answer PDF pickers.
+#[derive(Clone)]
+pub enum Answer {
+    Text(String),
+    Pdf(Result<crate::selected_pdf::SelectedPdf, String>),
+    Cancel,
+}
+
+impl From<&Option<String>> for Answer {
+    fn from(value: &Option<String>) -> Self {
+        value.clone().map_or(Self::Cancel, Self::Text)
+    }
 }
 
 /// Large form startup and a full calculation pass legitimately exceed a short event on
@@ -138,10 +152,11 @@ impl Realm {
     }
     /// Validate sources, initialize once when needed, and execute this job in the retained document realm.
     fn run(&mut self, job: Job) -> Outcome {
-        let out = self.run_job(job);
+        let mut out = self.run_job(job);
         // The realm keeps its globals and field objects, not the job's field snapshot: the engine
         // keeps that snapshot and patches it in place for the next callback.
-        if let Some(ctx) = self.context.as_ref() {
+        if let Some(ctx) = self.context.as_mut() {
+            crate::selected_pdf::finish(ctx, &mut out);
             crate::run::release_fields(ctx);
         }
         out
@@ -201,6 +216,7 @@ impl Realm {
         // once the document scripts ran, and put back if the link's own script fails.
         let link = job.event.kind == "Link";
         let Some(ctx) = self.context.as_mut() else { return failed("script realm unavailable".into()) };
+        crate::selected_pdf::begin(ctx);
         let (mut out, saved) = if initialize {
             let mut initial = crate::run::run_in_context(
                 ctx,
@@ -258,6 +274,7 @@ impl Realm {
                     out.changed.push(field);
                 }
             }
+            crate::selected_pdf::shift_alert_indices(ctx, initial.alerts.len());
             initial.alerts.append(&mut out.alerts);
             out.alerts = initial.alerts;
             initial.console.append(&mut out.console);
@@ -560,12 +577,20 @@ impl ScriptSession {
 
     /// Run a job with one total deadline, discarding its entire realm when the host times out.
     pub fn run(&mut self, job: Job, answers: &[Option<String>]) -> Outcome {
+        self.run_answers(job, &answers.iter().map(Answer::from).collect::<Vec<_>>())
+    }
+
+    pub fn run_answers(&mut self, job: Job, answers: &[Answer]) -> Outcome {
         let budget = execution_budget(job.fields.len(), job.doc_scripts.iter().map(String::len).fold(0usize, usize::saturating_add));
-        self.run_with_limit(job, answers, budget)
+        self.run_timed(WorkerRequest::Script { job: Box::new(job), english_retry: false }, answers, budget)
     }
     /// Run a callback within the remaining time of a larger operation.
     pub fn run_with_limit(&mut self, job: Job, answers: &[Option<String>], limit: std::time::Duration) -> Outcome {
-        self.run_timed(WorkerRequest::Script { job: Box::new(job), english_retry: false }, answers, limit)
+        self.run_timed(
+            WorkerRequest::Script { job: Box::new(job), english_retry: false },
+            &answers.iter().map(Answer::from).collect::<Vec<_>>(),
+            limit,
+        )
     }
 
     /// Retry formatting in a fresh context on the document worker, within the caller's remaining time.
@@ -580,7 +605,7 @@ impl ScriptSession {
     }
 
     /// Wait within one deadline for startup, prompt replies and completion. Detach a worker that exceeds the deadline.
-    fn run_timed(&mut self, request: WorkerRequest, answers: &[Option<String>], limit: std::time::Duration) -> Outcome {
+    fn run_timed(&mut self, request: WorkerRequest, answers: &[Answer], limit: std::time::Duration) -> Outcome {
         if limit.is_zero() {
             return Outcome {
                 execution_refused: true,
@@ -611,7 +636,7 @@ impl ScriptSession {
     /// Prompt replies consume the original deadline instead of restarting it.
     fn receive(
         rx: &mpsc::Receiver<InteractiveEvent>,
-        answers: &[Option<String>],
+        answers: &[Answer],
         started: std::time::Instant,
         limit: std::time::Duration,
     ) -> Option<Outcome> {
@@ -624,8 +649,19 @@ impl ScriptSession {
             match rx.recv_timeout(remaining) {
                 Ok(InteractiveEvent::Complete(out)) => return Some(out),
                 Ok(InteractiveEvent::Progress(_)) => {}
+                Ok(InteractiveEvent::SelectPdf(reply)) => {
+                    let answer = match answers.next() {
+                        Some(Answer::Pdf(pdf)) => pdf.clone().map(Some),
+                        Some(Answer::Text(_)) => Err("a PDF picker requires a selected PDF answer".into()),
+                        Some(Answer::Cancel) | None => Ok(None),
+                    };
+                    let _ = reply.send(answer);
+                }
                 Ok(InteractiveEvent::Prompt(_, reply)) => {
-                    let _ = reply.send(answers.next().cloned().flatten());
+                    let _ = reply.send(match answers.next() {
+                        Some(Answer::Text(text)) => Some(text.clone()),
+                        _ => None,
+                    });
                 }
                 Err(_) => return None,
             }
@@ -669,6 +705,9 @@ impl ScriptSession {
     }
 
     /// Run in the web-local realm; native prompt replies are unavailable on this host.
+    pub fn run_answers(&mut self, job: Job, _: &[Answer]) -> Outcome {
+        self.run(job, &[])
+    }
     pub fn run(&mut self, mut job: Job, _answers: &[Option<String>]) -> Outcome {
         self.instances.stamp(&mut job);
         self.stamp_icons(&mut job);
