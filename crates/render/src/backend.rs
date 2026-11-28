@@ -21,11 +21,25 @@ pub(crate) fn open(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<Pdf, O
                 OpenError::NeedsPassword
             }
         }
-        craft_pdf::OpenError::Load(LoadPdfError::Decryption(other)) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
+        craft_pdf::OpenError::Load(LoadPdfError::Decryption(other)) => decryption_unsupported(other),
         craft_pdf::OpenError::Load(LoadPdfError::Invalid) => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
         craft_pdf::OpenError::BackendPanic => OpenError::Invalid("the parser crashed".into()),
         other => OpenError::Invalid(other.to_string()),
     })
+}
+
+/// Why the parser can't decrypt a document, in words: its error names (`UnsupportedAlgorithm`)
+/// aren't. A password the parser refuses is told apart by [`open`].
+fn decryption_unsupported(e: DecryptionError) -> OpenError {
+    OpenError::Unsupported(
+        match e {
+            DecryptionError::UnsupportedAlgorithm => "the document is encrypted with a security handler or method PdfCraft can't decrypt",
+            DecryptionError::InvalidEncryption => "the document's encryption dictionary (/Encrypt) is invalid, so it can't be decrypted",
+            DecryptionError::MissingIDEntry => "the document is encrypted but has no file identifier (/ID), which its key is made from",
+            DecryptionError::PasswordProtected => "the document is protected by a password",
+        }
+        .into(),
+    )
 }
 
 #[cfg(test)]
