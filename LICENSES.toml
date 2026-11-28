@@ -16,7 +16,7 @@ sha256 = "cd7032ea33b71427f188e34ffb4aee9d6868a57fd196037c5c8b2be03a2a0352"
 [[document]]
 source = "NOTICE"
 destination = "NOTICE"
-sha256 = "c0cd7347f4c596dc01ac7fdc4aca323b6ba97385eb399bc5dd40e460bacf247d"
+sha256 = "17b44e0aa4dc0763f829d5a858dfed546b360ecb21ed278922a360dcdf0b066d"
 
 [[document]]
 source = "vendor/edit-session/LICENSE-MIT"
@@ -33,7 +33,7 @@ sha256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
 [[document]]
 source = "assets/app-icon/LICENSE-document.txt"
 destination = "assets/app-icon/LICENSE-document.txt"
-sha256 = "64a3137e3d5cc41e5b78d2ad8dd9ddddd6588283f9f7b3128aa6a8a50852fb9a"
+sha256 = "0144d717c623a5be547b4fc07da3bca262fb19d83c52683705567b81dba71a53"
 
 [[document]]
 source = "assets/app-icon/LICENSE.txt"
