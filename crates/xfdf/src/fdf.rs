@@ -561,6 +561,16 @@ pub(crate) fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, Dat
         // anyway points into the file and is replaced below, so it is not copied (nor what it
         // reaches).
         src.remove(b"P");
+        // An action (/A) or additional-actions dictionary (/AA) is code or a launch target from an
+        // untrusted file, and the XFDF import never carries one: neither is copied. The drop is
+        // recorded so it is not silent.
+        for key in [b"A".as_slice(), b"AA".as_slice()] {
+            if src.get(key).is_some() {
+                src.remove(key);
+                let name = text_of(&fdf, &src, b"NM").unwrap_or_else(|| "comment".to_string());
+                report.skipped.push(format!("{name}: /{} action not imported", String::from_utf8_lossy(key)));
+            }
+        }
         // A redaction mark is always drawn by PdfCraft (see `place`): its appearance is not copied.
         if src.get(b"Subtype").is_some_and(|s| fdf.resolve(s).as_name() == Some(b"Redact".as_slice())) {
             src.remove(b"AP");
