@@ -286,6 +286,37 @@ fn a_cut_page_is_named_beside_an_xfa_form_notice() {
     h.get_by_label_contains("XFA data are kept in step");
 }
 
+/// A page with a render warning other than content truncation is named (#4340), the bar can be
+/// dismissed, and a page warned later shows it again, covering the pages warned so far.
+#[test]
+fn a_page_with_a_render_warning_is_named_until_dismissed() {
+    use egui_kittest::kittest::Queryable;
+    use pdfcraft_render::RenderWarning;
+
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = PdfCraftApp::for_unit_tests();
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+            let bytes = app.session.create_blank(300.0, 400.0, 2).unwrap();
+            app.open_bytes(&egui::Context::default(), "blank.pdf", None, bytes.as_ref().clone()).unwrap();
+            app
+        }
+    });
+    h.run_steps(3);
+    h.state_mut().views[0].reports.warn(0, RenderWarning::ColourFallback);
+    h.run_steps(2);
+    h.get_by_label_contains("painted in a fallback colour");
+    h.get_by_label("Dismiss").click();
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("painted in a fallback colour").is_none(), "the warning bar can be dismissed");
+    // A page warned later shows it again, covering both pages warned so far.
+    h.state_mut().views[0].reports.warn(1, RenderWarning::Type3WidthsMissing);
+    h.run_steps(2);
+    h.get_by_label_contains("pages have render warnings");
+    h.get_by_label_contains("spaced by their procedures");
+}
+
 /// Dismissing another notice doesn't hide a page found cut later (#623), and dismissing the
 /// cut-page notice lasts until another page is found cut (review on #2113).
 #[test]

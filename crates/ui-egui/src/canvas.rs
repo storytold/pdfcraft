@@ -217,6 +217,8 @@ pub struct DocView {
     pub full_screen_fill: bool,
     /// Cut pages whose notice the reader dismissed: a page cut later shows it again.
     cut_notice_dismissed: std::collections::BTreeSet<usize>,
+    /// Warned pages whose notice the reader dismissed: a page warned later shows it again.
+    warn_notice_dismissed: std::collections::BTreeSet<usize>,
     pub find: Option<Find>,
     page_count: usize,
     /// Page sizes (width, height) in points (view space, unrotated by the view), for the page transforms.
@@ -609,6 +611,7 @@ impl DocView {
             presentation: None,
             full_screen_fill: true,
             cut_notice_dismissed: Default::default(),
+            warn_notice_dismissed: Default::default(),
             find: None,
             page_count: info.pages.len(),
             page_sizes: info.pages.iter().map(|p| (p.width, p.height)).collect(),
@@ -680,6 +683,7 @@ impl DocView {
         fresh.thumbnail_zoom = self.thumbnail_zoom;
         fresh.notice_dismissed = self.notice_dismissed;
         fresh.cut_notice_dismissed = std::mem::take(&mut self.cut_notice_dismissed);
+        fresh.warn_notice_dismissed = std::mem::take(&mut self.warn_notice_dismissed);
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
         // What the document asked to hide, and what is hidden now (F8), belong to the tab.

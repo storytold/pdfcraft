@@ -126,6 +126,11 @@ pub(super) fn notices(
     if view.cut_pages().iter().any(|p| !view.cut_notice_dismissed.contains(p)) {
         cut_pages_bar(view, ui);
     }
+    // A page with any other render warning is named too (#4340), so a fallback colour or a
+    // missing image isn't mistaken for the page's real appearance.
+    if view.reports.warned_pages().iter().any(|(page, _)| !view.warn_notice_dismissed.contains(page)) {
+        warned_pages_bar(view, ui);
+    }
     // A signature just placed with Fill & Sign is a comment others can move (#2149): offer to
     // lock it into the page now. `lock_offer` is false for a digitally signed document.
     if lock_offer && !view.lock_offer_dismissed {
@@ -276,5 +281,43 @@ fn cut_pages_bar(view: &mut DocView, ui: &mut egui::Ui) {
     };
     if bar(Tone::Warn, "triangle-alert", text).dismiss().show(ui).dismissed {
         view.cut_notice_dismissed.extend(cut);
+    }
+}
+
+/// The bar naming pages with a render warning other than content truncation (#4340): a colour
+/// painted in a fallback colour, a malformed indexed image, or a Type 3 font spaced by its own
+/// procedures. Dismissing it covers the pages warned so far; a page warned later shows it again.
+fn warned_pages_bar(view: &mut DocView, ui: &mut egui::Ui) {
+    let warned = view.reports.warned_pages();
+    let Some((first, kinds)) = warned.iter().find(|(page, _)| !view.warn_notice_dismissed.contains(page)) else { return };
+    let page = first.saturating_add(1).to_string();
+    let what = kinds
+        .iter()
+        .map(|kind| match kind {
+            pdfcraft_render::RenderWarning::ColourFallback => {
+                tl!("a colour couldn't be computed, so part of the page is painted in a fallback colour")
+            }
+            pdfcraft_render::RenderWarning::MalformedIndexedImage => {
+                tl!("an image's colour table is malformed, so it may be drawn wrongly or not at all")
+            }
+            pdfcraft_render::RenderWarning::Type3WidthsMissing => {
+                tl!("a Type 3 font has no widths, so its glyphs are spaced by their procedures")
+            }
+            // Content truncation has its own bar above, which also covers search and copy.
+            pdfcraft_render::RenderWarning::ContentTruncated => tl!("part of the content isn't drawn"),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let n = warned.len();
+    let text = if n == 1 {
+        crate::i18n::fmt(tl!("Page {page}: {what}."), &[("page", &page), ("what", &what)])
+    } else {
+        crate::i18n::fmt(
+            tl!("{n} pages have render warnings, page {page} first: {what}."),
+            &[("n", &n.to_string()), ("page", &page), ("what", &what)],
+        )
+    };
+    if bar(Tone::Warn, "triangle-alert", text).dismiss().show(ui).dismissed {
+        view.warn_notice_dismissed.extend(warned.iter().map(|(page, _)| *page));
     }
 }

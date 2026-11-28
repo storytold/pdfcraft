@@ -1,7 +1,7 @@
 //! The document's pages as pictures: what the page view, the Pages panel, Organize and the print preview ask the
 //! framework's texture contract for. Revisions say when a picture is out of date; render jobs own what they read.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use craft::behavior::kurbo::Size;
@@ -53,6 +53,9 @@ impl PageRevisions {
 struct Reports {
     errors: HashMap<usize, String>,
     cut: BTreeSet<usize>,
+    /// Pages with a render warning other than content truncation (#4340), by kind: the picture
+    /// may be missing a colour or an image, or a Type 3 font's spacing may be approximate.
+    warned: BTreeMap<usize, Vec<RenderWarning>>,
 }
 
 /// What render jobs found out about pages: why a page could not be drawn, and which pages were cut at the
@@ -75,11 +78,21 @@ impl RenderReports {
         self.lock().cut.insert(page);
     }
 
+    /// Records a render warning other than content truncation for `page` (#4340), once per kind.
+    pub fn warn(&self, page: usize, warning: RenderWarning) {
+        let mut reports = self.lock();
+        let listed = reports.warned.entry(page).or_default();
+        if !listed.contains(&warning) {
+            listed.push(warning);
+        }
+    }
+
     /// Forgets everything known about `page`: its content changed.
     pub fn forget(&self, page: usize) {
         let mut reports = self.lock();
         reports.errors.remove(&page);
         reports.cut.remove(&page);
+        reports.warned.remove(&page);
     }
 
     /// Forgets every page's reports.
@@ -87,6 +100,7 @@ impl RenderReports {
         let mut reports = self.lock();
         reports.errors.clear();
         reports.cut.clear();
+        reports.warned.clear();
     }
 
     /// The pages that could not be rendered with the reason, in page order.
@@ -99,6 +113,12 @@ impl RenderReports {
     /// The pages cut at the renderer's limits, in page order.
     pub fn cut_pages(&self) -> Vec<usize> {
         self.lock().cut.iter().copied().collect()
+    }
+
+    /// The pages with a render warning other than content truncation (#4340), each with its
+    /// kinds, in page order.
+    pub fn warned_pages(&self) -> Vec<(usize, Vec<RenderWarning>)> {
+        self.lock().warned.iter().map(|(page, kinds)| (*page, kinds.clone())).collect()
     }
 }
 
@@ -178,6 +198,7 @@ impl<'a> DocPages<'a> {
         // Installed faces draw on screen only: a print preview must match the printout.
         let config = if print.is_some() { self.config.clone() } else { self.config.clone().on_screen() };
         let tag = if print.is_some() { PRINT_TAG } else { 0 };
+        let whole_page = tile.is_none();
         ThumbRender::Later(Box::new(move |cancel| {
             if cancel.is_cancelled() {
                 return Err(LoadFailure::Missing);
@@ -187,10 +208,18 @@ impl<'a> DocPages<'a> {
             if cancel.is_cancelled() {
                 return Err(LoadFailure::Missing);
             }
-            if out.warnings.contains(&RenderWarning::ContentTruncated)
-                && let Some(reports) = &reports
-            {
-                reports.cut(page);
+            if let Some(reports) = &reports {
+                if out.warnings.contains(&RenderWarning::ContentTruncated) {
+                    reports.cut(page);
+                }
+                // Every other warning is named too (#4340): a colour painted in a fallback colour,
+                // a malformed indexed image, or a Type 3 font whose spacing came from its procedures.
+                // The whole-page raster speaks for the page; a tile's warnings are not the page's.
+                if whole_page {
+                    for warning in out.warnings.iter().copied().filter(|w| *w != RenderWarning::ContentTruncated) {
+                        reports.warn(page, warning);
+                    }
+                }
             }
             if let Some(error) = out.error {
                 log::warn!("page {}: {error}", page + 1);
@@ -277,6 +306,28 @@ fn turned(image: ColorImage, rotation: u16) -> ColorImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #4340: every warning a page's whole-page render reports is kept once per page, and a
+    /// page's reports go together when its content changes.
+    #[test]
+    fn a_pages_render_warnings_are_kept_once_each() {
+        let reports = RenderReports::default();
+        reports.warn(0, RenderWarning::ColourFallback);
+        reports.warn(0, RenderWarning::ColourFallback);
+        reports.warn(0, RenderWarning::MalformedIndexedImage);
+        reports.warn(1, RenderWarning::Type3WidthsMissing);
+        reports.cut(0);
+        assert_eq!(
+            reports.warned_pages(),
+            vec![(0, vec![RenderWarning::ColourFallback, RenderWarning::MalformedIndexedImage]), (1, vec![RenderWarning::Type3WidthsMissing])]
+        );
+        assert_eq!(reports.cut_pages(), vec![0], "content truncation keeps its own bar");
+        reports.forget(0);
+        assert_eq!(reports.warned_pages(), vec![(1, vec![RenderWarning::Type3WidthsMissing])]);
+        reports.warn(0, RenderWarning::ColourFallback);
+        reports.clear();
+        assert!(reports.warned_pages().is_empty());
+    }
     use crate::PdfCraftApp;
     use craft::host::{AppInfo, Host, ManualJobs, Wake};
     use egui_kittest::Harness;
