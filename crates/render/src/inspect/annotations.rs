@@ -323,6 +323,7 @@ impl<'a> Inspector<'a> {
                 state: state_or_default(self.text(d, b"State"), self.text(d, b"StateModel").as_deref()),
                 quads,
                 locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
+                locked_contents: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 512 != 0,
                 intent: self.name(d, b"IT"),
                 fill_sign,
                 no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),

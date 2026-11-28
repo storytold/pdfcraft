@@ -516,6 +516,9 @@ pub(crate) fn edit(e: AnnotationEdit, map: &PageMap<'_>, view: &mut CommentView,
             if has_popup(a) {
                 return (!a.popup.is_some_and(|p| p.open)).then_some(Edit::SetAnnotationPopup { page, index, rect: None, open: Some(true) });
             }
+            if a.locked_contents {
+                return None;
+            }
             view.composer = Some(Composer {
                 page,
                 at: edit_anchor(info, a),

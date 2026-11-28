@@ -189,7 +189,7 @@ fn threads(doc: &pdfcraft_engine::Document, prefs: &CommentPrefs) -> (Vec<Commen
             statuses: reviewer_statuses(&states, a),
             reply_statuses: replies.iter().flat_map(|r| reviewer_statuses(&states, r)).collect(),
             marked: states.marked_by(a, &prefs.author),
-            locked: a.locked,
+            locked: a.locked || a.locked_contents,
             resolved: false,
         });
         keys.insert(id, members);
@@ -335,7 +335,9 @@ pub(crate) fn show(
                 }
             }
             CommentEdit::Edit { thread, index, text, .. } => {
-                if let Some((page, index)) = map.key(thread, index) {
+                if let Some((page, index)) = map.key(thread, index)
+                    && !annotation_at(info, (page, index)).is_some_and(|a| a.locked_contents)
+                {
                     applied.push(Edit::SetAnnotationContents { page, index, text });
                 }
             }

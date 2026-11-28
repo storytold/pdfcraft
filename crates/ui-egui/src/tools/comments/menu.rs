@@ -128,7 +128,7 @@ pub(crate) fn context_rows(ui: &mut egui::Ui, cx: CommentMenuCx<'_>) -> Option<C
         Some(a) => {
             let (page, index) = (a.page, a.index);
             attachment_items(ui, view, info, a);
-            if row(ui, tl!("Edit text…"), allowed) {
+            if row(ui, tl!("Edit text…"), allowed && !a.locked_contents) {
                 view.session.comments.composer = Some(Composer {
                     page,
                     at: super::bridge::edit_anchor(info, a),
@@ -149,7 +149,7 @@ pub(crate) fn context_rows(ui: &mut egui::Ui, cx: CommentMenuCx<'_>) -> Option<C
                     }
                 }
             });
-            Menu::submenu_row_enabled(ui, tl!("Colour"), allowed, |ui, _| {
+            Menu::submenu_row_enabled(ui, tl!("Colour"), allowed && !a.locked && !a.locked_contents, |ui, _| {
                 let pick = palette(ui, tl!("Colour"), a.color.map(|c| c.map(f64::from)), "comment.menu.colour", recent);
                 if let Some(c) = pick.picked {
                     // Several selected: the app gives each of them the colour.
