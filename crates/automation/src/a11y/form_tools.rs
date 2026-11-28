@@ -329,8 +329,10 @@ impl Automation {
         use pdfcraft_engine::{FieldAction as A, FieldTrigger as T};
         let items = a.get("actions").and_then(Value::as_array).ok_or_else(|| ToolError::InvalidArgs("actions must be an array".into()))?;
         let bad = |m: String| ToolError::InvalidArgs(m);
-        let names = |v: &Value| -> Vec<String> {
-            v.as_array().map(|x| x.iter().filter_map(|s| s.as_str().map(str::to_string)).collect()).unwrap_or_default()
+        let names = |v: &Value| -> Result<Vec<String>> {
+            v.as_array()
+                .and_then(|x| x.iter().map(|s| s.as_str().map(str::to_string)).collect::<Option<Vec<_>>>())
+                .ok_or_else(|| bad("reset, show and hide must be arrays of field names".into()))
         };
         let mut acts = Vec::new();
         for it in items {
@@ -341,15 +343,15 @@ impl Automation {
             } else if let Some(u) = it["url"].as_str() {
                 A::Uri(u.into())
             } else if it.get("reset").is_some() {
-                A::Reset(names(&it["reset"]))
+                A::Reset(names(&it["reset"])?)
             } else if let Some(m) = it["menu"].as_str() {
                 A::Named(m.into())
             } else if let Some(p) = it["page"].as_u64() {
                 A::GoTo((p.max(1) - 1) as usize)
             } else if it.get("show").is_some() {
-                A::ShowHide { fields: names(&it["show"]), hide: false }
+                A::ShowHide { fields: names(&it["show"])?, hide: false }
             } else if it.get("hide").is_some() {
-                A::ShowHide { fields: names(&it["hide"]), hide: true }
+                A::ShowHide { fields: names(&it["hide"])?, hide: true }
             } else if let Some(u) = it["submit"].as_str() {
                 A::Submit(u.into())
             } else {
