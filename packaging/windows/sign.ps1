@@ -32,7 +32,7 @@ function Find-SignTool {
   $onPath = Get-Command signtool.exe -ErrorAction SilentlyContinue
   if ($onPath) { return $onPath.Source }
   $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
-  $found = Get-ChildItem -Path $kits -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+  $found = Get-ChildItem -LiteralPath $kits -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
     Sort-Object FullName -Descending | Select-Object -First 1
   if (-not $found) { throw 'signtool.exe not found (install the Windows SDK)' }
@@ -44,7 +44,7 @@ function Invoke-SignTool([string[]] $Arguments) {
   if ($LASTEXITCODE -ne 0) { throw "signtool $($Arguments[0]) failed with exit code $LASTEXITCODE" }
 }
 
-$Files = $Files | ForEach-Object { (Resolve-Path $_).Path }
+$Files = $Files | ForEach-Object { (Resolve-Path -LiteralPath $_).Path }
 $haveCert = [bool]$env:WINDOWS_CERTIFICATE
 $azureVars = 'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_CERT_PROFILE'
 $haveAzure = -not ($azureVars | Where-Object { -not [Environment]::GetEnvironmentVariable($_) })
@@ -78,12 +78,12 @@ try {
     $pkg = Join-Path $tmp 'trusted-signing.zip'
     $uri = "https://api.nuget.org/v3-flatcontainer/microsoft.trusted.signing.client/$trustedSigningVersion/microsoft.trusted.signing.client.$trustedSigningVersion.nupkg"
     Invoke-WebRequest -Uri $uri -OutFile $pkg
-    $actualHash = (Get-FileHash -Path $pkg -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actualHash = (Get-FileHash -LiteralPath $pkg -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualHash -ne $trustedSigningSha256) {
       throw "Microsoft.Trusted.Signing.Client $trustedSigningVersion checksum mismatch"
     }
-    Expand-Archive -Path $pkg -DestinationPath (Join-Path $tmp 'client') -Force
-    $dlib = Get-ChildItem -Path (Join-Path $tmp 'client') -Recurse -Filter Azure.CodeSigning.Dlib.dll |
+    Expand-Archive -LiteralPath $pkg -DestinationPath (Join-Path $tmp 'client') -Force
+    $dlib = Get-ChildItem -LiteralPath (Join-Path $tmp 'client') -Recurse -Filter Azure.CodeSigning.Dlib.dll |
       Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1
     if (-not $dlib) { throw 'Azure.CodeSigning.Dlib.dll not found in Microsoft.Trusted.Signing.Client' }
     $metadata = Join-Path $tmp 'metadata.json'
@@ -91,12 +91,12 @@ try {
       Endpoint               = $env:AZURE_SIGNING_ENDPOINT
       CodeSigningAccountName = $env:AZURE_SIGNING_ACCOUNT
       CertificateProfileName = $env:AZURE_CERT_PROFILE
-    } | ConvertTo-Json | Set-Content -Path $metadata -Encoding utf8
+    } | ConvertTo-Json | Set-Content -LiteralPath $metadata -Encoding utf8
     $ts = if ($env:WINDOWS_TIMESTAMP_URL) { $env:WINDOWS_TIMESTAMP_URL } else { 'http://timestamp.acs.microsoft.com' }
     Invoke-SignTool ($common + @('/tr', $ts, '/dlib', $dlib.FullName, '/dmdf', $metadata) + $Files)
   }
   Invoke-SignTool (@('verify', '/pa', '/v') + $Files)
 }
 finally {
-  Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
