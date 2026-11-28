@@ -118,7 +118,13 @@ pub fn save_and_reopen(doc: &Document, path: Save) -> (Vec<u8>, Document) {
 /// Save with the path's options. `/Info /ModDate` is left unset so a full save adds nothing that
 /// would make byte comparisons depend on the clock.
 pub fn save(doc: &Document, path: Save) -> Vec<u8> {
-    let opts = SaveOptions { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: path == Save::FullStreams, drop_unlinked: false };
+    let opts = SaveOptions {
+        mod_date: None,
+        id_seed: 0x5052_494E_5443_5241,
+        object_streams: path == Save::FullStreams,
+        drop_unlinked: false,
+        id_entropy: None,
+    };
     match path {
         Save::Incremental => write_incremental(doc, &opts),
         Save::FullTable | Save::FullStreams => write_full(doc, &opts),
