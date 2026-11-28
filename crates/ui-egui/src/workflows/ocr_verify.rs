@@ -787,6 +787,9 @@ impl OcrVerify {
         self.pages
             .iter()
             .map(|p| OcrPage {
+                tables: Vec::new(),
+                paragraph_lengths: Vec::new(),
+                line_lengths: Vec::new(),
                 already_on_page: 0,
                 page: p.page,
                 skipped: p.skipped.clone(),
@@ -1489,7 +1492,16 @@ mod tests {
         let text = session.create_from_text("t", "Recognize these scanned words").expect("fixture");
         let id = session.open("t.pdf", None, text, None).expect("fixture");
         let job = session.ocr_job(id, &[0], OcrSettings::default()).expect("fixture");
-        let page = OcrPage { already_on_page: 0, page: 0, words: confs.iter().map(|c| word("w", *c)).collect(), skipped: None, notes: Vec::new() };
+        let page = OcrPage {
+            tables: Vec::new(),
+            paragraph_lengths: Vec::new(),
+            line_lengths: Vec::new(),
+            already_on_page: 0,
+            page: 0,
+            words: confs.iter().map(|c| word("w", *c)).collect(),
+            skipped: None,
+            notes: Vec::new(),
+        };
         let mut v = OcrVerify::default();
         v.load(id, job.guard.clone(), vec![page]);
         (id, v)
@@ -1568,7 +1580,16 @@ mod tests {
         v2.load(
             id,
             job.guard.clone(),
-            vec![OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() }],
+            vec![OcrPage {
+                tables: Vec::new(),
+                paragraph_lengths: Vec::new(),
+                line_lengths: Vec::new(),
+                already_on_page: 0,
+                page: 0,
+                words: vec![word("w", Some(95.0))],
+                skipped: None,
+                notes: Vec::new(),
+            }],
         );
         v2.set_removed((0, 0), true);
         assert!(v2.accept(&mut s).is_err());
@@ -1596,6 +1617,9 @@ mod tests {
         let mut s = Session::new();
         let (_, mut v) = loaded(&mut s, &[Some(95.0), Some(95.0)]);
         v.pages = vec![OcrPage {
+            tables: Vec::new(),
+            paragraph_lengths: Vec::new(),
+            line_lengths: Vec::new(),
             already_on_page: 0,
             page: 0,
             words: vec![word("one", Some(95.0)), word("two", Some(95.0))],
@@ -1632,7 +1656,16 @@ mod tests {
         let pages = words
             .into_iter()
             .enumerate()
-            .map(|(page, words)| OcrPage { already_on_page: 0, page, words, skipped: None, notes: Vec::new() })
+            .map(|(page, words)| OcrPage {
+                tables: Vec::new(),
+                paragraph_lengths: Vec::new(),
+                line_lengths: Vec::new(),
+                already_on_page: 0,
+                page,
+                words,
+                skipped: None,
+                notes: Vec::new(),
+            })
             .collect();
         let mut v = OcrVerify::default();
         v.load(id, job.guard.clone(), pages);
@@ -1735,7 +1768,16 @@ mod tests {
         let pages = words
             .into_iter()
             .enumerate()
-            .map(|(page, words)| OcrPage { already_on_page: 0, page, words, skipped: None, notes: Vec::new() })
+            .map(|(page, words)| OcrPage {
+                tables: Vec::new(),
+                paragraph_lengths: Vec::new(),
+                line_lengths: Vec::new(),
+                already_on_page: 0,
+                page,
+                words,
+                skipped: None,
+                notes: Vec::new(),
+            })
             .collect();
         app.ocr_verify.load(id, job.guard.clone(), pages);
         (app, id)
@@ -1982,7 +2024,16 @@ mod tests {
         app.ocr_verify.load(
             id,
             job.guard.clone(),
-            vec![OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() }],
+            vec![OcrPage {
+                tables: Vec::new(),
+                paragraph_lengths: Vec::new(),
+                line_lengths: Vec::new(),
+                already_on_page: 0,
+                page: 0,
+                words: vec![word("w", Some(95.0))],
+                skipped: None,
+                notes: Vec::new(),
+            }],
         );
         assert!(app.ocr_verify.correct((0, 0), "Edited"), "the correction commits");
         app.ocr_draft.output_mode = OutputMode::EditableText;
@@ -2229,8 +2280,26 @@ mod tests {
     /// it already has text is passed over, unless every page was skipped.
     #[test]
     fn a_finished_run_shows_a_read_page_over_a_skipped_one() {
-        let skipped = |page| OcrPage { already_on_page: 0, page, words: Vec::new(), skipped: Some("has text".into()), notes: Vec::new() };
-        let read = |page| OcrPage { already_on_page: 0, page, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() };
+        let skipped = |page| OcrPage {
+            tables: Vec::new(),
+            paragraph_lengths: Vec::new(),
+            line_lengths: Vec::new(),
+            already_on_page: 0,
+            page,
+            words: Vec::new(),
+            skipped: Some("has text".into()),
+            notes: Vec::new(),
+        };
+        let read = |page| OcrPage {
+            tables: Vec::new(),
+            paragraph_lengths: Vec::new(),
+            line_lengths: Vec::new(),
+            already_on_page: 0,
+            page,
+            words: vec![word("w", Some(95.0))],
+            skipped: None,
+            notes: Vec::new(),
+        };
         let mut v = OcrVerify { current: 0, ..Default::default() };
         v.finished(vec![skipped(0), read(1), read(2)], false);
         assert_eq!(v.current, 1, "the first page read");
@@ -2266,7 +2335,16 @@ mod tests {
         }
         let a = app.views.first().expect("a is open").id;
         let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
-        let page = OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() };
+        let page = OcrPage {
+            tables: Vec::new(),
+            paragraph_lengths: Vec::new(),
+            line_lengths: Vec::new(),
+            already_on_page: 0,
+            page: 0,
+            words: vec![word("w", Some(95.0))],
+            skipped: None,
+            notes: Vec::new(),
+        };
         app.ocr_verify.load(a, job.guard.clone(), vec![page]);
         assert!(app.ocr_verify.correct((0, 0), "Edited"));
         app.active = Some(2);
@@ -2298,7 +2376,16 @@ mod tests {
         }
         let a = app.views.first().expect("a is open").id;
         let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
-        let page = OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() };
+        let page = OcrPage {
+            tables: Vec::new(),
+            paragraph_lengths: Vec::new(),
+            line_lengths: Vec::new(),
+            already_on_page: 0,
+            page: 0,
+            words: vec![word("w", Some(95.0))],
+            skipped: None,
+            notes: Vec::new(),
+        };
         app.ocr_verify.load(a, job.guard.clone(), vec![page]);
         assert!(app.ocr_verify.correct((0, 0), "Edited"));
         (app, a)
@@ -2339,7 +2426,16 @@ mod tests {
     #[test]
     fn a_finished_run_shows_a_page_it_read() {
         let mut v = OcrVerify { current: 0, ..Default::default() };
-        let page = OcrPage { already_on_page: 0, page: 2, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() };
+        let page = OcrPage {
+            tables: Vec::new(),
+            paragraph_lengths: Vec::new(),
+            line_lengths: Vec::new(),
+            already_on_page: 0,
+            page: 2,
+            words: vec![word("w", Some(95.0))],
+            skipped: None,
+            notes: Vec::new(),
+        };
         v.finished(vec![page], false);
         assert_eq!(v.current, 2);
         assert!(v.page(v.current).is_some());
@@ -2381,7 +2477,16 @@ mod tests {
         }
         let a = app.views[0].id;
         let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
-        let page = OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() };
+        let page = OcrPage {
+            tables: Vec::new(),
+            paragraph_lengths: Vec::new(),
+            line_lengths: Vec::new(),
+            already_on_page: 0,
+            page: 0,
+            words: vec![word("w", Some(95.0))],
+            skipped: None,
+            notes: Vec::new(),
+        };
         app.ocr_verify.load(a, job.guard.clone(), vec![page]);
         assert!(app.first_dirty().is_none(), "nothing is unsaved");
         app.active = Some(1);

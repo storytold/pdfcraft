@@ -104,7 +104,8 @@ impl Automation {
             .map(|p| match &p.skipped {
                 Some(why) => json!({ "page": p.page + 1, "skipped": why }),
                 None => {
-                    let mut page = json!({ "page": p.page + 1, "words": p.words.len(), "already_on_page": p.already_on_page });
+                    let mut page =
+                        json!({ "page": p.page + 1, "words": p.words.len(), "tables": p.tables.len(), "already_on_page": p.already_on_page });
                     // The editable output's substitution warnings (characters no font could
                     // show) are part of the result: reported per page, never dropped.
                     if !p.notes.is_empty() {
@@ -364,8 +365,13 @@ impl Automation {
                         })
                     })
                     .collect();
-                let mut page =
-                    json!({ "page": p.page + 1, "already_on_page": p.already_on_page, "words": words, "mean_confidence": p.mean_confidence().map(|c| (c * 10.0).round() / 10.0) });
+                let mut page = json!({
+                    "page": p.page + 1,
+                    "already_on_page": p.already_on_page,
+                    "tables": p.tables.len(),
+                    "words": words,
+                    "mean_confidence": p.mean_confidence().map(|c| (c * 10.0).round() / 10.0),
+                });
                 if let Some(why) = &p.skipped {
                     page["skipped"] = json!(why);
                 }
@@ -519,6 +525,9 @@ impl Automation {
         Ok(json!({ "path": path.to_string_lossy(), "count": words.len(), "words": words }))
     }
 
+    /// Whether text recognition's models are installed, whether the layout and table structure
+    /// models are too, the directories searched for them (in order), the languages it reads, each
+    /// as a code and a name, and the engines it can use.
     pub(crate) fn ocr_status(&self) -> Result<Value> {
         use pdfcraft_engine::ocr;
         let dirs: Vec<String> = ocr::Models::search_dirs().iter().map(|d| d.to_string_lossy().into_owned()).collect();
@@ -539,7 +548,9 @@ impl Automation {
                 v
             })
             .collect();
-        Ok(json!({ "available": ocr::available(), "search_dirs": dirs, "languages": langs, "engines": engines }))
+        Ok(
+            json!({ "available": ocr::available(), "layout": ocr::layout_available(), "tables": ocr::tables_available(), "search_dirs": dirs, "languages": langs, "engines": engines }),
+        )
     }
 }
 
