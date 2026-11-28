@@ -9,6 +9,8 @@
 //!   between them, each drawing an image upright (no rotation, skew or flip);
 //! - the images are 8-bit grey or RGB in the same colour space, without masks or a decode array
 //!   that changes anything, in a codec PdfCraft decodes;
+//! - no transfer function other than the identity is in force where they are drawn: merging
+//!   resamples a fragment, and samples drawn under one are kept as they are;
 //! - they tile one rectangle edge to edge with no gap or overlap — stacked top to bottom, placed
 //!   side by side, or arranged in a grid of rows and columns (in any drawing order), at least
 //!   [`MIN_FRAGMENTS`] of them.
@@ -21,7 +23,7 @@
 use pdfcraft_content::{Matrix, Op, parse, serialize_ops};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ImageBudget, ObjRef, Object, Stream};
 
-use crate::images::{components, content_bytes, decodable, page_resources, pixels, resample};
+use crate::images::{components, content_bytes, decodable, page_resources, pixels, resample, transfer_of};
 use crate::{OptimizeError, Report, Stage};
 
 /// Fewest stacked images treated as fragments of one picture.
@@ -406,10 +408,38 @@ fn merge_page(
         return Ok(0);
     }
     let parsed = parse(&data);
-    if parsed.skipped > 0 {
+    // Nor one with an inline image whose end is a guess (no `EI` the renderer finds): the
+    // renderer reads nothing after it, so what the parser read there (a `gs`, say) is not what
+    // the page draws, and a rewrite that ends the image with an `EI` would draw it.
+    if parsed.skipped > 0 || parsed.ambiguous_images > 0 {
         return Ok(0);
     }
     let ops = parsed.ops;
+    // Whether a transfer function other than the identity is in force at each operator: fragments
+    // drawn under one keep their samples, which merging would resample ([`transfer_of`]).
+    let states = resources.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
+    let mut stack = vec![false];
+    let under: Vec<bool> = ops
+        .iter()
+        .map(|op| {
+            let now = stack.last().copied().unwrap_or(false);
+            match op.op.as_slice() {
+                b"q" => stack.push(now),
+                b"Q" if stack.len() > 1 => {
+                    stack.pop();
+                }
+                b"gs" => {
+                    if let Some(set) = op.last_name().and_then(|n| states.get(n)).and_then(|g| transfer_of(doc, g))
+                        && let Some(t) = stack.last_mut()
+                    {
+                        *t = set;
+                    }
+                }
+                _ => {}
+            }
+            now
+        })
+        .collect();
     let mut out: Vec<Op> = Vec::with_capacity(ops.len());
     let (mut i, mut merged, mut k) = (0, 0, 0);
     let budget = ops.len().saturating_mul(SCAN_PER_OP).max(MIN_SCAN);
@@ -418,6 +448,14 @@ fn merge_page(
         if reads.get() > budget {
             out.extend(ops.get(i..).unwrap_or_default().iter().cloned());
             break;
+        }
+        // A run is `q … Do Q` groups with nothing between them, so one state is in force for all of it.
+        if under.get(i).copied().unwrap_or(false) {
+            if let Some(op) = ops.get(i) {
+                out.push(op.clone());
+            }
+            i += 1;
+            continue;
         }
         // The longest run of fragment groups from here with one colour space.
         let mut run = Vec::new();
