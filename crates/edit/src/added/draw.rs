@@ -8,8 +8,32 @@ use super::{
 };
 use pdfcraft_fonts::shaped_text::{self, ShapedFonts};
 
-fn font_name(base: &str) -> String {
-    format!("PCF{}", base.replace('-', ""))
+fn standard_font(t: &AddedText) -> Dict {
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("Type1"));
+    font.set(b"BaseFont".to_vec(), Object::name(t.family.base_font(t.bold, t.italic)));
+    if t.family != Family::Courier || !t.text.is_ascii() {
+        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    }
+    font
+}
+
+fn font_name(doc: &Document, t: &AddedText, taken: &Dict) -> String {
+    let base = format!("PCF{}", t.family.base_font(t.bold, t.italic).replace('-', ""));
+    let font = standard_font(t);
+    let mut name = base.clone();
+    let mut suffix = 0usize;
+    // A PDF may already use our preferred name for a different font or encoding. Reuse only
+    // the exact font we would write, its entries in any order, so repeated edits do not
+    // accumulate new resources.
+    let same =
+        |f: &Object| doc.resolve(f).as_dict().is_some_and(|d| d.len() == font.len() && font.iter().all(|(key, value)| d.get(key) == Some(value)));
+    while taken.get(name.as_bytes()).is_some_and(|f| !same(f)) {
+        suffix = suffix.saturating_add(1);
+        name = format!("{base}{suffix}");
+    }
+    name
 }
 
 #[cfg(test)]
@@ -60,7 +84,7 @@ pub(super) fn draw_laid_shaped(
     outline: impl Fn(ShapedScript, u32) -> Result<GlyphOutline, GlyphError>,
 ) -> Result<(), EditError> {
     let r = text_rect(t);
-    let latin = font_name(t.family.base_font(t.bold, t.italic));
+    let latin = font_name(doc, t, taken);
     let shaped =
         ShapedFonts::new(shaped_text::clusters(laid.iter().map(|(_, _, _, pieces, _)| pieces.as_slice())), outline, taken, fonts, "PCAr", &mut |o| {
             Object::Ref(doc.add(o))
@@ -122,17 +146,14 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
     .into_bytes();
     match c {
         Content::Text(t) => {
-            let base = t.family.base_font(t.bold, t.italic);
-            let name = font_name(base);
-            let mut font = Dict::new();
-            font.set(b"Type".to_vec(), Object::name("Font"));
-            font.set(b"Subtype".to_vec(), Object::name("Type1"));
-            font.set(b"BaseFont".to_vec(), Object::name(base));
-            if t.family != Family::Courier || !t.text.is_ascii() {
-                font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-            }
+            let name = font_name(doc, t, taken);
+            let font = standard_font(t);
             let mut fonts = Dict::new();
-            fonts.set(name.clone().into_bytes(), Object::Dict(font));
+            // Reusing a matching name must preserve its existing indirect reference as well
+            // as its appearance. Only new names need a resource entry in the merge.
+            if !taken.contains(name.as_bytes()) {
+                fonts.set(name.clone().into_bytes(), Object::Dict(font));
+            }
             let face_or_new = |has: fn(char) -> bool, face: bool| t.text.chars().any(has) && (face || !existing);
             if t.text.chars().any(is_thai)
                 || face_or_new(is_arabic, pdfcraft_fonts::document_arabic_font().is_some())

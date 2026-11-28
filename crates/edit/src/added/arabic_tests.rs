@@ -269,3 +269,19 @@ fn a_font_name_the_page_already_uses_is_not_reused() {
     assert_ne!(second, first);
     assert!(second.starts_with(b"PCAr"), "{}", String::from_utf8_lossy(&second));
 }
+
+#[test]
+fn latin_in_a_shaped_item_uses_the_collision_free_font_name() {
+    let mut doc = Document::new_empty();
+    let mut taken = Dict::new();
+    taken.set(b"PCFHelvetica".to_vec(), Object::Null);
+    let t = item();
+    let (_, resources) = draw::draw(&mut doc, &Content::Text(t.clone()), [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], &taken, false).unwrap();
+    let mut fonts = resources.get(b"Font").unwrap().as_dict().unwrap().clone();
+    let laid = vec![("Hi ب".into(), false, 0, vec![Piece::Latin("Hi ".into()), Piece::Shaped(vec![cluster(1, 0.5)])], 20.0)];
+    let mut out = Vec::new();
+    draw_laid_shaped(&mut doc, &t, &laid, &taken, &mut fonts, &mut out, |_, _| Ok(boxed(0.5))).unwrap();
+    let latin = glyphs_shown(&out).into_iter().find(|(_, code)| *code == b'H').unwrap().0;
+    assert_eq!(latin, b"PCFHelvetica1");
+    assert_eq!(fonts.get(&latin).unwrap().as_dict().unwrap().name(b"BaseFont"), Some(b"Helvetica".as_slice()));
+}
