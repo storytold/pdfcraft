@@ -220,7 +220,11 @@ fn paper_section(d: &PrintDraft, sizes: &[(f64, f64)], units: Unit, no_printers:
     if let Some(source) = source {
         buttons.push(("paper.match", lbl(tl!("Match page at 100%")), d.matching_paper(source).is_some(), None));
     }
-    let mut params = vec![paper, button_row("paper_actions", Label::default(), buttons)];
+    let mut eco = check("eco_mode", lbl(tl!("Eco mode (Grayscale, two-sided)")), d.eco_mode).shown(d.handling != Handling::Booklet);
+    if browser {
+        eco = eco.disabled();
+    }
+    let mut params = vec![eco, paper, button_row("paper_actions", Label::default(), buttons)];
 
     let sides = (0.0, crate::print_paper::MAX_SIDE * units.per_point());
     let kind = unit_kind(units);
@@ -442,6 +446,7 @@ fn advanced_section(d: &PrintDraft) -> PrintSection {
 /// The values of every row the draft decides.
 pub(super) fn fields_from_draft(d: &PrintDraft) -> DialogFields {
     let mut f = DialogFields::new();
+    f.set("eco_mode", d.eco_mode);
     f.set("which", id_of(&WHICH, d.which));
     f.set("range", d.range.clone());
     f.set("subset", id_of(&SUBSET, d.subset));
@@ -490,6 +495,11 @@ pub(super) fn draft_from_fields(d: &mut PrintDraft, f: &DialogFields, edited: &[
     let on = |key: &str| edited.iter().any(|e| e == key);
     let text = |key: &str| f.text(key);
     let num = |key: &str| f.number(key).filter(|n| n.is_finite());
+    if on("eco_mode")
+        && let Some(v) = f.bool("eco_mode")
+    {
+        d.set_eco_mode(v);
+    }
     if on("which")
         && let Some(which) = text("which").and_then(|t| value_of(&WHICH, t))
     {
