@@ -1640,6 +1640,39 @@ mod formcalc {
         assert_eq!(calc(r#"UnitValue("1in", "points")"#), "72");
     }
 
+    /// `Encode` for html and xml escapes the markup characters and writes every character past
+    /// ASCII as a numeric character reference (XFA 3.3 p. 1124).
+    #[test]
+    fn encode_writes_non_ascii_as_numeric_references() {
+        for kind in ["html", "xml"] {
+            assert_eq!(calc(&format!(r#"Encode("ÁÂÃÄÅÆ", "{kind}")"#)), "&#xc1;&#xc2;&#xc3;&#xc4;&#xc5;&#xc6;", "{kind}");
+            assert_eq!(
+                calc(&format!(r#"Encode("Åse <Ødegård> & ""€😀""", "{kind}")"#)),
+                "&#xc5;se &lt;&#xd8;deg&#xe5;rd&gt; &amp; &quot;&#x20ac;&#x1f600;&quot;",
+                "{kind}"
+            );
+            assert_eq!(calc(&format!(r#"Decode(Encode("Åse & €😀", "{kind}"), "{kind}")"#)), "Åse & €😀", "{kind}");
+        }
+        assert_eq!(calc(r#"Encode("plain text", "xml")"#), "plain text");
+    }
+
+    /// The unit functions know millipoints (1/72000 inch), and an invalid unit is inches, as
+    /// the spec says (XFA 3.3 pp. 1148-1149).
+    #[test]
+    fn unit_functions_know_millipoints_and_read_invalid_units_as_inches() {
+        assert_eq!(calc(r#"UnitType("72000mp")"#), "mp");
+        assert_eq!(calc(r#"UnitType("5 millipoints")"#), "mp");
+        assert_eq!(calc(r#"UnitValue("72000mp", "in")"#), "1");
+        assert_eq!(calc(r#"UnitValue("1in", "mp")"#), "72000");
+        assert_eq!(calc(r#"UnitValue("1pt", "millipoints")"#), "1000");
+        assert_eq!(calc(r#"UnitValue("7200millipoint", "cm")"#), "0.254");
+        // The spec's own examples of invalid units.
+        assert_eq!(calc(r#"UnitType("kilometers")"#), "in");
+        assert_eq!(calc(r#"UnitType("2.zero cm")"#), "in");
+        assert_eq!(calc(r#"UnitValue("5.08cm", "kilograms")"#), "2");
+        assert_eq!(calc(r#"UnitValue("6", "pt")"#), "432");
+    }
+
     fn assert_builtin_errors() {
         assert!(go(r#"Get("http://example.com")"#, "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("network"));
         assert!(go("Nope(1)", "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("unknown function"));

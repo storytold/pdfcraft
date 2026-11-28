@@ -5,6 +5,26 @@ use super::value::{Val, fixed, is_numeric_text, parse_num};
 use super::words::{decode_entities, word_num};
 use super::{Interp, MAX_STRING, R, STRING_TOO_LONG, XfaKind, is_limit};
 
+/// `Encode(s, "html" | "xml")`: the markup characters by name and every character past ASCII
+/// as a numeric reference, so "Á" is "&#xc1;" (XFA 3.3 p. 1124).
+fn encode_markup(s: &str) -> R<String> {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            c if c.is_ascii() => out.push(c),
+            c => out.push_str(&format!("&#x{:x};", u32::from(c))),
+        }
+        if out.len() > MAX_STRING {
+            return Err(STRING_TOO_LONG.into());
+        }
+    }
+    Ok(out)
+}
+
 impl Interp<'_> {
     /// A built-in function: its result is never a string past [`MAX_STRING`], and work on
     /// long strings is charged to the step budget.
@@ -199,7 +219,7 @@ impl Interp<'_> {
                 let s = self.arg_str(args, 0)?;
                 let kind = if args.len() > 1 { self.arg_str(args, 1)?.to_ascii_lowercase() } else { "url".into() };
                 Val::Str(match (lower.as_str(), kind.as_str()) {
-                    ("encode", "html" | "xml") => s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;"),
+                    ("encode", "html" | "xml") => encode_markup(&s)?,
                     ("decode", "xml") => decode_entities(&s, false),
                     ("decode", "html") => decode_entities(&s, true),
                     ("encode", _) => s
@@ -478,6 +498,8 @@ impl Interp<'_> {
                         "cm" | "centimeter" | "centimeters" => "cm",
                         "pt" | "point" | "points" => "pt",
                         "pc" | "pica" => "pc",
+                        "mp" | "millipoint" | "millipoints" => "mp",
+                        // An invalid unit is inches, as the spec says (XFA 3.3 p. 1148).
                         _ => "in",
                     }
                     .into(),
@@ -493,6 +515,9 @@ impl Interp<'_> {
                     "cm" | "centimeter" | "centimeters" => 2.54,
                     "pt" | "point" | "points" => 72.0,
                     "pc" | "pica" => 6.0,
+                    "mp" | "millipoint" | "millipoints" => 72_000.0,
+                    // No unit, or an invalid one, is inches: an invalid target converts to
+                    // inches (XFA 3.3 p. 1149).
                     _ => 1.0,
                 };
                 let target = if to.trim().is_empty() { unit.clone() } else { to };
