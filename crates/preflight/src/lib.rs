@@ -15,7 +15,10 @@
 //!   FirstPage and LastPage (ISO 32000-1 12.6.4.11, Table 212); no additional actions on the
 //!   catalog, pages, fields or widgets; `NeedAppearances` not true;
 //! - images: no `Interpolate`, no `Alternates`, no OPI; no PostScript XObjects;
-//! - embedded files: PDF/A-2 only allows embedded PDF/A files; PDF/A-3 needs `AFRelationship`.
+//! - embedded files: PDF/A-2 only allows embedded PDF/A files; PDF/A-3 needs `AFRelationship`, and
+//!   each embedded file listed as an associated file (`AF`) of the document or a part of it;
+//! - inline images: only the standard filters, not LZW or Crypt; JPEG 2000 images: 1, 3 or 4
+//!   channels, one colour specification used, method 1 to 3 and not CIEJab, one bit depth of 1 to 38.
 //!
 //! [`convert`] fixes what can be fixed without changing how pages look (XMP, the sRGB output
 //! intent, forbidden actions, annotation flags, Interpolate, NeedAppearances, encryption) and
@@ -23,9 +26,13 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod associated;
+mod contents;
 mod gstate;
 mod header;
 pub mod icc;
+mod inline;
+mod jpx;
 mod limits;
 mod spot;
 mod trailer;
@@ -216,12 +223,19 @@ pub const WORDINGS: &[&str] = &[
     "The font {} isn't embedded",
     "A font isn't embedded",
     "A stream uses LZW compression",
+    "An inline image uses the filter {}, which PDF/A doesn't allow there",
     "A stream refers to an external file",
     "An image asks to be interpolated",
     "An image has alternates or OPI information",
+    "A JPEG 2000 image has {} colour channels: only 1, 3 or 4 are allowed",
+    "A JPEG 2000 image has several colour specifications, but not exactly one marked as the best (APPROX 1)",
+    "A JPEG 2000 image's colour specification has the method {}: only 1, 2 or 3 are allowed",
+    "A JPEG 2000 image uses the enumerated colour space 19 (CIEJab)",
+    "A JPEG 2000 image's bit depth is outside 1 to 38, or differs between its colour channels",
     "PostScript XObjects aren't allowed",
     "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)",
     "An embedded file has no AFRelationship",
+    "An embedded file isn't associated with the document or a part of it (AF)",
 ];
 
 /// What a document declares (the Standards panel).
@@ -696,6 +710,10 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     let drawing = drawing_fonts(doc, &objs);
     check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
     check_limits(doc, &objs, &pages, &mut issue);
+    check_images(doc, &objs, &mut issue);
+    if level == Level::A3b {
+        check_associated_files(doc, &objs, &mut issue);
+    }
     check_spots(doc, &objs, &mut issue);
     check_graphics_states(doc, &mut issue);
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
@@ -982,6 +1000,103 @@ fn check_limits(
             issue("6.1.13", "Page {} has a boundary smaller than 3 or larger than 14400 units", Some((i + 1).to_string()), Some(i), false);
         }
     }
+}
+
+/// The decoded bytes, across the document's JPEG 2000 images, read to undo filters applied before
+/// `JPXDecode`.
+const MAX_JPX_PREFIX_DECODED: usize = 64 << 20;
+
+/// 6.1.10, an inline image's filters, and 6.2.8.3, JPEG 2000 images. Content and images would have
+/// to be rewritten to change either, which `convert` doesn't do.
+fn check_images(
+    doc: &Document,
+    objs: &[(ObjRef, std::sync::Arc<Object>)],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    for name in inline::forbidden_filters(doc, objs, &referenced_content(doc, objs)) {
+        issue("6.1.10", "An inline image uses the filter {}, which PDF/A doesn't allow there", Some(name), None, false);
+    }
+    let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_JPX_PREFIX_DECODED, 0);
+    for (_, o) in objs {
+        let Object::Stream(s) = &**o else { continue };
+        // With a colour space of its own, the image's data isn't read for one (ISO 32000-2 7.4.9).
+        if s.dict.name(b"Subtype") != Some(b"Image") || s.dict.get(b"ColorSpace").is_some_and(|cs| !matches!(cs, Object::Null)) {
+            continue;
+        }
+        let Some(found) = jpx::check(doc, s, &mut budget) else { continue };
+        if let Some(channels) = found.channels {
+            issue("6.2.8.3", "A JPEG 2000 image has {} colour channels: only 1, 3 or 4 are allowed", Some(channels.to_string()), None, false);
+        }
+        if found.best {
+            issue(
+                "6.2.8.3",
+                "A JPEG 2000 image has several colour specifications, but not exactly one marked as the best (APPROX 1)",
+                None,
+                None,
+                false,
+            );
+        }
+        if let Some(method) = found.method {
+            issue(
+                "6.2.8.3",
+                "A JPEG 2000 image's colour specification has the method {}: only 1, 2 or 3 are allowed",
+                Some(method.to_string()),
+                None,
+                false,
+            );
+        }
+        if found.cie_jab {
+            issue("6.2.8.3", "A JPEG 2000 image uses the enumerated colour space 19 (CIEJab)", None, None, false);
+        }
+        if found.depth {
+            issue("6.2.8.3", "A JPEG 2000 image's bit depth is outside 1 to 38, or differs between its colour channels", None, None, false);
+        }
+    }
+}
+
+/// The embedded files' file specifications, as 6.8 reads them: `/Type /Filespec` with `/EF`.
+fn embedded_file_specs(objs: &[(ObjRef, std::sync::Arc<Object>)]) -> impl Iterator<Item = ObjRef> + '_ {
+    objs.iter().filter(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Type") == Some(b"Filespec") && d.get(b"EF").is_some())).map(|(r, _)| *r)
+}
+
+/// PDF/A-3 6.8: every embedded file is an associated file of the document or a part of it.
+fn check_associated_files(
+    doc: &Document,
+    objs: &[(ObjRef, std::sync::Arc<Object>)],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let associated = associated::associated(doc, objs, &referenced_content(doc, objs));
+    if embedded_file_specs(objs).any(|r| !associated.contains(&r)) {
+        issue("6.8", "An embedded file isn't associated with the document or a part of it (AF)", None, None, true);
+    }
+}
+
+/// Associates the embedded files of `doc` that aren't associated files with the document as a
+/// whole: their file specifications go in the catalog's `/AF` array. How many it added.
+fn associate_embedded_files(doc: &mut Document, root: ObjRef) -> Result<usize, pdfcraft_cos::CosError> {
+    let objs = objects(doc);
+    let associated = associated::associated(doc, &objs, &referenced_content(doc, &objs));
+    let missing: Vec<Object> = embedded_file_specs(&objs).filter(|r| !associated.contains(r)).map(Object::Ref).collect();
+    if missing.is_empty() {
+        return Ok(0);
+    }
+    let added = missing.len();
+    match catalog(doc).get(b"AF").cloned() {
+        // An array of its own: it is the one extended.
+        Some(Object::Ref(r)) => {
+            let Object::Array(mut files) = (*doc.get(r)).clone() else { return Ok(0) };
+            files.extend(missing);
+            doc.set_existing(r, Object::Array(files))?;
+        }
+        Some(Object::Array(mut files)) => {
+            files.extend(missing);
+            doc.update_dict(root, |c| c.set(b"AF".to_vec(), Object::Array(files)))?;
+        }
+        None | Some(Object::Null) => doc.update_dict(root, |c| c.set(b"AF".to_vec(), Object::Array(missing)))?,
+        // An /AF that isn't an array is left as it is, and stays reported.
+        Some(_) => return Ok(0),
+    }
+    Ok(added)
 }
 
 fn check_spots(
@@ -1589,6 +1704,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         }
     }
     remove_from_pages(doc, &forbidden_annots)?;
+    let associated = if level == Level::A3b { associate_embedded_files(doc, root)? } else { 0 };
     // Forbidden actions left as objects of their own, or chained to by one, and those written
     // directly in an /A elsewhere (an outline item's, say).
     for (r, o) in objects(doc) {
@@ -1611,6 +1727,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         (images, "cleared image interpolation and alternates"),
         (removed, "removed multimedia annotations"),
         (files, "marked embedded files' relationship"),
+        (associated, "associated embedded files with the document"),
     ] {
         if n > 0 {
             fixed.push(format!("{n}: {what}"));

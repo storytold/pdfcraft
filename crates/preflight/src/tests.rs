@@ -2367,3 +2367,245 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// A page whose content is `content`, with the catalog entries `catalog` and the further objects
+/// `more`, numbered from 5.
+fn page_with(content: &str, catalog: &str, more: &[&str]) -> Document {
+    page_with_resources(content, "", catalog, more)
+}
+
+/// [`page_with`], with the page's resource dictionary holding `resources` too.
+fn page_with_resources(content: &str, resources: &str, catalog: &str, more: &[&str]) -> Document {
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>");
+    let page = format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im 5 0 R >> {resources} >> >>");
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let mut objs: Vec<&str> = vec![&catalog, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page, &stream];
+    objs.extend_from_slice(more);
+    build(&objs, "")
+}
+
+/// PDF/A-2 6.1.10: an inline image's filters are standard ones or their abbreviations, and none
+/// is LZW or Crypt.
+#[test]
+fn inline_image_filters_are_standard_clause_6_1_10() {
+    let found = |content: &str| -> Vec<String> {
+        verify(&page_with(content, "", &[]), Level::A2b).into_iter().filter(|i| i.clause == "6.1.10").map(|i| i.message).collect()
+    };
+    let image = |filter: &str| format!("q BI /W 1 /H 1 /BPC 8 /CS /G {filter} ID \0\nEI Q");
+    for fine in ["", "/F /AHx", "/Filter /FlateDecode", "/F [/A85 /Fl]", "/F [/RL /CCF /DCT]", "/Filter [/ASCIIHexDecode /RunLengthDecode]"] {
+        assert_eq!(found(&image(fine)), Vec::<String>::new(), "{fine}");
+    }
+    let said = |name: &str| format!("An inline image uses the filter {name}, which PDF/A doesn't allow there");
+    assert_eq!(found(&image("/F /LZW")), [said("LZW")]);
+    assert_eq!(found(&image("/Filter /LZWDecode")), [said("LZWDecode")]);
+    assert_eq!(found(&image("/F [/AHx /Crypt]")), [said("Crypt")]);
+    assert_eq!(found(&image("/F /Foo")), [said("Foo")]);
+    // Each name once; the image in a form XObject is read too.
+    let twice = format!("{} {}", image("/F /LZW"), image("/F [/LZW /Fl]"));
+    assert_eq!(found(&twice), [said("LZW")]);
+    let form = page_with(
+        "/Im Do",
+        "",
+        &["<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 40 >>\nstream\nBI /W 1 /H 1 /BPC 8 /CS /G /F /LZW ID \0\nEI\nendstream"],
+    );
+    assert_eq!(verify(&form, Level::A3b).iter().filter(|i| i.clause == "6.1.10").count(), 1);
+}
+
+/// JP2 data (ITU-T T.800 Annex I) with only its header: `channels` and `bpc` in `ihdr`, the
+/// per-channel depths `bpcc`, and `colr` boxes of (method, approx, enumerated space).
+fn jp2(channels: u8, bpc: u8, bpcc: &[u8], colours: &[(u8, u8, u8)]) -> Vec<u8> {
+    let boxed = |kind: &[u8; 4], body: &[u8]| -> Vec<u8> {
+        let mut b = vec![0, 0, 0, u8::try_from(body.len() + 8).unwrap()];
+        b.extend_from_slice(kind);
+        b.extend_from_slice(body);
+        b
+    };
+    let mut header = boxed(b"ihdr", &[0, 0, 0, 1, 0, 0, 0, 1, 0, channels, bpc, 7, 0, 0]);
+    if !bpcc.is_empty() {
+        header.extend(boxed(b"bpcc", bpcc));
+    }
+    for &(method, approx, space) in colours {
+        header.extend(boxed(b"colr", &[method, 0, approx, 0, 0, 0, space]));
+    }
+    let mut data = boxed(b"ftyp", b"jp2 \0\0\0\0jp2 ");
+    data.extend(boxed(b"jp2h", &header));
+    data.extend(boxed(b"jp2c", &[0x7F]));
+    data
+}
+
+/// PDF/A-2 6.2.8.3: a JPEG 2000 image's channels, colour specifications and bit depth.
+#[test]
+fn jpeg2000_images_are_checked_clause_6_2_8_3() {
+    let found = |data: &[u8]| -> Vec<String> {
+        // Every byte here is below 0x80, so the data can be written into a test file as text.
+        assert!(data.iter().all(|b| *b < 0x80));
+        let data: String = data.iter().copied().map(char::from).collect();
+        let image =
+            format!("<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /Filter /JPXDecode /Length {} >>\nstream\n{data}\nendstream", data.len());
+        verify(&page_with("/Im Do", "", &[&image]), Level::A2b).into_iter().filter(|i| i.clause == "6.2.8.3").map(|i| i.message).collect()
+    };
+    let srgb = (1, 0, 16);
+    for fine in [
+        jp2(3, 7, &[], &[srgb]),
+        jp2(1, 0, &[], &[(1, 0, 17)]),
+        jp2(4, 37, &[], &[(2, 0, 0)]),
+        // Of several specifications, the one marked as the best is used.
+        jp2(3, 7, &[], &[(4, 0, 0), (1, 1, 16)]),
+    ] {
+        assert_eq!(found(&fine), Vec::<String>::new(), "{fine:?}");
+    }
+    assert_eq!(found(&jp2(5, 7, &[], &[srgb])), ["A JPEG 2000 image has 5 colour channels: only 1, 3 or 4 are allowed"]);
+    // An opacity channel isn't a colour one (`cdef`); a palette's columns are the channels (`pclr`).
+    // `jp2` with `boxes` added at the end of `jp2h`, whose length grows by theirs.
+    let with_boxes = |data: Vec<u8>, boxes: &[(&[u8; 4], &[u8])]| -> Vec<u8> {
+        let mut data = data;
+        let at = data.windows(4).position(|w| w == b"jp2h").unwrap();
+        let end = at + 4 + usize::from(data[at - 1]) - 8;
+        let mut new = Vec::new();
+        for (kind, body) in boxes {
+            new.extend([0, 0, 0, u8::try_from(body.len() + 8).unwrap()]);
+            new.extend_from_slice(*kind);
+            new.extend_from_slice(body);
+        }
+        data[at - 1] += u8::try_from(new.len()).unwrap();
+        data.splice(end..end, new);
+        data
+    };
+    let grey_opacity = [0, 2, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0];
+    assert_eq!(found(&with_boxes(jp2(2, 7, &[], &[srgb]), &[(b"cdef", &grey_opacity)])), Vec::<String>::new());
+    let two_colours = [0, 2, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 2];
+    assert_eq!(
+        found(&with_boxes(jp2(2, 7, &[], &[srgb]), &[(b"cdef", &two_colours)])),
+        ["A JPEG 2000 image has 2 colour channels: only 1, 3 or 4 are allowed"]
+    );
+    // A palette of two entries, three 8-bit columns.
+    let palette = [0, 2, 3, 7, 7, 7, 0, 0, 0, 1, 1, 1];
+    assert_eq!(found(&with_boxes(jp2(1, 7, &[], &[srgb]), &[(b"pclr", &palette)])), Vec::<String>::new());
+    // A component mapping gives the channels: two palette columns and one component direct.
+    let mapping = [0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0];
+    assert_eq!(found(&with_boxes(jp2(2, 7, &[], &[srgb]), &[(b"pclr", &palette), (b"cmap", &mapping)])), Vec::<String>::new());
+    let mapping_two = [0, 0, 1, 0, 0, 0, 1, 1];
+    assert_eq!(
+        found(&with_boxes(jp2(1, 7, &[], &[srgb]), &[(b"pclr", &palette), (b"cmap", &mapping_two)])),
+        ["A JPEG 2000 image has 2 colour channels: only 1, 3 or 4 are allowed"]
+    );
+    // Depths: a palette column's is its own, so 8- and 16-bit columns differ.
+    let mixed = [0, 2, 3, 7, 15, 7, 0, 0, 0, 0, 1, 1, 1, 1];
+    assert!(jpx::check_data(&with_boxes(jp2(2, 7, &[], &[srgb]), &[(b"pclr", &mixed), (b"cmap", &mapping)])).is_some_and(|j| j.depth));
+    // A mapping to a palette the header doesn't have can't be read for its depths.
+    assert!(jpx::check_data(&with_boxes(jp2(2, 7, &[], &[srgb]), &[(b"cmap", &mapping)])).is_some_and(|j| j.depth));
+    // An opacity channel's depth may differ from the colour channels', within range.
+    let grey_and_opacity = |depths: &[u8]| jpx::check_data(&with_boxes(jp2(2, 0xFF, depths, &[srgb]), &[(b"cdef", &grey_opacity)]));
+    assert_eq!(grey_and_opacity(&[7, 0]), Some(jpx::Jpx::default()));
+    assert!(grey_and_opacity(&[7, 40]).is_some_and(|j| j.depth));
+    // With a colour space of its own, the image's data isn't read for one.
+    let bad = jp2(5, 40, &[], &[(4, 0, 0)]);
+    let text: String = bad.iter().copied().map(char::from).collect();
+    let own = format!(
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /Filter /JPXDecode /Length {} >>\nstream\n{text}\nendstream",
+        text.len()
+    );
+    assert!(verify(&page_with("/Im Do", "", &[&own]), Level::A2b).iter().all(|i| i.clause != "6.2.8.3"));
+    // Filters before `JPXDecode` are undone first, their parameters given directly or by reference;
+    // data they can't undo isn't read.
+    let five: String = jp2(5, 7, &[], &[srgb]).iter().map(|b| format!("{b:02X}")).collect::<String>() + ">";
+    let prefixed = |data: &str, parms: &str| {
+        let image = format!(
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /Filter [/AHx /JPXDecode] {parms} /Length {} >>\nstream\n{data}\nendstream",
+            data.len()
+        );
+        let doc = page_with("/Im Do", "", &[&image, "[null null]"]);
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.8.3").map(|i| i.message).collect::<Vec<_>>()
+    };
+    let channels = ["A JPEG 2000 image has 5 colour channels: only 1, 3 or 4 are allowed"];
+    assert_eq!(prefixed(&five, ""), channels);
+    assert_eq!(prefixed(&five, "/DecodeParms 6 0 R"), channels);
+    assert_eq!(prefixed("ZZ>", ""), Vec::<String>::new());
+    // A /Filter given by reference is followed.
+    let referred = format!("<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /Filter 6 0 R /Length {} >>\nstream\n{text}\nendstream", text.len());
+    let doc = page_with("/Im Do", "", &[&referred, "/JPXDecode"]);
+    assert!(verify(&doc, Level::A2b).iter().any(|i| i.clause == "6.2.8.3"));
+    assert_eq!(
+        found(&jp2(3, 7, &[], &[srgb, srgb])),
+        ["A JPEG 2000 image has several colour specifications, but not exactly one marked as the best (APPROX 1)"]
+    );
+    assert_eq!(found(&jp2(3, 7, &[], &[(4, 0, 0)])), ["A JPEG 2000 image's colour specification has the method 4: only 1, 2 or 3 are allowed"]);
+    // The one marked as the best is the one used: a method 4 there is reported, beside a good one.
+    assert_eq!(found(&jp2(3, 7, &[], &[srgb, (4, 1, 0)])), ["A JPEG 2000 image's colour specification has the method 4: only 1, 2 or 3 are allowed"]);
+    assert_eq!(found(&jp2(3, 7, &[], &[(1, 0, 19)])), ["A JPEG 2000 image uses the enumerated colour space 19 (CIEJab)"]);
+    let depth = ["A JPEG 2000 image's bit depth is outside 1 to 38, or differs between its colour channels"];
+    assert_eq!(found(&jp2(3, 40, &[], &[srgb])), depth);
+    // Channels whose depths may differ say so with 255 in `ihdr`, and give each in `bpcc`.
+    assert_eq!(jpx::check_data(&jp2(3, 0xFF, &[7, 7, 7], &[srgb])), Some(jpx::Jpx::default()));
+    for differ in [&[7, 7, 15][..], &[]] {
+        assert!(jpx::check_data(&jp2(3, 0xFF, differ, &[srgb])).is_some_and(|j| j.depth), "{differ:?}");
+    }
+    // A bare codestream: `SIZ` gives the components and their depths.
+    let mut siz = vec![0xFF, 0x4F, 0xFF, 0x51, 0, 47, 0, 0];
+    siz.extend([0; 32]);
+    siz.extend([0, 3, 7, 1, 1, 7, 1, 1, 7, 1, 1]);
+    assert_eq!(jpx::check_data(&siz), Some(jpx::Jpx::default()));
+    siz[45] = 15;
+    assert!(jpx::check_data(&siz).is_some_and(|j| j.depth));
+    siz[41] = 2;
+    assert!(jpx::check_data(&siz).is_some_and(|j| j.channels == Some(2)));
+}
+
+/// PDF/A-3 6.8: every embedded file is associated with the document or a part of it.
+#[test]
+fn embedded_files_are_associated_files_clause_6_8() {
+    let spec = "<< /Type /Filespec /F (a.xml) /UF (a.xml) /AFRelationship /Data /EF << /F 6 0 R >> >>";
+    let file = "<< /Type /EmbeddedFile /Subtype /text#2Fxml /Length 3 >>\nstream\n<a/>\nendstream";
+    let names = "/Names << /EmbeddedFiles << /Names [(a.xml) 7 0 R] >> >>";
+    let with = |content: &str, catalog: &str, image: &str| page_with(content, &format!("{names} {catalog}"), &[image, file, spec, "[7 0 R]"]);
+    let plain =
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /Length 1 >>\nstream\n\0\nendstream";
+    // The page's property list /MC0 is the array of the file's specification.
+    let listed = |content: &str| page_with_resources(content, "/Properties << /MC0 [7 0 R] >>", names, &[plain, file, spec, "[7 0 R]"]);
+    let said = "An embedded file isn't associated with the document or a part of it (AF)";
+    let found = |doc: &Document, level: Level| -> Vec<(String, bool)> {
+        verify(doc, level).into_iter().filter(|i| i.message == said).map(|i| (i.message, i.fixable)).collect()
+    };
+    assert_eq!(found(&with("", "", plain), Level::A3b), [(said.to_string(), true)]);
+    // PDF/A-2 doesn't have associated files.
+    assert_eq!(found(&with("", "", plain), Level::A2b), Vec::<(String, bool)>::new());
+    // The catalog's /AF, directly or by reference; an image's; a property list that content
+    // tags `AF`.
+    let image_af = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /AF [7 0 R] /Length 1 >>\nstream\n\0\nendstream";
+    for doc in [
+        with("", "/AF [7 0 R]", plain),
+        with("", "/AF 8 0 R", plain),
+        with("/Im Do", "", image_af),
+        listed("/AF /MC0 BDC EMC"),
+        // A name may be written with escapes (ISO 32000-2 7.3.5).
+        listed("/A#46 /MC0 BDC EMC"),
+    ] {
+        assert_eq!(found(&doc, Level::A3b), Vec::<(String, bool)>::new());
+    }
+    // A property list no `AF` sequence names associates nothing.
+    for content in ["", "/Span /MC0 BDC EMC", "/AF /MC1 BDC EMC"] {
+        let doc = listed(content);
+        assert_eq!(found(&doc, Level::A3b), [(said.to_string(), true)], "{content}");
+    }
+    // However many other names content tags, /MC0 counts when it is tagged too, and only then.
+    let others: String = (0..5000).map(|i| format!("/AF /N{i} BDC EMC ")).collect();
+    assert_eq!(found(&listed(&format!("{others}/AF /MC0 BDC EMC")), Level::A3b), Vec::<(String, bool)>::new());
+    assert_eq!(found(&listed(&others), Level::A3b), [(said.to_string(), true)]);
+    // A name is read in the resources of the content that uses it: the page's /MC0 names a.xml,
+    // a form's /MC0 names b.xml, and only the content that tags it associates its own.
+    let second = |form_content: &str| {
+        let spec_b = "<< /Type /Filespec /F (b.xml) /UF (b.xml) /AFRelationship /Data /EF << /F 9 0 R >> >>";
+        let form = format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /Properties << /MC0 [10 0 R] >> >> /Length {} >>\nstream\n{form_content}\nendstream",
+            form_content.len()
+        );
+        page_with_resources("/AF /MC0 BDC EMC", "/Properties << /MC0 [7 0 R] >>", names, &[plain, file, spec, "[7 0 R]", file, spec_b, &form])
+    };
+    assert_eq!(found(&second(""), Level::A3b), [(said.to_string(), true)]);
+    assert_eq!(found(&second("/AF /MC0 BDC EMC"), Level::A3b), Vec::<(String, bool)>::new());
+    // Save as PDF/A associates it with the document.
+    let mut doc = with("", "", plain);
+    let report = convert(&mut doc, Level::A3b).unwrap();
+    assert!(report.fixed.iter().any(|f| f == "1: associated embedded files with the document"), "{:?}", report.fixed);
+    assert_eq!(found(&doc, Level::A3b), Vec::<(String, bool)>::new());
+}
