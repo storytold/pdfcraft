@@ -72,14 +72,14 @@ const USAGE: &str = concat!(
     "\
 pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
                                                           (includes any declared PDF/A or PDF/UA level)
-pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
-pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
+pdfcraft-cli render <file.pdf> [--page N] [--dpi 96] --out x.png [--password PW]   (.png, .jpg, .tif or .pam)
+pdfcraft-cli text   <file.pdf> [--page N] [--password PW]  extracted text (pages separated by form feeds)
 pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
-                      [--insert-blank 1] [--title T] [--author A] [--full]
+                      [--insert-blank 1] [--title T] [--author A] [--full] [--password PW]
                       (options run in order; page numbers refer to the document after the earlier options)
 pdfcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
-pdfcraft-cli extract <in.pdf> --pages 1,3,5-8 --out out.pdf    (pages and ranges, in the order given)
-pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
+pdfcraft-cli extract <in.pdf> --pages 1,3,5-8 --out out.pdf [--password PW]    (pages and ranges, in the order given)
+pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR] [--password PW]
 pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
 pdfcraft-cli audit  <file.pdf> [--password PW]            find faux redactions (fails when found)
 pdfcraft-cli batch <files or dirs...> --steps convert,ocr,optimize --out-dir DIR

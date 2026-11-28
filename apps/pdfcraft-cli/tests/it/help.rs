@@ -20,7 +20,7 @@ fn help_flags_print_full_usage_to_stdout() {
         assert!(out.status.success(), "{args:?} exited {:?}", out.status);
         let stdout = text(&out.stdout);
         // Per-command options, not just the command list.
-        assert!(stdout.contains("pdfcraft-cli render <file.pdf> --page N"), "{args:?}: {stdout}");
+        assert!(stdout.contains("pdfcraft-cli render <file.pdf> [--page N]"), "{args:?}: {stdout}");
         assert!(stdout.contains("--every N"), "{args:?}: {stdout}");
         assert!(out.stderr.is_empty(), "{args:?}: {}", text(&out.stderr));
     }
@@ -31,7 +31,7 @@ fn no_command_fails_with_usage_on_stderr() {
     let out = run(&[]);
     assert!(!out.status.success());
     assert!(out.stdout.is_empty());
-    assert!(text(&out.stderr).contains("pdfcraft-cli render <file.pdf> --page N"));
+    assert!(text(&out.stderr).contains("pdfcraft-cli render <file.pdf> [--page N]"));
 }
 
 /// `mcp` is listed only when the build has it (`--no-default-features` leaves it out).
