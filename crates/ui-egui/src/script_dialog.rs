@@ -88,7 +88,8 @@ fn radio_peers(elements: &[pdfcraft_engine::js::DialogElement], group: &str, val
 #[derive(Default)]
 struct DialogState {
     values: std::collections::BTreeMap<String, serde_json::Value>,
-    images: std::collections::HashMap<String, CachedImage>,
+    images: std::collections::HashMap<usize, CachedImage>,
+    next_image: usize,
     revision: u32,
 }
 
@@ -112,7 +113,8 @@ fn custom_elements(
         ui.push_id((&e.id, &e.name, &e.kind), |ui| {
             ui.add_enabled_ui(e.enabled, |ui| {
                 if e.kind == "image" {
-                    let image = state.images.entry(e.id.clone()).or_default();
+                    let image = state.images.entry(state.next_image).or_default();
+                    state.next_image += 1;
                     if image.revision != state.revision {
                         image.revision = state.revision;
                         if image.value != e.value {
@@ -800,7 +802,13 @@ impl PdfCraftApp {
                     let request = craft::host::PickRequest::open("script-source-pdf")
                         .title(tl!("Select a source PDF for this document"))
                         .filter(tl!("PDF documents"), &["pdf"]);
-                    self.pick_file(request, target, move |_, ctx, picked| {
+                    let token = pending.token.clone();
+                    self.pick_file(request, target, move |app, ctx, picked| {
+                        if !app.script_pending.as_ref().is_some_and(|pending| {
+                            std::sync::Arc::ptr_eq(&pending.token, &token) && pending.pdf_pick.is_some() && pending.started.elapsed() < PROMPT_TIMEOUT
+                        }) {
+                            return;
+                        }
                         let Some(path) = picked.first_path() else {
                             let _ = send.send(Ok(None));
                             return;
@@ -938,6 +946,7 @@ impl PdfCraftApp {
                 ScriptPrompt::Dialog(dialog) => {
                     ui.label(&dialog.title);
                     let mut event = None;
+                    pending.dialog_state.next_image = 0;
                     egui::ScrollArea::vertical().max_height(600.0).show(ui, |ui| {
                         custom_elements(
                             ui,

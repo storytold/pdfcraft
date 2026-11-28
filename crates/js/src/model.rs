@@ -36,6 +36,7 @@ pub const DISPLAY_NO_VIEW: i32 = 3;
 /// Rectangle geometry for an individual widget after the first.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WidgetRect {
+    pub object_id: u64,
     pub rect: [f64; 4],
     pub crop: [f64; 4],
     pub rotation: i64,
@@ -75,6 +76,7 @@ pub struct FieldState {
     /// A setter ran, even if its text equals widget 0: other widgets may differ.
     pub caption_written: bool,
     pub rect: Option<[f64; 4]>,
+    pub first_widget_id: Option<u64>,
     pub additional_widget_rects: std::sync::Arc<[WidgetRect]>,
     pub page_rotation: i64,
     pub page_crop: [f64; 4],
@@ -118,6 +120,7 @@ impl FieldState {
             caption: None,
             caption_written: false,
             rect: None,
+            first_widget_id: None,
             additional_widget_rects: Default::default(),
             page_rotation: 0,
             page_crop: [0.0; 4],

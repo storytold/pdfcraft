@@ -58,7 +58,7 @@ shared deadline; small forms retain 10 seconds.
 The supplied sheet initialized without document errors or import-failure alerts,
 with one imported add-on, 213 races, 21 classes and 806 spells. The final local
 run opened it in 8.3 seconds. Timer-result writeback completed in about 1.2 seconds;
-previously it exceeded its callback budget after 43?61 seconds. Calculated values
+previously it exceeded its callback budget after 43 to 61 seconds. Calculated values
 are committed before formatting against one final snapshot, avoiding a full form
 read for each Format callback. Hidden-value writes invalidate stale appearances
 without drawing their potentially large storage strings.

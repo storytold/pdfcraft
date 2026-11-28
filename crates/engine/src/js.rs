@@ -368,6 +368,7 @@ pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field, geometry: &pdfcraft_
             .find_map(|p| (p.get(1) == Some(&"Tf")).then(|| p.first()?.parse::<f64>().ok()).flatten())
             .unwrap_or(0.0);
     if let Some(w) = f.widgets.first() {
+        s.first_widget_id = Some(field_object_id(w.obj));
         let page = w.page.unwrap_or(0);
         s.page_rotation = geometry.page_rotations.get(page).copied().unwrap_or(0);
         s.page_crop = geometry.page_boxes.get(page).map_or([0.0; 4], |boxes| boxes[1]);
@@ -388,7 +389,12 @@ pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field, geometry: &pdfcraft_
             let page = widget.page.unwrap_or(0);
             let rotation = geometry.page_rotations.get(page).copied().unwrap_or(0);
             let crop = geometry.page_boxes.get(page).map_or([0.0; 4], |boxes| boxes[1]);
-            pdfcraft_js::WidgetRect { rect: pdfcraft_js::rotate_rect(widget.rect, crop, rotation), crop, rotation }
+            pdfcraft_js::WidgetRect {
+                object_id: field_object_id(widget.obj),
+                rect: pdfcraft_js::rotate_rect(widget.rect, crop, rotation),
+                crop,
+                rotation,
+            }
         })
         .collect();
     s.icon_mixed = f.widgets.iter().any(|w| {
@@ -403,13 +409,38 @@ pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field, geometry: &pdfcraft_
     s
 }
 
+fn widget_geometry(field: &pdfcraft_js::FieldState) -> impl Iterator<Item = pdfcraft_js::WidgetRect> + '_ {
+    field
+        .first_widget_id
+        .zip(field.rect)
+        .map(|(object_id, rect)| pdfcraft_js::WidgetRect { object_id, rect, crop: field.page_crop, rotation: field.page_rotation })
+        .into_iter()
+        .chain(field.additional_widget_rects.iter().cloned())
+}
+
+/// The shadow keeps the original widget order. Route its writes to the surviving PDF indices.
+fn surviving_rect_changes<'a>(
+    before: &pdfcraft_js::FieldState,
+    after: &pdfcraft_js::FieldState,
+    preview: &'a pdfcraft_js::FieldState,
+) -> impl Iterator<Item = (usize, [f64; 4])> + 'a {
+    let original: std::collections::HashMap<_, _> = widget_geometry(before).map(|widget| (widget.object_id, widget)).collect();
+    let writes: std::collections::HashMap<_, _> = widget_geometry(after)
+        .filter_map(|widget| {
+            let before = original.get(&widget.object_id)?;
+            (widget.rect != before.rect).then(|| (widget.object_id, pdfcraft_js::unrotate_rect(widget.rect, widget.crop, widget.rotation)))
+        })
+        .collect();
+    widget_geometry(preview).enumerate().filter_map(move |(index, widget)| Some((index, *writes.get(&widget.object_id)?)))
+}
+
 /// The changes a script made, against the fields as they were.
 fn changes(
     before: &[pdfcraft_js::FieldState],
     after: &[pdfcraft_js::FieldState],
     formatted: &std::collections::BTreeSet<String>,
 ) -> Vec<FieldChange> {
-    changes_from(before, after, formatted, None)
+    changes_from(before, after, formatted, None, false)
 }
 
 fn changes_from(
@@ -417,6 +448,7 @@ fn changes_from(
     after: &[pdfcraft_js::FieldState],
     formatted: &std::collections::BTreeSet<String>,
     live_before: Option<&[pdfcraft_js::FieldState]>,
+    pages_deleted: bool,
 ) -> Vec<FieldChange> {
     if after.is_empty() {
         return Vec::new();
@@ -451,6 +483,22 @@ fn changes_from(
             .copied();
             let original_display = live.map(|f| f.display).or(a.display_before_write).unwrap_or(b.display);
             let original_icon = live.unwrap_or(b);
+            let (rect, widget_rects) = if let Some(live) = live.filter(|_| pages_deleted) {
+                let mut surviving = surviving_rect_changes(live, a, b).peekable();
+                let first = surviving.next_if(|(index, _)| *index == 0).map(|(_, rect)| rect);
+                (first, surviving.collect())
+            } else {
+                (
+                    (a.rect != b.rect).then(|| a.rect.map(|r| pdfcraft_js::unrotate_rect(r, b.page_crop, b.page_rotation))).flatten(),
+                    a.additional_widget_rects
+                        .iter()
+                        .zip(b.additional_widget_rects.iter())
+                        .enumerate()
+                        .filter(|(_, (after, before))| after.rect != before.rect)
+                        .map(|(i, (after, _))| (i + 1, pdfcraft_js::unrotate_rect(after.rect, after.crop, after.rotation)))
+                        .collect(),
+                )
+            };
             let c = FieldChange {
                 name: a.name.clone(),
                 object: a
@@ -463,15 +511,8 @@ fn changes_from(
                 read_only: (a.readonly != b.readonly).then_some(a.readonly),
                 required: (a.required != b.required).then_some(a.required),
                 display: (a.display != original_display).then_some(a.display),
-                rect: (a.rect != b.rect).then(|| a.rect.map(|r| pdfcraft_js::unrotate_rect(r, b.page_crop, b.page_rotation))).flatten(),
-                widget_rects: a
-                    .additional_widget_rects
-                    .iter()
-                    .zip(b.additional_widget_rects.iter())
-                    .enumerate()
-                    .filter(|(_, (after, before))| after.rect != before.rect)
-                    .map(|(i, (after, _))| (i + 1, pdfcraft_js::unrotate_rect(after.rect, after.crop, after.rotation)))
-                    .collect(),
+                rect,
+                widget_rects,
                 stroke_color: a.stroke_color.as_deref().filter(|_| a.stroke_color != b.stroke_color).map(<[_]>::to_vec),
                 text_size: (a.text_size != b.text_size).then_some(a.text_size),
                 line_width: (a.line_width != b.line_width).then_some(a.line_width),
@@ -1513,7 +1554,8 @@ impl Session {
                 }
             }
         }
-        let mut changes = changes_from(&baseline, &o.changed, &o.formatted, (!o.page_changes.is_empty()).then_some(states));
+        let pages_deleted = o.page_changes.iter().any(|change| matches!(change, pdfcraft_js::templates::Change::Delete { .. }));
+        let mut changes = changes_from(&baseline, &o.changed, &o.formatted, (!o.page_changes.is_empty()).then_some(states), pages_deleted);
         if o.calculations_current {
             for change in &mut changes {
                 change.calculation_complete = true;
@@ -1907,6 +1949,7 @@ impl Session {
         o.formatted.clear();
         o.requests.retain(|r| !matches!(r, Request::Reset(_)));
         if edited && o.error.is_none() {
+            o.post_commit_alerts.clear();
             o.error = Some(EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()).to_string());
         }
     }
@@ -2191,6 +2234,43 @@ thread_local! {
 #[cfg(test)]
 mod snapshot_review_tests {
     use super::*;
+
+    #[test]
+    fn page_deletion_routes_rectangle_writes_to_surviving_widgets() {
+        let first = [10.0, 10.0, 20.0, 20.0];
+        let second = [30.0, 30.0, 40.0, 40.0];
+        let third = [50.0, 50.0, 60.0, 60.0];
+        let crop = [0.0, 0.0, 200.0, 300.0];
+        let mut live = pdfcraft_js::FieldState::new("shared", pdfcraft_js::FieldType::Text, vec![]);
+        live.object_id = Some(1);
+        live.first_widget_id = Some(2);
+        live.rect = Some(first);
+        live.additional_widget_rects = [
+            pdfcraft_js::WidgetRect { object_id: 3, rect: pdfcraft_js::rotate_rect(second, crop, 90), crop, rotation: 90 },
+            pdfcraft_js::WidgetRect { object_id: 4, rect: pdfcraft_js::rotate_rect(third, crop, 0), crop, rotation: 0 },
+        ]
+        .into();
+        let mut preview = live.clone();
+        preview.first_widget_id = Some(3);
+        preview.rect = Some(live.additional_widget_rects[0].rect);
+        preview.page_crop = crop;
+        preview.page_rotation = 90;
+        preview.additional_widget_rects = [live.additional_widget_rects[1].clone()].into();
+        let compare = |after: &pdfcraft_js::FieldState| {
+            changes_from(std::slice::from_ref(&preview), std::slice::from_ref(after), &Default::default(), Some(std::slice::from_ref(&live)), true)
+        };
+
+        let mut after = live.clone();
+        after.rect = Some(third);
+        assert!(compare(&after).is_empty(), "a write to the deleted widget must not move a survivor");
+
+        let widgets = std::sync::Arc::make_mut(&mut after.additional_widget_rects);
+        widgets[0].rect = pdfcraft_js::rotate_rect(first, crop, 90);
+        widgets[1].rect = pdfcraft_js::rotate_rect(second, crop, 0);
+        let changes = compare(&after);
+        assert_eq!(changes[0].rect, Some(first));
+        assert_eq!(changes[0].widget_rects, [(1, second)]);
+    }
 
     /// Character-sheet metadata is case-sensitive, including custom keys differing only by case.
     #[test]
@@ -2511,7 +2591,8 @@ mod icon_mixed_review_tests {
         let mut after = live.clone();
         after.user_name = "Changed".into();
         let compare = |field: &pdfcraft_js::FieldState| {
-            changes_from(std::slice::from_ref(&pdf), std::slice::from_ref(field), &Default::default(), Some(std::slice::from_ref(&live)))[0].icon
+            changes_from(std::slice::from_ref(&pdf), std::slice::from_ref(field), &Default::default(), Some(std::slice::from_ref(&live)), false)[0]
+                .icon
         };
         assert_eq!(compare(&after), None);
         after.icon_written = true;
