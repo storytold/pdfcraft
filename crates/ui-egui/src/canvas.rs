@@ -202,9 +202,11 @@ pub struct DocView {
     pub close_requested: bool,
     /// A historical snapshot of another document (see [`Snapshot`]): `None` for real documents.
     pub snapshot: Option<Snapshot>,
-    /// Previous view / Next view: pages visited before (and after, once going back).
-    pub back: Vec<usize>,
-    pub forward: Vec<usize>,
+    /// Previous view / Next view: places visited before (and after, once going back), each the
+    /// page and how far down it the window's top was, in `go_to_fraction`'s form, so going back
+    /// lands where the reader left rather than at the page's top (#6848).
+    pub back: Vec<(usize, f32)>,
+    pub forward: Vec<(usize, f32)>,
     /// The interface the document hid in this tab, and what is hidden now (ISO 32000-2 Table 147
     /// `HideToolbar`, `HideMenubar`, `HideWindowUI`). Never saved.
     pub interface: crate::viewer_prefs::TabInterface,
