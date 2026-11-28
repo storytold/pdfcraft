@@ -91,6 +91,10 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
     // Every reference the signed revision makes, read only when a slot's generations narrowed.
     let signed_references = OnceCell::new();
     let dss = dss_parts(doc, &old);
+    // Font dictionaries a signature appearance added. They are part of that signature: a later
+    // signature must not read them as a form fill. The font program streams need no entry here;
+    // a new stream is not a change of its own.
+    let signature_fonts = signature_appearance_fonts(doc, &old);
     // Stored at the same place in both (and not edited since): the same bytes, unchanged.
     let same_place = |num: u32| -> bool {
         use pdfcraft_cos::XrefEntry;
@@ -138,6 +142,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         signed_resources: &signed_resources,
         old_info,
         dss: &dss,
+        signature_fonts: &signature_fonts,
     };
     for num in doc.object_numbers() {
         if same_place(num) {
@@ -307,6 +312,7 @@ struct ChangedObjectClassifier<'a> {
     old_info: Option<u32>,
     old_form: Option<u32>,
     dss: &'a HashSet<u32>,
+    signature_fonts: &'a HashSet<u32>,
 }
 
 impl ChangedObjectClassifier<'_> {
@@ -399,6 +405,9 @@ impl ChangedObjectClassifier<'_> {
         } else if previous.is_some() && Some(r.num) == self.old_info {
             // Only the signed revision's own /Info dictionary is a metadata change.
             Some(kind::METADATA)
+        } else if before.is_none() && self.signature_fonts.contains(&r.num) && font_resource_dict(dict) {
+            // An embedded font the signature appearance added, not a form that was filled in.
+            Some(kind::SIGNATURE)
         } else {
             Some(change_kind(self.doc, self.old, dict, previous))
         }
@@ -878,6 +887,116 @@ fn same_entry(a: Option<&Object>, b: Option<&Object>) -> bool {
     }
 }
 
+/// Whether `d` is a font dictionary a signature appearance embeds (the Type 0 font, its
+/// descendant, or the font descriptor). The program itself is a stream.
+fn font_resource_dict(d: &Dict) -> bool {
+    matches!(d.name(b"Type"), Some(b"Font" | b"FontDescriptor")) || d.get(b"FontDescriptor").is_some() || d.get(b"DescendantFonts").is_some()
+}
+
+/// Object numbers of the font dictionaries reachable from a signature widget `doc` added or
+/// changed since `old`. Following stops at the appearance's font resources, so a widget's page
+/// or signature value is not swept in with them. Each appearance has its own budget: an earlier
+/// signature must not use it up and leave a later signature's font to be read as a form fill.
+fn signature_appearance_fonts(doc: &Document, old: &Document) -> HashSet<u32> {
+    let mut out = HashSet::new();
+    for num in doc.object_numbers() {
+        let obj = doc.get(ObjRef { num, generation: doc.generation(num) });
+        let Some(widget) = obj.as_dict() else { continue };
+        if widget.name(b"Subtype") != Some(b"Widget") || widget.name(b"FT") != Some(b"Sig") {
+            continue;
+        }
+        let before = old.try_get(num).ok().filter(|o| !matches!(**o, Object::Null));
+        if before.as_deref().is_some_and(|b| same_object(b, &obj)) {
+            continue;
+        }
+        let Some(ap) = widget.get(b"AP") else { continue };
+        let mut seen = HashSet::new();
+        walk_appearance_fonts(doc, &doc.resolve(ap), &mut seen, 0);
+        out.extend(seen);
+    }
+    out
+}
+
+/// How far [`walk_appearance_fonts`] follows, and how many objects one appearance may name.
+const APPEARANCE_FONT_DEPTH: u8 = 16;
+const APPEARANCE_FONT_OBJECTS: usize = 64;
+
+fn walk_appearance_fonts(doc: &Document, obj: &Object, seen: &mut HashSet<u32>, depth: u8) {
+    if depth > APPEARANCE_FONT_DEPTH || seen.len() >= APPEARANCE_FONT_OBJECTS {
+        return;
+    }
+    match obj {
+        Object::Ref(r) => {
+            if seen.insert(r.num) {
+                walk_appearance_fonts(doc, &doc.get(*r), seen, depth + 1);
+            }
+        }
+        Object::Array(a) => {
+            for entry in a {
+                walk_appearance_fonts(doc, entry, seen, depth + 1);
+            }
+        }
+        Object::Dict(d) => walk_appearance_dict(doc, d, seen, depth),
+        Object::Stream(s) => walk_appearance_dict(doc, &s.dict, seen, depth),
+        _ => {}
+    }
+}
+
+fn walk_appearance_dict(doc: &Document, d: &Dict, seen: &mut HashSet<u32>, depth: u8) {
+    // `/N`, `/R` and `/D` are one stream, or a dictionary of named states (`/On`, `/Off`).
+    for key in [b"N".as_slice(), b"R", b"D"] {
+        if let Some(value) = d.get(key) {
+            if named_appearance_states(doc, value) {
+                walk_named_states(doc, value, seen, depth + 1);
+            } else {
+                walk_appearance_fonts(doc, value, seen, depth + 1);
+            }
+        }
+    }
+    for key in [b"Resources".as_slice(), b"DescendantFonts", b"FontDescriptor"] {
+        if let Some(value) = d.get(key) {
+            walk_appearance_fonts(doc, value, seen, depth + 1);
+        }
+    }
+    // `/Font` maps resource names to fonts. The names are not the keys followed above.
+    if let Some(fonts) = d.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()) {
+        for (_, entry) in fonts.iter() {
+            walk_appearance_fonts(doc, entry, seen, depth + 1);
+        }
+    }
+}
+
+/// `/N`, `/R` or `/D` holds named appearance states when it is a dictionary. A stream is the
+/// appearance itself, and `as_dict` on a stream is that stream's own dictionary, not states.
+fn named_appearance_states(doc: &Document, value: &Object) -> bool {
+    match value {
+        Object::Dict(_) => true,
+        Object::Ref(r) => matches!(&*doc.get(*r), Object::Dict(_)),
+        _ => false,
+    }
+}
+
+fn walk_named_states(doc: &Document, value: &Object, seen: &mut HashSet<u32>, depth: u8) {
+    if depth > APPEARANCE_FONT_DEPTH || seen.len() >= APPEARANCE_FONT_OBJECTS {
+        return;
+    }
+    if let Object::Dict(states) = value {
+        for (_, entry) in states.iter() {
+            walk_appearance_fonts(doc, entry, seen, depth + 1);
+        }
+        return;
+    }
+    let Some(r) = value.as_ref() else { return };
+    if !seen.insert(r.num) {
+        return;
+    }
+    let got = doc.get(r);
+    let Object::Dict(states) = &*got else { return };
+    for (_, entry) in states.iter() {
+        walk_appearance_fonts(doc, entry, seen, depth + 1);
+    }
+}
+
 /// Whether a dictionary was a signature object: a signature or timestamp value, a signature
 /// reference or its transform parameters, or a signature form field. Used to decide from the
 /// signed revision, so a later relabel of some other object cannot pose as a signature change.
@@ -1143,6 +1262,7 @@ mod tests {
             old_info: None,
             old_form: None,
             dss: &none,
+            signature_fonts: &none,
         };
         classifier.page_change_kind(d, before)
     }

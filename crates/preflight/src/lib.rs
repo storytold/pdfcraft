@@ -495,6 +495,29 @@ fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> s
     out
 }
 
+/// Font dictionaries written directly into a resource dictionary, rather than referred to. A
+/// signature appearance does this for its text font. They are still fonts used for rendering
+/// (ISO 19005-2, 6.2.11.4.1) and have no object of their own for [`drawing_fonts`] to name.
+fn direct_drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> Vec<Dict> {
+    let mut out = Vec::new();
+    for (_, o) in objs {
+        let Some(resources) = dict_of(o).and_then(|d| d.get(b"Resources")).map(|r| doc.resolve(r)) else { continue };
+        let Some(fonts) = resources.as_dict().and_then(|r| r.get(b"Font")).map(|f| doc.resolve(f)) else { continue };
+        let Some(fonts) = fonts.as_dict() else { continue };
+        for (_, entry) in fonts.iter() {
+            if entry.as_ref().is_some() {
+                continue;
+            }
+            if let Some(font) = doc.resolve(entry).as_dict()
+                && (font.name(b"Type") == Some(b"Font") || font.get(b"BaseFont").is_some() && font.name(b"Subtype").is_some())
+            {
+                out.push(font.clone());
+            }
+        }
+    }
+    out
+}
+
 /// How many references [`font_object`] follows, as the document's own `resolve` does.
 const MAX_REFERENCE_HOPS: usize = 32;
 
@@ -695,6 +718,9 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     check_transparency(doc, &pages, &mut issue);
     let drawing = drawing_fonts(doc, &objs);
     check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
+    for font in direct_drawing_fonts(doc, &objs) {
+        check_font(doc, &font, &mut issue);
+    }
     check_limits(doc, &objs, &pages, &mut issue);
     check_spots(doc, &objs, &mut issue);
     check_graphics_states(doc, &mut issue);

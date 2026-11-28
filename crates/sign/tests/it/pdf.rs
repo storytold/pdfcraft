@@ -638,10 +638,11 @@ fn invisible_signatures_and_refusals() {
 
 /// The normal appearance of the signature field `name`: its decoded content and resources.
 fn appearance_of(bytes: &[u8], name: &str) -> (String, pdfcraft_cos::Dict) {
-    appearance_in(&open(bytes), name)
+    let (content, res) = appearance_in(&open(bytes), name);
+    (String::from_utf8_lossy(&content).into_owned(), res)
 }
 
-fn appearance_in(doc: &Document, name: &str) -> (String, pdfcraft_cos::Dict) {
+fn appearance_in(doc: &Document, name: &str) -> (Vec<u8>, pdfcraft_cos::Dict) {
     let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
     let form = doc.resolve(catalog.get(b"AcroForm").unwrap()).as_dict().cloned().unwrap();
     let fields = doc.resolve(form.get(b"Fields").unwrap()).as_array().cloned().unwrap();
@@ -653,7 +654,67 @@ fn appearance_in(doc: &Document, name: &str) -> (String, pdfcraft_cos::Dict) {
     let ap = doc.resolve(field.get(b"AP").unwrap()).as_dict().cloned().unwrap();
     let Object::Stream(s) = &*doc.resolve(ap.get(b"N").unwrap()) else { panic!("no normal appearance") };
     let res = doc.resolve(s.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
-    (String::from_utf8_lossy(&s.decoded().unwrap()).into_owned(), res)
+    (s.decoded().unwrap(), res)
+}
+
+/// The text a visible signature shows, read back through the font its appearance embeds.
+fn appearance_text(bytes: &[u8], name: &str) -> String {
+    let doc = open(bytes);
+    let (content, res) = appearance_in(&doc, name);
+    let Some(fonts) = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()) else {
+        return String::new();
+    };
+    let mut tag = None;
+    let mut out = String::new();
+    for op in pdfcraft_content::ops(&content) {
+        match op.op.as_slice() {
+            b"Tf" => tag = op.operands.first().and_then(Object::as_name).map(<[u8]>::to_vec),
+            b"Tj" | b"'" => {
+                if let Some(Object::String(s)) = op.operands.first() {
+                    out.push_str(&decode_shown(&doc, &fonts, tag.as_deref(), &s.bytes));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn decode_shown(doc: &Document, fonts: &Dict, tag: Option<&[u8]>, bytes: &[u8]) -> String {
+    let Some(font) = tag.and_then(|tag| fonts.get(tag)).map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()) else {
+        return String::new();
+    };
+    pdfcraft_fonts::pdf::Metrics::from_dict(doc, &font).decode(bytes)
+}
+
+/// Whether every font the appearance names has a font program (ISO 19005-2, 6.2.11.4.1).
+fn appearance_fonts_embedded(doc: &Document, res: &Dict) -> bool {
+    let Some(fonts) = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()) else {
+        return false;
+    };
+    let mut any = false;
+    for (_, entry) in fonts.iter() {
+        any = true;
+        let resolved = doc.resolve(entry);
+        let Some(font) = resolved.as_dict() else { return false };
+        let descriptor = if font.name(b"Subtype") == Some(b"Type0") {
+            font.get(b"DescendantFonts")
+                .map(|x| doc.resolve(x))
+                .and_then(|a| a.as_array().and_then(|a| a.first().cloned()))
+                .map(|f| doc.resolve(&f))
+                .and_then(|f| f.as_dict().and_then(|d| d.get(b"FontDescriptor").cloned()))
+        } else {
+            font.get(b"FontDescriptor").cloned()
+        };
+        let embedded = descriptor
+            .map(|fd| doc.resolve(&fd))
+            .and_then(|fd| fd.as_dict().cloned())
+            .is_some_and(|fd| fd.get(b"FontFile").is_some() || fd.get(b"FontFile2").is_some() || fd.get(b"FontFile3").is_some());
+        if !embedded {
+            return false;
+        }
+    }
+    any
 }
 
 /// A 40 x 10 image, opaque or with one translucent pixel.
@@ -669,10 +730,11 @@ fn picture(translucent: bool) -> pdfcraft_sign::Graphic {
 fn visible_signatures_show_a_drawn_typed_or_image_graphic() {
     use pdfcraft_sign::{Appearance, Graphic};
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let name = format!("({})", id.certificate.display_name());
+    let name = id.certificate.display_name();
     let plain = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
     // Without a graphic the name is large on the left and in the details.
-    assert_eq!(appearance_of(&plain, "Signature1").0.matches(&name).count(), 2);
+    assert_eq!(appearance_text(&plain, "Signature1").matches(&name).count(), 2);
+    assert!(appearance_fonts_embedded(&open(&plain), &appearance_of(&plain, "Signature1").1));
     let strokes = Graphic::Strokes(vec![vec![[0.0, 0.0], [0.3, 0.2], [0.6, 0.0], [1.0, 0.2]], vec![[0.5, 0.1]]]);
     let typed = Graphic::Outlines(vec![vec![[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.0, 0.5]], vec![[0.2, 0.1], [0.8, 0.1], [0.5, 0.4]]]);
     for (graphic, drawn) in [
@@ -687,7 +749,8 @@ fn visible_signatures_show_a_drawn_typed_or_image_graphic() {
         let (content, res) = appearance_of(&signed, "Signature1");
         assert!(content.contains(drawn), "{graphic:?}: {content}");
         // The graphic takes the name's place on the left; the details still name the signer.
-        assert_eq!(content.matches(&name).count(), 1, "{content}");
+        assert_eq!(appearance_text(&signed, "Signature1").matches(&name).count(), 1, "{content}");
+        assert!(appearance_fonts_embedded(&open(&signed), &res));
         assert_eq!(res.get(b"XObject").is_some(), matches!(graphic, Graphic::Image { .. }));
     }
     // Translucent images keep their alpha as a soft mask; opaque ones need none.
@@ -704,7 +767,10 @@ fn visible_signatures_show_a_drawn_typed_or_image_graphic() {
     // With no text at all, the graphic has the whole box (194 x 44): 176 x 44, centred.
     let bare = Appearance { name: false, date: false, reason: false, location: false, distinguished_name: false, labels: false };
     let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { graphic: Some(picture(false)), appearance: bare, ..opts() }).unwrap();
-    assert!(appearance_of(&signed, "Signature1").0.contains("q 176 0 0 44 12 3 cm /Im1 Do Q"));
+    let (content, res) = appearance_of(&signed, "Signature1");
+    assert!(content.contains("q 176 0 0 44 12 3 cm /Im1 Do Q"), "{content}");
+    // Nothing is written, so the appearance names no font to leave unembedded.
+    assert!(res.get(b"Font").is_none(), "{res:?}");
     // An invisible signature has nothing to show: no image is embedded.
     let invisible = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { rect: None, graphic: Some(picture(false)), ..opts() }).unwrap();
     assert!(!invisible.windows(6).any(|w| w == b"/Image"));
@@ -2853,6 +2919,7 @@ fn an_encrypted_documents_signature_graphic_is_encrypted_with_it() {
         // Read back through the security handler, the pixels and their mask are exact; a stream
         // written in the clear would be "decrypted" into noise and fail to inflate.
         let (content, res) = appearance_in(&doc, "Signature1");
+        let content = String::from_utf8_lossy(&content);
         assert!(content.contains("/Im1 Do"), "{alg:?}: {content}");
         let xobjects = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
         let Object::Stream(im) = &*doc.resolve(xobjects.get(b"Im1").unwrap()) else { panic!() };
@@ -2987,11 +3054,12 @@ fn appearance_labels_helvetica_cannot_draw_are_refused() {
     };
     let all = Appearance { reason: true, location: true, ..Appearance::default() };
     let signed = sign(german, all, opts()).unwrap();
-    let (content, _) = appearance_of(&signed, "Signature1");
-    for word in ["(Digital", "(Grund:", "(Ort:", "(Datum:"] {
-        assert!(content.contains(word), "{word}: {content}");
+    let text = appearance_text(&signed, "Signature1");
+    for word in ["Digital", "Grund:", "Ort:", "Datum:"] {
+        assert!(text.contains(word), "{word}: {text}");
     }
-    assert!(!content.contains("Reason") && !content.contains("Date:") && !content.contains('?'), "{content}");
+    assert!(!text.contains("Reason") && !text.contains("Date:") && !text.contains('?'), "{text}");
+    assert!(appearance_fonts_embedded(&open(&signed), &appearance_of(&signed, "Signature1").1));
 }
 
 /// A visible signature with Central European characters (č, ć, ž, š) embeds the bundled
@@ -3015,6 +3083,10 @@ fn visible_appearance_draws_central_european_characters_with_embedded_font() {
     let (content, res) = appearance_of(&signed, "Signature1");
     // Verify that the appearance stream does not write `?` in place of non-WinAnsi characters.
     assert!(!content.contains('?'), "appearance content should not write '?' for Central European characters: {content}");
+    // The shown text is read from the stream's own bytes. A lossy UTF-8 copy would turn a glyph
+    // code at or above 0x80 into U+FFFD before the operators are parsed.
+    let shown = appearance_text(&signed, "Signature1");
+    assert!(shown.contains("Petravić"), "{shown}");
     // Verify an embedded TrueType font was added to the appearance resources.
     let fonts = res.get(b"Font").and_then(|o| o.as_dict()).unwrap();
     assert!(fonts.contains(b"PCFull0"), "appearance should reference the embedded font: {fonts:?}");
