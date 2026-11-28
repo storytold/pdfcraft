@@ -3216,6 +3216,30 @@ fn protecting_through_tools() {
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
 }
 
+/// Unlock for editing (#2465): a file restricted by a permissions password the user doesn't
+/// have gets an editable copy without security; the original file and document stay protected.
+#[test]
+fn unlocking_a_copy_for_editing_without_the_permissions_password() {
+    let dir = workdir("unlock-copy");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_protect", json!({ "doc": doc, "permissions_password": "boss", "changes": "none", "copy": false }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "locked.pdf" }));
+    let mut b = auto(&dir);
+    let re = ok(&mut b, "doc_open", json!({ "path": "locked.pdf" }))["doc"].as_u64().unwrap();
+    assert!(matches!(b.call("doc_unprotect", &json!({ "doc": re })), Err(ToolError::Failed(_))), "Remove security still needs the password");
+    assert!(matches!(b.call("doc_unlock_copy", &json!({ "doc": re, "path": "locked.pdf" })), Err(ToolError::Failed(_))), "never over the original");
+    let copy = ok(&mut b, "doc_unlock_copy", json!({ "doc": re, "path": "editable.pdf" }));
+    let id = copy["doc"].as_u64().unwrap();
+    assert_ne!(id, re, "the copy opens as its own document");
+    assert_eq!(ok(&mut b, "doc_info", json!({ "doc": id }))["security"]["protected"], false);
+    ok(&mut b, "page_delete", json!({ "doc": id, "pages": [1] }));
+    assert_eq!(ok(&mut b, "doc_info", json!({ "doc": re }))["security"]["protected"], true, "the original stays protected");
+    let mut c = auto(&dir);
+    let reopened = ok(&mut c, "doc_open", json!({ "path": "editable.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut c, "doc_info", json!({ "doc": reopened }))["security"]["protected"], false, "the file on disk has no security");
+}
+
 /// A refused `doc_split` or separate-file `page_extract` leaves no output directory behind
 /// (#5081), whether the protection allows no page changes ("Any except extracting pages") or
 /// page changes without copying; with copying allowed as well, the user may extract.

@@ -48,6 +48,8 @@ pub(super) enum Notice {
     Console,
     /// Unlock… (enter the permissions password).
     Unlock,
+    /// Unlock for editing: open an editable copy without the restrictions.
+    UnlockCopy,
     /// Close this historical snapshot tab (View signed version / View revision).
     Close,
     /// Stop showing the secured-document notice, in every document (#4035).
@@ -230,6 +232,8 @@ pub(super) fn notices(
     if secured && doc.can_unlock() {
         notice = notice.action(NoticeAction::new(tl!("Unlock…").to_string()).default_action());
         results.push(Some(Notice::Unlock));
+        notice = notice.action(NoticeAction::new(tl!("Unlock for editing").to_string()));
+        results.push(Some(Notice::UnlockCopy));
     }
     if secured {
         notice = notice.action(NoticeAction::new(tl!("Security settings").to_string()));

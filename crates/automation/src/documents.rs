@@ -188,6 +188,21 @@ impl Automation {
         Ok(out)
     }
 
+    /// Unlock for editing (#2465): write a copy of the document without its password security to
+    /// `path` (inside the write root) and open it. The open document is left as it is.
+    pub(crate) fn doc_unlock_copy(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let target = self.resolve(a.str("path")?, true)?;
+        if self.doc(a)?.path.as_deref().is_some_and(|p| Path::new(p) == target) {
+            return Err(failed("path is the document's own file: choose a new file for the copy"));
+        }
+        let bytes = self.session.unrestricted_copy_bytes(id).map_err(failed)?;
+        write_atomic(&target, &bytes)?;
+        let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let copy = self.session.open(name, Some(target.to_string_lossy().into_owned()), bytes, None).map_err(failed)?;
+        Ok(summary(self.session.get(copy).ok_or_else(|| failed("the document vanished"))?))
+    }
+
     /// Rename the document's file in its own folder (#2102). Both the old and the new name are
     /// writes there, so the automation write root must allow the folder; unsaved changes are refused
     /// rather than left behind in a file that no longer matches the document.

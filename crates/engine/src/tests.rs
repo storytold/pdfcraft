@@ -2201,6 +2201,23 @@ fn the_permissions_password_unlocks_an_open_document() {
 }
 
 #[test]
+fn an_unrestricted_copy_needs_no_permissions_password() {
+    // A restricted file opened without its permissions password: Remove security is refused,
+    // but Unlock for editing writes a copy without security that allows everything.
+    let bytes = protected("", "owner", 0b1100);
+    let mut s = Session::new();
+    let id = s.open("r.pdf", None, bytes, None).unwrap();
+    assert!(!s.get(id).unwrap().allows_security_change());
+    let copy = s.unrestricted_copy_bytes(id).unwrap();
+    assert!(pdfcraft_cos::Document::open(copy.clone()).unwrap().security().is_none(), "the copy has no security");
+    let id2 = s.open("r (editable).pdf", None, copy, None).unwrap();
+    let d = s.get(id2).unwrap();
+    assert!(d.allows_modification() && d.allows_security_change(), "the copy allows changes");
+    assert_eq!(d.info.pages.len(), s.get(id).unwrap().info.pages.len(), "same pages");
+    assert!(s.get(id).unwrap().info.encrypted, "the original stays protected");
+}
+
+#[test]
 fn remove_security_from_a_file_with_its_encrypt_dictionary_in_the_trailer() {
     // MuPDF writes /Encrypt inline in the trailer rather than as an object (#2661).
     let mut doc = pdfcraft_cos::Document::open_with_password(protected("user", "owner", -1), Some("owner")).unwrap();

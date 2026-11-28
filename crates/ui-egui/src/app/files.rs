@@ -26,6 +26,52 @@ pub(crate) fn same_file(open: &str, path: &str) -> bool {
 }
 
 impl PdfCraftApp {
+    /// Unlock for editing: write a copy of `id` without its password security next to the file,
+    /// as "<name> (editable).pdf" (numbered when that exists), and open it. The original file and
+    /// its tab are left untouched; a signature in the original no longer validates in the copy.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn open_unrestricted_copy(&mut self, id: DocId) {
+        let Some(doc) = self.session.get(id) else { return };
+        let Some(path) = doc.path.clone() else {
+            self.notify_tr("Save the document first, then unlock it for editing.");
+            return;
+        };
+        let signed = doc.is_signed();
+        let bytes = match self.session.unrestricted_copy_bytes(id) {
+            Ok(b) => b,
+            Err(e) => {
+                self.notify(i18n::fmt(tl!("Couldn't make an editable copy: {error}"), &[("error", &e.to_string())]));
+                return;
+            }
+        };
+        let original = std::path::Path::new(&path);
+        let dir = original.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let stem = original.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
+        let mut target = dir.join(format!("{stem} (editable).pdf"));
+        let mut n = 2;
+        while target.exists() {
+            target = dir.join(format!("{stem} (editable {n}).pdf"));
+            n += 1;
+        }
+        if let Err(e) = craft::atomic::atomic_write(&target, &bytes) {
+            self.notify(i18n::fmt(tl!("Couldn't make an editable copy: {error}"), &[("error", &e.to_string())]));
+            return;
+        }
+        let target = target.to_string_lossy().into_owned();
+        self.open_path(&target);
+        self.notify(if signed {
+            tl!("Opened an editable copy. The original is unchanged; its digital signature isn't valid in the copy.").to_string()
+        } else {
+            tl!("Opened an editable copy. The original is unchanged.").to_string()
+        });
+    }
+
+    /// Unlock for editing needs a file system (desktop builds).
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn open_unrestricted_copy(&mut self, _id: DocId) {
+        self.notify_tr("Unlock for editing isn't available in the web version.");
+    }
+
     /// Shows `panel` as the right panel, or closes the one showing for `None`.
     pub(crate) fn set_right(&mut self, panel: Option<RightPanel>) {
         use crate::side_panels::{PanelId, set_panel_visible};
