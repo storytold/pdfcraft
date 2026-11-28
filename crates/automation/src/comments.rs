@@ -833,6 +833,28 @@ impl Automation {
 
     /// The XFDF of the listed comments and their replies (`comments`: 1-based [page, index] pairs).
     pub(crate) fn comments_copy(&self, a: &Args) -> Result<Value> {
+        let (xfdf, which) = self.listed_comments_xfdf(a)?;
+        Ok(json!({ "xfdf": xfdf, "comments": which.len() }))
+    }
+
+    /// Cut: the XFDF of the listed comments, as `comments_copy` returns it, and the comments
+    /// deleted with their pop-ups and replies, as one undo step (#8153). A refused deletion (a
+    /// locked comment, a document that doesn't allow changes) deletes none of them.
+    pub(crate) fn comments_cut(&mut self, a: &Args) -> Result<Value> {
+        let (xfdf, which) = self.listed_comments_xfdf(a)?;
+        // A comment listed twice is cut once, and counted once.
+        let count = which.iter().collect::<std::collections::BTreeSet<_>>().len();
+        // Each deletion still names its comment after the ones before it took their pop-ups and replies.
+        let edits = self.doc(a)?.annotation_deletions(&which);
+        let mut out = self.apply(a, Edit::Batch { label: "Cut comments".into(), edits })?;
+        out["xfdf"] = json!(xfdf);
+        out["comments"] = json!(count);
+        Ok(out)
+    }
+
+    /// The listed comments (`comments`: 1-based [page, index] pairs, as `comment_list` reports
+    /// them), 0-based, and their XFDF with their replies.
+    fn listed_comments_xfdf(&self, a: &Args) -> Result<(String, Vec<(usize, usize)>)> {
         let id = self.doc(a)?.id;
         let all = self.comments(a)?;
         let shape = || ToolError::InvalidArgs("comments: [[page, index], …] (1-based, as comment_list reports)".into());
@@ -848,7 +870,7 @@ impl Automation {
             which.push((page, index));
         }
         let xfdf = self.session.export_comments(id, &which).map_err(failed)?;
-        Ok(json!({ "xfdf": xfdf, "comments": which.len() }))
+        Ok((xfdf, which))
     }
 
     /// Add the comments of `xfdf` (from `comments_copy`) to `page` as new comments.

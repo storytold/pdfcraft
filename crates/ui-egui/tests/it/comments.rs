@@ -4937,6 +4937,51 @@ fn edit_copy_and_paste_take_a_selected_comment() {
     assert!(copy_disabled(&mut h), "with nothing selected, Copy is greyed out again");
 }
 
+/// Edit ▸ Cut and ⌘X cut the selected comments: copied as Copy copies them, with their replies,
+/// and deleted as one undo step; with nothing selected Cut is greyed out (#8153).
+#[test]
+fn edit_cut_and_ctrl_x_cut_the_selected_comments_as_one_step() {
+    let cut_disabled = |h: &mut Harness<'static, PdfCraftApp>| {
+        crate::support::open_menu(h, "Edit");
+        let disabled = crate::support::menu_row(h, "Cut").accesskit_node().is_disabled();
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        disabled
+    };
+    let mut h = harness(|_| {});
+    let id = h.state().views[0].id;
+    add_two_boxes_and_a_reply(&mut h);
+    let count = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.annotations.len();
+    h.state_mut().views[0].session.comments.clear_selection();
+    h.run_steps(2);
+    assert!(cut_disabled(&mut h), "nothing selected: Edit ▸ Cut is greyed out");
+    {
+        let cv = &mut h.state_mut().views[0].session.comments;
+        cv.select_only((0, 0));
+        cv.toggle((0, 1));
+    }
+    h.run_steps(2);
+    assert!(!cut_disabled(&mut h), "Edit ▸ Cut is enabled with comments selected");
+    crate::support::open_menu(&mut h, "Edit");
+    crate::support::menu_row(&h, "Cut").click();
+    h.run_steps(4);
+    assert_eq!(count(&h), 0, "both boxes went, and the reply with them");
+    assert_eq!(h.state().comment_clipboard.as_ref().map(|c| c.count), Some(2), "Edit ▸ Cut copied them");
+    assert!(h.state().comment_clipboard.as_ref().is_some_and(|c| c.xfdf.contains("inreplyto=")), "with the reply");
+    assert!(h.state().views[0].session.comments.selection().is_empty(), "nothing is left selected");
+    undo(&mut h);
+    assert_eq!(count(&h), 3, "one Undo brings back all of them");
+
+    // ⌘X / Ctrl+X does the same with the keyboard.
+    h.state_mut().comment_clipboard = None;
+    h.state_mut().views[0].session.comments.select_only((0, 1));
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::X);
+    h.run_steps(4);
+    assert_eq!(count(&h), 2, "Ctrl+X removed the selected box: {:?}", h.state().session.get(id).unwrap().info.annotations);
+    assert_eq!(h.state().comment_clipboard.as_ref().map(|c| c.count), Some(1), "Ctrl+X copied it");
+}
+
 /// Prepare Form keeps ⌘C off the selected comments, so Edit ▸ Copy, which sends the same Copy, is
 /// greyed out there too rather than enabled and doing nothing (#7123).
 #[test]

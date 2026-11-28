@@ -214,6 +214,16 @@ fn enabled(app: &PdfCraftApp, ctx: &egui::Context, command: &CommandRef) -> bool
             doc.is_some_and(|d| d.allows_copying() && (command.id != CUT || d.allows_modification()))
         }
         PASTE if edit_objects && app.object_clipboard.is_some() => doc.is_some_and(pdfcraft_engine::Document::allows_modification),
+        // Selected comments are what Cut takes when no text is selected, as Copy copies them (#8153);
+        // Cut also deletes them, so the document must allow comments to change.
+        CUT if !organize
+            && !app.is_preparing()
+            && view.is_some_and(|v| {
+                v.session.comments.primary().is_some() && v.selection_waits_for_text().is_none() && v.selected_text().is_none_or(|t| t.is_empty())
+            }) =>
+        {
+            doc.is_some_and(pdfcraft_engine::Document::allows_annotation)
+        }
         CUT => organize && enabled_id("page.cut"),
         PASTE if organize => app.page_clipboard.is_some() && enabled_id("page.paste"),
         // On the pages Paste takes what the clipboard holds (a picture, comments), which only the paste itself reads:

@@ -4404,6 +4404,18 @@ evidence = ["crates/ui-egui/tests/it/comments.rs::copied_comments_paste_into_ano
 notes = "⌘C with comments selected (and no text selected) copies them as XFDF, each with its replies, to the app's clipboard (every tab and window) and as text to the system clipboard. ⌘V or Edit ▸ Paste comments hangs the copies on the pointer as one bundle (their box, with a count, and each comment's outline in its colour: Fill & Sign ticks, crosses, dots and lines as themselves, text boxes with their text); a click places them, centred there, on the page clicked (whatever tool is on: Fill & Sign's Text tool opens no box, a stamp tool places no stamp), so a copy never lands on its original and a bundle from an A0 page goes where it fits on an A4 one (placed as it is when larger than the page, with a notice); Escape or a right-click lets the bundle go. The page's context menu places the bundle at the point the menu was opened at. The copies are new comments under names of their own (nothing is replaced; pasting twice gives two sets) and are selected afterwards. XFDF with comments on the system clipboard pastes too, so comments travel between PdfCraft processes. The Comments panel's card menu copies that card's comment. Headless: comments_copy / comments_paste (`at` places the bundle's centre), undoable as one step. Each copy keeps its formatting and its appearance stream, so it looks as the original did. Not yet: file attachments' data (the attachment comment is copied without its file), pasting in the web build's other tabs through the system clipboard."
 
 [[feature]]
+id = "comment.cut"
+title = "Cut comments"
+area = "E"
+tier = "P1"
+milestone = "M5"
+status = "shipped"
+commands = []
+tools = ["comments_cut"]
+evidence = ["crates/ui-egui/tests/it/comments.rs::edit_cut_and_ctrl_x_cut_the_selected_comments_as_one_step", "crates/automation/tests/it/automation.rs::comments_cut_copies_and_deletes_as_one_step_through_tools"]
+notes = "⌘X / Ctrl+X or Edit ▸ Cut with comments selected (and no text selected) copies them as Copy does (XFDF, each with its replies, to the app's and the system clipboard) and deletes them as Delete does, as one undo step; Paste brings them back on any page or document. Enabled when Copy is and the document allows comments to change; locked comments are copied and stay, as Delete leaves them. Headless: comments_cut returns the XFDF for comments_paste and deletes the listed comments as one undo step, or refuses (a locked comment) and deletes none. Not yet: Duplicate (#8153)."
+
+[[feature]]
 id = "comment.import-from-pdf"
 title = "Import comments from another PDF"
 area = "E"

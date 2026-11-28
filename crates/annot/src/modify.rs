@@ -130,6 +130,17 @@ pub fn deletable(doc: &Document, page: usize, index: usize) -> Result<(), AnnotE
     deleted_index(doc, page, index).map(|_| ())
 }
 
+/// The `/Annots` positions [`delete_annotation`] takes out for the annotation at `(page, index)`:
+/// it (or the caret its Replace Text strikeout is grouped under), its pop-ups and its replies,
+/// wherever they sit in the array. Refused as [`delete_annotation`] refuses. Changes nothing.
+pub fn deleted_entries(doc: &Document, page: usize, index: usize) -> Result<Vec<usize>, AnnotError> {
+    let index = deleted_index(doc, page, index)?;
+    let list = annots(doc, page_ref(doc, page)?);
+    let target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    let doomed = with_replies_and_popups(doc, &list, seed(doc, target));
+    Ok(list.iter().enumerate().filter(|(i, e)| *i == index || goes_with(doc, e, &doomed)).map(|(i, _)| i).collect())
+}
+
 /// [`deletable`], returning the index [`delete_annotation`] deletes from: the caret for Replace
 /// Text's strikeout, else `index`.
 fn deleted_index(doc: &Document, page: usize, index: usize) -> Result<usize, AnnotError> {

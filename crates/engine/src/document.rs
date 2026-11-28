@@ -527,6 +527,31 @@ impl Document {
         self.editor.as_ref().is_some_and(|e| pdfcraft_annot::deletable(&e.cos, page, index).is_ok())
     }
 
+    /// The edits that delete the comments at `targets` (page and `/Annots` index, as
+    /// `info.annotations` numbers them), each with its pop-up and replies, to run in this order in
+    /// one batch. Each index is moved down past the entries the deletions before it take out,
+    /// wherever they sit (a pop-up can come before its comment), and a target one of them already
+    /// takes (a reply selected with its comment) is left out, so every deletion still names the
+    /// comment it was meant for.
+    pub fn annotation_deletions(&self, targets: &[(usize, usize)]) -> Vec<Edit> {
+        let mut targets = targets.to_vec();
+        targets.sort_unstable();
+        targets.dedup();
+        let mut gone: std::collections::BTreeSet<(usize, usize)> = std::collections::BTreeSet::new();
+        let mut edits = Vec::with_capacity(targets.len());
+        for (page, index) in targets {
+            if gone.contains(&(page, index)) {
+                continue;
+            }
+            let before = gone.range((page, 0)..(page, index)).count();
+            edits.push(Edit::DeleteAnnotation { page, index: index - before });
+            // A refused deletion refuses the batch; until then it counts as taking only itself.
+            let taken = self.editor.as_ref().and_then(|e| pdfcraft_annot::deleted_entries(&e.cos, page, index).ok());
+            gone.extend(taken.unwrap_or_else(|| vec![index]).into_iter().map(|i| (page, i)));
+        }
+        edits
+    }
+
     pub fn can_undo(&self) -> Option<&str> {
         self.undo_label().map(Label::as_str)
     }

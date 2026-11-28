@@ -947,6 +947,7 @@ impl Automation {
             "comment_edit" => self.comment_edit(&a)?,
             "comment_delete" => self.comment_delete(&a)?,
             "comments_copy" => self.comments_copy(&a)?,
+            "comments_cut" => self.comments_cut(&a)?,
             "comments_paste" => self.comments_paste(&a)?,
             other => return Err(ToolError::UnknownTool(other.into())),
         };
