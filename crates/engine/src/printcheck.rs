@@ -164,7 +164,7 @@ fn inspect(doc: &Document) -> PrintReadiness {
         .collect();
     let model_pages = pdfcraft_model::pages(doc);
     let pages = page_reports(doc, &model_pages);
-    let (images, resolution_unknown) = image_reports(doc, &model_pages);
+    let (images, resolution_unknown, unread) = image_reports(doc, &model_pages);
     let mut findings = Vec::new();
     // Without a TrimBox the trim, the bleed and the crop are the same box, so there is no bleed to
     // measure. That is a property of the document, not a fault on every page: report it once.
@@ -232,6 +232,15 @@ fn inspect(doc: &Document) -> PrintReadiness {
             page: None,
         });
     }
+    // A page whose inline images couldn't be read isn't passed for them.
+    for (page, error) in unread {
+        findings.push(Finding {
+            id: "image-unread",
+            severity: "warn",
+            message: format!("The inline images on page {page} couldn't be read ({error}), so their resolution wasn't checked."),
+            page: Some(page),
+        });
+    }
     if resolution_unknown > 0 {
         findings.push(Finding {
             id: "image-ppi-unknown",
@@ -274,8 +283,11 @@ fn page_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> Vec<PageBoxes
 }
 
 /// The images drawn on each page, and how many placements had no measurable resolution.
-fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnImage>, usize) {
+/// The images drawn on each page, how many placements couldn't be measured, and the pages whose
+/// inline images couldn't be read (with why).
+fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnImage>, usize, Vec<(u32, String)>) {
     let mut out = Vec::new();
+    let mut unread = Vec::new();
     let mut unknown = 0usize;
     let mut seen = std::collections::HashSet::new();
     for (i, page) in pages.iter().enumerate() {
@@ -296,6 +308,32 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
                 }
             }
         }
+        // Inline images (`BI … ID … EI`) have no object or resource name: each placement is
+        // listed as one, measured like an XObject's (#7731).
+        match pdfcraft_edit::page_inline_images(doc, i) {
+            Err(error) => unread.push((page_no, error.to_string())),
+            Ok(inline) => {
+                // The placement is in user units, `/UserUnit` points each (as for the forms below).
+                let u = page.user_unit(doc);
+                for image in inline {
+                    let matrix = image.matrix.map(|v| v * u);
+                    let ppi = matrix_ppi(matrix, image.width, image.height);
+                    if !ppi.is_finite() {
+                        unknown = unknown.saturating_add(1);
+                        continue;
+                    }
+                    let [a, b, c, d, ..] = matrix;
+                    let (w, h) = ((a.abs() + c.abs()), (b.abs() + d.abs()));
+                    out.push(DrawnImage {
+                        page: page_no,
+                        name: "inline image".into(),
+                        ppi,
+                        pixels: [image.width, image.height],
+                        size_mm: [mm(w), mm(h)],
+                    });
+                }
+            }
+        }
         // Images drawn inside a form XObject are not listed above. Their resolution is the
         // smallest use on this page, which is what the optimizer already measures.
         for (object, ppi) in pdfcraft_optimize::effective_resolutions(doc, &[page.obj]) {
@@ -310,7 +348,7 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
         }
     }
     out.sort_by(|a, b| a.page.cmp(&b.page).then(a.name.cmp(&b.name)).then(a.ppi.total_cmp(&b.ppi)));
-    (out, unknown)
+    (out, unknown, unread)
 }
 
 /// The effective resolution of a raster placement, `None` for Form artwork. Not finite (NaN)
@@ -328,6 +366,11 @@ fn matrix_ppi(matrix: [f64; 6], width: u32, height: u32) -> f64 {
     let [a, b, c, d, ..] = matrix;
     let (sx, sy) = (a.hypot(b), c.hypot(d));
     if width == 0 || height == 0 || !sx.is_finite() || !sy.is_finite() || sx <= 1e-6 || sy <= 1e-6 {
+        return f64::NAN;
+    }
+    // Axes that lie along one line squash the picture to a line, however long they are.
+    let area = (a * d - b * c).abs();
+    if !area.is_finite() || area <= 1e-9 * sx * sy {
         return f64::NAN;
     }
     let ppi = (f64::from(width) / (sx / 72.0)).min(f64::from(height) / (sy / 72.0));
@@ -434,6 +477,65 @@ mod tests {
         assert_eq!(report.resolution_unknown, 0);
         assert!(report.text().contains("50 ppi"));
         assert!(report.text().contains("verification only"));
+    }
+
+    /// #7731: an inline image (`BI … ID … EI`) is listed and measured like an image XObject, and
+    /// one whose placement can't be measured is counted, not passed.
+    #[test]
+    fn an_inline_image_is_listed_and_measured() {
+        let mut doc = Document::new_empty();
+        let unused = image(&mut doc, 1, 1);
+        // 8 px across 720 pt (10 in) is 0.8 ppi, as in the issue.
+        let pixels = "A".repeat(64);
+        page(&mut doc, "Unused", unused, &format!("q 720 0 0 400 0 0 cm BI /W 8 /H 8 /CS /G /BPC 8 ID {pixels} EI Q"));
+        // The long keys: 2 px across 72 pt is 2 ppi.
+        page(&mut doc, "Unused", unused, "q 72 0 0 72 0 0 cm BI /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 ID AAAA EI Q");
+        // A placement squashed to nothing can't be measured.
+        page(&mut doc, "Unused", unused, "q 72 0 0 0 0 0 cm BI /W 2 /H 2 /CS /G /BPC 8 ID AAAA EI Q");
+        let report = inspect(&doc);
+        let inline: Vec<_> = report.images.iter().filter(|i| i.name == "inline image").collect();
+        assert_eq!(inline.len(), 2, "{:?}", report.images);
+        assert_eq!((inline[0].page, inline[0].pixels), (1, [8, 8]));
+        assert!((inline[0].ppi - 0.8).abs() < 0.01, "{}", inline[0].ppi);
+        assert!((inline[0].size_mm[0] - 254.0).abs() < 0.1 && (inline[0].size_mm[1] - 141.1).abs() < 0.1, "{:?}", inline[0].size_mm);
+        assert_eq!((inline[1].page, inline[1].pixels), (2, [2, 2]), "the long keys");
+        assert!((inline[1].ppi - 2.0).abs() < 0.01, "{}", inline[1].ppi);
+        assert!(report.findings.iter().any(|f| f.id == "image-ppi" && f.severity == "fail" && f.page == Some(1)), "{:?}", report.findings);
+        assert_eq!(report.resolution_unknown, 1, "the squashed one");
+    }
+
+    /// An inline image is measured in points on a `/UserUnit` page, and one drawn with parallel
+    /// axes (a line, not a picture) is counted as unknown, not measured.
+    #[test]
+    fn an_inline_image_follows_the_user_unit_and_a_flat_one_is_unknown() {
+        let mut doc = Document::new_empty();
+        let unused = image(&mut doc, 1, 1);
+        // 240 px across 72 user units of 2 pt: 2 in, so 120 ppi, not 240.
+        let p = page(&mut doc, "Unused", unused, &format!("q 72 0 0 72 0 0 cm BI /W 240 /H 240 /CS /G /BPC 8 ID {} EI Q", "A".repeat(240 * 240)));
+        doc.update_dict(p, |d| d.set(b"UserUnit".to_vec(), Object::Int(2))).unwrap();
+        page(&mut doc, "Unused", unused, "q 72 72 72 72 0 0 cm BI /W 2 /H 2 /CS /G /BPC 8 ID AAAA EI Q");
+        let report = inspect(&doc);
+        let inline: Vec<_> = report.images.iter().filter(|i| i.name == "inline image").collect();
+        assert_eq!(inline.len(), 1, "{:?}", report.images);
+        assert!((inline[0].ppi - 120.0).abs() < 0.01, "{}", inline[0].ppi);
+        assert!((inline[0].size_mm[0] - 50.8).abs() < 0.01, "{:?}", inline[0].size_mm);
+        assert_eq!(report.resolution_unknown, 1, "the flat one");
+    }
+
+    /// A page whose inline images can't be read (here a placement past the reader's coordinate
+    /// limit) is not passed silently: it gets a warning that says so.
+    #[test]
+    fn inline_images_that_cannot_be_read_are_a_warning() {
+        let mut doc = Document::new_empty();
+        let unused = image(&mut doc, 1, 1);
+        page(&mut doc, "Unused", unused, "q 72 0 0 72 0 0 cm BI /W 2 /H 2 /CS /G /BPC 8 ID AAAA EI Q");
+        page(&mut doc, "Unused", unused, "q 10000000000000 0 0 1 0 0 cm Q q 72 0 0 72 0 0 cm BI /W 2 /H 2 /CS /G /BPC 8 ID AAAA EI Q");
+        let report = inspect(&doc);
+        let unread: Vec<_> = report.findings.iter().filter(|f| f.id == "image-unread").collect();
+        assert_eq!(unread.len(), 1, "{:?}", report.findings);
+        assert_eq!((unread[0].severity, unread[0].page), ("warn", Some(2)));
+        assert!(unread[0].message.starts_with("The inline images on page 2 couldn't be read ("), "{}", unread[0].message);
+        assert_eq!(report.images.iter().filter(|i| i.name == "inline image").count(), 1, "page 1's is still listed");
     }
 
     #[test]
