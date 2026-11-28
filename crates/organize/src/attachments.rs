@@ -7,7 +7,7 @@
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 
 use crate::OrganizeError;
-use crate::import::{name_tree_entries, set_attachments};
+use crate::import::{name_tree_entries, set_attachments, set_attachments_exact};
 
 /// The keys of the document-level attachments, in name-tree order.
 pub fn attachment_keys(doc: &Document) -> Vec<String> {
@@ -82,8 +82,39 @@ pub fn delete_attachment(doc: &mut Document, key: &str) -> Result<(), OrganizeEr
     if all.is_empty() { clear_embedded_files(doc) } else { set_attachments(doc, all) }
 }
 
+/// Set or clear the description of a document-level attachment without replacing its file
+/// specification or embedded stream.
+pub fn set_attachment_description(doc: &mut Document, key: &str, description: Option<&str>) -> Result<(), OrganizeError> {
+    let mut all = entries(doc);
+    let Some((_, value)) = all.iter_mut().find(|(name, _)| PdfString::literal(name.clone()).to_text() == key) else {
+        return Err(OrganizeError::Invalid(format!("there is no attachment named {key}")));
+    };
+    let description = description.map(str::trim).filter(|s| !s.is_empty()).map(PdfString::text).map(Object::String);
+    match value {
+        Object::Ref(reference) => {
+            doc.update_dict(*reference, |spec| match description {
+                Some(description) => spec.set(b"Desc".to_vec(), description),
+                None => {
+                    spec.remove(b"Desc");
+                }
+            })?;
+        }
+        Object::Dict(spec) => {
+            match description {
+                Some(description) => spec.set(b"Desc".to_vec(), description),
+                None => {
+                    spec.remove(b"Desc");
+                }
+            }
+            set_attachments_exact(doc, all)?;
+        }
+        _ => return Err(OrganizeError::Invalid(format!("attachment {key} has an invalid file specification"))),
+    }
+    Ok(())
+}
+
 /// The `/EmbeddedFiles` entries (key, file specification), in tree order.
-fn entries(doc: &Document) -> Vec<(Vec<u8>, Object)> {
+pub(crate) fn entries(doc: &Document) -> Vec<(Vec<u8>, Object)> {
     let Some(tree) = doc
         .root()
         .and_then(|r| doc.get(r).as_dict().cloned())

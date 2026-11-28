@@ -83,4 +83,12 @@ impl Document {
             .collect();
         Ok(Preview { candidates, unclassified_images: self.page_images(page).len(), unclassified_text_blocks, existing_structure })
     }
+
+    /// The running headers, footers and page numbers that applying auto-tag would mark as
+    /// pagination artifacts. Reads the working PDF and does not alter it; refuses what auto-tag
+    /// refuses.
+    pub fn autotag_running_text(&self) -> Result<Vec<crate::a11y::RunningText>, String> {
+        let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+        crate::a11y::running_text(&editor.cos).map_err(|e| e.to_string())
+    }
 }
