@@ -284,6 +284,25 @@ fn choosing_another_tool_over_refused_text_keeps_add_text_up() {
     assert!(texts(&h).is_empty(), "nothing was written to the page");
 }
 
+/// Entering Read mode over refused text keeps the text but not the tool: Read mode keeps every
+/// tool down.
+#[test]
+fn read_mode_over_refused_text_keeps_the_text_and_puts_add_text_down() {
+    let mut h = harness();
+    assert!(h.execute("edit.text"));
+    h.run_steps(2);
+    let draft = pdfcraft_ui_egui::TextDraft::new(9, None, [20.0, 200.0, 220.0, 220.0], "Typed".into(), Default::default());
+    h.state_mut().views[0].session.content.draft = Some(draft);
+    h.run_steps(2);
+    assert!(h.execute("view.read_mode"));
+    h.run_steps(3);
+    assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Read);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "no tool stays up in Read mode");
+    let draft = h.state().views[0].session.content.draft.as_ref().map(|d| d.text.clone());
+    assert_eq!(draft.as_deref(), Some("Typed"), "the typed text is kept");
+    assert!(texts(&h).is_empty(), "nothing was written to the page");
+}
+
 #[test]
 fn typing_moving_styling_and_deleting_added_content() {
     let mut h = harness();
