@@ -13,6 +13,18 @@ use pdfcraft_engine::Edit;
 use pdfcraft_engine::commands::{self, CommandSpec, Shortcut};
 
 use crate::{Mode, PdfCraftApp, PropsTab, RightPanel, SaveTarget};
+use std::cell::Cell;
+
+thread_local! {
+    /// Whether the floating bar that appears when text is selected is shown. The `view.selection_bar`
+    /// command flips it. Kept per thread so tests that run in parallel cannot affect each other.
+    /// Change `true` to `false` to start with the bar hidden. Not remembered after a restart.
+    static SELECTION_BAR_ON: Cell<bool> = const { Cell::new(true) };
+}
+
+pub(crate) fn selection_bar_on() -> bool {
+    SELECTION_BAR_ON.get()
+}
 
 /// Chords of the catalog's view commands, for the View menu, tooltips and Help ▸ Keyboard
 /// shortcuts. Keep them in step with the catalog's bindings.
@@ -595,6 +607,11 @@ impl PdfCraftApp {
             "view.next_tab" => self.step_tab(true),
             "view.previous_tab" => self.step_tab(false),
             "view.theme" => self.toggle_theme(ctx),
+            "view.selection_bar" => {
+                let on = !selection_bar_on();
+                SELECTION_BAR_ON.set(on);
+                self.notify_fmt(if on { "Text selection popup: on" } else { "Text selection popup: off" }, &[]);
+            }
             command if command.starts_with("measure.") => crate::measure_ui::command(self, command),
             "view.theme.system" => self.set_theme_preference(ModeChoice::System),
             "view.theme.light" => self.set_theme_preference(ModeChoice::Light),
