@@ -553,6 +553,176 @@ fn a_document_timestamp_keeps_a_no_changes_certification_valid() {
     assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::SIGNATURE)), "{:?}", s.modification);
 }
 
+/// Signing `bytes` again must be refused, in a new field, with an error that names `field`, the
+/// earlier signature that forbids it.
+fn assert_signing_refused(bytes: &[u8], field: &str, what: &str) {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    match pdfcraft_sign::sign(&open(bytes), &id, &SignOptions { rect: Some([20.0, 160.0, 220.0, 210.0]), ..opts() }) {
+        Err(SignError::Pdf(e)) => assert!(e.contains(field) && e.contains("invalidate"), "{what}: {e}"),
+        other => panic!("{what}: signing must be refused, got {:?}", other.map(|b| b.len())),
+    }
+}
+
+/// A "no changes allowed" certification (DocMDP P=1) is broken by any later signature, as
+/// `only_an_invisible_document_timestamp_survives_a_no_changes_certification` shows from the
+/// validating side. Signing such a document is refused instead of quietly breaking it (#6865); a
+/// document timestamp is still added (`a_document_timestamp_keeps_a_no_changes_certification_valid`).
+#[test]
+fn a_no_changes_certification_refuses_a_later_signature() {
+    let (_, _, certified) = certified_p1();
+    assert_signing_refused(&certified, "Signature1", "a new field");
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    assert!(
+        matches!(pdfcraft_sign::sign(&open(&certified), &id, &SignOptions { field: Some("Approval".into()), ..opts() }), Err(SignError::Pdf(_))),
+        "the empty field Approval"
+    );
+    // A certification that allows signing (P=2, P=3) is signed as before.
+    let certifier = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    for p in [2, 3] {
+        let certified = pdfcraft_sign::sign(&open(&fixture()), &certifier, &SignOptions { certify: Some(p), ..opts() }).unwrap();
+        pdfcraft_sign::sign(&open(&certified), &id, &SignOptions { field: Some("Approval".into()), ..opts() })
+            .unwrap_or_else(|e| panic!("P={p}: {e}"));
+    }
+}
+
+/// A signature field's `/Lock` may carry `/P`, the changes the document allows once the field is
+/// signed (ISO 32000-2 §12.7.5.5): `/P 1` is "no changes". Once such a field is signed, signing
+/// again is refused (#6865). While it is unsigned the lock is not in effect, and `/P 2`, `/P 3`
+/// or no `/P` allow a later signature.
+#[test]
+fn a_signed_field_lock_with_p_1_refuses_a_later_signature() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let id2 = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let lock = |p: Option<Object>| {
+        let mut entries = vec![("Type", Object::name("SigFieldLock")), ("Action", Object::name("All"))];
+        entries.extend(p.map(|p| ("P", p)));
+        dict_of(entries)
+    };
+    for (what, refused) in [
+        ("/P 1", true),
+        ("/P 1 by reference", true),
+        ("/Lock by reference", true),
+        ("/P 0", true),
+        ("/P 2", false),
+        ("/P 3", false),
+        ("no /P", false),
+    ] {
+        let mut doc = open(&fixture());
+        let value = match what {
+            "/P 1" => Object::Dict(lock(Some(Object::Int(1)))),
+            "/P 1 by reference" => {
+                let one = doc.add(Object::Int(1));
+                Object::Dict(lock(Some(Object::Ref(one))))
+            }
+            "/Lock by reference" => Object::Ref(doc.add(Object::Dict(lock(Some(Object::Int(1)))))),
+            "/P 0" => Object::Dict(lock(Some(Object::Int(0)))),
+            "/P 2" => Object::Dict(lock(Some(Object::Int(2)))),
+            "/P 3" => Object::Dict(lock(Some(Object::Int(3)))),
+            _ => Object::Dict(lock(None)),
+        };
+        doc.update_dict(ObjRef { num: 6, generation: 0 }, |f| f.set(b"Lock".to_vec(), value)).unwrap();
+        // The locked field is not signed yet: its lock is not in effect.
+        pdfcraft_sign::sign(&doc, &id2, &SignOptions { rect: Some([20.0, 160.0, 220.0, 210.0]), ..opts() })
+            .unwrap_or_else(|e| panic!("{what}, unsigned: {e}"));
+        let first = pdfcraft_sign::sign(&doc, &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+        if refused {
+            assert_signing_refused(&first, "Approval", what);
+        } else {
+            pdfcraft_sign::sign(&open(&first), &id2, &SignOptions { rect: Some([20.0, 160.0, 220.0, 210.0]), ..opts() })
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+        }
+    }
+}
+
+/// "Lock document after signing" in other signers is also written into the signature itself: a
+/// `/Reference` with `/TransformMethod /FieldMDP` whose `/TransformParams` carry `/P 1`. Signing
+/// again is refused then too (#6865), also when the method or the parameters are written by
+/// reference. The reference is added here after the fact, which breaks that signature's digest:
+/// signing reads what the lock says, not whether its signature still verifies.
+///
+/// A DocMDP reference in a signature the catalog does not name as the certification does not
+/// refuse: validation checks such a signature as an approval signature
+/// (`only_the_signature_the_catalog_names_certifies`), and signing agrees with it.
+#[test]
+fn a_fieldmdp_reference_with_p_1_refuses_a_later_signature() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let id2 = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let first = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    for (what, refused) in [
+        ("FieldMDP /P 1", true),
+        ("FieldMDP by reference", true),
+        ("parameters by reference", true),
+        ("FieldMDP /P 2", false),
+        ("FieldMDP without /P", false),
+        ("DocMDP /P 1 the catalog does not name", false),
+    ] {
+        let locked = edit_after(&first, |doc| {
+            let p = match what {
+                "FieldMDP /P 2" => Some(2),
+                "FieldMDP without /P" => None,
+                _ => Some(1),
+            };
+            let mut params = vec![("Type", Object::name("TransformParams")), ("Action", Object::name("All")), ("V", Object::name("1.2"))];
+            params.extend(p.map(|p| ("P", Object::Int(p))));
+            let params = Object::Dict(dict_of(params));
+            let params = if what == "parameters by reference" { Object::Ref(doc.add(params)) } else { params };
+            let method = Object::name(if what.starts_with("DocMDP") { "DocMDP" } else { "FieldMDP" });
+            let method = if what == "FieldMDP by reference" { Object::Ref(doc.add(method)) } else { method };
+            let sig_ref = dict_of(vec![("Type", Object::name("SigRef")), ("TransformMethod", method), ("TransformParams", params)]);
+            let field = doc.get(ObjRef { num: 6, generation: 0 });
+            let value = field.as_dict().and_then(|f| f.get(b"V")).and_then(Object::as_ref).unwrap();
+            doc.update_dict(value, |v| v.set(b"Reference".to_vec(), Object::Array(vec![Object::Dict(sig_ref)]))).unwrap();
+        });
+        if refused {
+            assert_signing_refused(&locked, "Approval", what);
+        } else {
+            pdfcraft_sign::sign(&open(&locked), &id2, &SignOptions { rect: Some([20.0, 160.0, 220.0, 210.0]), ..opts() })
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+        }
+    }
+}
+
+/// A signed field the form walk can't list (here its `/T` is gone) still holds its lock: such
+/// signatures are found in a pass over the file, as `has_signatures` finds them, and signing is
+/// refused without a field name to give (#6865).
+#[test]
+fn a_lock_on_a_signature_the_form_does_not_list_still_refuses() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let field = ObjRef { num: 6, generation: 0 };
+    let unname = |doc: &mut Document, field: ObjRef| {
+        doc.update_dict(field, |f| {
+            f.remove(b"T");
+        })
+        .unwrap();
+    };
+    // The field's own /Lock.
+    let mut doc = open(&fixture());
+    let lock = dict_of(vec![("Type", Object::name("SigFieldLock")), ("Action", Object::name("All")), ("P", Object::Int(1))]);
+    doc.update_dict(field, |f| f.set(b"Lock".to_vec(), Object::Dict(lock))).unwrap();
+    let first = pdfcraft_sign::sign(&doc, &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    assert_signing_refused(&edit_after(&first, |doc| unname(doc, field)), "an earlier signature", "a field lock");
+    // A FieldMDP reference in the signature.
+    let first = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let locked = edit_after(&first, |doc| {
+        let params = dict_of(vec![("Type", Object::name("TransformParams")), ("Action", Object::name("All")), ("P", Object::Int(1))]);
+        let sig_ref = dict_of(vec![("TransformMethod", Object::name("FieldMDP")), ("TransformParams", Object::Dict(params))]);
+        let value = doc.get(field).as_dict().and_then(|f| f.get(b"V")).and_then(Object::as_ref).unwrap();
+        doc.update_dict(value, |v| v.set(b"Reference".to_vec(), Object::Array(vec![Object::Dict(sig_ref)]))).unwrap();
+        unname(doc, field);
+    });
+    assert_signing_refused(&locked, "an earlier signature", "a FieldMDP reference");
+    // The certification: its field is the last in /Fields.
+    let (_, _, certified) = certified_p1();
+    let unnamed = edit_after(&certified, |doc| {
+        let catalog = doc.get(doc.root().unwrap());
+        let form = doc.resolve(catalog.as_dict().unwrap().get(b"AcroForm").unwrap());
+        let fields = doc.resolve(form.as_dict().unwrap().get(b"Fields").unwrap());
+        let certification = fields.as_array().unwrap().last().and_then(Object::as_ref).unwrap();
+        unname(doc, certification);
+    });
+    assert_signing_refused(&unnamed, "an earlier signature", "a certification");
+}
+
 /// Signature field "Approval" whose value, object 4, asks for DocMDP P 1 in its `/Reference`;
 /// object 5 is another signature dictionary. `perms` goes into the catalog. The signature itself
 /// is a dummy: which signature certifies is decided before its bytes are checked.
