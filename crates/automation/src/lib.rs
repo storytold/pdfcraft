@@ -165,6 +165,13 @@ impl Automation {
         &self.session
     }
 
+    /// Open a document from bytes the caller already holds, as `doc_open` opens a file. A host
+    /// with no file system (a browser page running the wasm build) has nothing for `doc_open`'s
+    /// `path` to name. Returns the id the tools take as `doc`.
+    pub fn open_bytes(&mut self, name: &str, bytes: Vec<u8>, password: Option<&str>) -> std::result::Result<u64, String> {
+        self.session.open(name, None, Arc::new(bytes), password).map(|id| id.0).map_err(|e| e.to_string())
+    }
+
     /// Save `bytes` that a caller writes on the session's behalf, such as `pdfcraft-cli run`
     /// saving a rendered page. With a root, it is confined like a tool's own output (a relative
     /// path resolves inside it). Written atomically either way (#2166), except to something
