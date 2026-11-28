@@ -5254,10 +5254,10 @@ area = "F"
 tier = "P1"
 milestone = "M6"
 status = "shipped"
-commands = ["form.prepare"]
+commands = ["form.prepare", "edit.copy"]
 tools = ["form_copy_field"]
-evidence = ["crates/forms/src/tests.rs::copying_a_field_makes_an_independent_field", "crates/automation/tests/it/automation.rs::copying_a_field_through_tools"]
-notes = "Prepare a form: ⌘C copies the selected fields, ⌘V pastes them on the current page as fields of their own (next free name, own value), one step right and down on their own page (#1571). Copies are taken at paste time, by name, and only within the same document; no Edit menu items yet, and pasting into another PDF is not supported"
+evidence = ["crates/forms/src/tests.rs::copying_a_field_makes_an_independent_field", "crates/forms/src/tests.rs::a_pasted_field_does_not_share_its_look_with_the_source", "crates/forms/src/tests.rs::a_transparent_borderless_multiline_field_pastes_onto_another_page_as_it_was", "crates/ui-egui/tests/it/prepare.rs::copying_and_pasting_the_selected_fields", "crates/ui-egui/tests/it/prepare.rs::pasting_other_text_does_not_paste_the_copied_fields", "crates/automation/tests/it/automation.rs::copying_a_field_through_tools"]
+notes = "Prepare a form: Copy (Edit menu or ⌘C) takes the selected fields, Paste (⌘V) adds them on the current page as fields of their own (next free name, own value, own appearance streams, flags and look kept), one step right and down on their own page, in place on another (#1571). Paste brings the fields back only while the clipboard still holds their copy. Copies are taken at paste time, by name, and only within the same document: no Cut, and pasting into another PDF is not supported yet (#2543)"
 
 [[feature]]
 id = "form.multiple-copies"

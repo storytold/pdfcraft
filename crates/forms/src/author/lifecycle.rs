@@ -325,7 +325,8 @@ pub(super) fn drop_from_calculation_order(doc: &mut Document, gone: impl Fn(ObjR
 }
 
 /// Widget-only keys: they stay with each widget when a merged field is split.
-pub(super) const WIDGET_KEYS: [&[u8]; 13] = [b"Type", b"Subtype", b"Rect", b"P", b"AP", b"AS", b"MK", b"F", b"BS", b"Border", b"H", b"StructParent", b"A"];
+pub(super) const WIDGET_KEYS: [&[u8]; 13] =
+    [b"Type", b"Subtype", b"Rect", b"P", b"AP", b"AS", b"MK", b"F", b"BS", b"Border", b"H", b"StructParent", b"A"];
 
 /// The `/AA` triggers of a widget annotation (ISO 32000-2 §12.6.3, Table 197). The rest (`K`,
 /// `F`, `V`, `C`, Table 199) belong to the field.
