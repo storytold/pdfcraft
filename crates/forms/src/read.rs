@@ -4,6 +4,9 @@ use super::{DecodeBudget, Dict, Document, Field, FieldKind, ObjRef, Object, PdfS
 /// At most this many `/State` entries of a set-layer-visibility action are read.
 const MAX_LAYER_STATE: usize = 1024;
 
+/// At most this many actions of a push button's `/Next` chain are read.
+const MAX_CHAINED_ACTIONS: usize = 256;
+
 /// A push button's mouse-up action (`/A`, or `/AA /U`, on the field or its widget).
 fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut DecodeBudget) -> Option<af::ButtonAction> {
     // A button PdfCraft generated for an XFA image field (`/PCXfaImage true`, no PDF action):
@@ -15,8 +18,51 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
         dict.get(b"A").cloned().or_else(|| dict.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|aa| aa.get(b"U").cloned())))
     };
     let action = pick(d).or_else(|| widgets.iter().find_map(|w| doc.get(*w).as_dict().and_then(pick)))?;
-    let a = doc.resolve(&action);
-    let a = a.as_dict()?;
+    // The action and those its `/Next` names, in the order they run (ISO 32000-2 §12.6.2): each
+    // action, then its `/Next` (one dictionary or an array), depth first. A button that hides
+    // itself and shows its next state is two Hide actions chained this way (#8104).
+    // At most MAX_CHAINED_ACTIONS entries are taken from `pending`, whatever they turn out to
+    // be (an action PdfCraft doesn't run, a repeat): what more it holds is never reached.
+    let mut steps = Vec::new();
+    let mut pending = vec![action];
+    let mut seen = std::collections::HashSet::new();
+    let mut budget = MAX_CHAINED_ACTIONS;
+    while budget > 0
+        && let Some(next) = pending.pop()
+    {
+        budget -= 1;
+        // An action reached twice (a /Next cycle) runs once.
+        if let Object::Ref(r) = &next
+            && !seen.insert(*r)
+        {
+            continue;
+        }
+        let resolved = doc.resolve(&next);
+        let Some(a) = resolved.as_dict() else { continue };
+        if let Some(step) = one_button_action(doc, a, scripts) {
+            steps.push(step);
+        }
+        match a.get(b"Next").map(|n| doc.resolve(n)).as_deref() {
+            Some(Object::Array(items)) => pending.extend(items.iter().take(budget).rev().cloned()),
+            Some(_) => pending.extend(a.get(b"Next").cloned()),
+            None => {}
+        }
+        // The bottom of the stack runs last: past the budget, it never runs.
+        if pending.len() > budget {
+            pending.drain(..pending.len() - budget);
+        }
+    }
+    match steps.len() {
+        0 => None,
+        1 => steps.pop(),
+        _ => Some(af::ButtonAction::Chain(steps)),
+    }
+}
+
+/// One action dictionary of a push button's chain, as [`button_action`] runs it; `None` for an
+/// action PdfCraft doesn't run.
+fn one_button_action(doc: &Document, a: &Dict, scripts: &mut DecodeBudget) -> Option<af::ButtonAction> {
+    let action = Object::Dict(a.clone());
     let s = |k: &[u8]| a.get(k).and_then(|v| text_of(&doc.resolve(v)));
     Some(match a.name(b"S")? {
         b"ResetForm" => {

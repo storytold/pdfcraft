@@ -389,6 +389,8 @@ impl PdfCraftApp {
         if !current {
             self.close_script_prompt(ctx, &pending);
             self.session.discard_javascript(&pending.run);
+            // A button chain waiting on a dropped script stops there.
+            self.button_chain = None;
             return;
         }
         if (pending.dialog.is_none() && pending.started.elapsed() > Duration::from_secs(10))
@@ -396,6 +398,7 @@ impl PdfCraftApp {
         {
             self.close_script_prompt(ctx, &pending);
             self.session.timeout_javascript(pending.run);
+            self.button_chain = None;
             self.notify("The form script timed out; its result was discarded");
             return;
         }
@@ -440,13 +443,18 @@ impl PdfCraftApp {
                                     doc_errors: Vec::new(),
                                 },
                             );
+                            self.continue_button_chain(ctx, id);
                         }
-                        Err(e) => self.notify(e.to_string()),
+                        Err(e) => {
+                            self.button_chain = None;
+                            self.notify(e.to_string());
+                        }
                     }
                     return;
                 }
                 Err(TryRecvError::Disconnected) => {
                     self.session.discard_javascript(&pending.run);
+                    self.button_chain = None;
                     self.notify("The form script stopped unexpectedly");
                     return;
                 }

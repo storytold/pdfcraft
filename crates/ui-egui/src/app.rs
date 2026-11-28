@@ -432,6 +432,8 @@ impl PdfCraftApp {
             js_console: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             script_pending: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            button_chain: None,
             js_dialog: None,
             a11y: a11y_ui::A11yState::default(),
             tags_state: Default::default(),
