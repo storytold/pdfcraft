@@ -435,9 +435,11 @@ fn copy_source(doc: &Document, f: &Field, w: &Widget) -> Result<Dict, FormError>
         return Ok(field);
     }
     // Preserve widget entries that aren't in the field dictionary, including unfamiliar
-    // annotation keys, while the field's own attributes keep their precedence.
+    // annotation keys, while the field's own attributes keep their precedence. A widget's /Ff
+    // is skipped: its radio or push-button bit would change the copy's kind, and its read-only
+    // bit is carried below.
     for (key, value) in widget_dict.iter() {
-        if !field.contains(key) && key.as_slice() != b"AA" && !COPY_DROPS.contains(&key.as_slice()) {
+        if !field.contains(key) && !matches!(key.as_slice(), b"AA" | b"Ff") && !COPY_DROPS.contains(&key.as_slice()) {
             field.set(key.clone(), value.clone());
         }
     }

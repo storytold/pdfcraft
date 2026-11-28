@@ -233,6 +233,28 @@ fn grid_copy_keeps_a_widget_that_is_read_only_on_its_own() {
 }
 
 #[test]
+fn grid_copy_of_a_check_box_ignores_its_widgets_button_kind_bits() {
+    for bits in [flags::RADIO, flags::PUSH_BUTTON] {
+        let ff = bits | flags::READ_ONLY;
+        let objs: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+            "<< /Fields [5 0 R] >>".into(),
+            "<< /FT /Btn /T (box) /V /Off /Kids [6 0 R] >>".into(),
+            format!("<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Ff {ff} /AS /Off /P 3 0 R /Rect [20 300 35 315] >>"),
+        ];
+        let mut doc = document(&objs);
+        assert_eq!(field(&fields(&doc), "box").kind, FieldKind::CheckBox);
+        copy_field(&mut doc, "box", 0, 0, [20.0, 250.0, 35.0, 265.0], "box_copy").unwrap();
+        let all = fields(&doc);
+        let copy = field(&all, "box_copy");
+        assert_eq!(copy.kind, FieldKind::CheckBox, "widget /Ff {ff} must not change the copy's kind");
+        assert!(copy.read_only(), "the widget's read-only bit still reaches the copy");
+    }
+}
+
+#[test]
 fn grid_copy_keeps_a_transparent_borderless_multiline_look() {
     let mut doc = fixture();
     let bare = FieldProps {
