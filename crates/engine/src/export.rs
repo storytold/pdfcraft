@@ -323,6 +323,7 @@ pub fn encode_image(width: u32, height: u32, premultiplied: &[u8], format: Image
         ImageFormat::Png => encode_png(width, height, premultiplied),
         ImageFormat::Jpeg { quality } => encode_jpeg(width, height, premultiplied, quality, dpi),
         ImageFormat::Tiff => encode_tiff(width, height, premultiplied, dpi),
+        ImageFormat::TiffG4 => encode_tiff_g4(width, height, premultiplied, dpi),
     }
 }
 
@@ -366,6 +367,8 @@ pub enum ImageFormat {
         quality: u8,
     },
     Tiff,
+    /// 1-bit CCITT Group 4 TIFF (opt-in black-and-white).
+    TiffG4,
 }
 
 impl ImageFormat {
@@ -373,7 +376,7 @@ impl ImageFormat {
         match self {
             ImageFormat::Png => "png",
             ImageFormat::Jpeg { .. } => "jpg",
-            ImageFormat::Tiff => "tif",
+            ImageFormat::Tiff | ImageFormat::TiffG4 => "tif",
         }
     }
 
@@ -381,7 +384,7 @@ impl ImageFormat {
         match self {
             ImageFormat::Png => "PNG",
             ImageFormat::Jpeg { .. } => "JPEG",
-            ImageFormat::Tiff => "TIFF",
+            ImageFormat::Tiff | ImageFormat::TiffG4 => "TIFF",
         }
     }
 }
@@ -438,6 +441,70 @@ pub fn encode_tiff(width: u32, height: u32, premultiplied: &[u8], dpi: f64) -> R
     craft_image_codecs::encode(&img, craft_image_codecs::Format::Tiff, &opts).map_err(|e| e.to_string())
 }
 
+/// Premultiplied RGBA → 1-bit CCITT Group 4 TIFF at `dpi`.
+///
+/// The page is composited over white and thresholded at Rec. 601 luma 128: darker ink is black,
+/// lighter paper stays white. Bits are packed the way `pdfcraft_filters::encode_g4` already
+/// expects (1 is white, 0 is black, MSB first, each row on a new byte), and the TIFF says
+/// WhiteIsZero so a reader that honours PhotometricInterpretation shows them as black ink
+/// on white paper.
+pub fn encode_tiff_g4(width: u32, height: u32, premultiplied: &[u8], dpi: f64) -> Result<Vec<u8>, String> {
+    check_raster(width, height, premultiplied)?;
+    let rgb = over_white(premultiplied);
+    let packed = pack_g4_rows(&rgb, width, height);
+    let coded = pdfcraft_filters::encode_g4(&packed, width, height).map_err(|e| e.to_string())?;
+    write_g4_tiff(width, height, &coded, dpi)
+}
+
+/// Pack 8-bit RGB rows as 1-bit samples: 1 is white, each row starts on a new byte.
+fn pack_g4_rows(rgb: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let (w, h) = (width as usize, height as usize);
+    let stride = w.div_ceil(8);
+    let mut packed = vec![0u8; stride.saturating_mul(h)];
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) * 3;
+            let (Some(&r), Some(&g), Some(&b)) = (rgb.get(i), rgb.get(i + 1), rgb.get(i + 2)) else {
+                continue;
+            };
+            // Rec. 601 luma; 128 and above is paper.
+            let luma = (77 * u32::from(r) + 150 * u32::from(g) + 29 * u32::from(b)) >> 8;
+            if luma >= 128
+                && let Some(byte) = packed.get_mut(y * stride + x / 8)
+            {
+                *byte |= 0x80 >> (x % 8);
+            }
+        }
+    }
+    packed
+}
+
+fn dpi_rational(dpi: f64) -> (u32, u32) {
+    let rounded = dpi.round();
+    if (dpi - rounded).abs() < 1e-3 && (1.0..u32::MAX as f64).contains(&rounded) {
+        (rounded as u32, 1)
+    } else {
+        let num = (dpi * 1000.0).round();
+        if (1.0..u32::MAX as f64).contains(&num) { (num as u32, 1000) } else { (72, 1) }
+    }
+}
+
+fn write_g4_tiff(width: u32, height: u32, coded: &[u8], dpi: f64) -> Result<Vec<u8>, String> {
+    let (num, den) = dpi_rational(dpi);
+    let mut ifd = craft_tiff::IfdBuilder::new()
+        .with(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![width]))
+        .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![height]))
+        .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![1]))
+        .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![4]))
+        .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![0]))
+        .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![1]))
+        .with(craft_tiff::tags::RESOLUTION_UNIT, craft_tiff::Value::Short(vec![2]))
+        .with(craft_tiff::tags::X_RESOLUTION, craft_tiff::Value::Rational(vec![(num, den)]))
+        .with(craft_tiff::tags::Y_RESOLUTION, craft_tiff::Value::Rational(vec![(num, den)]));
+    ifd.set_image(craft_tiff::ImageData::Strips { rows_per_strip: height, strips: vec![coded.to_vec()] });
+    craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd]).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod image_name_tests {
     use super::image_file_name;
@@ -468,7 +535,7 @@ mod image_name_tests {
 mod raster_tests {
     use super::{ImageFormat, encode_image, encode_png};
 
-    const FORMATS: [ImageFormat; 3] = [ImageFormat::Png, ImageFormat::Jpeg { quality: 90 }, ImageFormat::Tiff];
+    const FORMATS: [ImageFormat; 4] = [ImageFormat::Png, ImageFormat::Jpeg { quality: 90 }, ImageFormat::Tiff, ImageFormat::TiffG4];
 
     /// The colour type and pixels of a PNG.
     fn decode(png: &[u8]) -> (craft_image_codecs::ChannelLayout, Vec<u8>) {
@@ -526,5 +593,69 @@ mod raster_tests {
                 assert_eq!(refused, Some(format!("a {width}×{height} raster has no pixels")), "{}", format.label());
             }
         }
+    }
+
+    /// A black-and-white page exported with [`ImageFormat::TiffG4`] is 1-bit CCITT Group 4 and
+    /// smaller than the same page as 24-bit RGB/LZW. The default TIFF stays RGB/LZW. The file is
+    /// tagged WhiteIsZero so a reader that honours PhotometricInterpretation shows darker-than
+    /// luma 128 ink as black and paper, including a mid-grey of 128, as white.
+    #[test]
+    fn a_mono_tiff_is_1_bit_ccitt_group_4_and_smaller_than_rgb() {
+        // 16×2 keeps each row on two bytes, so packed bits have no padding in the last byte.
+        let mut rgba = vec![255u8; 16 * 2 * 4];
+        for px in rgba.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
+        // First eight pixels of row 0: black ink.
+        for px in rgba[..8 * 4].chunks_exact_mut(4) {
+            px[..3].fill(0);
+        }
+        // Row 1: a mid-grey (paper) then a dark grey (ink), the rest white.
+        rgba[16 * 4..16 * 4 + 3].fill(128);
+        rgba[16 * 4 + 4..16 * 4 + 7].fill(50);
+
+        let rgb = encode_image(16, 2, &rgba, ImageFormat::Tiff, 200.0).unwrap();
+        let g4 = encode_image(16, 2, &rgba, ImageFormat::TiffG4, 200.0).unwrap();
+
+        let rgb_ifd = &craft_tiff::Tiff::parse(&rgb).unwrap().ifds[0];
+        assert_eq!(rgb_ifd.u32(craft_tiff::tags::COMPRESSION).unwrap(), 5, "default TIFF stays LZW");
+        assert_eq!(rgb_ifd.u32(craft_tiff::tags::PHOTOMETRIC).unwrap(), 2, "default TIFF stays RGB");
+        assert_eq!(rgb_ifd.u32(craft_tiff::tags::SAMPLES_PER_PIXEL).unwrap(), 3);
+        assert_eq!(rgb_ifd.u64s(craft_tiff::tags::BITS_PER_SAMPLE).unwrap(), vec![8, 8, 8]);
+
+        let g4_ifd = &craft_tiff::Tiff::parse(&g4).unwrap().ifds[0];
+        assert_eq!(g4_ifd.u32(craft_tiff::tags::COMPRESSION).unwrap(), 4, "CCITT Group 4");
+        assert_eq!(g4_ifd.u32(craft_tiff::tags::PHOTOMETRIC).unwrap(), 0, "WhiteIsZero, 0 is white");
+        assert_eq!(g4_ifd.u32(craft_tiff::tags::BITS_PER_SAMPLE).unwrap(), 1);
+        assert_eq!(g4_ifd.u32(craft_tiff::tags::SAMPLES_PER_PIXEL).unwrap(), 1);
+        assert_eq!(g4_ifd.u32(craft_tiff::tags::RESOLUTION_UNIT).unwrap(), 2);
+        assert_eq!(g4_ifd.f64(craft_tiff::tags::X_RESOLUTION).unwrap(), 200.0);
+        assert_eq!(g4_ifd.f64(craft_tiff::tags::Y_RESOLUTION).unwrap(), 200.0);
+        assert!(g4.len() < rgb.len(), "Group 4 {g4} should be smaller than RGB/LZW {rgb}", g4 = g4.len(), rgb = rgb.len());
+
+        let offset = g4_ifd.u32(craft_tiff::tags::STRIP_OFFSETS).unwrap() as usize;
+        let count = g4_ifd.u32(craft_tiff::tags::STRIP_BYTE_COUNTS).unwrap() as usize;
+        let coded = g4.get(offset..offset.saturating_add(count)).expect("strip inside the file");
+        let params = pdfcraft_filters::CcittParams { k: -1, columns: 16, ..Default::default() };
+        let mut work = u64::MAX;
+        let bits = pdfcraft_filters::decode_ccitt_within(coded, &params, 2, &mut work).unwrap();
+        // Row 0: eight black (0) then eight white (1) → 0x00, 0xFF.
+        // Row 1: mid-grey paper, dark ink, then paper → 0xBF, 0xFF.
+        assert_eq!(bits, [0x00, 0xFF, 0xBF, 0xFF]);
+
+        // Decode the whole file with a reader that honours PhotometricInterpretation.
+        let decoded = craft_image_codecs::decode(&g4).expect("decode the whole Group 4 TIFF");
+        assert_eq!(decoded.dimensions(), (16, 2));
+        let channels = decoded.layout().channels();
+        let samples = decoded.as_u8().expect("8-bit samples after photometric mapping");
+        assert_eq!(samples.len(), 16 * 2 * channels);
+        let pixel = |i: usize| &samples[i * channels..(i + 1) * channels];
+        let is_black = |i: usize| pixel(i).iter().all(|&c| c == 0);
+        let is_white = |i: usize| pixel(i).iter().all(|&c| c == 255);
+        assert!((0..8).all(is_black), "row 0 ink is black");
+        assert!((8..16).all(is_white), "row 0 paper is white");
+        assert!(is_white(16), "mid-grey 128 is paper");
+        assert!(is_black(17), "dark grey is ink");
+        assert!((18..32).all(is_white), "rest of row 1 is paper");
     }
 }

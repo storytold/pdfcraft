@@ -4124,6 +4124,26 @@ fn exporting_images_and_text_through_tools() {
     assert!(a.call("doc_export_text", &json!({ "doc": doc, "path": "/etc/x.txt" })).is_err(), "confined to the root");
 }
 
+/// `doc_export_images` with `format: "tiff"` and `mono: true` writes a CCITT Group 4 file, which
+/// is smaller than the default 24-bit RGB/LZW TIFF of the same page. `mono` is refused for PNG.
+#[test]
+fn exporting_a_mono_tiff_through_tools_writes_a_smaller_group_4_file() {
+    let dir = workdir("export-g4");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "rgb", "dpi": 72, "pages": [1], "format": "tiff" }));
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "g4", "dpi": 72, "pages": [1], "format": "tiff", "mono": true }));
+    let rgb = std::fs::read(dir.join("rgb/a_page_1.tif")).unwrap();
+    let g4 = std::fs::read(dir.join("g4/a_page_1.tif")).unwrap();
+    assert!(rgb.starts_with(b"II*\0") || rgb.starts_with(b"MM\0*"));
+    assert!(g4.starts_with(b"II*\0") || g4.starts_with(b"MM\0*"));
+    assert!(g4.len() < rgb.len(), "Group 4 {} should be smaller than RGB/LZW {}", g4.len(), rgb.len());
+    assert!(matches!(
+        a.call("doc_export_images", &json!({ "doc": doc, "folder": "out", "format": "png", "mono": true })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+}
+
 #[test]
 fn accessibility_character_encoding_accepts_identity_cjk_through_tools() {
     use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, SaveOptions, Stream, write_full};

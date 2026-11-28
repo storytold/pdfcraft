@@ -72,7 +72,7 @@ fn format_id(format: ImageFormat) -> &'static str {
     match format {
         ImageFormat::Png => "png",
         ImageFormat::Jpeg { .. } => "jpeg",
-        ImageFormat::Tiff => "tiff",
+        ImageFormat::Tiff | ImageFormat::TiffG4 => "tiff",
     }
 }
 
