@@ -143,15 +143,25 @@ pub(crate) struct LazyStructure {
 
 impl LazyStructure {
     pub(crate) fn new(bytes: Arc<Vec<u8>>, password: Option<&str>) -> std::result::Result<Self, String> {
-        let source = Document::open_with_stream_limit(bytes, password, 256 << 20).map_err(|e| e.to_string())?;
+        let source = Document::open_with_stream_limit(bytes, password, crate::inspect::LOAD_STREAM_LIMIT).map_err(|e| e.to_string())?;
         // A file rebuilt because its last update has no `/Prev` is read here as rebuilt: the
         // renderer rebuilds it too, and the fallback reader would follow the cut-off chain.
         if !source.repair_log().is_empty() && !source.rebuilt_unlinked_update() {
             return Err("the structure requires compatibility repair".into());
         }
+        Self::over(source)
+    }
+
+    /// The structure of `source`, a document already open, read as it reads it.
+    pub(crate) fn over(source: Document) -> std::result::Result<Self, String> {
         let trailer = convert_dict(source.trailer(), 0).map_err(|e| e.to_string())?;
         let objects = source.object_numbers().into_iter().map(|n| (n, OnceLock::new())).collect();
         Ok(Self { source, trailer, objects, failed: AtomicBool::new(false) })
+    }
+
+    /// The document this structure reads.
+    pub(crate) fn source(&self) -> &Document {
+        &self.source
     }
 
     pub(crate) fn failed(&self) -> bool {

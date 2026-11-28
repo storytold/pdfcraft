@@ -258,6 +258,8 @@ pub(crate) fn security(d: &Document) -> Value {
                 "printing": if !p.print() { "none" } else if p.print_high_quality() { "high" } else { "low" },
                 "modify": p.modify(), "assemble": p.assemble(), "extract_pages": p.extract_pages(), "copy": p.copy(), "annotate": p.annotate(),
                 "fill_forms": p.fill_forms(), "accessibility": p.extract_for_accessibility(),
+                // Opened without the password its attachments need (`/AuthEvent /EFOpen`): doc_unlock takes it.
+                "attachments_locked": d.attachments_locked(),
             })
         }
     }
