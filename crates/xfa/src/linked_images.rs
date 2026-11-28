@@ -40,16 +40,27 @@ const MAX_TEMPLATE_DEPTH: usize = 256;
 /// arrays can be as long as the file allows.
 fn with_resolved<R>(doc: &Document, o: &Object, f: impl FnOnce(&Object) -> R) -> R {
     match o {
-        Object::Ref(r) => f(&doc.get(*r)),
+        Object::Ref(_) => f(&doc.resolve(o)),
         other => f(other),
     }
+}
+
+fn terminal_ref(doc: &Document, o: &Object) -> Option<ObjRef> {
+    let mut r = o.as_ref()?;
+    for _ in 0..=32 {
+        match &*doc.get(r) {
+            Object::Ref(next) => r = *next,
+            _ => return Some(r),
+        }
+    }
+    None
 }
 
 /// The `XFAImages` name tree: each name, as text, and the object it names.
 fn names(doc: &Document) -> HashMap<String, Object> {
     let mut walk = Walk { doc, out: HashMap::new(), seen: HashSet::new(), visited: 0, pairs: 0 };
     let Some(root) = doc.root() else { return walk.out };
-    let catalog = doc.get(root);
+    let catalog = doc.resolve(&Object::Ref(root));
     if let Some(names) = catalog.as_dict().and_then(|c| c.get(b"Names")) {
         with_resolved(doc, names, |n| {
             if let Some(tree) = n.as_dict().and_then(|d| d.get(b"XFAImages")) {
@@ -82,10 +93,13 @@ impl Walk<'_> {
             return;
         }
         self.visited += 1;
-        if let Some(r) = node.as_ref()
-            && !self.seen.insert(r)
-        {
-            return;
+        if node.as_ref().is_some() {
+            let Some(target) = terminal_ref(self.doc, node) else {
+                return;
+            };
+            if !self.seen.insert(target) {
+                return;
+            }
         }
         let doc = self.doc;
         with_resolved(doc, node, |node| {
@@ -227,6 +241,9 @@ impl Found<'_> {
     }
 
     fn subform(&mut self, s: &mut Subform, depth: usize) {
+        if depth > MAX_TEMPLATE_DEPTH {
+            return;
+        }
         if let Some(set) = s.page_set.as_mut() {
             for area in &mut set.areas {
                 self.nodes(&mut area.items, depth + 1);
@@ -257,4 +274,77 @@ fn resolve_found<'a>(tpl: &mut Template, doc: &'a Document) -> Option<Found<'a>>
 #[cfg(test)]
 pub(crate) fn resolve_keeping(tpl: &mut Template, doc: &Document) -> (Vec<String>, usize) {
     resolve_found(tpl, doc).map_or((Vec::new(), 0), |f| (f.warnings.clone(), f.kept()))
+}
+
+#[cfg(test)]
+mod tests {
+    use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
+
+    use super::resolve;
+    use crate::model::{Common, Draw, Node, Subform, Template, Value};
+
+    #[test]
+    fn resolve_follows_chained_indirect_references_in_xfa_images_name_tree() {
+        let mut doc = Document::new_empty();
+        let img_stream = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"PNGDATA".to_vec())));
+        let img_alias = doc.add(Object::Ref(img_stream));
+
+        let key_obj = doc.add(Object::String(PdfString::literal(b"logo.png".to_vec())));
+        let key_alias = doc.add(Object::Ref(key_obj));
+
+        let pairs_arr = doc.add(Object::Array(vec![Object::Ref(key_alias), Object::Ref(img_alias)]));
+        let pairs_alias = doc.add(Object::Ref(pairs_arr));
+
+        let mut leaf_dict = Dict::new();
+        leaf_dict.set(b"Names".to_vec(), Object::Ref(pairs_alias));
+        let leaf_obj = doc.add(Object::Dict(leaf_dict));
+        let leaf_alias = doc.add(Object::Ref(leaf_obj));
+
+        let cycle_a = doc.add(Object::Null);
+        let cycle_b = doc.add(Object::Ref(cycle_a));
+        doc.set(cycle_a, Object::Ref(cycle_b));
+
+        let tree_obj = doc.add(Object::Null);
+        let tree_alias = doc.add(Object::Ref(tree_obj));
+        let kids_arr = doc.add(Object::Array(vec![Object::Ref(tree_alias), Object::Ref(cycle_a), Object::Ref(leaf_alias)]));
+        let kids_alias = doc.add(Object::Ref(kids_arr));
+
+        let mut tree_dict = Dict::new();
+        tree_dict.set(b"Kids".to_vec(), Object::Ref(kids_alias));
+        doc.set(tree_obj, Object::Dict(tree_dict));
+
+        let mut names_dict = Dict::new();
+        names_dict.set(b"XFAImages".to_vec(), Object::Ref(tree_alias));
+        let names_obj = doc.add(Object::Dict(names_dict));
+        let names_alias = doc.add(Object::Ref(names_obj));
+
+        let Some(root_ref) = doc.root() else {
+            return;
+        };
+        let mut catalog = doc.get(root_ref).as_dict().cloned().unwrap_or_default();
+        catalog.set(b"Names".to_vec(), Object::Ref(names_alias));
+        let real_catalog = doc.add(Object::Dict(catalog));
+        doc.set(root_ref, Object::Ref(real_catalog));
+
+        let mut tpl = Template {
+            root: Subform {
+                children: vec![Node::Draw(Box::new(Draw {
+                    common: Common::default(),
+                    value: Value::Image { content_type: "image/png".into(), data: Vec::new(), href: Some("logo.png".into()) },
+                }))],
+                ..Subform::default()
+            },
+            ..Template::default()
+        };
+
+        let warnings = resolve(&mut tpl, &doc);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            tpl.root.children.first(),
+            Some(&Node::Draw(Box::new(Draw {
+                common: Common::default(),
+                value: Value::Image { content_type: "image/png".into(), data: b"PNGDATA".to_vec(), href: Some("logo.png".into()) },
+            })))
+        );
+    }
 }
