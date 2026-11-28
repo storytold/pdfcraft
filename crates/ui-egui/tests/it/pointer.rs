@@ -568,6 +568,58 @@ fn mouse_click_ticks_a_check_box() {
     assert_eq!(agree(&h), ["Yes"], "a click ticks the box");
 }
 
+/// A 300×400 page with a web link at x 50..250, y 300..350, a rectangle comment over its right end, at x 200..280,
+/// y 290..360, and a highlight on a line of text at x 40..150, y 157..172, which no link reaches.
+fn comments_to_tap_pdf() -> Vec<u8> {
+    let text = stream("BT /F1 12 Tf 40 160 Td (Signed and approved.) Tj ET");
+    pdf(&[
+        CATALOG,
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /Font << /F1 8 0 R >> >> /Annots [4 0 R 5 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [50 300 250 350] /Border [0 0 0] /A << /S /URI /URI (https://example.org/) >> >>",
+        "<< /Type /Annot /Subtype /Square /Rect [200 290 280 360] /C [1 0 0] /F 4 /T (Ana) >>",
+        "<< /Type /Annot /Subtype /Highlight /Rect [40 157 150 172] /QuadPoints [40 172 150 172 40 157 150 157] /C [1 1 0] /F 4 /T (Ana) >>",
+        text.as_str(),
+        HELVETICA,
+    ])
+}
+
+/// A press whose pointer lands in the frame of the press, as every tap's does and a fast mouse's can, goes to what a
+/// press there goes to after a hover: the comment over the link is selected and the link not followed, and the
+/// highlight is selected. A comment is a part of the page only under the pointer, so the tap used to go through the
+/// comment to the link, and through the highlight to the text.
+#[test]
+fn a_press_that_lands_with_its_pointer_goes_to_the_comment_under_it() {
+    let press = |p, pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let moved = egui::Event::PointerMoved;
+    type Click<'a> = &'a dyn Fn(&mut Harness<'static, PdfCraftApp>, egui::Pos2);
+    let clicks: [(&str, Click<'_>); 4] = [
+        ("after a hover", &|h, p| mouse_click(h, p)),
+        ("a tap", &|h, p| crate::support::input::touch_tap(h, p)),
+        ("a press in the move's frame", &|h, p| {
+            one_frame(h, [moved(p), press(p, true)]);
+            one_frame(h, [press(p, false)]);
+            h.run_steps(4);
+        }),
+        ("a whole click in the move's frame", &|h, p| {
+            one_frame(h, [moved(p), press(p, true), press(p, false)]);
+            h.run_steps(4);
+        }),
+    ];
+    for (how, click) in clicks {
+        let mut h = open(comments_to_tap_pdf(), "100", false);
+        let over_link = at(&h, 225.0, 325.0);
+        click(&mut h, over_link);
+        assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 1)), "{how}: the comment over the link is selected");
+        assert_eq!(pending_url(&h), None, "{how}: and the link is not followed");
+
+        let mut h = open(comments_to_tap_pdf(), "100", false);
+        let on_highlight = at(&h, 90.0, 165.0);
+        click(&mut h, on_highlight);
+        assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 2)), "{how}: the highlight is selected");
+    }
+}
+
 /// Whether a signing dialog shows: its title, in the access tree.
 fn signing_dialog_shown(h: &Harness<'_, PdfCraftApp>) -> bool {
     ["Sign with a Digital ID", "Configure a Digital ID for Signing"].into_iter().any(|title| h.query_by_label(title).is_some())

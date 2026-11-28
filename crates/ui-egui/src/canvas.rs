@@ -999,11 +999,12 @@ fn page_parts_of(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSessi
         // icon size, both as the tools on the canvas read them.
         let env = Env::of(ui);
         let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
-        let pointer = ui.input(|i| i.pointer.hover_pos()).map(|p| craft::behavior::kurbo::Point::new(p.x.into(), p.y.into()));
+        // A lifted finger's pointer is gone in the frame of its release: the comment stays its press's part there.
+        let at = ui.input(|i| i.pointer.interact_pos());
+        let pointer = at.map(|p| craft::behavior::kurbo::Point::new(p.x.into(), p.y.into()));
         let (tolerance, icon_side) = (map.doc_len(env.hit_reach()), map.doc_len(env.tokens.size.icon.md));
-        let on_link = ui
-            .input(|i| i.pointer.hover_pos())
-            .is_some_and(|p| parts.iter().any(|part| matches!(part.owner, Owner::Link { .. } | Owner::TextLink { .. }) && part.shape.hit(p)));
+        let on_link =
+            at.is_some_and(|p| parts.iter().any(|part| matches!(part.owner, Owner::Link { .. } | Owner::TextLink { .. }) && part.shape.hit(p)));
         if cx.tool == QuickTool::Select
             || cx.unobstructed && session.comments.tool.in_flight().is_none() && session.comments.tool.drawing().is_empty()
         {
@@ -1183,6 +1184,15 @@ fn route_press(
             if let Some(xf) = session.page_xform(press.page, geo) {
                 let page_cx =
                     comments::PageCx { page: press.page, xf: &xf, info: cx.info, prefs: cx.prefs, allowed: cx.allowed, hidden: cx.comments_hidden };
+                // A finger held on a comment selects it (the framework reports no long touch); with a modifier held it
+                // is left to the click, which adds to or takes from the selection.
+                let limit = ui.ctx().options(|o| o.input_options.max_click_duration);
+                if let PressPhase::Held { start, .. } = press.phase
+                    && !(press.mods.shift || press.mods.cmd || press.mods.ctrl)
+                    && ui.input(|i| i.any_touches() && i.time - start.time > limit)
+                {
+                    comments::part_held(&mut session.comments, press, &page_cx);
+                }
                 let words = Env::of(ui).words::<AnnotateWords>();
                 let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
                 comments::part_pressed(&mut session.comments, press, &page_cx, &map, cx.tool, &words);

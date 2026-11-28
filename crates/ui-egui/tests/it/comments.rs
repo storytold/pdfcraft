@@ -3540,6 +3540,37 @@ fn delete_deletes_the_group_member_clicked() {
     assert_eq!(shapes(&h), [("Circle".to_string(), true)], "the Square goes, the Circle stays as a comment of its own");
 }
 
+/// CodeRabbit on #8293: a finger held on the Circle selects its group and remembers the Circle,
+/// as a click on it does, so Delete with the finger still down deletes the Circle; so does a
+/// hold on the Circle while the group is selected already, from the Square. (Lifted in place,
+/// the hold is a click, which remembers the Circle too.)
+#[test]
+fn delete_deletes_the_group_member_a_finger_holds() {
+    let shapes = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> {
+        let mut out: Vec<String> = comments(h).iter().filter(|a| a.subtype != "Text").map(|a| a.subtype.clone()).collect();
+        out.sort();
+        out
+    };
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |_| {});
+    let circle = at(&h, 220.0, 150.0);
+    support::input::touch_hold(&mut h, circle);
+    assert_eq!(h.state().views[0].session.comments.selection(), vec![(0, 0)], "the hold selects the group");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(shapes(&h), ["Square".to_string()], "the Circle goes, the Square stays");
+    support::input::touch_lift(&mut h, circle);
+    undo(&mut h);
+    h.run_steps(3);
+
+    click_pt(&mut h, (60.0, 50.0));
+    support::input::touch_hold(&mut h, circle);
+    assert_eq!(h.state().views[0].session.comments.selection(), vec![(0, 0)], "the group stays selected");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(shapes(&h), ["Square".to_string()], "the Circle goes again, not the Square selected before");
+    support::input::touch_lift(&mut h, circle);
+}
+
 /// CodeRabbit on #4358: the member a click on the page picked is forgotten once the selection is
 /// made anywhere else. After clicking the Circle, choosing the group's card in the Comments panel
 /// selects the comment the card shows, the Square, so Delete deletes the Square, not the Circle
