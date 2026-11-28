@@ -116,13 +116,22 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
 /// on all of them (XFA 3.3, "Page Background": a page-background field binds only through an
 /// explicit data reference).
 fn page_area_index(tpl: &Template, segments: &[(String, usize)]) -> Option<usize> {
-    let ((first, instance), rest) = segments.split_first()?;
+    let (_, instance) = segments.first()?;
+    let target = page_area_object(tpl, segments)?;
+    let shared = matches!(target, Some(Node::Field(f)) if f.data_shared);
+    Some(if shared { 0 } else { *instance })
+}
+
+/// For a SOM path that starts at a page area (`Area[n].…`), the template object the rest of the
+/// path names inside the area's own content (`None` inside: the path names the area itself).
+/// `None` for any other path, or one naming an object the area doesn't have.
+fn page_area_object<'a>(tpl: &'a Template, segments: &[(String, usize)]) -> Option<Option<&'a Node>> {
+    let ((first, _), rest) = segments.split_first()?;
     if tpl.root.common.name.as_deref() == Some(first.as_str()) {
         return None;
     }
     let areas = tpl.root.page_set.as_ref()?;
     let area = areas.areas.iter().find(|a| a.name.as_deref() == Some(first.as_str()))?;
-    // The object the rest of the path names, inside the page area's own content.
     let mut nodes: &[Node] = &area.items;
     let mut target = None;
     for (name, index) in rest {
@@ -134,8 +143,38 @@ fn page_area_index(tpl: &Template, segments: &[(String, usize)]) -> Option<usize
             _ => &[],
         };
     }
-    let shared = matches!(target, Some(Node::Field(f)) if f.data_shared);
-    Some(if shared { 0 } else { *instance })
+    Some(target)
+}
+
+/// Whether any field of the template binds to a data node it may share ([`binds_shared_data`]),
+/// so a form without one can skip looking for the copies of a field.
+pub fn has_shared_bindings(tpl: &Template) -> bool {
+    fn any(nodes: &[Node], depth: usize) -> bool {
+        depth <= MAX_DEPTH
+            && nodes.iter().any(|n| match n {
+                Node::Field(f) => f.data_shared,
+                Node::Subform(sf) => {
+                    any(&sf.children, depth + 1) || sf.page_set.as_ref().is_some_and(|ps| ps.areas.iter().any(|a| any(&a.items, depth + 1)))
+                }
+                Node::Area(a) => any(&a.children, depth + 1),
+                Node::ExclGroup(_) | Node::Draw(_) => false,
+            })
+    }
+    any(&tpl.root.children, 0) || tpl.root.page_set.as_ref().is_some_and(|ps| ps.areas.iter().any(|a| any(&a.items, 0)))
+}
+
+/// Whether the field at `som` binds to a data node it shares with the other fields bound to it
+/// (`match="global"`, or an explicit data reference), rather than one of its own. Every field
+/// whose [`data_path`] is the same then shows one value, and an edit to any of them is an edit to
+/// all (XFA 3.3 p. 87, p. 176): the copies of a global field on each page a master page lays out.
+/// A field of the form's own content or of a page area; `false` for anything else.
+pub fn binds_shared_data(tpl: &Template, som: &str) -> bool {
+    let segments = som_to_path(som);
+    let field = match page_area_object(tpl, &segments) {
+        Some(target) => target,
+        None => template_object(tpl, som),
+    };
+    matches!(field, Some(Node::Field(f)) if f.data_shared)
 }
 
 enum Container<'a> {

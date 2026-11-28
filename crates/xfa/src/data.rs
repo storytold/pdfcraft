@@ -34,7 +34,7 @@ pub use dates::{iso_to_pattern, pattern_to_iso};
 pub(crate) use import::MAX_IMPORT_BYTES;
 pub use import::{DataImport, ImportNode, export_data, import_data, parse_data_file, write_data_image};
 pub use passwords::{clear_password_values, has_password_values};
-pub use path::{data_path, parse_datasets, som_to_path};
+pub use path::{binds_shared_data, data_path, has_shared_bindings, parse_datasets, som_to_path};
 pub(crate) use path::{fields_with_ids, template_field, template_object};
 pub use values::{FieldData, FieldDatum, is_on, name_text, radio_dataset_value, radio_state_for_item, read_values, read_values_with};
 #[cfg(test)]
