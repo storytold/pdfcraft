@@ -230,6 +230,7 @@ impl PdfCraftApp {
                 after_open: None,
                 recovered: Some(entry.clone()),
                 then: None,
+                from_attachment: None,
                 priority: craft::host::queue::Priority::VISIBLE,
             });
         }

@@ -238,6 +238,9 @@ pub struct PasswordPrompt {
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
     /// A launch-time display override, applied only after this PDF is unlocked.
     pub(crate) display_override: Option<(craft::pages::PageDisplay, bool)>,
+    /// The document and attached file this one was opened from: its tab keeps that origin once
+    /// it opens, after the password ([`crate::canvas::DocView::from_attachment`]).
+    pub(crate) from_attachment: Option<(pdfcraft_engine::DocId, pdfcraft_render::AttachmentSource, String)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -251,6 +254,8 @@ pub(crate) struct OpenRequest {
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
     pub(crate) recovered: Option<craft::platform::autosave::RecoveryEntry>,
     pub(crate) then: Option<&'static str>,
+    /// The document and attached file this one was opened from: its tab keeps that origin once it opens.
+    pub(crate) from_attachment: Option<(pdfcraft_engine::DocId, pdfcraft_render::AttachmentSource, String)>,
     /// Where the open waits in the worker's queue: a file the user named goes before files
     /// reopened from the last session.
     pub(crate) priority: craft::host::queue::Priority,

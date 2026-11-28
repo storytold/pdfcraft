@@ -156,9 +156,10 @@ pub struct DocView {
     /// views of one document apart (`crate::panes`).
     pub(crate) pane: crate::panes::ViewPane,
     pub id: DocId,
-    /// The document and attached file this tab was opened from, when a form or the Attachments
-    /// panel opened it: asking for that attachment again comes back to this tab.
-    pub from_attachment: Option<(DocId, String)>,
+    /// The document and attached file this tab was opened from (where the file lives in it, and
+    /// its name), when a form or the Attachments panel opened it: asking for that attachment
+    /// again comes back to this tab.
+    pub from_attachment: Option<(DocId, pdfcraft_render::AttachmentSource, String)>,
     /// What the page view shows: the page, display, zoom, fit, rotation and scroll offset.
     pub view: PageViewState,
     /// Everything the page body touches: the tools' and editors' state, the text selection, the pages placed.
@@ -695,6 +696,8 @@ impl DocView {
         fresh.viewport = self.viewport;
         // Same view key (`pane`): the page view's remembered state and the grid's press id are still this view's.
         fresh.pane = self.pane.clone();
+        // The tab is still the one opened from that attachment, so asking for it again comes back here.
+        fresh.from_attachment = self.from_attachment.clone();
         *self = fresh;
         // Marks the kept pictures out of date and clamps the page to the new page count.
         self.document_changed(ctx, info);

@@ -203,6 +203,8 @@ struct PendingOpen {
     ready: Option<open_worker::ResultKind>,
     /// Reopen Closed Tab asked for it: its closed-tab entry goes once it has opened, and stays when it fails.
     reopen: bool,
+    /// The document and attached file this one was opened from: its tab keeps that origin once it opens.
+    from_attachment: Option<(DocId, pdfcraft_render::AttachmentSource, String)>,
 }
 
 /// A named destination being looked up in a document.
@@ -502,6 +504,8 @@ pub struct PdfCraftApp {
     /// The progress card of each background job that shows one.
     pub(crate) progress_cards: std::collections::HashMap<crate::notices::ProgressKey, craft::ui::runtime::toast::ToastId>,
     pub password_prompt: Option<PasswordPrompt>,
+    /// Tests may force the password retry to open the held bytes on this thread, as the web does.
+    pub run_inline: bool,
     /// Whole-document text copies (#2639) reading their pages off the UI thread.
     pub(crate) text_copies: Queue<DocId, String>,
     /// Reveal-in-file-manager calls, which can block on a slow mount; their failures are shown by `drain_reveals`.

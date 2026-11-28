@@ -25,6 +25,17 @@ pub(crate) fn same_file(open: &str, path: &str) -> bool {
     craft::platform::open::same_file(std::path::Path::new(open), std::path::Path::new(path), None)
 }
 
+/// Inputs to [`PdfCraftApp::try_open`], kept together so the open, the password prompt and the
+/// tab origin stay one value (and the function stays within the argument limit).
+struct TryOpen<'a> {
+    name: &'a str,
+    path: Option<String>,
+    bytes: std::sync::Arc<Vec<u8>>,
+    password: Option<&'a str>,
+    activate: bool,
+    from_attachment: Option<(DocId, pdfcraft_render::AttachmentSource, String)>,
+}
+
 impl PdfCraftApp {
     /// Shows `panel` as the right panel, or closes the one showing for `None`.
     pub(crate) fn set_right(&mut self, panel: Option<RightPanel>) {
@@ -130,7 +141,7 @@ impl PdfCraftApp {
             }
             return r;
         }
-        self.try_open(ctx, name, path, std::sync::Arc::new(bytes), None, activate)
+        self.try_open(ctx, TryOpen { name, path, bytes: std::sync::Arc::new(bytes), password: None, activate, from_attachment: None })
     }
 
     /// Hand `request` to the open queue; the result arrives later as a pending open, under the
@@ -167,6 +178,7 @@ impl PdfCraftApp {
             display_override: None,
             ready: None,
             reopen: false,
+            from_attachment: request.from_attachment,
         });
         token
     }
@@ -263,6 +275,11 @@ impl PdfCraftApp {
             open_worker::ResultKind::Prepared { bytes, result, named } => match *result {
                 Ok(prepared) => match self.finish_open(ctx, &pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
                     Ok(id) => {
+                        if let Some(origin) = pending.from_attachment
+                            && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+                        {
+                            view.from_attachment = Some(origin);
+                        }
                         if let Some(path) = pending.path.as_deref() {
                             self.watch.known_as(id, std::path::Path::new(path), pending.stamp);
                             if pending.reopen {
@@ -307,6 +324,7 @@ impl PdfCraftApp {
                         then: pending.then,
                         after_open: pending.after_open,
                         display_override: pending.display_override,
+                        from_attachment: pending.from_attachment,
                     });
                 }
                 Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error.to_string())]),
@@ -316,15 +334,8 @@ impl PdfCraftApp {
 
     /// Open `bytes` on this thread: ask for a password if the document needs one, else add it
     /// as a tab (in front when `activate`).
-    fn try_open(
-        &mut self,
-        ctx: &egui::Context,
-        name: &str,
-        path: Option<String>,
-        bytes: std::sync::Arc<Vec<u8>>,
-        password: Option<&str>,
-        activate: bool,
-    ) -> Result<(), String> {
+    fn try_open(&mut self, ctx: &egui::Context, open: TryOpen<'_>) -> Result<(), String> {
+        let TryOpen { name, path, bytes, password, activate, from_attachment } = open;
         use pdfcraft_render::OpenError;
         // A new document opens with the remembered Highlight fields, which its scripts read; the
         // session keeps the document in front's.
@@ -347,12 +358,19 @@ impl PdfCraftApp {
                     then: None,
                     after_open: None,
                     display_override: None,
+                    from_attachment,
                 });
                 return Ok(());
             }
             Err(e) => return Err(e.to_string()),
         };
-        self.finish_open(ctx, name, path, bytes.len(), prepared, activate).map(|_| ())
+        let id = self.finish_open(ctx, name, path, bytes.len(), prepared, activate)?;
+        if let Some(origin) = from_attachment
+            && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+        {
+            view.from_attachment = Some(origin);
+        }
+        Ok(())
     }
 
     /// Add a prepared document as a tab: its view, the panels it opens with, a portfolio's file list
@@ -534,22 +552,26 @@ impl PdfCraftApp {
                 let name = safe_file_name(&att.name, "attachment");
                 // Already open: the tab opened from this attachment of this document (its bytes
                 // may have grown since, as a form laid out on open appends its layout).
-                let origin = (doc, att.name.clone());
+                let origin = (doc, att.source.clone(), att.name.clone());
                 let open_in = self.views.iter().position(|v| v.from_attachment.as_ref() == Some(&origin) && self.session.get(v.id).is_some());
                 if let Some(i) = open_in {
                     self.active = Some(i);
                     return;
                 }
-                let before = self.views.len();
-                match self.open_bytes(ctx, &name, None, bytes) {
-                    // Opening bytes adds their tab at once (unless a password is asked for first).
-                    Ok(()) if self.views.len() > before => {
-                        if let Some(v) = self.views.last_mut() {
-                            v.from_attachment = Some(origin);
-                        }
-                    }
-                    Ok(()) => {}
-                    Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]),
+                // try_open records the origin on the new tab, or on the password prompt so it is
+                // kept after the file is unlocked.
+                if let Err(e) = self.try_open(
+                    ctx,
+                    TryOpen {
+                        name: &name,
+                        path: None,
+                        bytes: std::sync::Arc::new(bytes),
+                        password: None,
+                        activate: true,
+                        from_attachment: Some(origin),
+                    },
+                ) {
+                    self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
                 }
             }
             (Ok(bytes), _) => {
@@ -711,8 +733,6 @@ impl PdfCraftApp {
 
     /// Answer the password prompt (`None` cancels).
     pub fn submit_password(&mut self, ctx: &egui::Context, password: Option<String>) {
-        #[cfg(not(target_arch = "wasm32"))]
-        let _ = ctx;
         let Some(mut p) = self.password_prompt.take() else { return };
         let Some(pw) = password.map(zeroize::Zeroizing::new) else {
             // A cancelled recovery goes back on offer; its snapshot stays in the store and must
@@ -725,6 +745,11 @@ impl PdfCraftApp {
             return;
         };
         #[cfg(not(target_arch = "wasm32"))]
+        if self.run_inline {
+            self.retry_inline(ctx, p, pw);
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         {
             let token = self.schedule_open(OpenRequest {
                 name: p.name.clone(),
@@ -736,6 +761,7 @@ impl PdfCraftApp {
                 after_open: p.after_open.clone(),
                 recovered: p.recovered.clone(),
                 then: p.then,
+                from_attachment: p.from_attachment.clone(),
                 priority: Priority::VISIBLE,
             });
             if let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == token) {
@@ -749,10 +775,19 @@ impl PdfCraftApp {
     }
 
     /// The web has no queue: the retry opens the held bytes at once.
-    #[cfg(target_arch = "wasm32")]
     fn retry_inline(&mut self, ctx: &egui::Context, mut p: PasswordPrompt, pw: zeroize::Zeroizing<String>) {
         let after_open = p.after_open.clone();
-        let opened = self.try_open(ctx, &p.name, p.path.take(), p.bytes.clone(), Some(&pw), p.activate);
+        let opened = self.try_open(
+            ctx,
+            TryOpen {
+                name: &p.name,
+                path: p.path.take(),
+                bytes: p.bytes.clone(),
+                password: Some(&pw),
+                activate: p.activate,
+                from_attachment: p.from_attachment.clone(),
+            },
+        );
         drop(pw);
         match opened {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
@@ -778,6 +813,7 @@ impl PdfCraftApp {
                     prompt.then = p.then;
                     prompt.after_open = after_open;
                     prompt.display_override = p.display_override;
+                    prompt.from_attachment = p.from_attachment.take();
                 }
             }
         }
@@ -923,6 +959,7 @@ impl PdfCraftApp {
             after_open,
             recovered: None,
             then,
+            from_attachment: None,
             priority: Priority::NEAR,
         });
         if let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == token) {

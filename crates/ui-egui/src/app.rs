@@ -397,6 +397,7 @@ impl PdfCraftApp {
             progress_requests: Vec::new(),
             progress_cards: Default::default(),
             password_prompt: None,
+            run_inline: false,
             unlock_prompt: None,
             screen_mode: Default::default(),
             host_dirty: None,

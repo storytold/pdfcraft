@@ -176,10 +176,35 @@ fn xfa_resolve(ctx: &mut Context, many: bool) -> JsResult<JsValue> {
     resolver(ctx, current, many)
 }
 
+/// The bare `event`'s `name` and `type` for an XFA `activity`. The activities that are field
+/// events in the public JavaScript API reference for PDF forms take that field event's name and
+/// the type `Field`: a click is `Mouse Up`, a change `Keystroke` and an exit `Blur` (all three
+/// measured on a synthetic form in another viewer), and enter, mouseDown, mouseUp, mouseEnter,
+/// mouseExit, calculate and validate the reference's `Focus`, `Mouse Down`, `Mouse Up`,
+/// `Mouse Enter`, `Mouse Exit`, `Calculate` and `Validate`. Any other activity (initialize, ready, docReady, preSign, …) has
+/// no field event there: it keeps its XFA name and has no type.
+pub(super) fn field_event(activity: &str) -> (&str, Option<&'static str>) {
+    let name = match activity {
+        "click" => "Mouse Up",
+        "change" => "Keystroke",
+        "exit" => "Blur",
+        "enter" => "Focus",
+        "mouseDown" => "Mouse Down",
+        "mouseUp" => "Mouse Up",
+        "mouseEnter" => "Mouse Enter",
+        "mouseExit" => "Mouse Exit",
+        "calculate" => "Calculate",
+        "validate" => "Validate",
+        _ => return (activity, None),
+    };
+    (name, Some("Field"))
+}
+
 /// Defines the globals for one script on node `current`: `xfa` (`form`, `host`, `layout`, `event`,
-/// `resolveNode` and more; `xfa.event`'s target is that node), a separate global `event` whose
-/// target is a document offering `exportDataObject`, `app`, `console`, `util`, and the nodes in
-/// scope by name, with `_name` for each repeatable one's instance manager.
+/// `resolveNode` and more; `xfa.event`'s target is that node and its name the activity), a
+/// separate global `event` named as [`field_event`] gives, whose target is a document offering
+/// `numPages` and `exportDataObject`, `app`, `console`, `util`, and the nodes in scope by name,
+/// with `_name` for each repeatable one's instance manager.
 pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current: usize) -> JsResult<()> {
     let rw = Attribute::CONFIGURABLE;
     let form = node_object(ctx, 0)?;
@@ -229,14 +254,20 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
         .function(NativeFunction::from_fn_ptr(zero), js_string!("pageSpan"), 1)
         .property(js_string!("ready"), JsValue::from(true), Attribute::READONLY)
         .build();
-    // Two event objects, as in Acrobat's XFA scripting: `xfa.event`, whose target is the form
-    // node the event happened on, and Acrobat's own `event`, whose target is the document
-    // (`event.target.exportDataObject(…)` is how forms open their attached files).
-    let acrobat_doc =
-        ObjectInitializer::new(ctx).function(NativeFunction::from_fn_ptr(export_data_object), js_string!("exportDataObject"), 4).build();
-    let event_object = |ctx: &mut Context, target: JsValue| {
-        ObjectInitializer::new(ctx)
-            .property(js_string!("name"), s(&event.activity), Attribute::all())
+    // Two event objects: `xfa.event`, named by the activity, whose target is the form node the
+    // event happened on, and the bare `event` another viewer gives XFA scripts, named as the
+    // matching field event ([`field_event`]), whose target is the document
+    // (`event.target.exportDataObject(…)` is how forms open their attached files). The
+    // document's `numPages` reads the count `xfa.layout.pageCount()` gives, through the same
+    // function.
+    let page_count = function(ctx, NativeFunction::from_fn_ptr(layout_page_count));
+    let acrobat_doc = ObjectInitializer::new(ctx)
+        .function(NativeFunction::from_fn_ptr(export_data_object), js_string!("exportDataObject"), 4)
+        .accessor(js_string!("numPages"), Some(page_count), None, rw)
+        .build();
+    let event_object = |ctx: &mut Context, name: &str, kind: Option<&str>, target: JsValue| {
+        let mut o = ObjectInitializer::new(ctx);
+        o.property(js_string!("name"), s(name), Attribute::all())
             .property(js_string!("newText"), s(&event.new_text), Attribute::all())
             .property(js_string!("prevText"), s(&event.prev_text), Attribute::all())
             .property(js_string!("fullText"), s(&event.new_text), Attribute::all())
@@ -251,11 +282,15 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
             .property(js_string!("keyDown"), JsValue::from(false), Attribute::all())
             .property(js_string!("commitKey"), JsValue::from(0.0), Attribute::all())
             .function(NativeFunction::from_fn_ptr(noop), js_string!("emit"), 0)
-            .function(NativeFunction::from_fn_ptr(noop), js_string!("reset"), 0)
-            .build()
+            .function(NativeFunction::from_fn_ptr(noop), js_string!("reset"), 0);
+        if let Some(kind) = kind {
+            o.property(js_string!("type"), s(kind), Attribute::all());
+        }
+        o.build()
     };
-    let ev = event_object(ctx, this_node.clone());
-    let acrobat_ev = event_object(ctx, acrobat_doc.into());
+    let ev = event_object(ctx, &event.activity, None, this_node.clone());
+    let (name, kind) = field_event(&event.activity);
+    let acrobat_ev = event_object(ctx, name, kind, acrobat_doc.into());
     let datasets = ObjectInitializer::new(ctx).property(js_string!("data"), form.clone(), rw).build();
     let template = sink(ctx)?;
     let resolve_one = xfa_resolve(ctx, false)?;

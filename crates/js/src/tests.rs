@@ -2338,6 +2338,43 @@ mod data_objects {
         assert_eq!(o.result.as_deref(), Some("go"), "xfa.event.target is still the button");
         assert!(o.effects.contains(&XfaEffect::OpenAttachment { name: "Guide.pdf".into(), open: true }), "{:?}", o.effects);
     }
+
+    /// In an XFA script the bare `event` is named as the matching field event, with type
+    /// `Field`, for each activity that has one (click, change and exit as measured in another
+    /// viewer, the rest from the public API reference); other activities keep their XFA name and
+    /// have no type. `xfa.event` keeps the activity's name, and `event.target.numPages` is the
+    /// count `xfa.layout.pageCount()` gives.
+    #[test]
+    fn in_xfa_scripts_event_names_the_field_event_and_its_target_counts_the_pages() {
+        let doc = XfaDoc { page_count: 3, ..Default::default() };
+        let cases = [
+            ("click", "Mouse Up|Field"),
+            ("change", "Keystroke|Field"),
+            ("exit", "Blur|Field"),
+            ("enter", "Focus|Field"),
+            ("mouseDown", "Mouse Down|Field"),
+            ("mouseUp", "Mouse Up|Field"),
+            ("mouseEnter", "Mouse Enter|Field"),
+            ("mouseExit", "Mouse Exit|Field"),
+            ("calculate", "Calculate|Field"),
+            ("validate", "Validate|Field"),
+            ("initialize", "initialize|undefined"),
+            ("docReady", "docReady|undefined"),
+            ("preSign", "preSign|undefined"),
+        ];
+        for (activity, named) in cases {
+            let event = XfaEvent { activity: activity.into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+            let o = run_xfa(
+                "event.name + '|' + String(event.type) + '|' + event.target.numPages + '|' + xfa.layout.pageCount() + '|' + xfa.event.name",
+                &event,
+                &doc,
+                &super::xfa_model::form(),
+                Limits::default(),
+            );
+            assert_eq!(o.error, None, "{activity}: {o:?}");
+            assert_eq!(o.result.as_deref(), Some(format!("{named}|3|3|{activity}").as_str()), "{activity}");
+        }
+    }
 }
 
 mod runtime_highlight {
