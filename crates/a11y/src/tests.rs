@@ -685,6 +685,43 @@ fn row_and_column_spans_keep_a_table_regular() {
     assert_eq!(status(&r, Rule::TableRegularity), Status::Passed, "{:?}", r.result(Rule::TableRegularity));
 }
 
+/// `good()` with the table of `row_and_column_spans_keep_a_table_regular`, its Summary and spans
+/// given through `/C` and the class map (#7457). `second_th` is the attribute entries of the
+/// second header cell.
+fn class_table(second_th: &str) -> Document {
+    let mut objs = good();
+    let tall = objs.len() + 1;
+    objs.push("<< /O /Table /RowSpan 2 >>".into());
+    objs[5] = format!(
+        "<< /Type /StructTreeRoot /K 7 0 R /RoleMap << /Heading1 /H1 >> \
+         /ClassMap << /Summed << /O /Table /Summary (s) >> /Tall {tall} 0 R /Wide [ << /O /Layout /Placement /Block >> << /O /Table /ColSpan 2 >> ] >> >>"
+    );
+    objs[6] = format!(
+        "<< /S /Document /P 6 0 R /K [ << /S /Table /C /Summed /K [\
+         << /S /TR /K [ << /S /TH /C [/Tall 1] /K 0 >> << /S /TH {second_th} /K 1 >> ] >> \
+         << /S /TR /K [ << /S /TD /K 2 >> << /S /TD /K 3 >> ] >> ] >> ] >>"
+    );
+    pdf(&objs, "/Info 8 0 R")
+}
+
+#[test]
+fn table_attributes_given_through_classes_are_read() {
+    // A class not in the map gives nothing; the next one in /C still counts.
+    let doc = class_table("/C [/Unknown /Wide]");
+    let r = check(&doc, &Options { rules: [Rule::TableSummary, Rule::TableRegularity].into(), pages: None });
+    assert_eq!(failed(&r), Vec::<Rule>::new(), "{:?}", r.results);
+}
+
+#[test]
+fn an_attribute_given_directly_wins_over_one_from_a_class() {
+    // /A says ColSpan 1, the class says 2: /A wins (§14.7.6.2), so row 1 is two columns wide and
+    // row 2, under the cell spanning two rows, three.
+    let doc = class_table("/A << /O /Table /ColSpan 1 >> /C /Wide");
+    let r = check(&doc, &Options { rules: [Rule::TableRegularity].into(), pages: None });
+    assert_eq!(status(&r, Rule::TableRegularity), Status::Failed, "{:?}", r.result(Rule::TableRegularity));
+    assert!(r.result(Rule::TableRegularity).unwrap().findings[0].message.contains("between 2 and 3"), "{:?}", r.result(Rule::TableRegularity));
+}
+
 /// A tagged document whose structure tree is the Document element `document` (object 3).
 fn structure_doc(objects: &[String]) -> Document {
     let mut objs = vec!["<< /Type /Catalog /StructTreeRoot 2 0 R >>".to_string(), "<< /Type /StructTreeRoot /K 3 0 R >>".to_string()];
