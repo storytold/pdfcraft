@@ -12961,6 +12961,24 @@ fn doc_print_as_image() {
     }
 }
 
+/// #8529: route picks how a printer gets the job; it is refused, with nothing written, for a
+/// print saved to a file and for a name it doesn't know.
+#[test]
+fn doc_print_route_is_for_printers_only() {
+    let dir = workdir("print-route");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (route, says) in [("vector", "path"), ("sharp", "unknown route")] {
+        match a.call("doc_print", &json!({ "doc": doc, "pages": "1", "route": route, "path": "routed.pdf" })) {
+            Err(ToolError::InvalidArgs(m)) => assert!(m.contains(says), "{m}"),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert!(!dir.join("routed.pdf").exists());
+    ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "route": "standard", "path": "routed.pdf" }));
+    assert!(dir.join("routed.pdf").exists());
+}
+
 /// #6269: color_management app prints converted pictures and says how; the profile must be an
 /// RGB or grey one, and the colour arguments need app.
 #[test]

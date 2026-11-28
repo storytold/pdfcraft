@@ -72,6 +72,8 @@ pub struct PrintDraft {
     pub content: Content,
     /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
     pub as_image: bool,
+    /// How the job reaches a Windows printer (#8529).
+    pub route: spool::Route,
     pub dpi: f64,
     /// Index into the paper list: the standard sizes, then `custom_papers`.
     pub paper: usize,
@@ -150,6 +152,7 @@ impl Default for PrintDraft {
             orientation: Orientation::Auto,
             content: Content::DocumentAndMarkups,
             as_image: false,
+            route: spool::Route::Standard,
             dpi: 300.0,
             paper: 0,
             custom_papers: Vec::new(),

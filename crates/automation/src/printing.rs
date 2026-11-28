@@ -430,6 +430,20 @@ impl Automation {
         if marks.is_some() && area.is_some() {
             return Err(bad("area prints part of a page, without printer marks: leave out one or the other"));
         }
+        // How the job reaches a Windows printer (#8529): the system's renderer, or sheets PdfCraft
+        // draws itself as shapes or as pixels.
+        let route = match a.opt_str("route")? {
+            None => spool::Route::Standard,
+            Some(r) => spool::Route::parse(r).ok_or_else(|| bad(format!("unknown route {r:?}: use standard, vector or image")))?,
+        };
+        if route != spool::Route::Standard {
+            if printer.is_none() {
+                return Err(bad("route chooses how a printer gets the job: leave it out when saving to path"));
+            }
+            if !cfg!(windows) {
+                return Err(bad("routes vector and image draw through Windows printing: on this system use route standard"));
+            }
+        }
         let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new(), area };
         let laid_out = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?;
         let sheets = laid_out.len();
@@ -480,10 +494,11 @@ impl Automation {
             }
             Destination::Printer(mut job) => {
                 // A GDI (v3) driver gets transparent sheets flattened (#6155, #5838, #5940); XPS
-                // (v4) drivers print them as they are.
-                let flatten = job.printer.as_deref().is_some_and(spool::gdi_driver);
+                // (v4) drivers print them as they are. The drawn routes draw transparency themselves.
+                let flatten = route == spool::Route::Standard && job.printer.as_deref().is_some_and(spool::gdi_driver);
                 let bytes = pdfcraft_engine::spooler::spooler_copy(bytes, &mut job, flatten);
-                out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
+                out["route"] = json!(route.id());
+                out["job"] = json!(pdfcraft_engine::drawn_print::submit(&bytes, &job, route, None, &mut |_, _| {}).map_err(failed)?);
             }
         }
         Ok(out)

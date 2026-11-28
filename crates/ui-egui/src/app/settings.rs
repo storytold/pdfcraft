@@ -67,6 +67,8 @@ pub struct Print {
     pub binding: Option<String>,
     pub as_image: Option<bool>,
     pub dpi: Option<f64>,
+    /// How jobs reach a Windows printer: `standard`, `vector` or `image`.
+    pub route: Option<String>,
 }
 
 impl Print {
@@ -571,6 +573,7 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
             binding: r.string("binding"),
             as_image: r.bool("as_image"),
             dpi: r.f64("dpi"),
+            route: r.string("route"),
         }
     };
 

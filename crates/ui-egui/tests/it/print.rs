@@ -789,6 +789,22 @@ fn print_as_image_is_an_advanced_choice_that_saves_pictures() {
     assert_eq!(pictures, 1, "the page is one picture");
 }
 
+/// On Windows the Advanced section offers how the job reaches the printer, and opens by itself
+/// when a drawn route is chosen, so the choice that changes every print is in view (#8529).
+#[cfg(windows)]
+#[test]
+fn a_drawn_print_route_opens_the_advanced_section() {
+    let shown = |route| {
+        let mut h = harness();
+        h.state_mut().print_draft.route = route;
+        h.open();
+        h.run_steps(2);
+        h.query_by_label_contains("Sending to the printer").is_some()
+    };
+    assert!(!shown(pdfcraft_engine::print::spool::Route::Standard), "the standard route leaves the section closed");
+    assert!(shown(pdfcraft_engine::print::spool::Route::Vector));
+}
+
 /// The spooler answering with no printers at all says so (#160), and Save as PDF still works.
 #[test]
 fn an_empty_printer_list_says_none_were_found() {
@@ -1579,6 +1595,7 @@ fn print_preferences_survive_a_restart_but_the_jobs_own_choices_reset() {
     d.binding = Binding::Right;
     d.as_image = true;
     d.dpi = 600.0;
+    d.route = pdfcraft_engine::print::spool::Route::Image;
     d.copies = 5;
     d.which = PrintWhich::Range;
     d.range = "2-3".into();
@@ -1622,6 +1639,9 @@ fn print_preferences_survive_a_restart_but_the_jobs_own_choices_reset() {
     assert_eq!(d.binding, Binding::Right, "a booklet's binding side is kept (#2707)");
     assert!(d.as_image, "Print as image is kept, for a printer that needs pictures (#6392)");
     assert_eq!(d.dpi, 600.0, "and its resolution");
+    // The route row is Windows only, so elsewhere a route brought from Windows is not used (#8529).
+    let route = if cfg!(windows) { pdfcraft_engine::print::spool::Route::Image } else { pdfcraft_engine::print::spool::Route::Standard };
+    assert_eq!(d.route, route, "a drawn route is kept for a system that prints blurred (#8529)");
     assert_eq!(d.copies, 1, "copies are this job's");
     assert_eq!(d.which, PrintWhich::All, "the page choice is this job's");
     assert_eq!(d.range, "");
@@ -1633,10 +1653,11 @@ fn print_preferences_survive_a_restart_but_the_jobs_own_choices_reset() {
 fn print_preferences_that_dont_parse_keep_the_defaults() {
     use pdfcraft_engine::print::{Binding, Content, SizeMode, spool::Duplex};
     let open = print_opened_with;
-    let garbage = r#"{"print": {"duplex": "sideways", "grayscale": "yes", "collate": null, "size": "custom", "custom_scale": 1e9, "comments_forms": 7, "binding": "up", "as_image": 1, "dpi": 72}}"#;
+    let garbage = r#"{"print": {"duplex": "sideways", "grayscale": "yes", "collate": null, "size": "custom", "custom_scale": 1e9, "comments_forms": 7, "binding": "up", "as_image": 1, "dpi": 72, "route": "sideways"}}"#;
     let d = open(Some(garbage)).print_draft;
     assert!(!d.as_image);
     assert_eq!(d.dpi, 300.0, "a resolution the dialog doesn't offer keeps the default");
+    assert_eq!(d.route, pdfcraft_engine::print::spool::Route::Standard, "an unknown route keeps the standard one");
     assert_eq!(d.duplex, None, "an unknown name keeps the printer's own default");
     assert!(!d.grayscale);
     assert!(d.collate);
