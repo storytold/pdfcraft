@@ -308,8 +308,20 @@ pub struct PdfCraftApp {
     /// closed), given back when its tab is left.
     portfolio_panel: Option<Option<RightPanel>>,
     pub quick_tool: QuickTool,
-    /// The tool before full screen, given back on leaving it (see [`Self::apply_full_screen`]).
+    /// The tool before full screen, given back on leaving it (see [`Self::follow_screen_mode`]).
     full_screen_tool: Option<QuickTool>,
+    /// Whether the window was maximized immediately before entering full screen, kept so saving
+    /// during full screen on Windows preserves `maximized` without persisting `fullscreen:true`
+    /// (#8010).
+    #[cfg(not(target_arch = "wasm32"))]
+    full_screen_maximized: Option<bool>,
+    /// Whether `AppShell` saw an OS full-screen mode on its last pass, so Windows reconciliation
+    /// only fires for desynced OS fullscreen rather than racing `AppShell`'s own exit (#8010).
+    #[cfg(not(target_arch = "wasm32"))]
+    shell_full_screen: bool,
+    /// Whether the root window was minimized on the latest `logic` pass, read by `App::save` (#8010).
+    #[cfg(not(target_arch = "wasm32"))]
+    window_minimized: bool,
     /// Comment author, per-tool colours and widths, pin.
     pub comment_prefs: comments::CommentPrefs,
     /// The colours picked last in the comment tools' colour pickers.

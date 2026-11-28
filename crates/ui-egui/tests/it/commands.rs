@@ -571,6 +571,66 @@ fn palette_search_by_command_id_runs_the_command_in_a_translated_interface() {
     assert!(!doc.dirty);
 }
 
+/// Regression (#8010): when the OS window starts in borderless full screen (e.g. from an earlier
+/// persisted `app.ron`) while `PdfCraftApp::full_screen()` is off, reconciliation exits OS full
+/// screen so window decorations return; legitimate full screen and Escape exit stay unaffected.
+#[test]
+fn reconcile_full_screen_exits_stale_os_fullscreen_and_keeps_escape_working() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let run_reconcile = |app: &mut PdfCraftApp, os_fullscreen: bool| -> Vec<egui::ViewportCommand> {
+        let mut input = egui::RawInput::default();
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().fullscreen = Some(os_fullscreen);
+        let out = ctx.run_logic(&input, |ctx| app.reconcile_full_screen(ctx));
+        out.viewport_commands.get(&egui::ViewportId::ROOT).cloned().unwrap_or_default()
+    };
+
+    // Desynced startup: OS window is fullscreen while app is not -> must exit OS fullscreen.
+    assert!(!h.state().full_screen());
+    assert_eq!(run_reconcile(h.state_mut(), true), [egui::ViewportCommand::Fullscreen(false)]);
+
+    // Legitimate Full Screen Mode with an open document stays fullscreen, and Escape exits it.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(2);
+    assert!(h.state().full_screen(), "Ctrl+L enters full screen");
+    assert!(run_reconcile(h.state_mut(), true).is_empty(), "legitimate full screen is left alone");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().full_screen(), "Escape leaves full screen");
+}
+
+/// Regression (#8010): closing the final document tab while in Full Screen Mode exits full screen
+/// instead of stranding the Home tab inside an undecorated borderless fullscreen window.
+#[test]
+fn closing_last_document_tab_in_full_screen_leaves_full_screen() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx, "second.pdf", None, fixture(1)).unwrap();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(2);
+    assert!(h.state().full_screen(), "entered full screen");
+
+    let run_reconcile = |app: &mut PdfCraftApp| -> Vec<egui::ViewportCommand> {
+        let mut input = egui::RawInput::default();
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().fullscreen = Some(true);
+        let out = ctx.run_logic(&input, |ctx| app.reconcile_full_screen(ctx));
+        out.viewport_commands.get(&egui::ViewportId::ROOT).cloned().unwrap_or_default()
+    };
+
+    // Closing one of two tabs keeps full screen active for the remaining document.
+    h.execute("file.close");
+    assert!(h.state().active.is_some());
+    assert!(run_reconcile(h.state_mut()).is_empty(), "still showing another document");
+    assert!(h.state().full_screen());
+
+    // Closing the last tab exits full screen and restores the decorated window.
+    h.execute("file.close");
+    assert!(h.state().active.is_none());
+    assert_eq!(run_reconcile(h.state_mut()), [egui::ViewportCommand::Fullscreen(false)]);
+    assert!(!h.state().full_screen(), "full screen cleared once no document remains");
+}
+
 /// Check that the quit shortcut needs exact platform modifiers and that unsaved work opens the save prompt
 /// instead of closing: the close is the window's close intent, and the prompt is answered by its button.
 #[test]

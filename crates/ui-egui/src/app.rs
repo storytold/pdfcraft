@@ -311,6 +311,12 @@ impl PdfCraftApp {
             portfolio_panel: None,
             quick_tool: QuickTool::Select,
             full_screen_tool: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            full_screen_maximized: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            shell_full_screen: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            window_minimized: false,
             comment_prefs: Default::default(),
             recent_colours: Default::default(),
             colour_picks: Default::default(),
@@ -699,8 +705,14 @@ impl eframe::App for PdfCraftApp {
     }
 
     /// The preferences go to the settings store, which writes them when they changed.
-    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.save_settings();
+        #[cfg(not(target_arch = "wasm32"))]
+        if cfg!(target_os = "windows") {
+            window::clear_saved_fullscreen(storage, self.window_minimized, self.full_screen_maximized);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = storage;
     }
 
     /// Starts an update that waits for the exit. On macOS the process ends before the app is dropped.
@@ -827,6 +839,10 @@ impl PdfCraftApp {
         }
         self.reopen_returned_rename(ctx);
         self.settle_presign(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.window_minimized = ctx.input(|i| i.viewport().minimized == Some(true));
+        }
         self.sync_titles(ctx);
     }
 
@@ -855,14 +871,20 @@ impl PdfCraftApp {
         // The accessible window takes the same name, so a screen reader (AT-SPI on Linux, UIA on
         // Windows) can tell it apart (#4614). egui builds the root node afresh every pass.
         ctx.accesskit_node_builder(egui::accesskit_root_id(), |root| root.set_label(self.window_title.as_str()));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.sync_full_screen_before_shell();
         // PLAN: assumed chrome::shell(&mut PdfCraftApp, &mut egui::Ui), the AppShell pass: menu bar, tab strip, mode bar, window edges and captions (pdf-chrome-w10).
         // The shell's body is the dock, whose document panel draws the page area or what takes its place
         // (`side_panels::document_view`).
         chrome::shell(self, ui);
+        #[cfg(not(target_arch = "wasm32"))]
+        let shell_saw_full = self.screen_mode.is_full_screen();
         // The keys the app reads itself, once the shell's pass has fired the commands and the tool host has taken
         // its tools' keys; leaving full screen is followed in this same pass.
         self.shortcuts(&ctx);
         self.follow_screen_mode();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.sync_full_screen_after_shell(&ctx, shell_saw_full);
         if !self.full_screen_document() && !self.ocr_verify.open {
             // FitWindow and CenterWindow, once the document just opened is laid out.
             self.window_preferences_frame(&ctx);
