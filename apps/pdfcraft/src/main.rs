@@ -74,6 +74,7 @@ Options:
   --control-token-file <FILE> the control channel's token, from FILE (or --control-token <TOKEN>)
   --page N, --zoom 150, --layout continuous, --theme dark, …
                               view settings applied once the files are open
+  --                          treat all following arguments as file names
   -h, --help                  print this and exit
   --version                   print the version and exit
 

@@ -33,6 +33,10 @@ impl Arguments {
         let mut args = args.into_iter();
         while let Some(a) = args.next() {
             match a.as_str() {
+                "--" => {
+                    parsed.files.extend(args.map(super::path_from_arg));
+                    break;
+                }
                 "--version" => {
                     parsed.version = true;
                     break;
@@ -189,6 +193,37 @@ mod tests {
         assert!(!args.two_paged);
         assert_eq!(args.files, ["first.pdf", "second.pdf"]);
         assert_eq!(args.options, [("layout".into(), "single".into())]);
+    }
+
+    #[test]
+    fn end_of_options_treats_remaining_arguments_as_files() {
+        let parsed = parse(&["first.pdf", "--", "--report.pdf", "--version", "--help", "--control", "--two-paged", "--", "file:///tmp/a%20b.pdf"]);
+        assert_eq!(parsed.files, ["first.pdf", "--report.pdf", "--version", "--help", "--control", "--two-paged", "--", "/tmp/a b.pdf"]);
+        assert!(parsed.options.is_empty() && parsed.control_file.is_none());
+        assert!(!parsed.version && !parsed.help && !parsed.two_paged);
+        assert!(parsed.may_hand_off());
+    }
+
+    #[test]
+    fn end_of_options_keeps_prior_options_and_accepts_an_empty_tail() {
+        let parsed = parse(&["--two-paged", "--layout", "single", "--combine", "before.pdf", "--", "--help", "after.pdf"]);
+        assert!(parsed.two_paged && parsed.combine && !parsed.help);
+        assert_eq!(parsed.files, ["before.pdf", "--help", "after.pdf"]);
+        assert_eq!(parsed.options, [("layout".into(), "single".into())]);
+        assert!(!parsed.may_hand_off());
+        let empty = parse(&["--"]);
+        assert!(empty.files.is_empty() && empty.options.is_empty());
+        let trailing = parse(&["file.pdf", "--"]);
+        assert_eq!(trailing.files, ["file.pdf"]);
+        assert!(trailing.options.is_empty() && trailing.may_hand_off());
+        // A consumed option value remains a value, even when it is the separator spelling.
+        let value = parse(&["--layout", "--", "--new-window", "file.pdf"]);
+        assert_eq!(value.options, [("layout".into(), "--".into())]);
+        assert_eq!(value.files, ["file.pdf"]);
+        assert!(value.new_window);
+        let control = parse(&["--control", "--", "file.pdf"]);
+        assert_eq!(control.control_file.as_deref(), Some("--"));
+        assert_eq!(control.files, ["file.pdf"]);
     }
 
     #[test]
