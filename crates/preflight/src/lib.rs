@@ -204,6 +204,9 @@ pub const WORDINGS: &[&str] = &[
     "A graphics state has a rendering intent that isn't a name",
     "The form asks viewers to make appearances (NeedAppearances)",
     "Some content could not be read for device colour",
+    // Permissions and signatures.
+    "The permissions dictionary holds {}: only UR3 and DocMDP are allowed",
+    "With DocMDP permissions, a signature reference dictionary holds {}",
     // Pages, actions, annotations and fields.
     "Page {} has additional actions",
     "A {} action isn't allowed",
@@ -671,6 +674,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     check_xmp_packets(&objs, &located_issue);
     check_output_intent(doc, &objs, &mut issue);
     check_catalog_actions(doc, &mut issue);
+    check_permissions(doc, level, &objs, &mut issue);
     // Pages: annotations and page actions.
     let pages = pdfcraft_model::pages(doc);
     // Each annotation's page: the first page that lists it.
@@ -895,6 +899,136 @@ fn check_output_intent(
             }
         }
         None => {}
+    }
+}
+
+/// The keys a permissions dictionary may hold (ISO 32000-2 12.8.6, Table 263).
+const PERMISSIONS: &[&[u8]] = &[b"UR3", b"DocMDP"];
+
+/// The signature reference entries PDF/A forbids when the document has DocMDP permissions: the
+/// object digest entries of ISO 32000-1 12.8.1, Table 253.
+const DIGEST_ENTRIES: &[&[u8]] = &[b"DigestLocation", b"DigestMethod", b"DigestValue"];
+
+/// How many `/Parent` links a field's inherited `/FT` is looked for through.
+const MAX_FIELD_DEPTH: usize = 32;
+
+#[cfg(test)]
+thread_local! {
+    /// The signature reference dictionaries [`check_permissions`] has read.
+    static SIGNATURE_REFERENCES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// 6.1.12: the catalog's permissions dictionary holds no keys but `UR3` and `DocMDP`, and when it
+/// holds `DocMDP` no signature's reference dictionaries hold `DigestLocation`, `DigestMethod` or
+/// `DigestValue`. An entry whose value is null is no entry (ISO 32000-2 7.3.7). The signatures are
+/// the dictionaries of type `Sig` among the document's objects, those the permissions dictionary
+/// holds and the values of signature fields, held directly or by reference; a field's type may be
+/// inherited from its parents (12.7.4.1, Table 226). Each signature and each reference dictionary
+/// held by reference is read once, however many fields or signatures hold it. PDF/A-4 numbers its
+/// own permissions rule differently (ISO 19005-4 6.1.11), so this one is for PDF/A-2 and PDF/A-3.
+fn check_permissions(
+    doc: &Document,
+    level: Level,
+    objs: &[(ObjRef, std::sync::Arc<Object>)],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    if level.part() > 3 {
+        return;
+    }
+    let Some(perms) = catalog(doc).get(b"Perms").map(|p| doc.resolve(p)) else { return };
+    let Some(perms) = perms.as_dict() else { return };
+    let present = |v: &Object| !matches!(*doc.resolve(v), Object::Null);
+    let others: Vec<String> = perms
+        .iter()
+        .filter(|(k, v)| !PERMISSIONS.contains(&k.as_slice()) && present(v))
+        .map(|(k, _)| String::from_utf8_lossy(k).into_owned())
+        .collect();
+    if !others.is_empty() {
+        issue("6.1.12", "The permissions dictionary holds {}: only UR3 and DocMDP are allowed", Some(others.join(", ")), None, false);
+    }
+    if !perms.get(b"DocMDP").is_some_and(present) {
+        return;
+    }
+    // A field's type, its own or the nearest parent's.
+    let field_type = |d: &Dict| -> Option<Vec<u8>> {
+        let name = |ft: &Object| doc.resolve(ft).as_name().map(<[u8]>::to_vec);
+        if let Some(ft) = d.get(b"FT") {
+            return name(ft);
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut parent = d.get(b"Parent").cloned();
+        for _ in 0..MAX_FIELD_DEPTH {
+            let Some(Object::Ref(r)) = parent else { return None };
+            if !seen.insert(r) {
+                return None;
+            }
+            let field = doc.get(r);
+            let field = field.as_dict()?;
+            if let Some(ft) = field.get(b"FT") {
+                return name(ft);
+            }
+            parent = field.get(b"Parent").cloned();
+        }
+        None
+    };
+    // The signatures, each indirect one once.
+    let mut seen = std::collections::HashSet::new();
+    let mut signatures: Vec<std::sync::Arc<Object>> = Vec::new();
+    let mut add = |v: &Object| {
+        if let Object::Ref(r) = v
+            && !seen.insert(*r)
+        {
+            return;
+        }
+        signatures.push(doc.resolve(v));
+    };
+    for (_, v) in perms.iter() {
+        add(v);
+    }
+    for (r, o) in objs {
+        let Some(d) = dict_of(o) else { continue };
+        if d.name(b"Type") == Some(b"Sig") {
+            add(&Object::Ref(*r));
+        } else if let Some(v) = d.get(b"V")
+            && field_type(d).as_deref() == Some(b"Sig")
+        {
+            add(v);
+        }
+    }
+    let mut found: Vec<&[u8]> = Vec::new();
+    let mut read = std::collections::HashSet::new();
+    'signatures: for signature in &signatures {
+        let Some(references) = signature.as_dict().and_then(|s| s.get(b"Reference")) else { continue };
+        if let Object::Ref(r) = references
+            && !read.insert(*r)
+        {
+            continue;
+        }
+        let references = doc.resolve(references);
+        for reference in references.as_array().into_iter().flatten() {
+            if let Object::Ref(r) = reference
+                && !read.insert(*r)
+            {
+                continue;
+            }
+            #[cfg(test)]
+            SIGNATURE_REFERENCES_READ.with(|n| n.set(n.get() + 1));
+            let reference = doc.resolve(reference);
+            let Some(reference) = reference.as_dict() else { continue };
+            for key in DIGEST_ENTRIES {
+                // A null digest entry, direct or by reference, is no entry (7.3.7).
+                if reference.get(key).is_some_and(present) && !found.contains(key) {
+                    found.push(key);
+                }
+            }
+            if found.len() == DIGEST_ENTRIES.len() {
+                break 'signatures;
+            }
+        }
+    }
+    if !found.is_empty() {
+        let keys: Vec<String> = found.iter().map(|k| String::from_utf8_lossy(k).into_owned()).collect();
+        issue("6.1.12", "With DocMDP permissions, a signature reference dictionary holds {}", Some(keys.join(", ")), None, false);
     }
 }
 
