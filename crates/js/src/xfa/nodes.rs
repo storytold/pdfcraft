@@ -1,7 +1,7 @@
 use super::globals::{recalculate, relayout};
 use super::host::{HNode, XHost, host};
 use super::instances::{instance_manager, list_object};
-use super::model::{MAX_DEPTH, XfaEffect};
+use super::model::{MAX_DEPTH, XfaEffect, XfaKind};
 use super::props;
 use super::{
     Attribute, Context, JsObject, JsProxy, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, as_number, clip, error, function,
@@ -32,9 +32,15 @@ pub(super) fn node_object(ctx: &mut Context, idx: usize) -> JsResult<JsValue> {
 /// An object that takes any property read or write without complaint (`this.border.fill…`,
 /// `this.fillColor = …`): what a script sets there changes nothing here.
 pub(super) fn sink(ctx: &mut Context) -> JsResult<JsValue> {
-    let target = ObjectInitializer::new(ctx).build();
-    let proxy = JsProxy::builder(target).get(sink_get).set(sink_set).build(ctx)?;
+    // a function underneath, so a call on it (`this.ui.resolveNode("#text")`) works too and gives another one
+    let target: JsObject = function(ctx, NativeFunction::from_fn_ptr(noop)).into();
+    let proxy = JsProxy::builder(target).get(sink_get).set(sink_set).apply(sink_apply).build(ctx)?;
     Ok(proxy.into())
+}
+
+/// A call on a stand-in, or a method giving one (`xfa.datasets.createNode(…)`): another stand-in.
+pub(super) fn sink_apply(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    sink(ctx)
 }
 
 fn sink_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -43,7 +49,9 @@ fn sink_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
         return Ok(JsValue::undefined());
     }
     match text(&key, ctx)?.as_str() {
-        "value" | "toString" | "valueOf" => Ok(s("")),
+        "value" => Ok(s("")),
+        "length" => Ok(JsValue::from(0)),
+        "toString" | "valueOf" => Ok(function(ctx, NativeFunction::from_fn_ptr(empty_text)).into()),
         _ => sink(ctx),
     }
 }
@@ -217,6 +225,8 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
     }
     Ok(match key.as_str() {
         IDX => JsValue::from(idx as f64),
+        // on a draw, `value` is its <value> element (`Rectangle3.value.rectangle.fill…`), not text
+        "value" if kind == XfaKind::Draw => sink(ctx)?,
         "rawValue" | "value" => host(ctx)?.borrow().nodes.get(idx).map_or(JsValue::null(), value_js),
         "formattedValue" => s(&host(ctx)?.borrow().nodes.get(idx).and_then(|n| n.formatted.as_deref().map(str::to_string)).unwrap_or(value)),
         "name" => s(&name),
@@ -267,6 +277,9 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
         "setAttribute" | "execEvent" | "execInitialize" | "execCalculate" | "execValidate" | "setElement" | "loadXML" | "saveXML" | "clone" => {
             function(ctx, NativeFunction::from_fn_ptr(noop)).into()
         }
+        "setItemState" => function(ctx, NativeFunction::from_fn_ptr(noop)).into(),
+        "getItemState" => function(ctx, NativeFunction::from_fn_ptr(false_value)).into(),
+        "getDeltas" => function(ctx, NativeFunction::from_fn_ptr(empty_list)).into(),
         "toString" | "valueOf" | "toJSON" => function(ctx, NativeFunction::from_fn_ptr(node_to_string)).into(),
         "length" => JsValue::undefined(),
         other => {
@@ -370,6 +383,23 @@ const SINK_MEMBERS: &[&str] = &[
 fn node_method(ctx: &mut Context, idx: usize, f: fn(&JsValue, &[JsValue], &JsObject, &mut Context) -> JsResult<JsValue>) -> JsValue {
     let r = props::node_ref(ctx, idx);
     function(ctx, NativeFunction::from_copy_closure_with_captures(f, r)).into()
+}
+
+fn empty_text(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
+    Ok(s(""))
+}
+
+fn false_value(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(false))
+}
+
+pub(super) fn null_value(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::null())
+}
+
+/// A list with nothing in it: the deltas, the page content, the nodes of a dataset the host doesn't keep.
+pub(super) fn empty_list(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    list_object(ctx, &[])
 }
 
 pub(super) fn noop(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
