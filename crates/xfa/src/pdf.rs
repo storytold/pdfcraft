@@ -12,9 +12,11 @@ use crate::layout::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widg
 use crate::model::Rect;
 use crate::text::{Face, Family, Span};
 
+mod comments;
 mod common;
 mod strip;
 
+pub(crate) use comments::{put_back as put_back_annotations, take as take_annotations};
 pub use common::jpeg_size;
 pub(crate) use common::rounded;
 use common::{
@@ -41,6 +43,10 @@ pub const DATE_KEY: &[u8] = b"PCXfaDate";
 /// step of the path above it (`form1[0]`, then `page1[0]`): a new layout replaces them with the
 /// fields they hold.
 pub const NODE_KEY: &[u8] = b"PCXfaNode";
+
+/// Private key on the links laying the form out writes over rich text, so a new layout knows
+/// them for its own and keeps the links a user added.
+pub(crate) const LINK_KEY: &[u8] = b"PCXfaLink";
 
 /// Private key on each page laying the form out writes: the name of the page area the page was
 /// made from. The n-th page with a name is that area's `[n-1]` instance, which scripts address
@@ -933,6 +939,7 @@ impl Emitter<'_> {
         d.set(b"F".to_vec(), Object::Int(4));
         d.set(b"Border".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(0)]));
         d.set(b"A".to_vec(), Object::Dict(action));
+        d.set(LINK_KEY.to_vec(), Object::Bool(true));
         let annot = self.doc.add(Object::Dict(d));
         *last = Some(LinkPiece { annot, uri: target, baseline: s.baseline, rect });
         Ok(Some(annot))
