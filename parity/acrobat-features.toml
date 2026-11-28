@@ -189,8 +189,8 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.open"]
 tools = ["doc_open"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::password_prompt_opens_and_security_tab_reports_the_details", "craft-pdf::crypt/tests.rs::empty_user_password_opens_without_asking", "crates/ui-egui/src/platform/open_worker/tests.rs::a_chosen_tool_survives_wrong_password_retry_and_runs_after_unlock", "crates/ui-egui/src/platform/open_worker/tests.rs::startup_intake_waits_for_local_authentication_and_keeps_its_own_background_password_prompt"]
-notes = "the field takes typing through the platform input method, which typed keys go through on Linux, however the file was opened (#2818); checked with synthetic input-method events, not on a Linux desktop"
+evidence = ["crates/ui-egui/tests/it/editing.rs::password_prompt_opens_and_security_tab_reports_the_details", "craft-pdf::crypt/tests.rs::empty_user_password_opens_without_asking", "crates/ui-egui/src/platform/open_worker/tests.rs::a_chosen_tool_survives_wrong_password_retry_and_runs_after_unlock", "crates/ui-egui/src/platform/open_worker/tests.rs::startup_intake_waits_for_local_authentication_and_keeps_its_own_background_password_prompt", "crates/render/tests/it/password_errors.rs::rendering_without_the_password_or_with_a_wrong_one_reports_the_password", "apps/pdfcraft-cli/tests/it/owner_password.rs::render_reports_a_missing_or_wrong_password_as_info_does"]
+notes = "the field takes typing through the platform input method, which typed keys go through on Linux, however the file was opened (#2818); checked with synthetic input-method events, not on a Linux desktop. The page renderer, and so CLI `render`, reports a missing or incorrect password in the words `info` and `doc_open` use, not as a parse failure"
 
 [[feature]]
 id = "core.unicode-passwords"

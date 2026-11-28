@@ -156,3 +156,32 @@ fn audit_places_findings_with_the_owner_password() {
         assert_eq!(report["findings"][0]["rect"], serde_json::json!([10.0, 120.0, 130.0, 160.0]), "{alg:?}");
     }
 }
+
+/// `render` reports a missing or wrong password as `info` does (ISO 32000-2 §7.6.4.1), not as a
+/// document that could not be parsed, and writes no image.
+#[test]
+fn render_reports_a_missing_or_wrong_password_as_info_does() {
+    for alg in ALGORITHMS {
+        let path = tmp(&format!("render-password-{alg:?}.pdf"));
+        std::fs::write(&path, protected(alg)).unwrap();
+        let png = tmp(&format!("render-password-{alg:?}.png"));
+        for (password, expected) in [(None, "the document is protected by a password"), (Some("wrong"), "the password is incorrect")] {
+            let _ = std::fs::remove_file(&png);
+            let given: &[&str] = match password {
+                Some(pw) => &["--password", pw],
+                None => &[],
+            };
+            let info = Command::new(BIN).args(["info", path.to_str().unwrap()]).args(given).output().unwrap();
+            let render = Command::new(BIN)
+                .args(["render", path.to_str().unwrap(), "--page", "1", "--out", png.to_str().unwrap()])
+                .args(given)
+                .output()
+                .unwrap();
+            let (info, stderr) = (String::from_utf8_lossy(&info.stderr), String::from_utf8_lossy(&render.stderr));
+            assert!(!render.status.success(), "{alg:?} with {password:?}");
+            assert_eq!(stderr.trim(), format!("pdfcraft-cli: {expected}"), "{alg:?} with {password:?}");
+            assert_eq!(stderr, info, "{alg:?} with {password:?}: the same words as info");
+            assert!(!png.exists(), "{alg:?} with {password:?}: no image is written");
+        }
+    }
+}
