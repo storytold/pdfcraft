@@ -279,6 +279,71 @@ fn the_quick_bar_colour_changes_the_selected_comment() {
     assert_eq!(state.comment_prefs.style(CommentTool::Highlight).color, [0.0, 0.47, 0.84]);
 }
 
+/// One click on a quick-bar swatch is one undo step: Undo once restores the old colour, and a second Undo takes
+/// back the highlight's creation, not a second recolouring.
+#[test]
+fn one_quick_bar_colour_click_is_one_undo_step() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "highlight").unwrap());
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+    };
+    drag(&mut h, a, b);
+    let old = comments(&h)[0].color;
+    let depth = |h: &Harness<'static, PdfCraftApp>| {
+        let state = h.state();
+        state.session.get(state.views[0].id).expect("document").undo_depth()
+    };
+    let before = depth(&h);
+
+    h.get_by_label("Colour").click();
+    h.run_steps(2);
+    h.get_by_label("Blue").click();
+    h.run_steps(3);
+    assert_ne!(comments(&h)[0].color, old, "the click recoloured the highlight");
+    assert_eq!(depth(&h), before + 1, "one click is one undo step");
+
+    let ctx = h.ctx.clone();
+    h.state_mut().undo(&ctx);
+    h.run_steps(2);
+    assert_eq!(comments(&h)[0].color, old, "one Undo restores the old colour");
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Highlight).color, [0.0, 0.47, 0.84], "the tool keeps the picked colour");
+    assert_eq!(depth(&h), before, "and nothing else was taken back");
+}
+
+/// A swatch picked from the keyboard is one undo step too: the fix for a click's press and release must not drop it.
+#[test]
+fn a_keyboard_pick_on_a_quick_bar_swatch_is_one_undo_step() {
+    for key in [egui::Key::Space, egui::Key::Enter] {
+        let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "highlight").unwrap());
+        let (a, b) = {
+            let v = &h.state().views[0];
+            (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+        };
+        drag(&mut h, a, b);
+        let old = comments(&h)[0].color;
+        let depth = |h: &Harness<'static, PdfCraftApp>| {
+            let state = h.state();
+            state.session.get(state.views[0].id).expect("document").undo_depth()
+        };
+        let before = depth(&h);
+
+        // Opening the popover puts the focus on the palette; the arrows move along its cells.
+        h.get_by_label("Colour").click();
+        h.run_steps(3);
+        for _ in 0..3 {
+            h.key_press(egui::Key::ArrowRight);
+            h.run_steps(2);
+        }
+        h.key_press(key);
+        h.run_steps(4);
+        assert_ne!(comments(&h)[0].color, old, "{key:?} picked a colour");
+        assert_eq!(depth(&h), before + 1, "{key:?}: one pick is one undo step");
+    }
+}
+
 #[test]
 fn the_quick_bar_colour_changes_the_selected_arrow() {
     use pdfcraft_ui_egui::comments::CommentTool;
