@@ -65,5 +65,7 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 craft-cms = { workspace = true }
 craft-tiff = { workspace = true }
 pdfcraft-testkit = { workspace = true }
+# Encryption fixtures with a dictionary written by hand (`encrypted_page`).
+pdfcraft-crypt = { workspace = true }
 # JBIG2 fixtures (`encode_jbig2_generic`).
 pdfcraft-filters = { workspace = true }
