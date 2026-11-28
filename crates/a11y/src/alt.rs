@@ -140,22 +140,38 @@ pub(crate) fn elements(doc: &Document) -> Vec<Element> {
     out
 }
 
-/// The marked-content ids an element owns directly.
-fn mcids(doc: &Document, d: &Dict) -> Vec<i64> {
+/// The marked-content ids an element owns directly in the content of its page `page`: not those of
+/// a marked-content reference with /Stm, which are ids in that stream's content, nor of one whose
+/// /Pg is another page, which are ids on that page (ISO 32000-2 Table 357). An equal id on `page`
+/// is another sequence.
+fn page_mcids(doc: &Document, d: &Dict, page: Option<ObjRef>) -> Vec<i64> {
+    mcids_where(doc, d, |m| on_page(m, page))
+}
+
+/// Whether marked-content reference `m` names content in the page content of `page`, the page of
+/// the element holding it (ISO 32000-2 Table 357).
+fn on_page(m: &Dict, page: Option<ObjRef>) -> bool {
+    !m.contains(b"Stm") && m.get(b"Pg").and_then(Object::as_ref).is_none_or(|p| Some(p) == page)
+}
+
+/// The marked-content ids an element owns directly: integers, and those of the marked-content
+/// references `keep` accepts.
+fn mcids_where(doc: &Document, d: &Dict, keep: impl Fn(&Dict) -> bool) -> Vec<i64> {
     let mut out = Vec::new();
     let mut push = |o: &Object| match &*doc.resolve(o) {
         Object::Int(n) => out.push(*n),
-        Object::Dict(m) if m.name(b"Type") == Some(b"MCR") => {
+        Object::Dict(m) if m.name(b"Type") == Some(b"MCR") && keep(m) => {
             if let Some(n) = m.get(b"MCID").and_then(Object::as_int) {
                 out.push(n)
             }
         }
         _ => {}
     };
-    match d.get(b"K") {
-        Some(Object::Array(a)) => a.iter().for_each(&mut push),
-        Some(o) => push(o),
-        None => {}
+    // /K may be an indirect reference to the array of kids, the same kids as an inline array.
+    let Some(k) = d.get(b"K").map(|k| doc.resolve(k)) else { return out };
+    match &*k {
+        Object::Array(a) => a.iter().for_each(&mut push),
+        o => push(o),
     }
     out
 }
@@ -392,13 +408,15 @@ pub(crate) fn content_bboxes(doc: &Document, page: &Dict, ids: &HashSet<i64>) ->
 
 /// The figures, in document order.
 pub fn figures(doc: &Document) -> Vec<Figure> {
-    let Some(root) = tree_root(doc) else { return Vec::new() };
-    let role_map = root.get(b"RoleMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    if tree_root(doc).is_none() {
+        return Vec::new();
+    }
+    let role_map = crate::structure::root_role_map(doc);
     let pages = pdfcraft_model::pages(doc);
     let index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let figures: Vec<(Element, Option<usize>)> = elements(doc)
         .into_iter()
-        .filter(|e| e.dict.name(b"S").is_some_and(|s| standard(doc, &role_map, s) == b"Figure"))
+        .filter(|e| crate::structure::is_figure(doc, &role_map, &e.dict))
         .map(|e| {
             let page = e.page.and_then(|p| index.get(&p).copied());
             (e, page)
@@ -407,7 +425,7 @@ pub fn figures(doc: &Document) -> Vec<Figure> {
     let mut wanted: HashMap<usize, HashSet<i64>> = HashMap::new();
     for (e, page) in &figures {
         if let Some(p) = page {
-            wanted.entry(*p).or_default().extend(mcids(doc, &e.dict));
+            wanted.entry(*p).or_default().extend(page_mcids(doc, &e.dict, e.page));
         }
     }
     let bounds: HashMap<usize, HashMap<i64, [f64; 4]>> =
@@ -417,20 +435,18 @@ pub fn figures(doc: &Document) -> Vec<Figure> {
         .map(|(e, page)| {
             let alt = e.dict.get(b"Alt").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text()));
             let on_page = page.and_then(|p| bounds.get(&p));
-            let bbox = on_page.and_then(|b| mcids(doc, &e.dict).iter().filter_map(|id| b.get(id)).fold(None, |acc, b| Some(union(acc, *b))));
+            let bbox =
+                on_page.and_then(|b| page_mcids(doc, &e.dict, e.page).iter().filter_map(|id| b.get(id)).fold(None, |acc, b| Some(union(acc, *b))));
             Figure { obj: e.object, page, alt, bbox }
         })
         .collect()
 }
 
 fn check_figure(doc: &Document, obj: ObjRef) -> Result<Dict, AltError> {
-    let root = tree_root(doc).ok_or(AltError::Untagged)?;
-    let role_map = root.get(b"RoleMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    tree_root(doc).ok_or(AltError::Untagged)?;
+    let role_map = crate::structure::root_role_map(doc);
     let d = doc.get(obj).as_dict().cloned().ok_or(AltError::NotAFigure(obj.num))?;
-    match d.name(b"S") {
-        Some(s) if standard(doc, &role_map, s) == b"Figure" => Ok(d),
-        _ => Err(AltError::NotAFigure(obj.num)),
-    }
+    if crate::structure::is_figure(doc, &role_map, &d) { Ok(d) } else { Err(AltError::NotAFigure(obj.num)) }
 }
 
 /// Set (or, with `None` or blank text, remove) a figure's alternate text.
@@ -602,6 +618,18 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
     if !ids.is_empty() && page.is_none() {
         return Err(AltError::UnsupportedContent);
     }
+    // Its parent's kids without it, worked out before anything changes. /K may be an indirect
+    // reference to the array, which is the same kids as an inline one.
+    let parent = d.get(b"P").and_then(Object::as_ref);
+    let unlinked = parent.and_then(|parent| {
+        let kids = doc.get(parent).as_dict().and_then(|p| p.get(b"K").cloned())?;
+        let keep = |o: &Object| o.as_ref() != Some(obj);
+        match (&kids, &*doc.resolve(&kids)) {
+            (Object::Ref(r), _) if *r == obj => Some((parent, Object::Array(Vec::new()))),
+            (_, Object::Array(a)) => Some((parent, Object::Array(a.iter().filter(|o| keep(o)).cloned().collect()))),
+            _ => None,
+        }
+    });
     if let Some(page) = page.filter(|_| !ids.is_empty()) {
         let streams = decode_page_streams(doc, &page.dict).ok_or(AltError::TooLarge)?;
         match artifact_marked_content(doc, page, streams, &ids, false)? {
@@ -616,17 +644,8 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
         }
     }
     // Out of its parent's kids.
-    if let Some(parent) = d.get(b"P").and_then(Object::as_ref) {
-        let kids = doc.get(parent).as_dict().and_then(|p| p.get(b"K").cloned());
-        let keep = |o: &Object| o.as_ref() != Some(obj);
-        let new = match kids {
-            Some(Object::Array(a)) => Some(Object::Array(a.into_iter().filter(keep).collect())),
-            Some(Object::Ref(r)) if r == obj => Some(Object::Array(Vec::new())),
-            _ => None,
-        };
-        if let Some(k) = new {
-            doc.update_dict(parent, |p| p.set(b"K".to_vec(), k))?;
-        }
+    if let Some((parent, k)) = unlinked {
+        doc.update_dict(parent, |p| p.set(b"K".to_vec(), k))?;
     }
     Ok(())
 }

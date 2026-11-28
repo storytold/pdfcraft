@@ -86,6 +86,143 @@ pub(crate) fn is_standard(t: &[u8]) -> bool {
     STANDARD.contains(&t)
 }
 
+/// Standard types of the PDF 1.7 namespace that the PDF 2.0 one doesn't have (ISO 32000-2 Annex M).
+const ONLY_PDF_1_7: &[&[u8]] = &[b"Art", b"BlockQuote", b"TOC", b"TOCI", b"Index", b"Private", b"Quote", b"Note", b"Reference", b"BibEntry", b"Code"];
+
+/// Standard types of the PDF 2.0 namespace that the PDF 1.7 one doesn't have (ISO 32000-2 Annex M;
+/// headings past H6 are not in [`STANDARD`] at all).
+const ONLY_PDF_2_0: &[&[u8]] = &[b"DocumentFragment", b"Aside", b"Title", b"FENote", b"Sub", b"Em", b"Strong", b"Artifact"];
+
+/// Whether `t` is a standard type of the PDF 2.0 standard namespace (`pdf2`) or of the PDF 1.7 one.
+fn standard_in(t: &[u8], pdf2: bool) -> bool {
+    STANDARD.contains(&t) && !(if pdf2 { ONLY_PDF_1_7 } else { ONLY_PDF_2_0 }).contains(&t)
+}
+
+/// The namespace name of the standard structure namespace for PDF 1.7, the default one (ISO
+/// 32000-2 §14.8.6.1).
+const PDF_1_7_NAMESPACE: &str = "http://iso.org/pdf/ssn";
+
+/// The namespace name of the standard structure namespace for PDF 2.0 (ISO 32000-2 §14.8.6.1).
+const PDF_2_0_NAMESPACE: &str = "http://iso.org/pdf2/ssn";
+
+/// The most role-map steps followed from an element's own type, through /RoleMap and /RoleMapNS
+/// alike. Chains may be circular (ISO 32000-2 §14.7.3, Note 2), so the walk stops here.
+const MAX_ROLE_STEPS: usize = 12;
+
+/// `f` of `o`, an indirect object resolved first. A direct object is borrowed, not copied, so a
+/// large direct dictionary read once per element costs nothing per element.
+fn with_resolved<R>(doc: &Document, o: &Object, f: impl FnOnce(&Object) -> R) -> R {
+    match o {
+        Object::Ref(_) => f(&doc.resolve(o)),
+        _ => f(o),
+    }
+}
+
+/// Whether namespace dictionary `space` names a standard structure namespace (its /NS, a text
+/// string in either encoding, Table 356): `Some` with whether it is the PDF 2.0 one, or `None` for
+/// any other namespace.
+fn standard_namespace(doc: &Document, space: &Dict) -> Option<bool> {
+    with_resolved(doc, space.get(b"NS")?, |name| {
+        let name = name.as_string()?;
+        if name.text_eq(PDF_1_7_NAMESPACE) {
+            Some(false)
+        } else if name.text_eq(PDF_2_0_NAMESPACE) {
+            Some(true)
+        } else {
+            None
+        }
+    })
+}
+
+/// The namespace dictionary an /NS entry, or a role map's target, names; `None` (the default
+/// standard namespace) when it names no namespace dictionary. One has the namespace name, a text
+/// string, in /NS, and a /Type, if any, of Namespace (ISO 32000-2 Table 356): a stream's
+/// dictionary, or a page's, is not one.
+fn namespace(doc: &Document, o: &Object) -> Option<Arc<Object>> {
+    Some(doc.resolve(o)).filter(|o| match &**o {
+        Object::Dict(d) => {
+            d.get(b"NS").is_some_and(|n| with_resolved(doc, n, |n| n.as_string().is_some()))
+                && d.get(b"Type").is_none_or(|t| with_resolved(doc, t, |t| t.as_name() == Some(b"Namespace".as_slice())))
+        }
+        _ => false,
+    })
+}
+
+/// Where a /RoleMapNS value leads: a type in the default standard namespace (a name), or a type
+/// and the namespace it is in (an array of the type and an indirect reference to that namespace's
+/// dictionary, Table 356). An array without that reference leads nowhere.
+fn role_target(doc: &Document, v: &Object) -> Option<(Vec<u8>, Option<Arc<Object>>)> {
+    match v {
+        Object::Name(n) => Some((n.to_vec(), None)),
+        Object::Array(pair) => {
+            let name = pair.first().and_then(|n| with_resolved(doc, n, |n| n.as_name().map(<[u8]>::to_vec)))?;
+            let space = pair.get(1).filter(|r| matches!(r, Object::Ref(_))).and_then(|r| namespace(doc, r))?;
+            Some((name, Some(space)))
+        }
+        _ => None,
+    }
+}
+
+/// The standard type of element `d`, whose type is `ty`, following the role maps at most
+/// [`MAX_ROLE_STEPS`] steps. An element with no namespace (/NS) is in the default standard
+/// namespace and is mapped through the tree root's `role_map`. One in another namespace is mapped
+/// through that namespace's /RoleMapNS, whose value is a type in the default namespace or a type
+/// and the namespace it is in (ISO 32000-2 §14.7.4.2, Table 356, and §14.8.6.2). In a standard
+/// namespace named by /NS, a type is standard when that namespace defines it (Annex M); with no
+/// /NS it is the default namespace, the PDF 1.7 one (§14.8.6.1). The flag is `Some` with whether
+/// the type is one of the PDF 2.0 standard namespace, or `None` for a type that maps to no
+/// standard one, which comes back as the last type reached.
+pub(crate) fn standard_type(doc: &Document, role_map: &Dict, d: &Dict, ty: &[u8]) -> (Vec<u8>, Option<bool>) {
+    let mut t = ty.to_vec();
+    let mut ns = d.get(b"NS").and_then(|o| namespace(doc, o));
+    // The element's own type, then the type each mapping leads to, the last one included.
+    for step in 0..=MAX_ROLE_STEPS {
+        let space = match ns.as_deref() {
+            Some(Object::Dict(space)) => Some(space),
+            _ => None,
+        };
+        let standard = match space {
+            None => standard_in(&t, false).then_some(false),
+            Some(space) => standard_namespace(doc, space).filter(|&pdf2| standard_in(&t, pdf2)),
+        };
+        if standard.is_some() {
+            return (t, standard);
+        }
+        if step == MAX_ROLE_STEPS {
+            break;
+        }
+        let next = match space {
+            None => role_map.get(&t).and_then(|o| with_resolved(doc, o, |o| o.as_name().map(|n| (n.to_vec(), None)))),
+            Some(space) => space.get(b"RoleMapNS").and_then(|m| {
+                with_resolved(doc, m, |m| match m {
+                    Object::Dict(m) => m.get(&t).and_then(|v| with_resolved(doc, v, |v| role_target(doc, v))),
+                    _ => None,
+                })
+            }),
+        };
+        // A chain that comes back to where it was (a type mapped to itself, or a cycle) ends at
+        // the bound, on a type that is not standard.
+        let Some((n, space)) = next else { break };
+        t = n;
+        ns = space;
+    }
+    (t, None)
+}
+
+/// Whether element `d` is a Figure: its type, through the role maps ([`standard_type`]), is the
+/// standard Figure. The checker, the figure list and the alternate-text editor all ask this.
+pub(crate) fn is_figure(doc: &Document, role_map: &Dict, d: &Dict) -> bool {
+    d.name(b"S").is_some_and(|s| matches!(standard_type(doc, role_map, d, s), (t, Some(_)) if t == b"Figure"))
+}
+
+/// The tree root's /RoleMap, or an empty one.
+pub(crate) fn root_role_map(doc: &Document) -> Dict {
+    struct_root(doc)
+        .and_then(|r| r.as_dict().and_then(|d| d.get(b"RoleMap")).map(|o| doc.resolve(o)))
+        .and_then(|o| o.as_dict().cloned())
+        .unwrap_or_default()
+}
+
 /// Structure nested deeper than this is not read (a guard against absurd trees).
 const MAX_DEPTH: usize = 256;
 
@@ -218,7 +355,7 @@ pub(crate) fn has_struct_tree(doc: &Document) -> bool {
 /// Walks the structure tree in document order, telling `v` about each element.
 fn walk<V: Visitor>(doc: &Document, pages: &[Page], v: &mut V) {
     let Some(root) = struct_root(doc) else { return };
-    let role_map = root.as_dict().and_then(|d| d.get(b"RoleMap")).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    let role_map = root_role_map(doc);
     let page_index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let mut w = Walker { doc, role_map, page_index, seen: HashSet::new(), frames: Vec::new(), tasks: Vec::new(), opened: 0 };
     if root.as_dict().is_some_and(|d| d.contains(b"K")) {
@@ -327,8 +464,14 @@ impl Walker<'_> {
             return;
         }
         let target = self.doc.get(r);
-        if target.as_dict().is_some() {
-            self.dict(&Loc { owner: target, path: Vec::new() }, depth, page, Some(r), v);
+        match &*target {
+            Object::Dict(_) => self.dict(&Loc { owner: target, path: Vec::new() }, depth, page, Some(r), v),
+            // An indirect array of kids is the same kids as an inline one.
+            Object::Array(items) if !items.is_empty() => {
+                let len = items.len();
+                self.tasks.push(Task::Items { loc: Loc { owner: target, path: Vec::new() }, next: 0, len, depth: depth + 1, page });
+            }
+            _ => {}
         }
     }
 
@@ -354,8 +497,16 @@ impl Walker<'_> {
         let Some(s) = d.name(b"S") else { return };
         let page = self.page_of(d).or(page);
         let alt = self.has_text(d, b"Alt") || self.has_text(d, b"ActualText");
-        let ty = self.standard(s);
-        let kind = kind_of(&ty);
+        let (ty, pdf2) = self.standard(d, s);
+        // In the PDF 2.0 namespace Lbl is a general inline label: of a list item, but also of a
+        // heading, a form field or a key (ISO 32000-2 §14.8.4.7.2, Table 368). Only the PDF 1.7 Lbl
+        // belongs in a list item. A type that maps to no standard one is none of the kinds, whatever
+        // name the mapping stopped at.
+        let kind = match pdf2 {
+            None => Kind::Other,
+            Some(true) if ty == b"Lbl" => Kind::Other,
+            Some(_) => kind_of(&ty),
+        };
         let attrs = if matches!(kind, Kind::Table | Kind::Td | Kind::Th) { self.attr_dicts(d) } else { Vec::new() };
         let frame = Frame {
             object,
@@ -410,19 +561,9 @@ impl Walker<'_> {
         d.get(key).map(|o| self.doc.resolve(o)).and_then(|o| o.as_string().map(|s| !s.to_text().trim().is_empty())).unwrap_or(false)
     }
 
-    /// The standard type of `ty`, following the role map (a bounded number of steps).
-    fn standard(&self, ty: &[u8]) -> Vec<u8> {
-        let mut t = ty.to_vec();
-        for _ in 0..12 {
-            if STANDARD.contains(&t.as_slice()) {
-                return t;
-            }
-            match self.role_map.get(&t).map(|o| self.doc.resolve(o)).and_then(|o| o.as_name().map(<[u8]>::to_vec)) {
-                Some(n) if n != t => t = n,
-                _ => break,
-            }
-        }
-        t
+    /// The standard type of element `d`, whose type is `ty`: [`standard_type`].
+    fn standard(&self, d: &Dict, ty: &[u8]) -> (Vec<u8>, Option<bool>) {
+        standard_type(self.doc, &self.role_map, d, ty)
     }
 
     /// The attribute dictionaries of an element: the dictionaries its /A entry holds, one or an array.
@@ -705,7 +846,12 @@ impl Visitor for Checks {
             Kind::Li if parent != Some(Kind::L) => {
                 self.add(Rule::ListItems, e.index, || finding(e, "not in an L (list)"));
             }
-            Kind::Lbl | Kind::LBody if !matches!(parent, Some(Kind::Li | Kind::NoteOrToc)) => {
+            // A label may also sit in a TOCI, BibEntry, Note or FENote; a list item body is internal
+            // to LI only (ISO 32000-2 §14.8.4.8.2, Table 370).
+            Kind::Lbl if !matches!(parent, Some(Kind::Li | Kind::NoteOrToc)) => {
+                self.add(Rule::LblLBody, e.index, || finding(e, "not in an LI (list item)"));
+            }
+            Kind::LBody if parent != Some(Kind::Li) => {
                 self.add(Rule::LblLBody, e.index, || finding(e, "not in an LI (list item)"));
             }
             Kind::Heading(level) => {

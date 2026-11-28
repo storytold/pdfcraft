@@ -2198,3 +2198,459 @@ fn checker_reports_each_untagged_annotation_without_copying_shared_dictionaries(
     let found = content::page_rule(&doc, Rule::TaggedAnnotations, &pages, &[0], &Default::default(), false);
     assert_eq!(found.len(), 2, "the popup is skipped, each listed text annotation reported");
 }
+
+/// A tagged PDF 2.0 list, figure and table whose types are XHTML names in their own namespace
+/// (object 4), role mapped through its /RoleMapNS: `li` to LI and `td` to TD in the PDF 2.0
+/// standard namespace (object 5), `img` to Figure in the default one, and `ol` through a third
+/// namespace (object 6) that maps it on to L. `kids` are the Document element's kids.
+fn namespaced_doc(kids: &str) -> Document {
+    structure_doc(&[
+        format!("<< /S /Document /K [{kids}] >>"),
+        "<< /Type /Namespace /NS (http://www.w3.org/1999/xhtml) /RoleMapNS << /ol [/list 6 0 R] /li [/LI 5 0 R] /span [/Lbl 5 0 R] \
+         /div [/LBody 5 0 R] /img /Figure /table [/Table 5 0 R] /tr [/TR 5 0 R] /td [/TD 5 0 R] /loop [/loop 4 0 R] >> >>"
+            .into(),
+        "<< /Type /Namespace /NS (http://iso.org/pdf2/ssn) >>".into(),
+        "<< /Type /Namespace /NS (http://example.com/lists) /RoleMapNS << /list [/L 5 0 R] >> >>".into(),
+    ])
+}
+
+#[test]
+fn types_in_a_namespace_are_role_mapped_through_its_role_map() {
+    // ISO 32000-2 §14.7.4.2 and §14.8.6.2: an element with /NS takes its role map from that
+    // namespace's /RoleMapNS, not from the tree root's /RoleMap.
+    // The labels, bodies and one cell are standard types in the PDF 2.0 namespace; their parents
+    // are XHTML.
+    let (x, ssn) = ("/NS 4 0 R", "/NS 5 0 R");
+    let list = format!("<< /S /ol {x} /K [ << /S /li {x} /K [ << /S /Lbl {ssn} /K 0 >> << /S /LBody {ssn} /K 1 >> ] >> ] >>");
+    let table =
+        format!("<< /S /table {x} /A << /O /Table /Summary (s) >> /K [ << /S /tr {x} /K [ << /S /td {x} /K 2 >> << /S /TD {ssn} /K 4 >> ] >> ] >>");
+    // A `td` outside any row is a TD, so it is found: the cell rule sees the mapping.
+    let doc = namespaced_doc(&format!("{list} {table} << /S /img {x} /K 3 >> << /S /td {x} /K 5 >>"));
+    let rules = [Rule::LblLBody, Rule::ListItems, Rule::TableCells, Rule::TableRows, Rule::FiguresAltText];
+    let r = checked(&doc, &rules);
+    for rule in [Rule::LblLBody, Rule::ListItems, Rule::TableRows] {
+        assert_eq!(status(&r, rule), Status::Passed, "{rule:?}: {:?}", r.result(rule));
+    }
+    let cells = &r.result(Rule::TableCells).unwrap().findings;
+    assert_eq!(cells.iter().map(|f| f.message.as_str()).collect::<Vec<_>>(), ["TD element: not in a TR"]);
+    // The img is a Figure, so its missing alternate text is found.
+    let figures = &r.result(Rule::FiguresAltText).unwrap().findings;
+    assert_eq!(figures.iter().map(|f| f.message.as_str()).collect::<Vec<_>>(), ["Figure element: no alternate text"]);
+}
+
+#[test]
+fn a_pdf_2_label_may_label_more_than_a_list_item() {
+    // ISO 32000-2 Table 368: in the PDF 2.0 namespace Lbl also labels a form field, a heading or a
+    // key. The PDF 1.7 Lbl (the default namespace, or the 1.7 namespace named) and any LBody still
+    // belong in a list item.
+    // Objects 6 to 8 are the PDF 2.0, default-namespace and named PDF 1.7 labels; 9 is the body.
+    let doc = structure_doc(&[
+        "<< /S /Document /K [ << /S /Form /K [6 0 R] >> << /S /Form /K [7 0 R] >> << /S /Form /K [8 0 R] >> << /S /Div /K [9 0 R] >> ] >>".into(),
+        "<< /Type /Namespace /NS (http://iso.org/pdf2/ssn) >>".into(),
+        "<< /Type /Namespace /NS (http://iso.org/pdf/ssn) >>".into(),
+        "<< /S /Lbl /NS 4 0 R /K 0 >>".into(),
+        "<< /S /Lbl /K 1 >>".into(),
+        "<< /S /Lbl /NS 5 0 R /K 2 >>".into(),
+        "<< /S /LBody /NS 4 0 R /K 3 >>".into(),
+    ]);
+    let r = checked(&doc, &[Rule::LblLBody]);
+    let found: Vec<(Option<u32>, &str)> =
+        r.result(Rule::LblLBody).unwrap().findings.iter().map(|f| (f.object.map(|o| o.num), f.message.as_str())).collect();
+    assert_eq!(
+        found,
+        [
+            (Some(7), "Lbl element: not in an LI (list item)"),
+            (Some(8), "Lbl element: not in an LI (list item)"),
+            (Some(9), "LBody element: not in an LI (list item)")
+        ]
+    );
+}
+
+#[test]
+fn a_standard_namespace_named_by_its_utf16_text_string_is_recognised() {
+    // ISO 32000-2 Table 356: a namespace's /NS is a text string, so the PDF 2.0 namespace name may
+    // be written in UTF-16BE. A Lbl in it labels a form field.
+    let utf16: String = "http://iso.org/pdf2/ssn".encode_utf16().map(|u| format!("{u:04X}")).collect();
+    let doc = structure_doc(&[
+        "<< /S /Document /K [ << /S /Form /K [5 0 R] >> ] >>".into(),
+        format!("<< /Type /Namespace /NS <FEFF{utf16}> >>"),
+        "<< /S /Lbl /NS 4 0 R /K 0 >>".into(),
+    ]);
+    // An unrecognised namespace would leave Lbl unresolved, which passes the rule too: the type
+    // itself must come out as the PDF 2.0 Lbl.
+    let label = doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_dict().cloned().unwrap();
+    assert_eq!(crate::structure::standard_type(&doc, &pdfcraft_cos::Dict::new(), &label, b"Lbl"), (b"Lbl".to_vec(), Some(true)));
+    let r = checked(&doc, &[Rule::LblLBody]);
+    assert_eq!(status(&r, Rule::LblLBody), Status::Passed, "{:?}", r.result(Rule::LblLBody));
+}
+
+#[test]
+fn a_type_is_standard_only_in_a_namespace_that_defines_it() {
+    // ISO 32000-2 Annex M: Title is a standard type of the PDF 2.0 namespace, not of the PDF 1.7
+    // one. A PDF 1.7 Title mapped to the PDF 2.0 H1 is that H1, so the H2 after it is in order; a
+    // PDF 2.0 Title is a Title already, and its role map is not read, so the H2 comes first.
+    let heading_doc = |ns: &str| {
+        structure_doc(&[
+            "<< /S /Document /K [ << /S /Title /NS 4 0 R /K 0 >> << /S /H2 /K 1 >> ] >>".into(),
+            format!("<< /Type /Namespace /NS ({ns}) /RoleMapNS << /Title [/H1 5 0 R] >> >>"),
+            "<< /Type /Namespace /NS (http://iso.org/pdf2/ssn) >>".into(),
+        ])
+    };
+    let r = checked(&heading_doc("http://iso.org/pdf/ssn"), &[Rule::HeadingNesting]);
+    assert_eq!(status(&r, Rule::HeadingNesting), Status::Passed, "{:?}", r.result(Rule::HeadingNesting));
+    let r = checked(&heading_doc("http://iso.org/pdf2/ssn"), &[Rule::HeadingNesting]);
+    assert_eq!(status(&r, Rule::HeadingNesting), Status::Failed, "{:?}", r.result(Rule::HeadingNesting));
+}
+
+#[test]
+fn the_type_after_the_last_mapping_allowed_is_classified() {
+    // Twelve mappings lead `a0` to the PDF 2.0 Lbl, which labels a form field; thirteen would
+    // lead `b0` to an LBody outside a list item, but the walk stops before the thirteenth.
+    let chain = |p: &str, to: &str, len: usize| {
+        (0..len)
+            .map(|i| if i + 1 == len { format!("/{p}{i} [/{to} 5 0 R]") } else { format!("/{p}{i} [/{p}{} 4 0 R]", i + 1) })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    // Twelve lead `c0`, in object 6, to an LBody outside a list item: the one finding.
+    let doc = structure_doc(&[
+        "<< /S /Document /K [ << /S /Form /K [7 0 R] >> << /S /Div /K [ << /S /b0 /NS 4 0 R /K 1 >> 6 0 R ] >> ] >>".into(),
+        format!(
+            "<< /Type /Namespace /NS (http://example.com/x) /RoleMapNS << {} {} {} >> >>",
+            chain("a", "Lbl", 12),
+            chain("b", "LBody", 13),
+            chain("c", "LBody", 12)
+        ),
+        "<< /Type /Namespace /NS (http://iso.org/pdf2/ssn) >>".into(),
+        "<< /S /c0 /NS 4 0 R /K 2 >>".into(),
+        "<< /S /a0 /NS 4 0 R /K 0 >>".into(),
+    ]);
+    // An unresolved `a0` would pass under Form too: it must come out as the PDF 2.0 Lbl.
+    let a0 = doc.get(pdfcraft_cos::ObjRef::new(7, 0)).as_dict().cloned().unwrap();
+    assert_eq!(crate::structure::standard_type(&doc, &pdfcraft_cos::Dict::new(), &a0, b"a0"), (b"Lbl".to_vec(), Some(true)));
+    let r = checked(&doc, &[Rule::LblLBody]);
+    let found: Vec<_> = r.result(Rule::LblLBody).unwrap().findings.iter().map(|f| f.object.map(|o| o.num)).collect();
+    assert_eq!(found, [Some(6)], "{:?}", r.result(Rule::LblLBody));
+}
+
+#[test]
+fn a_role_map_pair_without_its_namespace_maps_nowhere() {
+    // ISO 32000-2 Table 356: an array value is a type and an indirect reference to the namespace it
+    // is in. `[/Figure]` names no namespace, so `img` stays an unknown type, not a Figure.
+    let doc = structure_doc(&[
+        "<< /S /Document /K [ << /S /img /NS 4 0 R /K 0 >> ] >>".into(),
+        "<< /Type /Namespace /NS (http://www.w3.org/1999/xhtml) /RoleMapNS << /img [/Figure] >> >>".into(),
+    ]);
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    assert!(r.result(Rule::FiguresAltText).unwrap().findings.is_empty(), "{:?}", r.result(Rule::FiguresAltText));
+}
+
+#[test]
+fn a_namespace_that_is_a_stream_leaves_the_element_in_the_default_namespace() {
+    // ISO 32000-2 Table 355: /NS refers to a namespace dictionary. A stream is not one, so the
+    // element is read through the tree root's /RoleMap, which makes CustomItem a list item.
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(),
+            "<< /Type /StructTreeRoot /K 3 0 R /RoleMap << /CustomItem /LI >> >>".into(),
+            "<< /S /Document /K [ << /S /L /K [ << /S /CustomItem /NS 4 0 R /K [ << /S /Lbl /K 0 >> ] >> ] >> ] >>".into(),
+            "<< /Type /Namespace /NS (http://example.com/x) /Length 0 >>\nstream\n\nendstream".into(),
+        ],
+        "",
+    );
+    let r = checked(&doc, &[Rule::LblLBody]);
+    assert_eq!(status(&r, Rule::LblLBody), Status::Passed, "{:?}", r.result(Rule::LblLBody));
+}
+
+#[test]
+fn a_namespaced_figure_finding_has_its_bounds() {
+    // The checker finds an `img` mapped to Figure through /RoleMapNS, and locates it on its page
+    // as it does a Figure reached through /RoleMap.
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >>".into(),
+            stream("/img << /MCID 0 >> BDC 10 150 40 20 re f EMC"),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R >>".into(),
+            "<< /S /Document /P 5 0 R /K [7 0 R] >>".into(),
+            "<< /S /img /NS 9 0 R /P 6 0 R /Pg 3 0 R /K 0 >>".into(),
+            "<< /Nums [0 [7 0 R]] >>".into(),
+            "<< /Type /Namespace /NS (http://www.w3.org/1999/xhtml) /RoleMapNS << /img /Figure >> >>".into(),
+        ],
+        "",
+    );
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    let finding = &r.result(Rule::FiguresAltText).unwrap().findings[0];
+    assert_eq!((finding.object.map(|o| o.num), finding.page, finding.bbox), (Some(7), Some(0), Some([10.0, 150.0, 50.0, 170.0])));
+}
+
+#[test]
+fn a_namespaced_figure_is_listed_and_takes_alternate_text() {
+    // The figure list and the alternate-text editor see the `img` the checker reports, mapped to
+    // Figure through /RoleMapNS; saving its alternate text clears the finding.
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >>".into(),
+            stream("/img << /MCID 0 >> BDC 10 150 40 20 re f EMC"),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R /RoleMap << /Photo /Figure >> >>".into(),
+            "<< /S /Document /P 5 0 R /K [7 0 R 10 0 R] >>".into(),
+            "<< /S /img /NS 9 0 R /P 6 0 R /Pg 3 0 R /K 0 >>".into(),
+            "<< /Nums [0 [7 0 R]] >>".into(),
+            "<< /Type /Namespace /NS (http://www.w3.org/1999/xhtml) /RoleMapNS << /img /Figure >> >>".into(),
+            "<< /S /Photo /P 6 0 R /Alt (A bar) >>".into(),
+        ],
+        "",
+    );
+    let listed: Vec<_> = figures(&doc).iter().map(|f| (f.obj.num, f.bbox)).collect();
+    assert_eq!(listed, [(7, Some([10.0, 150.0, 50.0, 170.0])), (10, None)], "the role-mapped Photo still counts");
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    let before: Vec<_> = r.result(Rule::FiguresAltText).unwrap().findings.iter().map(|f| f.object.map(|o| o.num)).collect();
+    assert_eq!(before, [Some(7)], "{:?}", r.result(Rule::FiguresAltText));
+    set_alt(&mut doc, pdfcraft_cos::ObjRef::new(7, 0), Some("A grey bar")).unwrap();
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    assert_eq!(status(&r, Rule::FiguresAltText), Status::Passed, "{:?}", r.result(Rule::FiguresAltText));
+}
+
+#[test]
+fn a_figure_in_a_form_xobject_takes_no_page_bounds_from_an_equal_id() {
+    // ISO 32000-2 Table 357: a marked-content reference with /Stm names a sequence in that
+    // stream's content. MCID 0 in the form is not MCID 0 on the page, a shape the figure doesn't hold.
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 /Resources << /XObject << /X 9 0 R >> >> >>"
+                .into(),
+            stream("/P << /MCID 0 >> BDC 10 150 40 20 re f EMC /X Do"),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R >>".into(),
+            "<< /S /Document /P 5 0 R /K [7 0 R] >>".into(),
+            "<< /S /Figure /P 6 0 R /Pg 3 0 R /K << /Type /MCR /Stm 9 0 R /MCID 0 >> >>".into(),
+            "<< /Nums [0 [6 0 R]] >>".into(),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] {}", &stream("/Figure << /MCID 0 >> BDC 100 100 50 30 re f EMC")[3..]),
+        ],
+        "",
+    );
+    let f = figures(&doc);
+    assert_eq!((f.len(), f.first().and_then(|f| f.bbox)), (1, None));
+}
+
+#[test]
+fn a_figure_whose_content_is_on_another_page_takes_no_bounds_from_an_equal_id() {
+    // ISO 32000-2 Table 357: a marked-content reference's /Pg names the page its MCID is on. The
+    // figure's page holds an MCID 0 too, a shape the figure doesn't hold.
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >>".into(),
+            stream("/P << /MCID 0 >> BDC 10 150 40 20 re f EMC"),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R >>".into(),
+            "<< /S /Document /P 5 0 R /K [7 0 R] >>".into(),
+            "<< /S /Figure /P 6 0 R /Pg 3 0 R /K << /Type /MCR /Pg 9 0 R /MCID 0 >> >>".into(),
+            "<< /Nums [0 [6 0 R] 1 [7 0 R]] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 10 0 R /StructParents 1 >>".into(),
+            stream("/Figure << /MCID 0 >> BDC 100 100 50 30 re f EMC"),
+        ],
+        "",
+    );
+    let f = figures(&doc);
+    assert_eq!((f.len(), f.first().and_then(|f| f.bbox)), (1, None));
+}
+
+#[test]
+fn a_figure_whose_content_is_in_a_form_xobject_is_not_marked_decorative_on_the_page() {
+    // ISO 32000-2 Table 357: the figure's MCID 0 is in the form's content, not the page's. The
+    // page's own MCID 0 is a paragraph, which must stay tagged, and so must the figure.
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 /Resources << /XObject << /X 9 0 R >> >> >>"
+                .into(),
+            stream("/P << /MCID 0 >> BDC 10 150 40 20 re f EMC /X Do"),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R >>".into(),
+            "<< /S /Document /P 5 0 R /K [10 0 R 7 0 R] >>".into(),
+            "<< /S /img /NS 11 0 R /P 6 0 R /Pg 3 0 R /K << /Type /MCR /Stm 9 0 R /MCID 0 >> >>".into(),
+            "<< /Nums [0 [10 0 R]] >>".into(),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] {}", &stream("/Figure << /MCID 0 >> BDC 100 100 50 30 re f EMC")[3..]),
+            "<< /S /P /P 6 0 R /Pg 3 0 R /K 0 >>".into(),
+            "<< /Type /Namespace /NS (http://www.w3.org/1999/xhtml) /RoleMapNS << /img /Figure >> >>".into(),
+        ],
+        "",
+    );
+    let figure = pdfcraft_cos::ObjRef::new(7, 0);
+    let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned();
+    let document = doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().cloned();
+    assert_eq!(mark_decorative(&mut doc, figure), Err(AltError::UnsupportedContent));
+    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned(), page, "the page content is unchanged");
+    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().cloned(), document, "the figure stays in the tree");
+    // Alternate text, which touches no content, still works.
+    set_alt(&mut doc, figure, Some("A chart")).unwrap();
+}
+
+#[test]
+fn kids_in_an_indirect_array_are_read_like_an_inline_array() {
+    // ISO 32000-2 §7.3.10: /K may be an indirect reference to the array of kids. The Document's
+    // kids, and the figure's marked content, are each in such an array.
+    let build_with = |figure_kids: &str, document_kids: &str| {
+        pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >>".into(),
+                stream("/P << /MCID 0 >> BDC 10 150 40 20 re f EMC /Figure << /MCID 1 >> BDC 100 100 50 30 re f EMC"),
+                "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R >>".into(),
+                format!("<< /S /Document /P 5 0 R /K {document_kids} >>"),
+                format!("<< /S /Figure /P 6 0 R /Pg 3 0 R /K {figure_kids} >>"),
+                "<< /Nums [0 [10 0 R 7 0 R]] >>".into(),
+                "[10 0 R 7 0 R]".into(),
+                "<< /S /P /P 6 0 R /Pg 3 0 R /K 0 >>".into(),
+                "[1]".into(),
+                "[<< /Type /MCR /Stm 13 0 R /MCID 0 >>]".into(),
+                format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] {}", &stream("/Figure << /MCID 0 >> BDC 0 0 5 5 re f EMC")[3..]),
+            ],
+            "",
+        )
+    };
+    let build = |figure_kids: &str| build_with(figure_kids, "9 0 R");
+    let mut doc = build("11 0 R");
+    // The checker reaches the figure, as the figure list does, and finds it without alternate text.
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    let found: Vec<_> = r.result(Rule::FiguresAltText).unwrap().findings.iter().map(|f| f.object.map(|o| o.num)).collect();
+    assert_eq!(found, [Some(7)], "{:?}", r.result(Rule::FiguresAltText));
+    assert_eq!(figures(&doc).first().and_then(|f| f.bbox), Some([100.0, 100.0, 150.0, 130.0]));
+    // Marking it decorative converts its content and takes it out of the indirect array.
+    mark_decorative(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
+    assert!(figures(&doc).is_empty());
+    let kids = doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().and_then(|d| d.get(b"K").cloned()).map(|k| doc.resolve(&k).as_ref().clone());
+    assert_eq!(kids, Some(pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Ref(pdfcraft_cos::ObjRef::new(10, 0))])));
+    let pages = pdfcraft_model::pages(&doc);
+    let c = doc.resolve(pages[0].dict.get(b"Contents").unwrap());
+    let pdfcraft_cos::Object::Stream(c) = &*c else { panic!("one content stream") };
+    let text = String::from_utf8(c.decoded().unwrap()).unwrap();
+    assert!(text.contains("/Artifact BMC") && text.contains("/MCID 0") && !text.contains("/MCID 1"), "{text}");
+    // Marking the tag an artifact reads the figure's indirect array too.
+    let mut doc = build_with("11 0 R", "[10 0 R 7 0 R]");
+    mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
+    assert!(figures(&doc).is_empty());
+    // An indirect array holding a form XObject's marked content is refused before anything changes,
+    // by either edit: the page's own MCID 0, the paragraph's, is another sequence.
+    for document_kids in ["[10 0 R 7 0 R]", "9 0 R"] {
+        let mut doc = build_with("12 0 R", document_kids);
+        let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned();
+        let document = doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().cloned();
+        assert_eq!(mark_decorative(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)), Err(AltError::UnsupportedContent));
+        assert_eq!(mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)), Err(ArtifactError::UnsupportedContent));
+        assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned(), page, "the page content is unchanged");
+        assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().cloned(), document, "the figure stays in the tree");
+    }
+}
+
+#[test]
+fn a_figure_with_child_elements_is_not_marked_decorative() {
+    // Taking the figure out of the tree would take its Caption with it, whether the Caption is
+    // in an inline array of kids or an indirect one (ISO 32000-2 §7.3.10).
+    for kids in ["[0 9 0 R]", "10 0 R"] {
+        let mut doc = pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >>".into(),
+                stream("/Figure << /MCID 0 >> BDC 100 100 50 30 re f EMC /Caption << /MCID 1 >> BDC BT /F1 9 Tf 100 90 Td (Fig. 1) Tj ET EMC"),
+                "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R >>".into(),
+                "<< /S /Document /P 5 0 R /K [7 0 R] >>".into(),
+                format!("<< /S /Figure /P 6 0 R /Pg 3 0 R /K {kids} >>"),
+                "<< /Nums [0 [7 0 R 9 0 R]] >>".into(),
+                "<< /S /Caption /P 7 0 R /Pg 3 0 R /K 1 >>".into(),
+                "[0 9 0 R]".into(),
+            ],
+            "",
+        );
+        let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned();
+        let document = doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().cloned();
+        assert_eq!(mark_decorative(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)), Err(AltError::HasChildren), "{kids}");
+        assert_eq!(mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)), Err(ArtifactError::HasChildren), "{kids}");
+        assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned(), page, "the page content is unchanged");
+        assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().cloned(), document, "the figure stays in the tree");
+    }
+}
+
+#[test]
+fn a_namespace_that_is_a_page_leaves_the_element_in_the_default_namespace() {
+    // ISO 32000-2 Table 356: a namespace dictionary has its name in /NS (and a /Type, if any, of
+    // Namespace). A page is not one, so Photo is read through the root /RoleMap: a Figure.
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >>".into(),
+            stream("/Photo << /MCID 0 >> BDC 10 150 40 20 re f EMC"),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R /RoleMap << /Photo /Figure >> >>".into(),
+            "<< /S /Document /P 5 0 R /K [7 0 R] >>".into(),
+            "<< /S /Photo /NS 3 0 R /P 6 0 R /Pg 3 0 R /K 0 >>".into(),
+            "<< /Nums [0 [7 0 R]] >>".into(),
+        ],
+        "",
+    );
+    let listed: Vec<_> = figures(&doc).iter().map(|f| f.obj.num).collect();
+    assert_eq!(listed, [7]);
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    let found: Vec<_> = r.result(Rule::FiguresAltText).unwrap().findings.iter().map(|f| f.object.map(|o| o.num)).collect();
+    assert_eq!(found, [Some(7)], "{:?}", r.result(Rule::FiguresAltText));
+}
+
+#[test]
+fn a_default_namespace_title_follows_the_role_map() {
+    // ISO 32000-2 §14.8.6.1: an element without /NS is in the PDF 1.7 namespace, which has no
+    // Title (Annex M), so the root /RoleMap makes this Title an H1 and the H2 after it is in order.
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(),
+            "<< /Type /StructTreeRoot /K 3 0 R /RoleMap << /Title /H1 >> >>".into(),
+            "<< /S /Document /K [ << /S /Title /K 0 >> << /S /H2 /K 1 >> ] >>".into(),
+        ],
+        "",
+    );
+    let r = checked(&doc, &[Rule::HeadingNesting]);
+    assert_eq!(status(&r, Rule::HeadingNesting), Status::Passed, "{:?}", r.result(Rule::HeadingNesting));
+}
+
+#[test]
+fn a_type_that_maps_to_no_standard_one_is_no_list_item() {
+    // `item`'s mapping is the malformed `[/LI]` (no namespace), and `LI` in a namespace that is
+    // not a standard one has no mapping at all: both stop on the name LI without reaching the
+    // standard LI, so the LBody in each is outside a list item.
+    let doc = structure_doc(&[
+        "<< /S /Document /K [ << /S /L /K [ << /S /item /NS 4 0 R /K [ << /S /LBody /K 0 >> ] >> << /S /LI /NS 4 0 R /K [ << /S /LBody /K 1 >> ] >> ] >> ] >>".into(),
+        "<< /Type /Namespace /NS (http://example.com/x) /RoleMapNS << /item [/LI] >> >>".into(),
+    ]);
+    let r = checked(&doc, &[Rule::LblLBody]);
+    assert_eq!(r.result(Rule::LblLBody).unwrap().findings.len(), 2, "{:?}", r.result(Rule::LblLBody));
+}
+
+#[test]
+fn a_list_item_body_belongs_in_a_list_item_only() {
+    // ISO 32000-2 §14.8.4.8.2, Table 370: LBody is internal to LI. A label may sit in a Note too,
+    // a list item body may not.
+    let doc = structure_doc(&["<< /S /Document /K [ << /S /Note /K [ << /S /Lbl /K 0 >> 4 0 R ] >> ] >>".into(), "<< /S /LBody /K 1 >>".into()]);
+    let r = checked(&doc, &[Rule::LblLBody]);
+    let found: Vec<_> = r.result(Rule::LblLBody).unwrap().findings.iter().map(|f| f.object.map(|o| o.num)).collect();
+    assert_eq!(found, [Some(4)], "{:?}", r.result(Rule::LblLBody));
+}
+
+#[test]
+fn namespace_role_maps_that_loop_or_lead_nowhere_end_on_a_non_standard_type() {
+    // `loop` maps to itself in its own namespace, `nowhere` is not in the role map at all, and a
+    // /NS that names no dictionary leaves the element in the default namespace (its /RoleMap).
+    let doc = namespaced_doc(
+        "<< /S /loop /NS 4 0 R /K [ << /S /Lbl /K 0 >> ] >> << /S /nowhere /NS 4 0 R /K [ << /S /LBody /K 1 >> ] >> \
+         << /S /LI /NS 99 0 R /K [ << /S /Lbl /K 2 >> ] >>",
+    );
+    let r = checked(&doc, &[Rule::LblLBody]);
+    let found: Vec<&str> = r.result(Rule::LblLBody).unwrap().findings.iter().map(|f| f.message.as_str()).collect();
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found.iter().all(|m| m.contains("not in an LI")), "{found:?}");
+}
