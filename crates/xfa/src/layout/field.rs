@@ -210,6 +210,13 @@ impl Layouter<'_> {
                 };
                 (WidgetKind::Button { caption }, rect, border, None, f.tooltip.clone())
             }
+            Ui::DateTimeEdit if crate::data::is_time_field(f) => {
+                // A time of day (#8411): canonical in the data and as a template default, held in
+                // the field's pattern. Text that isn't a time stays as it is.
+                let pattern = crate::data::time_pattern(f);
+                let shown = plain_value.as_ref().map(|v| crate::data::time_in_pattern(v, &pattern));
+                (WidgetKind::Time(pattern), ui, widget_border(f.ui_border.as_ref(), false), shown, f.tooltip.clone())
+            }
             Ui::DateTimeEdit => {
                 let pattern = date_pattern(f.picture.as_deref());
                 // The data holds the date in the field's data picture, or else as an ISO date; a
@@ -251,7 +258,12 @@ impl Layouter<'_> {
         // A date field's default, like its value, in the field's own pattern.
         let default = match &kind {
             WidgetKind::Date(pattern) => template_default.map(|v| canonical_date_in(&v, pattern)),
+            WidgetKind::Time(pattern) => template_default.map(|v| crate::data::time_in_pattern(&v, pattern)),
             _ => template_default,
+        };
+        let display_date = match &kind {
+            WidgetKind::Time(_) => f.display_picture.as_deref().and_then(crate::data::time_letters),
+            _ => (f.ui == Ui::DateTimeEdit).then(|| f.display_picture.as_deref().and_then(crate::data::date_letters)).flatten(),
         };
         let items: Vec<String> = match &kind {
             WidgetKind::CheckBox { on, .. } => vec![on.clone(), f.items.get(1).cloned().unwrap_or_default()],
@@ -276,7 +288,7 @@ impl Layouter<'_> {
             action,
             items,
             no_scroll: f.no_scroll,
-            display_date: (f.ui == Ui::DateTimeEdit).then(|| f.display_picture.as_deref().and_then(crate::data::date_letters)).flatten(),
+            display_date,
             // `push` sets where it shows.
             views: Views::ALL,
             required: f.required,

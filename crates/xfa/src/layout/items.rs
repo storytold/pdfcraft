@@ -86,6 +86,9 @@ pub enum WidgetKind {
     Image,
     /// A date field with its Acrobat format pattern (`yyyy-mm-dd`).
     Date(String),
+    /// A time field (#8411) with its Acrobat time pattern (`h:MM tt`): it holds the time in that
+    /// pattern, and the data holds it canonically (`HH:MM:SS`).
+    Time(String),
     CheckBox {
         on: String,
         round: bool,
@@ -150,8 +153,8 @@ pub struct Widget {
     pub items: Vec<String>,
     /// A text field that doesn't scroll: it takes no more text than it shows (`DoNotScroll`).
     pub no_scroll: bool,
-    /// Date fields: the date letters of the display picture (`<format><picture>`), how the value
-    /// shows when it isn't being typed in. `None`: as the edit pattern writes it.
+    /// Date and time fields: the Acrobat pattern of the display picture (`<format><picture>`), how
+    /// the value shows when it isn't being typed in. `None`: as the edit pattern writes it.
     pub display_date: Option<String>,
     /// Where the field is shown: on screen, in print, or both (its annotation flags).
     pub views: Views,

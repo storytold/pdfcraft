@@ -302,7 +302,7 @@ impl Emitter<'_> {
         // SOM path.
         let mut under: Option<String> = None;
         match &w.kind {
-            WidgetKind::Text | WidgetKind::Date(_) | WidgetKind::Password => {
+            WidgetKind::Text | WidgetKind::Date(_) | WidgetKind::Time(_) | WidgetKind::Password => {
                 d.set(b"FT".to_vec(), Object::name("Tx"));
                 if w.multiline {
                     ff |= 1 << 12;
@@ -339,6 +339,16 @@ impl Emitter<'_> {
                     let pattern = js_string(pattern);
                     aa.set(b"F".to_vec(), js_action(&format!("AFDate_FormatEx({shown});")));
                     aa.set(b"K".to_vec(), js_action(&format!("AFDate_KeystrokeEx({pattern});")));
+                    d.set(b"AA".to_vec(), Object::Dict(aa));
+                }
+                if let WidgetKind::Time(pattern) = &w.kind {
+                    // Text the pattern doesn't read is kept as typed, as for a date (#8411).
+                    d.set(DATE_KEY.to_vec(), Object::Bool(true));
+                    let mut aa = Dict::new();
+                    let shown = js_string(w.display_date.as_deref().unwrap_or(pattern));
+                    let pattern = js_string(pattern);
+                    aa.set(b"F".to_vec(), js_action(&format!("AFTime_FormatEx({shown});")));
+                    aa.set(b"K".to_vec(), js_action(&format!("AFTime_KeystrokeEx({pattern});")));
                     d.set(b"AA".to_vec(), Object::Dict(aa));
                 }
             }

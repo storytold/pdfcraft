@@ -653,6 +653,32 @@ pub fn leave_template(data: &str) -> String {
     )
 }
 
+/// Two time fields (#8411): `start` is typed and shown as `h:MM A` (`2:30 PM`), `at` has no
+/// picture. Both hold a `<time/>`, which the data keeps as `HH:MM:SS`.
+pub fn time_template(data: &str) -> String {
+    let datasets = if data.is_empty() {
+        String::new()
+    } else {
+        format!("<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets>")
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="tb">
+  <field name="start" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>time{{h:MM A}}</picture></ui><value><time/></value><format><picture>time{{h:MM A}}</picture></format></field>
+  <field name="at" w="2in" h="0.3in"><ui><dateTimeEdit/></ui><value><time/></value></field>
+ </subform>
+</subform>
+</template>
+{datasets}
+</xdp:xdp>
+"##
+    )
+}
+
 /// Two date fields shown as `MM/DD/YYYY`: `due` binds its value to the data as `YYYYMMDD`
 /// (`<bind><picture>`), `when` has no data picture, so its data holds ISO dates.
 pub fn bound_date_template(data: &str) -> String {
