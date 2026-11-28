@@ -399,32 +399,35 @@ fn fill_color(fill: &[Op]) -> [f64; 3] {
     let Some(op) = fill.iter().rev().find(|op| matches!(op.op.as_slice(), b"g" | b"rg" | b"k" | b"sc" | b"scn")) else {
         return [0.0, 0.0, 0.0];
     };
-    let space = match op.op.as_slice() {
-        b"sc" | b"scn" => match op.operands.len() {
-            1 => b"g".as_slice(),
-            3 => b"rg".as_slice(),
-            4 => b"k".as_slice(),
-            _ => return [0.0; 3],
-        },
-        other => other,
+    let n = |i: usize| op.operands.get(i).and_then(Object::as_f64).unwrap_or(0.0);
+    // `g`, `rg` and `k` name their space; `sc` and `scn` are read by how many operands they have.
+    let count = match op.op.as_slice() {
+        b"g" => 1,
+        b"rg" => 3,
+        b"k" => 4,
+        _ => op.operands.len(),
     };
-    match space {
-        b"g" => {
-            let v = op.operands.first().and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0);
+    match count {
+        1 => fill_rgb(&[n(0)]),
+        3 => fill_rgb(&[n(0), n(1), n(2)]),
+        4 => fill_rgb(&[n(0), n(1), n(2), n(3)]),
+        _ => [0.0, 0.0, 0.0],
+    }
+}
+
+/// A fill colour's operands as RGB, as a [`TextBlock`]'s colour reads them: one operand is a
+/// grey, three are RGB, four are CMYK converted without a profile (`(1 − c)(1 − k)`, …), and any
+/// other count is black. The colour space is not consulted (a spot colour's tint reads as a
+/// grey). Copy with formatting reads a drawn glyph's operands with it, to tell whether the glyph
+/// is painted as a block is.
+pub fn fill_rgb(operands: &[f64]) -> [f64; 3] {
+    match *operands {
+        [v] => {
+            let v = v.clamp(0.0, 1.0);
             [v, v, v]
         }
-        b"rg" => [
-            op.operands.first().and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
-            op.operands.get(1).and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
-            op.operands.get(2).and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
-        ],
-        b"k" => {
-            let c = op.operands.first().and_then(Object::as_f64).unwrap_or(0.0);
-            let m = op.operands.get(1).and_then(Object::as_f64).unwrap_or(0.0);
-            let y = op.operands.get(2).and_then(Object::as_f64).unwrap_or(0.0);
-            let k = op.operands.get(3).and_then(Object::as_f64).unwrap_or(0.0);
-            [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)]
-        }
+        [r, g, b] => [r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)],
+        [c, m, y, k] => [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)],
         _ => [0.0, 0.0, 0.0],
     }
 }

@@ -68,6 +68,9 @@ pub(super) struct Shared {
     /// request cannot trap every worker in turn while other scales, tiles, or generations remain usable.
     pub(super) stuck: Mutex<std::collections::HashSet<RequestFailureKey>>,
     stats: AtomicRenderStats,
+    /// Copy with formatting's recovery state for the pool's document (one pool per document
+    /// version): every worker's pages share each font's rule decisions.
+    pub(super) recovery: Arc<crate::text::RecoveryDocument>,
     /// Per worker id: set to stop that worker's render at its next content operator once nobody
     /// can receive its answer (the pool was dropped, or the watchdog gave up on the render).
     /// Lock `busy` first when holding both.
@@ -318,6 +321,13 @@ impl RenderPool {
         Self::with_mode(bytes, 0, config, true)
     }
 
+    /// Test hook: the pool's recovery state (`RecoveryDocument`'s `Debug`, which counts the
+    /// fonts it decided).
+    #[cfg(test)]
+    pub(crate) fn recovery_state(&self) -> String {
+        format!("{:?}", self.shared.recovery)
+    }
+
     /// `true` when rendering happens on the caller's thread (no worker threads available).
     pub fn is_inline(&self) -> bool {
         self.inline.is_some()
@@ -385,6 +395,7 @@ impl RenderPool {
                 rgba: Pixels::default(),
                 error: Some("all render workers exceeded their time limits; close and reopen the document to try again".into()),
                 text: None,
+                recovered: None,
                 warnings: Vec::new(),
                 millis: 0,
             })
@@ -430,7 +441,7 @@ impl RenderPool {
                     self.shared.queue.retry(req);
                 } else {
                     lock(&self.shared.stuck).insert(req.into());
-                    let what = if req.kind == RequestKind::Text { "text extraction for page" } else { "page" };
+                    let what = if req.kind == RequestKind::Pixels { "page" } else { "text extraction for page" };
                     let error = format!(
                         "{what} {} took longer than {:.0} s and was skipped; the page may be damaged or extremely complex",
                         req.page + 1,
@@ -443,6 +454,7 @@ impl RenderPool {
                         rgba: Pixels::default(),
                         error: Some(error),
                         text: None,
+                        recovered: None,
                         warnings: Vec::new(),
                         millis: 0,
                     });
@@ -563,6 +575,7 @@ pub(super) fn worker(
                         rgba: Pixels::default(),
                         error: Some(error),
                         text: None,
+                        recovered: None,
                         warnings: Vec::new(),
                         millis: 0,
                     };
@@ -659,6 +672,22 @@ pub(super) fn worker(
                 // Acquisition may have waited or parsed privately after shared
                 // fallback. Retire before any render work if the watchdog gave
                 // this request to a replacement while initialization ran.
+                // Copy with formatting's document survey (once per pool) is timed as parsing is: not
+                // at all, having caps of its own; the page's time starts after it.
+                if req.kind == RequestKind::RecoveredText
+                    && let Some(pdf) = pdf
+                    && !shared.recovery.prepared()
+                {
+                    if !set_busy_stage(&shared, id, BusyStage::Parsing) {
+                        return;
+                    }
+                    // A panic in the survey leaves the document unprepared (the next request
+                    // surveys again) and this worker running, its slot cleared as usual; the
+                    // page's own extraction surveys again, and if that panics too the page keeps
+                    // its strict text (`extract_page_with`).
+                    let settings = worker_settings(&config, &request_cancelled);
+                    let _ = catch_unwind(AssertUnwindSafe(|| shared.recovery.prepare(pdf, &settings)));
+                }
                 let stage = if *shared_generation { BusyStage::SharedRender } else { BusyStage::Private };
                 if !set_busy_stage(&shared, id, stage) {
                     return;
@@ -718,7 +747,7 @@ pub(super) fn worker(
                         panic!("injected page panic");
                     }
                     match pdf {
-                        Some(pdf) => render_page(pdf, cache, &settings, &config, req),
+                        Some(pdf) => render_page(pdf, cache, &settings, Some(&shared.recovery), &config, req),
                         None => Err(("the document could not be parsed".into(), false)),
                     }
                 }))
