@@ -8728,3 +8728,66 @@ fn xfa_line_without_width_is_vertical_and_without_height_is_horizontal() {
         lines[5]
     );
 }
+
+/// A form whose table has a narrow first column (18pt) holding, in its footer row, a button
+/// without a width ("Add service", as on Minnesota DHS forms; #5436), `nested` in a flowed cell
+/// that gives itself 81pt or else as the cell itself, with a text field after the table.
+fn narrow_cell_button_form(nested: bool) -> String {
+    let button = r#"<field name="btnAdd" minH="11pt"><ui><button/></ui>
+      <caption><value><text>Add service</text></value><font typeface="Helvetica" size="9pt"/></caption>
+      <margin leftInset="6pt" rightInset="6pt" topInset="5pt" bottomInset="4pt"/>
+     </field>"#;
+    let cell = if nested { format!(r#"<subform name="sfAdd" layout="tb" w="81pt">{button}</subform>"#) } else { button.to_string() };
+    format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/></pageArea></pageSet>
+ <subform name="body" layout="tb" w="540pt">
+  <subform name="table" layout="table" columnWidths="18pt 300pt">
+   <subform name="row" layout="row">
+    <field name="n" h="20pt"><ui><textEdit/></ui></field>
+    <field name="service" h="20pt"><ui><textEdit/></ui></field>
+   </subform>
+   <subform name="foot" layout="row">
+    {cell}
+    <draw w="300pt" h="20pt"><value><text>Grand total</text></value></draw>
+   </subform>
+  </subform>
+  <field name="after" w="300pt" h="20pt"><ui><textEdit/></ui></field>
+ </subform>
+</subform></template>
+</xdp:xdp>"#
+    )
+}
+
+/// The rectangle of the widget named `name` in `xml`'s layout.
+fn widget_rect(xml: &str, name: &str) -> Rect {
+    let form = layout_xml(xml).unwrap();
+    let all: Vec<&Widget> = form.pages.iter().flat_map(widgets).collect();
+    all.iter().find(|w| w.name == name).map(|w| w.rect).unwrap_or_else(|| panic!("no {name} in {all:?}"))
+}
+
+#[test]
+fn a_button_in_a_narrow_table_cell_keeps_its_caption_width() {
+    // A button without a width is as wide as its caption (XFA 3.3, "Text Layout with Growable
+    // Width", p. 278), also in a table cell narrower than that: drawn at its column's width, it
+    // used to be squeezed to the column, its caption wrapping letter by letter and the button
+    // running down over what follows the table (#5436).
+    let xml = narrow_cell_button_form(true);
+    let (button, after) = (widget_rect(&xml, "btnAdd"), widget_rect(&xml, "after"));
+    assert!(button.w > 18.0, "the button {button:?} is squeezed into its 18pt column");
+    assert!(button.w > button.h, "the button {button:?} is taller than wide: its caption wraps");
+    assert!(button.bottom() <= after.y + 0.01, "the button {button:?} runs into the field after the table {after:?}");
+}
+
+#[test]
+fn a_button_that_is_a_narrow_table_cell_is_as_tall_as_its_caption_at_the_columns_width() {
+    // A button that is itself a cell is drawn at its column's width, as every cell is: its row
+    // must then hold its caption wrapped at that width. Measured at its caption's width
+    // instead, the row was one line tall and the caption didn't fit the button drawn in it.
+    let button = widget_rect(&narrow_cell_button_form(false), "btnAdd");
+    let one_line = widget_rect(&narrow_cell_button_form(true), "btnAdd");
+    assert!(button.w <= 18.0 + 0.01, "the button {button:?} leaves its 18pt column");
+    // Between its 6pt insets the button has 6pt, too little for any word of its caption.
+    assert!(button.h >= one_line.h + text::line_height(9.0) - 0.01, "the button {button:?} has room for one line of its caption ({one_line:?})");
+}
