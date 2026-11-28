@@ -47,6 +47,29 @@ fn a_failing_step_is_named_and_the_rest_are_skipped() {
 }
 
 #[test]
+fn a_non_string_output_path_fails_the_step_in_both_modes() {
+    let steps = serde_json::json!([
+        blank(),
+        { "tool": "page_render", "args": { "doc": 1, "page": 1, "dpi": 10 }, "out": 42 },
+        { "tool": "doc_close", "args": { "doc": 1 } }
+    ]);
+    let expected = "step 2 (page_render): \"out\" must be a path string";
+    for extra in [&[][..], &["--report"][..]] {
+        let o = run_script("invalid-output-path", &steps, extra);
+        assert_eq!(o.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&o.stderr);
+        assert!(stderr.contains(expected), "{stderr}");
+        if !extra.is_empty() {
+            let report: serde_json::Value = serde_json::from_slice(&o.stdout).expect("stdout is one JSON document");
+            assert_eq!(report["ok"], false);
+            let steps = report["steps"].as_array().unwrap();
+            assert_eq!(steps.iter().map(|s| s["status"].as_str().unwrap()).collect::<Vec<_>>(), ["ok", "error", "skipped"]);
+            assert_eq!(steps[1]["error"], expected);
+        }
+    }
+}
+
+#[test]
 fn a_step_without_a_tool_is_an_error_step() {
     let o = run_script("report-notool", &serde_json::json!([{ "args": {} }]), &["--report"]);
     assert_eq!(o.status.code(), Some(1));
