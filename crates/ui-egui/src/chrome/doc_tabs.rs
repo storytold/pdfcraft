@@ -46,7 +46,9 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, place: Place) {
         app.pane_front(place).and_then(|i| app.views.get(i)).map(|v| StripTab::View(v.pane.key))
     };
     let label = if place == Place::Main { tl!("Documents") } else { tl!("Split view documents") };
-    let mut strip = DocumentTabs::new(label.to_string(), &tabs).reorderable(true);
+    // A tab dragged out and let go where no strip or pane takes it moves to a window of its own (#1683); a browser
+    // tab has no second window to start.
+    let mut strip = DocumentTabs::new(label.to_string(), &tabs).reorderable(true).tear_off(cfg!(not(target_arch = "wasm32")));
     if place == Place::Main {
         strip = strip.trailing(|ui| {
             Button::command("file.open").variant(craft::theme::Variant::GHOST).icon(IconId::new("plus")).show(ui);
@@ -109,6 +111,15 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, place: Place) {
                     }
                 }
             }
+            // The page area takes dropped tabs (split view), so this is a tab let go over the toolbar, a side panel or
+            // outside the window: it moves to a window of its own.
+            DocumentTabsEvent::TornOff { documents, .. } => {
+                for document in documents {
+                    if let StripTab::View(key) = document {
+                        app.tab_action(ui.ctx(), Action::NewWindow(key));
+                    }
+                }
+            }
             DocumentTabsEvent::ContextMenu(request) => {
                 app.panes.tab_menu = match request.key {
                     StripTab::View(key) => Some((place, key)),
@@ -139,6 +150,9 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, place: Place) {
         }
         if MenuItem::new(tl!("Split down").to_string()).show(ui).ran {
             chosen = Some(Action::Split { tab, down: true });
+        }
+        if cfg!(not(target_arch = "wasm32")) && MenuItem::new(tl!("Move to New Window").to_string()).enabled(path.is_some()).show(ui).ran {
+            chosen = Some(Action::NewWindow(tab));
         }
         if MenuItem::new(reveal_label.clone()).enabled(CAN_REVEAL && path.is_some()).show(ui).ran
             && let Some(id) = doc

@@ -349,6 +349,7 @@ impl PdfCraftApp {
             printer_papers_source: None,
             spooler: None,
             two_sided_source: None,
+            window_launcher: None,
             palette_open: false,
             all_tools_expanded: false,
             all_tools_full: false,

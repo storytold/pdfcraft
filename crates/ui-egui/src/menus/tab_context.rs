@@ -17,6 +17,19 @@ pub(crate) enum Action {
         tab: u64,
         down: bool,
     },
+    /// Move a tab to a window of its own, by its view key (#1683).
+    NewWindow(u64),
+}
+
+/// Starts a PdfCraft window of its own with these arguments: a test's stand-in, or else a new run of this program.
+pub type WindowLauncher = std::sync::Arc<dyn Fn(&[String]) -> Result<(), String> + Send + Sync>;
+
+/// A new run of this program with `args`, which opens a window of its own (`--new-window` keeps it from handing the
+/// file back to this one). The child isn't waited for: it outlives this window.
+#[cfg(not(target_arch = "wasm32"))]
+fn launch_window(args: &[String]) -> Result<(), String> {
+    let program = std::env::current_exe().map_err(|e| e.to_string())?;
+    std::process::Command::new(program).args(args).spawn().map(drop).map_err(|e| e.to_string())
 }
 
 /// Reveal a local file without opening it or changing document/Recent state. The file manager call
@@ -86,6 +99,49 @@ impl crate::PdfCraftApp {
                 }
             }
             Action::Rename(id) => self.start_rename(ctx, id),
+            Action::NewWindow(tab) => {
+                if let Some(i) = self.tab_with_key(tab) {
+                    self.move_tab_to_new_window(i);
+                }
+            }
+        }
+    }
+
+    /// Moves tab `index` to a window of its own (#1683), as dragging it out of the window does: the document opens
+    /// there at the page this tab shows (and its zoom, unless the view fits the page or its width, which the new
+    /// window fits to its own size), and the tab closes here once the window is on its way. The new window opens the
+    /// file, so a document with changes that aren't saved, or never saved to a file, stays here with a notice: the
+    /// changes would not come along. A document under OCR review stays too, as for Close.
+    pub(crate) fn move_tab_to_new_window(&mut self, index: usize) {
+        let Some(view) = self.views.get(index) else { return };
+        let (page, zoom, fitted) = (view.current().saturating_add(1), (view.zoom() * 100.0).round(), view.fit() != crate::canvas::Fit::None);
+        let Some(path) = self.session.get(view.id).and_then(|d| d.path.clone()) else {
+            self.notify_tr("Save this document to a file to move it to a new window");
+            return;
+        };
+        if self.has_unsaved_work(index) {
+            self.notify_tr("Save your changes to move this document to a new window");
+            return;
+        }
+        if self.hold_close_for_ocr_review(index) {
+            return;
+        }
+        let mut args = vec!["--new-window".to_owned(), "--page".to_owned(), page.to_string()];
+        if !fitted && zoom.is_finite() && zoom > 0.0 {
+            args.extend(["--zoom".to_owned(), format!("{zoom}")]);
+        }
+        args.push(path);
+        let launched = match &self.window_launcher {
+            Some(launch) => launch(&args),
+            #[cfg(not(target_arch = "wasm32"))]
+            None => launch_window(&args),
+            // A browser tab has no second window to start.
+            #[cfg(target_arch = "wasm32")]
+            None => Err("The browser can't open another window.".to_owned()),
+        };
+        match launched {
+            Ok(()) => self.close_tab(index),
+            Err(e) => self.notify_fmt("Couldn't open a new window: {e}", &[("e", &e)]),
         }
     }
 }
@@ -279,5 +335,127 @@ mod tests {
         h.run_steps(3);
         assert_eq!(h.state().views.len(), 1);
         assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().name, "second.pdf");
+    }
+
+    /// #1683: Move to New Window starts a window of its own on the tab's file, at its page (and zoom, when the view
+    /// doesn't fit the page or width), and the tab closes here. A tab whose changes aren't saved, or that has no file,
+    /// stays, and so does one whose window couldn't be started.
+    #[test]
+    fn move_to_new_window_starts_a_window_on_the_file_and_closes_the_tab() {
+        let ctx = &egui::Context::default();
+        let launched: Arc<std::sync::Mutex<Vec<Vec<String>>>> = Arc::default();
+        let record = launched.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            let mut app = app();
+            for (name, path) in [
+                ("first.pdf", Some("/tmp/first.pdf")),
+                ("unsaved.pdf", None),
+                ("edited.pdf", Some("/tmp/edited.pdf")),
+                ("third.pdf", Some("/tmp/third.pdf")),
+                ("fourth.pdf", Some("/tmp/fourth.pdf")),
+            ] {
+                // A document of three pages, so the page shown can be other than the first.
+                let bytes = if name == "third.pdf" { app.session.create_blank(200.0, 300.0, 3).unwrap().to_vec() } else { PDF.to_vec() };
+                app.open_bytes(ctx, name, path.map(String::from), bytes).unwrap();
+            }
+            let record = record.clone();
+            app.window_launcher = Some(Arc::new(move |args: &[String]| {
+                record.lock().unwrap().push(args.to_vec());
+                Ok(())
+            }));
+            app
+        });
+        h.run_steps(8);
+        let key = |h: &Harness<'_, PdfCraftApp>, name: &str| {
+            let state = h.state();
+            state.views.iter().find(|v| state.session.get(v.id).is_some_and(|d| d.name == name)).map(|v| v.view_key())
+        };
+
+        // From the tab's menu: the file, at the page shown; the view fits its width, so no zoom goes along.
+        h.get_by_role_and_label(Role::Tab, "first.pdf").click_secondary();
+        h.run_steps(2);
+        h.get_by_label("Move to New Window").click();
+        h.run_steps(3);
+        assert_eq!(*launched.lock().unwrap(), [["--new-window", "--page", "1", "/tmp/first.pdf"]]);
+        assert!(key(&h, "first.pdf").is_none(), "the tab moved out of this window");
+
+        // A document never saved to a file has nothing for the new window to open.
+        h.get_by_role_and_label(Role::Tab, "unsaved.pdf").click_secondary();
+        h.run_steps(2);
+        assert!(h.get_by_label("Move to New Window").accesskit_node().is_disabled());
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        let unsaved = key(&h, "unsaved.pdf").unwrap();
+        h.state_mut().tab_action(ctx, Action::NewWindow(unsaved));
+        assert_eq!(launched.lock().unwrap().len(), 1);
+        assert!(key(&h, "unsaved.pdf").is_some());
+
+        // Changes that aren't saved would not come along: the tab stays.
+        let edited = key(&h, "edited.pdf").unwrap();
+        let id = h.state().views[h.state().tab_with_key(edited).unwrap()].id;
+        h.state_mut().session.apply(id, pdfcraft_engine::Edit::InsertBlankPage { at: 0, width: 300.0, height: 400.0 }).unwrap();
+        h.state_mut().tab_action(ctx, Action::NewWindow(edited));
+        assert_eq!(launched.lock().unwrap().len(), 1, "no window for a document with unsaved changes");
+        assert!(key(&h, "edited.pdf").is_some());
+
+        // At a zoom of its own, on page 2: both go along.
+        let third = key(&h, "third.pdf").unwrap();
+        let index = h.state().tab_with_key(third).unwrap();
+        {
+            let view = &mut h.state_mut().views[index];
+            view.go_to_page(1);
+            view.view.zoom = 1.5;
+            view.view.fit = crate::canvas::Fit::None;
+        }
+        h.state_mut().tab_action(ctx, Action::NewWindow(third));
+        assert_eq!(launched.lock().unwrap().last().unwrap(), &["--new-window", "--page", "2", "--zoom", "150", "/tmp/third.pdf"]);
+        assert!(key(&h, "third.pdf").is_none());
+
+        // A window that can't be started leaves the tab where it is.
+        h.state_mut().window_launcher = Some(Arc::new(|_: &[String]| Err("no".to_owned())));
+        let fourth = key(&h, "fourth.pdf").unwrap();
+        h.state_mut().tab_action(ctx, Action::NewWindow(fourth));
+        assert!(key(&h, "fourth.pdf").is_some(), "the tab stays when its window can't start");
+    }
+
+    /// #1683, #2848: a tab dragged out of the strip and let go where no strip or pane takes it (here the tools panel)
+    /// moves to a window of its own.
+    #[test]
+    fn a_tab_dragged_out_of_the_strip_moves_to_a_new_window() {
+        let ctx = &egui::Context::default();
+        let launched: Arc<std::sync::Mutex<Vec<Vec<String>>>> = Arc::default();
+        let record = launched.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            let mut app = app();
+            for name in ["first.pdf", "second.pdf"] {
+                app.open_bytes(ctx, name, Some(format!("/tmp/{name}")), PDF.to_vec()).unwrap();
+            }
+            let record = record.clone();
+            app.window_launcher = Some(Arc::new(move |args: &[String]| {
+                record.lock().unwrap().push(args.to_vec());
+                Ok(())
+            }));
+            app
+        });
+        h.run_steps(8);
+        let from = h.get_by_role_and_label(Role::Tab, "first.pdf").rect().center();
+        // Down on the tab, out of the strip in steps, and up over the tools panel at the left.
+        let to = egui::pos2(120.0, 600.0);
+        let button =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.event(egui::Event::PointerMoved(from));
+        h.event(button(from, true));
+        h.run_steps(1);
+        for step in 1..=12 {
+            h.event(egui::Event::PointerMoved(from.lerp(to, step as f32 / 12.0)));
+            h.run_steps(1);
+        }
+        h.event(button(to, false));
+        h.run_steps(4);
+        assert_eq!(*launched.lock().unwrap(), [["--new-window", "--page", "1", "/tmp/first.pdf"]]);
+        let names: Vec<String> = h.state().views.iter().filter_map(|v| h.state().session.get(v.id).map(|d| d.name.clone())).collect();
+        assert_eq!(names, ["second.pdf"]);
     }
 }
