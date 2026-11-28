@@ -175,6 +175,19 @@ fn indirect_annots_array_is_updated_in_place() {
 }
 
 #[test]
+fn a_comment_added_to_a_page_sharing_its_annots_array_shows_on_that_page_only() {
+    let mut doc = fixture();
+    // Both pages list array object 5, as some producers write it.
+    let first = page_refs(&doc).unwrap()[0];
+    doc.update_dict(first, |d| d.set(b"Annots".to_vec(), Object::Ref(ObjRef::new(5, 0)))).unwrap();
+    let before = list(&doc, 0).len();
+    add_annotation(&mut doc, &new(1, Shape::Rectangle { rect: [0.0, 0.0, 10.0, 10.0] }), &meta("x")).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(list(&doc, 0).len(), before, "the other page doesn't get the comment");
+    assert_eq!(list(&doc, 1).len(), before + 1);
+}
+
+#[test]
 fn invalid_geometry_is_rejected() {
     let mut doc = fixture();
     let bad = [
