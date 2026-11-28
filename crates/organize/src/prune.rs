@@ -150,6 +150,10 @@ impl Pruner<'_> {
             let font_ref = font.as_ref();
             let resolved = self.doc.resolve(font);
             let Some(font) = resolved.as_dict().filter(|f| f.name(b"Subtype") == Some(b"Type3")) else { continue };
+            // A glyph stream can carry resources of its own, as some writers leave them, where
+            // ISO 32000-2 7.8.3 asks for the font's: what they reach is kept too. Only the
+            // streams' dictionaries are walked, never their data.
+            let glyphs = font.get(b"CharProcs").cloned();
             if let Some(glyph_resources) = font.get(b"Resources") {
                 if let Some(r) = font_ref
                     && !self.glyph_fonts.insert(r)
@@ -157,7 +161,13 @@ impl Pruner<'_> {
                     continue;
                 }
                 self.protect_glyph_object(glyph_resources);
+                if let Some(glyphs) = &glyphs {
+                    self.protect_glyph_object(glyphs);
+                }
             } else {
+                if let Some(glyphs) = &glyphs {
+                    self.protect_glyph_object(glyphs);
+                }
                 self.distrust(resources, owner);
                 // This root dictionary is already owned by the content caller. Only its
                 // referenced descendants can share additional owners elsewhere in the file.
@@ -288,6 +298,31 @@ fn resolve_resources(doc: &Document, resources: &Object, page: ObjRef) -> Option
     }
 }
 
+/// The form's default resources (`/AcroForm /DR`), with their owner: the dictionary itself when
+/// it is an indirect object, else the catalog, which no page's resources can be.
+fn form_resources(doc: &Document) -> Option<(Dict, Owner)> {
+    let root = doc.root()?;
+    let catalog = doc.get(root).as_dict().cloned()?;
+    let form = catalog.get(b"AcroForm").map(|f| doc.resolve(f))?.as_dict().cloned()?;
+    let dr = form.get(b"DR")?;
+    match dr {
+        Object::Ref(r) => doc.get(*r).as_dict().cloned().map(|d| (d, Owner::Resources(*r))),
+        Object::Dict(d) => Some((d.clone(), Owner::Page(root))),
+        _ => None,
+    }
+}
+
+/// Whether resource dictionary `resources` names a Type 3 font with no `/Resources` of its own.
+/// A font dictionary too large to read is taken for one.
+fn type3_without_resources(doc: &Document, resources: &Dict) -> bool {
+    let Some(fonts) = resources.get(b"Font").map(|f| doc.resolve(f)) else { return false };
+    let Some(fonts) = fonts.as_dict() else { return false };
+    if fonts.len() > MAX_GLYPH_RESOURCE_WORK {
+        return true;
+    }
+    fonts.iter().any(|(_, f)| doc.resolve(f).as_dict().is_some_and(|f| f.name(b"Subtype") == Some(b"Type3") && f.get(b"Resources").is_none()))
+}
+
 /// Drop the entries `names` never draws. Returns how many were removed.
 fn drop_unused(xobjects: &mut Dict, names: &HashSet<Vec<u8>>) -> usize {
     let unused: Vec<Vec<u8>> = xobjects.iter().map(|(k, _)| k.clone()).filter(|k| !names.contains(k)).collect();
@@ -365,6 +400,17 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
             Ok((data, false)) => pruner.content(&data, &res_dict, owner, 0),
             Ok((_, true)) | Err(_) => pruner.unread(&res_dict, owner, 0),
         }
+    }
+    // The form draws its fields with the fonts of `/AcroForm /DR`. A Type 3 font there draws its
+    // glyphs through resources that may be the very /XObject dictionary a page draws from.
+    if let Some((dr, owner)) = form_resources(pruner.doc) {
+        // A Type 3 font there without /Resources draws with the resources of whichever page shows
+        // the field (ISO 32000-2 9.6.5 d): any page's /XObject entries may be its glyphs', so none
+        // is pruned.
+        if type3_without_resources(pruner.doc, &dr) {
+            return Ok(0);
+        }
+        pruner.protect_type3_resources(&dr, owner);
     }
     let Pruner { used, unsure, glyph_budget_exhausted, too_deep, .. } = pruner;
     if glyph_budget_exhausted || too_deep {

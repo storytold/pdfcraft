@@ -954,6 +954,132 @@ fn doc_b() -> Document {
     open(build(&b, "/Root 1 0 R"))
 }
 
+/// Extract and Split bring the form's drawing settings along with its fields: `/NeedAppearances`
+/// (the viewer draws every field from its value), and the `/DA`, `/DR` with its font, and `/Q`
+/// it draws them with (ISO 32000-2 Table 224). Without them the part shows the stale stored
+/// appearance, and the field's `/DA` names a font no resource dictionary holds.
+#[test]
+fn extracted_fields_keep_the_forms_drawing_settings() {
+    let src = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /NeedAppearances true /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) /Q 1 /DR << /Font << /Helv 6 0 R >> >> >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada) /DA (/Helv 10 Tf 0 g) /Rect [10 10 150 30] /P 3 0 R >>".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    let form = |doc: &Document| {
+        let root = doc.root().unwrap();
+        let catalog = doc.get(root).as_dict().cloned().unwrap();
+        doc.resolve(catalog.get(b"AcroForm").expect("a form")).as_dict().cloned().unwrap()
+    };
+    let out = full_roundtrip(&extract_pages(&src, &[0]).unwrap());
+    let f = form(&out);
+    assert_eq!(f.get(b"NeedAppearances"), Some(&Object::Bool(true)));
+    assert_eq!(f.get(b"Q").and_then(Object::as_int), Some(1));
+    assert!(matches!(f.get(b"DA"), Some(Object::String(s)) if s.bytes == b"/Helv 0 Tf 0 g"), "{:?}", f.get(b"DA"));
+    let dr = out.resolve(f.get(b"DR").expect("/DR")).as_dict().cloned().unwrap();
+    let helv = dr.get(b"Font").map(|x| out.resolve(x)).and_then(|x| x.as_dict().and_then(|x| x.get(b"Helv").cloned())).expect("/Helv");
+    assert_eq!(out.resolve(&helv).as_dict().and_then(|d| d.name(b"BaseFont").map(<[u8]>::to_vec)), Some(b"Helvetica".to_vec()), "the font is copied");
+    // The page without fields makes a part without a form, and gets none of it.
+    let out = full_roundtrip(&extract_pages(&src, &[1]).unwrap());
+    let root = out.root().unwrap();
+    assert!(out.get(root).as_dict().unwrap().get(b"AcroForm").is_none());
+}
+
+/// A `/DR` Type 3 font's glyph that draws through resources other than the font's keeps its image
+/// when the part drops what its pages don't draw: a glyph stream with `/Resources` of its own
+/// (the font's are empty), and a font with none at all, whose glyphs use the page's (ISO 32000-2
+/// 9.6.5 d).
+#[test]
+fn an_extracted_forms_type3_glyphs_keep_the_images_they_draw_from_elsewhere() {
+    let st = |dict: &str, body: &str| format!("<< {dict} /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let image = |v: &str| st("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", v);
+    let objects = |font_resources: &str, glyph: &str| -> Vec<String> {
+        vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /NeedAppearances true /Fields [5 0 R] /DA (/T3 0 Tf 0 g) /DR << /Font << /T3 12 0 R >> >> >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R] /Resources << /XObject 7 0 R >> /Contents 8 0 R >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 11 0 R >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (A) /DA (/T3 10 Tf 0 g) /Rect [10 10 150 30] /P 3 0 R >>".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+            "<< /PageImage 9 0 R /GlyphImage 10 0 R >>".into(),
+            st("", "q 9 0 0 9 0 0 cm /PageImage Do Q"),
+            image("a"),
+            image("b"),
+            st("", "BT (LEFT-BEHIND) Tj ET"),
+            format!("<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /g 13 0 R >> /Encoding << /Differences [65 /g] >> /FirstChar 65 /LastChar 65 /Widths [1] {font_resources} >>"),
+            st(glyph, "1 0 d0 /GlyphImage Do"),
+        ]
+    };
+    for (what, font_resources, glyph) in [
+        ("a glyph stream's own /Resources", "/Resources << >>", "/Resources << /XObject 7 0 R >>"),
+        ("the page's, for a font without /Resources", "", ""),
+    ] {
+        let src = open(build(&objects(font_resources, glyph), "/Root 1 0 R"));
+        let out = full_roundtrip(&extract_pages(&src, &[0]).unwrap());
+        let page = out.get(pages(&out).unwrap()[0].obj);
+        let res = out.resolve(page.as_dict().unwrap().get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = out.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        assert!(xo.get(b"GlyphImage").is_some(), "the image a /DR Type 3 glyph draws through {what} stays: {xo:?}");
+    }
+}
+
+/// The form's `/DR` is copied as resources. Its font names are names, whatever they are: a font
+/// called `/P` next to ones called `/Subtype` and `/Rect` was dropped, the dictionary taken for an
+/// annotation's. A `/DR` that is the catalog brings nothing, not the pages left behind. And a
+/// Type 3 font there that draws its glyph from the `/XObject` dictionary a page shares keeps that
+/// glyph's image when the part drops what its pages don't draw.
+#[test]
+fn an_extracted_forms_resources_are_copied_as_resources() {
+    let st = |dict: &str, body: &str| format!("<< {dict} /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let image = |v: &str| st("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", v);
+    let objects = |dr: &str| -> Vec<String> {
+        vec![
+            format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /NeedAppearances true /Fields [5 0 R] /DA (/P 0 Tf 0 g) /DR {dr} >> >>"),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R] /Resources << /XObject 7 0 R >> /Contents 8 0 R >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 11 0 R >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada) /DA (/P 10 Tf 0 g) /Rect [10 10 150 30] /P 3 0 R >>".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+            "<< /PageImage 9 0 R /GlyphImage 10 0 R >>".into(),
+            st("", "q 9 0 0 9 0 0 cm /PageImage Do Q"),
+            image("a"),
+            image("b"),
+            st("", "BT (LEFT-BEHIND) Tj ET"),
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /g 13 0 R >> /Encoding << /Differences [65 /g] >> /FirstChar 65 /LastChar 65 /Widths [1] /Resources << /XObject 7 0 R >> >>".into(),
+            st("", "0 0 d0 /GlyphImage Do"),
+        ]
+    };
+    let form = |doc: &Document| {
+        let root = doc.root().unwrap();
+        let catalog = doc.get(root).as_dict().cloned().unwrap();
+        doc.resolve(catalog.get(b"AcroForm").expect("a form")).as_dict().cloned().unwrap()
+    };
+
+    let src = open(build(&objects("<< /Font << /P 6 0 R /Subtype 6 0 R /Rect 6 0 R /T3 12 0 R >> >>"), "/Root 1 0 R"));
+    let out = full_roundtrip(&extract_pages(&src, &[0]).unwrap());
+    let dr = out.resolve(form(&out).get(b"DR").expect("/DR")).as_dict().cloned().unwrap();
+    let fonts = dr.get(b"Font").map(|x| out.resolve(x)).and_then(|x| x.as_dict().cloned()).expect("/Font");
+    for name in [&b"P"[..], b"Subtype", b"Rect", b"T3"] {
+        assert!(fonts.get(name).is_some(), "/{} is kept: {fonts:?}", String::from_utf8_lossy(name));
+    }
+    // The page's /XObject dictionary, which the Type 3 glyph draws through too.
+    let page = out.get(pages(&out).unwrap()[0].obj);
+    let res = out.resolve(page.as_dict().unwrap().get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = out.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    assert!(xo.get(b"GlyphImage").is_some(), "the image a /DR Type 3 glyph draws stays: {xo:?}");
+
+    let src = open(build(&objects("1 0 R"), "/Root 1 0 R"));
+    let part = extract_pages(&src, &[0]).unwrap();
+    let bytes = write_full(&part, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(11).any(|w| w == b"LEFT-BEHIND"), "a /DR that is the catalog brings no page left behind");
+    assert!(form(&part).get(b"DR").is_none(), "and is not carried");
+}
+
 /// Write in full, reopen with our reader, and require hayro to agree on the page count.
 fn full_roundtrip(doc: &Document) -> Document {
     let bytes = write_full(doc, &SaveOptions::default()).expect("writes");

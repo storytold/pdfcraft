@@ -325,6 +325,88 @@ pub(super) fn register_fields(dst: &mut Document, fields: &[ObjRef]) -> Result<(
     Ok(())
 }
 
+/// The form-wide entries a field is drawn with (ISO 32000-2 Table 224), from `src`'s form onto
+/// `dst`'s when the copied pages brought fields along (`dst` has a form) and `dst` does not set
+/// the entry itself: `/NeedAppearances`, which asks a viewer to draw every field from its value,
+/// and the defaults it draws them with, `/DA`, `/DR` (its fonts copied, sharing what the pages
+/// already brought) and `/Q`. Without them the copy shows the stored appearances its source told
+/// viewers to redraw, and a field's `/DA` may name a font no resource dictionary holds.
+pub(super) fn carry_form_defaults(dst: &mut Document, src: &Document, copied: HashMap<ObjRef, ObjRef>) -> Result<(), OrganizeError> {
+    let form_of = |doc: &Document| {
+        let catalog = doc.root().and_then(|r| doc.get(r).as_dict().cloned())?;
+        let entry = catalog.get(b"AcroForm")?.clone();
+        let form = doc.resolve(&entry).as_dict().cloned()?;
+        Some((entry.as_ref(), form))
+    };
+    let (Some((_, from)), Some((at, mut form))) = (form_of(src), form_of(dst)) else { return Ok(()) };
+    let mut changed = false;
+    let mut map = Some(copied);
+    for key in [&b"NeedAppearances"[..], b"DA", b"DR", b"Q"] {
+        let Some(value) = from.get(key).filter(|_| !form.contains(key)) else { continue };
+        let value = match key {
+            // The resource dictionary holds fonts by reference: copied, or shared with the pages'.
+            b"DR" => match copy_resources(dst, src, value, map.take().unwrap_or_default())? {
+                Some(dr) => dr,
+                None => continue,
+            },
+            _ => (*src.resolve(value)).clone(),
+        };
+        if !matches!(value, Object::Null) {
+            form.set(key.to_vec(), value);
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(());
+    }
+    match at {
+        Some(r) => dst.set(r, Object::Dict(form)),
+        None => {
+            let root = dst.root().ok_or(OrganizeError::NoPageTree)?;
+            dst.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(form)))?;
+        }
+    }
+    Ok(())
+}
+
+/// The kinds of resource a resource dictionary holds (ISO 32000-2 Table 34).
+const RESOURCE_KINDS: [&[u8]; 8] = [b"ExtGState", b"ColorSpace", b"Pattern", b"Shading", b"XObject", b"Font", b"ProcSet", b"Properties"];
+
+/// Resource dictionary `value` of `src` copied into `dst` as resources, reusing the copies in
+/// `map`; `None` when it is not one. Only the kinds of resource are copied, each a dictionary
+/// from names to resources (`/ProcSet` an array of names), and the dictionaries are built here,
+/// not copied whole: a name such as `/P` or `/Rect` is a resource's name, which copying the
+/// dictionary as an object could take for an annotation's entry and drop. A value that is the
+/// catalog or a page-tree node is no resource, and copying it would bring along pages left
+/// behind, so it is left out, as is a `/DR` that is one.
+fn copy_resources(dst: &mut Document, src: &Document, value: &Object, map: HashMap<ObjRef, ObjRef>) -> Result<Option<Object>, OrganizeError> {
+    let page_tree = |o: &Object| o.as_dict().is_some_and(|d| matches!(d.name(b"Type"), Some(b"Catalog" | b"Pages" | b"Page")));
+    let resolved = src.resolve(value);
+    let Some(dr) = resolved.as_dict().filter(|_| !page_tree(&resolved)) else { return Ok(None) };
+    let mut copier = super::Copier::new(src, map, HashMap::new());
+    let mut out = Dict::new();
+    for kind in RESOURCE_KINDS {
+        let Some(entries) = dr.get(kind).map(|e| src.resolve(e)) else { continue };
+        match &*entries {
+            Object::Dict(named) => {
+                let mut copied = Dict::new();
+                for (name, v) in named.iter() {
+                    if page_tree(&src.resolve(v)) {
+                        continue;
+                    }
+                    copied.set(name.clone(), copier.copy_value(dst, v, None)?);
+                }
+                out.set(kind.to_vec(), Object::Dict(copied));
+            }
+            Object::Array(names) if kind == b"ProcSet" => {
+                out.set(kind.to_vec(), Object::Array(names.iter().filter(|n| n.as_name().is_some()).cloned().collect()));
+            }
+            _ => {}
+        }
+    }
+    Ok(Some(Object::Dict(out)))
+}
+
 /// At most this many field nodes are read when matching copied widgets to their originals.
 const MAX_FIELD_NODES: usize = 100_000;
 
