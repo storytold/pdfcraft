@@ -183,6 +183,29 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
     (out, names)
 }
 
+/// The names an earlier layout pass gave the fields and radio groups it generated, by the SOM
+/// path each names (`/PCSom`), in the order it wrote them, so a new pass gives each object the
+/// name it had ([`crate::layout::KeptNames`]). Only the top level of the AcroForm's `/Fields` is
+/// read, at most [`MAX_FIELDS_SEARCHED`] entries: a generated field or radio group is there, with
+/// its name. The fields above signature fields named by their SOM path, and the fields the file
+/// came with, are not generated names and are skipped.
+pub(crate) fn generated_names(doc: &Document) -> crate::layout::KeptNames {
+    let mut kept = crate::layout::KeptNames::default();
+    let Some(root) = doc.root() else { return kept };
+    let catalog = doc.get(root);
+    let Some(acro) = catalog.as_dict().and_then(|c| c.get(b"AcroForm")).map(|a| doc.resolve(a)) else { return kept };
+    let Some(fields) = acro.as_dict().and_then(|a| a.get(b"Fields")).map(|f| doc.resolve(f)) else { return kept };
+    for field in fields.as_array().map(Vec::as_slice).unwrap_or_default().iter().take(MAX_FIELDS_SEARCHED) {
+        let field = doc.resolve(field);
+        let Some(d) = field.as_dict().filter(|d| !d.contains(NODE_KEY)) else { continue };
+        let text = |key: &[u8]| d.get(key).map(|v| doc.resolve(v)).and_then(|v| v.as_string().map(|s| s.to_text()));
+        if let (Some(som), Some(name)) = (text(SOM_KEY), text(b"T")) {
+            kept.add(som, name);
+        }
+    }
+    kept
+}
+
 /// Required (`Ff` bit 2), which viewers outline when they highlight a form's fields, for widget
 /// `w` when it must be filled in. A radio button's flags are its group's (the group takes it,
 /// [`Emitter::radio_group`]), and a push button keeps no value (ISO 32000-2 §12.7.5.2.2), so
@@ -256,8 +279,8 @@ impl Emitter<'_> {
 
     /// The field of radio group `group`, which button `w` is a kid of: the one an earlier button
     /// made (required too when `w` must be chosen), or a new field of the form, with `w`'s text
-    /// look and the group's SOM path (the button's without its last step).
-    fn radio_group(&mut self, w: &Widget, group: &str) -> Result<ObjRef, XfaError> {
+    /// look and the SOM path `group_som` the layout drew the group at.
+    fn radio_group(&mut self, w: &Widget, group: &str, group_som: &str) -> Result<ObjRef, XfaError> {
         if let Some((p, _)) = self.radio_groups.get(group) {
             let p = *p;
             // A later button that must be chosen makes the group required too.
@@ -277,8 +300,7 @@ impl Emitter<'_> {
         g.set(b"V".to_vec(), Object::name("Off"));
         g.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
         g.set(b"Kids".to_vec(), Object::Array(Vec::new()));
-        let group_som = w.som.rsplit_once('.').map(|(g, _)| g.to_string()).unwrap_or_else(|| w.som.clone());
-        g.set(SOM_KEY.to_vec(), Object::String(PdfString::text(&group_som)));
+        g.set(SOM_KEY.to_vec(), Object::String(PdfString::text(group_som)));
         let p = self.doc.add(Object::Dict(g));
         self.radio_groups.insert(group.to_string(), (p, Vec::new()));
         self.fields.push(p);
@@ -441,9 +463,9 @@ impl Emitter<'_> {
                 d.set(b"AP".to_vec(), Object::Dict(ap));
                 d.set(b"PCItems".to_vec(), Object::Array(w.items.iter().map(|i| Object::String(PdfString::text(i))).collect()));
             }
-            WidgetKind::Radio { group, on, .. } => {
+            WidgetKind::Radio { group, group_som, on, .. } => {
                 top_level = false;
-                let parent = self.radio_group(w, group)?;
+                let parent = self.radio_group(w, group, group_som)?;
                 d.set(b"Parent".to_vec(), Object::Ref(parent));
                 // Appearance states are PDF names, so a space becomes an underscore. The datasets
                 // still hold the template's text (`/PCOn`); writing the name back would drop the selection.

@@ -5,18 +5,31 @@ use super::{
     XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, pattern_to_iso, text,
 };
 
+/// Whether [`Layouter::draw_field`] draws `f` as a field (a widget) rather than as text: every
+/// field but a non-interactive one that isn't a button.
+pub(super) fn shown_as_field(f: &Field) -> bool {
+    f.access != Access::NonInteractive || f.ui == Ui::Button
+}
+
+/// What [`Layouter::draw_field`] needs to draw a radio group's button.
+pub(super) struct RadioButton<'a> {
+    /// The group's field name.
+    pub(super) group: &'a str,
+    /// The SOM path the group's field records ([`WidgetKind::Radio::group_som`]).
+    pub(super) group_som: &'a str,
+    /// The button's on value.
+    pub(super) on: &'a str,
+    /// The tooltip, the button's or else the group's.
+    pub(super) tip: Option<String>,
+    /// Whether the group's data selects this button.
+    pub(super) chosen: bool,
+}
+
 impl Layouter<'_> {
     /// Draw field `f` at `rect`: its border (a button's is its widget's box), its caption, then its
     /// widget, or its value as plain text when it is non-interactive, a barcode, or a text field
     /// taller than its content area. `radio` is set for a group's radio button; `sib` is its SOM index.
-    pub(super) fn draw_field(
-        &mut self,
-        f: &Field,
-        rect: Rect,
-        ctx: &Ctx,
-        radio: Option<(&str, &str, Option<String>, bool)>,
-        sib: usize,
-    ) -> Result<(), XfaError> {
+    pub(super) fn draw_field(&mut self, f: &Field, rect: Rect, ctx: &Ctx, radio: Option<RadioButton<'_>>, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &f.common.border
             && f.ui != Ui::Button
         {
@@ -123,7 +136,7 @@ impl Layouter<'_> {
             }
             _ => {}
         }
-        if f.access == Access::NonInteractive && f.ui != Ui::Button {
+        if !shown_as_field(f) {
             // Shown as text, not as a field.
             return self.draw_value_text(&f.value, ui.inset(&f.ui_margin), &fctx.font, &fctx.para, &fctx.som);
         }
@@ -157,8 +170,8 @@ impl Layouter<'_> {
             (Ui::Button, Some(cap)) => ctx.para.apply(&cap.para).h_align,
             _ => fctx.para.h_align,
         };
-        let name = self.unique_name(f.common.name.as_deref().unwrap_or("field"), f.common.name.is_none());
         let som = som_path();
+        let name = self.unique_name(f.common.name.as_deref().unwrap_or("field"), f.common.name.is_none(), &som);
         let read_only = matches!(f.access, Access::ReadOnly | Access::Protected);
         // The data's value wins over the template's default.
         let data_value: Option<String> =
@@ -186,8 +199,13 @@ impl Layouter<'_> {
                 let r = Rect::new(x, y, s, s);
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "1".into());
                 let (kind, tip, checked) = match radio {
-                    Some((group, on_value, tip, chosen)) => (
-                        WidgetKind::Radio { group: group.to_string(), on: on_value.to_string(), round: f.check_round },
+                    Some(RadioButton { group, group_som, on: on_value, tip, chosen }) => (
+                        WidgetKind::Radio {
+                            group: group.to_string(),
+                            group_som: group_som.to_string(),
+                            on: on_value.to_string(),
+                            round: f.check_round,
+                        },
                         tip.or_else(|| f.tooltip.clone()),
                         chosen,
                     ),

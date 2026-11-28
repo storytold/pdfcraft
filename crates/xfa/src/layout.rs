@@ -196,6 +196,8 @@ struct Layouter<'t> {
     /// The names the template's fields, groups and groups' members take as written
     /// ([`common::collect_names`]), which a made-up `_2`, `_3` name must not take.
     template_names: HashSet<String>,
+    /// The names the layout pass before this one gave its fields and radio groups, by SOM path.
+    kept: KeptNames,
     /// Field values by `id`, for embedded fields in rich text.
     values: HashMap<String, common::EmbedSource>,
     warnings: Vec<String>,
@@ -236,6 +238,33 @@ struct Layouter<'t> {
     master_copies: Vec<Rc<Vec<Node>>>,
 }
 
+/// The PDF field names an earlier layout pass gave the form's fields and radio groups, by the SOM
+/// path of the object each names ([`crate::pdf::generated_names`]). A new pass gives each object
+/// the name it had, while it may still have it, and gives no other object a name in here: a name
+/// keeps meaning the same SOM path, and so the same field or group, when the form is laid out
+/// again, however many objects before it appeared or went away, and a name whose path went away
+/// names nothing rather than another object. A row is its SOM path: rows after a removed one are
+/// renumbered (`removeInstance`), with their data, and take the names of their new paths, as a
+/// SOM expression such as `row[0].Choice` then names them.
+#[derive(Debug, Default)]
+pub(crate) struct KeptNames {
+    /// The names by SOM path, in the order the earlier pass wrote them: a field drawn more than
+    /// once (on each page made from a page area) had a name for each copy, and unnamed radio
+    /// groups have no SOM step of their own, so those of one container share its path.
+    by_som: HashMap<String, Vec<String>>,
+    /// Every name in [`Self::by_som`].
+    all: HashSet<String>,
+}
+
+impl KeptNames {
+    /// Note that the field or radio group at SOM path `som` was named `name`.
+    pub(crate) fn add(&mut self, som: String, name: String) {
+        if self.all.insert(name.clone()) {
+            self.by_som.entry(som).or_default().push(name);
+        }
+    }
+}
+
 /// How many instances of a repeating subform to lay out: what the data holds once it holds
 /// any (rows added or removed), else the template's initial count; at least the minimum
 /// whatever the data holds (XFA 3.3, "Repeating Elements using Occurrence Limits", #4744);
@@ -257,17 +286,28 @@ pub(crate) fn subform_instances(tpl: &Template, data: Option<&DataNode>, sf: &Su
 
 /// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).
 pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError> {
-    layout_inner(tpl, data, None)
+    layout_inner(tpl, data, None, KeptNames::default())
 }
 
 /// [`layout`], with what scripts set (`ov`) applied to page-master content page by page: a
 /// field hidden on the second page made from a page area is hidden there only. The rest of the
 /// template takes `ov` before this ([`crate::script::apply_overrides`]).
 pub fn layout_with_overrides(tpl: &Template, data: Option<&DataNode>, ov: &crate::script::Overrides) -> Result<Form, XfaError> {
-    layout_inner(tpl, data, Some(ov))
+    layout_inner(tpl, data, Some(ov), KeptNames::default())
 }
 
-fn layout_inner(tpl: &Template, data: Option<&DataNode>, overrides: Option<&crate::script::Overrides>) -> Result<Form, XfaError> {
+/// [`layout_with_overrides`], giving each field and radio group the name `kept` says an earlier
+/// pass gave it ([`KeptNames`]).
+pub(crate) fn layout_keeping_names(
+    tpl: &Template,
+    data: Option<&DataNode>,
+    ov: &crate::script::Overrides,
+    kept: KeptNames,
+) -> Result<Form, XfaError> {
+    layout_inner(tpl, data, Some(ov), kept)
+}
+
+fn layout_inner(tpl: &Template, data: Option<&DataNode>, overrides: Option<&crate::script::Overrides>, kept: KeptNames) -> Result<Form, XfaError> {
     let areas = match &tpl.root.page_set {
         Some(ps) if !ps.areas.is_empty() => ps.areas.clone(),
         _ => vec![PageArea {
@@ -299,6 +339,7 @@ fn layout_inner(tpl: &Template, data: Option<&DataNode>, overrides: Option<&crat
         page_taken: Vec::new(),
         taken: HashSet::new(),
         template_names,
+        kept,
         values,
         warnings: Vec::new(),
         warned: HashSet::new(),
