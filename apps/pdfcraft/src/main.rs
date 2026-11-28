@@ -371,12 +371,39 @@ fn native_options(integrated: bool, renderer: eframe::Renderer) -> eframe::Nativ
     {
         viewport = viewport.with_icon(egui::IconData::default());
     }
-    // Dock, taskbar, Alt-Tab and launcher icon when running unbundled.
-    #[cfg(not(target_os = "windows"))]
-    match eframe::icon_data::from_png_bytes(APP_ICON_PNG) {
-        Ok(icon) => viewport = viewport.with_icon(icon),
-        Err(e) => log::warn!("app icon: {e}"),
-    }
+	// Keep the bundled .icns icon on macOS. An empty icon prevents
+	// eframe from replacing it with its default icon at launch.
+	#[cfg(target_os = "macos")]
+	{
+		let in_app_bundle = std::env::current_exe().ok().is_some_and(|exe| {
+			let macos = exe.parent();
+			let contents = macos.and_then(std::path::Path::parent);
+			let bundle = contents.and_then(std::path::Path::parent);
+	
+			macos.and_then(std::path::Path::file_name) == Some(std::ffi::OsStr::new("MacOS"))
+				&& contents.and_then(std::path::Path::file_name)
+					== Some(std::ffi::OsStr::new("Contents"))
+				&& bundle
+					.and_then(std::path::Path::extension)
+					.is_some_and(|ext| ext == "app")
+		});
+	
+		if in_app_bundle {
+			viewport = viewport.with_icon(egui::IconData::default());
+		} else {
+			match eframe::icon_data::from_png_bytes(APP_ICON_PNG) {
+				Ok(icon) => viewport = viewport.with_icon(icon),
+				Err(e) => log::warn!("app icon: {e}"),
+			}
+		}
+	}
+	
+	// Other desktop targets, such as Linux and FreeBSD, keep the runtime icon.
+	#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+	match eframe::icon_data::from_png_bytes(APP_ICON_PNG) {
+		Ok(icon) => viewport = viewport.with_icon(icon),
+		Err(e) => log::warn!("app icon: {e}"),
+	}
     if integrated {
         // macOS keeps its traffic lights over the app's bar; elsewhere the app's bar is the whole
         // title bar, with its own caption buttons.
