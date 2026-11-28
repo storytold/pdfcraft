@@ -17,7 +17,8 @@
 //!   source structure tree is not copied;
 //! - named destinations are resolved against the source's name tree and become explicit ones;
 //! - layers (optional content groups) used by the pages are registered in the destination's
-//!   `/OCProperties`, keeping their default on/off state.
+//!   `/OCProperties`, keeping their default on/off state and the source configuration's name,
+//!   base state and order.
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -502,6 +503,9 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
     let mut all = list(&props, b"OCGs", dst);
     let mut config = props.get(b"D").map(|d| dst.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap_or_default();
     let (mut on, mut off, mut order) = (list(&config, b"ON", dst), list(&config, b"OFF", dst), list(&config, b"Order", dst));
+    // A destination that already lists its layers keeps that order. One that doesn't gets the
+    // source's `/Order` (group labels included), not the order the pages happened to refer to them.
+    let dest_had_order = !order.is_empty();
     for (from, to) in ocgs {
         let r = Object::Ref(*to);
         if all.contains(&r) {
@@ -510,6 +514,32 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
         all.push(r.clone());
         order.push(r.clone());
         if hidden(&Object::Ref(*from)) { off.push(r) } else { on.push(r) }
+    }
+    if !dest_had_order && let Some(source_order) = src_config.get(b"Order") {
+        let copied: HashMap<ObjRef, ObjRef> = ocgs.iter().copied().collect();
+        if let Some(Object::Array(mut mapped)) = remap_order(src, source_order, &copied) {
+            let mut seen = HashSet::new();
+            order_refs(&Object::Array(mapped.clone()), &mut seen);
+            for (_, to) in ocgs {
+                if seen.insert(*to) {
+                    mapped.push(Object::Ref(*to));
+                }
+            }
+            order = mapped;
+        }
+    }
+    if config_name(dst, &config).is_none() {
+        let name = config_name(src, &src_config).unwrap_or_else(|| Object::String(pdfcraft_cos::PdfString::text("Default")));
+        config.set(b"Name".to_vec(), name);
+    }
+    if config.get(b"BaseState").is_none()
+        && let Some(name) = src_config.get(b"BaseState").map(|b| src.resolve(b)).and_then(|b| match b.as_name() {
+            Some(b"OFF") => Some("OFF"),
+            Some(b"ON") => Some("ON"),
+            _ => None,
+        })
+    {
+        config.set(b"BaseState".to_vec(), Object::name(name));
     }
     props.set(b"OCGs".to_vec(), Object::Array(all));
     config.set(b"ON".to_vec(), Object::Array(on));
@@ -521,6 +551,46 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
         None => dst.update_dict(root, |c| c.set(b"OCProperties".to_vec(), Object::Dict(props)))?,
     }
     Ok(())
+}
+
+/// A non-empty `/Name` on an optional-content configuration, as its own string.
+fn config_name(doc: &Document, config: &Dict) -> Option<Object> {
+    let text = config.get(b"Name").map(|n| doc.resolve(n)).and_then(|n| n.as_string().filter(|s| !s.bytes.is_empty()).cloned())?;
+    Some(Object::String(text))
+}
+
+/// One `/Order` entry with copied groups rewritten through `copied`. A label stays. A group that
+/// was not copied is dropped, and so is an array that then holds nothing.
+fn remap_order(src: &Document, value: &Object, copied: &HashMap<ObjRef, ObjRef>) -> Option<Object> {
+    if let Some(r) = value.as_ref()
+        && let Some(to) = copied.get(&r)
+    {
+        return Some(Object::Ref(*to));
+    }
+    let resolved = src.resolve(value);
+    if let Some(text) = resolved.as_string().filter(|s| !s.bytes.is_empty()) {
+        return Some(Object::String(text.clone()));
+    }
+    resolved.as_array().and_then(|items| remap_order_array(src, items, copied))
+}
+
+fn remap_order_array(src: &Document, items: &[Object], copied: &HashMap<ObjRef, ObjRef>) -> Option<Object> {
+    let mapped: Vec<Object> = items.iter().filter_map(|item| remap_order(src, item, copied)).collect();
+    (!mapped.is_empty()).then_some(Object::Array(mapped))
+}
+
+fn order_refs(value: &Object, out: &mut HashSet<ObjRef>) {
+    match value {
+        Object::Ref(r) => {
+            out.insert(*r);
+        }
+        Object::Array(items) => {
+            for item in items {
+                order_refs(item, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The objects `value` (of `src`) refers to, directly or through others, each once whatever the
