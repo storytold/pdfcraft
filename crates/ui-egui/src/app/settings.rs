@@ -137,6 +137,14 @@ pub struct Comment {
     pub comment_styles: Option<String>,
     /// JSON text: one entry per tool.
     pub comment_font_sizes: Option<String>,
+    /// Summarize Comments' layout, by its key (#6791).
+    pub summary_layout: Option<String>,
+    /// Summarize Comments' sort order, by its name.
+    pub summary_sort: Option<String>,
+    /// Summarize Comments' paper, by its name; none takes the paper the document is.
+    pub summary_paper: Option<String>,
+    /// Summarize Comments shows the pages without comments too.
+    pub summary_pages_without_comments: Option<bool>,
 }
 
 impl Comment {
@@ -615,7 +623,8 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
 
     let comment = {
         let r = Reader::new(&root, Comment::KEY, &mut errors);
-        Comment { comment_styles: r.text("comment_styles"), comment_font_sizes: r.text("comment_font_sizes") }
+        // The last release kept no Summarize Comments choices (#6791).
+        Comment { comment_styles: r.text("comment_styles"), comment_font_sizes: r.text("comment_font_sizes"), ..Comment::default() }
     };
 
     let signature = {

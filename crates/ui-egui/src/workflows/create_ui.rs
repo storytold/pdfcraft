@@ -114,13 +114,25 @@ impl PdfCraftApp {
         // The reading-colours preference is app-wide: the newly created document starts with it.
         self.session.set_reading_colors(id, self.reading_colors);
         let info = &self.session.get(id).ok_or_else(|| tl!("the new document could not be opened").to_string())?.info;
-        let mut view = crate::DocView::new(id, info, self.view_defaults, self.highlight_fields);
+        let (initial, has_comments) = (self.session.get(id).map(|d| d.initial_view()).unwrap_or_default(), !info.annotations.is_empty());
+        let view = crate::DocView::new(id, info, self.view_defaults, self.highlight_fields);
+        self.views.push(view);
+        let index = self.views.len() - 1;
+        self.active = Some(index);
+        // A document with comments opens with them listed, as an opened one does (a right panel
+        // the user closed stays closed; Read mode opens with the panes closed).
+        if has_comments && self.right().is_none() && !self.right_panel_closed && self.mode_override.unwrap_or(self.default_mode) != crate::Mode::Read
+        {
+            self.set_right(Some(crate::RightPanel::Comments));
+        }
+        // Shown as it asks to be, as an opened file is: a comment summary opens with each sheet
+        // whole in view, in a two-page view for sequence numbers on separate pages (#6791).
+        self.apply_initial_view(index, &initial);
+        // After the initial view, so full screen shows one fitted page and leaving it comes back to it.
         // PLAN: assumed `full_screen() -> bool` (pdf-shell-w8)
         if self.full_screen() {
-            view.enter_full_screen(self.full_screen_fill);
+            self.views[index].enter_full_screen(self.full_screen_fill);
         }
-        self.views.push(view);
-        self.active = Some(self.views.len() - 1);
         Ok(())
     }
 

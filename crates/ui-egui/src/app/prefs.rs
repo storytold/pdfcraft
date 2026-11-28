@@ -225,7 +225,14 @@ impl PdfCraftApp {
             .collect();
         let font_sizes: Vec<serde_json::Value> =
             self.comment_prefs.font_sizes().map(|(t, size)| serde_json::json!({ "tool": t.command(), "font_size": size })).collect();
-        let comment = settings::Comment { comment_styles: json_text(&styles), comment_font_sizes: json_text(&font_sizes) };
+        let comment = settings::Comment {
+            comment_styles: json_text(&styles),
+            comment_font_sizes: json_text(&font_sizes),
+            summary_layout: Some(self.summary_layout.key().to_string()),
+            summary_sort: Some(self.summary_sort.name().to_string()),
+            summary_paper: self.summary_paper.map(str::to_string),
+            summary_pages_without_comments: Some(self.summary_pages_without_comments),
+        };
         let signature = settings::Signature {
             signatures: Some({
                 let mut slots = craft::review::ui::signature::SignatureSettings::default();
@@ -558,6 +565,7 @@ impl PdfCraftApp {
 
     /// The per-tool comment styles and font sizes.
     fn apply_comment(&mut self, c: &settings::Comment) {
+        self.apply_summary(c);
         // Per-tool comment styles (#340): each field goes through its clamping setter, so a
         // malformed or hostile entry is clamped or ignored rather than trusted.
         if let Some(styles) = parsed(&c.comment_styles).as_ref().and_then(serde_json::Value::as_array) {
@@ -611,6 +619,23 @@ impl PdfCraftApp {
                     self.comment_prefs.set_font_size(tool, size);
                 }
             }
+        }
+    }
+
+    /// Summarize Comments' choices (#6791); a value this version doesn't offer leaves the one
+    /// before, and a paper it doesn't offer the document's.
+    fn apply_summary(&mut self, c: &settings::Comment) {
+        if let Some(layout) = c.summary_layout.as_deref().and_then(pdfcraft_engine::SummaryLayout::parse) {
+            self.summary_layout = layout;
+        }
+        if let Some(sort) = c.summary_sort.as_deref().and_then(pdfcraft_engine::SummarySort::parse) {
+            self.summary_sort = sort;
+        }
+        if let Some(name) = c.summary_paper.as_deref() {
+            self.summary_paper = pdfcraft_engine::SUMMARY_PAPERS.iter().copied().find(|p| *p == name);
+        }
+        if let Some(on) = c.summary_pages_without_comments {
+            self.summary_pages_without_comments = on;
         }
     }
 
