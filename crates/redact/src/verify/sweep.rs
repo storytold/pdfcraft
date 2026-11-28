@@ -495,7 +495,7 @@ fn sweep_objects(needles: &[Needle], doc: &Document, depth: usize, tag: &str, ac
                 for n in acc.bytes(Surface::DecodedStreams, needles, &s.raw, MIN_STRUCTURED_NEEDLE) {
                     acc.survivor(Surface::DecodedStreams, format!("{loc} (raw)"), Some(n));
                 }
-                match acc.ctx.decode(s) {
+                match acc.ctx.decode(doc, s) {
                     Ok(d) => {
                         let loc = format!("{loc} (decoded)");
                         for (n, c) in acc.counts(Surface::DecodedStreams, needles, &d, MIN_STRUCTURED_NEEDLE) {
@@ -508,7 +508,7 @@ fn sweep_objects(needles: &[Needle], doc: &Document, depth: usize, tag: &str, ac
                     Err(()) => acc.raw_only(Surface::DecodedStreams),
                 }
             } else {
-                match acc.ctx.decode(s) {
+                match acc.ctx.decode(doc, s) {
                     // The boxes and labels this run drew are not text to look for.
                     Ok(d) if acc.ctx.is_overlay(&d) => overlay_raw.push(s.raw.to_vec()),
                     Ok(d) => {
@@ -578,7 +578,7 @@ fn sweep_attachments(needles: &[Needle], doc: &Document, embedded: &BTreeSet<u32
             acc.problem(Surface::EmbeddedFiles, format!("{loc} is not a stream"));
             continue;
         };
-        let payload = match acc.ctx.decode(s) {
+        let payload = match acc.ctx.decode(doc, s) {
             Ok(p) => p,
             Err(()) => {
                 acc.problem(Surface::EmbeddedFiles, format!("{loc} can't be decoded in full"));
@@ -742,7 +742,7 @@ pub(super) fn sweep_xmp(needles: &[Needle], doc: &Document, tag: &str, acc: &mut
         acc.problem(Surface::Xmp, format!("{loc} is not a stream"));
         return;
     };
-    let Ok(data) = acc.ctx.decode(s) else {
+    let Ok(data) = acc.ctx.decode(doc, s) else {
         acc.problem(Surface::Xmp, format!("{loc} can't be decoded in full"));
         return;
     };

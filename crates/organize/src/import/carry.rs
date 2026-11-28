@@ -23,29 +23,48 @@ pub(super) fn collect_attachments(dst: &mut Document, src: &Document, out: &mut 
 
 /// Write attachments as a flat, sorted `/EmbeddedFiles` name tree; duplicate names get " (2)"…
 pub(crate) fn set_attachments(dst: &mut Document, mut entries: Vec<(Vec<u8>, Object)>) -> Result<(), OrganizeError> {
+    write_attachments(dst, &mut entries, true)
+}
+
+/// Rewrite the name tree without changing attachment keys (used when editing one file spec).
+pub(crate) fn set_attachments_exact(dst: &mut Document, mut entries: Vec<(Vec<u8>, Object)>) -> Result<(), OrganizeError> {
+    write_attachments(dst, &mut entries, false)
+}
+
+/// Write a flat, sorted `/EmbeddedFiles` name tree, optionally renaming duplicate keys.
+fn write_attachments(dst: &mut Document, entries: &mut [(Vec<u8>, Object)], uniquify: bool) -> Result<(), OrganizeError> {
     if entries.is_empty() {
         return Ok(());
     }
-    // Names are compared and numbered as text: a key written as UTF-16 (a name with an accent
-    // or Chinese letters) must not get ASCII bytes appended to it.
-    let mut seen = std::collections::HashSet::new();
-    for (k, _) in entries.iter_mut() {
-        let base = pdfcraft_cos::PdfString::literal(k.clone()).to_text();
-        let mut text = base.clone();
-        let mut n = 2;
-        while !seen.insert(text.clone()) {
-            text = format!("{base} ({n})");
-            n += 1;
-        }
-        if text != base {
-            *k = pdfcraft_cos::PdfString::text(&text).bytes;
+    // Names are compared and numbered as text, and a renamed key keeps the encoding it came in:
+    // " (2)" is appended as UTF-16 to a UTF-16 key (either byte order) and as bytes to a
+    // PDFDocEncoding one, so a name with an accent or Chinese letters never gets ASCII bytes
+    // appended to it and the rest of the key stays byte for byte as the file wrote it.
+    if uniquify {
+        let reserved: std::collections::HashSet<String> = entries.iter().map(|(k, _)| key_text(k)).collect();
+        let mut seen = std::collections::HashSet::new();
+        for (k, _) in entries.iter_mut() {
+            let base = key_text(k);
+            if seen.insert(base.clone()) {
+                continue;
+            }
+            let mut n = 2;
+            let suffix = loop {
+                let suffix = format!(" ({n})");
+                n += 1;
+                let text = format!("{base}{suffix}");
+                if !reserved.contains(&text) && seen.insert(text) {
+                    break suffix;
+                }
+            };
+            append_in_encoding(k, &suffix);
         }
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     let mut names = Vec::new();
-    for (k, v) in entries {
-        names.push(Object::String(pdfcraft_cos::PdfString::literal(k)));
-        names.push(v);
+    for (k, v) in entries.iter() {
+        names.push(Object::String(pdfcraft_cos::PdfString::literal(k.clone())));
+        names.push(v.clone());
     }
     let mut tree = Dict::new();
     tree.set(b"Names".to_vec(), Object::Array(names));
@@ -98,9 +117,13 @@ pub(super) fn source_outline(src: &Document, pages: HashMap<ObjRef, ObjRef>) -> 
         .and_then(|r| src.get(r).as_dict().cloned())
         .and_then(|c| c.get(b"Outlines").map(|o| src.resolve(o)))
         .and_then(|o| o.as_dict().and_then(|d| d.reference(b"First")));
+    let whole = crate::page_count(src).is_ok_and(|n| pages.len() >= n);
     let mapper = Copier::new(src, HashMap::new(), pages);
     let mut budget = 10_000usize;
-    outline_level(&mapper, first, 0, &mut budget)
+    let outline = outline_level(&mapper, first, 0, &mut budget);
+    // Of some of the pages, only the bookmarks that lead to a copied page and those above them:
+    // the others would carry their titles along into a file without their pages.
+    if whole { outline } else { kept_bookmarks(outline) }
 }
 
 /// `nodes` without the bookmarks whose page was not copied (no destination left), unless a bookmark
@@ -137,10 +160,11 @@ fn outline_level(m: &Copier<'_>, first: Option<ObjRef>, depth: u8, budget: &mut 
         let target = item.get(b"Dest").cloned().or_else(|| {
             let a = m.src.resolve(item.get(b"A")?);
             let a = a.as_dict()?;
-            (a.name(b"S") == Some(b"GoTo")).then(|| a.get(b"D").cloned()).flatten()
+            let is_goto = a.get(b"S").map(|s| m.src.resolve(s)).as_deref().and_then(Object::as_name) == Some(b"GoTo");
+            is_goto.then(|| a.get(b"D").cloned()).flatten()
         });
         let dest = target.and_then(|t| m.map_dest(&t));
-        let open = item.int(b"Count").is_some_and(|c| c > 0);
+        let open = item.get(b"Count").and_then(|c| m.src.resolve(c).as_int()).is_some_and(|c| c > 0);
         let children = outline_level(m, item.reference(b"First"), depth + 1, budget);
         made.push(OutlineNode { title, colour, flags, dest, open, children });
     }
@@ -230,4 +254,109 @@ pub(super) fn add_outline(doc: &mut Document, marks: &[Mark]) -> Result<(), Orga
         c.set(b"PageMode".to_vec(), Object::name("UseOutlines"));
     })?;
     Ok(())
+}
+
+/// A name-tree key as text: UTF-16 with either byte-order mark, else PDFDocEncoding.
+fn key_text(key: &[u8]) -> String {
+    match key {
+        [0xff, 0xfe, rest @ ..] => {
+            let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+            String::from_utf16_lossy(&units)
+        }
+        _ => pdfcraft_cos::PdfString::literal(key.to_vec()).to_text(),
+    }
+}
+
+/// Appends `suffix` (ASCII) to `key` in the key's own encoding.
+fn append_in_encoding(key: &mut Vec<u8>, suffix: &str) {
+    match key.get(..2) {
+        Some([0xfe, 0xff]) | Some([0xff, 0xfe]) => {
+            // A leftover last byte is not a unit (readers leave it out when decoding). Drop it
+            // so the suffix stays aligned, then append in the key's byte order.
+            if key.len() % 2 == 1 {
+                key.pop();
+            }
+            if key[0] == 0xfe {
+                key.extend(suffix.encode_utf16().flat_map(u16::to_be_bytes));
+            } else {
+                key.extend(suffix.encode_utf16().flat_map(u16::to_le_bytes));
+            }
+        }
+        _ => key.extend_from_slice(suffix.as_bytes()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::attachment_keys;
+
+    fn build(bodies: &[&str]) -> Document {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, b) in bodies.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{b}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+        Document::open(Arc::new(out)).expect("opens")
+    }
+
+    #[test]
+    fn set_attachments_renames_a_truncated_utf16_key_without_misaligning_the_suffix() {
+        // A UTF-16 "A" with a leftover trailing byte: to_text ignores that byte, and a
+        // byte-preserving append of " (2)" would pair it with the suffix and store the wrong name.
+        let bodies = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+        ];
+        for (order, truncated) in [("BE", [0xfe, 0xff, 0x00, 0x41, 0x00].as_slice()), ("LE", [0xff, 0xfe, 0x41, 0x00, 0x00].as_slice())] {
+            let mut doc = build(&bodies);
+            set_attachments(&mut doc, vec![(truncated.to_vec(), Object::Null), (truncated.to_vec(), Object::Null)]).unwrap();
+            let entries = crate::attachments::entries(&doc);
+            let names: Vec<String> = entries.iter().map(|(k, _)| key_text(k)).collect();
+            assert_eq!(names, ["A", "A (2)"], "{order}");
+            let renamed = entries.iter().map(|(k, _)| k).find(|k| key_text(k) == "A (2)").expect("{order}: renamed key");
+            assert_eq!(renamed.len() % 2, 0, "{order}: the renamed key is a complete UTF-16 string");
+        }
+    }
+
+    #[test]
+    fn set_attachments_does_not_clobber_later_numbered_attachment_name() {
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+        ]);
+        let entries =
+            vec![(b"report.pdf".to_vec(), Object::Null), (b"report.pdf".to_vec(), Object::Null), (b"report.pdf (2)".to_vec(), Object::Null)];
+        set_attachments(&mut doc, entries).unwrap();
+        assert_eq!(attachment_keys(&doc), ["report.pdf", "report.pdf (2)", "report.pdf (3)"]);
+    }
+
+    #[test]
+    fn source_outline_resolves_indirect_goto_action_type_and_count() {
+        let src = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+            "<< /Type /Outlines /First 5 0 R /Last 5 0 R /Count 1 >>",
+            "<< /Title (Parent) /Parent 4 0 R /First 6 0 R /Last 6 0 R /Count 8 0 R /A << /S 7 0 R /D [3 0 R /Fit] >> >>",
+            "<< /Title (Child) /Parent 5 0 R /Dest [3 0 R /Fit] >>",
+            "/GoTo",
+            "1",
+        ]);
+        let nodes = source_outline(&src, HashMap::from([(ObjRef::new(3, 0), ObjRef::new(3, 0))]));
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].dest.is_some());
+        assert!(nodes[0].open);
+    }
 }

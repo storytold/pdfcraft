@@ -22,6 +22,7 @@ mod content;
 mod conventions;
 pub mod file_access;
 mod forms;
+mod hairlines;
 mod layers;
 mod links;
 #[cfg(feature = "mcp")]
@@ -29,6 +30,7 @@ pub mod mcp;
 mod measure;
 mod model3d;
 mod model_render;
+mod print_colour;
 mod printing;
 mod reading;
 mod redact;
@@ -41,14 +43,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pdfcraft_engine::{BlockKey, CombineSource, DocId, Document, Edit, Session, TextBlock, block_overlapping, commands};
-use pdfcraft_platform::staging::{StagingName, staging_suffixes};
 use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
 use serde_json::{Value, json};
 
 pub use pdfcraft_render::Pixels;
 pub use tools::{ToolDef, tools};
 
-use file_access::foreign_share;
 use text_cache::TextCache;
 
 mod assemble;
@@ -71,10 +71,8 @@ use pages::{DEFAULT_DPI, MAX_DPI, encode_png, rendered_content};
 use pages::{FIND_FIRST_BATCH, FIND_MAX_WARNING_BYTES, FIND_MAX_WARNINGS, extract_parallel};
 #[cfg(test)]
 pub(crate) use paths::MAX_INPUT;
-use paths::{child, lexical, unused, write_atomic};
+use paths::{child, lexical, write_atomic};
 pub(crate) use paths::{read_input, read_input_bytes};
-#[cfg(test)]
-use paths::{write_atomic_synced, write_atomic_with};
 
 struct OcrReview {
     handle: u64,
@@ -101,6 +99,8 @@ pub struct Automation {
     /// Review sessions held for `ocr_words` (a guard and the pages read), by document.
     ocr_reviews: HashMap<DocId, OcrReview>,
     next_ocr_review: u64,
+    /// What object_copy copied, for object_paste into any open document.
+    objects_clipboard: Option<pdfcraft_engine::ObjectClipboard>,
 }
 
 impl Default for Automation {
@@ -121,6 +121,7 @@ impl Automation {
             evicted: HashSet::new(),
             ocr_reviews: HashMap::new(),
             next_ocr_review: 0,
+            objects_clipboard: None,
         }
     }
 

@@ -64,6 +64,7 @@ impl Automation {
             }
             "doc_close" => self.doc_close(&a)?,
             "doc_save" => self.doc_save(&a)?,
+            "doc_rename" => self.doc_rename(&a)?,
             "doc_set_info" => {
                 let edit = Edit::SetInfo { key: a.str("key")?.into(), value: a.str("value")?.into() };
                 self.apply(&a, edit)?
@@ -74,6 +75,7 @@ impl Automation {
             "text_extract" => self.text_extract(&a)?,
             "text_word_count" => self.text_word_count(&a)?,
             "text_find" => self.text_find(&a)?,
+            "text_replace" => self.text_replace(&a)?,
             "page_rotate" => {
                 let degrees = a.int("degrees")?;
                 if degrees % 90 != 0 {
@@ -201,6 +203,7 @@ impl Automation {
             "bookmark_export" => self.bookmark_export(&a)?,
             "bookmark_import" => self.bookmark_import(&a)?,
             "bookmark_copy" => self.bookmark_copy(&a)?,
+            "bookmark_suggest" => self.bookmark_suggest(&a)?,
             "bookmark_add" => {
                 let page = self.page(&a)?;
                 let parent = a.opt_path("parent")?.unwrap_or_default();
@@ -314,6 +317,22 @@ impl Automation {
                 let at = self.opt_position(&a, "at")?;
                 self.apply(&a, Edit::DuplicatePages { pages, at })?
             }
+            "page_templates" => {
+                let templates: Vec<Value> = self.doc(&a)?.templates().into_iter().map(|t| json!({ "name": t.name, "hidden": t.hidden })).collect();
+                json!({ "templates": templates })
+            }
+            "page_template_spawn" => {
+                let at = self.opt_position(&a, "at")?.unwrap_or(self.doc(&a)?.info.pages.len());
+                let edit = Edit::SpawnTemplate { name: a.str("name")?.into(), at, rename: a.opt_bool("rename")?.unwrap_or(true) };
+                self.apply(&a, edit)?
+            }
+            "page_template_set_hidden" => self.apply(
+                &a,
+                Edit::SetTemplateHidden {
+                    name: a.str("name")?.into(),
+                    hidden: a.opt_bool("hidden")?.ok_or_else(|| ToolError::InvalidArgs("hidden is required".into()))?,
+                },
+            )?,
             "page_set_box" => self.page_set_box(&a)?,
             "page_transition_set" => self.page_transition_set(&a)?,
             "doc_create" => self.doc_create(&a)?,
@@ -467,6 +486,7 @@ impl Automation {
                         "bring_forward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringForward),
                         "send_backward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward),
                         "remove_crop" => ImageEdit::RemoveCrop,
+                        "ungroup" => ImageEdit::Ungroup,
                         "replace" => {
                             let path = self.resolve(a.str("path")?, false)?;
                             let bytes = read_input(&path)?;
@@ -479,6 +499,10 @@ impl Automation {
                     };
                     self.apply(&a, Edit::EditPageImage { page, index, change })?
                 }
+            }
+            "text_prepare" => {
+                let page = self.page(&a)?;
+                self.prepare_text(&a, page)?
             }
             "text_paragraphs" => {
                 let page = self.page(&a)?;
@@ -608,6 +632,7 @@ impl Automation {
                     size: a.opt_num("size")?,
                     underline: a.opt_bool("underline")?,
                     line_spacing: a.opt_num("line_spacing")?,
+                    paragraph_spacing: a.opt_num("paragraph_spacing")?,
                     char_spacing: a.opt_num("char_spacing")?,
                     scale: a.opt_num("scale")?,
                     width,
@@ -695,7 +720,7 @@ impl Automation {
                 summary(self.session.get(new).ok_or_else(|| failed("the document vanished"))?)
             }
             "doc_export_images" | "doc_export_text" | "doc_export_all_images" => self.export(name, &a)?,
-            "doc_header_footer" | "doc_watermark" | "doc_background" | "doc_remove_marks" => self.marks(name, &a)?,
+            "doc_header_footer" | "doc_watermark" | "doc_background" | "doc_printer_marks" | "doc_remove_marks" => self.marks(name, &a)?,
             "doc_backdrops" => self.backdrops(&a)?,
             "doc_unprotect" => {
                 let mut out = self.apply(&a, Edit::RemoveProtection)?;
@@ -704,11 +729,8 @@ impl Automation {
             }
             "form_fields" => self.form_fields(&a)?,
             "form_fill" => self.form_fill(&a)?,
-            "form_set_image" => {
-                let path = self.resolve(a.str("path")?, false)?;
-                let bytes = read_input(&path)?;
-                self.apply(&a, Edit::SetFieldImage { name: a.str("field")?.to_owned(), image: Arc::new(bytes) })?
-            }
+            "form_focus" => self.form_focus(&a)?,
+            "form_set_image" => self.form_set_image(&a)?,
             "form_reset" => self.form_reset(&a)?,
             "form_add_field" => self.form_add_field(&a)?,
             "form_add_field_table" => self.form_add_field_table(&a)?,
@@ -723,16 +745,21 @@ impl Automation {
             "redact_clear" => self.redact_clear(&a)?,
             "doc_hidden_info" => self.doc_hidden_info(&a)?,
             "printers" => self.printers()?,
+            "print_color_profiles" => self.print_color_profiles()?,
             "printer_options" => self.printer_options(&a)?,
+            "printer_papers" => self.printer_papers(&a)?,
             "link_list" => self.link_list(&a)?,
             "link_open" => self.link_open(&a)?,
             "link_add" => self.link_add(&a)?,
             "link_edit" => self.link_edit(&a)?,
             "link_delete" => self.link_delete(&a)?,
+            "link_run_javascript" => self.link_run_javascript(&a)?,
             "links_from_urls" => self.links_from_urls(&a)?,
             "links_remove" => self.links_remove(&a)?,
             "object_list" => self.object_list(&a)?,
             "object_move" => self.object_move(&a)?,
+            "object_copy" => self.object_copy(&a)?,
+            "object_paste" => self.object_paste(&a)?,
             "content_list" => self.content_list(&a)?,
             "page_add_text" => self.page_add_text(&a)?,
             "page_add_image" => self.page_add_image(&a)?,
@@ -740,6 +767,7 @@ impl Automation {
             "content_delete" => self.content_delete(&a)?,
             "content_copy" => self.content_copy(&a)?,
             "doc_print" => self.doc_print(&a)?,
+            "doc_fix_hairlines" => self.fix_hairlines(&a)?,
             "attachment_add" => {
                 let path = self.resolve(a.str("path")?, false)?;
                 let bytes = read_input(&path)?;
@@ -757,6 +785,49 @@ impl Automation {
             }
             "attachment_delete" => {
                 let edit = Edit::DeleteAttachment { key: a.str("name")?.into() };
+                self.apply(&a, edit)?
+            }
+            "doc_convert_colours" => self.convert_colours(&a)?,
+            "attachment_edit" => {
+                let key = a.opt_str("key")?;
+                let name = a.opt_str("name")?;
+                if key.is_some() == name.is_some() {
+                    return Err(ToolError::InvalidArgs("provide exactly one of key or name".into()));
+                }
+                let keys: Vec<String> = self
+                    .doc(&a)?
+                    .info
+                    .attachments
+                    .iter()
+                    .filter_map(|attachment| match &attachment.source {
+                        pdfcraft_render::AttachmentSource::Document { key: attachment_key }
+                            if key.is_some_and(|key| key == attachment_key) || name.is_some_and(|name| name == attachment.name) =>
+                        {
+                            Some(attachment_key.clone())
+                        }
+                        pdfcraft_render::AttachmentSource::Document { .. } => None,
+                        pdfcraft_render::AttachmentSource::Annotation { .. } => None,
+                    })
+                    .collect();
+                let key = match keys.as_slice() {
+                    [key] => key.clone(),
+                    [] if key.is_some() => {
+                        return Err(ToolError::InvalidArgs(format!("there is no document attachment with key {:?}", key.unwrap_or_default())));
+                    }
+                    [] => {
+                        return Err(ToolError::InvalidArgs(format!(
+                            "there is no document attachment named {:?}; use a name from doc_info",
+                            name.unwrap_or_default()
+                        )));
+                    }
+                    _ => {
+                        return Err(ToolError::InvalidArgs(format!(
+                            "more than one document attachment is named {:?}; provide its key from doc_info",
+                            name.unwrap_or_default()
+                        )));
+                    }
+                };
+                let edit = Edit::EditAttachmentDescription { key, description: Some(a.str("description")?.into()) };
                 self.apply(&a, edit)?
             }
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
@@ -785,6 +856,9 @@ impl Automation {
             "accessibility_autotag_form_fields" => self.accessibility_autotag_form_fields(&a)?,
             "ocr_recognize" => self.ocr_recognize(&a)?,
             "js_run" => self.js_run(&a)?,
+            "js_event" => self.js_event(&a)?,
+            "js_page" => self.js_page(&a)?,
+            "js_advance" => self.js_advance(&a)?,
             "js_document_scripts" => self.js_document_scripts(&a)?,
             "js_set_document_script" => self.js_set_document_script(&a)?,
             "js_enabled" => self.js_enabled(&a)?,
@@ -827,6 +901,7 @@ impl Automation {
             "accessibility_tag_content" => self.accessibility_tag_content(&a)?,
             "accessibility_set_tag_property" => self.accessibility_set_tag_property(&a)?,
             "accessibility_mark_tag_artifact" => self.accessibility_mark_tag_artifact(&a)?,
+            "accessibility_layout_table_to_blocks" => self.accessibility_layout_table_to_blocks(&a)?,
             "accessibility_move_tag" => self.accessibility_move_tag(&a)?,
             "sign_id_create" => self.sign_id_create(&a)?,
             "sign_document" => self.sign_document(&a)?,
@@ -864,6 +939,7 @@ impl Automation {
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,
             "comment_lock" => self.comment_lock(&a)?,
+            "comment_popup" => self.comment_popup(&a)?,
             "comments_hide" => self.comments_hide(&a)?,
             "layer_set" => self.layer_set(&a)?,
             "view_reading_colors" => self.view_reading_colors(&a)?,

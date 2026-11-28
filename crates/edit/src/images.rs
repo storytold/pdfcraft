@@ -1,7 +1,7 @@
 //! Edit a PDF ▸ edit existing images and grouped artwork (Image/Form XObjects painted by `Do`
 //! in its own content streams), and changing one: move/resize/rotate/flip (the `Do` is wrapped in
 //! `q … cm … Q` with the extra transform), replace (it draws another XObject in the same place),
-//! or delete. Only the stream that draws it is rewritten, as a new object.
+//! delete, or ungroup grouped artwork (its content drawn in place, see `ungroup`). Only the stream that draws it is rewritten, as a new object.
 
 use kurbo::{BezPath, Point, Shape};
 use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
@@ -9,7 +9,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use std::sync::Arc;
 
 use crate::EditError;
-use crate::text::content_streams;
+use crate::text::{ContentStream, content_streams, joined};
 
 /// The identity of a soft mask (`/SMask`) in the PDF graphics state.
 #[derive(Clone, Debug)]
@@ -47,9 +47,9 @@ pub struct PageImage {
     pub width: u32,
     pub height: u32,
     /// The content stream its `Do` (its first token) is in, and the `Do`'s index among the
-    /// operators of the page's streams joined ([`Pieces`]).
+    /// operators of the page's streams joined ([`pdfcraft_content::Pieces`]).
     pub stream: usize,
-    op: usize,
+    pub(crate) op: usize,
     /// CTM before `Do`, excluding a Form's own Matrix.
     draw_matrix: [f64; 6],
     clips: Vec<ClipPath>,
@@ -59,6 +59,15 @@ impl PageImage {
     /// Whether an active clip was written by PdfCraft's image crop tool.
     pub fn has_editor_crop(&self) -> bool {
         self.clips.iter().any(|clip| clip.app_crop)
+    }
+
+    /// The editing frame, respecting explicit PDF/editor crops but not the page boundary.
+    /// Selected handles remain reachable outside the page; body hits still use `contains`.
+    pub fn frame_rect(&self) -> Option<[f64; 4]> {
+        self.clips.iter().try_fold(self.rect, |rect, clip| {
+            let b = clip.path.bounding_box();
+            intersection(rect, [b.x0, b.y0, b.x1, b.y1])
+        })
     }
 
     /// Whether a user-space point belongs to the placed artwork and every active clip.
@@ -103,11 +112,6 @@ fn too_many_images() -> EditError {
     EditError::Invalid(format!("the page draws more than {MAX_PAGE_IMAGES} images"))
 }
 
-/// The page's streams joined into the one stream they are: an operator may span two of them.
-fn joined(streams: &[(Object, Vec<u8>)]) -> Pieces {
-    Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>())
-}
-
 fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
     pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
 }
@@ -117,6 +121,816 @@ fn xobjects(doc: &Document, page: &Dict) -> Dict {
         .map(|r| doc.resolve(r))
         .and_then(|r| r.as_dict().and_then(|d| d.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned())))
         .unwrap_or_default()
+}
+
+const IMAGE_CENSUS_MAX_OBJECTS: usize = 100_000;
+const IMAGE_CENSUS_MAX_BYTES: usize = 128 * 1024 * 1024;
+const IMAGE_CENSUS_MAX_OPERATORS: usize = 5_000_000;
+const IMAGE_CENSUS_MAX_VISITS: usize = 50_000;
+const IMAGE_CENSUS_MAX_DEPTH: usize = 64;
+const IMAGE_CENSUS_MAX_ALIASES: usize = 255;
+const IMAGE_REWRITE_MAX_ENTRIES: usize = 500_000;
+const IMAGE_REWRITE_MAX_CONTAINER_ENTRIES: usize = 100_000;
+const IMAGE_REWRITE_MAX_KEY_BYTES: usize = 16 * 1024 * 1024;
+const IMAGE_REWRITE_MAX_STAGED_OBJECTS: usize = IMAGE_CENSUS_MAX_ALIASES;
+
+/// Separate budget for the conservative cleanup rewrite walk. It counts every array item and
+/// dictionary entry inspected, including primitive values, without recursively visiting scalar
+/// leaves. This work is distinct from the executable-content census budget above.
+#[derive(Default)]
+struct ImageRewriteBudget {
+    entries: usize,
+    key_bytes: usize,
+}
+
+impl ImageRewriteBudget {
+    fn charge_entries(&mut self, count: usize) -> Result<(), ()> {
+        if count > IMAGE_REWRITE_MAX_CONTAINER_ENTRIES {
+            return Err(());
+        }
+        self.entries = self.entries.saturating_add(count);
+        if self.entries > IMAGE_REWRITE_MAX_ENTRIES { Err(()) } else { Ok(()) }
+    }
+
+    fn charge_dict(&mut self, dict: &Dict) -> Result<(), ()> {
+        self.charge_entries(dict.len())
+    }
+
+    fn charge_key_bytes(&mut self, count: usize) -> Result<(), ()> {
+        self.key_bytes = self.key_bytes.saturating_add(count);
+        if self.key_bytes > IMAGE_REWRITE_MAX_KEY_BYTES { Err(()) } else { Ok(()) }
+    }
+}
+
+/// A full-document, bounded census of executable resource consumers. `incomplete` means a
+/// conservative cleanup cannot prove that an image is unused, so callers must leave its bytes.
+struct ImageUseCensus<'a> {
+    doc: &'a Document,
+    target: ObjRef,
+    used: bool,
+    incomplete: bool,
+    bytes: usize,
+    operators: usize,
+    visits: usize,
+}
+
+impl ImageUseCensus<'_> {
+    fn charge_visit(&mut self) -> bool {
+        self.visits = self.visits.saturating_add(1);
+        if self.visits > IMAGE_CENSUS_MAX_VISITS {
+            self.incomplete = true;
+            false
+        } else {
+            true
+        }
+    }
+
+    fn charge_stream(&mut self, stream: &pdfcraft_cos::Stream) -> Option<Vec<u8>> {
+        if !self.charge_visit() {
+            return None;
+        }
+        // A tolerated prefix cannot prove nonuse. Bound allocation by the document's remaining
+        // census allowance, and reject corrupt filters before any destructive cleanup is staged.
+        let remaining = IMAGE_CENSUS_MAX_BYTES.saturating_sub(self.bytes);
+        let data = match self.doc.with_direct_parms(stream).decoded_strict_within(remaining) {
+            Ok(data) => data,
+            Err(_) => {
+                self.incomplete = true;
+                return None;
+            }
+        };
+        self.bytes = self.bytes.saturating_add(data.len());
+        if self.bytes > IMAGE_CENSUS_MAX_BYTES {
+            self.incomplete = true;
+            return None;
+        }
+        Some(data)
+    }
+
+    fn walk_stream(&mut self, object: &Object, inherited: &Dict, depth: usize, path: &mut std::collections::HashSet<ObjRef>) {
+        if self.used || self.incomplete {
+            return;
+        }
+        if !self.charge_visit() {
+            return;
+        }
+        if depth > IMAGE_CENSUS_MAX_DEPTH {
+            self.incomplete = true;
+            return;
+        }
+        let reference = object.as_ref();
+        if reference == Some(self.target) {
+            self.used = true;
+            return;
+        }
+        if let Some(reference) = reference
+            && !path.insert(reference)
+        {
+            // A cycle could be rendered differently under an inherited resource scope.
+            self.incomplete = true;
+            return;
+        }
+        let resolved = self.doc.resolve(object);
+        let Object::Stream(stream) = &*resolved else {
+            self.incomplete = true;
+            return;
+        };
+
+        // Image masks and alternates are serialized image consumers even though they are not
+        // reached by a `Do` of their own.
+        if stream.dict.name(b"Subtype") == Some(b"Image") {
+            for key in [b"SMask".as_slice(), b"Mask".as_slice()] {
+                let Some(dependency) = stream.dict.get(key) else { continue };
+                if dependency.as_ref() == Some(self.target) {
+                    self.used = true;
+                    return;
+                }
+                match dependency {
+                    Object::Ref(_) => self.walk_stream(dependency, inherited, depth + 1, path),
+                    Object::Null => {}
+                    Object::Name(name) if key == b"SMask" && name == b"None" => {}
+                    Object::Array(values) if key == b"Mask" && values.iter().all(|value| value.as_ref().is_none()) => {}
+                    _ => self.incomplete = true,
+                }
+                if self.incomplete || self.used {
+                    return;
+                }
+            }
+            if let Some(alternates) = stream.dict.get(b"Alternates").map(|o| self.doc.resolve(o)) {
+                let Some(items) = alternates.as_array() else {
+                    self.incomplete = true;
+                    return;
+                };
+                for item in items {
+                    let item = self.doc.resolve(item);
+                    let Some(image) = item.as_dict().and_then(|d| d.get(b"Image")) else {
+                        self.incomplete = true;
+                        return;
+                    };
+                    if image.as_ref() == Some(self.target) {
+                        self.used = true;
+                        return;
+                    }
+                    self.walk_stream(image, inherited, depth + 1, path);
+                    if self.incomplete || self.used {
+                        return;
+                    }
+                }
+            }
+            if let Some(reference) = reference {
+                path.remove(&reference);
+            }
+            return;
+        }
+
+        let subtype = stream.dict.name(b"Subtype");
+        let pattern = stream.dict.get(b"PatternType").map(|o| self.doc.resolve(o)).as_deref().and_then(Object::as_int) == Some(1);
+        if subtype != Some(b"Form") && !pattern {
+            self.incomplete = true;
+            if let Some(reference) = reference {
+                path.remove(&reference);
+            }
+            return;
+        }
+        let resources =
+            stream.dict.get(b"Resources").map(|r| self.doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_else(|| inherited.clone());
+        let Some(data) = self.charge_stream(stream) else {
+            if let Some(reference) = reference {
+                path.remove(&reference);
+            }
+            return;
+        };
+        self.walk_content(&data, &resources, depth + 1, path);
+        if let Some(reference) = reference {
+            path.remove(&reference);
+        }
+    }
+
+    fn walk_type3(&mut self, font: &Object, _inherited: &Dict, depth: usize, path: &mut std::collections::HashSet<ObjRef>) {
+        if !self.charge_visit() {
+            return;
+        }
+        let resolved = self.doc.resolve(font);
+        let Some(dict) = resolved.as_dict() else {
+            self.incomplete = true;
+            return;
+        };
+        if dict.get(b"Subtype").map(|o| self.doc.resolve(o)).as_deref().and_then(Object::as_name) != Some(b"Type3") {
+            return;
+        }
+        let Some(resources) = dict.get(b"Resources").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned()) else {
+            // The selected font survives Form calls, but its glyphs then resolve names in the
+            // text-showing Form's scope. Without tracking that graphics state, nonuse is unproven.
+            self.incomplete = true;
+            return;
+        };
+        let Some(charprocs) = dict.get(b"CharProcs").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned()) else {
+            self.incomplete = true;
+            return;
+        };
+        for (_, charproc) in charprocs.iter() {
+            self.walk_charproc(charproc, &resources, depth + 1, path);
+            if self.used || self.incomplete {
+                return;
+            }
+        }
+    }
+
+    fn walk_charproc(&mut self, object: &Object, inherited: &Dict, depth: usize, path: &mut std::collections::HashSet<ObjRef>) {
+        if self.used || self.incomplete {
+            return;
+        }
+        if !self.charge_visit() {
+            return;
+        }
+        if depth > IMAGE_CENSUS_MAX_DEPTH {
+            self.incomplete = true;
+            return;
+        }
+        let reference = object.as_ref();
+        if reference.is_some_and(|r| !path.insert(r)) {
+            self.incomplete = true;
+            return;
+        }
+        let resolved = self.doc.resolve(object);
+        let Object::Stream(stream) = &*resolved else {
+            self.incomplete = true;
+            return;
+        };
+        let resources =
+            stream.dict.get(b"Resources").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_else(|| inherited.clone());
+        if let Some(data) = self.charge_stream(stream) {
+            self.walk_content(&data, &resources, depth + 1, path);
+        }
+        if let Some(reference) = reference {
+            path.remove(&reference);
+        }
+    }
+
+    fn walk_resources_for_operator(&mut self, op: &Op, resources: &Dict, depth: usize, path: &mut std::collections::HashSet<ObjRef>) {
+        if op.is("Tf") {
+            let Some(name) = op.name(0) else {
+                self.incomplete = true;
+                return;
+            };
+            if let Some(fonts) = resources.get(b"Font").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned())
+                && let Some(font) = fonts.get(name)
+            {
+                self.walk_type3(font, resources, depth + 1, path);
+            }
+        } else if op.is("gs") {
+            let Some(name) = op.name(0) else {
+                self.incomplete = true;
+                return;
+            };
+            let states = resources.get(b"ExtGState").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned());
+            let Some(state) = states.as_ref().and_then(|d| d.get(name)).map(|o| self.doc.resolve(o)) else {
+                self.incomplete = true;
+                return;
+            };
+            let Some(state_dict) = state.as_dict() else {
+                self.incomplete = true;
+                return;
+            };
+            if let Some(font_value) = state_dict.get(b"Font") {
+                let font = self.doc.resolve(font_value);
+                let Some(values) = font.as_array() else {
+                    self.incomplete = true;
+                    return;
+                };
+                if values.len() != 2 {
+                    self.incomplete = true;
+                    return;
+                }
+                self.walk_type3(&values[0], resources, depth + 1, path);
+                if self.incomplete || self.used {
+                    return;
+                }
+            }
+            let Some(mask_value) = state_dict.get(b"SMask") else { return };
+            let mask = self.doc.resolve(mask_value);
+            match &*mask {
+                Object::Name(name) if name == b"None" => {}
+                Object::Dict(mask_dict) => {
+                    let Some(group) = mask_dict.get(b"G") else {
+                        self.incomplete = true;
+                        return;
+                    };
+                    let resolved_group = self.doc.resolve(group);
+                    if !matches!(&*resolved_group, Object::Stream(stream) if stream.dict.name(b"Subtype") == Some(b"Form")) {
+                        self.incomplete = true;
+                        return;
+                    }
+                    self.walk_stream(group, resources, depth + 1, path);
+                }
+                _ => self.incomplete = true,
+            }
+        } else if op.is("scn") || op.is("SCN") {
+            let Some(name) = op.operands.last().and_then(Object::as_name) else { return };
+            let patterns = resources.get(b"Pattern").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned());
+            if let Some(pattern) = patterns.as_ref().and_then(|d| d.get(name)) {
+                let resolved = self.doc.resolve(pattern);
+                if let Some(dict) = resolved.as_dict() {
+                    let kind = dict.get(b"PatternType").map(|o| self.doc.resolve(o));
+                    match kind.as_deref().and_then(Object::as_int) {
+                        Some(1) => self.walk_stream(pattern, resources, depth + 1, path),
+                        Some(2) if !dict.contains(b"ExtGState") => {}
+                        // A shading pattern's state can select a soft-mask Form. Unknown types
+                        // are consumers too: neither case proves image nonuse.
+                        _ => self.incomplete = true,
+                    }
+                } else {
+                    self.incomplete = true;
+                }
+            }
+        }
+    }
+
+    fn walk_content(&mut self, data: &[u8], resources: &Dict, depth: usize, path: &mut std::collections::HashSet<ObjRef>) {
+        self.walk_parsed(parse(data), resources, depth, path);
+    }
+
+    fn walk_parsed(&mut self, parsed: pdfcraft_content::Parsed, resources: &Dict, depth: usize, path: &mut std::collections::HashSet<ObjRef>) {
+        if self.used || self.incomplete {
+            return;
+        }
+        if depth > IMAGE_CENSUS_MAX_DEPTH {
+            self.incomplete = true;
+            return;
+        }
+        self.operators = self.operators.saturating_add(parsed.ops.len());
+        if parsed.skipped != 0 || self.operators > IMAGE_CENSUS_MAX_OPERATORS {
+            self.incomplete = true;
+            return;
+        }
+        for op in &parsed.ops {
+            self.walk_resources_for_operator(op, resources, depth, path);
+            if self.incomplete || self.used {
+                return;
+            }
+            if !op.is("Do") {
+                continue;
+            }
+            let Some(name) = op.name(0) else {
+                self.incomplete = true;
+                return;
+            };
+            let Some(xobjects) = resources.get(b"XObject").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned()) else {
+                self.incomplete = true;
+                return;
+            };
+            let Some(xobject) = xobjects.get(name) else {
+                self.incomplete = true;
+                return;
+            };
+            if xobject.as_ref() == Some(self.target) {
+                self.used = true;
+                return;
+            }
+            self.walk_stream(xobject, resources, depth + 1, path);
+            if self.incomplete || self.used {
+                return;
+            }
+        }
+    }
+
+    fn walk_annotation(&mut self, annotation: &Dict, resources: &Dict, path: &mut std::collections::HashSet<ObjRef>) {
+        if let Some(ap) = annotation.get(b"AP") {
+            self.walk_appearances(ap, resources, 0, path);
+        }
+        if let Some(mk) = annotation.get(b"MK").map(|o| self.doc.resolve(o)) {
+            if let Some(characteristics) = mk.as_dict() {
+                // Button icons are Form consumers independently of the /AP states.
+                for key in [b"I".as_slice(), b"RI", b"IX"] {
+                    if let Some(icon) = characteristics.get(key) {
+                        self.walk_stream(icon, resources, 0, path);
+                    }
+                }
+            } else if !matches!(&*mk, Object::Null) {
+                self.incomplete = true;
+            }
+        }
+    }
+
+    fn walk_appearances(&mut self, object: &Object, resources: &Dict, depth: usize, path: &mut std::collections::HashSet<ObjRef>) {
+        if self.used || self.incomplete {
+            return;
+        }
+        if !self.charge_visit() {
+            return;
+        }
+        if depth > IMAGE_CENSUS_MAX_DEPTH {
+            self.incomplete = true;
+            return;
+        }
+        let reference = object.as_ref();
+        match &*self.doc.resolve(object) {
+            Object::Stream(_) => self.walk_stream(object, resources, depth + 1, path),
+            Object::Dict(dict) => {
+                if let Some(reference) = reference
+                    && !path.insert(reference)
+                {
+                    self.incomplete = true;
+                    return;
+                }
+                if dict.contains(b"Resources") {
+                    self.incomplete = true;
+                    return;
+                }
+                for (_, value) in dict.iter() {
+                    self.walk_appearances(value, resources, depth + 1, path);
+                    if self.incomplete || self.used {
+                        return;
+                    }
+                }
+                if let Some(reference) = reference {
+                    path.remove(&reference);
+                }
+            }
+            Object::Array(values) => {
+                if let Some(reference) = reference
+                    && !path.insert(reference)
+                {
+                    self.incomplete = true;
+                    return;
+                }
+                for value in values {
+                    self.walk_appearances(value, resources, depth + 1, path);
+                    if self.incomplete || self.used {
+                        return;
+                    }
+                }
+                if let Some(reference) = reference {
+                    path.remove(&reference);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Remove a deleted/replaced image from every resource dictionary only after a bounded census
+/// proves no page, Form, Type3 glyph, soft mask, tiling pattern, or annotation appearance uses it.
+/// Any unsupported or malformed consumer preserves the image and still lets the edit succeed.
+fn prune_unused_image(doc: &mut Document, target: ObjRef) {
+    let object_count = doc.scan_objects_checked().take(IMAGE_CENSUS_MAX_OBJECTS + 1).count();
+    if object_count > IMAGE_CENSUS_MAX_OBJECTS {
+        return;
+    }
+    let mut census = ImageUseCensus { doc, target, used: false, incomplete: false, bytes: 0, operators: 0, visits: 0 };
+    let mut path = std::collections::HashSet::new();
+    let pages = pdfcraft_model::pages(doc);
+    if pages.len() > IMAGE_CENSUS_MAX_OBJECTS {
+        return;
+    }
+    for page in &pages {
+        let resources = match page.dict.get(b"Resources") {
+            None => Dict::new(),
+            Some(value) => {
+                let resolved = doc.resolve(value);
+                let Some(resources) = resolved.as_dict().cloned() else {
+                    census.incomplete = true;
+                    break;
+                };
+                resources
+            }
+        };
+        let contents_object = page.dict.get(b"Contents").map(|value| doc.resolve(value));
+        let contents: &[Object] = match contents_object.as_deref() {
+            None => &[],
+            Some(Object::Array(items)) => items,
+            Some(value) => std::slice::from_ref(value),
+        };
+        if contents.len() > IMAGE_CENSUS_MAX_VISITS {
+            census.incomplete = true;
+            break;
+        }
+        let mut content_data = Vec::with_capacity(contents.len());
+        for content in contents {
+            let resolved = doc.resolve(content);
+            let Object::Stream(stream) = &*resolved else {
+                census.incomplete = true;
+                break;
+            };
+            if let Some(data) = census.charge_stream(stream) {
+                content_data.push(data);
+            }
+            if census.incomplete {
+                break;
+            }
+        }
+        if !census.incomplete {
+            census.walk_parsed(Pieces::join(&content_data).parse(), &resources, 0, &mut path);
+        }
+        let annots = page.dict.get(b"Annots").map(|o| doc.resolve(o));
+        if let Some(annots) = annots {
+            let Some(items) = annots.as_array() else {
+                census.incomplete = true;
+                break;
+            };
+            if items.len() > IMAGE_CENSUS_MAX_OBJECTS {
+                census.incomplete = true;
+                break;
+            }
+            for item in items {
+                if !census.charge_visit() {
+                    break;
+                }
+                let resolved = doc.resolve(item);
+                let Some(annotation) = resolved.as_dict() else { continue };
+                census.walk_annotation(annotation, &resources, &mut path);
+                if census.incomplete || census.used {
+                    break;
+                }
+            }
+        }
+        if census.incomplete || census.used {
+            break;
+        }
+    }
+    if census.used || census.incomplete {
+        return;
+    }
+
+    // Unknown stream types carrying their own resource namespace could also consume XObjects.
+    let checked: Vec<_> = doc.scan_objects_checked().collect();
+    if checked.len() > IMAGE_CENSUS_MAX_OBJECTS || checked.iter().any(|(_, item)| item.is_err()) {
+        return;
+    }
+    if checked.iter().any(|(_, item)| {
+        item.as_ref().ok().is_some_and(|o| matches!(o.as_ref(), Object::Stream(s) if s.dict.contains(b"Resources") && s.dict.name(b"Subtype") != Some(b"Form") && s.dict.int(b"PatternType") != Some(1)))
+    }) {
+        return;
+    }
+
+    let mut staged = std::collections::HashMap::new();
+    let mut indirect_xobject_dicts = std::collections::HashSet::new();
+    let mut indirect_alternate_arrays = std::collections::HashSet::new();
+    let mut aliases = 0usize;
+    let mut rewrite_budget = ImageRewriteBudget::default();
+    for (reference, item) in checked {
+        let Ok(object) = item else { return };
+        let mut object = (*object).clone();
+        let mappings_changed = match prune_xobject_mappings(&mut object, target, &mut indirect_xobject_dicts, &mut aliases, 0, &mut rewrite_budget) {
+            Ok(changed) => changed,
+            Err(()) => return,
+        };
+        let dependencies_changed =
+            match prune_image_dependencies(&mut object, doc, target, &mut indirect_alternate_arrays, &mut aliases, 0, &mut rewrite_budget) {
+                Ok(changed) => changed,
+                Err(()) => return,
+            };
+        if mappings_changed || dependencies_changed {
+            if aliases > IMAGE_CENSUS_MAX_ALIASES || staged.len() >= IMAGE_REWRITE_MAX_STAGED_OBJECTS {
+                return;
+            }
+            staged.insert(reference, object);
+        }
+    }
+    for reference in indirect_xobject_dicts {
+        let was_staged = staged.contains_key(&reference);
+        let mut object = staged.remove(&reference).unwrap_or_else(|| (*doc.get(reference)).clone());
+        let changed = match remove_target_aliases(object.as_dict_mut(), target, &mut aliases, &mut rewrite_budget) {
+            Ok(changed) => changed,
+            Err(()) => return,
+        };
+        if changed || was_staged {
+            if aliases > IMAGE_CENSUS_MAX_ALIASES || (!was_staged && staged.len() >= IMAGE_REWRITE_MAX_STAGED_OBJECTS) {
+                return;
+            }
+            staged.insert(reference, object);
+        }
+    }
+    for reference in indirect_alternate_arrays {
+        let was_staged = staged.contains_key(&reference);
+        let mut object = staged.remove(&reference).unwrap_or_else(|| (*doc.get(reference)).clone());
+        let changed = match remove_target_alternate_entries(&mut object, doc, target, &mut aliases, &mut rewrite_budget) {
+            Ok(changed) => changed,
+            Err(()) => return,
+        };
+        if changed {
+            if aliases > IMAGE_CENSUS_MAX_ALIASES || (!was_staged && staged.len() >= IMAGE_REWRITE_MAX_STAGED_OBJECTS) {
+                return;
+            }
+            staged.insert(reference, object);
+        } else if !matches!(&object, Object::Array(_)) {
+            // An indirect `/Alternates` value that is not an array is malformed. Since the
+            // census cannot establish whether it retains the target, preserve the whole edit.
+            return;
+        } else if was_staged {
+            staged.insert(reference, object);
+        }
+    }
+    for (reference, object) in staged {
+        doc.set(reference, object);
+    }
+}
+
+fn remove_target_aliases(dict: Option<&mut Dict>, target: ObjRef, aliases: &mut usize, budget: &mut ImageRewriteBudget) -> Result<bool, ()> {
+    let Some(dict) = dict else { return Ok(false) };
+    budget.charge_dict(dict)?;
+    let mut names = Vec::new();
+    for (name, value) in dict.iter() {
+        budget.charge_key_bytes(name.len())?;
+        if value.as_ref() == Some(target) {
+            if aliases.saturating_add(names.len()) >= IMAGE_CENSUS_MAX_ALIASES {
+                return Err(());
+            }
+            names.push(name.clone());
+        }
+    }
+    for name in &names {
+        dict.remove(name);
+    }
+    *aliases = aliases.saturating_add(names.len());
+    Ok(!names.is_empty())
+}
+
+fn prune_xobject_mappings(
+    object: &mut Object,
+    target: ObjRef,
+    indirect: &mut std::collections::HashSet<ObjRef>,
+    aliases: &mut usize,
+    depth: usize,
+    budget: &mut ImageRewriteBudget,
+) -> Result<bool, ()> {
+    if depth > IMAGE_CENSUS_MAX_DEPTH {
+        return Err(());
+    }
+    let mut changed = false;
+    match object {
+        Object::Array(values) => {
+            budget.charge_entries(values.len())?;
+            for value in values.iter_mut().filter(|value| is_container(value)) {
+                changed |= prune_xobject_mappings(value, target, indirect, aliases, depth + 1, budget)?;
+            }
+        }
+        Object::Dict(dict) | Object::Stream(pdfcraft_cos::Stream { dict, .. }) => {
+            if let Some(xobjects) = dict.get_mut(b"XObject") {
+                match xobjects {
+                    Object::Ref(reference) => {
+                        indirect.insert(*reference);
+                    }
+                    Object::Dict(mappings) => changed |= remove_target_aliases(Some(mappings), target, aliases, budget)?,
+                    _ => {}
+                }
+            }
+            let mut keys = Vec::new();
+            budget.charge_dict(dict)?;
+            for (key, value) in dict.iter() {
+                budget.charge_key_bytes(key.len())?;
+                if is_container(value) {
+                    keys.push(key.clone());
+                }
+            }
+            for key in keys {
+                if let Some(value) = dict.get_mut(&key) {
+                    changed |= prune_xobject_mappings(value, target, indirect, aliases, depth + 1, budget)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(changed)
+}
+
+fn contains_target_ref(object: &Object, target: ObjRef, depth: usize, budget: &mut ImageRewriteBudget) -> Result<bool, ()> {
+    if depth > IMAGE_CENSUS_MAX_DEPTH {
+        return Err(());
+    }
+    match object {
+        Object::Ref(reference) => Ok(*reference == target),
+        Object::Array(values) => {
+            budget.charge_entries(values.len())?;
+            for value in values.iter().filter(|value| matches!(value, Object::Array(_))) {
+                if contains_target_ref(value, target, depth + 1, budget)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn alternate_uses_target(object: &Object, doc: &Document, target: ObjRef) -> bool {
+    doc.resolve(object).as_dict().and_then(|dict| dict.get(b"Image")).is_some_and(|image| image.as_ref() == Some(target))
+}
+
+fn remove_target_alternate_entries(
+    object: &mut Object,
+    doc: &Document,
+    target: ObjRef,
+    aliases: &mut usize,
+    budget: &mut ImageRewriteBudget,
+) -> Result<bool, ()> {
+    let Object::Array(entries) = object else { return Ok(false) };
+    budget.charge_entries(entries.len())?;
+    let mut retained = Vec::new();
+    let mut removed = 0;
+    for entry in entries.iter() {
+        if alternate_uses_target(entry, doc, target) {
+            if aliases.saturating_add(removed) >= IMAGE_CENSUS_MAX_ALIASES {
+                return Err(());
+            }
+            removed += 1;
+        } else {
+            retained.push(entry.clone());
+        }
+    }
+    if removed != 0 {
+        *entries = retained;
+        *aliases = aliases.saturating_add(removed);
+    }
+    Ok(removed != 0)
+}
+
+/// Remove dependencies on an image only after the document census proves no active consumer
+/// uses it. The dependent image is left in place, but its stale optional mask/alternate edge is
+/// removed so full-save garbage collection can release the target bytes.
+fn prune_image_dependencies(
+    object: &mut Object,
+    doc: &Document,
+    target: ObjRef,
+    indirect_alternate_arrays: &mut std::collections::HashSet<ObjRef>,
+    aliases: &mut usize,
+    depth: usize,
+    budget: &mut ImageRewriteBudget,
+) -> Result<bool, ()> {
+    if depth > IMAGE_CENSUS_MAX_DEPTH {
+        return Err(());
+    }
+    let mut changed = false;
+    match object {
+        Object::Array(values) => {
+            budget.charge_entries(values.len())?;
+            for value in values.iter_mut().filter(|value| is_container(value)) {
+                changed |= prune_image_dependencies(value, doc, target, indirect_alternate_arrays, aliases, depth + 1, budget)?;
+            }
+        }
+        Object::Dict(dict) | Object::Stream(pdfcraft_cos::Stream { dict, .. }) => {
+            if dict.name(b"Subtype") == Some(b"Image") {
+                for key in [b"SMask".as_slice(), b"Mask".as_slice()] {
+                    let contains_target =
+                        if let Some(value) = dict.get(key) { contains_target_ref(value, target, depth + 1, budget)? } else { false };
+                    if contains_target {
+                        if aliases.saturating_add(1) > IMAGE_CENSUS_MAX_ALIASES {
+                            return Err(());
+                        }
+                        dict.remove(key);
+                        *aliases = aliases.saturating_add(1);
+                        changed = true;
+                    }
+                }
+                match dict.get(b"Alternates") {
+                    Some(Object::Array(_)) => {
+                        let Some(Object::Array(entries)) = dict.get_mut(b"Alternates") else { return Err(()) };
+                        budget.charge_entries(entries.len())?;
+                        let mut retained = Vec::new();
+                        let mut removed = 0;
+                        for entry in entries.iter() {
+                            if alternate_uses_target(entry, doc, target) {
+                                if aliases.saturating_add(removed) >= IMAGE_CENSUS_MAX_ALIASES {
+                                    return Err(());
+                                }
+                                removed += 1;
+                            } else {
+                                retained.push(entry.clone());
+                            }
+                        }
+                        if removed != 0 {
+                            *entries = retained;
+                            *aliases = aliases.saturating_add(removed);
+                            changed = true;
+                        }
+                    }
+                    Some(Object::Ref(reference)) => {
+                        indirect_alternate_arrays.insert(*reference);
+                    }
+                    _ => {}
+                }
+            }
+            let mut keys = Vec::new();
+            budget.charge_dict(dict)?;
+            for (key, value) in dict.iter() {
+                budget.charge_key_bytes(key.len())?;
+                if is_container(value) {
+                    keys.push(key.clone());
+                }
+            }
+            for key in keys {
+                if let Some(value) = dict.get_mut(&key) {
+                    changed |= prune_image_dependencies(value, doc, target, indirect_alternate_arrays, aliases, depth + 1, budget)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(changed)
+}
+
+fn is_container(object: &Object) -> bool {
+    matches!(object, Object::Array(_) | Object::Dict(_) | Object::Stream(_))
 }
 
 fn intersection(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
@@ -470,6 +1284,9 @@ pub enum ImageChange {
     Arrange(ArrangeOrder),
     /// Remove any private crop on the image.
     RemoveCrop,
+    /// Grouped Form artwork only: draw the form's content in place of its `Do`, so its text and
+    /// pictures become the page's own and can be edited one by one (#2964).
+    Ungroup,
 }
 
 /// The user-space transform that maps box `from` onto box `to` (move and resize).
@@ -532,10 +1349,15 @@ fn exclusive_clip(ops: &[Op], op: usize) -> Option<(usize, Matrix)> {
 /// The `q cm … Q` whose only content after its `cm` is `start..=end` (a `Do`, or a balanced
 /// `q … Q` scope), with the index and value of that `cm`. Another transform of the same
 /// placement is folded into it, so repeated moves and resizes don't nest one more `q` each.
-fn enclosing_transform(ops: &[Op], start: usize, end: usize) -> Option<(usize, Matrix)> {
+/// None when its `Q` is at or past `hidden` ([`crate::text::first_op_after_damage`]): a stream
+/// between that wasn't read may draw in that `cm` too.
+fn enclosing_transform(ops: &[Op], start: usize, end: usize, hidden: usize) -> Option<(usize, Matrix)> {
     let at = start.checked_sub(1)?;
     let cm = ops.get(at)?;
     if !ops.get(at.checked_sub(1)?)?.is("q") || !ops.get(end.checked_add(1)?)?.is("Q") || !cm.is("cm") || cm.operands.len() != 6 {
+        return None;
+    }
+    if end.checked_add(1)? >= hidden {
         return None;
     }
     let m = Matrix(cm.nums::<6>()?);
@@ -1000,19 +1822,24 @@ pub(crate) fn extract_scope_state(ops: &[Op], start: usize, target: usize, initi
 }
 
 /// The unit `order` puts the image's unit `target_idx` next to, and whether after it. An image that
-/// shares its unit with other paint at the limit moves within that unit, past or behind the paint.
+/// shares its unit with other paint at the limit moves within that unit, past or behind the paint,
+/// but only when that paint is on the side the move crosses: paint after it for a forward move,
+/// paint before it for a backward move. Otherwise the move would leave paint order unchanged and
+/// is refused, including when that is the only unit.
 fn target_destination_unit<'a>(
     units: &'a [std::ops::Range<usize>],
     target_idx: usize,
     target_unit: &'a std::ops::Range<usize>,
     order: ArrangeOrder,
-    has_other_paint: bool,
+    has_paint_before: bool,
+    has_paint_after: bool,
 ) -> Result<(&'a std::ops::Range<usize>, bool), EditError> {
     let forward = matches!(order, ArrangeOrder::BringToFront | ArrangeOrder::BringForward);
     let refused = || EditError::Invalid(if forward { "the image is already in front" } else { "the image is already at the back" }.into());
     let at_limit = if forward { target_idx.saturating_add(1) >= units.len() } else { target_idx == 0 };
     if at_limit {
-        return if has_other_paint { Ok((target_unit, forward)) } else { Err(refused()) };
+        let effective_in_unit = if forward { has_paint_after } else { has_paint_before };
+        return if effective_in_unit { Ok((target_unit, forward)) } else { Err(refused()) };
     }
     let dest = match order {
         ArrangeOrder::BringToFront => units.last(),
@@ -1057,7 +1884,9 @@ fn determine_arrange_spans(
     has_other_paint: bool,
     marked_unit: bool,
 ) -> Result<(std::ops::Range<usize>, usize, usize, usize), EditError> {
-    let scope = image_scopes(ops, target, "arranged")
+    // Nothing is hidden for Arrange: it takes out the scope it finds, so a scope that closes past a
+    // stream not read whole changes a stream past it, which `rewritten_contents` refuses.
+    let scope = image_scopes(ops, target, "arranged", ops.len())
         .ok()
         .and_then(|s| s.isolated)
         .filter(|&(start, end, _)| start >= target_unit.start && end < target_unit.end);
@@ -1190,14 +2019,36 @@ fn build_relocated_unit_ops(
     Ok(unit_ops)
 }
 
+/// Paint inside `target_unit` other than the image at `target`, as `(any, before, after)`: whether
+/// there is any, and whether some of it comes before the image or after it.
+fn arrange_paint_flags(ops: &[Op], target: usize, target_unit: &std::ops::Range<usize>) -> (bool, bool, bool) {
+    let mut has_other_paint = false;
+    let mut has_paint_before = false;
+    let mut has_paint_after = false;
+    // A Form XObject counts as paint whatever the text rendering mode: `Tr 3` hides only the
+    // text it shows, and its paths and images still paint.
+    for (i, op) in ops.iter().enumerate() {
+        if i < target_unit.start || i >= target_unit.end || i == target {
+            continue;
+        }
+        let is_paint = matches!(
+            op.op.as_slice(),
+            b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
+        );
+        if is_paint {
+            has_other_paint = true;
+            if i < target {
+                has_paint_before = true;
+            } else {
+                has_paint_after = true;
+            }
+        }
+    }
+    (has_other_paint, has_paint_before, has_paint_after)
+}
+
 /// Change the stacking order of `img`, drawn on page `p` by its content streams `all`.
-fn arrange_image(
-    doc: &mut Document,
-    p: &pdfcraft_model::Page,
-    all: &[(Object, Vec<u8>)],
-    img: &PageImage,
-    order: ArrangeOrder,
-) -> Result<(), EditError> {
+fn arrange_image(doc: &mut Document, p: &pdfcraft_model::Page, all: &[ContentStream], img: &PageImage, order: ArrangeOrder) -> Result<(), EditError> {
     let pieces = joined(all);
     let ops = pieces.parse().ops;
     let target = img.op;
@@ -1209,20 +2060,12 @@ fn arrange_image(
     let Some((target_idx, target_unit)) = units.iter().enumerate().find(|(_, u)| u.contains(&target)) else {
         return Err(EditError::Invalid("the image content unit could not be located".into()));
     };
-    let has_other_paint = ops.iter().enumerate().any(|(i, op)| {
-        i >= target_unit.start
-            && i < target_unit.end
-            && i != target
-            && matches!(
-                op.op.as_slice(),
-                b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
-            )
-    });
-    if units.len() <= 1 && !has_other_paint {
-        return Err(EditError::Invalid("the page has only one content unit to arrange".into()));
-    }
+    // Units are counted inside a page-wide q … Q wrapper, so separate balanced inner units are not
+    // mistaken for one shared unit. A sole shared unit is handled by the directional at-limit check
+    // in `target_destination_unit`: an effective move within it is allowed, an ineffective one is refused.
+    let (has_other_paint, has_paint_before, has_paint_after) = arrange_paint_flags(&ops, target, target_unit);
 
-    let (dest_unit, insert_after) = target_destination_unit(&units, target_idx, target_unit, order, has_other_paint)?;
+    let (dest_unit, insert_after) = target_destination_unit(&units, target_idx, target_unit, order, has_paint_before, has_paint_after)?;
     if !balanced_arrange_span(&ops, target_unit.clone()) || !balanced_arrange_span(&ops, dest_unit.clone()) {
         return Err(EditError::Invalid("cannot arrange an image across graphics or marked-content boundaries".into()));
     }
@@ -1264,7 +2107,7 @@ fn arrange_image(
         ops.get(dest_unit.start).map(|op| pieces.piece_of(op.span.start))
     };
     let owned_destination = destination_piece
-        .filter(|piece| all.get(*piece).is_some_and(|(obj, _)| doc.resolve(obj).as_dict().is_some_and(|d| d.get(b"PCAdded").is_some())));
+        .filter(|piece| all.get(*piece).is_some_and(|s| doc.resolve(&s.entry).as_dict().is_some_and(|d| d.get(b"PCAdded").is_some())));
     if let Some(piece) = owned_destination {
         let whole_unit = ops.iter().enumerate().all(|(index, op)| {
             let (first, last) = pieces.pieces_of(op);
@@ -1439,13 +2282,14 @@ fn arrange_image(
     };
 
     if let Some(piece) = owned_destination {
+        let insertion = piece.saturating_add(usize::from(insert_after));
+        crate::text::drawn_before_damage(all, insertion)?;
         let changed = pieces.splice([(target_span, removal_replacement)]);
-        let contents = crate::text::rewritten_contents(doc, all, changed);
+        let contents = crate::text::rewritten_contents(doc, all, changed)?;
         let mut list = match contents {
             Object::Array(list) => list,
             one => vec![one],
         };
-        let insertion = piece.saturating_add(usize::from(insert_after));
         if insertion > list.len() {
             return Err(EditError::Invalid("the destination content stream is missing".into()));
         }
@@ -1467,7 +2311,7 @@ fn arrange_image(
     }
 
     let changed = pieces.splice(edits);
-    let contents = crate::text::rewritten_contents(doc, all, changed);
+    let contents = crate::text::rewritten_contents(doc, all, changed)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -1501,8 +2345,10 @@ impl ImageScopes {
     }
 }
 
-/// [`ImageScopes`] of the `Do` at `target`. An image inside a text object cannot be `done`.
-fn image_scopes(ops: &[Op], target: usize, done: &str) -> Result<ImageScopes, EditError> {
+/// [`ImageScopes`] of the `Do` at `target`. An image inside a text object cannot be `done`. A scope
+/// still open at op `hidden` ([`crate::text::first_op_after_damage`]) holds a stream that wasn't
+/// read, which may paint there: it counts as painting something else.
+fn image_scopes(ops: &[Op], target: usize, done: &str, hidden: usize) -> Result<ImageScopes, EditError> {
     struct Scope {
         start: usize,
         matrix: Matrix,
@@ -1521,6 +2367,11 @@ fn image_scopes(ops: &[Op], target: usize, done: &str) -> Result<ImageScopes, Ed
     let mut isolated = None;
     let mut outermost = None;
     for (index, op) in ops.iter().enumerate() {
+        if index == hidden {
+            for scope in &mut stack {
+                scope.other_paint = true;
+            }
+        }
         match op.op.as_slice() {
             b"q" => {
                 if stack.len() >= 256 {
@@ -1606,20 +2457,31 @@ fn app_crop_ranges(ops: &[Op], start: usize, target: usize) -> Vec<std::ops::Ran
 }
 
 /// Remove only crops written by PdfCraft, preserving the document author's clipping paths.
-fn remove_image_crop(doc: &mut Document, p: &pdfcraft_model::Page, all: &[(Object, Vec<u8>)], img: &PageImage) -> Result<(), EditError> {
+fn remove_image_crop(doc: &mut Document, p: &pdfcraft_model::Page, all: &[ContentStream], img: &PageImage) -> Result<(), EditError> {
     let pieces = joined(all);
     let ops = pieces.parse().ops;
     let target = img.op;
-    let scope = image_scopes(&ops, target, "cropped")?;
-    let Some((start, _, _)) = scope.transform_scope(target) else {
-        return Err(EditError::Invalid("the image has no PdfCraft crop to remove".into()));
+    let crops = |hidden| -> Result<Vec<std::ops::Range<usize>>, EditError> {
+        let scope = image_scopes(&ops, target, "cropped", hidden)?;
+        Ok(scope.transform_scope(target).map(|(start, _, _)| app_crop_ranges(&ops, start, target)).unwrap_or_default())
     };
-    let crops = app_crop_ranges(&ops, start, target);
-    if crops.is_empty() {
-        return Err(EditError::Invalid("the image has no PdfCraft crop to remove".into()));
+    let crops_there = crops(crate::text::first_op_after_damage(all, &pieces, &ops))?;
+    if crops_there.is_empty() {
+        // A crop in a scope that closes past a stream not read whole may clip what that stream draws.
+        // Enumeration can also see a PdfCraft crop marker whose path (`W q Q n`, for example)
+        // scope detection does not treat as a removable crop; say it cannot be removed rather
+        // than that no crop exists.
+        return Err(EditError::Invalid(if !crops(ops.len())?.is_empty() {
+            "the image's crop may also clip what a content stream that is damaged or can't be decoded draws, so it isn't removed".into()
+        } else if img.has_editor_crop() {
+            "the image's PdfCraft crop cannot be safely removed from its current scope".into()
+        } else {
+            "the image has no PdfCraft crop to remove".into()
+        }));
     }
+    let crops = crops_there;
     let changed = crate::text::splice(&pieces, &ops, |index| (Vec::new(), !crops.iter().any(|r| r.contains(&index))));
-    let contents = crate::text::rewritten_contents(doc, all, changed);
+    let contents = crate::text::rewritten_contents(doc, all, changed)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -1635,6 +2497,8 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
     if !ops.get(img.op).is_some_and(|op| op.is("Do")) {
         return Err(EditError::Invalid("the image operation is missing".into()));
     }
+    let old_object = img.object;
+    let prune_target = matches!(change, ImageChange::Delete | ImageChange::Replace(_)).then_some(old_object).flatten();
     let mut resources = None;
     let replacement: Vec<Op> = match change {
         ImageChange::Delete => Vec::new(),
@@ -1649,6 +2513,26 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
         }
         ImageChange::Crop(keep) => {
             return crop_image_impl(doc, &p, &all, &img, *keep);
+        }
+        ImageChange::Ungroup => {
+            if !img.is_form {
+                return Err(EditError::Invalid("only grouped Form artwork can be ungrouped".into()));
+            }
+            let res = p.dict.get(b"Resources").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+            let space = crate::ungroup::page_blend_space(doc, &p.dict);
+            // One allowance for the form and everything it draws.
+            let mut budget = pdfcraft_cos::DecodeBudget::new(crate::ungroup::MAX_FORM_BYTES, 0);
+            let crate::ungroup::Ungrouped { ops: inline, resources: mut merged, patterns, .. } =
+                crate::ungroup::ungroup_ops(doc, &res, &ops, img.op, space.as_ref(), Matrix(img.matrix), &mut budget).map_err(|r| r.error)?;
+            if !patterns.is_empty() {
+                let mut table = merged.get(b"Pattern").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+                for (name, copy) in patterns {
+                    table.set(name, Object::Ref(doc.add(copy)));
+                }
+                merged.set(b"Pattern".to_vec(), Object::Dict(table));
+            }
+            resources = Some(merged);
+            inline
         }
         ImageChange::Replace(r) => {
             if img.is_form {
@@ -1666,13 +2550,16 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
         }
     };
     let changed = crate::text::splice(&pieces, &ops, |index| if index == img.op { (replacement.clone(), false) } else { (Vec::new(), true) });
-    let contents = crate::text::rewritten_contents(doc, &all, changed);
+    let contents = crate::text::rewritten_contents(doc, &all, changed)?;
     doc.update_dict(p.obj, |d| {
         d.set(b"Contents".to_vec(), contents);
         if let Some(res) = resources {
             d.set(b"Resources".to_vec(), Object::Dict(res));
         }
     })?;
+    if let Some(target) = prune_target {
+        prune_unused_image(doc, target);
+    }
     Ok(())
 }
 
@@ -1687,7 +2574,7 @@ pub(crate) fn selectable_images(
     Ok(page_images(doc, page)?
         .into_iter()
         .enumerate()
-        .filter(|(_, image)| !all.get(image.stream).and_then(|(o, _)| o.as_ref()).is_some_and(|r| excluded.contains(&r)))
+        .filter(|(_, image)| !all.get(image.stream).and_then(|s| s.entry.as_ref()).is_some_and(|r| excluded.contains(&r)))
         .collect())
 }
 
@@ -1700,7 +2587,7 @@ pub(crate) fn painted_over(doc: &Document, page: usize, rect: [f64; 4], from: us
 fn transform_image(
     doc: &mut Document,
     page: &pdfcraft_model::Page,
-    streams: &[(Object, Vec<u8>)],
+    streams: &[ContentStream],
     image: &PageImage,
     transform: [f64; 6],
 ) -> Result<(), EditError> {
@@ -1715,8 +2602,9 @@ fn transform_image(
     }
     // A private path crop moves with its image regardless of intervening state operators.
     // Shared crops retain the existing fixed-clip behavior, preserving neighbouring paint.
+    let hidden = crate::text::first_op_after_damage(streams, &pieces, &ops);
     let (start, end, placement) =
-        image_scopes(&ops, target, "transformed")?.transform_scope(target).unwrap_or((target, target, Matrix(image.draw_matrix)));
+        image_scopes(&ops, target, "transformed", hidden)?.transform_scope(target).unwrap_or((target, target, Matrix(image.draw_matrix)));
     let inverse = placement.invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
     let local = placement.then(&Matrix(transform)).then(&inverse);
     if !local.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
@@ -1725,7 +2613,7 @@ fn transform_image(
 
     // Already alone in a `q cm … Q` (its own placement, or the wrapper an earlier edit added):
     // change that `cm` in place. The CTM inside is `local · cm · outer` either way.
-    if let Some((at, cm)) = enclosing_transform(&ops, start, end) {
+    if let Some((at, cm)) = enclosing_transform(&ops, start, end, hidden) {
         let folded = local.then(&cm);
         if !folded.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
             return Err(EditError::Invalid("the image transform is too large".into()));
@@ -1733,7 +2621,7 @@ fn transform_image(
         let changed = crate::text::splice(&pieces, &ops, |index| {
             if index == at { (vec![Op::new("cm", folded.0.map(Object::Real).to_vec())], false) } else { (Vec::new(), true) }
         });
-        let contents = crate::text::rewritten_contents(doc, streams, changed);
+        let contents = crate::text::rewritten_contents(doc, streams, changed)?;
         doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), contents))?;
         return Ok(());
     }
@@ -1754,7 +2642,7 @@ fn transform_image(
             (Vec::new(), true)
         }
     });
-    let contents = crate::text::rewritten_contents(doc, streams, changed);
+    let contents = crate::text::rewritten_contents(doc, streams, changed)?;
     doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -1766,7 +2654,7 @@ fn transform_image(
 fn crop_image_impl(
     doc: &mut Document,
     page: &pdfcraft_model::Page,
-    streams: &[(Object, Vec<u8>)],
+    streams: &[ContentStream],
     image: &PageImage,
     keep: [f64; 4],
 ) -> Result<(), EditError> {
@@ -1790,8 +2678,9 @@ fn crop_image_impl(
     if !ops.get(target).is_some_and(|op| op.is("Do")) {
         return Err(EditError::Invalid("the image operation could not be located".into()));
     }
-    let (start, end, placement) =
-        image_scopes(&ops, target, "cropped")?.transform_scope(target).unwrap_or((target, target, Matrix(image.draw_matrix)));
+    let (start, end, placement) = image_scopes(&ops, target, "cropped", crate::text::first_op_after_damage(streams, &pieces, &ops))?
+        .transform_scope(target)
+        .unwrap_or((target, target, Matrix(image.draw_matrix)));
     let inverse = placement.invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
     let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| inverse.apply(x, y));
     if !corners.iter().all(|(x, y)| x.is_finite() && y.is_finite() && x.abs() <= 1e12 && y.abs() <= 1e12) {
@@ -1844,9 +2733,27 @@ fn crop_image_impl(
             (Vec::new(), true)
         }
     });
-    let contents = crate::text::rewritten_contents(doc, streams, changed);
+    let contents = crate::text::rewritten_contents(doc, streams, changed)?;
     doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
+}
+
+/// The `Do` of each image `indexes` (from [`page_images`]) on `page`, as an index among the
+/// page's joined operators: what Copy takes of them.
+pub(crate) fn image_ops(doc: &Document, page: usize, indexes: &[usize]) -> Result<Vec<usize>, EditError> {
+    if indexes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let images = page_images(doc, page)?;
+    indexes
+        .iter()
+        .map(|i| {
+            images
+                .get(*i)
+                .map(|image| image.op)
+                .ok_or_else(|| EditError::Invalid("a selected image no longer exists; select the objects again".into()))
+        })
+        .collect()
 }
 
 /// Plan all transforms before changing a stream; indexes refer to the original inventory.
@@ -1872,6 +2779,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     }
     let pieces = joined(&all);
     let ops = pieces.parse().ops;
+    let hidden = crate::text::first_op_after_damage(&all, &pieces, &ops);
     let mut inside_text = false;
     for (index, op) in ops.iter().enumerate() {
         if op.is("BT") {
@@ -1889,7 +2797,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     let mut folds = std::collections::BTreeMap::new();
     for image in images.iter().filter(|image| image.has_editor_crop()) {
         let Some(&(_, _, offset)) = plans.get(&image.op) else { continue };
-        let Some((start, end, placement)) = image_scopes(&ops, image.op, "moved")?.transform_scope(image.op) else {
+        let Some((start, end, placement)) = image_scopes(&ops, image.op, "moved", hidden)?.transform_scope(image.op) else {
             return Err(EditError::Invalid("the image crop cannot be moved independently".into()));
         };
         let inverse = placement.invert().ok_or_else(|| EditError::Invalid("a selected image has no area".into()))?;
@@ -1906,7 +2814,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
         };
         // An enclosing cm is before the captured placement; an inside-scope cm is after it.
         // Their multiplication orders differ when that cm scales or shears a translation.
-        let folded = enclosing_transform(&ops, start, end)
+        let folded = enclosing_transform(&ops, start, end, hidden)
             .map(|(at, cm)| (at, local.then(&cm)))
             .or_else(|| leading_transform().map(|(at, cm)| (at, cm.then(&local))));
         if let Some((at, folded)) = folded {
@@ -1942,7 +2850,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     // An image already alone in `q cm Do Q` moves by changing that `cm`, not by nesting another.
     for index in 0..ops.len() {
         let Some(&(movement, _, _)) = plans.get(&index) else { continue };
-        let Some((at, cm)) = enclosing_transform(&ops, index, index) else { continue };
+        let Some((at, cm)) = enclosing_transform(&ops, index, index, hidden) else { continue };
         let folded = movement.then(&cm);
         if !folded.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
             return Err(EditError::Invalid("the image move is too large".into()));
@@ -1977,7 +2885,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
         out.push(Op::new("Q", vec![]));
         (out, false)
     });
-    let contents = crate::text::rewritten_contents(doc, &all, data);
+    let contents = crate::text::rewritten_contents(doc, &all, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -2020,5 +2928,13 @@ mod allocation_tests {
         let before = tracker.current_state.clone();
         tracker.step(&op, &states, &doc, Matrix::translate(50.0, 0.0)).unwrap();
         assert!(before.visually_differs(&tracker.current_state), "the same mask established under a different CTM is a different effective mask");
+    }
+
+    #[test]
+    fn arrange_paint_flags_counts_a_form_drawn_in_invisible_text_mode() {
+        // `Tr 3` hides text, not the paths and images a Form draws.
+        let ops =
+            vec![Op::new("Do", vec![Object::name("Target")]), Op::new("Tr", vec![Object::Real(3.0)]), Op::new("Do", vec![Object::name("Form")])];
+        assert_eq!(arrange_paint_flags(&ops, 0, &(0..ops.len())), (true, false, true));
     }
 }
