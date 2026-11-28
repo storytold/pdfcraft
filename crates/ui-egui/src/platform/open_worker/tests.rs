@@ -225,6 +225,7 @@ fn open_prepare_keeps_control_and_existing_tabs_live_until_atomic_commit() {
     assert_eq!(rig.jobs.waiting(), 1);
     let opening_label = format!("Opening {}…", file.name());
     assert_eq!(rig.h.state().opening_notice.as_ref().map(|notice| notice.label.as_str()), Some(opening_label.as_str()));
+    rig.h.run_steps(1);
     assert!(rig.notice_says(&opening_label));
     if crate::i18n::needs_catalogs() {
         let language = std::mem::replace(&mut rig.h.state_mut().language, "ja".into());
