@@ -28,7 +28,7 @@ fn messy() -> Document {
             "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript << /Names [(x) 9 0 R] >> >> /AA << /WC 9 0 R >> >>",
             "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
             "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im 8 0 R >> >> /Annots [6 0 R 7 0 R] >>",
-            "<< /Length 44 >>\nstream\n1 0 0 rg BT /F1 12 Tf 10 10 Td (Hi) Tj ET /Im Do\nendstream",
+            "<< /Length 48 >>\nstream\n1 0 0 rg BT /F1 12 Tf 10 10 Td (Hi) Tj ET /Im Do\nendstream",
             "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
             "<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /P 3 0 R /AP << /N 10 0 R >> >>",
             "<< /Type /Annot /Subtype /Link /Rect [40 10 80 30] /P 3 0 R /F 4 /A 9 0 R >>",
@@ -2366,4 +2366,266 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
+}
+
+/// A file of a catalog, a page tree and a page, with object `n` written as `layout[n - 1]`: the
+/// bytes before it and its own text, from its object number to just past `endobj`. The
+/// cross-reference table points just past the end-of-line markers that start the bytes before it:
+/// at the object number, or at the white space that follows them.
+fn laid_out(layout: &[(&str, &str)]) -> Document {
+    let mut out = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3".to_vec();
+    let mut offsets = Vec::new();
+    for (before, text) in layout {
+        offsets.push(out.len() + before.bytes().take_while(|b| matches!(b, b'\r' | b'\n')).count());
+        out.extend_from_slice(before.as_bytes());
+        out.extend_from_slice(text.as_bytes());
+    }
+    let xref = out.len() + 1;
+    out.extend_from_slice(format!("\nxref\n0 {}\n0000000000 65535 f \n", layout.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", layout.len() + 1).as_bytes());
+    Document::open(std::sync::Arc::new(out)).unwrap()
+}
+
+const CATALOG: &str = "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj";
+const PAGES: &str = "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj";
+const PAGE: &str = "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>\nendobj";
+
+fn syntax(layout: &[(&str, &str)]) -> Vec<String> {
+    verify(&laid_out(layout), Level::A2b).into_iter().filter(|i| i.clause == "6.1.9").map(|i| i.message).collect()
+}
+
+#[test]
+fn indirect_objects_are_written_as_pdfa_asks_clause_6_1_9() {
+    let fine = [("\n", CATALOG), ("\n", PAGES), ("\r\n", PAGE)];
+    assert_eq!(syntax(&fine), Vec::<String>::new());
+    let with_page = |before: &str, page: &str| syntax(&[("\n", CATALOG), ("\n", PAGES), (before, page)]);
+
+    // The numbers and `obj`: one white-space character each, of any kind.
+    assert_eq!(
+        with_page("\n", "3  0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj"),
+        ["Object 3 doesn't separate its object number, generation number and obj keyword by single white-space characters"]
+    );
+    assert_eq!(with_page("\n", "3 0\n\nobj\n<< /Type /Page /Parent 2 0 R >>\nendobj").len(), 1);
+    assert_eq!(with_page("\n", "3\t0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj"), Vec::<String>::new());
+    // An end-of-line marker before the object number and after `obj`, also when the offset points
+    // at white space before the number.
+    assert_eq!(
+        with_page(
+            "
+    ", PAGE
+        ),
+        ["The object number of object 3 isn't preceded by an end-of-line marker"]
+    );
+    // A space there also leaves the `endobj` before it without one after.
+    assert_eq!(
+        with_page(" ", PAGE),
+        [
+            "The object number of object 3 isn't preceded by an end-of-line marker",
+            "The endobj keyword of object 2 isn't both preceded and followed by an end-of-line marker"
+        ]
+    );
+    assert_eq!(
+        with_page("\n", "3 0 obj<< /Type /Page /Parent 2 0 R >>\nendobj"),
+        ["The obj keyword of object 3 isn't followed by an end-of-line marker"]
+    );
+    assert_eq!(with_page("\n", "3 0 obj \n<< /Type /Page /Parent 2 0 R >>\nendobj").len(), 1);
+    // And on both sides of `endobj`.
+    assert_eq!(
+        with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R >>endobj"),
+        ["The endobj keyword of object 3 isn't both preceded and followed by an end-of-line marker"]
+    );
+    assert_eq!(syntax(&[("\n", CATALOG), ("\n", "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj "), ("\n", PAGE)]).len(), 1);
+    assert_eq!(syntax(&[("\n", "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\n endobj"), ("\n", PAGES), ("\n", PAGE)]).len(), 1);
+
+    // A stream's data may hold the bytes `endobj` and `obj<<`: only the object's own count.
+    let stream = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 22 >>\nstream\n4 0 obj<< >>endobj x\n\nendstream\nendobj";
+    assert_eq!(with_page("\n", stream), Vec::<String>::new());
+    let stream_bad = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 22 >>\nstream\n4 0 obj<< >>endobj x\n\nendstream endobj";
+    assert_eq!(with_page("\n", stream_bad).len(), 1);
+    // A literal string in the stream dictionary may hold `stream` and an end-of-line marker: the
+    // stream data starts after the real keyword.
+    let stream_note = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Note (stream\n) /Length 18 >>\nstream\nendstream endobj x\nendstream\nendobj";
+    assert_eq!(with_page("\n", stream_note), Vec::<String>::new());
+    // So may a string, a name or a comment in any object: the `endobj` after the value counts.
+    for page in [
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /Note (endobj) >>\nendobj",
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /T (endobj) >>\nendobj",
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /Note /endobj >>\nendobj",
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /endobj 1 >>\nendobj",
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R >> % endobj\nendobj",
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R >> %endobj\nendobj",
+    ] {
+        assert_eq!(with_page("\n", page), Vec::<String>::new(), "{page:?}");
+    }
+    assert_eq!(with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R /Note (endobj) >> endobj").len(), 1);
+    // A value written up against `endobj` is read as one token with it: the keyword is still there,
+    // without an end-of-line marker before it.
+    let around = ["The endobj keyword of object 4 isn't both preceded and followed by an end-of-line marker"];
+    for value in ["1.0endobj", "/Nendobj", "12endobj"] {
+        assert_eq!(syntax(&[("\n", CATALOG), ("\n", PAGES), ("\n", PAGE), ("\n", &format!("4 0 obj\n{value}\n"))]), around, "{value}");
+    }
+    assert_eq!(syntax(&[("\n", CATALOG), ("\n", PAGES), ("\n", PAGE), ("\n", "4 0 obj\n1.0\nendobj")]), Vec::<String>::new());
+    // So may a comment after `endstream`.
+    let stream_comment = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 2 >>\nstream\nxx\nendstream % endobj\nendobj";
+    assert_eq!(with_page("\n", stream_comment), Vec::<String>::new());
+    // Also when the data itself ends in the bytes `endstream`: the keyword is the one after it.
+    let stream_suffix = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 9 >>\nstream\nendstream\nendstream % endobj\nendobj";
+    assert_eq!(with_page("\n", stream_suffix), Vec::<String>::new());
+    assert_eq!(with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 2 >>\nstream\nxx\nendstream % c\n endobj").len(), 1);
+    // An object with an unsaved edit is written again on saving, so its old bytes aren't read,
+    // nor taken to hold the data of its replacement, which would find `endstream` in the old data.
+    let old = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 18 >>\nstream\nendstream endobj x\nendstream\nendobj";
+    let mut file = laid_out(&[("\n", CATALOG), ("\n", PAGES), ("\n", old)]);
+    assert!(verify(&file, Level::A2b).iter().all(|i| i.clause != "6.1.9"));
+    let mut emptied = Dict::new();
+    emptied.set(b"Type".to_vec(), Object::name("Page"));
+    emptied.set(b"Parent".to_vec(), Object::Ref(ObjRef::new(2, 0)));
+    file.set(ObjRef::new(3, 0), Object::Stream(pdfcraft_cos::Stream::from_raw(emptied, Vec::new())));
+    assert!(verify(&file, Level::A2b).iter().all(|i| i.clause != "6.1.9"));
+
+    // A comment in the header is a white-space character of its own (ISO 32000-2 7.2.4), so the
+    // gap holding it isn't a single one; the header's other findings are still made.
+    assert_eq!(
+        with_page("\n", "3 0 %c\nobj<< /Type /Page /Parent 2 0 R >>\nendobj"),
+        [
+            "Object 3 doesn't separate its object number, generation number and obj keyword by single white-space characters",
+            "The obj keyword of object 3 isn't followed by an end-of-line marker"
+        ]
+    );
+
+    // Each problem is named once, with the first object that has it.
+    let twice = syntax(&[
+        ("\n", "1 0 obj<< /Type /Catalog /Pages 2 0 R >>\nendobj"),
+        ("\n", "2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj"),
+        ("\n", PAGE),
+    ]);
+    assert_eq!(twice, ["The obj keyword of object 1 isn't followed by an end-of-line marker"]);
+    // None of them is fixable.
+    let issues = verify(&laid_out(&[(" ", CATALOG), ("\n", PAGES), ("\n", PAGE)]), Level::A2b);
+    assert!(issues.iter().filter(|i| i.clause == "6.1.9").all(|i| !i.fixable));
+}
+
+fn stream_syntax(streams: &[&str]) -> Vec<String> {
+    let mut layout = vec![("\n", CATALOG), ("\n", PAGES), ("\n", PAGE)];
+    layout.extend(streams.iter().map(|s| ("\n", *s)));
+    verify(&laid_out(&layout), Level::A2b).into_iter().filter(|i| i.clause == "6.1.7.1").map(|i| i.message).collect()
+}
+
+#[test]
+fn streams_are_written_as_pdfa_asks_clause_6_1_7_1() {
+    let none = Vec::<String>::new();
+    let one = |data: &str| stream_syntax(&[&format!("4 0 obj\n{data}\nendobj")]);
+    assert_eq!(one("<< /Length 5 >>\nstream\nHELLO\nendstream"), none);
+    assert_eq!(one("<< /Length 5 >>\nstream\r\nHELLO\r\nendstream"), none);
+    assert_eq!(one("<< /Length 5 >>\r\nstream\nHELLO\rendstream"), none);
+    // Data that holds the bytes `endstream`, where /Length says it goes on.
+    assert_eq!(one("<< /Length 11 >>\nstream\nAendstreamB\nendstream"), none);
+    // Empty data: the marker after `stream` is the one before `endstream`.
+    assert_eq!(one("<< /Length 0 >>\nstream\nendstream"), none);
+    assert_eq!(one("<< /Length 0 >>\nstream\r\nendstream"), none);
+
+    // After `stream`: CR LF or LF alone.
+    let keyword = ["The stream keyword of object 4 isn't followed by CR LF or by LF alone"];
+    assert_eq!(one("<< /Length 5 >>\nstream\rHELLO\nendstream"), keyword);
+    assert_eq!(one("<< /Length 5 >>\nstream \nHELLO\nendstream"), keyword);
+    assert_eq!(one("<< /Length 5 >>\nstream\t\r\nHELLO\nendstream"), keyword);
+    // Before `endstream`: an end-of-line marker.
+    assert_eq!(one("<< /Length 5 >>\nstream\nHELLOendstream"), ["The endstream keyword of object 4 isn't preceded by an end-of-line marker"]);
+    assert_eq!(one("<< /Length 6 >>\nstream\nHELLO endstream"), ["The endstream keyword of object 4 isn't preceded by an end-of-line marker"]);
+
+    // /Length: the bytes up to the end-of-line marker before `endstream`, or up to its LF when it is
+    // CR LF.
+    let length = ["The Length of stream object 4 doesn't match the bytes of its data"];
+    assert_eq!(one("<< /Length 6 >>\nstream\r\nHELLO\r\nendstream"), none);
+    assert_eq!(one("<< /Length 7 >>\nstream\r\nHELLO\r\nendstream"), length);
+    assert_eq!(one("<< /Length 6 >>\nstream\nHELLO\nendstream"), length);
+    assert_eq!(one("<< /Length 3 >>\nstream\nHELLO\nendstream"), length);
+    assert_eq!(one("<< /Length 99 >>\nstream\nHELLO\nendstream"), length);
+    assert_eq!(one("<< /Length -1 >>\nstream\nHELLO\nendstream"), length);
+    assert_eq!(one("<< >>\nstream\nHELLO\nendstream"), length);
+    assert_eq!(one("<< /Length 1 >>\nstream\nAendstreamB\nendstream"), length);
+    // An indirect /Length is resolved.
+    let indirect = |n: &str| stream_syntax(&["4 0 obj\n<< /Length 5 0 R >>\nstream\nHELLO\nendstream\nendobj", &format!("5 0 obj\n{n}\nendobj")]);
+    assert_eq!(indirect("5"), none);
+    assert_eq!(indirect("4"), length);
+    // A wrong /Length with a space after `stream` and none before `endstream`: all three.
+    assert_eq!(one("<< /Length 2 >>\nstream \nHELLOendstream").len(), 3);
+
+    // Each problem is named once, with the first object that has it, and none is fixable.
+    let twice =
+        stream_syntax(&["4 0 obj\n<< /Length 9 >>\nstream\nHELLO\nendstream\nendobj", "5 0 obj\n<< /Length 9 >>\nstream\nHELLO\nendstream\nendobj"]);
+    assert_eq!(twice, length);
+    let file = laid_out(&[("\n", CATALOG), ("\n", PAGES), ("\n", PAGE), ("\n", "4 0 obj\n<< /Length 5 >>\nstream\rHELLOendstream\nendobj")]);
+    let issues: Vec<_> = verify(&file, Level::A2b).into_iter().filter(|i| i.clause == "6.1.7.1").collect();
+    assert_eq!(issues.len(), 2);
+    assert!(issues.iter().all(|i| !i.fixable));
+    // An object with an unsaved edit is written again on saving, so its old bytes aren't read.
+    let mut file = file;
+    let edited = file.get(ObjRef::new(4, 0)).as_ref().clone();
+    file.set(ObjRef::new(4, 0), edited);
+    assert!(verify(&file, Level::A2b).iter().all(|i| i.clause != "6.1.7.1"));
+    // The indirect object rule still reads past such a stream to its `endobj`.
+    assert_eq!(
+        syntax(&[("\n", CATALOG), ("\n", PAGES), ("\n", PAGE), ("\n", "4 0 obj\n<< /Length 9 >>\nstream \nx endobj\nendstream\nendobj")]),
+        none
+    );
+}
+
+/// The bytes judged are the file's: an unsaved edit of only the object an indirect `/Length`
+/// refers to changes neither the length read nor where the data is taken to end.
+#[test]
+fn an_edited_indirect_length_is_read_from_the_file_clause_6_1_7_1() {
+    let file = |saved: i64, edited: i64| {
+        let length = format!("5 0 obj\n{saved}\nendobj");
+        let mut doc = laid_out(&[
+            ("\n", CATALOG),
+            ("\n", PAGES),
+            ("\n", PAGE),
+            ("\n", "4 0 obj\n<< /Length 5 0 R >>\nstream\nHELLO\nendstream\nendobj"),
+            ("\n", &length),
+        ]);
+        doc.set(ObjRef::new(5, 0), Object::Int(edited));
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.7.1").map(|i| i.message).collect::<Vec<_>>()
+    };
+    assert!(file(5, 4).is_empty());
+    assert!(file(5, 99).is_empty());
+    // A wrong /Length in the file is still wrong when the edit would make it right.
+    assert_eq!(file(4, 5), ["The Length of stream object 4 doesn't match the bytes of its data"]);
+}
+
+/// A stream with no `endstream` to find still has its `stream` keyword judged; what depends on
+/// where its data ends isn't reported.
+#[test]
+fn a_stream_without_endstream_still_has_its_keyword_judged_clause_6_1_7_1() {
+    let one = |data: &str| stream_syntax(&[&format!("4 0 obj\n{data}\nendobj")]);
+    assert_eq!(one("<< /Length 5 >>\nstream\rHELLO"), ["The stream keyword of object 4 isn't followed by CR LF or by LF alone"]);
+    assert_eq!(one("<< /Length 5 >>\nstream\nHELLO"), Vec::<String>::new());
+}
+
+/// Whether an object is a stream is read from the file too: an unsaved edit of only the object
+/// an indirect `/Length` refers to, to a length the document can't read the stream with, leaves
+/// the file's stream judged as before, its `stream` keyword included when no `endstream` follows.
+#[test]
+fn a_stream_left_unreadable_by_an_edited_indirect_length_is_still_judged_clause_6_1_7_1() {
+    let file = |stream: &str, edited: Option<i64>| {
+        let mut doc = laid_out(&[("\n", CATALOG), ("\n", PAGES), ("\n", PAGE), ("\n", stream), ("\n", "5 0 obj\n5\nendobj")]);
+        if let Some(edited) = edited {
+            doc.set(ObjRef::new(5, 0), Object::Int(edited));
+        }
+        let read = doc.get(ObjRef::new(4, 0));
+        let said = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.7.1").map(|i| i.message).collect::<Vec<_>>();
+        (matches!(&*read, Object::Stream(_)), said)
+    };
+    let keyword = ["The stream keyword of object 4 isn't followed by CR LF or by LF alone".to_string()];
+    let open = "4 0 obj\n<< /Length 5 0 R >>\nstream\rHELLO\nendobj";
+    assert_eq!(file(open, None), (true, keyword.to_vec()));
+    let (readable, said) = file(open, Some(-1));
+    assert!(!readable, "the fixture's edit leaves the stream unreadable to the document");
+    assert_eq!(said, keyword);
+    // With `endstream` too, all of the stream's findings are those of the file.
+    let closed = "4 0 obj\n<< /Length 5 0 R >>\nstream\rHELLO\nendstream\nendobj";
+    assert_eq!(file(closed, Some(-1)).1, file(closed, None).1);
 }

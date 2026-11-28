@@ -26,6 +26,7 @@
 mod gstate;
 mod header;
 pub mod icc;
+mod indirect;
 mod limits;
 mod spot;
 mod trailer;
@@ -218,6 +219,13 @@ pub const WORDINGS: &[&str] = &[
     "A stream uses LZW compression",
     "A stream refers to an external file",
     "An image asks to be interpolated",
+    "The object number of object {} isn't preceded by an end-of-line marker",
+    "Object {} doesn't separate its object number, generation number and obj keyword by single white-space characters",
+    "The obj keyword of object {} isn't followed by an end-of-line marker",
+    "The endobj keyword of object {} isn't both preceded and followed by an end-of-line marker",
+    "The stream keyword of object {} isn't followed by CR LF or by LF alone",
+    "The Length of stream object {} doesn't match the bytes of its data",
+    "The endstream keyword of object {} isn't preceded by an end-of-line marker",
     "An image has alternates or OPI information",
     "PostScript XObjects aren't allowed",
     "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)",
@@ -667,6 +675,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         push(Issue { clause, message, pattern, value: None, values, page: None, object: Some(object), fixable });
     };
     check_identification(doc, level, &mut issue);
+    check_object_syntax(doc, &mut issue);
     let objs = objects(doc);
     check_xmp_packets(&objs, &located_issue);
     check_output_intent(doc, &objs, &mut issue);
@@ -703,6 +712,40 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     let mut seen = std::collections::HashSet::new();
     out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
     out
+}
+
+/// 6.1.9 and 6.1.7.1: how indirect objects and stream data are written in the file. Each problem is
+/// named once, with the first object that has it. Rewriting the file would fix them, which `convert`
+/// doesn't do.
+fn check_object_syntax(doc: &Document, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    let found = indirect::check(doc);
+    if let Some(n) = found.before_header {
+        issue("6.1.9", "The object number of object {} isn't preceded by an end-of-line marker", Some(n.to_string()), None, false);
+    }
+    if let Some(n) = found.spacing {
+        issue(
+            "6.1.9",
+            "Object {} doesn't separate its object number, generation number and obj keyword by single white-space characters",
+            Some(n.to_string()),
+            None,
+            false,
+        );
+    }
+    if let Some(n) = found.after_obj {
+        issue("6.1.9", "The obj keyword of object {} isn't followed by an end-of-line marker", Some(n.to_string()), None, false);
+    }
+    if let Some(n) = found.around_endobj {
+        issue("6.1.9", "The endobj keyword of object {} isn't both preceded and followed by an end-of-line marker", Some(n.to_string()), None, false);
+    }
+    if let Some(n) = found.after_stream {
+        issue("6.1.7.1", "The stream keyword of object {} isn't followed by CR LF or by LF alone", Some(n.to_string()), None, false);
+    }
+    if let Some(n) = found.length {
+        issue("6.1.7.1", "The Length of stream object {} doesn't match the bytes of its data", Some(n.to_string()), None, false);
+    }
+    if let Some(n) = found.before_endstream {
+        issue("6.1.7.1", "The endstream keyword of object {} isn't preceded by an end-of-line marker", Some(n.to_string()), None, false);
+    }
 }
 
 /// 6.1.2, 6.1.3 and 6.6: identification and metadata, the file header, the file identifier and
