@@ -293,8 +293,11 @@ impl Automation {
             "even" => Subset::Even,
             s => return Err(bad(format!("unknown subset {s:?}"))),
         };
-        let pages = print::select_pages(count, a.opt_str("pages")?, &labels, subset, a.opt_bool("reverse")?.unwrap_or(false))
+        let mut pages = print::select_pages(count, a.opt_str("pages")?, &labels, subset, a.opt_bool("reverse")?.unwrap_or(false))
             .map_err(|e| bad(e.to_string()))?;
+        if a.opt_bool("only_commented")?.unwrap_or(false) {
+            pages = print::only_commented(pages, &pdfcraft_engine::commented_pages(&doc.info.annotations)).map_err(|e| bad(e.to_string()))?;
+        }
         let layout = match a.opt_str("layout")?.unwrap_or("fit") {
             "custom" => Layout::Size(SizeMode::Custom(a.opt_num("scale")?.ok_or_else(|| bad("custom needs scale (percent)"))?)),
             "multiple" => {

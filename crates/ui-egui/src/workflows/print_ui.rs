@@ -840,6 +840,22 @@ mod tests {
         }
     }
 
+    /// Only pages with comments narrows whichever pages the draft chose, and says so when none is left (#7015).
+    #[test]
+    fn only_commented_narrows_the_chosen_pages() {
+        let labels: Vec<String> = (1..=5).map(|n| n.to_string()).collect();
+        let mut draft = PrintDraft { only_commented: true, commented: vec![1, 3], ..Default::default() };
+        assert_eq!(draft.settings(5, &labels).unwrap().pages, vec![1, 3]);
+        draft.which = Which::Selected;
+        draft.selected = vec![0, 3, 4];
+        assert_eq!(draft.settings(5, &labels).unwrap().pages, vec![3]);
+        draft.which = Which::Current;
+        draft.current_page = 2;
+        assert!(draft.settings(5, &labels).unwrap_err().contains("comment"));
+        draft.only_commented = false;
+        assert_eq!(draft.settings(5, &labels).unwrap().pages, vec![2], "off, the commented list changes nothing");
+    }
+
     /// #5806: with Print as image, grayscale makes the pictures grey, so the job doesn't ask the
     /// driver for it as well; a driver that keeps no grayscale setting then still prints.
     #[test]

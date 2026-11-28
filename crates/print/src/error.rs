@@ -1,7 +1,8 @@
 /// What can go wrong when printing.
 ///
-/// The three things a *person* can be wrong about — there is nothing to print, a page number past
-/// the end, a range that is not a page — each have their own variant with the numbers apart from
+/// The things a *person* can be wrong about — there is nothing to print, a page number past the
+/// end, a range that is not a page, too many pages, no commented page among those chosen — each
+/// have their own variant with the numbers apart from
 /// the words, so an interface can say them in its own language with [`PrintError::said`]. The rest
 /// are faults rather than mistakes and carry their text as it is.
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -17,6 +18,9 @@ pub enum PrintError {
     /// A range that names more pages than a listing will take, with the limit.
     #[error("the range selects more than {0} pages")]
     TooManySelected(usize),
+    /// Only pages with comments was asked for, and none of the chosen pages has one.
+    #[error("none of the chosen pages has a comment")]
+    NoCommentedPages,
     #[error("{0}")]
     Invalid(String),
     #[error("{0}")]
@@ -36,13 +40,14 @@ pub fn in_english(wording: &str) -> String {
 
 /// What a person can get wrong about what to print, in English, with their holes still in them.
 ///
-/// An interface that reports these in another language translates these four, which is the whole
+/// An interface that reports these in another language translates these five, which is the whole
 /// reason they are gathered here; `wordings_are_said` keeps them in step with the errors.
 pub const WORDINGS: &[&str] = &[
     "there are no pages to print",
     "page {n} is out of range (1–{count})",
     "{page} is not a page number or label",
     "the range selects more than {limit} pages",
+    "none of the chosen pages has a comment",
 ];
 
 impl PrintError {
@@ -60,6 +65,7 @@ impl PrintError {
             // The token goes in quoted, the way it is typed, as the error itself prints it.
             PrintError::NotAPage(token) => say(&words("{page} is not a page number or label"), &[("{page}", format!("{token:?}"))]),
             PrintError::TooManySelected(limit) => say(&words("the range selects more than {limit} pages"), &[("{limit}", limit.to_string())]),
+            PrintError::NoCommentedPages => words("none of the chosen pages has a comment"),
             fault => fault.to_string(),
         }
     }

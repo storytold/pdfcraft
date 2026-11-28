@@ -1,7 +1,7 @@
 //! Pages to Print: all, a range ("1-3, 6, 9-", page labels allowed, "(n)" for the page at
 //! position n), odd or even pages, reverse.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::PrintError;
 
@@ -164,6 +164,15 @@ pub fn select_listed(count: usize, pages: &[usize], subset: Subset, reverse: boo
         return Err(PrintError::OutOfRange(p.saturating_add(1), count));
     }
     narrow(pages.to_vec(), subset, reverse)
+}
+
+/// The pages of `pages` that carry a comment, in print order: Print ▸ Only pages with comments
+/// (#7015). `commented` lists the pages (0-based, any order) that have a comment. It narrows what
+/// [`select_pages`] or [`select_listed`] chose, so the range, odd or even and reverse still apply.
+pub fn only_commented(pages: Vec<usize>, commented: &[usize]) -> Result<Vec<usize>, PrintError> {
+    let has: HashSet<usize> = commented.iter().copied().collect();
+    let out: Vec<usize> = pages.into_iter().filter(|p| has.contains(p)).collect();
+    if out.is_empty() { Err(PrintError::NoCommentedPages) } else { Ok(out) }
 }
 
 /// The odd or even pages of those chosen, by page number (the first page of the document is 1,

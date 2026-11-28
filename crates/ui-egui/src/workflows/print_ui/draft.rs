@@ -50,6 +50,10 @@ pub struct PrintDraft {
     pub area: Option<(usize, [f64; 4])>,
     pub subset: Subset,
     pub reverse: bool,
+    /// Only pages with comments (#7015): of the pages chosen, print those in `commented`.
+    pub only_commented: bool,
+    /// The pages (0-based) that carried a comment when the dialog opened.
+    pub commented: Vec<usize>,
     pub handling: Handling,
     pub size: SizeMode,
     pub custom_scale: f64,
@@ -131,6 +135,8 @@ impl Default for PrintDraft {
             area: None,
             subset: Subset::All,
             reverse: false,
+            only_commented: false,
+            commented: Vec::new(),
             handling: Handling::Size,
             size: SizeMode::Fit,
             custom_scale: 100.0,
@@ -461,10 +467,11 @@ impl PrintDraft {
             Which::Selected => print::select_listed(count, &self.selected, self.subset, self.reverse),
             Which::Current => print::select_listed(count, &[self.current_page], self.subset, self.reverse),
             Which::All | Which::Range | Which::Area => print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse),
-        }
+        };
+        let pages = if self.only_commented { pages.and_then(|p| print::only_commented(p, &self.commented)) } else { pages };
         // What the person got wrong about what to print is said in their language: the engine hands
         // the wording over whole and the page numbers apart from it.
-        .map_err(|e| e.said(&crate::i18n::words))?;
+        let pages = pages.map_err(|e| e.said(&crate::i18n::words))?;
         let layout = match self.handling {
             Handling::Size => size,
             Handling::Multiple => {
