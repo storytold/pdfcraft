@@ -3,8 +3,9 @@
 
 use crate::support::AppHarness as _;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::Session;
+use pdfcraft_engine::pdfa::Level;
 use pdfcraft_ui_egui::{PdfCraftApp, RightPanel};
 
 #[test]
@@ -230,6 +231,104 @@ fn declaring(ids: &str) -> Vec<u8> {
     }
     pdf.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
     pdf
+}
+
+/// A one-page PDF 2.0 file that PDF/A-4 asks nothing more of, declaring PDF/A-4 with the
+/// conformance letter `conformance` (none for PDF/A-4 itself).
+fn pdfa4(conformance: &str) -> Vec<u8> {
+    let conformance = if conformance.is_empty() { String::new() } else { format!("<pdfaid:conformance>{conformance}</pdfaid:conformance>") };
+    let xmp = format!(
+        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\
+         <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" \
+         xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\"><pdfaid:part>4</pdfaid:part><pdfaid:rev>2020</pdfaid:rev>{conformance}\
+         </rdf:Description></rdf:RDF></x:xmpmeta>\n<?xpacket end=\"w\"?>"
+    );
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R /Metadata 4 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Resources << >> >>".to_string(),
+        format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len()),
+    ];
+    let mut pdf = b"%PDF-2.0\n%\xE2\xE3\xCF\xD3\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    let id = "/ID [<00112233445566778899AABBCCDDEEFF> <00112233445566778899AABBCCDDEEFF>]";
+    pdf.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R {id} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    pdf
+}
+
+/// Standards ▸ PDF/A opens on the level the document declares when it verifies that level, so a
+/// PDF/A-4 file is checked against PDF/A-4's own rules and not PDF/A-2b's. Save as PDF/A makes only
+/// PDF/A-2b and 3b files, so it isn't offered for the PDF/A-4 levels.
+#[test]
+fn pdfa_dialog_opens_on_the_declared_level_and_verifies_pdfa4_only() {
+    const VERIFIED_ONLY: &str = "PDF/A-4 levels are verified only: Save as PDF/A makes PDF/A-2b and 3b files.";
+    let files = [
+        ("a4.pdf", pdfa4("")),
+        ("a4e.pdf", pdfa4("E")),
+        ("a3b.pdf", declaring("pdfaid:part=\"3\" pdfaid:conformance=\"B\"")),
+        ("a2a.pdf", declaring("pdfaid:part=\"2\" pdfaid:conformance=\"A\"")),
+    ];
+    let opened = files.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        for (name, bytes) in &opened {
+            app.open_bytes(&egui::Context::default(), name, None, bytes.clone()).unwrap();
+        }
+        app.active = Some(0);
+        app
+    });
+    h.run_steps(4);
+    assert!(h.execute("standards.pdfa"));
+    h.run_steps(2);
+    assert_eq!(h.state().pdfa.level, Level::A4);
+    h.get_by_label("Declared conformance: PDF/A-4");
+    h.get_by_label(VERIFIED_ONLY);
+    assert!(h.get_by_label("Save as PDF/A").accesskit_node().is_disabled());
+    h.get_by_label("Verify").click();
+    h.run_steps(3);
+    h.get_by_label("PdfCraft's checks found no problems for PDF/A-4. This is not a validator result.");
+    // Nothing a click or Enter can reach converts a PDF/A-4 level, and Enter leaves the dialog open.
+    let id = h.state().active_ids().unwrap().1;
+    h.get_by_label("Save as PDF/A").click();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), None);
+    assert!(crate::support::dialog_open(&h));
+    // Another active document gets its own level, and the dialog forgets the last result.
+    for (i, level) in [(1, Level::A4e), (2, Level::A3b), (3, Level::A2b)] {
+        h.state_mut().active = Some(i);
+        h.run_steps(2);
+        assert_eq!(h.state().pdfa.level, level, "{}", files[i].0);
+        h.get_by_label("Verify to see what the document needs.");
+    }
+    h.get_by_label("Declared conformance: PDF/A-2a");
+    assert!(!h.get_by_label("Save as PDF/A").accesskit_node().is_disabled());
+    assert!(h.query_by_label(VERIFIED_ONLY).is_none());
+    // A level picked by hand stays while the document stays active, until the dialog opens again.
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Conformance level:").click();
+    h.run_steps(2);
+    h.get_by_label("PDF/A-4f").click_accesskit();
+    h.run_steps(3);
+    assert_eq!(h.state().pdfa.level, Level::A4f);
+    h.get_by_label(VERIFIED_ONLY);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!crate::support::dialog_open(&h));
+    assert!(h.execute("standards.pdfa"));
+    h.run_steps(2);
+    assert_eq!(h.state().pdfa.level, Level::A2b);
 }
 
 #[test]
