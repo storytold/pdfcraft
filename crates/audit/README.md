@@ -28,7 +28,8 @@ Limits, by design and documented rather than hidden:
   translucent one (`/ca` below 1) is not flagged;
 - covers inside form XObjects are found, but only text drawn directly in the page content is
   checked under them;
-- annotation rectangles are compared in unrotated user space, so `/Rotate` pages may misalign;
+- annotation covers use their stored `/Rect`; appearance streams and `NoRotate` placement are
+  not interpreted;
 - a cover that hides less than half of every word it touches, less than 40% of a line's box and
   less than 40% of its words (a sliver of a long value) is not flagged.
 

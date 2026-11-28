@@ -20,8 +20,9 @@
 //!
 //! Detection limits (documented, not hidden): other filled paths, slanted or bent strokes,
 //! shadings and patterns are not considered; a cover drawn with a translucent ExtGState
-//! (`/ca`, `/CA < 1`) or a highlight or square with `/CA < 1` is not flagged; annotation rectangles are
-//! compared in unrotated user space, so pages with `/Rotate` may misalign; covers inside form
+//! (`/ca`, `/CA < 1`) or a highlight or square with `/CA < 1` is not flagged; opaque filled
+//! `/Square` annotations use their stored `/Rect`, without interpreting their appearance streams
+//! or `NoRotate` placement; covers inside form
 //! XObjects are found, but only text drawn directly in the page content is checked under them,
 //! so text inside a form XObject is not audited; a `/Highlight` is judged by its own
 //! `/QuadPoints`, `/C` and `/CA`, never by its appearance stream (`/AP`), so a finding can differ
