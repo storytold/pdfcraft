@@ -49,14 +49,15 @@ fn the_replaced_forms_cleanup_names_the_page_it_refuses() {
 }
 
 /// With a Type 3 font listed, the fonts' cleanup reads the soft masks without resources of their
-/// own that the page sets, which the walk doesn't enter: one with bytes the parser can't read is
-/// refused, naming the page.
+/// own that the page sets: when the soft mask exceeds 2,000,000 operators, the Type 3 cleanup
+/// refuses and names the page.
 #[test]
 fn the_type3_cleanup_names_the_page_it_refuses() {
-    let group = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency >>", b"BT ( ET");
+    let many = b"n ".repeat(2_000_001);
+    let group = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency >>", &many);
     let font = b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 65 /Widths [500] /Encoding << /Differences [65 /A] >> /CharProcs << >> >>".to_vec();
     let res = "/Font << /F1 5 0 R /T3 10 0 R >> /ExtGState << /GS1 << /SMask << /S /Luminosity /G 9 0 R >> >> >>";
-    refuses_page_two(second_page_hidden(b"/GS1 gs", res, vec![group, font]), "a soft mask or form without resources of its own has bytes");
+    refuses_page_two(second_page_hidden(b"/GS1 gs", res, vec![group, font]), "a form without resources of its own has bytes");
 }
 
 /// A page whose forms go past what one page may read is refused, named, by Apply Redactions and by
