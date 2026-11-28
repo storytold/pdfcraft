@@ -75,13 +75,22 @@ mod native {
     use std::time::{Duration, Instant};
 
     use super::{Script, run_script};
+    use crate::interaction::{InteractiveEvent, MAX_PROMPTS, Prompt};
     use crate::xfa::{ENGINE_START_LIMIT, XfaDoc, XfaOutcome};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Longest a script waits for the user to answer one message box, as an AcroForm script's
+    /// prompt waits; then it gets the buttons' safe default.
+    const PROMPT_LIMIT: Duration = Duration::from_secs(300);
 
     enum Reply {
         /// The thread is up.
         Ready,
         /// The engine is ready for the script just sent: its time starts now.
         Started,
+        /// The script asks the user (a message box) and waits for the answer.
+        Prompt(Prompt, Sender<Option<String>>),
         Outcome(Box<XfaOutcome>),
     }
 
@@ -99,11 +108,26 @@ mod native {
         dead: Option<String>,
         /// How long the engine has to be ready for a script ([`ENGINE_START_LIMIT`] by default).
         start_limit: Duration,
+        /// Where the scripts' questions go, when the viewer can ask the user
+        /// ([`XfaSession::with_prompts`]), and how many the event has asked.
+        prompts: Option<(Sender<InteractiveEvent>, Arc<AtomicUsize>)>,
     }
 
     impl XfaSession {
         pub fn new(doc: XfaDoc) -> XfaSession {
-            XfaSession { doc, worker: None, dead: None, start_limit: ENGINE_START_LIMIT }
+            XfaSession { doc, worker: None, dead: None, start_limit: ENGINE_START_LIMIT, prompts: None }
+        }
+
+        /// Let the scripts' message boxes ask the user: each question goes to `prompts` with a
+        /// sender for the answer, and the script waits on its thread (at most [`PROMPT_LIMIT`]
+        /// for each), its time limit stopped meanwhile. `asked` counts the event's questions,
+        /// across every session the event uses (a script turning field highlighting on or off
+        /// starts a new one): past [`MAX_PROMPTS`] nobody is asked and each message box gets its
+        /// buttons' safe default, so a form can't keep the user answering. Without it a message
+        /// box takes the event's answers, then its buttons' safe default.
+        pub fn with_prompts(mut self, prompts: Sender<InteractiveEvent>, asked: Arc<AtomicUsize>) -> XfaSession {
+            self.prompts = Some((prompts, asked));
+            self
         }
 
         /// Multiply the time the engine has to be ready for a script by `factor` (a script's
@@ -125,7 +149,26 @@ mod native {
                 let (to, inbox) = channel::<Box<Script>>();
                 let (reply, from) = channel::<Reply>();
                 let doc = self.doc.clone();
+                let asking = self.prompts.is_some();
                 let spawned = std::thread::Builder::new().name("pdfcraft-xfa-session".into()).stack_size(crate::SCRIPT_STACK).spawn(move || {
+                    // The scripts' questions reach the session (which passes them on and stops
+                    // the clock while the user answers) through the reply channel. The host is
+                    // set once for the thread, so the prompt limit holds for the whole event.
+                    if asking {
+                        let (questions, asked) = channel::<InteractiveEvent>();
+                        let forward = reply.clone();
+                        let forwarder = std::thread::Builder::new().name("pdfcraft-xfa-prompts".into()).spawn(move || {
+                            while let Ok(InteractiveEvent::Prompt(prompt, answer)) = asked.recv() {
+                                if forward.send(Reply::Prompt(prompt, answer)).is_err() {
+                                    break;
+                                }
+                            }
+                        });
+                        // Without the forwarder nobody would answer: the scripts don't ask.
+                        if forwarder.is_ok() {
+                            crate::interaction::set_host(Some(questions));
+                        }
+                    }
                     crate::xfa::warm_up();
                     // The caller is gone when a send fails: nothing to report then.
                     let _ = reply.send(Reply::Ready);
@@ -164,6 +207,7 @@ mod native {
             }
             let timeout = script.timeout;
             let start_limit = self.start_limit;
+            let prompts = self.prompts.clone();
             let worker = match self.worker() {
                 Ok(w) => w,
                 Err(why) => return failed(why),
@@ -176,17 +220,33 @@ mod native {
             // The engine's start, then the script's own time.
             let (mut running, mut limit) = (false, start_limit);
             let mut deadline = Instant::now().checked_add(limit);
+            let mut waited = Duration::ZERO;
             loop {
                 let left = deadline.map_or(limit, |d| d.saturating_duration_since(Instant::now()));
                 match worker.from.recv_timeout(left) {
-                    Ok(Reply::Outcome(o)) => {
+                    Ok(Reply::Outcome(mut o)) => {
                         // A FormCalc script its own clock stopped reports as abandoned: the
                         // session ends as it does when the wait runs out first.
                         if o.abandoned {
                             self.dead = o.error.clone();
                             self.worker = None;
                         }
+                        o.waited = waited;
                         return *o;
+                    }
+                    Ok(Reply::Prompt(prompt, answer)) => {
+                        // The user's time isn't the script's: its clock stops until the answer.
+                        let asked = Instant::now();
+                        let (give, given) = channel();
+                        let sent = prompts.as_ref().is_some_and(|(p, asked)| {
+                            asked.fetch_add(1, Ordering::Relaxed) < MAX_PROMPTS && p.send(InteractiveEvent::Prompt(prompt, give)).is_ok()
+                        });
+                        let reply = if sent { given.recv_timeout(PROMPT_LIMIT).ok().flatten() } else { None };
+                        // The script's own wait may have ended first: then it took the default.
+                        let _ = answer.send(reply);
+                        let paused = asked.elapsed();
+                        waited = waited.saturating_add(paused);
+                        deadline = deadline.and_then(|d| d.checked_add(paused));
                     }
                     Ok(Reply::Started) => {
                         // A second call changes nothing: the script's time has already begun.

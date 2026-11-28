@@ -138,6 +138,7 @@ pub(crate) fn run_formcalc_at(
         Err(e) => return XfaOutcome { error: Some(e), ..Default::default() },
     };
     let mut host = XHost::new(root, reuse, &event.target, doc);
+    host.answers = event.answers.clone();
     #[cfg(target_arch = "wasm32")]
     let _ = deadline;
     let mut interp = Interp {
@@ -186,6 +187,7 @@ pub(crate) fn run_formcalc_at(
     out.notes = host.notes();
     out.effects = host.effects;
     out.console = host.console;
+    out.messages = host.messages;
     clip_result(&mut out);
     out
 }

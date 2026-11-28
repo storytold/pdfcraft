@@ -21,6 +21,8 @@ pub enum InteractiveEvent {
     Prompt(Prompt, Sender<Option<String>>),
     Complete(Outcome),
 }
+/// Most prompts one script invocation (an AcroForm script, an XFA event) shows the user.
+pub const MAX_PROMPTS: usize = 32;
 thread_local! { static HOST:RefCell<Option<(Sender<InteractiveEvent>,usize)>>=const {RefCell::new(None)}; }
 /// Tell alert/menu helpers whether this worker has an interactive or deterministic reply channel.
 pub(crate) fn has_host() -> bool {
@@ -31,12 +33,17 @@ pub(crate) fn has_host() -> bool {
 pub(crate) fn set_host(host: Option<Sender<InteractiveEvent>>) {
     HOST.with(|h| *h.borrow_mut() = host.map(|h| (h, 0)));
 }
+/// Whether the invocation may still ask: it has a prompt channel and has asked fewer than
+/// [`MAX_PROMPTS`] questions.
+pub(crate) fn can_ask() -> bool {
+    HOST.with(|h| h.borrow().as_ref().is_some_and(|(_, n)| *n < MAX_PROMPTS))
+}
 /// Charge one prompt to the invocation's budget: the channel to send it on, if the worker has one.
 fn reserve() -> JsResult<Option<Sender<InteractiveEvent>>> {
     HOST.with(|h| {
         let mut h = h.borrow_mut();
         let Some((tx, n)) = h.as_mut() else { return Ok(None) };
-        if *n >= 32 {
+        if *n >= MAX_PROMPTS {
             return Err(error("too many interactive prompts"));
         }
         *n += 1;
