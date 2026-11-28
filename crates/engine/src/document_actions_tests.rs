@@ -101,6 +101,36 @@ fn the_open_action_does_not_run_with_javascript_off() {
     assert!(s.run_document_actions(id, DocumentScriptEvent::CatalogOpen).is_empty());
 }
 
+/// An administrator's policy keeps the catalog's actions off while the user's own choice says
+/// JavaScript is on, and a policy that arrives after the document opened drops its realm, so
+/// nothing a script set up carries over once the policy goes.
+#[test]
+fn an_administrators_policy_keeps_document_actions_off() {
+    let lock = || Some(crate::js::JavaScriptLock { source: "policy".into(), unreadable: None });
+    let bytes = Arc::new(form(
+        "/OpenAction << /S /JavaScript /JS (if \\(typeof runs == 'undefined'\\) var runs = 0; runs++; getField\\('log'\\).value = 'run ' + runs;) >> /AA << /WS << /S /JavaScript /JS (getField\\('log'\\).value = 'saved';) >> >>",
+        &[],
+    ));
+    // Locked from the start: neither the open action nor Will Save runs.
+    let mut s = Session::new();
+    s.set_javascript_lock(lock());
+    assert!(s.javascript_preference(), "the user's own choice is on");
+    let id = s.open("locked.pdf", None, bytes.clone(), None).unwrap();
+    assert_eq!(log(&s, id), "");
+    assert!(s.run_document_actions(id, DocumentScriptEvent::CatalogOpen).is_empty());
+    assert!(s.run_document_actions(id, DocumentScriptEvent::WillSave).is_empty());
+    assert_eq!(log(&s, id), "");
+    // Locked after opening: the realm the open action ran in is dropped.
+    let mut s = Session::new();
+    let id = s.open("open.pdf", None, bytes, None).unwrap();
+    assert_eq!(log(&s, id), "run 1");
+    s.set_javascript_lock(lock());
+    assert!(s.run_document_actions(id, DocumentScriptEvent::WillSave).is_empty());
+    assert_eq!(log(&s, id), "run 1");
+    s.set_javascript_lock(None);
+    assert_eq!(s.run_javascript(id, "typeof runs;", None).unwrap().result.as_deref(), Some("undefined"), "a fresh realm");
+}
+
 /// Revert reopens the saved file in a fresh realm, so the open action runs again from scratch.
 #[test]
 fn revert_runs_the_open_action_again_in_a_fresh_realm() {

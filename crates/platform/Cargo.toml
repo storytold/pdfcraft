@@ -10,10 +10,20 @@ workspace = true
 
 [dependencies]
 log = { workspace = true }
+# Administrators' policy file on Linux and the BSDs (policy.rs).
+serde_json = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# Administrators' policies in HKLM and HKCU\SOFTWARE\Policies (policy.rs): safe wrappers over
+# the registry API. Already in the tree with this feature through the desktop app.
+winsafe = { version = "0.0.29", default-features = false, features = ["advapi"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Atomic saves use explicit xattr size queries and fall back to plain fsync if F_FULLFSYNC is refused.
 rustix = { version = "1.1.6", features = ["fs"] }
+# Administrators' policies as managed preferences (policy.rs): CFPreferences' safe bindings.
+# Already in the tree through winit and wgpu.
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFBase", "CFNumber", "CFPreferences", "CFPropertyList", "CFString"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Already in the dependency graph through the accessibility integration. The portal watcher

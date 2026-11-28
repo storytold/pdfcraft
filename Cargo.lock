@@ -6524,7 +6524,10 @@ dependencies = [
  "async-channel",
  "futures-lite",
  "log",
+ "objc2-core-foundation",
  "rustix 1.1.6",
+ "serde_json",
+ "winsafe",
  "zbus",
 ]
 

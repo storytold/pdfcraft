@@ -4,7 +4,7 @@
 use craft::theme::variant::Tone;
 use craft::ui::runtime::{env::WindowKey, toast};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 // PLAN: assumed `pdfcraft_ui_egui::JsDialog` with `DocumentScripts(DocJsDraft)` and `Console` (pdf-forms-w17)
 use crate::support::AppHarness as _;
 use pdfcraft_ui_egui::{JsDialog, PdfCraftApp};
@@ -253,6 +253,90 @@ fn document_scripts_and_preferences() {
     fresh.set_option(&egui::Context::default(), "language", "en").unwrap();
     fresh.apply_settings(&saved);
     assert!(!fresh.session.javascript(), "the preference is remembered");
+}
+
+#[test]
+fn an_administrators_policy_locks_the_preference_off() {
+    let mut h = harness();
+    let source = r"HKLM\SOFTWARE\Policies\ArtCraft\PdfCraft\DisableJavaScript";
+    h.state_mut().session.set_javascript_lock(Some(pdfcraft_engine::js::JavaScriptLock { source: source.into(), unreadable: None }));
+    h.state_mut().open_preferences();
+    h.run_steps(2);
+    // Below the fold in a 900-point window: scroll to it so the click lands.
+    h.get_by_label("Enable Acrobat JavaScript").scroll_to_me();
+    h.run_steps(4);
+    let checkbox = h.get_by_label("Enable Acrobat JavaScript");
+    assert!(checkbox.accesskit_node().is_disabled(), "locked");
+    assert_eq!(checkbox.accesskit_node().toggled(), Some(egui::accesskit::Toggled::False), "shown off");
+    // The note and where the policy is are the row's help, shown under the box.
+    h.get_by_label_contains("Turned off by your administrator.");
+    h.get_by_label_contains(source);
+    // Clicking the locked box changes nothing. Neither does OK, the person's own choice included,
+    // when another setting changed too, so that OK writes the whole draft back.
+    h.get_by_label("Enable Acrobat JavaScript").click();
+    h.run_steps(2);
+    let reload = h.state().reload_changed_files;
+    h.get_by_label("Reload documents when their files change on disk").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("Reload documents when their files change on disk").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert!(!h.state().session.javascript());
+    assert!(h.state().session.javascript_preference(), "the locked box leaves the person's choice alone");
+    assert_ne!(h.state().reload_changed_files, reload, "OK applied the other change");
+    // The button script doesn't run.
+    let id = h.state().active_ids().unwrap().1;
+    h.run_button_script(id, "hello", "getField('greeting').value = 'ran';");
+    h.run_steps(2);
+    assert_ne!(value(&h, "greeting"), ["ran"]);
+    // The console says why.
+    assert!(h.execute("tools.js_console"));
+    h.run_steps(2);
+    h.get_by_label("JavaScript is turned off by your administrator.");
+
+    // What's saved is the person's own choice (on), so it comes back once the policy is gone.
+    let saved = h.state().settings_snapshot();
+    let mut fresh = crate::control::new_app();
+    fresh.set_option(&egui::Context::default(), "language", "en").unwrap();
+    fresh.apply_settings(&saved);
+    assert!(fresh.session.javascript(), "the policy isn't saved as the preference");
+}
+
+/// Reset Section on the JavaScript card leaves the person's own choice alone while a policy
+/// locks it, as the locked box does: their "off" is still off once the policy goes.
+#[test]
+fn resetting_the_javascript_section_under_a_policy_keeps_the_persons_choice() {
+    let mut h = harness();
+    h.state_mut().session.set_javascript(false);
+    h.state_mut().session.set_javascript_lock(Some(pdfcraft_engine::js::JavaScriptLock { source: "policy".into(), unreadable: None }));
+    h.state_mut().open_preferences();
+    h.run_steps(2);
+    // The JavaScript card is the last one, so its Reset Section is the last.
+    h.query_all_by_label("Reset Section").last().expect("a Reset Section button").scroll_to_me();
+    h.run_steps(4);
+    h.query_all_by_label("Reset Section").last().expect("a Reset Section button").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert!(!h.state().session.javascript_preference(), "the reset left the person's choice alone");
+}
+
+#[test]
+fn an_unreadable_policy_says_so() {
+    let mut h = harness();
+    let lock = pdfcraft_engine::js::JavaScriptLock {
+        source: "/etc/pdfcraft/policy.json (DisableJavaScript)".into(),
+        unreadable: Some("it isn't valid JSON".into()),
+    };
+    h.state_mut().session.set_javascript_lock(Some(lock));
+    h.state_mut().open_preferences();
+    h.run_steps(2);
+    h.get_by_label("Enable Acrobat JavaScript").scroll_to_me();
+    h.run_steps(4);
+    assert!(h.get_by_label("Enable Acrobat JavaScript").accesskit_node().is_disabled());
+    h.get_by_label_contains("Turned off because your administrator's policy couldn't be read.");
+    h.get_by_label_contains("/etc/pdfcraft/policy.json (DisableJavaScript): it isn't valid JSON");
 }
 
 #[test]

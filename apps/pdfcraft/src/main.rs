@@ -521,6 +521,8 @@ fn app_creator<'a>(
         app.reopen_last_session = reopen::system_default();
         let settings = pdfcraft_ui_egui::settings::open();
         app.apply_settings(settings.get());
+        // Administrators' policies win over the saved preferences.
+        app.apply_admin_policy();
         app.attach_settings(settings);
         #[cfg(target_os = "windows")]
         if let Some(window) = cc.winit_window() {

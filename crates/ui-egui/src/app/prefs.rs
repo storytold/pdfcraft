@@ -241,7 +241,8 @@ impl PdfCraftApp {
             trusted: Some(trusted),
             custom_stamps: json_text(&stamps_ui::encode(&self.custom_stamps)),
             actions: json_text(&actions_ui::encode(&self.custom_actions)),
-            javascript: Some(self.session.javascript()),
+            // The person's own choice, not what an administrator's policy forces.
+            javascript: Some(self.session.javascript_preference()),
         };
         // PLAN: assumed app fields `dock`, `rail_side`, `recent_view`, `recent_sort` (chrome-w13, chrome-w16)
         let dock = settings::Dock { dock: json_text(&*self.dock), rail_side: name_of(&self.rail_side) };

@@ -76,10 +76,13 @@ fn console(app: &mut PdfCraftApp, ui: &mut egui::Ui, open: &mut bool) {
     ];
     let buttons: Vec<FooterButton> = actions.iter().map(|(_, b)| b.clone()).collect();
     let javascript = app.session.javascript();
+    let locked = app.session.javascript_lock().is_some();
     let mut submitted = false;
     let console = &mut app.js_console;
     let shown = Dialog::new(tl!("JavaScript Console")).opened(Bind::bound(&mut *open)).buttons(buttons).show(ui, |ui, _cx| {
-        if !javascript {
+        if locked {
+            Text::new(tl!("JavaScript is turned off by your administrator.")).shade(Shade::Muted).show(ui);
+        } else if !javascript {
             Text::new(tl!("JavaScript is turned off (Preferences ▸ JavaScript).")).shade(Shade::Muted).show(ui);
         }
         Stack::new().scroll(Scroll::vertical().anchored_end()).show(ui, |ui, _| {
