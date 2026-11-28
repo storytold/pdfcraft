@@ -10106,6 +10106,9 @@ fn comparing_documents_through_tools() {
         .unwrap();
     let r = ok(&mut a, "doc_compare", json!({ "doc": v2, "other": v1, "visual": true }));
     assert!(!r["visual"].as_array().unwrap().is_empty(), "{r}");
+    let same = ok(&mut a, "doc_compare", json!({ "doc": v1, "other": v1, "visual": true }));
+    let score = |r: &Value| r["similarity"][0]["ssim"].as_f64().unwrap_or(f64::NAN);
+    assert!(score(&r) < score(&same), "a changed page looks less alike than an unchanged one: {r} {same}");
     assert_eq!((r["replaced"].as_u64(), r["inserted"].as_u64(), r["deleted"].as_u64()), (Some(1), Some(1), Some(1)), "{r}");
     assert_eq!(r["changes"][0]["old"]["text"], "900");
     assert_eq!(r["changes"][0]["new"]["text"], "950");

@@ -7,6 +7,10 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod similarity;
+
+pub use similarity::structural_similarity;
+
 /// A word of one document.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Word {

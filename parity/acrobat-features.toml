@@ -9467,8 +9467,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["doc.compare"]
 tools = ["doc_compare"]
-evidence = ["crates/compare/src/lib.rs::finds_changed_regions", "crates/engine/src/tests.rs::comparing_two_versions_of_a_document", "crates/automation/tests/it/automation.rs::comparing_documents_through_tools"]
-notes = "Pages rendered at 72 dpi and compared page by page; differing regions shaded orange where no text change explains them."
+evidence = ["crates/compare/src/lib.rs::finds_changed_regions", "crates/compare/src/similarity.rs::identical_pictures_score_highest_and_more_damage_scores_lower", "crates/engine/src/tests.rs::comparing_two_versions_of_a_document", "crates/automation/tests/it/automation.rs::comparing_documents_through_tools"]
+notes = "Pages rendered at 72 dpi and compared page by page; differing regions shaded orange where no text change explains them. Automation also reports each page's structural similarity (SSIM on luma), null for a page that could not be compared; the GUI does not show it yet."
 
 [[feature]]
 id = "misc.compare-side-by-side"
