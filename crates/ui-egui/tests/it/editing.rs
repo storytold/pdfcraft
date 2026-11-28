@@ -3188,6 +3188,39 @@ fn replace_split_selection_keeps_the_unchecked_page() {
     adjacent.run_steps(3);
     assert_eq!(texts_of(adjacent.state(), 0), ["Original 1", "Replacement 1", "Replacement 2"]);
     assert_eq!(sizes(adjacent.state()), [(200, 300), (400, 500), (400, 500)]);
+
+    // Replacing 3 pages with a 1-page file is enabled, deletes the 2 excess pages, and selects the surviving page.
+    let mut fewer_app = crate::control::new_app();
+    fewer_app.set_option(&egui::Context::default(), "language", "en").unwrap();
+    fewer_app.open_bytes(&egui::Context::default(), "original.pdf", None, sized(3, 200, 300, "Original")).unwrap();
+    fewer_app.views[0].select_pages(&[0, 1, 2]);
+    fewer_app.start_replace(&egui::Context::default(), "single.pdf".into(), sized(1, 400, 500, "Single"));
+    let mut fewer = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        fewer_app
+    });
+    fewer.run_steps(2);
+    let _ = egui_kittest::kittest::Queryable::get_by_label(&fewer, "2 extra original pages will be deleted.");
+    egui_kittest::kittest::Queryable::get_by_label(&fewer, "OK").click();
+    fewer.run_steps(3);
+    assert_eq!(texts_of(fewer.state(), 0), ["Single 1"]);
+    assert_eq!(fewer.state().views[0].selected.iter().copied().collect::<Vec<_>>(), [0]);
+
+    // Replacing 1 page with a 3-page replacement range inserts the extra 2 pages right after it and selects all 3.
+    let mut more = open(&[1]);
+    let replace_id = craft::ui::dialog::dialog_id("page.replace");
+    let ctx = more.ctx.clone();
+    more.state_mut().dialogs.set_json_field(&ctx, replace_id, "src_from", serde_json::json!(2)).unwrap();
+    more.state_mut().dialogs.set_json_field(&ctx, replace_id, "src_to", serde_json::json!(4)).unwrap();
+    more.run_steps(2);
+    let _ = egui_kittest::kittest::Queryable::get_by_label(&more, "2 extra replacement pages will be inserted.");
+    egui_kittest::kittest::Queryable::get_by_label(&more, "OK").click();
+    more.run_steps(3);
+    assert_eq!(texts_of(more.state(), 0), ["Original 1", "Replacement 2", "Replacement 3", "Replacement 4", "Original 3"]);
+    assert_eq!(more.state().views[0].selected.iter().copied().collect::<Vec<_>>(), [1, 2, 3]);
+    more.state_mut().undo(&egui::Context::default());
+    more.run_steps(2);
+    assert_eq!(texts_of(more.state(), 0), ["Original 1", "Original 2", "Original 3"]);
 }
 
 #[test]

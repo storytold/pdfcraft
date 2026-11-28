@@ -294,36 +294,57 @@ impl ReplaceSource {
     }
 
     fn dialog<'b>(&self, fields: &'b mut DialogFields) -> ParamDialog<'b> {
-        let n = self.pages(fields).len().max(1);
-        let max_start = (self.src_pages.saturating_sub(n) + 1).max(1);
-        let src_from = fields.int("src_from").map_or(1, |s| s.max(1) as usize).min(max_start);
-        fields.set("src_from", src_from as i64);
         let (from, to) = span(fields);
-        let fits = n <= self.src_pages && from <= to;
+        let n = self.pages(fields).len().max(1);
+        let src_count = self.src_pages.max(1);
+        let src_from = fields.int("src_from").map_or(1, |s| s.max(1) as usize).min(src_count);
+        let src_to = fields.int("src_to").map_or(src_from.saturating_add(n.saturating_sub(1)).min(src_count), |s| s.max(1) as usize).min(src_count);
+        fields.set("src_from", src_from as i64);
+        fields.set("src_to", src_to as i64);
+        let fits = self.src_pages > 0 && from <= to && src_from <= src_to;
+        let src_len = src_to.saturating_sub(src_from) + 1;
         let count = self.count.max(1) as i64;
-        let params = vec![
+        let mut params = vec![
             Param::new("from", tl!("Original: replace pages"), ParamKind::int(Some(1), Some(count), 1)),
             Param::new("to", tl!("to"), ParamKind::int(Some(1), Some(count), count)),
             Param::new(
                 "src_from",
                 fmt(tl!("Replacement: pages of {name}"), &[("name", &self.name)]),
-                ParamKind::int(Some(1), Some(max_start as i64), 1),
+                ParamKind::int(Some(1), Some(src_count as i64), 1),
+            ),
+            Param::new(
+                "src_to",
+                fmt(tl!("to (of {n})"), &[("n", &self.src_pages.to_string())]),
+                ParamKind::int(Some(1), Some(src_count as i64), src_count as i64),
             ),
             Param::read_only_text(
                 "totals",
                 "",
                 fmt(
                     tl!("Original: {n} pages. Replacement: pages {a} to {b} of {m}."),
-                    &[
-                        ("n", &count.to_string()),
-                        ("a", &src_from.to_string()),
-                        ("b", &(src_from + n.saturating_sub(1)).to_string()),
-                        ("m", &self.src_pages.to_string()),
-                    ],
+                    &[("n", &count.to_string()), ("a", &src_from.to_string()), ("b", &src_to.to_string()), ("m", &self.src_pages.to_string())],
                 ),
             )
             .full_width(),
         ];
+        if fits && src_len != n {
+            let delta_note = if src_len < n {
+                let removed = n - src_len;
+                if removed == 1 {
+                    tl!("1 extra original page will be deleted.").to_owned()
+                } else {
+                    fmt(tl!("{name} extra original pages will be deleted."), &[("name", &removed.to_string())])
+                }
+            } else {
+                let added = src_len - n;
+                if added == 1 {
+                    tl!("1 extra replacement page will be inserted.").to_owned()
+                } else {
+                    fmt(tl!("{name} extra replacement pages will be inserted."), &[("name", &added.to_string())])
+                }
+            };
+            params.push(Param::read_only_text("delta", "", delta_note).full_width());
+        }
         let note = if fits {
             tl!("Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.")
         } else {
@@ -411,10 +432,15 @@ impl PdfCraftApp {
         let count = self.session.get(id).map_or(1, |d| d.info.pages.len());
         let pages = self.views[i].target_pages();
         let opening = (pages.first().map_or(1, |p| p + 1), pages.last().map_or(1, |p| p + 1));
+        let src_to = pages.len().max(1).min(src_pages.max(1));
         let target = self.pick_target(Some(id));
         let source = Arc::new(ReplaceSource { name, bytes, src_pages, count, pages, opening, target });
-        let seeds =
-            vec![("from", FieldValue::from(opening.0 as i64)), ("to", FieldValue::from(opening.1 as i64)), ("src_from", FieldValue::from(1i64))];
+        let seeds = vec![
+            ("from", FieldValue::from(opening.0 as i64)),
+            ("to", FieldValue::from(opening.1 as i64)),
+            ("src_from", FieldValue::from(1i64)),
+            ("src_to", FieldValue::from(src_to as i64)),
+        ];
         self.replace_source = Some(source.clone());
         self.open_page_dialog(ctx, REPLACE, seeds, move |fields| source.dialog(fields));
     }
@@ -479,16 +505,16 @@ impl PdfCraftApp {
                 && self.still_pick_target(source.target)
             {
                 let pages = source.pages(&result.fields);
-                let src_from = result.fields.int("src_from").map_or(1, |s| s.max(1) as usize);
-                let n = pages.len();
+                let src_from = result.fields.int("src_from").map_or(1, |s| s.max(1) as usize).min(source.src_pages.max(1));
+                let src_to = result
+                    .fields
+                    .int("src_to")
+                    .map_or(src_from.saturating_add(pages.len().saturating_sub(1)), |s| s.max(1) as usize)
+                    .max(src_from)
+                    .min(source.src_pages);
                 self.apply_edit(
                     ctx,
-                    Edit::ReplacePages {
-                        pages,
-                        name: source.name.clone(),
-                        bytes: source.bytes.clone(),
-                        src_pages: (src_from - 1..src_from - 1 + n).collect(),
-                    },
+                    Edit::ReplacePages { pages, name: source.name.clone(), bytes: source.bytes.clone(), src_pages: (src_from - 1..src_to).collect() },
                 );
             }
         }
