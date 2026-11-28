@@ -286,7 +286,7 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, checks: &[Result<us
             CombineKey::Page(..) => false,
         };
         if locked {
-            entries.push(Entry::new(TileRow::Unlock, tl!("Unlock…")).icon(IconId::new("lock-open")));
+            entries.push(Entry::new(TileRow::Unlock, tl!("Unlock…")).icon(IconId::new("lock_open")));
         }
         match Menu::context(tl!("File"), &shown.response.response).pick(ui, &entries).picked {
             Some(TileRow::Act(act)) => actions.push(act_action(act, key)),

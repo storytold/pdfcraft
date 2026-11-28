@@ -198,6 +198,28 @@ usage = "UI icon, embedded via crates/ui-egui/src/icons.rs"
 sha256 = "765ebd1031367e2fd2a940b62f4402fac8976dea0210b0e3b1e59a2c75897928"
 
 [[asset]]
+path = "assets/icons/chevrons-down.svg"
+title = "Lucide icon \"chevrons-down\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/chevrons-down.svg)"
+licence = "ISC AND MIT"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icons.rs"
+sha256 = "f6fb7f1c3d539665c0d4c6ea5c13436ef1eb1a0df8e6c9f0de65fb960cc27083"
+
+[[asset]]
+path = "assets/icons/chevrons-up.svg"
+title = "Lucide icon \"chevrons-up\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/chevrons-up.svg)"
+licence = "ISC AND MIT"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icons.rs"
+sha256 = "36890150a699c3c16fbc28fce1ee2582c0b74c7fe3f4ff30c6917960933051af"
+
+[[asset]]
 path = "assets/icons/circle-check.svg"
 title = "Lucide icon \"circle-check\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"
@@ -658,6 +680,17 @@ licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
 usage = "UI icon, embedded via crates/ui-egui/src/icons.rs"
 sha256 = "195939cbf88689334dc3a9d64bd0b3f459ce1de7d71e53620f6b0448b958f9c8"
+
+[[asset]]
+path = "assets/icons/pin-off.svg"
+title = "Lucide icon \"pin-off\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/pin-off.svg)"
+licence = "ISC AND MIT"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icons.rs"
+sha256 = "4c9c29a91905ccc7473f7c62061092abab0c89697f9ab7f7041631a53720d67a"
 
 [[asset]]
 path = "assets/icons/presentation.svg"

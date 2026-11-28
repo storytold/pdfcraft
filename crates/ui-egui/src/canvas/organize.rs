@@ -172,8 +172,8 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
         })
         .show(cx.ui, |ui, _| {
             Text::new(label.clone()).show(ui);
-            earlier = IconButton::new(IconId::new("chevron-left")).label(tl!("Move earlier")).enabled(editable && first > 0).show(ui).clicked();
-            later = IconButton::new(IconId::new("chevron-right")).label(tl!("Move later")).enabled(editable && last + 1 < n).show(ui).clicked();
+            earlier = IconButton::new(IconId::new("chevron_left")).label(tl!("Move earlier")).enabled(editable && first > 0).show(ui).clicked();
+            later = IconButton::new(IconId::new("chevron_right")).label(tl!("Move later")).enabled(editable && last + 1 < n).show(ui).clicked();
         });
     if earlier {
         view.session.pending_edit = Some(Edit::MovePages { pages: targets.clone(), to: first - 1 });

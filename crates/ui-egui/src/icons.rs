@@ -28,6 +28,8 @@ const ICONS: &[(&str, &[u8])] = &[
     icon!("braces"),
     icon!("camera"),
     icon!("check-circle-2"),
+    icon!("chevrons-down"),
+    icon!("chevrons-up"),
     icon!("circle-check"),
     icon!("circle-help"),
     icon!("circle-x"),
@@ -83,6 +85,7 @@ const ICONS: &[(&str, &[u8])] = &[
     icon!("panel-right"),
     icon!("paperclip"),
     icon!("pen-line"),
+    icon!("pin-off"),
     icon!("presentation"),
     icon!("printer"),
     icon!("replace"),
@@ -123,6 +126,7 @@ mod tests {
     use craft::behavior::IconId;
     use craft::ui::primitives::{has_icon, icon_names};
     use pdfcraft_engine::{catalog, commands, links};
+    use std::borrow::Cow;
 
     /// Every icon string the engine carries: groups, items, commands and links.
     fn engine_icons() -> Vec<(String, &'static str)> {
@@ -144,12 +148,49 @@ mod tests {
         names
     }
 
-    /// A name neither the catalogue nor the app set has draws nothing, silently.
+    /// The icon of every command in the app's catalog, which menus and command bars draw beside the command: the
+    /// engine's commands and the UI's own.
+    fn command_icons() -> Vec<(String, Cow<'static, str>)> {
+        let catalog = crate::commands::catalog::catalog(false).expect("the command catalog builds");
+        catalog.defs().iter().filter_map(|def| Some((format!("command {}", def.command.id), def.icon.clone()?))).collect()
+    }
+
+    /// Every `IconId::new("…")` literal in the UI source outside inline test modules, with its file. A name that
+    /// reaches `IconId::new` in a variable isn't seen.
+    fn literal_icons() -> Vec<(String, Cow<'static, str>)> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![root.clone()];
+        let mut names = Vec::new();
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).expect("UI source directory") {
+                let path = entry.expect("UI source entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let source = std::fs::read_to_string(&path).expect("UI source file").replace("\r\n", "\n");
+                    let code = source.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+                    let file = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
+                    for call in code.split("IconId::new(").skip(1) {
+                        if let Some((name, _)) = call.trim_start().strip_prefix('"').and_then(|rest| rest.split_once('"')) {
+                            names.push((file.clone(), Cow::Owned(name.to_owned())));
+                        }
+                    }
+                }
+            }
+        }
+        names
+    }
+
+    /// A name neither the catalogue nor the app set has draws nothing, silently. The catalogue names its icons by
+    /// meaning (`chevron_down`), not by the file a set draws for them (`chevron-down`).
     #[test]
     fn every_icon_the_app_names_resolves() {
         register();
+        let literals = literal_icons();
+        assert!(!literals.is_empty(), "the UI source names icons with IconId::new");
+        let named = engine_icons().into_iter().map(|(owner, name)| (owner, Cow::Borrowed(name))).chain(command_icons()).chain(literals);
         let missing: Vec<String> =
-            engine_icons().into_iter().filter(|(_, name)| !has_icon(&IconId::new(name))).map(|(owner, name)| format!("{owner}: {name}")).collect();
+            named.filter(|(_, name)| !has_icon(&IconId::from(name.clone()))).map(|(owner, name)| format!("{owner}: {name}")).collect();
         assert!(missing.is_empty(), "icons nobody has: {missing:?}");
         assert!(has_icon(&IconId::new(crate::chrome::HOME_ICON)), "the title bar Home icon resolves");
         for name in ["circle-check", "circle-x", "triangle-alert"] {

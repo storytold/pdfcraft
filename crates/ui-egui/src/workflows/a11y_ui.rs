@@ -209,12 +209,12 @@ pub(crate) fn pass(ctx: &egui::Context, app: &mut PdfCraftApp) {
 }
 
 /// The icon and tone of a rule's status.
-fn status_icon(s: Status) -> (&'static str, Tone) {
+fn status_icon(s: Status) -> (IconId, Tone) {
     match s {
-        Status::Passed => ("circle-check", Tone::Good),
-        Status::Failed => ("circle-x", Tone::Bad),
-        Status::Manual => ("circle-help", Tone::Warn),
-        Status::Skipped => ("circle-dashed", Tone::Neutral),
+        Status::Passed => (IconId::new("circle-check"), Tone::Good),
+        Status::Failed => (IconId::new("circle-x"), Tone::Bad),
+        Status::Manual => (IconId::new("circle-help"), Tone::Warn),
+        Status::Skipped => (IconId::new("ellipse_dashed"), Tone::Neutral),
     }
 }
 
@@ -415,7 +415,7 @@ pub(crate) fn panel(ui: &mut Ui, state: &mut A11yState, doc: DocId) -> Option<Pa
                 LineKind::Category { .. } | LineKind::Finding { .. } => row,
                 LineKind::Rule { rule, status } => {
                     let (icon, tone) = status_icon(*status);
-                    let row = row.icon(IconSpec::svg(IconId::new(icon))).tone(tone);
+                    let row = row.icon(IconSpec::svg(icon)).tone(tone);
                     let row = if *status == Status::Skipped { row.ink(RowInk::Muted) } else { row };
                     if explained == Some(*rule) { row.below(Text::new(tl!(rule.explanation())).shade(Shade::Muted), |_| {}) } else { row }
                 }
@@ -782,8 +782,8 @@ impl StackDialog for AltTextDialog {
                     if let Some(on) = alt.decorative.same() {
                         *decorative = *on;
                     }
-                    let back = IconButton::new(IconSpec::svg(IconId::new("chevron-left"))).label(tl!("Previous figure")).enabled(i > 0).show(ui);
-                    let next = IconButton::new(IconSpec::svg(IconId::new("chevron-right"))).label(tl!("Next figure")).enabled(i + 1 < n).show(ui);
+                    let back = IconButton::new(IconSpec::svg(IconId::new("chevron_left"))).label(tl!("Previous figure")).enabled(i > 0).show(ui);
+                    let next = IconButton::new(IconSpec::svg(IconId::new("chevron_right"))).label(tl!("Next figure")).enabled(i + 1 < n).show(ui);
                     if back.response().clicked() {
                         value.index = i.saturating_sub(1);
                     }

@@ -573,10 +573,10 @@ fn order_row<'a>(k: usize, count: usize, f: &CalculatedField, row: &Row, editabl
         // Each arrow names the field it moves.
         let named = |tip: &str| format!("{}: {}", tl!(tip), f.name);
         if k > 0 {
-            r = r.trailing_part_revealed(UP, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron-up"))), named("Earlier in calculation order"));
+            r = r.trailing_part_revealed(UP, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron_up"))), named("Earlier in calculation order"));
         }
         if k + 1 < count {
-            r = r.trailing_part_revealed(DOWN, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron-down"))), named("Later in calculation order"));
+            r = r.trailing_part_revealed(DOWN, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron_down"))), named("Later in calculation order"));
         }
     }
     r
@@ -585,7 +585,7 @@ fn order_row<'a>(k: usize, count: usize, f: &CalculatedField, row: &Row, editabl
 /// The panel's title row: Back to Prepare a form. Returns the command to run when it was pressed.
 pub(crate) fn header(ui: &mut egui::Ui) -> Option<&'static str> {
     // A command-bound button fires its command itself; the return also lets the caller run it.
-    let button = IconButton::command(IconSpec::svg(IconId::new("chevron-left")), BACK).show(ui);
+    let button = IconButton::command(IconSpec::svg(IconId::new("chevron_left")), BACK).show(ui);
     button.response().clicked().then_some(BACK)
 }
 

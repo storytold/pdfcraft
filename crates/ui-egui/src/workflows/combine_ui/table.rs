@@ -289,7 +289,7 @@ pub(super) fn table(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> Option<RowActio
         CombineKey::Page(..) => None,
     });
     if let Some(id) = locked {
-        let entries = [Entry::new(id, tl!("Unlock…")).icon(IconId::new("lock-open"))];
+        let entries = [Entry::new(id, tl!("Unlock…")).icon(IconId::new("lock_open"))];
         if let Some(id) = Menu::context(tl!("File"), &out.response).pick(ui, &entries).picked {
             action = Some(RowAction::Unlock(Some(id)));
         }

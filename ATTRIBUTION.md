@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with the SHA-256 of every asset, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (137)
+## In this repository (140)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -25,6 +25,8 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `assets/icons/braces.svg` | Lucide icon "braces" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/braces.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |
 | `assets/icons/camera.svg` | Lucide icon "camera" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/camera.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |
 | `assets/icons/check-circle-2.svg` | Lucide icon "check-circle-2" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/check-circle-2.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |
+| `assets/icons/chevrons-down.svg` | Lucide icon "chevrons-down" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/chevrons-down.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |
+| `assets/icons/chevrons-up.svg` | Lucide icon "chevrons-up" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/chevrons-up.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |
 | `assets/icons/circle-check.svg` | Lucide icon "circle-check" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/circle-check.svg) | Source of the path data that crates/sign/src/status_layers.rs draws into displayed signature status layers; the UI draws this icon from the built-in catalogue |
 | `assets/icons/circle-help.svg` | Lucide icon "circle-help" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/circle-help.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |
 | `assets/icons/clock-3.svg` | Lucide icon "clock-3" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/clock-3.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |
@@ -67,6 +69,7 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `assets/icons/minimize-2.svg` | Lucide icon "minimize-2" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/minimize-2.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |
 | `assets/icons/paperclip.svg` | Lucide icon "paperclip" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/paperclip.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |
 | `assets/icons/pen-line.svg` | Lucide icon "pen-line" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/pen-line.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |
+| `assets/icons/pin-off.svg` | Lucide icon "pin-off" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/pin-off.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |
 | `assets/icons/presentation.svg` | Lucide icon "presentation" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/presentation.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |
 | `assets/icons/printer.svg` | Lucide icon "printer" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/printer.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |
 | `assets/icons/replace.svg` | Lucide icon "replace" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/replace.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |

@@ -108,13 +108,13 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let can_delete = editable && targets.len() < n;
     Row::new().show(ui, |ui, _| {
         let buttons = [
-            ("rotate-ccw", "Rotate counterclockwise", editable),
-            ("rotate-cw", "Rotate clockwise", editable),
-            ("trash-2", "Delete pages (Delete)", can_delete),
-            ("file-output", "Extract pages to a new document", editable),
+            (IconId::new("rotate_ccw"), "Rotate counterclockwise", editable),
+            (IconId::new("rotate_cw"), "Rotate clockwise", editable),
+            (IconId::new("trash-2"), "Delete pages (Delete)", can_delete),
+            (IconId::new("file-output"), "Extract pages to a new document", editable),
         ];
         for (at, (icon, label, enabled)) in buttons.into_iter().enumerate() {
-            if !IconButton::new(IconId::new(icon)).label(tl!(label).to_owned()).enabled(enabled).show(ui).clicked() {
+            if !IconButton::new(icon).label(tl!(label).to_owned()).enabled(enabled).show(ui).clicked() {
                 continue;
             }
             act = Some(match at {
