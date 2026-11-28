@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
 
 use craft::host::queue::{Cancel, JobQueue, QueueOptions, QueueOrder};
 use craft::host::{Host, Wake};
@@ -98,6 +99,41 @@ fn prepare(job: Job, cancel: &Cancel) -> ResultKind {
         .filter(|_| result.is_ok() && !cancel.is_cancelled())
         .map(|name| (name.clone(), pdfcraft_render::named_destination(bytes.clone(), password, &name)));
     ResultKind::Prepared { bytes, result: Box::new(result), named }
+}
+
+/// One file of a batch read for Combine files: its name, and its bytes with when it was last
+/// modified, or why it couldn't be read.
+pub(crate) struct FileRead {
+    pub name: String,
+    pub read: Result<(Vec<u8>, Option<std::time::SystemTime>), String>,
+}
+
+/// Read `paths` on a thread of their own, one after the other, and send every file's outcome in
+/// the order the paths were given when the last one is done. Large files and stalled file systems
+/// (a network share, a sleeping disk) keep the frame thread free; `repaint` wakes it when the reply
+/// is ready. A reader that couldn't be started is an `Err`, and a reader that stopped without
+/// answering shows as a disconnected receiver.
+pub(crate) fn read_files(paths: Vec<PathBuf>, repaint: Option<egui::Context>) -> Result<Receiver<Vec<FileRead>>, String> {
+    let (reply, receiver) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("pdfcraft-combine-read".into())
+        .spawn(move || {
+            let files = paths
+                .iter()
+                .map(|path| {
+                    let name = path.file_name().map_or_else(|| path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
+                    let read =
+                        std::fs::read(path).map(|bytes| (bytes, std::fs::metadata(path).and_then(|m| m.modified()).ok())).map_err(|e| e.to_string());
+                    FileRead { name, read }
+                })
+                .collect();
+            let _ = reply.send(files);
+            if let Some(ctx) = repaint {
+                ctx.request_repaint();
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(receiver)
 }
 
 #[cfg(test)]

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Action
+# libfm's file-manager actions (PCManFM, PCManFM-Qt, LXDE and LXQt): right-click
+# PDFs and pictures > "Combine files in PdfCraft". The same file types as the KDE service menu and
+# the Windows installer's "Combine files" menus (#585).
+Name=Combine files in PdfCraft
+Icon=ai.storyteller.pdfcraft
+Profiles=combine;
+
+[X-Action-Profile combine]
+MimeTypes=application/pdf;image/png;image/jpeg;image/tiff;image/gif;image/bmp;image/jp2;image/jpx;image/x-jp2-codestream;
+Exec=pdfcraft --combine %F
+TryExec=pdfcraft

@@ -42,7 +42,15 @@ impl AppleEvents {
         Box::new(move || {
             for event in inbox.drain() {
                 match event {
-                    Event::Open(paths) => sender.open(paths),
+                    // A Finder Quick Action's list of files becomes a combine request (finder_combine).
+                    Event::Open(paths) => {
+                        for request in crate::finder_combine::from_open(paths) {
+                            match request {
+                                crate::finder_combine::Request::Open(paths) => sender.open(paths),
+                                crate::finder_combine::Request::Combine(paths) => sender.open_for(paths, "combine"),
+                            }
+                        }
+                    }
                     Event::Quit => {
                         craft::quit::on_menu_event(&ctx, craft::quit::QUIT_MENU_ID);
                     }

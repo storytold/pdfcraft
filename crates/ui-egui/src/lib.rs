@@ -450,6 +450,10 @@ pub struct PdfCraftApp {
     pub(crate) opens: Queue<u64, open_worker::ResultKind>,
     #[cfg(not(target_arch = "wasm32"))]
     pending_opens: Vec<PendingOpen>,
+    /// Files named by `--combine` launches, being read away from the frame thread. A request is
+    /// added to the Combine files list only when every request before it has been.
+    #[cfg(not(target_arch = "wasm32"))]
+    combine_reads: std::collections::VecDeque<std::sync::mpsc::Receiver<Vec<open_worker::FileRead>>>,
     /// The open retrying a closed password prompt's file with its password: replies behind it
     /// wait for it.
     #[cfg(not(target_arch = "wasm32"))]

@@ -16,7 +16,12 @@
 //! one line each way, a JSON request naming absolute paths and `ok`, and the running app opens the
 //! paths exactly as File ▸ Open would. A `--combine` launch (File Explorer's "Combine files in
 //! PdfCraft", #585, one launch per selected file) hands them over the same way with
-//! `"combine": true`, and the running app adds them to its Combine files tab instead.
+//! `"combine": true`, and the running app adds them to its Combine files tab instead. The list
+//! follows the order the launches reach the first instance. Only a single `--combine a b c` fixes
+//! that order (the order given); with File Explorer's `MultiSelectModel=Document` each selected file
+//! starts its own process and the order in which they arrive is not defined, so a selection from
+//! Explorer is not guaranteed to be listed in the order it was selected (the list can be reordered
+//! on the tab).
 //!
 //! Every failure falls back to the old behaviour: a launch that can't hand its files over within
 //! a few seconds opens its own window. `--new-window`, any other option, or no files at all also
@@ -105,7 +110,11 @@ fn deliver(sender: &IntakeSender, paths: Vec<String>, combine: bool) {
     // `open` and `open_for` make each path absolute and sort the batch.
     let paths: Vec<std::path::PathBuf> = paths.into_iter().map(std::path::PathBuf::from).collect();
     if combine {
-        sender.open_for(paths, "combine");
+        // The intake sorts each batch, but takes the batches in the order they came: a single
+        // `--combine a b c` keeps the order given when each file is a batch of its own.
+        for path in paths {
+            sender.open_for(vec![path], "combine");
+        }
     } else {
         sender.open(paths);
     }
@@ -355,7 +364,7 @@ fn serve(listener: UnixListener) -> Claim {
     }
 }
 
-/// Read one launch's request, queue its files and confirm.
+/// Read one launch's request, confirm it and queue its files.
 #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
 fn receive(stream: &UnixStream, sender: &IntakeSender) -> std::io::Result<()> {
     use std::io::{BufRead, Read, Write};
@@ -368,9 +377,12 @@ fn receive(stream: &UnixStream, sender: &IntakeSender) -> std::io::Result<()> {
         return Ok(());
     }
     let (paths, combine) = parse_request(&line).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "not an open request"))?;
-    deliver(sender, paths, combine);
+    // Confirm first: a launch whose confirmation never arrives opens the files itself, so the files
+    // are queued here only once the confirmation is on its way, never both.
     let mut writer = stream;
-    writer.write_all(b"ok\n")
+    writer.write_all(b"ok\n")?;
+    deliver(sender, paths, combine);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -495,12 +507,26 @@ mod tests {
         // Absolute on every platform, so the intake keeps the path as it was sent.
         let file = |name: &str| std::env::temp_dir().join(name);
         let text = |name: &str| file(name).to_string_lossy().into_owned();
-        // The reply `ok` is sent after the batch is queued, so it is there once the launch returns.
+        // The reply `ok` is sent before the batch is queued (a launch that hears nothing opens the
+        // files itself), so the batch is waited for.
+        let arrived = |n: usize| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let mut got = Vec::new();
+            while got.len() < n && std::time::Instant::now() < deadline {
+                got.extend(intake.take());
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            got
+        };
         assert!(matches!(claim_at(&path, &[text("a.pdf")], true, false), Claim::HandedOff));
-        assert_eq!(intake.take(), vec![Intake::Open(vec![file("a.pdf")])]);
+        assert_eq!(arrived(1), vec![Intake::Open(vec![file("a.pdf")])]);
         // A --combine launch hands its file over for the Combine files tab (#585).
         assert!(matches!(claim_at(&path, &[text("c.pdf")], true, true), Claim::HandedOff));
-        assert_eq!(intake.take(), vec![Intake::OpenFor { paths: vec![file("c.pdf")], action: "combine".to_string() }]);
+        assert_eq!(arrived(1), vec![Intake::OpenFor { paths: vec![file("c.pdf")], action: "combine".to_string() }]);
+        // Several files keep the order they were given in, not the intake's sorted order.
+        assert!(matches!(claim_at(&path, &[text("d.pdf"), text("c.pdf")], true, true), Claim::HandedOff));
+        let combine = |name: &str| Intake::OpenFor { paths: vec![file(name)], action: "combine".to_string() };
+        assert_eq!(arrived(2), vec![combine("d.pdf"), combine("c.pdf")]);
         // A launch with options keeps its own window and doesn't take over the socket.
         assert!(matches!(claim_at(&path, &[text("b.pdf")], false, false), Claim::Alone));
         assert!(intake.take().is_empty());

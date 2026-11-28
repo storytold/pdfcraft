@@ -671,9 +671,26 @@ fn a_repeated_waiting_open_keeps_the_tool_it_brings() {
     assert!(rig.export_open(), "the second open keeps the tool the first one brought");
 }
 
-/// File ▸ Open of a Word document: LibreOffice runs as a queue job, never on the frame thread,
-/// and the result opens as a new, unsaved PDF. Without LibreOffice the user is told it is needed,
-/// rather than that the file is a broken PDF.
+/// Combine's file reads: one answer, every file in the order the paths were given, a file that
+/// can't be read named with why and its neighbours still read.
+#[test]
+fn combine_reads_answer_in_path_order_and_name_what_failed() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-read-files-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (b, a, missing) = (dir.join("b.pdf"), dir.join("a.pdf"), dir.join("missing.pdf"));
+    std::fs::write(&b, b"bee").unwrap();
+    std::fs::write(&a, b"ay").unwrap();
+    let receiver = super::read_files(vec![b, missing, a], None).unwrap();
+    let files = receiver.recv_timeout(std::time::Duration::from_secs(30)).expect("the reader answers");
+    let _ = std::fs::remove_dir_all(&dir);
+    let names: Vec<_> = files.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["b.pdf", "missing.pdf", "a.pdf"]);
+    assert_eq!(files[0].read.as_ref().unwrap().0, b"bee");
+    assert!(files[0].read.as_ref().unwrap().1.is_some(), "when it was last modified comes with the bytes");
+    assert!(files[1].read.is_err(), "the missing file says why");
+    assert_eq!(files[2].read.as_ref().unwrap().0, b"ay");
+}
+
 #[test]
 fn file_open_converts_an_office_document_on_the_worker() {
     let mut rig = Rig::empty();

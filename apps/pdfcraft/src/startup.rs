@@ -46,8 +46,13 @@ impl Arguments {
                 "--control-token-file" => parsed.control_token_file = args.next(),
                 "--create-images" => parsed.create_images = true,
                 // File Explorer's "Combine files in PdfCraft" (#585): the files go to the Combine
-                // files tab, of the running PdfCraft when there is one.
-                "--combine" => parsed.combine = true,
+                // files tab, of the running PdfCraft when there is one. Every launcher puts the
+                // files after it, and some pass bare names (GNOME Files runs its scripts in the
+                // folder), so everything after it is a file, even a name that starts with "--".
+                "--combine" => {
+                    parsed.combine = true;
+                    parsed.files.extend(args.by_ref().map(craft::platform::default_app::path_from_arg));
+                }
                 "--new-window" => parsed.new_window = true,
                 "--two-paged" => parsed.two_paged = true,
                 flag if flag.starts_with("--two-paged=") => {
@@ -181,6 +186,17 @@ mod tests {
             let args = parse(&["--two-paged", flag, "ignored.pdf"]);
             assert!(args.help && args.files.is_empty());
         }
+    }
+
+    #[test]
+    fn everything_after_combine_is_a_file() {
+        // GNOME Files passes bare names: one that looks like an option must not take the next.
+        let args = parse(&["--new-window", "--combine", "a.pdf", "--x.pdf", "b.pdf", "--version", "-h", "file:///tmp/c%20d.pdf"]);
+        assert!(args.combine && args.new_window && !args.version && !args.help);
+        assert_eq!(args.files, ["a.pdf", "--x.pdf", "b.pdf", "--version", "-h", "/tmp/c d.pdf"]);
+        assert!(args.options.is_empty());
+        let empty = parse(&["--combine"]);
+        assert!(empty.combine && empty.files.is_empty());
     }
 
     #[test]

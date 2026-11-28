@@ -150,8 +150,16 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
             if n == 0 {
                 // Choose the files, or on the desktop a folder of them.
+                let mut lines = vec![tl!("Drop PDFs, images, text files or folders here, or choose them.")];
+                // macOS lists the Finder Quick Action the app installs only after it is ticked once,
+                // and the app can't tick it (finder_combine::install), so say where it is.
+                if cfg!(target_os = "macos") {
+                    lines.push(tl!(
+                        "From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize."
+                    ));
+                }
                 let mut empty = Notice::new(Tone::Info, tl!("Add the files to combine"))
-                    .lines([tl!("Drop PDFs, images, text files or folders here, or choose them.")])
+                    .lines(lines)
                     .action(NoticeAction::new(tl!("Add files…")).default_action());
                 if cfg!(not(target_arch = "wasm32")) {
                     empty = empty.action(NoticeAction::new(tl!("Add folder…")));
