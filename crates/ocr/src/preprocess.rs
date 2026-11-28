@@ -1,11 +1,12 @@
 //! Preprocessing: a pure function between the page raster and recognition, in fixed order —
-//! (a) DPI normalization, then the four opt-in steps (b) orientation, (c) deskew, (d) denoise,
-//! (e) binarization. Normalization exists for those steps (their windows and thresholds are
-//! calibrated for 300 dpi), so it runs only when at least one of them is on: with every step
-//! off the raster is handed to the engines exactly as it was rendered. (Enlarging a render
-//! on its own changes what the models read: a 72 dpi scan of "due: €250" read as "ue: ?250"
-//! after a 4× bilinear enlargement.) Everything is plain Rust on the RGBA raster: no
-//! Leptonica, no process, no new dependencies.
+//! (a) DPI normalization, then the four steps (b) orientation, (c) deskew, (d) denoise,
+//! (e) binarization. Normalization exists for the stroke steps (c) to (e) (their windows and
+//! thresholds are calibrated for 300 dpi), so it runs only when at least one of them is on:
+//! otherwise the raster is handed to the engines exactly as it was rendered, turned upright if
+//! need be. (Enlarging a render on its own changes what the models read: a 72 dpi scan of
+//! "due: €250" read as "ue: ?250" after a 4× bilinear enlargement.) Orientation needs no
+//! enlarging: the ink's profile bands at any resolution and the judge is shown the page shrunk.
+//! Everything is plain Rust on the RGBA raster: no Leptonica, no process, no new dependencies.
 //!
 //! Every geometric step records its inverse; the result carries one exact
 //! [`InverseTransform`] (an affine map, composed in f64), and callers map every word box
@@ -16,7 +17,8 @@
 
 use crate::{MAX_PIXELS, MAX_SIDE, OcrError, OcrImage};
 
-/// The four opt-in steps. All off by default: a scan is passed through as rendered.
+/// The four steps. All off here by default (a scan is passed through as rendered); the engine's
+/// settings say which are on, auto-rotate among them where the engine judges the turns.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PreprocessOptions {
     /// Detect pages scanned at 90°/180°/270° and turn them upright.
@@ -30,9 +32,10 @@ pub struct PreprocessOptions {
 }
 
 impl PreprocessOptions {
-    /// Whether any step is on (and so the raster is normalized to 300 dpi first).
-    pub fn any(&self) -> bool {
-        self.auto_rotate || self.deskew || self.denoise || self.binarize
+    /// Whether a step that looks at strokes is on (and so the raster is normalized to 300 dpi
+    /// first): deskew, denoise and binarize. Orientation reads the page as rendered.
+    pub fn resamples(&self) -> bool {
+        self.deskew || self.denoise || self.binarize
     }
 }
 
@@ -74,11 +77,12 @@ pub fn preprocess_with_judge(
 ) -> Result<Preprocessed, OcrError> {
     let mut current = image;
     let mut inverse = InverseTransform::identity();
-    // (a) DPI normalization: for the steps below, a scan under 300 dpi is enlarged by 300/src so
-    // they see letter-sized strokes. With every step off nothing is resampled. A broken dpi
-    // (zero, negative, NaN) is left alone.
+    // (a) DPI normalization: for the stroke steps (c) to (e), a scan under 300 dpi is enlarged
+    // by 300/src so they see letter-sized strokes. With those off nothing is resampled, so a
+    // page that is only turned upright is read as rendered. A broken dpi (zero, negative,
+    // NaN) is left alone.
     let mut dpi = if source_dpi.is_finite() && source_dpi >= 1.0 { source_dpi } else { 300.0 };
-    if options.any() && dpi < 300.0 {
+    if options.resamples() && dpi < 300.0 {
         let scale = f64::from(300.0 / dpi);
         current = resize_bilinear(&current, scale)?;
         inverse = compose(&inverse, &InverseTransform::scale(1.0 / scale));
@@ -255,15 +259,21 @@ pub const JUDGE_SIDE: u32 = 1200;
 /// The lead in readable words over the page as it stands that is still noise, not a reading: a
 /// turn is made only when it finds more than this many more.
 const JUDGE_MARGIN: usize = 2;
+/// Readable words in the page as it stands that settle it is upright or upside down, not
+/// sideways: text read sideways comes to almost nothing (the sideways shop drawings of #8484
+/// read 1 to 12 words that way and 32 to 81 turned right), so a page read this well is
+/// checked for the upside-down turn only, and the two sideways readings are saved.
+const READS_WELL: usize = 40;
 
 /// The correction for a page scanned sideways or upside down: the ink's profile
 /// ([`profile_orientation`]) where it is clear and confirmed, or the turn `judge` reads best.
 /// Without a judge the profile's clear answer stands and anything less clear is a no-op, as
 /// before. With one: a clear turn is made only if the judge reads the turned page at least as
 /// well as the page as it stands (a ruled form fools the profile, #8484), and an unsure
-/// profile puts all four turns to the judge, the page as it stands winning ties and anything
-/// within [`JUDGE_MARGIN`] of it. The judge sees the page shrunk to [`JUDGE_SIDE`]; a judge
-/// that can't read any turn leaves the profile's answer in place.
+/// profile puts the turns to the judge, all three when the page as it stands reads poorly and
+/// the upside-down one alone when it reads well ([`READS_WELL`]); the page as it stands wins
+/// ties and anything within [`JUDGE_MARGIN`] of it. The judge sees the page shrunk to
+/// [`JUDGE_SIDE`]; a judge that can't read any turn leaves the profile's answer in place.
 fn choose_orientation(image: &OcrImage, judge: Option<OrientationJudge<'_>>) -> Result<QuarterTurns, OcrError> {
     let profile = profile_orientation(image);
     let fallback = match profile {
@@ -271,26 +281,32 @@ fn choose_orientation(image: &OcrImage, judge: Option<OrientationJudge<'_>>) -> 
         Profile::Unsure => 0,
     };
     let Some(judge) = judge else { return Ok(fallback) };
-    let candidates: &[QuarterTurns] = match profile {
-        Profile::Clear(0) => return Ok(0),
-        Profile::Clear(k) => &[0, k][..],
-        Profile::Unsure => &[0, 1, 2, 3][..],
-    };
-    let small = judge_image(image)?;
-    let mut readings: Vec<(QuarterTurns, usize)> = Vec::new();
-    for &k in candidates {
-        let turned = if k == 0 { small.clone() } else { rotate_quarter_turns(&small, k) };
-        if let Some(words) = judge(&turned) {
-            readings.push((k, words));
-        }
+    if profile == Profile::Clear(0) {
+        return Ok(0);
     }
-    let Some(&(_, as_it_stands)) = readings.iter().find(|(k, _)| *k == 0) else { return Ok(fallback) };
-    let best = readings.iter().filter(|(k, _)| *k != 0).max_by_key(|(_, words)| *words);
+    let small = judge_image(image)?;
+    let read = |k: QuarterTurns| {
+        let turned;
+        let shown = if k == 0 {
+            &small
+        } else {
+            turned = rotate_quarter_turns(&small, k);
+            &turned
+        };
+        judge(shown).map(|words| (k, words))
+    };
+    let Some((_, as_it_stands)) = read(0) else { return Ok(fallback) };
+    let others: &[QuarterTurns] = match profile {
+        Profile::Clear(k) => &[k],
+        Profile::Unsure if as_it_stands >= READS_WELL => &[2],
+        Profile::Unsure => &[1, 2, 3],
+    };
+    let best = others.iter().filter_map(|&k| read(k)).max_by_key(|&(_, words)| words);
     Ok(match best {
-        Some(&(k, words)) if words > as_it_stands.saturating_add(JUDGE_MARGIN) => k,
+        Some((k, words)) if words > as_it_stands.saturating_add(JUDGE_MARGIN) => k,
         // A clear turn the judge reads no worse than the page as it stands keeps the profile's
         // answer; one it reads worse is declined.
-        Some(&(k, words)) if profile == Profile::Clear(k) && words >= as_it_stands => k,
+        Some((k, words)) if profile == Profile::Clear(k) && words >= as_it_stands => k,
         _ => 0,
     })
 }
@@ -798,6 +814,25 @@ mod tests {
         assert_eq!(p.inverse_transform, InverseTransform::identity());
     }
 
+    /// Auto-rotate alone enlarges nothing: the profile and the judge need no letter-sized
+    /// strokes, and a page that is turned upright, or left as it is, is read as rendered.
+    #[test]
+    fn auto_rotate_alone_reads_a_scan_at_its_own_resolution() {
+        let on = PreprocessOptions { auto_rotate: true, ..Default::default() };
+        let src = l_line();
+        let p = preprocess(src.clone(), 72.0, &on).unwrap();
+        assert_eq!(p.image.rgba, src.rgba, "an upright page is passed through");
+        assert_eq!(p.dpi, 72.0, "the render's own resolution");
+        assert_eq!(p.inverse_transform, InverseTransform::identity());
+        let turned = rotated(1);
+        let p = preprocess(turned.clone(), 150.0, &on).unwrap();
+        assert_eq!((p.image.width, p.image.height), (turned.height, turned.width), "turned, not enlarged");
+        assert_eq!(p.dpi, 150.0);
+        // A stroke step on top brings the enlargement back.
+        let p = preprocess(src, 150.0, &PreprocessOptions { auto_rotate: true, denoise: true, ..Default::default() }).unwrap();
+        assert_eq!(p.dpi, 300.0);
+    }
+
     /// The upscale refuses to break the side cap.
     #[test]
     fn upscaling_respects_the_side_cap() {
@@ -1069,7 +1104,7 @@ mod tests {
 
 #[cfg(test)]
 mod orientation_tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
 
     use super::*;
 
@@ -1177,6 +1212,39 @@ mod orientation_tests {
         assert_eq!((p.image.width, p.image.height), (300, 400), "turned to the way the judge reads");
         let (x, y) = p.inverse_transform.apply(0.0, 0.0);
         assert!(x.is_finite() && y.is_finite());
+    }
+
+    /// Text read sideways comes to almost nothing, so a page the judge reads well as it stands
+    /// is upright or upside down, and only the upside-down turn is put to it.
+    #[test]
+    fn a_page_that_reads_well_as_it_stands_is_checked_for_the_upside_down_turn_only() {
+        let page = grid(400, 300);
+        assert_eq!(profile_orientation(&page), Profile::Unsure);
+        // The sizes the judge is shown tell the sideways turns from the other two.
+        let shown = RefCell::new(Vec::new());
+        let seen = &shown;
+        let scripted = |scores: &'static [usize]| {
+            let next = Cell::new(0usize);
+            move |image: &OcrImage| {
+                seen.borrow_mut().push((image.width, image.height));
+                let i = next.get();
+                next.set(i + 1);
+                scores.get(i).copied()
+            }
+        };
+        let reads_well = scripted(&[READS_WELL, 3]);
+        assert_eq!(choose_orientation(&page, Some(&reads_well)).unwrap(), 0);
+        assert_eq!(shown.borrow().as_slice(), &[(400, 300), (400, 300)], "as it stands, then upside down; no sideways reading");
+        // An upside-down page reads well either way and better turned.
+        shown.borrow_mut().clear();
+        let upside_down = scripted(&[READS_WELL, READS_WELL + JUDGE_MARGIN + 1]);
+        assert_eq!(choose_orientation(&page, Some(&upside_down)).unwrap(), 2);
+        assert_eq!(shown.borrow().len(), 2);
+        // One word short of reading well, and all three turns are read.
+        shown.borrow_mut().clear();
+        let reads_poorly = scripted(&[READS_WELL - 1, 0, 0, READS_WELL + JUDGE_MARGIN + 1]);
+        assert_eq!(choose_orientation(&page, Some(&reads_poorly)).unwrap(), 3);
+        assert_eq!(shown.borrow().as_slice(), &[(400, 300), (300, 400), (400, 300), (300, 400)]);
     }
 
     #[test]

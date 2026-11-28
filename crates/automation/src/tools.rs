@@ -1552,7 +1552,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true)." },
                     "skip_text_files": { "type": "boolean", "description": "Batch: leave whole files that already contain text alone (they come back skipped, not read)." },
                     "force_ocr": { "type": "boolean", "description": "Read pages and files even when the skip options would leave them alone (default false)." },
-                    "auto_rotate": { "type": "boolean", "description": "Turn pages scanned sideways or upside down upright before reading (default false)." },
+                    "auto_rotate": { "type": "boolean", "description": "Turn pages scanned sideways or upside down upright before reading (default true where the engine judges the turns, the desktop; false in the web build)." },
                     "deskew": { "type": "boolean", "description": "Straighten skewed text lines before reading (default false)." },
                     "denoise": { "type": "boolean", "description": "A 3×3 median filter against scan speckle (default false)." },
                     "binarize": { "type": "boolean", "description": "Sauvola binarization: ink to black, paper to white (default false)." },

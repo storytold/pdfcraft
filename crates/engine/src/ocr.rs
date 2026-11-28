@@ -129,8 +129,10 @@ pub struct OcrSettings {
     pub engine: EngineChoice,
     /// How the engines' readings combine (see [`MergeStrategy`]).
     pub strategy: MergeStrategy,
-    /// Preprocessing, all off by default (a scan is passed through as rendered):
-    /// straighten pages scanned at 90°/180°/270°.
+    /// Preprocessing (a scan is passed through as rendered unless a step is on): straighten
+    /// pages scanned at 90°/180°/270°. On by default where the job's engine judges the turns
+    /// ([`OcrJob::run`], the desktop); off in the web build, whose steps take no judge and
+    /// where the ink's profile alone would turn a ruled form wrongly (#8484).
     pub auto_rotate: bool,
     /// Preprocessing: straighten skewed text lines.
     pub deskew: bool,
@@ -201,7 +203,7 @@ impl Default for OcrSettings {
             force_ocr: false,
             engine: EngineChoice::default(),
             strategy: MergeStrategy::default(),
-            auto_rotate: false,
+            auto_rotate: cfg!(not(target_arch = "wasm32")),
             deskew: false,
             denoise: false,
             binarize: false,
@@ -1436,14 +1438,17 @@ mod tests {
         assert_eq!(EngineChoice::Tesseract.default_strategy(), MergeStrategy::PrimaryOnly);
     }
 
-    /// Settings default to today's behavior: ocrs, PrimaryOnly, no preprocessing, searchable.
+    /// Settings default to today's behavior: ocrs, PrimaryOnly, searchable, and no preprocessing
+    /// but auto-rotate, which is on where the engine judges the turns (the desktop) and off in
+    /// the web build, whose steps take no judge.
     #[test]
     fn settings_default_to_the_ocrs_status_quo() {
         let s = OcrSettings::default();
         assert_eq!(s.engine, EngineChoice::Ocrs);
         assert_eq!(s.strategy, MergeStrategy::PrimaryOnly);
         assert_eq!(s.output_mode, OutputMode::Searchable);
-        assert!(!s.auto_rotate && !s.deskew && !s.denoise && !s.binarize);
+        assert_eq!(s.auto_rotate, cfg!(not(target_arch = "wasm32")), "auto-rotate is on by default only where the engine judges the turns");
+        assert!(!s.deskew && !s.denoise && !s.binarize);
         assert_eq!(s.region, None);
         assert_eq!(s.low_confidence_threshold, 60.0);
         assert_eq!(s.tesseract_path, None, "no configured tesseract path by default: the PATH decides");
@@ -1863,7 +1868,8 @@ mod tests {
         let s = Session::new();
         let bytes = s.create_from_text("t", "Already typed here").unwrap();
         let (r, fake) = fake_recognizers();
-        let settings = OcrSettings { skip_text_files: true, force_ocr: true, ..Default::default() };
+        // Auto-rotate off: the judge's readings of the turned page (#8484) would count as calls.
+        let settings = OcrSettings { skip_text_files: true, force_ocr: true, auto_rotate: false, ..Default::default() };
         let out = recognize_file("t.pdf", bytes, None, settings, &r, true, |_, _| true).unwrap();
         assert_eq!(fake.calls(), 1);
         assert_eq!(out.file_skipped, None);
@@ -1877,7 +1883,7 @@ mod tests {
         let s = Session::new();
         let bytes = s.create_from_text("t", "A page with text").unwrap();
         let (r, fake) = fake_recognizers();
-        let settings = OcrSettings { force_ocr: true, ..Default::default() };
+        let settings = OcrSettings { force_ocr: true, auto_rotate: false, ..Default::default() };
         let out = recognize_file("t.pdf", bytes, None, settings, &r, true, |_, _| true).unwrap();
         assert_eq!(fake.calls(), 1, "the page's own text did not stop the run");
         assert_eq!(out.pages[0].skipped, None);
@@ -1973,7 +1979,7 @@ mod tests {
         let skip = OcrSettings { skip_text_files: true, ..Default::default() };
         let Ok(Opened::Skipped(out)) = FileJob::open("t.pdf", bytes.clone(), None, skip, true) else { panic!("the file should be skipped") };
         assert_eq!(out.file_skipped.as_deref(), Some("the file already contains text"));
-        let force = OcrSettings { force_ocr: true, ..Default::default() };
+        let force = OcrSettings { force_ocr: true, auto_rotate: false, ..Default::default() };
         let Ok(Opened::Read(mut file)) = FileJob::open("t.pdf", bytes.clone(), None, force.clone(), true) else { panic!("the file should be read") };
         let pages = file.job.take().unwrap().run(&r, |_, _| true);
         let out = file.finish(pages).unwrap();

@@ -45,7 +45,8 @@ pub struct OcrDraft {
     pub engine: EngineChoice,
     /// How two engines' readings combine.
     pub strategy: MergeStrategy,
-    /// Preprocessing flags, all off by default.
+    /// Preprocessing flags: auto-rotate on by default where the engine judges the turns (the
+    /// desktop; the web build's steps take no judge), the rest off.
     pub auto_rotate: bool,
     pub deskew: bool,
     pub denoise: bool,
@@ -74,7 +75,7 @@ impl Default for OcrDraft {
             text_pages: false,
             engine: EngineChoice::default(),
             strategy: MergeStrategy::default(),
-            auto_rotate: false,
+            auto_rotate: cfg!(not(target_arch = "wasm32")),
             deskew: false,
             denoise: false,
             binarize: false,
