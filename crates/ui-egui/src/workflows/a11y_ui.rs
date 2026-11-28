@@ -697,6 +697,7 @@ fn figure_image(bytes: &Arc<Vec<u8>>, password: Option<&str>, shot: Option<&Figu
         scale,
         tag: 0,
         preview: false,
+        magnification: None,
     });
     if out.error.is_some() || out.width == 0 {
         return blank();

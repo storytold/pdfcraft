@@ -13,55 +13,55 @@ repository = "https://github.com/storytold/pdfcraft"
 
 [workspace.dependencies]
 # The framework facade: every framework crate is reached through it (contract head); its features pick the crates.
-craft = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", default-features = false }
-craft-markdown = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f", default-features = false }
+craft-markdown = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
 # Small, revision-bound UI drafts; the existing engine remains the owner of PDF edits/history.
 edit-session = { path = "vendor/edit-session", version = "=0.1.0-alpha.2" }
 # Shared frontend components; engines remain independent of egui.
-craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
 # Quit the macOS way (#1136): ⌘Q asks about unsaved changes, and closing quits through `terminate:`.
-craft-quit = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft-quit = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
 # One menu definition for the native macOS menu bar and the in-window bar elsewhere.
-craft-menu = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", default-features = false }
+craft-menu = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f", default-features = false }
 # Interface translations: lookup, fallback, CLDR plurals and language names over the craft-i18n
 # catalogs that `crates/ui-egui/build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, at
 # the commit in `craft-i18n.rev`). Already in the tree through craft-ui.
-craft-i18n = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft-i18n = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
 # Shared system spooler; document composition remains in pdfcraft-print.
-craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
 # ICC transforms for app-managed print colour; at craft-print's commit, so one craft-libs checkout.
-craft-cms = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-zip = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft-cms = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+craft-zip = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
 # Whether a path stored in a document may be opened (GoToR link targets).
-craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
 # The installed-font catalog the engine reads faces from (Edit ▸ Add text, font embedding).
-craft-font-catalog = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", default-features = false }
+craft-font-catalog = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f", default-features = false }
 # The craft-fonts manifest parser and `EmbeddedFace`, the face table the interface font stack takes; already in the
 # tree through craft-ui.
-craft-fonts-build = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft-fonts-build = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", features = ["ui"] }
-craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", features = ["cos", "crypt", "filters", "fonts"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f", features = ["ui"] }
+craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f", features = ["cos", "crypt", "filters", "fonts"] }
 # The writers the Word and RTF exports map onto (storytold/craft-libs#793), at storytold/craft-libs#1467:
 # its font and colour lookups take constant time, as PdfCraft's own writer did. craft-rtf, craft-wordmodel and
 # craft-docx move together: craft_rtf::doc::export takes its own revision's Document.
-craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
 # Shared Base64 encoder; use the existing RTF revision to reuse its codepage dependency.
-craft-mime = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-csv = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-xml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-image-codecs = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-tiff = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-jpeg = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-docx = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-wordmodel = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-pptx = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-drawingml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-opc = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft-mime = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+craft-csv = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+craft-xml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+craft-image-codecs = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+craft-tiff = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+craft-jpeg = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+craft-docx = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+craft-wordmodel = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+craft-pptx = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+craft-drawingml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+craft-opc = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
 # Shared MCP stdio framing and JSON-RPC 2.0 envelopes (storytold/craft-libs#778).
-craft-mcp-server = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-jsonrpc = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft-mcp-server = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+craft-jsonrpc = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
 # internal
 pdfcraft-geom = { path = "crates/geom", version = "0.22.0" }
 pdfcraft-filters = { path = "crates/filters", version = "0.22.0" }
@@ -96,8 +96,8 @@ pdfcraft-engine = { path = "crates/engine", version = "0.22.0" }
 pdfcraft-platform = { path = "crates/platform", version = "0.22.0" }
 pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.22.0" }
 pdfcraft-automation = { path = "crates/automation", version = "0.22.0", default-features = false }
-pdfcraft-prc = { package = "craft-prc", git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-prc = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+pdfcraft-prc = { package = "craft-prc", git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+craft-prc = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
 pdfcraft-prc-render = { path = "crates/prc-render", version = "0.22.0" }
 
 # pdf
@@ -180,14 +180,14 @@ unset_env = ["CRAFT_FONTS_DIR", "CRAFT_FONTS_REQUIRED", "CRAFT_I18N_DIR", "CRAFT
 
 # BEGIN port-kit framework patch
 [patch.crates-io]
-krilla = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-hayro = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-hayro-cmap = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-hayro-postscript = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+krilla = { git = "https://github.com/storytold/craft-libs", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+hayro = { git = "https://github.com/storytold/craft-libs", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+hayro-cmap = { git = "https://github.com/storytold/craft-libs", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+hayro-postscript = { git = "https://github.com/storytold/craft-libs", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
+linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "959b34427d23fab04cc53e67ac1e0ae1b408064f" }
 ecolor = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
 emath = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
 epaint = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }

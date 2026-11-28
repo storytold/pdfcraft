@@ -183,7 +183,7 @@ impl<'a> DocPages<'a> {
                 return Err(LoadFailure::Missing);
             }
             let mut renderer = PageRenderer::new(bytes, config);
-            let out = renderer.render(RenderRequest { page, kind: RequestKind::Pixels, tile, scale, tag, preview: false });
+            let out = renderer.render(RenderRequest { page, kind: RequestKind::Pixels, tile, scale, tag, preview: false, magnification: None });
             if cancel.is_cancelled() {
                 return Err(LoadFailure::Missing);
             }

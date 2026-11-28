@@ -68,6 +68,7 @@ fn render_page_at_size(bytes: Vec<u8>, index: usize, size: (u32, u32)) -> Render
         scale: 1.0,
         tag: 0,
         preview: false,
+        magnification: None,
     });
     assert_eq!(page.error, None);
     assert!(page.warnings.is_empty(), "{:?}", page.warnings);

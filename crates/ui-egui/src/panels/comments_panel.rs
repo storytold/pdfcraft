@@ -474,6 +474,7 @@ mod tests {
             fill_sign: false,
             no_rotate: false,
             points: Vec::new(),
+            no_zoom: false,
             text_box: None,
             popup: None,
         }
