@@ -8,7 +8,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use craft::theme::variant::Tone;
 #[cfg(not(target_arch = "wasm32"))]
-use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::contract::{Politeness, Props as _, Show as _};
 #[cfg(not(target_arch = "wasm32"))]
 use craft::ui::display::Spinner;
 #[cfg(not(target_arch = "wasm32"))]
@@ -186,6 +186,7 @@ fn show_opening(app: &PdfCraftApp, ui: &mut egui::Ui) {
         .show(&ctx, |ui| {
             Notice::new(Tone::Neutral, notice.label.clone())
                 .layout(NoticeLayout::Toast)
+                .announce(Politeness::Polite)
                 .content(Spinner::new().label(notice.label.clone()), |_| {})
                 .show(ui);
         });
