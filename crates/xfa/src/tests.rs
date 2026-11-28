@@ -5189,6 +5189,48 @@ fn a_layout_ready_event_is_told_apart_from_form_ready() {
     assert!(live.events.iter().any(|e| e.som == "form[0]" && e.activity == "layoutReady"), "{:?}", live.events);
 }
 
+/// A script marked `runAt="server"` runs only on a forms server, and one whose `binding` names
+/// another kind of application may be ignored (XFA 3.3 §script): neither is read as an event,
+/// calculate or validate script, while one with no `runAt`, `client` or `both` and the `XFA`
+/// binding still is. The template says once that it has scripts it doesn't run (#8337).
+#[test]
+fn server_scripts_and_scripts_for_other_applications_are_not_run() {
+    let field = |name: &str, attrs: &str| {
+        let s = format!(r#"<script contentType="application/x-javascript"{attrs}>this.rawValue = "{name}";</script>"#);
+        format!(
+            r#"<field name="{name}" w="1in" h="0.3in"><ui><textEdit/></ui><event activity="initialize">{s}</event><calculate>{s}</calculate><validate>{s}</validate></field>"#
+        )
+    };
+    let fields = [
+        ("plain", ""),
+        ("client", r#" runAt="client""#),
+        ("both", r#" runAt="both""#),
+        ("xfa", r#" binding="XFA""#),
+        ("server", r#" runAt="server""#),
+        ("other", r#" binding="AcroForm""#),
+    ];
+    let xml = format!(
+        r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb"><pageSet><pageArea name="page"><contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/></pageArea></pageSet>{}</subform></template>"#,
+        fields.iter().map(|(name, attrs)| field(name, attrs)).collect::<String>()
+    );
+    let (tpl, warnings) = parse(&xml).unwrap();
+    let live = form_tree(&tpl, None, &Overrides::default());
+    let activities = |name: &str| {
+        let som = format!("form[0].{name}[0]");
+        live.events.iter().filter(|e| e.som == som).map(|e| e.activity.as_str()).collect::<Vec<_>>()
+    };
+    for name in ["plain", "client", "both", "xfa"] {
+        assert_eq!(activities(name), ["initialize", "calculate", "validate"], "{name}");
+    }
+    for name in ["server", "other"] {
+        assert!(activities(name).is_empty(), "{name}: {:?}", activities(name));
+    }
+    assert_eq!(warnings.iter().filter(|w| w.contains("forms server")).count(), 1, "{warnings:?}");
+    // A form with only scripts it runs says nothing of the kind.
+    let (_, warnings) = parse(&xml.replace(r#" runAt="server""#, "").replace(r#" binding="AcroForm""#, "")).unwrap();
+    assert!(!warnings.iter().any(|w| w.contains("forms server")), "{warnings:?}");
+}
+
 /// A script numbers its own field's page when it gives that field a layout page call's result
 /// (`page`, `absPage`, `pageCount`): read from its code, not a comment or a string, by whole
 /// names, over several lines, and in bounded time for a hostile script. Page numbering is what

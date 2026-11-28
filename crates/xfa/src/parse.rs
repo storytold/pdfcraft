@@ -856,8 +856,8 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         data_shared: child(n, "bind")
             .is_some_and(|b| b.attribute("match").is_some_and(|m| m.trim() == "global") || b.attribute("ref").is_some_and(|r| !r.trim().is_empty())),
         scripts,
-        calculate: child(n, "calculate").and_then(|c| child(c, "script")).map(|s| parse_script(s, "calculate")),
-        validate: validate_el.and_then(|v| child(v, "script")).map(|s| parse_script(s, "validate")),
+        calculate: child(n, "calculate").and_then(|c| child(c, "script")).and_then(|s| parse_script(s, "calculate")),
+        validate: validate_el.and_then(|v| child(v, "script")).and_then(|s| parse_script(s, "validate")),
         validate_message,
         required: must_be_filled(validate_el),
         numeric,
@@ -872,9 +872,21 @@ fn must_be_filled(validate: Option<XmlNode>) -> bool {
     validate.is_some_and(|v| v.attribute("nullTest").is_some_and(|t| t.trim() == "error"))
 }
 
-fn parse_script(s: XmlNode, activity: &str) -> Script {
+/// Whether a `<script>` is one for this viewer to run (XFA 3.3 §script): `runAt` is `client`
+/// (the default) or `both`, not `server`, which only a forms server runs; and `binding` is
+/// `XFA` (the default), not the name of another kind of application, whose scripts an XFA
+/// processor may ignore.
+fn runs_here(s: XmlNode) -> bool {
+    s.attribute("runAt").is_none_or(|r| r.trim() != "server") && s.attribute("binding").is_none_or(|b| b.trim().eq_ignore_ascii_case("XFA"))
+}
+
+/// The script `s` for `activity`, or `None` when it isn't one to run here ([`runs_here`]).
+fn parse_script(s: XmlNode, activity: &str) -> Option<Script> {
+    if !runs_here(s) {
+        return None;
+    }
     let ct = s.attribute("contentType").unwrap_or("");
-    Script { activity: activity.to_string(), text: text_of(s).trim().to_string(), formcalc: !ct.to_ascii_lowercase().contains("javascript") }
+    Some(Script { activity: activity.to_string(), text: text_of(s).trim().to_string(), formcalc: !ct.to_ascii_lowercase().contains("javascript") })
 }
 
 /// `<event activity="…"><script>…</script></event>` children.
@@ -886,7 +898,7 @@ fn parse_events(n: XmlNode) -> Vec<Script> {
             // `ready` is two events, told apart by `ref`: layout:ready (`$layout`, once the form
             // is laid out) and form:ready (`$form`).
             let activity = if activity == "ready" && ev.attribute("ref").is_some_and(|r| r.trim() == "$layout") { "layoutReady" } else { activity };
-            scripts.push(parse_script(s, activity));
+            scripts.extend(parse_script(s, activity));
         }
     }
     scripts
@@ -1327,6 +1339,9 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         None => template,
     };
     let sf = children(template, "subform").next().ok_or_else(|| XfaError::Malformed("the template has no root subform".into()))?;
+    if template.descendants().any(|n| n.is_element() && n.tag_name().name() == "script" && !runs_here(n)) {
+        warnings.push("scripts the form marks to run on a forms server or writes for another application are not run".into());
+    }
     let mut root_sf = parse_subform(sf, &mut warnings, 0, None);
     if root_sf.page_set.is_none() {
         // A page set may sit beside the root subform.
