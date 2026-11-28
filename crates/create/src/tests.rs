@@ -3157,3 +3157,73 @@ fn shared_pcx_keeps_version_four_rgb_and_palette_pixels() {
     assert_eq!(super::pcx("windows.pcx", &palette).unwrap().data, [4, 5, 6]);
     assert!(from_images(&[("windows.pcx".into(), rgb)]).is_ok());
 }
+
+/// `keys` of image stream `r` given by reference, each to an object holding its value.
+fn by_reference(doc: &mut Document, r: ObjRef, keys: &[&[u8]]) {
+    let Object::Stream(mut s) = (*doc.get(r)).clone() else { panic!("{r:?} is not a stream") };
+    for key in keys {
+        let value = s.dict.get(key).cloned().unwrap();
+        let held = doc.add(value);
+        s.dict.set(key.to_vec(), Object::Ref(held));
+    }
+    doc.set(r, Object::Stream(s));
+}
+
+/// (#7862) A `/Width` or `/Height` given by reference (ISO 32000-2 §7.3.10) is read like a
+/// direct one: Export all images writes the image at its size, as Save image as does, a JPEG as
+/// is and others as PNG, with a soft mask whose size is given so too.
+#[test]
+fn image_sizes_given_by_reference_are_read() {
+    let files = [("scan.jpg", jpeg_bytes()), ("flat.png", png_bytes(false)), ("photo.png", png_bytes(true))];
+    for (name, bytes) in files {
+        let made = reopen(&from_images(&[(name.into(), bytes)]).unwrap());
+        let direct = extract_images(&made, &[0], 0);
+        assert!(direct.skipped.is_empty() && direct.images.len() == 1, "{name}: {:?}", direct.skipped);
+        let want = &direct.images[0];
+        const BY_REFERENCE: [&[&[u8]]; 3] = [&[b"Width"], &[b"Height"], &[b"Width", b"Height"]];
+        for keys in BY_REFERENCE {
+            let mut doc = made.clone();
+            let image = want.object;
+            by_reference(&mut doc, image, keys);
+            let mask = match &*doc.get(image) {
+                Object::Stream(s) => s.dict.reference(b"SMask"),
+                _ => None,
+            };
+            if let Some(mask) = mask {
+                by_reference(&mut doc, mask, keys);
+            }
+            let doc = reopen(&doc);
+            let out = extract_images(&doc, &[0], 0);
+            let what = format!("{name}, {:?} by reference", keys.iter().map(|k| String::from_utf8_lossy(k)).collect::<Vec<_>>());
+            assert!(out.skipped.is_empty(), "{what}: {:?}", out.skipped);
+            let got: Vec<_> = out.images.iter().map(|i| (i.extension, i.width, i.height, &i.data)).collect();
+            assert_eq!(got, [(want.extension, want.width, want.height, &want.data)], "{what}");
+            assert_eq!(image_file(&doc, out.images[0].object).unwrap(), (want.extension, want.data.clone()), "{what}: Save image as");
+        }
+    }
+}
+
+/// (#7862) An image whose size can't be read, a reference to no object or to something other
+/// than an integer among them, isn't written, and is listed under skipped with the reason.
+#[test]
+fn an_image_whose_size_cant_be_read_is_listed_as_skipped() {
+    let made = reopen(&from_images(&[("scan.jpg".into(), jpeg_bytes())]).unwrap());
+    let image = extract_images(&made, &[0], 0).images[0].object;
+    let missing = ObjRef { num: 9_999, generation: 0 };
+    for width in [Object::Ref(missing), Object::String(PdfString::literal(b"64".to_vec())), Object::Real(64.5)] {
+        let mut doc = made.clone();
+        let Object::Stream(mut s) = (*doc.get(image)).clone() else { panic!("{image:?} is the image") };
+        let given = match width.clone() {
+            missing @ Object::Ref(_) => missing,
+            other => Object::Ref(doc.add(other)),
+        };
+        s.dict.set(b"Width".to_vec(), given);
+        doc.set(image, Object::Stream(s));
+        let doc = reopen(&doc);
+        for min_side in [0, 1] {
+            let out = extract_images(&doc, &[0], min_side);
+            assert!(out.images.is_empty(), "{width:?}");
+            assert_eq!(out.skipped, [(0, image, "the image has no size".to_string())], "{width:?}, min_side {min_side}");
+        }
+    }
+}

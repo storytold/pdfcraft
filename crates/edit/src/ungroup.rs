@@ -702,9 +702,13 @@ fn is_name(doc: &Document, d: &Dict, key: &[u8], want: &[u8]) -> bool {
     d.get(key).is_some_and(|v| doc.resolve(v).as_name() == Some(want))
 }
 
-/// `d`'s integer `key`, directly or through an indirect object.
-fn int_of(doc: &Document, d: &Dict, key: &[u8]) -> Option<i64> {
-    d.get(key).and_then(|v| doc.resolve(v).as_int())
+/// `d`'s integer `key`, directly or through an indirect object. A direct value is read in place:
+/// `Document::resolve` would copy it, however large, only for it to be refused.
+pub(crate) fn int_of(doc: &Document, d: &Dict, key: &[u8]) -> Option<i64> {
+    match d.get(key)? {
+        v @ Object::Ref(_) => doc.resolve(v).as_int(),
+        v => v.as_int(),
+    }
 }
 
 /// Whether an ExtGState blends with something other than Normal.

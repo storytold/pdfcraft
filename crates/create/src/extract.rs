@@ -67,15 +67,21 @@ pub(crate) fn extract_images_within(doc: &Document, pages: &[usize], min_side: u
             }
             let obj = doc.get(r);
             let Object::Stream(s) = &*obj else { continue };
+            let s = sized(doc, s);
             let (w, h) = (s.dict.int(b"Width").unwrap_or(0), s.dict.int(b"Height").unwrap_or(0));
-            if w <= 0 || h <= 0 || (w.min(h) as u64) < min_side as u64 {
+            if w <= 0 || h <= 0 {
+                // Not written, so listed: no image is left out without a reason.
+                out.skipped.push((p, r, "the image has no size".into()));
+                continue;
+            }
+            if (w.min(h) as u64) < min_side as u64 {
                 continue;
             }
             if held >= max_bytes {
                 out.skipped.push((p, r, "more images than one export can hold".into()));
                 continue;
             }
-            match image(doc, s, budget) {
+            match image(doc, &s, budget) {
                 Ok((extension, data)) => {
                     held = held.saturating_add(data.len());
                     out.images.push(ExtractedImage { page: p, object: r, width: w as u32, height: h as u32, extension, data });
@@ -98,6 +104,24 @@ pub fn image_file_within(doc: &Document, image: ObjRef, budget: &mut ImageBudget
         Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => self::image(doc, s, budget),
         _ => Err("not an image".into()),
     }
+}
+
+/// `s` with its `/Width` and `/Height` made direct where they are given by reference (ISO 32000-2
+/// §7.3.10), so that the size checks here and the decoders, which read them as written, see the
+/// image's size. Only an integer is taken from the object referred to; anything else becomes null,
+/// as a direct one would be ignored. The image's data is shared, not copied. `s` itself when
+/// neither is indirect.
+fn sized<'s>(doc: &Document, s: &'s Stream) -> std::borrow::Cow<'s, Stream> {
+    let indirect = |key: &[u8]| matches!(s.dict.get(key), Some(Object::Ref(_)));
+    if !indirect(b"Width") && !indirect(b"Height") {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut made = s.clone();
+    for key in [b"Width".as_slice(), b"Height"] {
+        let Some(r @ Object::Ref(_)) = s.dict.get(key) else { continue };
+        made.dict.set(key.to_vec(), doc.resolve(r).as_int().map_or(Object::Null, Object::Int));
+    }
+    std::borrow::Cow::Owned(made)
 }
 
 /// The image XObjects reachable from `res`, through form XObjects, in resource order.
@@ -144,6 +168,8 @@ fn decoded(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<Vec<u
 /// mask, a stencil `/Mask` or a colour-key `/Mask`) is always a PNG with that transparency as
 /// alpha, JPEG images included, so cut-out images keep their transparent background.
 fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'static str, Vec<u8>), String> {
+    let direct = sized(doc, s);
+    let s: &Stream = &direct;
     let f = filters(s);
     let jpeg = matches!(f.last().map(Vec::as_slice), Some(b"DCTDecode" | b"DCT"));
     if matches!(f.last().map(Vec::as_slice), Some(b"JPXDecode")) {
@@ -642,6 +668,8 @@ fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize, budget: &mut Ima
 /// A one-component mask image as 8-bit values (its `/Decode` interval applied), scaled to
 /// `w` × `h`. `None` when it can't be decoded (JPEG 2000 masks).
 fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut ImageBudget) -> Option<Vec<u8>> {
+    let direct = sized(doc, m);
+    let m: &Stream = &direct;
     let (mw, mh) = size(m.dict.int(b"Width")?, m.dict.int(b"Height")?)?;
     let stencil = m.dict.get(b"ImageMask").is_some_and(|v| matches!(&*doc.resolve(v), Object::Bool(true)));
     let f = filters(m);

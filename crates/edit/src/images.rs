@@ -1161,8 +1161,8 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
                 name: String::from_utf8_lossy(name).into_owned(),
                 object: resource.as_ref(),
                 is_form,
-                width: if is_form { 0 } else { s.dict.int(b"Width").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
-                height: if is_form { 0 } else { s.dict.int(b"Height").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
+                width: if is_form { 0 } else { pixels(doc, &s.dict, b"Width") },
+                height: if is_form { 0 } else { pixels(doc, &s.dict, b"Height") },
                 stream: pieces.piece_of(op.span.start),
                 op: i,
                 draw_matrix: ctm.0,
@@ -1171,6 +1171,12 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
         }
     }
     Ok(out)
+}
+
+/// An image's `/Width` or `/Height` (`key`) in pixels, written directly or given by reference
+/// (ISO 32000-2 §7.3.10): 0 when it isn't a non-negative integer, `u32::MAX` past that.
+fn pixels(doc: &Document, d: &Dict, key: &[u8]) -> u32 {
+    u32::try_from(crate::ungroup::int_of(doc, d, key).unwrap_or(0).max(0)).unwrap_or(u32::MAX)
 }
 
 /// The images page `page` (0-based) shows, in drawing order, including those drawn inside form
@@ -1237,8 +1243,8 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
                     name: String::from_utf8_lossy(name).into_owned(),
                     object: Some(r),
                     is_form: false,
-                    width: s.dict.int(b"Width").unwrap_or(0).max(0) as u32,
-                    height: s.dict.int(b"Height").unwrap_or(0).max(0) as u32,
+                    width: pixels(doc, &s.dict, b"Width"),
+                    height: pixels(doc, &s.dict, b"Height"),
                     stream: stream(op),
                     op: i,
                     draw_matrix: ctm.0,
