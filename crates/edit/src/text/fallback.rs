@@ -543,7 +543,9 @@ pub(super) fn add_type3_font(doc: &mut Document, fonts_res: &mut Dict, face: &Em
         suffix = suffix.saturating_add(1);
         name = format!("{prefix}{suffix}");
     }
-    fonts_res.set(name.as_bytes().to_vec(), Object::Dict(font));
+    // An object of its own, like the descriptor: Apply Redactions cleans a Type 3 font's glyphs
+    // through its reference, and refuses a page whose resources hold one directly.
+    fonts_res.set(name.as_bytes().to_vec(), Object::Ref(doc.add(Object::Dict(font))));
     name
 }
 
