@@ -1,5 +1,6 @@
 # PdfCraft parity with Adobe Acrobat Pro
 
+> **Last reviewed:** 2026-11-15 | **Last updated:** 2026-11-15 | **Change:** minor (craft-libs cutover for codecs, XFA XML, crypt/filters/COS/export/XFDF, PRC and ZIP; print colour management for pictures; M7 line replacement keeps source fonts; auto-tag headings by size and weight; arrow-key comment moves; stream-filter JPEG export; form, signature, optimize, redaction, measurement, PRC-normal and CMYK fixes; v0.21.1 Flatpak fix; scores and estimates unchanged)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > Integration update 2026-10-30: lossless JBIG2 generic and exact-copy symbol coding are included; no lossy substitution. Combined tests passed at bdf5620; the subsequent review fixes require fresh CI.
 
@@ -55,7 +56,7 @@ never been measured side by side with Acrobat, and the first public releases (0.
 
 - **Target identified from the installed app.** `/Applications/Adobe Acrobat DC/Adobe Acrobat.app`,
   `CFBundleShortVersionString` 26.002.21931. Inspected without launching it and without opening
-  anything inside `Contents/Resources/JavaScripts/` (clean-room rules, `AGENTS.md` §2): the
+  anything inside `Contents/Resources/JavaScripts/` (clean-room rules, clean-room.md): the
   `Info.plist` `CFBundleDocumentTypes` (the formats it opens: see
   [file-format-parity.md](file-format-parity.md)), the `.lproj` folder names (24 localizations,
   plus the MEA/MEH/NAF Middle East and North Africa editions named in `Resources/Sequences/`), the

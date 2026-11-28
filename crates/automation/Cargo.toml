@@ -10,6 +10,8 @@ workspace = true
 
 [dependencies]
 pdfcraft-engine = { workspace = true }
+# The framework, through its facade: `craft::atomic` for crash-safe writes.
+craft = { workspace = true, features = ["atomic"] }
 pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-organize = { workspace = true }
@@ -20,22 +22,26 @@ serde_json = { workspace = true }
 sha2 = "0.11"
 tempfile = "3.27"
 base64 = { version = "0.23", optional = true }
+craft-jsonrpc = { workspace = true, optional = true }
+craft-mcp-server = { workspace = true, optional = true }
 
 
 [features]
 default = ["mcp"]
 # The MCP server module. Opt-in at run time either way; disable to leave it out of the build.
-mcp = ["dep:base64"]
+mcp = ["dep:base64", "dep:craft-jsonrpc", "dep:craft-mcp-server"]
 
 [dev-dependencies]
 # Synthetic printer profiles for the app-managed print colour tests.
 craft-cms = { workspace = true }
+craft-image-codecs = { workspace = true }
+# Word exports read back as Word reads them.
+craft-docx = { workspace = true }
+craft-wordmodel = { workspace = true }
 pdfcraft-fonts = { workspace = true }
-png = "0.18"
 flate2.workspace = true
 pdfcraft-model = { workspace = true }
 pdfcraft-xfa = { workspace = true }
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 rustix = { version = "1", features = ["fs"] }

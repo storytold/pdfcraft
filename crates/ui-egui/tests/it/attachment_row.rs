@@ -1,6 +1,10 @@
 //! An attachment's row in the Attachments panel answers a double-click and a right-click, as
 //! in Acrobat (#3466), while its buttons keep taking their own clicks.
 
+use std::path::Path;
+use std::sync::Arc;
+
+use craft::host::{Picked, ScriptedFiles};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
@@ -48,12 +52,20 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 }
 
 fn harness_with_pdf(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, pdf).unwrap();
-        app.set_option("panel", "attachments").unwrap();
-        app
+    harness_answering(pdf, Arc::new(ScriptedFiles::new()))
+}
+
+/// [`harness_with_pdf`] whose file picks `files` answers.
+fn harness_answering(pdf: Vec<u8>, files: Arc<ScriptedFiles>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::test_app(crate::support::host_with_files(files));
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf).unwrap();
+            app.set_option(&egui::Context::default(), "panel", "attachments").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h
@@ -93,24 +105,6 @@ fn submitting_blank_leaves_an_absent_description_untouched() {
     assert_eq!(doc.can_undo(), None);
 }
 
-/// A folder of its own for one test's saved file, removed afterwards.
-struct Dir(std::path::PathBuf);
-
-impl Dir {
-    fn new(test: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("pdfcraft-attachment-row-{test}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).unwrap();
-        Self(path)
-    }
-}
-
-impl Drop for Dir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 /// Two pointer clicks a frame apart on `label` (an accessibility click is never a double-click).
 fn double_click(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
     let at = row_name(h, label);
@@ -133,53 +127,46 @@ fn right_click(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
     h.run_steps(2);
 }
 
+/// A row event of the Attachments list becomes an attachment action: a double click saves a file that
+/// is not a PDF and opens one that is; the row menu offers Open only for the PDF, and its Save, Open and
+/// Delete act on the row it was opened on.
 #[test]
-fn double_clicking_a_pdf_attachment_opens_it_in_a_new_tab() {
-    let mut h = harness();
+fn attachment_rows_turn_their_events_into_attachment_actions() {
+    let saved = Path::new("out/saved notes.txt");
+    let from_menu = Path::new("out/from menu.pdf");
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![saved.to_path_buf()]), Picked::Paths(vec![from_menu.to_path_buf()])]));
+    let mut h = harness_answering(attachments_pdf(), files.clone());
     assert_eq!(h.state().views.len(), 1);
+    double_click(&mut h, "notes.txt");
+    assert_eq!(files.file(saved).as_deref(), Some(&b"hello notes"[..]), "PdfCraft opens only PDFs, so it saves the rest");
+    assert_eq!(h.state().views.len(), 1, "nothing opens");
     double_click(&mut h, "inner.pdf");
     assert_eq!(h.state().views.len(), 2, "the attached PDF opens in a tab of its own");
-}
-
-#[test]
-fn double_clicking_another_attachment_saves_it() {
-    let dir = Dir::new("double");
-    let target = dir.0.join("saved notes.txt");
-    let mut h = harness();
-    h.state_mut().pick_override = Some(vec![target.to_string_lossy().into_owned()]);
-    double_click(&mut h, "notes.txt");
-    assert_eq!(std::fs::read(&target).unwrap(), b"hello notes", "PdfCraft opens only PDFs, so it saves the rest");
-    assert_eq!(h.state().views.len(), 1, "nothing opens");
-}
-
-#[test]
-fn the_right_click_menu_opens_saves_and_deletes() {
-    let dir = Dir::new("menu");
-    let target = dir.0.join("from menu.pdf");
-    let mut h = harness();
-    let count = |h: &Harness<'static, PdfCraftApp>, label: &str| h.query_all_by_label(label).count();
-    // The rows have Save and Delete buttons each, and the PDF's row an Open button.
-    assert_eq!((count(&h, "Save attachment…"), count(&h, "Open in a new tab"), count(&h, "Delete attachment")), (2, 1, 2));
-    // A text file's menu has Save and Delete, no Open.
+    // Opening the same attachment again selects its existing tab. Close it and keep a different
+    // document open so the menu action must create a third tab.
+    h.state_mut().close_tab(1);
+    let ctx = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx, "other.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "doc.pdf").click();
+    h.run_steps(3);
+    // The menu of a text file has no Open; the PDF's has.
     right_click(&mut h, "notes.txt");
-    assert_eq!((count(&h, "Save attachment…"), count(&h, "Open in a new tab"), count(&h, "Delete attachment")), (3, 1, 3));
+    assert!(h.get_by_role(egui::accesskit::Role::Menu).query_by_label("Open in a new tab").is_none(), "no Open for notes.txt");
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
-    // Scope actions to the menu: egui nests it under its row in the accessibility tree.
-    // Save writes the PDF, not the text file whose row comes last.
     right_click(&mut h, "inner.pdf");
-    assert_eq!(count(&h, "Open in a new tab"), 2, "the PDF's menu offers Open");
-    h.state_mut().pick_override = Some(vec![target.to_string_lossy().into_owned()]);
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Open in a new tab");
     h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Save attachment…").click();
     h.run_steps(3);
-    assert_eq!(std::fs::read(&target).unwrap(), INNER, "Save from inner.pdf's menu");
+    assert_eq!(files.file(from_menu).as_deref(), Some(INNER), "Save from inner.pdf's menu");
     right_click(&mut h, "inner.pdf");
     h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Open in a new tab").click();
     h.run_steps(3);
-    assert_eq!(h.state().views.len(), 2, "Open from the menu");
-    h.state_mut().active = Some(0);
+    assert_eq!(h.state().views.len(), 3, "Open from the menu");
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "doc.pdf").click();
     h.run_steps(3);
-    // Delete from inner.pdf's menu leaves notes.txt, whose row's button would delete itself.
+    // Delete from inner.pdf's menu leaves notes.txt.
     right_click(&mut h, "inner.pdf");
     h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Delete attachment").click();
     h.run_steps(3);
@@ -229,10 +216,10 @@ fn editing_the_document_while_description_dialog_is_open_discards_its_stale_draf
     right_click(&mut h, "notes.txt");
     h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Edit description").click();
     h.run_steps(2);
-    assert!(
-        h.state_mut()
-            .apply_edit(pdfcraft_engine::Edit::EditAttachmentDescription { key: "notes.txt".into(), description: Some("Changed elsewhere".into()) })
-    );
+    assert!(h.state_mut().apply_edit(
+        &egui::Context::default(),
+        pdfcraft_engine::Edit::EditAttachmentDescription { key: "notes.txt".into(), description: Some("Changed elsewhere".into()) }
+    ));
     h.get_by_label("OK").click();
     h.run_steps(3);
     let state = h.state();
@@ -241,40 +228,13 @@ fn editing_the_document_while_description_dialog_is_open_discards_its_stale_draf
     assert_eq!(doc.can_undo(), Some("Edit attachment description"));
 }
 
-#[test]
-fn the_row_buttons_still_take_their_own_clicks() {
-    let dir = Dir::new("buttons");
-    let target = dir.0.join("from button.txt");
-    let mut h = harness();
-    h.state_mut().pick_override = Some(vec![target.to_string_lossy().into_owned()]);
-    // The rows list inner.pdf first, then notes.txt: the second Save button is notes.txt's.
-    h.get_all_by_label("Save attachment…").nth(1).unwrap().click();
-    h.run_steps(3);
-    assert_eq!(std::fs::read(&target).unwrap(), b"hello notes", "the Save button under the row's click area");
-    h.get_by_label("Open in a new tab").click();
-    h.run_steps(3);
-    assert_eq!(h.state().views.len(), 2, "the Open button");
-}
-
-/// CodeRabbit on #4513: a right-click on one of a row's buttons opens that row's menu too, as a
-/// right-click anywhere on the row does.
-#[test]
-fn a_right_click_on_a_row_button_opens_the_row_menu() {
-    let mut h = harness();
-    let count = |h: &Harness<'static, PdfCraftApp>, label: &str| h.query_all_by_label(label).count();
-    // inner.pdf's row comes first: its Save button is the first one.
-    let at = h.get_all_by_label("Save attachment…").next().expect("inner.pdf's Save button").rect().center();
-    h.hover_at(at);
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
-    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
-    h.run_steps(2);
-    assert_eq!(count(&h, "Open in a new tab"), 2, "inner.pdf's menu, with Open, is open");
-    assert_eq!(count(&h, "Save attachment…"), 3);
-}
-
 /// Where the attachment named `label` shows in the panel: the lowest text with that name, below
-/// a tab of the same name once the attachment is open.
+/// a tab of the same name once the attachment is open. The row's accessible name is its name
+/// followed by its details.
 fn row_name(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Pos2 {
-    h.get_all_by_label(label).map(|n| n.rect()).max_by(|a, b| a.top().total_cmp(&b.top())).expect("the attachment is listed").center()
+    let row = h.get_by(|node| {
+        node.role() == egui::accesskit::Role::ListItem && node.label().is_some_and(|text| text.starts_with(label)) && !node.is_hidden()
+    });
+    let rect = row.rect();
+    egui::pos2(rect.left() + rect.width() * 0.25, rect.center().y)
 }

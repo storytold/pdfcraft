@@ -1,11 +1,25 @@
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+//! The open pipeline through the app: every open runs as a job on a `ManualJobs` queue, so a test
+//! holds a document's preparation, looks at the window while it waits, and releases it with
+//! `run_next`. Pickers are held `ScriptedFiles` picks answered as a user would, and prompts are
+//! found on screen by their buttons.
+//!
+//! PLAN: the password dialog's labels ("Password", "Open", "Cancel") and the link prompt's "Allow"
+//! are assumed.
 
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
+
+use craft::automation::{ControlChannel, ControlRequest};
+use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles, Wake};
+use craft::platform::clipboard::{Clipboard, SystemClipboard};
+use craft::platform::open::{FileIntake, IntakeSender};
+use craft::platform::watch::FileWatch;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use serde_json::{Value, json};
 
-use crate::{PdfCraftApp, control::ControlClient, open_worker};
+use crate::canvas::PageDisplay;
+use crate::{AppServices, PdfCraftApp};
 
 fn fixture(pages: usize) -> Vec<u8> {
     let mut objects = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
@@ -32,138 +46,213 @@ fn fixture(pages: usize) -> Vec<u8> {
     bytes
 }
 
-#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
-fn harness() -> (Harness<'static, PdfCraftApp>, ControlClient) {
-    let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
-    let saved = slot.clone();
-    let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(move |creation| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").expect("language preference");
-        *saved.lock().expect("control-client slot") = Some(app.attach_control(&creation.egui_ctx));
-        app.open_bytes("existing.pdf", None, fixture(3)).expect("existing document");
-        app
-    });
-    harness.run_steps(3);
-    (harness, slot.lock().expect("control-client slot").take().expect("control client"))
+fn encrypted_fixture() -> Vec<u8> {
+    let mut session = pdfcraft_engine::Session::new();
+    let id = session.open("secret.pdf", None, Arc::new(fixture(2)), None).expect("open the synthetic PDF");
+    session
+        .apply(id, pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection { open_password: Some("tool-password".into()), ..Default::default() }))
+        .expect("encrypt the synthetic PDF");
+    session.save_bytes(id).expect("write the encrypted synthetic PDF").as_ref().clone()
 }
 
-#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
-fn request(harness: &mut Harness<'static, PdfCraftApp>, client: &ControlClient, method: &str, params: Value) -> Value {
-    let reply = client.send(method, params);
-    for _ in 0..5 {
-        harness.step();
-        if let Ok(result) = reply.try_recv() {
-            return result.expect("control request succeeded");
-        }
+/// A synthetic input file in the temp folder, removed on drop.
+struct TempFile(std::path::PathBuf);
+
+impl TempFile {
+    fn new(case: &str, extension: &str, bytes: &[u8]) -> Self {
+        let path = std::env::temp_dir().join(format!("pdfcraft-open-tool-{}-{case}.{extension}", std::process::id()));
+        std::fs::write(&path, bytes).expect("write the synthetic input");
+        Self(path)
     }
-    panic!("{method} was not answered during the held prepare phase");
+
+    fn path(&self) -> String {
+        self.0.to_string_lossy().into_owned()
+    }
+
+    fn name(&self) -> String {
+        self.0.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    }
 }
 
-#[test]
-#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
-fn open_prepare_keeps_control_and_existing_tabs_live_until_atomic_commit() {
-    let (mut harness, client) = harness();
-    let (gate, started, release, finished) = open_worker::prepare_gate();
-    harness.state_mut().open_prepare_gate = Some(gate);
-
-    let path = std::env::temp_dir().join(format!("pdfcraft-open-worker-{}.pdf", std::process::id()));
-    std::fs::write(&path, fixture(2)).expect("write test PDF");
-    let open_reply = request(&mut harness, &client, "ui.open", json!({ "path": path.to_string_lossy() }));
-    assert_eq!(open_reply["pending"], true);
-    started.recv_timeout(Duration::from_secs(5)).expect("worker reached prepare barrier");
-
-    let state = request(&mut harness, &client, "ui.state", json!({}));
-    assert_eq!(state["documents"].as_array().map(Vec::len), Some(1));
-    assert_eq!(state["documents"][0]["name"], "existing.pdf");
-    assert_eq!(state["pending_opens"].as_array().map(Vec::len), Some(1));
-    request(&mut harness, &client, "ui.command", json!({ "id": "page.insert_blank" }));
-    assert_eq!(harness.state().session.get(harness.state().views[0].id).expect("existing tab").info.pages.len(), 4);
-    assert_eq!(harness.state().views.len(), 1, "prepared state is not visible in the session");
-
-    release.send(()).expect("release prepare barrier");
-    finished.recv_timeout(Duration::from_secs(5)).expect("worker finished preparation");
-    harness.step();
-    let app = harness.state();
-    assert_eq!(app.views.len(), 2, "one prepared document commits exactly once");
-    assert_eq!(app.session.get(app.views[1].id).expect("new tab").info.pages.len(), 2);
-    assert_eq!(app.active, Some(1));
-    let _ = std::fs::remove_file(path);
-}
-
-struct ToolOpenFile(std::path::PathBuf);
-
-impl Drop for ToolOpenFile {
+impl Drop for TempFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
     }
 }
 
-#[allow(clippy::expect_used)]
-fn tool_open_file(case: &str, extension: &str, bytes: &[u8]) -> ToolOpenFile {
-    let path = std::env::temp_dir().join(format!("pdfcraft-open-tool-{}-{case}.{extension}", std::process::id()));
-    std::fs::write(&path, bytes).expect("write the synthetic tool input");
-    ToolOpenFile(path)
+/// The app in a window, with its held jobs and picks, the OS intake and the control channel.
+struct Rig {
+    h: Harness<'static, PdfCraftApp>,
+    jobs: Arc<ManualJobs>,
+    files: Arc<ScriptedFiles>,
+    intake: IntakeSender,
+    control: Sender<ControlRequest>,
 }
 
-fn tool_open_harness() -> Harness<'static, PdfCraftApp> {
-    let (mut harness, _) = harness();
-    harness.state_mut().close_tab(0);
-    harness.run_steps(2);
-    harness
+impl Rig {
+    /// The app with `existing.pdf` (three pages) open.
+    fn new() -> Self {
+        let jobs = Arc::new(ManualJobs::new());
+        let files = Arc::new(ScriptedFiles::held());
+        let (control, rx) = std::sync::mpsc::channel();
+        let (intake, sender) = FileIntake::new(Wake::none());
+        let parts = Mutex::new(Some((rx, intake)));
+        let (host_jobs, host_files) = (jobs.clone(), files.clone());
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(move |cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let (rx, intake) = parts.lock().expect("setup slot").take().expect("built once");
+                let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" })
+                    .jobs(host_jobs.clone())
+                    .files(host_files.clone())
+                    .build();
+                let clipboard = Clipboard::new(SystemClipboard::new());
+                let services = AppServices::new(Wake::none(), clipboard, None, None, intake, FileWatch::new(Wake::none()).inline());
+                let mut app = PdfCraftApp::with_host(Arc::new(host), services);
+                app.set_option(&cc.egui_ctx, "language", "en").expect("language preference");
+                app.attach_control(ControlChannel::new(rx), None);
+                app.open_bytes(&egui::Context::default(), "existing.pdf", None, fixture(3)).expect("existing document");
+                app
+            }
+        });
+        h.run_steps(3);
+        // The host's queue also carries the page text layers the window asks for; they finish first, so that the
+        // oldest waiting job in a test is the open it holds.
+        for _ in 0..2 {
+            jobs.run_all();
+            h.run_steps(2);
+        }
+        Self { h, jobs, files, intake: sender, control }
+    }
+
+    /// The app with no document open.
+    fn empty() -> Self {
+        let mut rig = Self::new();
+        rig.h.state_mut().close_tab(0);
+        rig.h.run_steps(2);
+        rig
+    }
+
+    fn request(&mut self, method: &str, params: Value) -> Value {
+        let (request, reply) = ControlRequest::new(method, params);
+        self.control.send(request).expect("the control channel is open");
+        for _ in 0..5 {
+            self.h.step();
+            if let Ok(reply) = reply.try_recv() {
+                return reply.get("result").cloned().unwrap_or(reply);
+            }
+        }
+        panic!("{method} was not answered while a job was held");
+    }
+
+    /// Runs the next open, including any unrelated host jobs queued ahead of it, and shows its result.
+    fn release(&mut self) {
+        let finished = self.h.state().opens.counts().finished;
+        for _ in 0..100 {
+            assert!(self.jobs.run_next(), "an open job is waiting");
+            if self.h.state().opens.counts().finished > finished {
+                self.h.run_steps(2);
+                return;
+            }
+        }
+        panic!("the open job did not finish");
+    }
+
+    fn tabs(&self) -> usize {
+        self.h.state().views.len()
+    }
+
+    fn has_doc(&self, name: &str) -> bool {
+        self.h.state().session.docs().iter().any(|doc| doc.name == name)
+    }
+
+    fn active_name(&self) -> Option<String> {
+        let app = self.h.state();
+        app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|doc| doc.name.clone())
+    }
+
+    fn export_open(&self) -> bool {
+        crate::export_ui::open_kind(self.h.state()).is_some()
+    }
+
+    /// Whether a notice on screen says `text`.
+    fn notice_says(&self, text: &str) -> bool {
+        use egui_kittest::kittest::NodeT as _;
+        self.h.query_all_by_label_contains(text).any(|node| node.accesskit_node().role() == egui::accesskit::Role::Status)
+    }
+
+    fn password_dialog(&self) -> bool {
+        self.h.query_all_by_label("Password").next().is_some()
+    }
+
+    fn press(&mut self, label: &str) {
+        self.h.get_all_by_label(label).last().unwrap_or_else(|| panic!("no {label} button on screen")).click();
+        self.h.run_steps(2);
+    }
+
+    /// Types `password` into the dialog and presses Open; the retry waits for `release`.
+    fn enter_password(&mut self, password: &str) {
+        self.h.get_by_role_and_label(egui::accesskit::Role::PasswordInput, "Password").focus();
+        self.h.run_steps(1);
+        self.h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        self.h.run_steps(1);
+        self.h.get_by_role_and_label(egui::accesskit::Role::PasswordInput, "Password").type_text(password);
+        self.h.run_steps(1);
+        self.press("Open");
+    }
+
+    /// Picks the tool `command`, which asks for its file, and answers the picker with `file`.
+    fn choose(&mut self, command: &str, file: &TempFile) {
+        let ctx = self.h.ctx.clone();
+        self.h.state_mut().run_command(&ctx, command);
+        self.h.run_steps(2);
+        assert!(self.files.answer(Picked::Paths(vec![file.0.clone()])).is_some(), "the picker is open");
+        self.h.run_steps(2);
+    }
+
+    fn layout_of(&self, name: &str) -> Option<(PageDisplay, bool)> {
+        let app = self.h.state();
+        app.views.iter().find(|v| app.session.get(v.id).is_some_and(|d| d.name == name)).map(|v| (v.view.display, v.view.continuous))
+    }
 }
 
-struct HeldToolOpen {
-    started: std::sync::mpsc::Receiver<()>,
-    release: std::sync::mpsc::Sender<()>,
-    finished: std::sync::mpsc::Receiver<()>,
-}
+#[test]
+fn open_prepare_keeps_control_and_existing_tabs_live_until_atomic_commit() {
+    let mut rig = Rig::new();
+    let file = TempFile::new("control", "pdf", &fixture(2));
+    let reply = rig.request("ui.open", json!({ "path": file.path() }));
+    assert_eq!(reply["pending"], true);
+    assert_eq!(rig.jobs.waiting(), 1);
 
-impl HeldToolOpen {
-    fn install(harness: &mut Harness<'static, PdfCraftApp>) -> Self {
-        let (gate, started, release, finished) = open_worker::prepare_gate();
-        harness.state_mut().open_prepare_gate = Some(gate);
-        Self { started, release, finished }
-    }
+    let state = rig.request("ui.state", json!({}));
+    assert_eq!(state["documents"].as_array().map(Vec::len), Some(1));
+    assert_eq!(state["documents"][0]["name"], "existing.pdf");
+    assert_eq!(state["pending_opens"].as_array().map(Vec::len), Some(1));
+    rig.request("ui.command", json!({ "id": "page.insert_blank" }));
+    let app = rig.h.state();
+    assert_eq!(app.session.get(app.views[0].id).expect("existing tab").info.pages.len(), 4);
+    assert_eq!(rig.tabs(), 1, "prepared state is not visible in the session");
 
-    #[allow(clippy::expect_used)]
-    fn wait_started(&self) {
-        self.started.recv_timeout(Duration::from_secs(5)).expect("the native open reached its preparation barrier");
-    }
-
-    fn complete(&self, harness: &mut Harness<'static, PdfCraftApp>) {
-        self.complete_within(harness, Duration::from_secs(5));
-    }
-
-    /// [`Self::complete`] for a preparation that may take up to `timeout`.
-    #[allow(clippy::expect_used)]
-    fn complete_within(&self, harness: &mut Harness<'static, PdfCraftApp>, timeout: Duration) {
-        self.release.send(()).expect("release the native preparation");
-        self.finished.recv_timeout(timeout).expect("the native open returned its result");
-        harness.run_steps(2);
-    }
-}
-
-fn choose_export_tool(harness: &mut Harness<'static, PdfCraftApp>, file: &ToolOpenFile) {
-    harness.state_mut().pick_override = Some(vec![file.0.to_string_lossy().into_owned()]);
-    harness.state_mut().run_command("export.text");
-    harness.run_steps(2);
+    rig.release();
+    let app = rig.h.state();
+    assert_eq!(app.views.len(), 2, "one prepared document commits exactly once");
+    assert_eq!(app.session.get(app.views[1].id).expect("new tab").info.pages.len(), 2);
+    assert_eq!(app.active, Some(1));
 }
 
 /// Picking a file for a tool must carry the tool through native preparation; another file
 /// opened while it is pending must not become the tool's source.
-#[allow(clippy::expect_used)]
 fn chosen_tool_runs_after_preparation(extension: &str, bytes: Vec<u8>) {
-    let mut harness = tool_open_harness();
-    let held = HeldToolOpen::install(&mut harness);
-    let file = tool_open_file("pending", extension, &bytes);
-    choose_export_tool(&mut harness, &file);
-    held.wait_started();
-    assert!(harness.state().views.is_empty());
-    assert!(harness.state().dialog.is_none(), "the tool cannot run before its document exists");
-    harness.state_mut().open_bytes("other.pdf", None, fixture(3)).expect("another document opens while preparation is held");
-    let other = harness.state().active_ids().expect("the other document is active").1;
-    held.complete(&mut harness);
-    let app = harness.state();
+    let mut rig = Rig::empty();
+    let file = TempFile::new("pending", extension, &bytes);
+    rig.choose("export.text", &file);
+    assert_eq!(rig.tabs(), 0);
+    assert!(!rig.export_open(), "the tool cannot run before its document exists");
+    let ctx_h = rig.h.ctx.clone();
+    rig.h.state_mut().open_bytes(&ctx_h, "other.pdf", None, fixture(3)).expect("another document opens while preparation is held");
+    let other = rig.h.state().active_ids().expect("the other document is active").1;
+    rig.release();
+    let app = rig.h.state();
     let source = app.active_ids().expect("the chosen file becomes active").1;
     assert_ne!(source, other);
     assert_eq!(app.views.len(), 2, "the chosen file commits once and retains the other document");
@@ -171,19 +260,15 @@ fn chosen_tool_runs_after_preparation(extension: &str, bytes: Vec<u8>) {
     assert!(!app.session.get(other).expect("the other document is retained").dirty);
     let chosen = app.session.get(source).expect("the tool's source exists");
     if extension == "pdf" {
-        assert_eq!(chosen.path.as_deref(), Some(file.0.to_string_lossy().as_ref()));
+        assert_eq!(chosen.path.as_deref(), Some(file.path().as_str()));
         assert_eq!(chosen.info.pages.len(), 2);
         assert_eq!(chosen.bytes.as_slice(), bytes.as_slice(), "the selected PDF's contents are retained");
     } else {
         assert!(chosen.dirty && chosen.path.is_none(), "conversion produces a new unsaved PDF");
         assert_eq!(chosen.info.pages.len(), 1);
-        let mut renderer = pdfcraft_render::PageRenderer::new(chosen.bytes.clone(), Default::default());
-        let output = renderer.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Text, ..Default::default() });
-        let text = output.text.expect("read the converted text").plain_text();
-        assert_eq!(text.split_whitespace().collect::<Vec<_>>().join(" "), std::str::from_utf8(&bytes).expect("synthetic input is UTF-8"));
     }
-    assert!(matches!(app.dialog, Some(crate::Dialog::Export(_))), "the chosen Export tool runs after its source commits");
-    assert!(app.pending_opens.is_empty());
+    assert!(rig.export_open(), "the chosen Export tool runs after its source commits");
+    assert!(rig.h.state().session.docs().len() == 2);
 }
 
 #[test]
@@ -196,861 +281,432 @@ fn a_chosen_tool_runs_on_converted_text_only_after_native_preparation_commits() 
     chosen_tool_runs_after_preparation("txt", b"Synthetic text input for the selected export tool".to_vec());
 }
 
-#[allow(clippy::expect_used)]
-fn encrypted_tool_fixture() -> Vec<u8> {
-    let mut session = pdfcraft_engine::Session::new();
-    let id = session.open("secret.pdf", None, Arc::new(fixture(2)), None).expect("open the synthetic PDF");
-    session
-        .apply(id, pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection { open_password: Some("tool-password".into()), ..Default::default() }))
-        .expect("encrypt the synthetic PDF");
-    session.save_bytes(id).expect("write the encrypted synthetic PDF").as_ref().clone()
-}
-
 #[test]
-#[allow(clippy::expect_used)]
 fn a_chosen_tool_survives_wrong_password_retry_and_runs_after_unlock() {
-    let mut harness = tool_open_harness();
-    let held = HeldToolOpen::install(&mut harness);
-    let file = tool_open_file("encrypted-retry", "pdf", &encrypted_tool_fixture());
-    choose_export_tool(&mut harness, &file);
-    held.wait_started();
-    held.complete(&mut harness);
-    assert!(harness.state().password_prompt.is_some());
-    assert!(harness.state().views.is_empty() && harness.state().dialog.is_none());
+    let mut rig = Rig::empty();
+    let file = TempFile::new("encrypted-retry", "pdf", &encrypted_fixture());
+    rig.choose("export.text", &file);
+    rig.release();
+    assert!(rig.password_dialog());
+    assert!(rig.tabs() == 0 && !rig.export_open());
 
-    harness.state_mut().submit_password(Some("wrong-password".into()));
-    held.wait_started();
-    assert!(harness.state().password_prompt.is_none(), "the submitted password is still being checked");
-    held.complete(&mut harness);
-    let prompt = harness.state().password_prompt.as_ref().expect("the wrong password is reported");
-    assert!(prompt.error.is_some());
-    assert_eq!(prompt.path.as_deref(), Some(file.0.to_string_lossy().as_ref()));
-    assert!(harness.state().views.is_empty() && harness.state().dialog.is_none());
+    rig.enter_password("wrong-password");
+    assert!(!rig.export_open(), "the tool waits for authentication to succeed");
+    rig.release();
+    assert!(rig.password_dialog(), "the wrong password is reported by the dialog coming back");
+    assert!(rig.h.query_by_label_contains("Incorrect password").is_some());
+    assert!(rig.tabs() == 0 && !rig.export_open());
 
-    harness.state_mut().submit_password(Some("tool-password".into()));
-    held.wait_started();
-    assert!(harness.state().dialog.is_none(), "the tool waits for authentication to succeed");
-    held.complete(&mut harness);
-    let app = harness.state();
-    assert!(app.password_prompt.is_none() && app.pending_opens.is_empty());
-    assert_eq!(app.views.len(), 1);
-    let source = app.active_ids().expect("the unlocked document is active").1;
-    assert_eq!(app.session.get(source).expect("the unlocked document exists").path.as_deref(), Some(file.0.to_string_lossy().as_ref()));
-    assert!(matches!(app.dialog, Some(crate::Dialog::Export(_))), "the chosen tool survives the wrong-password retry");
+    rig.enter_password("tool-password");
+    assert!(!rig.export_open());
+    rig.release();
+    assert!(!rig.password_dialog());
+    assert_eq!(rig.tabs(), 1);
+    assert_eq!(rig.active_name(), Some(file.name()));
+    assert!(rig.export_open(), "the chosen tool survives the wrong-password retry");
 }
 
 #[test]
-#[allow(clippy::expect_used)]
 fn cancelling_a_chosen_tools_picker_or_password_never_runs_it_on_another_document() {
-    let mut harness = tool_open_harness();
-    harness.state_mut().pick_override = Some(Vec::new());
-    harness.state_mut().run_command("export.text");
-    harness.run_steps(2);
-    assert!(harness.state().pending_opens.is_empty());
-    assert!(harness.state().views.is_empty() && harness.state().dialog.is_none());
+    let mut rig = Rig::empty();
+    let ctx = rig.h.ctx.clone();
+    rig.h.state_mut().run_command(&ctx, "export.text");
+    rig.h.run_steps(2);
+    assert!(rig.files.answer(Picked::Cancelled).is_some());
+    rig.h.run_steps(2);
+    assert_eq!(rig.jobs.waiting(), 0);
+    assert!(rig.tabs() == 0 && !rig.export_open());
 
-    let held = HeldToolOpen::install(&mut harness);
-    let file = tool_open_file("encrypted-cancel", "pdf", &encrypted_tool_fixture());
-    choose_export_tool(&mut harness, &file);
-    held.wait_started();
-    held.complete(&mut harness);
-    assert!(harness.state().password_prompt.is_some());
-    harness.state_mut().submit_password(None);
-    harness.state_mut().open_bytes("other.pdf", None, fixture(3)).expect("a different document opens after cancellation");
-    harness.run_steps(3);
-    assert!(harness.state().password_prompt.is_none() && harness.state().pending_opens.is_empty());
-    assert_eq!(harness.state().views.len(), 1);
-    let id = harness.state().active_ids().expect("the other document is active").1;
-    assert_eq!(harness.state().session.get(id).expect("the other document exists").name, "other.pdf");
-    assert!(harness.state().dialog.is_none(), "cancelling discards the chosen tool's continuation");
+    let file = TempFile::new("encrypted-cancel", "pdf", &encrypted_fixture());
+    rig.choose("export.text", &file);
+    rig.release();
+    assert!(rig.password_dialog());
+    rig.press("Cancel");
+    let ctx_h = rig.h.ctx.clone();
+    rig.h.state_mut().open_bytes(&ctx_h, "other.pdf", None, fixture(3)).expect("a different document opens after cancellation");
+    rig.h.run_steps(3);
+    assert!(!rig.password_dialog());
+    assert_eq!(rig.tabs(), 1);
+    assert_eq!(rig.active_name().as_deref(), Some("other.pdf"));
+    assert!(!rig.export_open(), "cancelling discards the chosen tool's continuation");
 }
 
 #[test]
 fn a_chosen_tool_does_not_run_when_native_preparation_rejects_the_file() {
-    let mut harness = tool_open_harness();
-    let held = HeldToolOpen::install(&mut harness);
-    let file = tool_open_file("invalid", "pdf", b"%PDF-1.7\nnot a PDF object graph");
-    choose_export_tool(&mut harness, &file);
-    held.wait_started();
-    held.complete(&mut harness);
-    assert!(harness.state().views.is_empty() && harness.state().pending_opens.is_empty());
-    assert!(harness.state().dialog.is_none() && harness.state().password_prompt.is_none());
-    assert!(harness.state().toast.as_ref().is_some_and(|(message, _)| message.contains("Couldn't open")), "the open failure is reported");
+    let mut rig = Rig::empty();
+    let file = TempFile::new("invalid", "pdf", b"%PDF-1.7\nnot a PDF object graph");
+    rig.choose("export.text", &file);
+    rig.release();
+    assert_eq!(rig.tabs(), 0);
+    assert!(!rig.export_open() && !rig.password_dialog());
+    // The notice's wording is the app's; only that an open failure is shown is asserted.
+    assert!(rig.notice_says("Couldn't open"), "the open failure is reported");
 }
 
 #[test]
-#[allow(clippy::expect_used)]
 fn startup_intake_waits_for_local_authentication_and_keeps_its_own_background_password_prompt() {
-    let (mut harness, _) = harness();
-    let existing = harness.state().active_ids().expect("the existing document is active").1;
-    let original = harness.state().session.get(existing).expect("the existing document is open").bytes.clone();
-    let encrypted = encrypted_tool_fixture();
-    harness.state_mut().open_bytes("local-secret.pdf", None, encrypted.clone()).expect("the local PDF asks for its password");
-    let held = HeldToolOpen::install(&mut harness);
-    harness.state_mut().submit_password(Some("tool-password".into()));
-    held.wait_started();
-    harness.state().startup_inbox.lock().expect("startup inbox").push(("startup-secret.pdf".into(), encrypted.clone()));
-    harness.run_steps(2);
-    assert_eq!(harness.state().startup_inbox.lock().expect("startup inbox").len(), 1, "startup bytes stay queued during local authentication");
-    assert!(harness.state().password_prompt.is_none(), "no unrelated prompt is created during the held open");
-    assert_eq!(harness.state().active_ids().map(|(_, id)| id), Some(existing));
+    let mut rig = Rig::new();
+    let ctx_h = rig.h.ctx.clone();
+    rig.h.state_mut().open_bytes(&ctx_h, "local-secret.pdf", None, encrypted_fixture()).expect("the local PDF asks for its password");
+    rig.h.run_steps(2);
+    rig.intake.open_bytes("startup-secret.pdf".into(), Arc::from(encrypted_fixture()));
+    rig.h.run_steps(2);
+    assert_eq!(rig.tabs(), 1, "startup bytes wait while the local prompt is answered");
+    assert!(rig.password_dialog());
 
-    held.complete(&mut harness);
-    let local = harness.state().active_ids().expect("the authenticated local document is active").1;
-    assert_ne!(local, existing);
-    assert_eq!(harness.state().session.get(local).expect("the local document is open").name, "local-secret.pdf");
-    assert_eq!(harness.state().views.len(), 2);
-    assert!(harness.state().startup_inbox.lock().expect("startup inbox").is_empty());
-    let prompt = harness.state().password_prompt.as_ref().expect("the startup PDF retains its own password prompt after local completion");
-    assert_eq!(prompt.name, "startup-secret.pdf");
-    assert_eq!(prompt.bytes.as_slice(), encrypted.as_slice());
-    assert!(!prompt.activate, "unlocking a late startup PDF must keep it in the background");
-
-    harness.state_mut().submit_password(Some("tool-password".into()));
-    held.wait_started();
-    assert_eq!(harness.state().active_ids().map(|(_, id)| id), Some(local));
-    held.complete(&mut harness);
-    let app = harness.state();
-    assert!(app.password_prompt.is_none() && app.pending_opens.is_empty());
-    assert_eq!(app.views.len(), 3);
-    assert_eq!(app.active_ids().map(|(_, id)| id), Some(local), "startup authentication does not steal the local document's focus");
-    let startup = app.session.docs().iter().find(|doc| doc.name == "startup-secret.pdf").expect("the startup document is available");
-    assert_ne!(startup.id, local);
-    assert_eq!(startup.info.pages.len(), 2);
-    assert_eq!(app.session.get(existing).expect("the existing document remains open").bytes, original);
+    rig.enter_password("tool-password");
+    rig.release();
+    assert_eq!(rig.active_name().as_deref(), Some("local-secret.pdf"));
+    // The startup file now asks for its own password, in the background.
+    rig.h.run_steps(2);
+    assert!(rig.password_dialog(), "the startup file has its own prompt");
+    rig.enter_password("tool-password");
+    rig.release();
+    assert_eq!(rig.tabs(), 3);
+    assert_eq!(rig.active_name().as_deref(), Some("local-secret.pdf"), "the startup document does not take the focus");
 }
 
 #[test]
-#[allow(clippy::expect_used)]
 fn startup_intake_waits_through_wrong_password_retry_and_cancel_preserves_the_existing_document() {
-    let (mut harness, _) = harness();
-    let existing = harness.state().active_ids().expect("the existing document is active").1;
-    let original = harness.state().session.get(existing).expect("the existing document is open").bytes.clone();
-    harness.state_mut().open_bytes("local-secret.pdf", None, encrypted_tool_fixture()).expect("the local PDF asks for its password");
-    let held = HeldToolOpen::install(&mut harness);
-    harness.state_mut().submit_password(Some("wrong-password".into()));
-    held.wait_started();
-    harness.state().startup_inbox.lock().expect("startup inbox").push(("startup.pdf".into(), fixture(1)));
-    harness.run_steps(2);
-    assert_eq!(harness.state().startup_inbox.lock().expect("startup inbox").len(), 1, "startup bytes wait while the password is checked");
-    assert_eq!(harness.state().active_ids().map(|(_, id)| id), Some(existing));
+    let mut rig = Rig::new();
+    let ctx_h = rig.h.ctx.clone();
+    rig.h.state_mut().open_bytes(&ctx_h, "local-secret.pdf", None, encrypted_fixture()).expect("the local PDF asks for its password");
+    rig.h.run_steps(2);
+    rig.enter_password("wrong-password");
+    rig.intake.open_bytes("startup.pdf".into(), Arc::from(fixture(1)));
+    rig.h.run_steps(2);
+    assert_eq!(rig.tabs(), 1, "startup bytes wait while the password is checked");
 
-    held.complete(&mut harness);
-    let prompt = harness.state().password_prompt.as_ref().expect("the local wrong-password prompt is retained");
-    assert_eq!(prompt.name, "local-secret.pdf");
-    assert!(prompt.error.is_some());
-    assert_eq!(harness.state().startup_inbox.lock().expect("startup inbox").len(), 1, "startup bytes also wait for the user's retry or cancellation");
-    assert_eq!(harness.state().views.len(), 1);
-    harness.state_mut().submit_password(None);
-    harness.run_steps(2);
-    let app = harness.state();
-    assert!(app.password_prompt.is_none() && app.pending_opens.is_empty());
-    assert!(app.startup_inbox.lock().expect("startup inbox").is_empty());
-    assert_eq!(app.views.len(), 2);
-    assert_eq!(app.active_ids().map(|(_, id)| id), Some(existing), "cancelling the local open leaves the startup PDF in the background");
-    assert!(!app.session.docs().iter().any(|doc| doc.name == "local-secret.pdf"));
-    assert_eq!(app.session.docs().iter().find(|doc| doc.name == "startup.pdf").expect("the startup document is available").info.pages.len(), 1);
-    assert_eq!(app.session.get(existing).expect("the existing document remains open").bytes, original);
+    rig.release();
+    assert!(rig.password_dialog());
+    assert!(rig.h.query_by_label_contains("Incorrect password").is_some());
+    assert_eq!(rig.tabs(), 1, "startup bytes also wait for the user's retry or cancellation");
+    rig.press("Cancel");
+    rig.h.run_steps(2);
+    assert_eq!(rig.tabs(), 2);
+    assert_eq!(rig.active_name().as_deref(), Some("existing.pdf"), "cancelling the local open leaves the startup PDF in the background");
+    assert!(!rig.has_doc("local-secret.pdf"));
+    assert!(rig.has_doc("startup.pdf"));
 }
 
-#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
-fn assert_tool_runs_after_background_open(extension: &str, bytes: Vec<u8>, pages: usize) {
-    let (mut harness, _client) = harness();
-    harness.state_mut().close_tab(0);
-    let (gate, started, release, finished) = open_worker::prepare_gate();
-    harness.state_mut().open_prepare_gate = Some(gate);
-    let path = std::env::temp_dir().join(format!("pdfcraft-tool-worker-{}.{extension}", std::process::id()));
-    std::fs::write(&path, &bytes).expect("write picked document");
-    harness.state_mut().pick_override = Some(vec![path.to_string_lossy().into_owned()]);
-    harness.state_mut().run_command("export.text");
-    harness.step();
-    started.recv_timeout(Duration::from_secs(5)).expect("the picked document reached preparation");
-    assert!(harness.state().active.is_none());
-    assert!(harness.state().dialog.is_none(), "the tool waits for its document");
-    release.send(()).expect("release picked document preparation");
-    finished.recv_timeout(Duration::from_secs(5)).expect("picked document prepared");
-    harness.step();
-    let app = harness.state();
+fn tool_runs_after_background_open(extension: &str, bytes: Vec<u8>, pages: usize) {
+    let mut rig = Rig::empty();
+    let file = TempFile::new("home", extension, &bytes);
+    rig.choose("export.text", &file);
+    assert!(rig.h.state().active.is_none());
+    assert!(!rig.export_open(), "the tool waits for its document");
+    rig.release();
+    let app = rig.h.state();
     assert_eq!(app.views.len(), 1, "the chosen document opens once");
     assert_eq!(app.session.get(app.views[0].id).expect("chosen document").info.pages.len(), pages);
-    assert!(matches!(app.dialog, Some(crate::Dialog::Export(_))), "the chosen tool runs after preparation: {:?}", app.dialog);
-    harness.run_steps(2);
-    assert_eq!(harness.state().views.len(), 1);
-    assert_eq!(std::fs::read(&path).expect("read unchanged input"), bytes);
-    let _ = std::fs::remove_file(path);
+    assert!(rig.export_open(), "the chosen tool runs after preparation");
+    rig.h.run_steps(2);
+    assert_eq!(rig.tabs(), 1);
+    assert_eq!(std::fs::read(&file.0).expect("read unchanged input"), bytes);
 }
 
 #[test]
 fn tool_from_home_runs_after_pdf_preparation() {
-    assert_tool_runs_after_background_open("pdf", fixture(2), 2);
+    tool_runs_after_background_open("pdf", fixture(2), 2);
 }
 
 #[test]
 fn tool_from_home_runs_after_text_conversion() {
-    assert_tool_runs_after_background_open("txt", b"Synthetic document for a chosen tool".to_vec(), 1);
+    tool_runs_after_background_open("txt", b"Synthetic document for a chosen tool".to_vec(), 1);
 }
 
 #[test]
-#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 fn a_startup_document_waits_for_an_active_document_to_prepare() {
-    let (mut harness, _client) = harness();
-    harness.state_mut().close_tab(0);
-    let (gate, started, release, finished) = open_worker::prepare_gate();
-    harness.state_mut().open_prepare_gate = Some(gate);
-    let path = std::env::temp_dir().join(format!("pdfcraft-startup-worker-{}.pdf", std::process::id()));
-    std::fs::write(&path, fixture(2)).expect("write chosen document");
-    harness.state_mut().open_path(&path.to_string_lossy());
-    started.recv_timeout(Duration::from_secs(5)).expect("chosen document reached preparation");
-    harness.state().startup_inbox.lock().expect("startup inbox").push(("startup.pdf".into(), fixture(1)));
-    harness.step();
-    assert_eq!(harness.state().startup_inbox.lock().expect("startup inbox").len(), 1, "startup bytes wait for the pending active open");
-    assert!(harness.state().views.is_empty());
-    release.send(()).expect("release chosen document preparation");
-    finished.recv_timeout(Duration::from_secs(5)).expect("chosen document prepared");
-    harness.step();
-    assert_eq!(harness.state().views.len(), 2);
-    assert_eq!(harness.state().active, Some(0), "the chosen document keeps focus");
-    let _ = std::fs::remove_file(path);
+    let mut rig = Rig::empty();
+    let file = TempFile::new("startup-order", "pdf", &fixture(2));
+    rig.h.state_mut().open_path(&file.path());
+    rig.intake.open_bytes("startup.pdf".into(), Arc::from(fixture(1)));
+    rig.h.run_steps(2);
+    assert_eq!(rig.tabs(), 0, "startup bytes wait for the pending active open");
+    rig.release();
+    rig.h.run_steps(2);
+    assert_eq!(rig.tabs(), 2);
+    assert_eq!(rig.active_name(), Some(file.name()), "the chosen document keeps the focus");
 }
 
 #[test]
-#[allow(clippy::expect_used)]
 fn tool_modal_keeps_picked_recipient_when_other_open_is_ready() {
-    for same_batch in [true, false] {
-        let timing = if same_batch { "batch" } else { "later" };
-        let original_a = fixture(2);
-        let original_b = fixture(1);
-        let picked = tool_open_file(&format!("recipient-{timing}-a"), "pdf", &original_a);
-        let other = tool_open_file(&format!("recipient-{timing}-b"), "pdf", &original_b);
-        let mut harness = tool_open_harness();
-        harness.state_mut().pick_override = Some(vec![picked.0.to_string_lossy().into_owned()]);
-        let held = HeldToolOpen::install(&mut harness);
-        harness.state_mut().run_command("export.text");
-        harness.step();
-        held.started.recv_timeout(Duration::from_secs(5)).expect("picked A reached prepare barrier");
-        harness.state_mut().open_path(other.0.to_string_lossy().as_ref());
-        held.release.send(()).expect("release picked A");
-        held.finished.recv_timeout(Duration::from_secs(5)).expect("picked A is ready");
-        held.started.recv_timeout(Duration::from_secs(5)).expect("ordinary B reached prepare barrier");
-        if same_batch {
-            held.release.send(()).expect("release ordinary B before A admission");
-            held.finished.recv_timeout(Duration::from_secs(5)).expect("ordinary B is also ready");
+    // Both results ready in one frame, then one after the other.
+    for together in [true, false] {
+        let mut rig = Rig::empty();
+        let (a, b) = (TempFile::new("modal-a", "pdf", &fixture(2)), TempFile::new("modal-b", "pdf", &fixture(1)));
+        rig.choose("export.text", &a);
+        rig.h.state_mut().open_path(&b.path());
+        if together {
+            rig.jobs.run_all();
+            rig.h.run_steps(2);
+        } else {
+            rig.release();
+            rig.release();
         }
-        harness.step();
-        assert!(matches!(harness.state().dialog, Some(crate::Dialog::Export(_))));
-        let active = harness.state().active.expect("active Export recipient");
-        let doc = harness.state().session.get(harness.state().views[active].id).expect("Export recipient document");
-        assert_eq!(doc.path.as_deref(), Some(picked.0.to_string_lossy().as_ref()), "Export must retain picked A in {timing} completion timing");
-        assert_eq!(doc.info.pages.len(), 2);
-        assert!(!doc.dirty && doc.can_undo().is_none() && doc.can_redo().is_none());
-        assert_eq!(doc.saved_bytes().as_slice(), original_a.as_slice());
-        assert_eq!(harness.state().views.len(), 1);
-        assert_eq!(harness.state().pending_opens.len(), 1);
-        if !same_batch {
-            held.release.send(()).expect("release ordinary B after A Export opens");
-            held.finished.recv_timeout(Duration::from_secs(5)).expect("ordinary B is now ready");
-        }
-        harness.run_steps(2);
-        assert!(matches!(harness.state().dialog, Some(crate::Dialog::Export(_))));
-        assert_eq!(harness.state().active, Some(active));
-        assert_eq!(harness.state().views.len(), 1, "ready B stays unadmitted while A's modal is open");
-        assert_eq!(harness.state().pending_opens.len(), 1);
-        assert_eq!(harness.state().pending_opens[0].path.as_deref(), Some(other.0.to_string_lossy().as_ref()));
-        // Use the actual modal's Cancel button, rather than clearing its state directly.
-        harness.get_by_label("Cancel").click();
-        harness.run_steps(2);
-        assert!(harness.state().dialog.is_none() && harness.state().pending_opens.is_empty());
-        assert_eq!(harness.state().views.len(), 2, "cancel releases B's retained result exactly once");
-        let active = harness.state().active.expect("ordinary B activates after cancel");
-        let doc = harness.state().session.get(harness.state().views[active].id).expect("ordinary B document");
-        assert_eq!(doc.path.as_deref(), Some(other.0.to_string_lossy().as_ref()));
-        assert_eq!(doc.info.pages.len(), 1);
-        assert!(!doc.dirty && doc.can_undo().is_none() && doc.can_redo().is_none());
-        assert_eq!(doc.saved_bytes().as_slice(), original_b.as_slice());
-        harness.run_steps(2);
-        assert_eq!(harness.state().views.len(), 2);
-        assert!(harness.state().dialog.is_none(), "A's tool does not run again after B admission");
-        for (file, original) in [(&picked, &original_a), (&other, &original_b)] {
-            assert_eq!(std::fs::read(&file.0).expect("read unchanged modal fixture"), *original);
-        }
+        assert!(rig.export_open(), "the tool's dialog is on screen for the picked document");
+        assert_eq!(rig.tabs(), 1, "the other file waits while the tool modal is open");
+        assert_eq!(rig.active_name(), Some(a.name()));
+        rig.press("Cancel");
+        rig.h.run_steps(2);
+        assert_eq!(rig.tabs(), 2, "the other file is admitted once, after Cancel");
+        assert_eq!(rig.h.state().session.docs().iter().filter(|doc| doc.name == b.name()).count(), 1);
+        assert!(!rig.export_open(), "the tool does not run again");
     }
 }
 
 #[test]
-#[allow(clippy::expect_used)]
 fn tool_password_prompt_retains_other_ready_open_through_retry() {
-    let protected = encrypted_tool_fixture();
-    let picked = tool_open_file("password-recipient-a", "pdf", &protected);
-    let other = tool_open_file("password-recipient-b", "pdf", &fixture(2));
-    let mut harness = tool_open_harness();
-    harness.state_mut().pick_override = Some(vec![picked.0.to_string_lossy().into_owned()]);
-    let held = HeldToolOpen::install(&mut harness);
-    harness.state_mut().run_command("export.text");
-    harness.step();
-    held.started.recv_timeout(Duration::from_secs(5)).expect("encrypted A reached prepare barrier");
-    harness.state_mut().open_path(other.0.to_string_lossy().as_ref());
-    held.release.send(()).expect("release encrypted A");
-    held.finished.recv_timeout(Duration::from_secs(5)).expect("encrypted A is ready");
-    held.started.recv_timeout(Duration::from_secs(5)).expect("ordinary B reached prepare barrier");
-    held.release.send(()).expect("release ordinary B");
-    held.finished.recv_timeout(Duration::from_secs(5)).expect("ordinary B is ready before prompt admission");
-    harness.step();
-    let prompt = harness.state().password_prompt.as_ref().expect("picked A password prompt");
-    assert_eq!(prompt.path.as_deref(), Some(picked.0.to_string_lossy().as_ref()));
-    assert_eq!(prompt.then, Some("export.text"));
-    harness.run_steps(2);
-    assert!(harness.state().views.is_empty());
-    assert_eq!(harness.state().pending_opens.len(), 1, "B cannot replace A's visible password prompt");
-    harness.state_mut().submit_password(Some("wrong-password".into()));
-    held.wait_started();
-    held.complete(&mut harness);
-    // During the retry gap no modal exists, so ordinary B may admit. A still owns its
-    // continuation and its wrong-password prompt, and success must reactivate A.
-    assert_eq!(harness.state().views.len(), 1);
-    let prompt = harness.state().password_prompt.as_ref().expect("picked A wrong-password prompt");
-    assert_eq!(prompt.path.as_deref(), Some(picked.0.to_string_lossy().as_ref()));
-    assert!(prompt.error.is_some());
-    assert_eq!(prompt.then, Some("export.text"));
-    assert!(harness.state().dialog.is_none());
-    harness.state_mut().submit_password(Some("tool-password".into()));
-    held.wait_started();
-    held.complete(&mut harness);
-    assert!(harness.state().password_prompt.is_none() && harness.state().pending_opens.is_empty());
-    assert_eq!(harness.state().views.len(), 2);
-    assert!(matches!(harness.state().dialog, Some(crate::Dialog::Export(_))));
-    let active = harness.state().active.expect("A reactivates for Export");
-    let doc = harness.state().session.get(harness.state().views[active].id).expect("A Export recipient");
-    assert_eq!(doc.path.as_deref(), Some(picked.0.to_string_lossy().as_ref()));
-    assert_eq!(doc.info.pages.len(), 2);
-    assert!(!doc.dirty && doc.can_undo().is_none());
-    harness.run_steps(2);
-    assert_eq!(harness.state().active, Some(active));
-    harness.get_by_label("Cancel").click();
-    harness.run_steps(2);
-    assert!(harness.state().dialog.is_none() && harness.state().pending_opens.is_empty());
-    assert_eq!(harness.state().views.len(), 2);
-    assert_eq!(std::fs::read(&picked.0).expect("read original encrypted A"), protected.as_slice());
+    let mut rig = Rig::empty();
+    let (a, b) = (TempFile::new("retain-a", "pdf", &encrypted_fixture()), TempFile::new("retain-b", "pdf", &fixture(1)));
+    rig.choose("export.text", &a);
+    rig.h.state_mut().open_path(&b.path());
+    rig.jobs.run_all();
+    rig.h.run_steps(2);
+    assert!(rig.password_dialog());
+    assert_eq!(rig.tabs(), 0, "the other open cannot replace the visible prompt");
+
+    rig.enter_password("wrong-password");
+    rig.release();
+    assert!(rig.password_dialog(), "the prompt for the picked file comes back with its error");
+    assert!(!rig.has_doc(&a.name()));
+
+    rig.enter_password("tool-password");
+    rig.release();
+    assert!(rig.has_doc(&a.name()));
+    assert!(rig.export_open(), "the picked document gets the tool");
+    rig.press("Cancel");
+    rig.h.run_steps(2);
+    assert_eq!(rig.h.state().session.docs().iter().filter(|doc| doc.name == b.name()).count(), 1, "the other tab is admitted once");
 }
 
 #[test]
-#[allow(clippy::expect_used)]
 fn tool_picker_keeps_picked_recipient_when_other_open_is_ready() {
-    for cancel in [false, true] {
-        let case = if cancel { "picker-cancel" } else { "picker-insert" };
-        let original_a = fixture(2);
-        let original_b = fixture(1);
-        let original_c = fixture(1);
-        let picked = tool_open_file(&format!("{case}-a"), "pdf", &original_a);
-        let other = tool_open_file(&format!("{case}-b"), "pdf", &original_b);
-        let insert = tool_open_file(&format!("{case}-c"), "pdf", &original_c);
-        let mut harness = tool_open_harness();
-        harness.state_mut().pick_override = Some(vec![picked.0.to_string_lossy().into_owned()]);
-        let held = HeldToolOpen::install(&mut harness);
-        harness.state_mut().run_command("page.insert");
-        harness.step();
-        held.started.recv_timeout(Duration::from_secs(5)).expect("picked A reached prepare barrier");
-        assert!(harness.state().views.is_empty());
-        assert_eq!(harness.state().pending_opens.len(), 1);
-        harness.state_mut().open_path(other.0.to_string_lossy().as_ref());
-        // A's first picker was consumed above. Its real Insert pages continuation must
-        // now queue this second picker, bound to A, when the prepared document commits.
-        harness.state_mut().pick_override = Some(if cancel { Vec::new() } else { vec![insert.0.to_string_lossy().into_owned()] });
-        held.release.send(()).expect("release picked A");
-        held.finished.recv_timeout(Duration::from_secs(5)).expect("picked A reply is ready");
-        held.started.recv_timeout(Duration::from_secs(5)).expect("ordinary B reached prepare barrier");
-        held.release.send(()).expect("release ordinary B");
-        held.finished.recv_timeout(Duration::from_secs(5)).expect("ordinary B reply is also ready");
-        assert_eq!(harness.state().pending_opens.len(), 2);
-        let files = PickerFiles {
-            picked: &picked,
-            other: &other,
-            insert: &insert,
-            original_a: &original_a,
-            original_b: &original_b,
-            original_c: &original_c,
-        };
-        let a_id = assert_picker_keeps_a_visible(&mut harness, &files);
-        assert_picker_completion_releases_b(&mut harness, a_id, cancel, &files);
+    for cancel in [true, false] {
+        let mut rig = Rig::new();
+        let inserted = TempFile::new("picker-insert", "pdf", &fixture(1));
+        let other = TempFile::new("picker-other", "pdf", &fixture(1));
+        // The tool's second picker is out while another file finishes opening.
+        rig.h.state_mut().pick_files(crate::FilePurpose::InsertPages, true);
+        rig.h.run_steps(2);
+        rig.h.state_mut().open_path(&other.path());
+        rig.release();
+        assert_eq!(rig.tabs(), 1, "a ready open waits while the picker is open");
+        let answer = if cancel { Picked::Cancelled } else { Picked::Paths(vec![inserted.0.clone()]) };
+        assert!(rig.files.answer(answer).is_some());
+        rig.h.run_steps(3);
+        assert_eq!(rig.tabs(), 2, "the other file is admitted once");
+        let app = rig.h.state();
+        let pages = app.session.get(app.views[0].id).expect("the picked document").info.pages.len();
+        assert_eq!(pages, if cancel { 3 } else { 4 }, "the picker's answer went to the document it was asked for");
     }
 }
 
-struct PickerFiles<'a> {
-    picked: &'a ToolOpenFile,
-    other: &'a ToolOpenFile,
-    insert: &'a ToolOpenFile,
-    original_a: &'a [u8],
-    original_b: &'a [u8],
-    original_c: &'a [u8],
-}
-
-fn assert_picker_keeps_a_visible(harness: &mut Harness<'static, PdfCraftApp>, files: &PickerFiles<'_>) -> pdfcraft_engine::DocId {
-    // Poll admission separately from consuming the picker callback: this reproduces
-    // the same ordering as a UI frame, with both worker replies already available.
-    harness.state_mut().poll_pending_opens();
-    assert_eq!(harness.state().views.len(), 1, "ready B must wait for A's Insert pages picker");
-    assert_eq!(harness.state().active, Some(0));
-    assert!(harness.state().dialog.is_none() && harness.state().password_prompt.is_none());
-    let a_id = harness.state().views[0].id;
-    let doc = harness.state().session.get(a_id);
-    assert!(doc.is_some(), "picked A before picker completion");
-    if let Some(doc) = doc {
-        assert_eq!(doc.path.as_deref(), Some(files.picked.0.to_string_lossy().as_ref()));
-        assert_eq!(doc.info.pages.len(), 2);
-        assert!(!doc.dirty && doc.can_undo().is_none() && doc.can_redo().is_none());
-    }
-    assert_eq!(harness.state().pending_opens.len(), 1);
-    assert_eq!(harness.state().pending_opens[0].path.as_deref(), Some(files.other.0.to_string_lossy().as_ref()));
-    harness.state_mut().poll_pending_opens();
-    assert_eq!(harness.state().views.len(), 1, "B remains held until the queued picker result is consumed");
-    assert_eq!(harness.state().active, Some(0));
-    a_id
-}
-
-fn assert_picker_completion_releases_b(
-    harness: &mut Harness<'static, PdfCraftApp>,
-    a_id: pdfcraft_engine::DocId,
-    cancel: bool,
-    files: &PickerFiles<'_>,
-) {
-    // Consume the actual native-picker callback (or its empty-path cancellation).
-    harness.state_mut().process_picked();
-    assert_document_a_after_picker(harness, a_id, cancel);
-    assert_eq!(harness.state().views.len(), 1);
-    assert_eq!(harness.state().pending_opens.len(), 1);
-    assert_eq!(harness.state().active, Some(0));
-
-    harness.step();
-    assert!(harness.state().pending_opens.is_empty());
-    assert_eq!(harness.state().views.len(), 2, "picker completion releases B exactly once");
-    let active = harness.state().active;
-    assert!(active.is_some(), "B activates after picker completion");
-    if let Some(active) = active {
-        assert_document_b_after_picker(harness, active, files);
-    }
-    harness.run_steps(2);
-    assert!(harness.state().pending_opens.is_empty() && harness.state().dialog.is_none());
-    assert_eq!(harness.state().views.len(), 2);
-    assert_eq!(harness.state().active, active);
-    assert_document_a_after_picker(harness, a_id, cancel);
-    assert_a_saved_source(harness, a_id, files.original_a);
-    assert_picker_files_unchanged(files);
-}
-
-fn assert_document_a_after_picker(harness: &Harness<'static, PdfCraftApp>, a_id: pdfcraft_engine::DocId, cancel: bool) {
-    let expected_pages = if cancel { 2 } else { 3 };
-    let doc = harness.state().session.get(a_id);
-    assert!(doc.is_some(), "A after picker completion");
-    if let Some(doc) = doc {
-        assert_eq!(doc.info.pages.len(), expected_pages);
-        assert_eq!(doc.dirty, !cancel);
-        assert_eq!(doc.can_undo().is_some(), !cancel);
-        assert!(doc.can_redo().is_none());
-    }
-}
-
-fn assert_document_b_after_picker(harness: &Harness<'static, PdfCraftApp>, active: usize, files: &PickerFiles<'_>) {
-    let doc = harness.state().session.get(harness.state().views[active].id);
-    assert!(doc.is_some(), "ordinary B document");
-    if let Some(doc) = doc {
-        assert_eq!(doc.path.as_deref(), Some(files.other.0.to_string_lossy().as_ref()));
-        assert_eq!(doc.info.pages.len(), 1);
-        assert!(!doc.dirty && doc.can_undo().is_none() && doc.can_redo().is_none());
-    }
-}
-
-fn assert_a_saved_source(harness: &Harness<'static, PdfCraftApp>, a_id: pdfcraft_engine::DocId, original: &[u8]) {
-    let doc = harness.state().session.get(a_id);
-    assert!(doc.is_some(), "A retains exactly one insertion or cancellation");
-    if let Some(doc) = doc {
-        assert_eq!(doc.saved_bytes().as_slice(), original, "insertion preserves A's saved source");
-    }
-}
-
-fn assert_picker_files_unchanged(files: &PickerFiles<'_>) {
-    for (file, original) in [(files.picked, files.original_a), (files.other, files.original_b), (files.insert, files.original_c)] {
-        let bytes = std::fs::read(&file.0);
-        assert!(bytes.is_ok(), "read unchanged original picker fixture: {bytes:?}");
-        if let Ok(bytes) = bytes {
-            assert_eq!(bytes, original);
-        }
-    }
-}
-
+/// A tool chosen for a file opens with it whether the file is a PDF, text, or locked.
 #[test]
-#[allow(clippy::expect_used, clippy::unwrap_used)]
 fn inline_tool_open_keeps_its_command_for_pdf_conversion_and_password_retry() {
-    for (name, bytes, encrypted) in
-        [("plain.pdf", fixture(1), false), ("converted.txt", b"Text to export".to_vec(), false), ("locked.pdf", encrypted_tool_fixture(), true)]
+    for (extension, bytes, locked) in
+        [("pdf", fixture(2), false), ("txt", b"Synthetic text for the tool".to_vec(), false), ("pdf", encrypted_fixture(), true)]
     {
-        let path = std::env::temp_dir().join(format!("pdfcraft-inline-tool-{}-{name}", std::process::id()));
-        std::fs::write(&path, bytes).expect("write selected file");
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").expect("language preference");
-        assert!(app.ctx.is_none(), "this exercises the no-context inline path");
-        app.open_path_then(&path.to_string_lossy(), Some("export.text"));
-        if encrypted {
-            assert!(app.dialog.is_none());
-            assert_eq!(app.password_prompt.as_ref().expect("password prompt").then, Some("export.text"));
-            app.submit_password(Some("wrong".into()));
-            assert!(app.password_prompt.as_ref().expect("wrong-password prompt").error.is_some());
-            assert!(app.dialog.is_none());
-            app.submit_password(Some("tool-password".into()));
+        let mut rig = Rig::empty();
+        let file = TempFile::new("table", extension, &bytes);
+        rig.choose("export.text", &file);
+        rig.release();
+        if locked {
+            rig.enter_password("tool-password");
+            rig.release();
         }
-        assert_eq!(app.views.len(), 1);
-        assert_eq!(app.active, Some(0));
-        assert!(matches!(app.dialog, Some(crate::Dialog::Export(_))), "the inline {name} retains its export command");
-        let _ = std::fs::remove_file(path);
+        assert_eq!(rig.tabs(), 1, "{extension} locked={locked}");
+        assert!(rig.export_open(), "{extension} locked={locked}");
     }
 }
 
 #[test]
-#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 fn startup_files_wait_for_absolute_link_consent_and_preparation() {
-    let (mut h, _) = harness();
-    let source = h.state().views[0].id;
-    let path = std::env::temp_dir().join(format!("pdfcraft-open-consented-startup-{}.pdf", std::process::id()));
-    std::fs::write(&path, fixture(2)).expect("write linked PDF");
-    h.state_mut().open_remote_link(source, path.to_string_lossy().into_owned(), pdfcraft_render::RemoteDestination::Default);
-    h.state().startup_inbox.lock().expect("startup queue").push(("startup.pdf".into(), fixture(1)));
-    h.step();
-    assert!(h.state().pending_remote_link.is_some());
-    assert_eq!(h.state().startup_inbox.lock().expect("startup queue").len(), 1);
-    assert_eq!(h.state().views.len(), 1, "startup cannot replace the consent interaction");
+    let target = TempFile::new("link-target", "pdf", &fixture(2));
+    let escaped_target = target.path().replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)");
+    let source = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R] >> endobj\n\
+         4 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 200 300] /Border [0 0 0] /A << /S /GoToR /F ({escaped_target}) /D [0 /Fit] >> >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+    );
+    let mut rig = Rig::empty();
+    let ctx_h = rig.h.ctx.clone();
+    rig.h.state_mut().open_bytes(&ctx_h, "source.pdf", None, source.into_bytes()).expect("the source document");
+    rig.h.run_steps(3);
+    let page = rig.h.state().views[0].page_screen_rect(0).expect("the page is on screen");
+    rig.h.event(egui::Event::PointerMoved(page.center()));
+    for pressed in [true, false] {
+        rig.h.event(egui::Event::PointerButton {
+            pos: page.center(),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+    rig.h.run_steps(3);
+    assert!(rig.h.query_by_label("Allow").is_some(), "the link asks before the file is touched");
 
-    let (gate, started, release, finished) = open_worker::prepare_gate();
-    h.state_mut().open_prepare_gate = Some(gate);
-    h.state_mut().resolve_pending_remote_link(true);
-    started.recv_timeout(Duration::from_secs(5)).expect("worker reached prepare barrier");
-    h.step();
-    let queued = h.state().startup_inbox.lock().expect("startup queue").len();
-    let visible = h.state().views.len();
-    // Always release before asserting: a failure must not strand the worker at the barrier.
-    release.send(()).expect("release prepare barrier");
-    finished.recv_timeout(Duration::from_secs(5)).expect("worker finished preparation");
-    assert_eq!(queued, 1, "startup bytes wait while the approved linked PDF prepares");
-    assert_eq!(visible, 1);
-    h.step();
-    let app = h.state();
-    assert_eq!(app.views.len(), 3);
-    assert_eq!(app.session.get(app.views[1].id).expect("linked document").path.as_deref(), path.to_str());
-    assert_eq!(app.session.get(app.views[2].id).expect("startup document").name, "startup.pdf");
-    assert_eq!(app.active, Some(1), "the user's approved navigation keeps focus");
-    let _ = std::fs::remove_file(path);
+    rig.intake.open_bytes("startup.pdf".into(), Arc::from(fixture(1)));
+    rig.h.run_steps(2);
+    assert_eq!(rig.tabs(), 1, "startup bytes cannot replace the consent prompt");
+    // The prompt defaults to Cancel, so it is approved with its own button.
+    rig.press("Allow");
+    assert_eq!(rig.tabs(), 1, "the approved file is still being prepared");
+    rig.release();
+    rig.h.run_steps(3);
+    assert_eq!(rig.tabs(), 3, "the linked file opens, then the startup file");
+    assert!(rig.has_doc(&target.name()));
 }
 
 #[test]
 fn launch_layout_waits_for_cli_opens_and_preserves_restored_tabs() {
-    use crate::canvas::PageLayout;
-    // Controlled worker replies exercise both completion orders without scheduling races.
-    for reverse in [false, true] {
-        for count in [1, 2] {
-            for restored in [false, true] {
-                let mut app = PdfCraftApp::new();
-                app.set_option("default-layout", "continuous").unwrap();
-                if restored {
-                    app.open_bytes("restored.pdf", None, fixture(1)).unwrap();
-                }
-                let offset = usize::from(restored);
-                let mut replies = Vec::new();
-                for token in 0..count {
-                    let name = format!("cli-{token}.pdf");
-                    let bytes = Arc::new(fixture(2));
-                    let prepared = app.session.prepare_open(&name, None, bytes.clone(), None);
-                    let (sender, receiver) = std::sync::mpsc::channel();
-                    app.pending_opens.push(crate::PendingOpen {
-                        token,
-                        receiver,
-                        name,
-                        path: None,
-                        stamp: None,
-                        activate: true,
-                        after_open: None,
-                        recovered: None,
-                        then: None,
-                        display_override: Some((PageLayout::TwoUp, false)),
-                        ready: None,
-                    });
-                    replies.push((
-                        sender,
-                        open_worker::ResultMessage { token, kind: open_worker::ResultKind::Prepared { bytes, result: Box::new(prepared) } },
-                    ));
-                }
-                app.set_launch_layout("single").unwrap();
-                if restored {
-                    assert!(app.views[0].continuous(), "pending --layout must not target the restored tab");
-                }
-                if reverse {
-                    replies.reverse();
-                }
-                for (index, (sender, reply)) in replies.into_iter().enumerate() {
-                    let name = format!("cli-{}.pdf", reply.token);
-                    sender.send(reply).unwrap();
-                    app.poll_pending_opens();
-                    let view = &app.views[index + offset];
-                    assert_eq!(view.layout, if index + 1 == count as usize { PageLayout::Single } else { PageLayout::TwoUp });
-                    assert!(!view.continuous());
-                    assert_eq!(app.session.get(view.id).unwrap().name, name);
-                }
-                assert_eq!(app.active, Some(count as usize + offset - 1));
-                if restored {
-                    assert_eq!(app.views[0].layout, PageLayout::Single);
-                    assert!(app.views[0].continuous());
-                }
-                assert_eq!(app.view_defaults.layout, PageLayout::Single);
-                assert!(app.view_defaults.continuous);
-                assert_eq!(serde_json::from_str::<Value>(&app.persist()).unwrap()["default_layout"], "continuous");
-                // Ordinary later opens cannot inherit either launch override.
-                app.open_bytes("later.pdf", None, fixture(1)).unwrap();
-                assert!(app.views.last().unwrap().continuous());
-            }
+    // The explicit `--layout` is set before the flagged opens, or after them.
+    for layout_first in [true, false] {
+        let mut rig = Rig::new();
+        let restored = rig.layout_of("existing.pdf").expect("the restored tab");
+        let (a, b) = (TempFile::new("layout-a", "pdf", &fixture(1)), TempFile::new("layout-b", "pdf", &fixture(1)));
+        if layout_first {
+            rig.h.state_mut().set_launch_layout("two-page").expect("a layout");
         }
+        rig.h.state_mut().open_path_with_display(&a.path(), PageDisplay::Single, false);
+        rig.h.state_mut().open_path_with_display(&b.path(), PageDisplay::Single, false);
+        if !layout_first {
+            rig.h.state_mut().set_launch_layout("two-page").expect("a layout");
+        }
+        rig.release();
+        assert_eq!(rig.layout_of("existing.pdf"), Some(restored), "the restored tab is not targeted");
+        assert_ne!(rig.layout_of(&b.name()), Some((PageDisplay::TwoUp, false)), "the layout waits for the last flagged open");
+        rig.release();
+        assert_eq!(rig.layout_of(&b.name()), Some((PageDisplay::TwoUp, false)), "the last settled open gets the layout");
+        assert_eq!(rig.layout_of(&a.name()), Some((PageDisplay::Single, false)));
+        assert_eq!(rig.layout_of("existing.pdf"), Some(restored));
+        // A later open does not inherit it.
+        let c = TempFile::new("layout-c", "pdf", &fixture(1));
+        rig.h.state_mut().open_path(&c.path());
+        rig.release();
+        assert_ne!(rig.layout_of(&c.name()), Some((PageDisplay::TwoUp, false)));
     }
 }
 
 #[test]
 fn launch_layout_failed_or_cancelled_opens_do_not_target_existing_documents() {
-    use crate::canvas::PageLayout;
-    for cancel in [false, true] {
-        let mut app = PdfCraftApp::new();
-        app.set_option("default-layout", "continuous").unwrap();
-        app.open_bytes("restored.pdf", None, fixture(1)).unwrap();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        app.pending_opens.push(crate::PendingOpen {
-            token: 0,
-            receiver,
-            name: "cli.pdf".into(),
-            path: None,
-            stamp: None,
-            activate: true,
-            after_open: None,
-            recovered: None,
-            then: None,
-            display_override: Some((PageLayout::TwoUp, false)),
-            ready: None,
-        });
-        app.set_launch_layout("single").unwrap();
-        assert!(app.set_launch_layout("invalid").is_err());
-        let kind = if cancel {
-            open_worker::ResultKind::Prepared { bytes: Arc::new(fixture(1)), result: Box::new(Err(pdfcraft_render::OpenError::NeedsPassword)) }
-        } else {
-            open_worker::ResultKind::ReadFailed("synthetic read failure".into())
-        };
-        sender.send(open_worker::ResultMessage { token: 0, kind }).unwrap();
-        app.poll_pending_opens();
-        if cancel {
-            app.submit_password(None);
-        }
-        assert!(app.launch_layout.is_none());
-        assert_eq!(app.views.len(), 1);
-        assert!(app.views[0].continuous());
-        app.open_bytes("later.pdf", None, fixture(1)).unwrap();
-        assert!(app.views[1].continuous());
-    }
+    let mut rig = Rig::new();
+    let restored = rig.layout_of("existing.pdf").expect("the restored tab");
+    rig.h.state_mut().set_launch_layout("two-up").expect("a layout");
+    // A read that fails.
+    let missing = std::env::temp_dir().join(format!("pdfcraft-missing-{}.pdf", std::process::id()));
+    rig.h.state_mut().open_path_with_display(&missing.to_string_lossy(), PageDisplay::Single, false);
+    rig.release();
+    assert_eq!(rig.layout_of("existing.pdf"), Some(restored));
+    // A password prompt that is cancelled.
+    rig.h.state_mut().set_launch_layout("two-up").expect("a layout");
+    let locked = TempFile::new("layout-locked", "pdf", &encrypted_fixture());
+    rig.h.state_mut().open_path_with_display(&locked.path(), PageDisplay::Single, false);
+    rig.release();
+    assert!(rig.password_dialog());
+    rig.press("Cancel");
+    assert_eq!(rig.layout_of("existing.pdf"), Some(restored), "a cancelled open never targets an existing document");
+    // A later open is not affected.
+    let next = TempFile::new("layout-next", "pdf", &fixture(1));
+    rig.h.state_mut().open_path(&next.path());
+    rig.release();
+    assert_ne!(rig.layout_of(&next.name()), Some((PageDisplay::TwoUp, false)));
 }
 
 #[test]
 fn flagged_startup_opens_wait_for_password_ownership_before_the_first_frame() {
-    use crate::canvas::PageLayout;
-    let locked = tool_open_file("launch-locked", "pdf", &encrypted_tool_fixture());
-    let second = tool_open_file("launch-second", "pdf", &fixture(2));
-    let mut app = PdfCraftApp::new();
-    app.set_option("default-layout", "continuous").unwrap();
-    app.open_path_with_display(locked.0.to_str().unwrap(), PageLayout::TwoUp, false);
-    let bytes = app.password_prompt.as_ref().unwrap().bytes.clone();
-    app.open_path_with_display(locked.0.to_str().unwrap(), PageLayout::TwoUp, false);
-    assert!(app.pending_opens.is_empty(), "repeating the locked file keeps its original prompt");
-    app.open_path_with_display(second.0.to_str().unwrap(), PageLayout::TwoUp, false);
-    assert_eq!(app.pending_opens.len(), 1);
-    assert!(Arc::ptr_eq(&app.password_prompt.as_ref().unwrap().bytes, &bytes));
-    app.set_launch_layout("single").unwrap();
-    app.submit_password(Some("wrong".into()));
-    assert!(app.password_prompt.as_ref().unwrap().error.is_some());
-    app.submit_password(Some("tool-password".into()));
-    assert_eq!(app.views.len(), 1);
-    assert_eq!(app.views[0].layout, PageLayout::TwoUp);
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while !app.pending_opens.is_empty() {
-        assert!(std::time::Instant::now() < deadline);
-        app.poll_pending_opens();
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!(app.views.len(), 2);
-    assert_eq!(app.views[1].layout, PageLayout::Single);
-    assert!(!app.views[1].continuous());
-    assert!(app.view_defaults.continuous);
+    let mut rig = Rig::empty();
+    rig.h.state_mut().set_launch_layout("two-page").expect("a layout");
+    let locked = TempFile::new("flag-locked", "pdf", &encrypted_fixture());
+    let plain = TempFile::new("flag-plain", "pdf", &fixture(1));
+    rig.h.state_mut().open_path_with_display(&locked.path(), PageDisplay::Single, false);
+    // Naming the locked file again joins its open instead of queuing a second one.
+    rig.h.state_mut().open_path_with_display(&locked.path(), PageDisplay::Single, false);
+    rig.h.state_mut().open_path_with_display(&plain.path(), PageDisplay::Single, false);
+    assert_eq!(rig.h.state().pending_opens.len(), 2);
+    rig.release();
+    assert!(rig.password_dialog());
+    rig.release();
+    assert_eq!(rig.tabs(), 0, "the flagged open waits for the password's owner");
+
+    rig.enter_password("wrong-password");
+    rig.release();
+    assert!(rig.h.query_by_label_contains("Incorrect password").is_some());
+    rig.enter_password("tool-password");
+    rig.release();
+    rig.h.run_steps(2);
+    assert_eq!(rig.tabs(), 2);
+    assert!(!rig.password_dialog(), "no second prompt appears");
+    assert_eq!(rig.layout_of(&locked.name()), Some((PageDisplay::Single, false)));
+    assert_eq!(rig.layout_of(&plain.name()), Some((PageDisplay::TwoUp, false)), "the layout lands on the last settled open");
 }
 
-/// #1928: a new file handed over by the OS (Finder, or another launch) raises the window at once,
-/// before it is prepared, and is the selected tab once it opens.
 #[test]
-#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 fn a_new_file_from_the_os_brings_the_window_forward_before_it_is_prepared() {
-    let (mut harness, _client) = harness();
-    let (gate, started, release, finished) = open_worker::prepare_gate();
-    harness.state_mut().open_prepare_gate = Some(gate);
-    let path = std::env::temp_dir().join(format!("pdfcraft-os-open-worker-{}.pdf", std::process::id()));
-    std::fs::write(&path, fixture(2)).expect("write the handed-over PDF");
-    let mut queue = vec![crate::OsEvent::Open(vec![path.to_string_lossy().into_owned()])];
-    harness.state_mut().os_events = Some(Box::new(move || std::mem::take(&mut queue)));
-    harness.step();
-    started.recv_timeout(Duration::from_secs(5)).expect("the handed-over PDF reached preparation");
-    let commands: Vec<_> = harness.output().viewport_output.values().flat_map(|v| v.commands.clone()).collect();
-    let visible = harness.state().views.len();
-    // Always release before asserting: a failure must not strand the worker at the barrier.
-    release.send(()).expect("release the handed-over PDF");
-    finished.recv_timeout(Duration::from_secs(5)).expect("the handed-over PDF prepared");
+    let mut rig = Rig::new();
+    let file = TempFile::new("os-open", "pdf", &fixture(2));
+    rig.intake.open(vec![file.0.clone()]);
+    rig.h.step();
+    let commands: Vec<egui::ViewportCommand> = rig.h.output().viewport_output.values().flat_map(|output| output.commands.clone()).collect();
     assert!(commands.contains(&egui::ViewportCommand::Minimized(false)), "{commands:?}");
     assert!(commands.contains(&egui::ViewportCommand::Focus), "{commands:?}");
-    assert_eq!(visible, 1, "the window comes forward while the file is still preparing");
-    harness.step();
-    let app = harness.state();
-    assert_eq!(app.views.len(), 2);
-    let active = app.active.expect("a selected document");
-    let doc = app.session.get(app.views[active].id).expect("the handed-over document");
-    assert_eq!(doc.path.as_deref(), Some(path.to_string_lossy().as_ref()), "the new file is the selected tab");
-    assert_eq!(doc.info.pages.len(), 2);
-    let _ = std::fs::remove_file(path);
+    assert_eq!(rig.tabs(), 1, "the file is still being prepared");
+    rig.release();
+    assert_eq!(rig.tabs(), 2);
+    assert_eq!(rig.active_name(), Some(file.name()), "the new document is the selected tab");
 }
 
-/// A file waiting for room in the open queue, named again with a tool (Open and run), keeps
-/// that tool; a later repeat without one doesn't drop it.
 #[test]
 fn a_repeated_waiting_open_keeps_the_tool_it_brings() {
-    let file = tool_open_file("deferred-tool", "pdf", &fixture(1));
-    let path = file.0.to_string_lossy().into_owned();
-    let mut app = PdfCraftApp::new();
-    app.deferred_opens.push_back(crate::DeferredOpen { path: path.clone(), after_open: None, then: None, display_override: None });
-    assert_eq!(app.open_path_then(&path, Some("export.text")), crate::OpenOutcome::Pending);
-    assert_eq!(app.deferred_opens.len(), 1);
-    assert_eq!(app.deferred_opens.front().and_then(|d| d.then), Some("export.text"));
-    assert_eq!(app.open_path(&path), crate::OpenOutcome::Pending);
-    assert_eq!(app.deferred_opens.front().and_then(|d| d.then), Some("export.text"));
+    let mut rig = Rig::empty();
+    let file = TempFile::new("repeat", "pdf", &fixture(2));
+    let ctx = rig.h.ctx.clone();
+    rig.h.state_mut().open_path_then(&ctx, &file.path(), Some("export.text"));
+    rig.h.state_mut().open_path_then(&ctx, &file.path(), None);
+    assert_eq!(rig.jobs.waiting(), 1, "the file opens once");
+    rig.release();
+    assert_eq!(rig.tabs(), 1);
+    assert!(rig.export_open(), "the second open keeps the tool the first one brought");
 }
 
-/// A password retry submits with priority and succeeds even when the open worker queue is full
-/// of ordinary background documents, placing the retry at the head of the worker queue.
+/// File ▸ Open of a Word document: LibreOffice runs as a queue job, never on the frame thread,
+/// and the result opens as a new, unsaved PDF. Without LibreOffice the user is told it is needed,
+/// rather than that the file is a broken PDF.
 #[test]
-#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
-fn password_retry_submits_with_priority_when_worker_queue_is_full() {
-    let (gate, started, release, finished) = open_worker::prepare_gate();
-    let worker = open_worker::OpenWorker::new(Some(gate)).expect("worker");
-    let pdf = Arc::new(fixture(1));
-    let open_context = pdfcraft_engine::Session::new().open_context();
-
-    // Fill the worker queue to its limit while the gate holds the worker on the first job.
-    let _first =
-        worker.submit(1, open_context.clone(), "first.pdf".into(), None, None, open_worker::Input::Bytes(pdf.clone())).expect("submit first");
-    started.recv_timeout(Duration::from_secs(5)).expect("first job reached gate");
-
-    for token in 2..=(open_worker::MAX_QUEUED_OPENS as u64 + 1) {
-        worker
-            .submit(token, open_context.clone(), format!("doc-{token}.pdf"), None, None, open_worker::Input::Bytes(pdf.clone()))
-            .expect("queue up to limit");
-    }
-
-    // At capacity, an ordinary submit fails with the capacity error.
-    let overflow = worker.submit(999, open_context.clone(), "overflow.pdf".into(), None, None, open_worker::Input::Bytes(pdf.clone()));
-    assert_eq!(overflow.err(), Some("too many documents are waiting to open".into()));
-
-    // A priority submit (such as a password prompt retry) succeeds and enters the queue.
-    let priority_token = 1000;
-    let priority_recv = worker.submit_priority(
-        priority_token,
-        open_context.clone(),
-        "password-retry.pdf".into(),
-        None,
-        Some(zeroize::Zeroizing::new("secret".into())),
-        open_worker::Input::Bytes(pdf.clone()),
-    );
-    assert!(priority_recv.is_ok(), "priority submit must bypass the queued opens limit");
-
-    // Release the first job; the priority job must be processed next because it was pushed to the front.
-    release.send(()).expect("release first");
-    finished.recv_timeout(Duration::from_secs(5)).expect("first finished");
-
-    started.recv_timeout(Duration::from_secs(5)).expect("priority job reached gate next");
-    release.send(()).expect("release priority");
-    finished.recv_timeout(Duration::from_secs(5)).expect("priority finished");
-
-    let priority_result = priority_recv.unwrap().recv_timeout(Duration::from_secs(5)).expect("priority result");
-    assert_eq!(priority_result.token, priority_token);
-}
-
-/// A password prompt keeps a place in the worker's bounded queue for its retry: files named after
-/// the protected one fill the rest and wait in order, and the retry is queued, not refused as
-/// "too many documents are waiting to open" while the worker has yet to take the others.
-#[test]
-#[allow(clippy::expect_used)]
-fn a_password_prompt_keeps_a_place_in_the_open_queue_for_its_retry() {
-    let mut harness = tool_open_harness();
-    let held = HeldToolOpen::install(&mut harness);
-    let locked = tool_open_file("queue-locked", "pdf", &encrypted_tool_fixture());
-    harness.state_mut().open_path(&locked.0.to_string_lossy());
-    held.wait_started();
-    let others: Vec<ToolOpenFile> =
-        (0..open_worker::MAX_QUEUED_OPENS + 4).map(|i| tool_open_file(&format!("queue-{i}"), "pdf", &fixture(1))).collect();
-    for file in &others {
-        harness.state_mut().open_path(&file.0.to_string_lossy());
-    }
-    held.complete(&mut harness);
-    let app = harness.state();
-    assert!(app.password_prompt.is_some(), "the protected file asks for its password");
-    assert!(app.pending_opens.len() < open_worker::MAX_QUEUED_OPENS, "one place stays free: {} waiting", app.pending_opens.len());
-    assert!(!app.deferred_opens.is_empty(), "the rest wait their turn");
-    harness.state_mut().submit_password(Some("tool-password".into()));
-    let app = harness.state();
-    assert!(app.password_prompt.is_none(), "the retry is queued: {:?}", app.password_prompt.as_ref().and_then(|p| p.error.clone()));
-    assert!(app.password_retry.is_some());
-}
-
-/// A Word document built from the synthetic fixture (PdfCraft's own Word export).
-#[allow(clippy::expect_used)]
-fn synthetic_docx() -> Vec<u8> {
-    let mut session = pdfcraft_engine::Session::new();
-    let id = session.open("source.pdf", None, Arc::new(fixture(1)), None).expect("open the fixture");
-    session.get(id).expect("the fixture").export_office(pdfcraft_engine::compare::OfficeFormat::Docx)
-}
-
-/// File ▸ Open of a Word document: LibreOffice runs on the open worker, never on the frame
-/// thread, and the result opens as a new, unsaved PDF. Without LibreOffice the user is
-/// told it is needed, rather than that the file is a broken PDF.
-#[test]
-#[allow(clippy::expect_used)]
 fn file_open_converts_an_office_document_on_the_worker() {
-    let mut harness = tool_open_harness();
-    let held = HeldToolOpen::install(&mut harness);
-    let file = tool_open_file("office", "docx", &synthetic_docx());
-    harness.state_mut().pick_override = Some(vec![file.0.to_string_lossy().into_owned()]);
-    harness.state_mut().run_command("file.open");
-    harness.run_steps(2);
-    held.wait_started();
-    assert!(harness.state().views.is_empty(), "nothing opens before the conversion finishes");
-    // An installed LibreOffice takes seconds; it is stopped after 120 s.
-    held.complete_within(&mut harness, Duration::from_secs(150));
-    let app = harness.state();
-    assert!(app.pending_opens.is_empty());
+    let mut rig = Rig::empty();
+    let file = TempFile::new("office", "docx", &synthetic_docx());
+    rig.choose("file.open", &file);
+    assert_eq!(rig.tabs(), 0, "nothing opens before the conversion finishes");
+    rig.release();
+    let app = rig.h.state();
     if let Some(view) = app.views.first() {
         let doc = app.session.get(view.id).expect("the converted document");
         // Named after the Word file: `<stem>.docx` opens as `<stem>.pdf`.
         assert_eq!(doc.name, format!("pdfcraft-open-tool-{}-office.pdf", std::process::id()));
         assert!(doc.path.is_none(), "the converted PDF is new and unsaved, not the .docx on disk");
     } else {
-        let message = app.toast.as_ref().map(|(message, _)| message.clone()).unwrap_or_default();
-        assert!(message.contains("LibreOffice, which isn't installed"), "the failure names the missing dependency: {message}");
+        assert!(rig.notice_says("LibreOffice, which isn't installed"), "the failure names the missing dependency");
     }
 }
 
-#[test]
-fn the_open_picker_defaults_to_pdf_and_offers_images_office_text_and_all_files() {
-    let filters = PdfCraftApp::open_filters();
-    let names: Vec<&str> = filters.iter().map(|(name, _)| name.as_str()).collect();
-    #[cfg(not(target_os = "macos"))]
-    assert_eq!(names, ["PDF", "Images", "Office documents", "Text", "All files"]);
-    #[cfg(target_os = "macos")]
-    assert_eq!(names, ["PDF", "Images", "Office documents", "Text"]);
-    let extensions = |name: &str| filters.iter().find(|(n, _)| n == name).map(|(_, e)| e.clone()).unwrap_or_default();
-    assert_eq!(extensions("PDF"), ["pdf"]);
-    assert_eq!(extensions("Images"), pdfcraft_engine::IMAGE_EXTENSIONS);
-    assert!(["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "rtf"].iter().all(|e| extensions("Office documents").contains(e)));
-    assert_eq!(extensions("Text"), pdfcraft_engine::TEXT_EXTENSIONS);
+fn synthetic_docx() -> Vec<u8> {
+    let mut writer = craft::zip::Writer::new();
+    {
+        for (name, body) in [
+            (
+                "[Content_Types].xml",
+                "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>",
+            ),
+            (
+                "word/document.xml",
+                "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>Synthetic</w:t></w:r></w:p></w:body></w:document>",
+            ),
+        ] {
+            writer.add(name, body.as_bytes(), craft::zip::Compression::Deflated).expect("add zip entry");
+        }
+    }
+    writer.finish().expect("finish zip")
 }

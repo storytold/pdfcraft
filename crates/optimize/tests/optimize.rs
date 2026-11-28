@@ -39,9 +39,10 @@ fn image(doc: &mut Document, w: u32, h: u32, n: usize, jpeg: bool, smask: Option
         d.set(b"SMask".to_vec(), Object::Ref(m));
     }
     let s = if jpeg {
-        let mut out = Vec::new();
-        let ty = if n == 1 { image::ExtendedColorType::L8 } else { image::ExtendedColorType::Rgb8 };
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 98).encode(&px, w, h, ty).unwrap();
+        let layout = if n == 1 { craft_image_codecs::ChannelLayout::Gray } else { craft_image_codecs::ChannelLayout::Rgb };
+        let img = craft_image_codecs::Image::from_u8(w, h, layout, px).unwrap();
+        let opts = craft_image_codecs::EncodeOptions { jpeg_quality: 98, ..Default::default() };
+        let out = craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).unwrap();
         d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
         Stream::from_raw(d, out)
     } else {
@@ -3886,8 +3887,9 @@ fn strip(doc: &mut Document, w: u32, v: u8, jpeg: bool) -> ObjRef {
     d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
     let px = vec![v; w as usize];
     let s = if jpeg {
-        let mut out = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 95).encode(&px, w, 1, image::ExtendedColorType::L8).unwrap();
+        let img = craft_image_codecs::Image::from_u8(w, 1, craft_image_codecs::ChannelLayout::Gray, px).unwrap();
+        let opts = craft_image_codecs::EncodeOptions { jpeg_quality: 95, ..Default::default() };
+        let out = craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).unwrap();
         d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
         Stream::from_raw(d, out)
     } else {

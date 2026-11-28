@@ -201,7 +201,7 @@ fn check(root: &Path, docs: &Documents, attribution: &assets::Manifest) -> Vec<S
             }
         }
     }
-    for required in ["LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "vendor/hayro-interpret/assets/LICENSE_FOXIT"]
+    for required in ["LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
         .into_iter()
         .chain(attribution.asset.iter().map(|a| a.licence_file.as_str()))
     {
@@ -281,7 +281,7 @@ mod tests {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!("pdfcraft-license-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         std::fs::create_dir_all(&root).unwrap();
-        let document = ["LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "vendor/hayro-interpret/assets/LICENSE_FOXIT"]
+        let document = ["LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
             .into_iter()
             .map(|p| {
                 let path = root.join(p);
