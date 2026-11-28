@@ -277,14 +277,19 @@ fn page_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> Vec<PageBoxes
 fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnImage>, usize) {
     let mut out = Vec::new();
     let mut unknown = 0usize;
-    let mut seen = std::collections::HashSet::new();
     for (i, page) in pages.iter().enumerate() {
         let page_no = (i + 1) as u32;
+        // The lowest measured resolution of each image placed directly on this page, `INFINITY`
+        // when none of its direct placements could be measured.
+        let mut direct = std::collections::HashMap::new();
         if let Ok(placed) = pdfcraft_edit::page_images(doc, i) {
             for image in placed {
                 if let Some(ppi) = placed_ppi(&image) {
                     if let Some(object) = image.object {
-                        seen.insert((page_no, object));
+                        let lowest = direct.entry(object).or_insert(f64::INFINITY);
+                        if ppi < *lowest {
+                            *lowest = ppi;
+                        }
                     }
                     if !ppi.is_finite() {
                         unknown = unknown.saturating_add(1);
@@ -296,10 +301,16 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
                 }
             }
         }
-        // Images drawn inside a form XObject are not listed above. Their resolution is the
-        // smallest use on this page, which is what the optimizer already measures.
+        // Images drawn inside a form XObject or a tiling pattern cell are not listed above. Their
+        // resolution is the smallest use on this page, which is what the optimizer already
+        // measures. An image also placed directly is listed again only when one of those uses is
+        // lower than its direct placements. The optimizer counts `/UserUnit` and the direct
+        // placements do not, so they are compared in the same units.
+        let unit = page.user_unit(doc);
         for (object, ppi) in pdfcraft_optimize::effective_resolutions(doc, &[page.obj]) {
-            if seen.contains(&(page_no, object)) {
+            if let Some(lowest) = direct.get(&object)
+                && (!ppi.is_finite() || ppi >= (lowest / unit) * (1.0 - 1e-9))
+            {
                 continue;
             }
             if !ppi.is_finite() {
@@ -434,6 +445,67 @@ mod tests {
         assert_eq!(report.resolution_unknown, 0);
         assert!(report.text().contains("50 ppi"));
         assert!(report.text().contains("verification only"));
+    }
+
+    /// Adds a tiling pattern whose one-inch cell draws `img` one inch wide, under a pattern matrix
+    /// that makes that ten inches, as `/P1` to page `p`'s resources, keeping its other resources.
+    fn add_tiling_pattern(doc: &mut Document, p: pdfcraft_cos::ObjRef, img: pdfcraft_cos::ObjRef) {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Pattern"));
+        d.set(b"PatternType".to_vec(), Object::Int(1));
+        d.set(b"PaintType".to_vec(), Object::Int(1));
+        d.set(b"TilingType".to_vec(), Object::Int(1));
+        d.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 72.into(), 72.into()]));
+        d.set(b"XStep".to_vec(), Object::Int(72));
+        d.set(b"YStep".to_vec(), Object::Int(72));
+        d.set(b"Matrix".to_vec(), Object::Array(vec![10.into(), 0.into(), 0.into(), 10.into(), 0.into(), 0.into()]));
+        let mut x = Dict::new();
+        x.set(b"Im".to_vec(), Object::Ref(img));
+        let mut cell = Dict::new();
+        cell.set(b"XObject".to_vec(), Object::Dict(x));
+        d.set(b"Resources".to_vec(), Object::Dict(cell));
+        let pattern = doc.add(Object::Stream(Stream::flate(d, b"q 72 0 0 72 0 0 cm /Im Do Q")));
+        doc.update_dict(p, |d| {
+            let mut patterns = Dict::new();
+            patterns.set(b"P1".to_vec(), Object::Ref(pattern));
+            let mut res = d.get(b"Resources").and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+            res.set(b"Pattern".to_vec(), Object::Dict(patterns));
+            d.set(b"Resources".to_vec(), Object::Dict(res));
+        })
+        .unwrap();
+    }
+
+    /// A low-resolution picture used as a pattern fill is listed and failed like a drawn one (#7741).
+    #[test]
+    fn an_image_painted_through_a_tiling_pattern_is_measured() {
+        let mut doc = Document::new_empty();
+        let tiny = image(&mut doc, 8, 8);
+        // Ten inches for eight pixels: 0.8 ppi.
+        let p = page(&mut doc, "Unused", tiny, "/Pattern cs /P1 scn 0 0 612 792 re f");
+        add_tiling_pattern(&mut doc, p, tiny);
+
+        let report = inspect(&doc);
+        assert_eq!(report.images.len(), 1, "{:?}", report.images);
+        assert!((report.images[0].ppi - 0.8).abs() < 0.01, "{}", report.images[0].ppi);
+        assert!(report.findings.iter().any(|f| f.id == "image-ppi" && f.severity == "fail" && f.page == Some(1)), "{:?}", report.findings);
+        assert_eq!(report.resolution_unknown, 0);
+    }
+
+    /// An image placed directly at a good resolution and also used as a coarse pattern fill is
+    /// failed for the pattern use, not passed for the direct one.
+    #[test]
+    fn a_lower_pattern_use_of_a_directly_placed_image_is_not_hidden() {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 600, 600);
+        // Directly: 600 pixels over one inch. Through the pattern: over ten inches.
+        let p = page(&mut doc, "Im", img, "q 72 0 0 72 0 0 cm /Im Do Q /Pattern cs /P1 scn 0 0 612 792 re f");
+        add_tiling_pattern(&mut doc, p, img);
+
+        let report = inspect(&doc);
+        let lowest = report.images.iter().map(|i| i.ppi).fold(f64::INFINITY, f64::min);
+        let highest = report.images.iter().map(|i| i.ppi).fold(0.0, f64::max);
+        assert!(lowest < highest, "{:?}", report.images);
+        assert!(report.findings.iter().any(|f| f.id == "image-ppi" && f.severity == "fail" && f.page == Some(1)), "{:?}", report.findings);
     }
 
     #[test]

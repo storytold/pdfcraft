@@ -79,6 +79,9 @@ struct Walk<'a> {
     /// The references the walk followed to reach its images, and the pages and page-tree nodes
     /// whose resources it read.
     read: Read,
+    /// Also walk the cells of tiling patterns a stream selects, to measure the images they draw.
+    /// Off for Reduce File Size, which resamples only images the walk reaches.
+    patterns: bool,
 }
 
 /// Where a walk read a reference: under a name in an `/XObject` dictionary (an image or a form),
@@ -123,6 +126,11 @@ impl Walk<'_> {
                 }
             }
         }
+        let patterns = if self.patterns {
+            resources.get(b"Pattern").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()).unwrap_or_default()
+        } else {
+            Dict::default()
+        };
         let mut stack = vec![ctm];
         for op in pdfcraft_content::parse(data).ops {
             let top = stack.last().copied().unwrap_or(ctm);
@@ -159,6 +167,20 @@ impl Walk<'_> {
                         }
                         Some(b"Form") => self.form(r, s, (resources, holder), top, defaults),
                         _ => {}
+                    }
+                }
+                // A tiling pattern's cell is content like a form's, with /Matrix and /Resources.
+                // Its matrix maps pattern space to the default space of the stream that uses it
+                // (ISO 32000-2 §8.7.3.1), so the cell is placed from `ctm`, where this stream
+                // starts, whatever transform is current. A shading pattern is a dictionary, not a
+                // stream, and draws no image.
+                b"scn" | b"SCN" if self.patterns => {
+                    let Some(name) = op.last_name() else { continue };
+                    let Some(r) = patterns.get(name).and_then(Object::as_ref) else { continue };
+                    let obj = doc.get(r);
+                    let Object::Stream(s) = &*obj else { continue };
+                    if s.dict.int(b"PatternType") == Some(1) {
+                        self.form(r, s, (resources, holder), ctm, defaults);
                     }
                 }
                 _ => {}
@@ -260,8 +282,10 @@ fn remaps_device_spaces(doc: &Document, resources: &Dict) -> bool {
 /// If forms nest too deeply, are drawn too many times, or a page's or form's content doesn't
 /// decode within its budget or is damaged partway, every image is given `INFINITY` (never
 /// resampled), since its largest use may be among those missed.
+///
+/// Images drawn inside the cells of tiling patterns are measured too, under the pattern matrix.
 pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef, f64> {
-    let Ok((ppi, ..)) = walk_pages(doc, pages, &mut |_| true) else { return HashMap::new() };
+    let Ok((ppi, ..)) = walk_pages(doc, pages, true, &mut |_| true) else { return HashMap::new() };
     ppi
 }
 
@@ -273,8 +297,9 @@ type PagesWalked = (HashMap<ObjRef, f64>, HashSet<u32>, Read);
 /// in force, by object number (all of them when a use may have been missed), and the references
 /// followed to reach them.
 ///
-/// `tick` hears how many pages are done, and stops the walk by returning false.
-fn walk_pages(doc: &Document, pages: &[ObjRef], tick: &mut dyn FnMut(usize) -> bool) -> Result<PagesWalked, OptimizeError> {
+/// `patterns`: also walk tiling pattern cells ([`Walk::patterns`]). `tick` hears how many pages
+/// are done, and stops the walk by returning false.
+fn walk_pages(doc: &Document, pages: &[ObjRef], patterns: bool, tick: &mut dyn FnMut(usize) -> bool) -> Result<PagesWalked, OptimizeError> {
     let mut walk = Walk {
         doc,
         path: Vec::new(),
@@ -286,6 +311,7 @@ fn walk_pages(doc: &Document, pages: &[ObjRef], tick: &mut dyn FnMut(usize) -> b
         out: HashMap::new(),
         defaults: HashSet::new(),
         read: Read::default(),
+        patterns,
     };
     for (done, p) in pages.iter().enumerate() {
         if !tick(done) {
@@ -1381,7 +1407,8 @@ pub(crate) fn run(
     progress: &mut dyn FnMut(Stage) -> bool,
     budget: &mut ImageBudget,
 ) -> Result<(), OptimizeError> {
-    let (ppi, mut defaults, read) = walk_pages(doc, pages, &mut |done| progress(Stage::Reading { done, total: pages.len() }))?;
+    // Pattern cells are not walked: images only they draw are left as they are.
+    let (ppi, mut defaults, read) = walk_pages(doc, pages, false, &mut |done| progress(Stage::Reading { done, total: pages.len() }))?;
     // Black-and-white RGB becomes grey, which default colour spaces would draw otherwise, and an
     // indexed image's palette says which of its samples a resampled one keeps, which they may
     // change: one used where the walk didn't look may be drawn so.

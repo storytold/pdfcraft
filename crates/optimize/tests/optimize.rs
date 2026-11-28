@@ -5840,3 +5840,40 @@ fn the_fewest_strips_that_make_a_picture_are_merged() {
     let r = optimize(&mut doc, &keep).unwrap();
     assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
 }
+
+/// A tiling pattern's cell is placed by the pattern matrix from where the page's content starts,
+/// not by the transform current when the pattern is selected (ISO 32000-2 §8.7.3.1), and Reduce
+/// File Size leaves an image only a pattern draws as it is (#7741).
+#[test]
+fn an_image_in_a_tiling_pattern_cell_is_measured_under_the_pattern_matrix_and_not_resampled() {
+    let mut doc = Document::new_empty();
+    // 1200 px drawn one inch wide in the cell, doubled by the pattern matrix: 600 ppi, which
+    // Reduce File Size would resample if it walked the cell.
+    let img = image(&mut doc, 1200, 1200, 3, false, None);
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("Pattern"));
+    d.set(b"PatternType".to_vec(), Object::Int(1));
+    d.set(b"PaintType".to_vec(), Object::Int(1));
+    d.set(b"TilingType".to_vec(), Object::Int(1));
+    d.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 72.into(), 72.into()]));
+    d.set(b"XStep".to_vec(), Object::Int(72));
+    d.set(b"YStep".to_vec(), Object::Int(72));
+    d.set(b"Matrix".to_vec(), Object::Array(vec![2.into(), 0.into(), 0.into(), 2.into(), 0.into(), 0.into()]));
+    d.set(b"Resources".to_vec(), Object::Dict(resources(xobjects(&[("Im", img)]))));
+    let pattern = doc.add(Object::Stream(Stream::flate(d, b"q 72 0 0 72 0 0 cm /Im Do Q")));
+    // Scaled by 4 when the pattern is selected: that must not shrink the cell (150 ppi).
+    let p = page(&mut doc, &[], "q 4 0 0 4 0 0 cm /Pattern cs /P1 scn 0 0 100 100 re f Q");
+    doc.update_dict(p, |d| {
+        let mut patterns = Dict::new();
+        patterns.set(b"P1".to_vec(), Object::Ref(pattern));
+        let mut res = Dict::new();
+        res.set(b"Pattern".to_vec(), Object::Dict(patterns));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+
+    assert_eq!(effective_resolutions(&doc, &[p]).get(&img).map(|ppi| ppi.round()), Some(600.0));
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(report.images_resampled, 0, "{report:?}");
+    assert_eq!(stream(&doc, img).dict.int(b"Width"), Some(1200));
+}
