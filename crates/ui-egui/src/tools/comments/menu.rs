@@ -98,6 +98,26 @@ fn row(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
     MenuItem::new(label.to_string()).enabled(enabled).show(ui).ran
 }
 
+/// Mark the selected text instead, on a highlight, underline, strikethrough or squiggly underline: the
+/// markup takes the text selected on its page as its range, extended or reduced, and keeps its colour, note
+/// and replies (#4824). Disabled, saying why, until text on that page alone is selected.
+fn mark_selection_row(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, a: &Annotation, allowed: bool) -> Option<Edit> {
+    if !matches!(a.subtype.as_str(), "Highlight" | "Underline" | "StrikeOut" | "Squiggly") {
+        return None;
+    }
+    let quads = view.selection_quads_on(info, a.page);
+    let mut item = MenuItem::new(tl!("Mark the selected text instead")).enabled(allowed && !a.locked && quads.is_some());
+    if allowed && !a.locked && quads.is_none() {
+        item = item.tooltip(tl!("Select the text it should mark first"));
+    }
+    if !item.show(ui).ran {
+        return None;
+    }
+    let quads = quads?;
+    view.clear_selection();
+    Some(Edit::SetMarkupRange { page: a.page, index: a.index, quads })
+}
+
 /// Rows of the canvas context menu for the selected comment (or the page), inside `Menu::context`.
 pub(crate) fn context_rows(ui: &mut egui::Ui, cx: CommentMenuCx<'_>) -> Option<CanvasAction> {
     let CommentMenuCx { view, info, deletable, prefs, rights, recent, tool } = cx;
@@ -171,6 +191,9 @@ pub(crate) fn context_rows(ui: &mut egui::Ui, cx: CommentMenuCx<'_>) -> Option<C
             }
             if row(ui, tl!("Copy text"), true) {
                 action = Some(CanvasAction::CopyText(a.contents.clone().unwrap_or_default()));
+            }
+            if let Some(edit) = mark_selection_row(ui, view, info, a, allowed) {
+                action = Some(CanvasAction::Edit(Box::new(edit)));
             }
             Divider::horizontal().show(ui);
             // The comments themselves, to paste into this or another document; the rows take their chords

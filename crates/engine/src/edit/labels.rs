@@ -94,6 +94,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Open comment pop-up",
     "Close comment pop-up",
     "Move comment pop-up",
+    "Change marked text",
     "Resize comment",
     "Change comment properties",
     "Fill in {name}",
@@ -253,6 +254,7 @@ impl Edit {
             Edit::SetAnnotationPopup { rect: Some(_), .. } => Label::of("Move comment pop-up"),
             Edit::SetAnnotationPopup { open: Some(true), .. } => Label::of("Open comment pop-up"),
             Edit::SetAnnotationPopup { .. } => Label::of("Close comment pop-up"),
+            Edit::SetMarkupRange { .. } => Label::of("Change marked text"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
             Edit::StyleAnnotation { .. }
             | Edit::FillAnnotation { .. }

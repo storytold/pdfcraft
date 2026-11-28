@@ -65,6 +65,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::MoveAnnotation { .. }
         | Edit::ReshapeAnnotation { .. }
         | Edit::SetAnnotationPopup { .. }
+        | Edit::SetMarkupRange { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
         | Edit::FillAnnotation { .. }
@@ -747,6 +748,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::MoveAnnotation { page, index, dx, dy } => pdfcraft_annot::move_annotation(doc, *page, *index, *dx, *dy, &cx.meta())?,
         Edit::ReshapeAnnotation { page, index, points } => pdfcraft_annot::set_points(doc, *page, *index, points, &cx.meta())?,
         Edit::SetAnnotationPopup { page, index, rect, open } => pdfcraft_annot::set_popup(doc, *page, *index, *rect, *open, &cx.meta())?,
+        Edit::SetMarkupRange { page, index, quads } => pdfcraft_annot::set_quads(doc, *page, *index, quads, &cx.meta())?,
         Edit::ResizeAnnotation { page, index, rect } => pdfcraft_annot::set_rect(doc, *page, *index, *rect, &cx.meta())?,
         Edit::StyleAnnotation { page, index, color, opacity, width, endings } => {
             pdfcraft_annot::set_style(
