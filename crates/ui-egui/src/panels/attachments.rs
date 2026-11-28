@@ -68,6 +68,10 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, cx: &mut BodyCx<'_>
     };
     let detail = |a: &pdfcraft_render::Attachment| {
         let mut parts = vec![a.size.map(human_size).unwrap_or_default()];
+        if let Some(declared) = a.declared_size {
+            // Said beside the counted size, not instead of it: the file is what gets saved.
+            parts.push(crate::i18n::fmt(tl!("the file says {size}"), &[("size", &human_size(declared))]));
+        }
         if let pdfcraft_render::AttachmentSource::Annotation { page, .. } = a.source {
             parts.push(crate::i18n::fmt(tl!("on page {label}"), &[("label", info.pages.get(page).map(|p| p.label.as_str()).unwrap_or("?"))]));
         }

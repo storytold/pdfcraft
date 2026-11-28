@@ -1,5 +1,6 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod attachment_declared_size;
 mod cid_cff_unusable_font_dict;
 mod cid_fallback_query;
 mod euro_width;

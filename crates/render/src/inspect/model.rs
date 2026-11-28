@@ -814,7 +814,12 @@ pub struct Attachment {
     pub description: Option<String>,
     /// Whether the file specification contained `/Desc`, including an empty value.
     pub has_description: bool,
+    /// The file's size in bytes: counted when its stream is stored unfiltered, else the
+    /// `/Params /Size` it declares (ISO 32000-2 §7.11.4), else the stored length.
     pub size: Option<usize>,
+    /// The `/Params /Size` the file declares when it is not the size counted (`size`). Only an
+    /// unfiltered stream is counted without decoding it, so a filtered one is never flagged.
+    pub declared_size: Option<usize>,
     pub source: AttachmentSource,
 }
 
