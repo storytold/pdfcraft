@@ -269,12 +269,17 @@ impl Session {
             },
             (_, cos) => (bytes, info, cos),
         };
-        // The catalog leads to no page, but the reader found pages by scanning: gather the page
-        // objects into a page tree as one more revision, or page edits address none of them
-        // (#1656). Kept only when the reader then shows the same pages, and never on a signed
-        // document, where writing the repair could rewrite the file under its signatures.
+        // The catalog leads to no page (its `/Pages` is missing or lost, or the tree's `/Kids`
+        // reach no page), but the reader found pages by scanning: gather the page objects into a
+        // page tree as one more revision, or page edits address none of them (#1656). Kept only
+        // when the reader then shows the same pages, and never on a signed document, where
+        // writing the repair could rewrite the file under its signatures.
         let (bytes, info, cos) = match cos {
             Ok(Ok(cos)) if !info.pages.is_empty() && pdfcraft_organize::page_count(&cos).unwrap_or(0) == 0 => {
+                // Whether the catalog's `/Pages` names a node that is there: the tree then exists
+                // and leads to no page, rather than being missing.
+                let tree_present =
+                    cos.root().and_then(|r| cos.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).is_some_and(|p| cos.get(p).as_dict().is_some());
                 let mut work = cos.clone();
                 let signed = || pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust).iter().any(|s| s.signed);
                 let rebuilt = match pdfcraft_organize::recover_page_tree(&mut work) {
@@ -283,7 +288,12 @@ impl Session {
                 };
                 match rebuilt {
                     Some((b, i, mut c)) => {
-                        c.note_repair(format!("the page tree is missing; its {} pages were found by scanning the file", i.pages.len()));
+                        let n = i.pages.len();
+                        c.note_repair(if tree_present {
+                            format!("the page tree leads to no page; the {n} pages found by scanning the file were gathered into a new one")
+                        } else {
+                            format!("the page tree is missing; its {n} pages were found by scanning the file")
+                        });
                         (b, i, Ok(Ok(c)))
                     }
                     None => (bytes, info, Ok(Ok(cos))),
