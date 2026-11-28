@@ -74,9 +74,12 @@ Headless `doc_print` defaults are unchanged.
 `spool` delegates discovery, driver options, preferences and submission to
 [`craft-print`](https://github.com/storytold/craft-libs/tree/main/crates/print).
 PdfCraft retains page selection, imposition, annotations and print-permission checks.
-CUPS jobs stream through stdin with `fit-to-page=false`, and with `orientation-requested=4` when
-every sheet is landscape (`cups_orientation`), since CUPS would otherwise shrink a landscape
-sheet into portrait paper. On macOS they also carry the job name and owner
+CUPS jobs stream through stdin with `fit-to-page=false` and `print-scaling=none` whatever the
+Size (fit, actual size, shrink and custom % are already applied to the sheets), so a queue whose
+`print-scaling-default` is `auto` (IPP Everywhere's) does not shrink a paper-sized sheet into the
+printable area: A4 at 100 % printed at 97 % on a printer with 3 mm margins (#7207). Jobs also carry
+`orientation-requested=4` when every sheet is landscape (`cups_orientation`), since CUPS would
+otherwise shrink a landscape sheet into portrait paper. On macOS they also carry the job name and owner
 (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`) as the system print dialog sends them, which
 some vendors' filters need (#5743). Windows renders sheets through
 `Windows.Data.Pdf` and spools them at their physical PDF size with per-page paper and

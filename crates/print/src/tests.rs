@@ -430,7 +430,7 @@ fn spooler_arguments_and_printer_list() {
     assert_eq!(
         lp_args(&job).join(" "),
         format!(
-            "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false{}",
+            "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false -o print-scaling=none{}",
             macos_auto_tray()
         )
     );
@@ -748,7 +748,7 @@ fn printer_option_defaults_and_job_arguments() {
         ..Job::default()
     };
     let args = lp_args(&job).join(" ");
-    assert!(args.ends_with("-o fit-to-page=false -o InputSlot=Tray2 -o EFMediaType=Heavy1"), "{args}");
+    assert!(args.ends_with("-o fit-to-page=false -o print-scaling=none -o InputSlot=Tray2 -o EFMediaType=Heavy1"), "{args}");
     assert!(spool::printer_options("../../etc/passwd").is_empty(), "not a queue name");
 }
 
@@ -775,7 +775,7 @@ fn landscape_sheets_ask_cups_to_turn_the_page() {
     assert_eq!(cups_orientation(&[]), None);
     // `lp` is given it, among the job's other options.
     let job = Job { options: ask.into_iter().collect(), ..Job::default() };
-    assert!(lp_args(&job).join(" ").ends_with(&format!("-o fit-to-page=false -o orientation-requested=4{}", macos_auto_tray())));
+    assert!(lp_args(&job).join(" ").ends_with(&format!("-o print-scaling=none -o orientation-requested=4{}", macos_auto_tray())));
 }
 
 /// Both submission paths add the orientation through `add_cups_orientation`: after the job's

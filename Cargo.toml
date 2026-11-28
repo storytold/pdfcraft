@@ -28,10 +28,12 @@ craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1
 # catalogs that `crates/ui-egui/build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, at
 # the commit in `craft-i18n.rev`). Already in the tree through craft-ui.
 craft-i18n = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-# Shared system spooler; document composition remains in pdfcraft-print.
-craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+# Shared system spooler; document composition remains in pdfcraft-print. An exact-size CUPS job
+# asks for `print-scaling=none` (#7207): until that is merged into storytold/craft-libs, the pin
+# is the fork commit that adds it on top of craft-libs 0a6e42b.
+craft-print = { git = "https://github.com/dnviti/craft-libs", version = "0.1.0", rev = "edc9703d74fce4021fe6847ac88030067153304f" }
 # ICC transforms for app-managed print colour; at craft-print's commit, so one craft-libs checkout.
-craft-cms = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft-cms = { git = "https://github.com/dnviti/craft-libs", version = "0.1.0", rev = "edc9703d74fce4021fe6847ac88030067153304f" }
 craft-zip = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
 # Whether a path stored in a document may be opened (GoToR link targets).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
