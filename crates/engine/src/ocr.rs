@@ -722,7 +722,7 @@ impl OcrJob {
     /// stops (the pages read so far are returned).
     pub fn run(self, recognizers: &Recognizers, mut progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
         let total = self.pages.len();
-        let mut steps = self.steps();
+        let mut steps = self.steps_judged_by(Some(recognizers.primary.clone()));
         let mut out = Vec::new();
         while progress(steps.done(), total) {
             match steps.next_page() {
@@ -738,10 +738,18 @@ impl OcrJob {
     /// Read the pages one at a time, preparing each page's image and recognising it separately:
     /// the web build prepares pages on the page and recognises them in Web Workers.
     pub fn steps(self) -> OcrSteps {
+        self.steps_judged_by(None)
+    }
+
+    /// [`OcrJob::steps`], with an engine at hand while pages are prepared: with auto-rotate on,
+    /// it settles the orientation of a page the ink's profile can't place, or would turn
+    /// wrongly, by reading the page turned each way (#8484). The web build's workers hold the
+    /// engines, so its steps go without.
+    pub fn steps_judged_by(self, judge: Option<Arc<dyn Recognizer>>) -> OcrSteps {
         let config =
             RenderConfig { password: self.password.as_deref().map(Arc::from), hide_comments: self.settings.native_text_only, ..Default::default() };
         let renderer = PageRenderer::new(self.bytes.clone(), config);
-        OcrSteps { job: self, renderer, next: 0 }
+        OcrSteps { job: self, renderer, next: 0, judge }
     }
 }
 
@@ -752,6 +760,8 @@ pub struct OcrSteps {
     job: OcrJob,
     renderer: PageRenderer,
     next: usize,
+    /// An engine that judges a page's orientation while it is prepared, when there is one.
+    judge: Option<Arc<dyn Recognizer>>,
 }
 
 impl OcrSteps {
@@ -820,7 +830,15 @@ impl OcrSteps {
         // back in processed coordinates and are mapped to the ORIGINAL raster's before
         // placement. The render dpi is the real one (pixels per point × 72), never a
         // fixed value.
-        let pre = pdfcraft_ocr::preprocess::preprocess(
+        // With auto-rotate on and an engine at hand, the engine judges the turns the ink's
+        // profile can't settle: how many readable words it finds in the page turned each way.
+        let options = pdfcraft_ocr::RecognizeOptions { language: settings.language.clone() };
+        let judge = self
+            .judge
+            .as_ref()
+            .filter(|_| settings.auto_rotate)
+            .map(|engine| move |turned: &OcrImage| engine.recognize(turned, &options).ok().map(|lines| pdfcraft_ocr::readable_words(&lines)));
+        let pre = pdfcraft_ocr::preprocess::preprocess_with_judge(
             image,
             scale * 72.0,
             &pdfcraft_ocr::preprocess::PreprocessOptions {
@@ -829,6 +847,7 @@ impl OcrSteps {
                 denoise: settings.denoise,
                 binarize: settings.binarize,
             },
+            judge.as_ref().map(|j| j as &dyn Fn(&OcrImage) -> Option<usize>),
         )
         .map_err(|e| skip(&e.to_string()))?;
         Ok(OcrShot {
@@ -1758,6 +1777,68 @@ mod tests {
     fn fake_recognizers() -> (Recognizers, Arc<Fake>) {
         let fake = Arc::new(Fake::new());
         (Recognizers { primary: fake.clone(), secondary: None }, fake)
+    }
+
+    /// A fake engine that reads words only from a page turned one way: portrait or landscape.
+    struct ReadsWhen {
+        portrait: bool,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Recognizer for ReadsWhen {
+        fn id(&self) -> &'static str {
+            "fake"
+        }
+        fn available(&self) -> bool {
+            true
+        }
+        fn languages(&self) -> Vec<(String, String)> {
+            vec![("en".into(), "English".into())]
+        }
+        fn recognize(&self, image: &pdfcraft_ocr::OcrImage, _options: &pdfcraft_ocr::RecognizeOptions) -> Result<Vec<pdfcraft_ocr::Line>, OcrError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let reads = (image.height() > image.width()) == self.portrait;
+            let words = if reads { vec!["SHEET", "ONE", "TITLE", "BRACKET", "SCALE"] } else { vec!["T", "I"] };
+            Ok(vec![pdfcraft_ocr::Line { words: words.into_iter().map(|w| pdfcraft_ocr::Word::new(w, [1.0, 1.0, 9.0, 9.0], "fake")).collect() }])
+        }
+    }
+
+    /// A page of ruled lines both ways, as a form or line art: the ink's profile can't tell its
+    /// orientation, so an engine at hand reads the page turned each way and the turn it reads
+    /// best is made (#8484). Without an engine at hand the page is left as it stands.
+    #[test]
+    fn a_page_the_profile_cannot_place_is_turned_the_way_the_engine_reads() {
+        let (w, h) = (400u32, 300u32);
+        let mut rgba = vec![255u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                if (y + 20) % 40 < 2 || (x + 20) % 40 < 2 {
+                    let i = ((y * w + x) * 4) as usize;
+                    rgba[i..i + 3].copy_from_slice(&[0, 0, 0]);
+                }
+            }
+        }
+        let png = crate::export::encode_png(w, h, &rgba).unwrap();
+        let settings = OcrSettings { auto_rotate: true, force_ocr: true, ..Default::default() };
+        let shot = |judge: Option<Arc<dyn Recognizer>>| {
+            let mut s = Session::new();
+            let bytes = s.create_from_images(&[("grid.png".into(), png.clone())]).unwrap();
+            let id = s.open("grid.pdf", None, bytes, None).unwrap();
+            let job = s.ocr_job(id, &[0], settings.clone()).unwrap();
+            let mut steps = job.steps_judged_by(judge);
+            let shot = steps.next_page().unwrap().unwrap();
+            let image = shot.image().unwrap();
+            (image.width(), image.height())
+        };
+        let portrait = Arc::new(ReadsWhen { portrait: true, calls: std::sync::atomic::AtomicUsize::new(0) });
+        let (tw, th) = shot(Some(portrait.clone()));
+        assert!(th > tw, "turned to the way the engine reads: {tw}x{th}");
+        assert_eq!(portrait.calls.load(std::sync::atomic::Ordering::SeqCst), 4, "the four turns were judged");
+        let landscape = Arc::new(ReadsWhen { portrait: false, calls: std::sync::atomic::AtomicUsize::new(0) });
+        let (lw, lh) = shot(Some(landscape));
+        assert!(lw > lh, "left as it stands when that reads best: {lw}x{lh}");
+        let (nw, nh) = shot(None);
+        assert!(nw > nh, "no engine at hand: left as it stands: {nw}x{nh}");
     }
 
     /// Skip-files: a file that already has text is passed over entirely — the engine never
