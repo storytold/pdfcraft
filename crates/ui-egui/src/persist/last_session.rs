@@ -57,6 +57,7 @@ impl PdfCraftApp {
                 let page = document.view["page"].as_u64().and_then(|p| usize::try_from(p).ok()).unwrap_or(0);
                 let place = pdfcraft_render::RemoteDestination::Page { page, view: pdfcraft_render::DestView::Top };
                 let front = last.active.as_deref().is_none_or(|active| active == document.path);
+                self.open_history.restoring(&document.path);
                 self.reopen_path(&document.path, place, front);
             }
         }

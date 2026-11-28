@@ -254,6 +254,7 @@ impl PdfCraftApp {
             pending_destinations: Vec::new(),
             pinned_jobs: queue(&host, &wake, "pdfcraft-pinned-folders"),
             recent_check: persist::recent_check::RecentCheck::new(queue(&host, &wake, "pdfcraft-recent-check")),
+            open_history: Default::default(),
             text_copies: queue(&host, &wake, "pdfcraft-copy-text"),
             reveal_jobs: queue(&host, &wake, "pdfcraft-reveal"),
             ocr_runs: queue(&host, &wake, "pdfcraft-ocr"),
