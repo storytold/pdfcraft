@@ -799,13 +799,10 @@ fn close_requested_tab(ctx: &egui::Context, app: &mut PdfCraftApp, index: usize)
     true
 }
 
-/// Follows the link, or the bookmark's action, that was clicked. A link to another file comes
-/// back, to be opened once the document is no longer borrowed.
-pub(crate) fn follow_link(
-    app: &mut PdfCraftApp,
-    index: usize,
-    target: Option<LinkTarget>,
-) -> Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> {
+/// Follows the link, or the bookmark's action, that was clicked. A link to another file, or to a
+/// PDF attached to this one, comes back, to be opened once the document is no longer borrowed
+/// ([`open_link`]).
+pub(crate) fn follow_link(app: &mut PdfCraftApp, index: usize, target: Option<LinkTarget>) -> Option<LinkOpen> {
     let view_id = app.views[index].id;
     match target? {
         LinkTarget::Page(p, dest) => {
@@ -816,7 +813,8 @@ pub(crate) fn follow_link(
         }
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
         LinkTarget::SetLayers { changes, preserve_rb } => set_layers(app, index, &changes, preserve_rb),
-        LinkTarget::RemoteGoTo { file, destination, .. } => return Some((view_id, file, destination)),
+        LinkTarget::RemoteGoTo { file, destination, .. } => return Some(LinkOpen::Remote(view_id, file, destination)),
+        LinkTarget::EmbeddedGoTo { source, destination, .. } => return Some(LinkOpen::Embedded(view_id, source, destination)),
         // Run by `PdfCraftApp::run_link_script`, which needs the link's page and index.
         LinkTarget::JavaScript(_) => {}
         LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
@@ -2032,7 +2030,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     if let Some((page, area)) = body_out.snapshot {
         app.finish_marquee(ui.ctx(), index, (page, area));
     }
-    let remote_open = follow_link(app, index, clicked_link);
+    let link_open = follow_link(app, index, clicked_link);
     if let Some((page, link)) = javascript_link {
         app.run_link_script(ui.ctx(), doc_id, page, link);
     }
@@ -2047,7 +2045,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         form_notice,
         copy_selected: body_out.copy_selected,
         recolour,
-        remote_open,
+        link_open,
         open_table: prepare.table,
         open_boxes: body_out.open_boxes,
         open_signature: body_out.open_signature,
@@ -2069,7 +2067,7 @@ struct FrameRequests {
     copy_selected: bool,
     /// A colour picked for every selected comment (Colour in the page's menu).
     recolour: Option<pdfcraft_engine::Rgb>,
-    remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)>,
+    link_open: Option<LinkOpen>,
     /// A table drawn with the prepare tool: its page and user-space rectangle.
     open_table: Option<(usize, [f64; 4])>,
     /// The Crop tool's double-click: open Set Page Boxes on the current page.
@@ -2092,7 +2090,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
         form_notice,
         copy_selected,
         recolour,
-        remote_open,
+        link_open,
         open_table,
         open_boxes,
         open_signature,
@@ -2313,9 +2311,25 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
     if let Some(notice) = app.views[index].session.comments.notice.take() {
         app.notify_tr(notice);
     }
-    if let Some((source, file, destination)) = remote_open {
-        app.open_remote_link(source, file, destination);
+    if let Some(open) = link_open {
+        open_link(app, ctx, open);
     }
+}
+
+/// Open the document a followed link or bookmark leads to ([`follow_link`]).
+pub(crate) fn open_link(app: &mut PdfCraftApp, ctx: &egui::Context, open: LinkOpen) {
+    match open {
+        LinkOpen::Remote(source, file, destination) => app.open_remote_link(source, file, destination),
+        LinkOpen::Embedded(doc, source, destination) => app.open_embedded_link(ctx, doc, source, destination),
+    }
+}
+
+/// A clicked link or bookmark that opens another document once the frame no longer borrows this one.
+pub(crate) enum LinkOpen {
+    /// A GoToR or Launch link: the document it is in, the file, and where in it to go.
+    Remote(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination),
+    /// A GoToE link: the document it is in, its attachment, and where in it to go.
+    Embedded(pdfcraft_engine::DocId, pdfcraft_render::AttachmentSource, pdfcraft_render::RemoteDestination),
 }
 
 pub(crate) mod page_box_drag;
