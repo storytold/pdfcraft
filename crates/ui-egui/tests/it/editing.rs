@@ -455,6 +455,111 @@ fn reverse_pages_reverses_the_selection_or_else_the_whole_document() {
 }
 
 #[test]
+fn reverse_pages_command_disabled_on_single_page_document() {
+    let mut h = harness(1, |_| ());
+    let spec = pdfcraft_engine::commands::command("page.reverse").unwrap();
+    assert!(!h.state().command_enabled(spec));
+    assert!(!h.execute("page.reverse"));
+    h.run_steps(2);
+    assert_eq!(support::shown_notice(&h).as_deref(), Some("Reversing pages requires at least two pages"));
+}
+
+#[test]
+fn reversing_selected_pages_keeps_a_draft_note_on_a_page_that_stays() {
+    let draft = |page| pdfcraft_ui_egui::comments::Composer {
+        page,
+        at: [100.0, 100.0],
+        kind: pdfcraft_ui_egui::comments::ComposerKind::Note,
+        text: "Draft".into(),
+        focus: false,
+    };
+    let mut h = organize(4);
+    h.get_by_label("Page 1").click();
+    h.run_steps(1);
+    h.get_by_label("Page 2").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    // Page 4 keeps its position when pages 1 and 2 swap, so its draft stays open.
+    h.state_mut().views[0].session.comments.composer = Some(draft(3));
+    assert!(h.execute("page.reverse"));
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()), ["Page 2", "Page 1", "Page 3", "Page 4"]);
+    assert_eq!(h.state().views[0].session.comments.composer.as_ref().map(|c| c.page), Some(3));
+    // A draft on a page that moved is cancelled, so it doesn't land on the other page.
+    h.state_mut().views[0].session.comments.composer = Some(draft(0));
+    assert!(h.execute("page.reverse"));
+    h.run_steps(3);
+    assert!(h.state().views[0].session.comments.composer.is_none());
+}
+
+#[test]
+fn deleting_a_page_cancels_a_draft_note_on_a_later_page_that_moves_up() {
+    let mut h = organize(4);
+    h.get_by_label("Page 1").click();
+    h.run_steps(2);
+    // Page 4 moves up to page 3 once page 1 goes, so its draft must not land on another page.
+    h.state_mut().views[0].session.comments.composer = Some(pdfcraft_ui_egui::comments::Composer {
+        page: 3,
+        at: [100.0, 100.0],
+        kind: pdfcraft_ui_egui::comments::ComposerKind::Note,
+        text: "Draft".into(),
+        focus: false,
+    });
+    assert!(h.execute("page.delete"));
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()), ["Page 2", "Page 3", "Page 4"]);
+    assert!(h.state().views[0].session.comments.composer.is_none());
+}
+
+#[test]
+fn reverse_pages_from_organize_panel_reverses_and_preserves_selection() {
+    let mut h = organize(3);
+    h.get_by_label("Reverse pages").click();
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()), ["Page 3", "Page 2", "Page 1"]);
+    assert_eq!(h.state().views[0].selected.items, [0, 1, 2]);
+}
+
+#[test]
+fn reverse_pages_from_thumbnail_context_menu() {
+    let mut h = organize(3);
+    h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::MenuItem, "Reverse pages").click();
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()), ["Page 3", "Page 2", "Page 1"]);
+    assert_eq!(h.state().views[0].selected.items, [0, 1, 2]);
+}
+
+#[test]
+fn reverse_pages_context_menu_disabled_on_single_page() {
+    let mut h = organize(1);
+    h.get_by_label("Page 1").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    assert!(h.get_by_role_and_label(Role::MenuItem, "Reverse pages").accesskit_node().is_disabled());
+}
+
+#[test]
+fn reverse_pages_from_pages_panel_context_menu() {
+    let mut h = harness(3, |app| app.set_option(&egui::Context::default(), "panel", "pages").unwrap());
+    let thumb = h.get_all_by_label("Page 2").max_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).unwrap();
+    thumb.click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::MenuItem, "Reverse pages").click();
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()), ["Page 3", "Page 2", "Page 1"]);
+    assert_eq!(h.state().views[0].selected.items, [0, 1, 2]);
+}
+
+#[test]
+fn reverse_pages_pages_panel_context_menu_disabled_on_single_page() {
+    let mut h = harness(1, |app| app.set_option(&egui::Context::default(), "panel", "pages").unwrap());
+    let thumb = h.get_all_by_label("Page 1").max_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).unwrap();
+    thumb.click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    assert!(h.get_by_role_and_label(Role::MenuItem, "Reverse pages").accesskit_node().is_disabled());
+}
+
+#[test]
 fn command_click_toggles_and_rotation_applies_to_selection() {
     let mut h = organize(3);
     h.get_by_label("Page 1").click();

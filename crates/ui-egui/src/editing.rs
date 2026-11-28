@@ -24,11 +24,17 @@ fn new_text_typed(v: &crate::DocView) -> bool {
 
 /// Clear an unfinished page-anchored drawing or composer when a page edit shifts or removes `page`.
 fn clear_shifted_page_comment_state(view: &mut crate::DocView, shifted_from: usize) {
+    clear_moved_page_comment_state(view, |page| page >= shifted_from);
+}
+
+/// Cancels the unfinished shape and the draft comment (not an edit) on a page `moved` says has
+/// changed position, so neither lands on the page that took its place.
+fn clear_moved_page_comment_state(view: &mut crate::DocView, moved: impl Fn(usize) -> bool) {
     // The shape being clicked out is on the tool's page.
-    if !view.session.comments.tool.drawing().is_empty() && view.session.comments.tool.page >= shifted_from {
+    if !view.session.comments.tool.drawing().is_empty() && moved(view.session.comments.tool.page) {
         view.session.comments.tool.cancel_drawing();
     }
-    if view.session.comments.composer.as_ref().is_some_and(|c| !matches!(c.kind, crate::comments::ComposerKind::Edit(_)) && c.page >= shifted_from) {
+    if view.session.comments.composer.as_ref().is_some_and(|c| !matches!(c.kind, crate::comments::ComposerKind::Edit(_)) && moved(c.page)) {
         view.session.comments.composer = None;
     }
 }
@@ -62,10 +68,16 @@ fn select_after_edit(
             view.select_pages(&[(*at).min(info.pages.len() - 1)]);
         }
         Edit::DeletePages { pages } => {
+            // Every page after the first deleted one moves up, so its draft would land elsewhere.
             if let Some(&first) = pages.iter().min() {
                 clear_shifted_page_comment_state(view, first);
             }
             view.clear_page_selection(None);
+        }
+        Edit::ReversePages { pages } => {
+            // Only the reversed pages move; the others keep their drafts.
+            clear_moved_page_comment_state(view, |page| pages.contains(&page));
+            view.select_pages(pages);
         }
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).

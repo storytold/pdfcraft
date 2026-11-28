@@ -130,11 +130,13 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let crop = info.pages.get(last).map_or([0.0, 0.0, 612.0, 792.0], |p| p.crop);
     let (w, h) = ((crop[2] - crop[0]).abs().max(1.0) as f64, (crop[3] - crop[1]).abs().max(1.0) as f64);
     let row = |icon, label, act, enabled, later, space| Line::Row { icon, label, act, enabled, later, space };
+    let can_reverse = editable && (view.selected.items.len() >= 2 || n >= 2);
     let mut lines = vec![
         // Production's Insert is one row that opens a menu of the three ways to insert.
         row("file-plus-2", "Insert", None, editable, false, false),
         row("replace", "Replace", Some(Act::View(ViewAction::ReplacePages)), editable, false, true),
         row("scissors", "Split", Some(Act::View(ViewAction::Split)), editable, false, false),
+        row("swap_vertical", "Reverse pages", Some(Act::Command("page.reverse")), can_reverse, false, false),
         row("hash", "Bates numbering", Some(Act::Command("edit.bates")), true, false, false),
         row("square-dashed-mouse-pointer", "Set page boxes", Some(Act::Command("page.boxes")), true, false, true),
         row("crop", "Crop pages", Some(Act::Command("page.crop")), true, false, false),

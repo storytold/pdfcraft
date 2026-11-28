@@ -111,6 +111,9 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
             if MenuItem::new(tl!("Replace pages…")).enabled(editable).show(ui).ran {
                 view.pending_action = Some(crate::canvas::ViewAction::ReplacePages);
             }
+            if MenuItem::new(tl!("Reverse pages")).enabled(editable && (view.selected.items.len() >= 2 || count >= 2)).show(ui).ran {
+                result.command = Some("page.reverse");
+            }
             if MenuItem::new(tl!("Cut")).enabled(editable).show(ui).ran {
                 view.pending_action = Some(crate::canvas::ViewAction::CopyPages { cut: true });
             }
