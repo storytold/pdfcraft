@@ -131,6 +131,23 @@ pub(crate) fn editor_signatures(
     }
 }
 
+/// [`editor_signatures`] of the document `editor` shows (its file `bytes`), or of the signed file
+/// when what is shown was reconciled with its XFA packets for display only
+/// ([`crate::Document::shown_not_saved`]): nothing of that is in the file, so the signatures are
+/// as signed.
+pub(crate) fn shown_signatures(
+    shown: Option<&crate::document::ShownOnly>,
+    editor: &crate::history::Editor,
+    bytes: &[u8],
+    trust: &TrustStore,
+    cache: &pdfcraft_sign::DigestCache,
+) -> Vec<SignatureInfo> {
+    match shown {
+        Some(s) => signatures_of(&s.signed, s.signed.bytes(), trust, cache),
+        None => editor_signatures(editor, bytes, trust, cache),
+    }
+}
+
 /// What Optimize PDF did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OptimizeReport {

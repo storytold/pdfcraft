@@ -76,6 +76,48 @@ pub struct Document {
     /// applied redactions left that still hold the removed text. The interface shows it; tools
     /// return it.
     pub edit_notices: Vec<EditNotice>,
+    /// A form certified with no changes allowed (DocMDP `/P` 1) that opening laid out from its XFA
+    /// template, or gave the values of its XFA data, for display only: what it shows is that
+    /// form, while the signed file is the only one it may be saved as, so edits and saves are
+    /// refused ([`Document::check_certification`], [`Document::check_saving`]).
+    pub(crate) shown_not_saved: Option<ShownOnly>,
+}
+
+/// A form opening reconciled with its XFA packets for display only ([`Document::shown_not_saved`]).
+pub(crate) struct ShownOnly {
+    /// What opening did to show it.
+    pub(crate) kind: ShownNotSaved,
+    /// The file as signed: its signatures are validated on it, as it is the only file the
+    /// document can be saved as ([`crate::doc_state::shown_signatures`]).
+    pub(crate) signed: pdfcraft_cos::Document,
+}
+
+/// What opening a form certified with no changes allowed did to show it, and keeps out of the
+/// file ([`Document::shown_not_saved`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShownNotSaved {
+    /// A dynamic XFA form with no layout yet was laid out from its template.
+    Layout,
+    /// The fields were given the values of the form's XFA data.
+    Data,
+}
+
+impl ShownNotSaved {
+    /// The change an edit would save with it, for [`EditError::Certified`].
+    fn edited(self) -> &'static str {
+        match self {
+            Self::Layout => "a change saved with the pages laid out from its XFA template",
+            Self::Data => "a change saved with the field values taken from its XFA data",
+        }
+    }
+
+    /// The change saving would make, for [`EditError::Certified`].
+    fn saved(self) -> &'static str {
+        match self {
+            Self::Layout => "saving the pages laid out from its XFA template",
+            Self::Data => "saving the field values taken from its XFA data",
+        }
+    }
 }
 
 /// Something the last successful edit did that the user should hear about, never left silent
@@ -513,6 +555,39 @@ impl Document {
     /// Signed: at least one signature field holds a signature.
     pub fn is_signed(&self) -> bool {
         self.signatures.iter().any(|s| s.signed)
+    }
+
+    /// The DocMDP permissions (`/P`, 1 to 3) of the document's signed certification: the
+    /// signature its catalog's `/Perms /DocMDP` named when it was signed (ISO 32000-2
+    /// §12.8.2.2.1). The strictest, should a damaged file have more than one; `None` without one.
+    pub fn certification(&self) -> Option<u8> {
+        self.signatures.iter().filter(|s| s.signed).filter_map(|s| s.certify).min()
+    }
+
+    /// Refuse `edit` when the document's certification doesn't permit it (Table 257): a
+    /// certification named from `/Perms /DocMDP` prevents those changes as well as detecting
+    /// them. [`crate::Session::apply`] checks every edit here before applying it.
+    ///
+    /// A form opening showed reconciled with its XFA packets under a certification that allows
+    /// no changes ([`Document::shown_not_saved`]) refuses every edit, document information too:
+    /// saving it would write the reconciled form into the signed file.
+    pub fn check_certification(&self, edit: &Edit) -> Result<(), EditError> {
+        self.certification().map_or(Ok(()), |level| crate::edit::check_certification(edit, level))?;
+        match self.shown_not_saved.as_ref() {
+            Some(shown) => Err(EditError::Certified { level: 1, what: shown.kind.edited() }),
+            None => Ok(()),
+        }
+    }
+
+    /// Refuse writing the document as it is shown (Save, Save As, signing, a document timestamp,
+    /// embedding revocation data) when opening reconciled it with its XFA packets under a
+    /// certification that allows no changes (ISO 32000-2 Table 257): that file would carry the
+    /// laid-out pages or the field values, a change the certification forbids.
+    pub fn check_saving(&self) -> Result<(), EditError> {
+        match self.shown_not_saved.as_ref() {
+            Some(shown) => Err(EditError::Certified { level: 1, what: shown.kind.saved() }),
+            None => Ok(()),
+        }
     }
 
     /// Whether comments are hidden (Comments ▸ Hide all comments).

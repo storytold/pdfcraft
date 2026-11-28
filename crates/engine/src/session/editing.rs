@@ -2,8 +2,8 @@
 use super::check_refresh_panic;
 use super::{
     Arc, DocId, Document, Edit, EditCtx, EditError, Label, MAX_UNDO, ObjectKind, OnceLock, RenderPool, SaveOptions, Scope, Session,
-    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, editor_signatures,
-    guard, info_fields, inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions,
+    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, guard, info_fields,
+    inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_signatures, shown_under_redactions,
     sync_xfa_state, undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets,
 };
 use crate::{EditNotice, MarkKind, print_preview_layers};
@@ -34,6 +34,33 @@ fn prepare_ocr_text_edit(editor: &mut crate::history::Editor, info: &pdfcraft_re
         }
         other => other,
     })
+}
+
+/// What a widget of `before`'s form has changed of where it sits or whether it shows in `after`:
+/// another `/Rect`, or another `/F` (hidden, printed, locked…), which the signature check counts
+/// as a change to the page, not a form fill. `None` when every widget kept both.
+fn widgets_moved(before: &pdfcraft_cos::Document, after: &pdfcraft_cos::Document) -> Option<&'static str> {
+    let was = widget_places(before);
+    let (mut moved, mut shown) = (false, false);
+    for (obj, (rect, flags)) in widget_places(after) {
+        if let Some((r, f)) = was.get(&obj) {
+            moved |= *r != rect;
+            shown |= *f != flags;
+        }
+    }
+    if moved {
+        Some("moving or resizing form fields")
+    } else if shown {
+        Some("hiding or showing form fields")
+    } else {
+        None
+    }
+}
+
+/// Each widget of `doc`'s form: its `/Rect` and its `/F` (`None` when it has none).
+fn widget_places(doc: &pdfcraft_cos::Document) -> std::collections::HashMap<pdfcraft_cos::ObjRef, ([f64; 4], Option<i64>)> {
+    let flags = |obj| doc.get(obj).as_dict().and_then(|d| d.get(b"F")).and_then(|f| doc.resolve(f).as_int());
+    pdfcraft_forms::fields(doc).into_iter().flat_map(|f| f.widgets.into_iter().map(|w| (w.obj, (w.rect, flags(w.obj))))).collect()
 }
 
 /// Whether the edit, or any edit inside a batch, deletes pages.
@@ -122,6 +149,32 @@ fn sync_script_history(doc: &Document, previous: &pdfcraft_cos::Document, restor
     }
 }
 
+/// Renamed fields are said, not slipped in: a repair-log note in `next` (with the caveat that
+/// scripts were left alone) and a count in the undo step's label, which it gives back.
+fn note_renamed_fields(next: &mut pdfcraft_cos::Document, edit: &Edit, renamed: &[(String, String)]) -> Label {
+    if !renamed.is_empty() {
+        let shown: Vec<String> = renamed.iter().take(5).map(|(old, new)| format!("{old} → {new}")).collect();
+        let more = renamed.len().saturating_sub(shown.len());
+        let more = if more > 0 { format!(", and {more} more") } else { String::new() };
+        next.note_repair(format!(
+            "inserted pages renamed {} form field{} to keep their names separate ({}{more}); scripts that refer to the old names were not rewritten",
+            renamed.len(),
+            if renamed.len() == 1 { "" } else { "s" },
+            shown.join(", ")
+        ));
+    }
+    // Only Insert from File renames fields; its label says so in a wording the interface
+    // translates (the count lives in the repair note).
+    match (edit, renamed.len()) {
+        (_, 0) => edit.label(),
+        (Edit::InsertPagesFrom { name, .. }, n) => Label::with(
+            if n == 1 { "Insert pages from {name} — 1 field renamed" } else { "Insert pages from {name} — fields renamed" },
+            name.as_str(),
+        ),
+        _ => edit.label(),
+    }
+}
+
 impl Session {
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
@@ -164,10 +217,13 @@ impl Session {
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
+        let certified = doc.check_certification(&edit);
+        cx.certification = doc.certification();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
         if let Some(p) = editor.cos.permissions() {
             check_permission(&edit, &p)?;
         }
+        certified?;
         let Some(edit) = prepare_ocr_text_edit(editor, &doc.info, edit) else {
             return Ok(None);
         };
@@ -216,34 +272,7 @@ impl Session {
                 .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))
                 .inspect_err(|_| discard_edit_callbacks(&cx))?;
         }
-        // Renamed fields are said, not slipped in: a repair-log note (with the caveat that
-        // scripts were left alone) and a count in the undo step's label.
-        let renamed_note = |renamed: &[(String, String)]| {
-            (!renamed.is_empty()).then(|| {
-                let shown: Vec<String> = renamed.iter().take(5).map(|(old, new)| format!("{old} → {new}")).collect();
-                let more = renamed.len().saturating_sub(shown.len());
-                let more = if more > 0 { format!(", and {more} more") } else { String::new() };
-                format!(
-                    "inserted pages renamed {} form field{} to keep their names separate ({}{more}); scripts that refer to the old names were not rewritten",
-                    renamed.len(),
-                    if renamed.len() == 1 { "" } else { "s" },
-                    shown.join(", ")
-                )
-            })
-        };
-        if let Some(note) = renamed_note(&cx.renamed_fields) {
-            next.note_repair(note);
-        }
-        // Only Insert from File renames fields; its label says so in a wording the interface
-        // translates (the count lives in the repair note).
-        let label = match (&edit, cx.renamed_fields.len()) {
-            (_, 0) => edit.label(),
-            (Edit::InsertPagesFrom { name, .. }, n) => Label::with(
-                if n == 1 { "Insert pages from {name} — 1 field renamed" } else { "Insert pages from {name} — fields renamed" },
-                name.as_str(),
-            ),
-            _ => edit.label(),
-        };
+        let label = note_renamed_fields(&mut next, &edit, &cx.renamed_fields);
         // An XFA form's scripts answer the change: exit and validate scripts of the field, then
         // every calculation (and a reset recalculates). They read the data, so it is brought up
         // to date first. The fields whose exit scripts ran are noted once the edit is kept.
@@ -278,6 +307,7 @@ impl Session {
                     ran_away: false,
                     highlight,
                     time_scale: cx.xfa_time_scale,
+                    keep_layout: cx.certification.is_some(),
                     relaid: false,
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
@@ -315,7 +345,18 @@ impl Session {
                 .map_err(EditError::Write)
                 .inspect_err(|_| discard_edit_callbacks(&cx))?;
             // Rebuilding from stale data would discard accepted widget values.
-            if xfa_notes.is_empty() {
+            if xfa_notes.is_empty() && cx.certification.is_some() {
+                // Under a certification the form is not laid out again: that replaces pages and
+                // widgets, which no level allows (ISO 32000-2 Table 257). The signed pages are
+                // kept; the value is in the field and the data.
+                let needed = guard(|| xfa::relayout_needed(&next, tpl, &doc.form))
+                    .unwrap_or_else(|m| Err(format!("laying out the XFA text failed unexpectedly ({m})")))
+                    .map_err(EditError::Write)
+                    .inspect_err(|_| discard_edit_callbacks(&cx))?;
+                if needed {
+                    xfa_notes.push(xfa::LAYOUT_KEPT.to_string());
+                }
+            } else if xfa_notes.is_empty() {
                 let reflow = guard(|| xfa::relayout_changed_text(&mut next, tpl, &doc.form))
                     .unwrap_or_else(|m| Err(format!("laying out the XFA text failed unexpectedly ({m})")))
                     .map_err(EditError::Write)
@@ -336,6 +377,15 @@ impl Session {
         // unsigned files in full. Signed files must retain their signed bytes.
         if !signed && deletes_pages(&edit) {
             next.require_full_save();
+        }
+        // A script run by a fill (a value's callbacks, or the changes it handed back) can move,
+        // resize, hide or show a field's widget, which changes the page it is on: no
+        // certification allows that (ISO 32000-2 Table 257). Checked on what the edit did, whatever ran it.
+        if let Some(level) = cx.certification
+            && let Some(what) = widgets_moved(&editor.cos, &next)
+        {
+            discard_edit_callbacks(&cx);
+            return Err(EditError::Certified { level, what });
         }
         let rewrites = |c: &pdfcraft_cos::Document| c.full_save_required() || c.encryption_changed();
         if signed && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {
@@ -538,7 +588,7 @@ impl Session {
             #[cfg(test)]
             check_refresh_panic();
             if !doc.signatures.is_empty() {
-                let mut signatures = editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache);
+                let mut signatures = shown_signatures(doc.shown_not_saved.as_ref(), editor, &bytes, &doc.trust, &doc.sig_cache);
                 // The display copy is kept for a metadata edit, and so are its marks, unless the
                 // edit changed a verdict (a certification can forbid it): the page then draws the
                 // new one.
@@ -589,7 +639,11 @@ impl Session {
         }
         doc.info.file_size = bytes.len();
         doc.form = form;
-        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache) };
+        let mut signatures = if doc.signatures.is_empty() {
+            Vec::new()
+        } else {
+            shown_signatures(doc.shown_not_saved.as_ref(), editor, &bytes, &doc.trust, &doc.sig_cache)
+        };
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
@@ -654,7 +708,11 @@ impl Session {
             doc.marker_scan = OnceLock::new();
         }
         doc.info.file_size = bytes.len();
-        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache) };
+        let mut signatures = if doc.signatures.is_empty() {
+            Vec::new()
+        } else {
+            shown_signatures(doc.shown_not_saved.as_ref(), editor, &bytes, &doc.trust, &doc.sig_cache)
+        };
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
@@ -762,7 +820,7 @@ impl Session {
         if invalidate_links {
             doc.links = OnceLock::new();
         }
-        let mut signatures = editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache);
+        let mut signatures = shown_signatures(doc.shown_not_saved.as_ref(), editor, &bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
@@ -788,6 +846,7 @@ fn rerun_layout_ready(next: &mut pdfcraft_cos::Document, cx: &mut EditCtx) {
         ran_away: false,
         highlight,
         time_scale: cx.xfa_time_scale,
+        keep_layout: cx.certification.is_some(),
         relaid: false,
     };
     let ran = guard(|| xfa::on_layout(next, &tpl, &mut run)).unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
