@@ -1,3 +1,5 @@
+use craft_pdf::interpret::hayro_cmap::CidFamily;
+
 #[cfg(not(target_arch = "wasm32"))]
 fn render_gate(page: usize, shared_generation: bool) -> super::RenderGate {
     let barrier = || std::sync::Arc::new(std::sync::Barrier::new(2));
@@ -10394,7 +10396,7 @@ fn ink_and_text(pdf: Vec<u8>) -> (usize, String) {
 
 /// Whether some craft-fonts face is for a Han script, so CJK text has a face to draw in.
 fn has_han_face() -> bool {
-    pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| ["Hans", "Hant", "Jpan", "Kore"].iter().any(|s| f.covers(s)))
+    pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| ["Hans", "Hant", "Jpan", "Kore"].iter().any(|s| f.has_script(s)))
 }
 
 /// #5329: Simplified Chinese in a CID font of the Adobe-GB1 collection that isn't embedded
@@ -10450,7 +10452,7 @@ fn non_embedded_korean_and_traditional_chinese_cid_fonts_draw() {
     for (base_font, encoding, ordering, codes, expected, script) in cases {
         let (inked, text) = ink_and_text(non_embedded_cid_pdf(base_font, encoding, "CIDFontType0", ordering, "", codes, None));
         assert_eq!(text, expected, "{base_font}: the text layer");
-        let has_face = if script == "Kore" { pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.covers("Kore")) } else { has_han_face() };
+        let has_face = if script == "Kore" { pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.has_script("Kore")) } else { has_han_face() };
         if !has_face {
             eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): no {script} face to check");
             continue;

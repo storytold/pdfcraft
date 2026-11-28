@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with the SHA-256 of every asset, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (137)
+## In this repository (152)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -145,7 +145,21 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `assets/icons/move-horizontal.svg` | Lucide icon "move-horizontal" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/move-horizontal.svg) | UI icon, embedded via crates/ui-egui/src/icons.rs |
 | `assets/icons/panel-left.svg` | Lucide icon "panel-left" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/panel-left.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/panel-right.svg` | Lucide icon "panel-right" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/panel-right.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
-
+| `vendor/hayro-interpret/assets/FoxitDingbats.pfb` | FoxitDingbats (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Standard-14 substitute font in vendored hayro-interpret |
+| `vendor/hayro-interpret/assets/FoxitFixed.pfb` | FoxitFixed (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Standard-14 substitute font in vendored hayro-interpret |
+| `vendor/hayro-interpret/assets/FoxitFixedBold.pfb` | FoxitFixedBold (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Standard-14 substitute font in vendored hayro-interpret |
+| `vendor/hayro-interpret/assets/FoxitFixedBoldItalic.pfb` | FoxitFixedBoldItalic (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Standard-14 substitute font in vendored hayro-interpret |
+| `vendor/hayro-interpret/assets/FoxitFixedItalic.pfb` | FoxitFixedItalic (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Standard-14 substitute font in vendored hayro-interpret |
+| `vendor/hayro-interpret/assets/FoxitSans.pfb` | FoxitSans (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Standard-14 substitute font in vendored hayro-interpret |
+| `vendor/hayro-interpret/assets/FoxitSansBold.pfb` | FoxitSansBold (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Standard-14 substitute font in vendored hayro-interpret |
+| `vendor/hayro-interpret/assets/FoxitSansBoldItalic.pfb` | FoxitSansBoldItalic (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Standard-14 substitute font in vendored hayro-interpret |
+| `vendor/hayro-interpret/assets/FoxitSansItalic.pfb` | FoxitSansItalic (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Standard-14 substitute font in vendored hayro-interpret |
+| `vendor/hayro-interpret/assets/FoxitSerif.pfb` | FoxitSerif (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Standard-14 substitute font in vendored hayro-interpret |
+| `vendor/hayro-interpret/assets/FoxitSerifBold.pfb` | FoxitSerifBold (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Standard-14 substitute font in vendored hayro-interpret |
+| `vendor/hayro-interpret/assets/FoxitSerifBoldItalic.pfb` | FoxitSerifBoldItalic (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Standard-14 substitute font in vendored hayro-interpret |
+| `vendor/hayro-interpret/assets/FoxitSerifItalic.pfb` | FoxitSerifItalic (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Standard-14 substitute font in vendored hayro-interpret |
+| `vendor/hayro-interpret/assets/FoxitSymbol.pfb` | FoxitSymbol (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Standard-14 substitute font in vendored hayro-interpret |
+| `vendor/hayro-interpret/assets/CGATS001Compat-v2-micro.icc` | CGATS001Compat v2 micro ICC profile | Clinton Ingram (saucecontrol/Compact-ICC-Profiles) | CC0-1.0 | https://github.com/saucecontrol/Compact-ICC-Profiles | Default CMYK colour conversion in vendored hayro-interpret |
 ## Compiled in through dependencies (24)
 
 | Crate | File | Title | Author | Licence | Source | Used for |
