@@ -144,7 +144,7 @@ fn clean(path: &str) -> Option<String> {
     if path.is_empty() || path.chars().count() > MAX_PATH_CHARS || path.contains('\0') {
         return None;
     }
-    let trimmed = path.trim_end_matches(['/', '\\']);
+    let trimmed = path.trim_end_matches(std::path::is_separator);
     // The file system root ("/") keeps its separator, as does a Windows drive root ("C:\").
     let path = if trimmed.is_empty() || trimmed.ends_with(':') { path } else { trimmed };
     std::path::Path::new(path).is_absolute().then(|| path.to_string())
@@ -398,6 +398,14 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_name_on_unix_can_end_with_a_backslash() {
+        let folder = "/tmp/scans\\";
+        assert_eq!(clean(folder).as_deref(), Some(folder));
+        assert_eq!(clean("/tmp/scans\\/").as_deref(), Some(folder));
+    }
+
     #[test]
     fn locations_are_said_in_words() {
         let home = Some(std::path::Path::new("/Users/me"));
