@@ -142,6 +142,10 @@ pub fn is_group_subordinate(d: &Dict) -> bool {
     d.name(b"RT") == Some(b"Group") && d.reference(b"IRT").is_some()
 }
 
+/// How far a group subordinate's `/IRT` chain is followed to its primary: the comment list's
+/// limit (`pdfcraft_render::MAX_GROUP_DEPTH`), so a restyle reaches the group the list shows.
+pub(crate) const MAX_GROUP_DEPTH: usize = 64;
+
 /// Every comment (see [`is_comment_subtype`]), ordered by page and then top edge.
 pub fn summaries(doc: &Document) -> Vec<Summary> {
     let mut out = Vec::new();
