@@ -1,6 +1,6 @@
 //! Corner rotation belongs to one document generation. Only release commits an edit;
 //! Escape, focus loss, a modal or another edit cancels the preview.
-use crate::canvas::{DocView, PageXform};
+use crate::canvas::{PageSession, PageXform};
 use egui::{Color32, Pos2, Rect, Stroke};
 use pdfcraft_engine::{Document, Edit, EditableObject, ObjectKind, ObjectTarget};
 
@@ -34,24 +34,23 @@ enum DragMode {
 }
 
 /// Apply pending text first, then start a gesture only against a current object inventory.
-fn start_gesture(view: &mut DocView, doc: &Document, gesture: Gesture) {
-    if view.content.hold_blocked() {
+fn start_gesture(session: &mut PageSession, doc: &Document, gesture: Gesture) {
+    if session.content.hold_blocked() {
         return;
     }
     // Apply a draft first: that edit can renumber the inventory. Never transform stale targets.
-    if let Some(edit) = view.content.finish_draft(doc.added()) {
-        view.pending_edit = Some(edit);
+    if let Some(edit) = session.content.finish_draft(doc.added()) {
+        session.pending_edit = Some(edit);
         return;
     }
-    if let Some(e) = view.line_editor.take()
+    if let Some(e) = session.line_editor.take()
         && e.has_changes()
     {
         let style = e.style();
-        view.pending_edit = Some(Edit::EditTextBlock { page: e.page, block: e.block, text: e.text, style });
+        session.pending_edit = Some(Edit::EditTextBlock { page: e.page, block: e.block, text: e.text, style });
         return;
     }
-    view.block_drag = None;
-    view.object_rotation.gesture = Some(gesture);
+    session.object_rotation.gesture = Some(gesture);
 }
 
 /// Uniform screen-space scaling around the opposite corner, with no jump for an off-center press.
@@ -169,20 +168,22 @@ fn arrow(painter: &egui::Painter, at: Pos2, hot: bool, orientation: f32) {
 }
 
 /// Resolve the active editor or Select-tool hit to one current editable object.
-fn selected_target(view: &DocView, doc: &Document, page: usize) -> Option<ObjectTarget> {
-    view.content
+fn selected_target(session: &PageSession, doc: &Document, page: usize) -> Option<ObjectTarget> {
+    session
+        .content
         .selected
         .filter(|(p, _)| *p == page)
         .map(|(_, i)| ObjectTarget { kind: ObjectKind::Added, index: i })
         .or_else(|| {
-            view.image_selection
+            session
+                .image_selection
                 .as_ref()
                 .filter(|s| s.page == page && s.crop.is_none())
                 .map(|s| ObjectTarget { kind: ObjectKind::Image, index: s.index })
         })
-        .or_else(|| view.line_editor.as_ref().filter(|e| e.page == page).map(|e| ObjectTarget { kind: ObjectKind::Text, index: e.block }))
+        .or_else(|| session.line_editor.as_ref().filter(|e| e.page == page).map(|e| ObjectTarget { kind: ObjectKind::Text, index: e.block }))
         .or_else(|| {
-            view.picked_image.filter(|p| p.page == page && p.generation == doc.edit_generation()).map(|p| {
+            session.picked_image.filter(|p| p.page == page && p.generation == doc.edit_generation()).map(|p| {
                 let owner = doc.page_images(page).get(p.index).and_then(|image| image.content_stream);
                 doc.added()
                     .iter()
@@ -197,48 +198,48 @@ fn selected_target(view: &DocView, doc: &Document, page: usize) -> Option<Object
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn page_input(
     ui: &egui::Ui,
-    resp: &egui::Response,
+    id: egui::Id,
     xf: &PageXform,
     page: usize,
     doc: &Document,
-    view: &mut DocView,
+    session: &mut PageSession,
     select_tool: bool,
     editing_content: bool,
 ) -> bool {
     // Preserve the existing move renderer and its release/settling state once it owns a drag.
-    if view.content.dragging(page) {
+    if session.content.dragging(page) {
         return false;
     }
-    if view.image_selection.as_ref().is_some_and(|s| s.page == page && s.crop.is_some()) {
-        view.object_rotation.gesture = None;
-        view.object_rotation.selected = None;
+    if session.image_selection.as_ref().is_some_and(|s| s.page == page && s.crop.is_some()) {
+        session.object_rotation.gesture = None;
+        session.object_rotation.selected = None;
         return false;
     }
-    if view.objects.count() > 1 || !ui.input(|i| i.focused) {
+    if session.objects.count() > 1 || !ui.input(|i| i.focused) {
         return false;
     }
-    let single = selected_target(view, doc, page);
+    let single = selected_target(session, doc, page);
     if let Some(target) = single {
-        view.object_rotation.selected = Some((page, target));
+        session.object_rotation.selected = Some((page, target));
     }
-    let Some((_, target)) = view.object_rotation.selected.filter(|(p, _)| *p == page) else { return false };
-    let Some(object) = view.object_rotation.cached_object(doc, page, target) else { return false };
+    let Some((_, target)) = session.object_rotation.selected.filter(|(p, _)| *p == page) else { return false };
+    let Some(object) = session.object_rotation.cached_object(doc, page, target) else { return false };
     let bounds = xf.user_rect(&doc.info, page, object.rect.map(|v| v as f32));
     if !bounds.is_finite() || bounds.width() < 1.0 || bounds.height() < 1.0 {
         return false;
     }
     let pointer = ui.input(|i| i.pointer.interact_pos());
-    let dragging = view.object_rotation.gesture.as_ref().is_some_and(|g| g.page == page);
+    let dragging = session.object_rotation.gesture.as_ref().is_some_and(|g| g.page == page);
     let mut owns = dragging;
     if !dragging {
         // The text editor, image selection and added-content tools already paint a frame.
-        if single.is_none() || select_tool && view.picked_image.is_none() {
+        if single.is_none() || select_tool && session.picked_image.is_none() {
             ui.painter().rect_stroke(bounds, 0, Stroke::new(1.0, BLUE), egui::StrokeKind::Outside);
         }
         for (corner, at) in handles(bounds).into_iter().enumerate() {
             let hit = ui.interact(
                 Rect::from_center_size(at, egui::vec2(REACH * 2.0, REACH * 2.0)),
-                resp.id.with(("rotate-corner", target.kind.as_str(), target.index, corner)),
+                id.with(("rotate-corner", target.kind.as_str(), target.index, corner)),
                 egui::Sense::drag(),
             );
             arrow(ui.painter(), at, hit.hovered() || hit.dragged(), corner as f32 * 90.0);
@@ -253,7 +254,7 @@ pub(crate) fn page_input(
             owns |= hit.hovered() || hit.is_pointer_button_down_on();
             if pressed && let Some(start) = pointer {
                 start_gesture(
-                    view,
+                    session,
                     doc,
                     Gesture { page, object: target, start, rect: bounds, degrees: 0.0, mode: DragMode::Rotate, preview: bounds },
                 );
@@ -263,11 +264,11 @@ pub(crate) fn page_input(
     // Existing edit-mode image grips keep their pixel preview. Text corners scale glyphs
     // instead of merely rewrapping the paragraph. Select-tool objects use these same gestures.
     let scale_here = select_tool || single.is_none() || object.content_type == "text";
-    if !dragging && view.object_rotation.gesture.is_none() && scale_here {
+    if !dragging && session.object_rotation.gesture.is_none() && scale_here {
         for (corner, at) in corners(bounds).into_iter().enumerate() {
             let hit = ui.interact(
                 Rect::from_center_size(at, egui::vec2(16.0, 16.0)),
-                resp.id.with(("scale-corner", target.kind.as_str(), target.index, corner)),
+                id.with(("scale-corner", target.kind.as_str(), target.index, corner)),
                 egui::Sense::drag(),
             );
             scale_handle(ui.painter(), at);
@@ -284,7 +285,7 @@ pub(crate) fn page_input(
             {
                 let fixed = corners(bounds)[(corner + 2) % 4];
                 start_gesture(
-                    view,
+                    session,
                     doc,
                     Gesture { page, object: target, start, rect: bounds, degrees: 0.0, mode: DragMode::Scale { fixed }, preview: bounds },
                 );
@@ -304,14 +305,14 @@ pub(crate) fn page_input(
         if pointer.is_some_and(inside) && !ui.input(|i| i.pointer.secondary_down()) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
         }
-        if resp.drag_started_by(egui::PointerButton::Primary)
-            && let Some(start) = ui.input(|i| i.pointer.press_origin()).filter(|p| inside(*p))
+        if ui.input(|i| i.pointer.primary_pressed())
+            && let Some(start) = pointer.filter(|p| inside(*p))
         {
             owns = true;
-            start_gesture(view, doc, Gesture { page, object: target, start, rect: bounds, degrees: 0.0, mode: DragMode::Move, preview: bounds });
+            start_gesture(session, doc, Gesture { page, object: target, start, rect: bounds, degrees: 0.0, mode: DragMode::Move, preview: bounds });
         }
     }
-    if let Some(g) = view.object_rotation.gesture.as_mut().filter(|g| g.page == page) {
+    if let Some(g) = session.object_rotation.gesture.as_mut().filter(|g| g.page == page) {
         owns = true;
         if let Some(now) = pointer {
             match g.mode {
@@ -344,7 +345,7 @@ pub(crate) fn page_input(
         }
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         if !ui.input(|i| i.pointer.primary_down())
-            && let Some(g) = view.object_rotation.gesture.take()
+            && let Some(g) = session.object_rotation.gesture.take()
         {
             let edit = match g.mode {
                 DragMode::Rotate if g.degrees.abs() > 0.01 => Some(Edit::RotateObject { page, object: g.object, degrees: f64::from(g.degrees) }),
@@ -367,12 +368,12 @@ pub(crate) fn page_input(
                 _ => None,
             };
             if edit.is_some() {
-                view.object_rotation.pending = Some((page, object));
-                view.pending_edit = edit;
+                session.object_rotation.pending = Some((page, object));
+                session.pending_edit = edit;
             }
         }
-    } else if resp.clicked() && pointer.is_some_and(|p| !bounds.contains(p)) && !owns {
-        view.object_rotation.selected = None;
+    } else if ui.input(|i| i.pointer.primary_clicked()) && pointer.is_some_and(|p| !bounds.contains(p)) && !owns {
+        session.object_rotation.selected = None;
     }
     owns
 }
@@ -401,18 +402,21 @@ mod tests {
     /// Main's control cancellation must discard a pending transform before button cleanup.
     #[test]
     fn control_cancellation_discards_corner_rotation() {
-        let mut app = crate::PdfCraftApp::new();
-        app.run_inline = true;
+        let ctx = egui::Context::default();
+        let mut app = crate::PdfCraftApp::for_unit_tests();
         let bytes = app.session.create_blank(300.0, 400.0, 1).unwrap();
-        app.open_bytes("rotation-cancel.pdf", None, bytes.as_ref().clone()).unwrap();
-        assert!(app.apply_edit(Edit::AddText {
-            page: 0,
-            text: pdfcraft_engine::AddedText { text: "Cancel rotation".into(), rect: [20.0, 30.0, 180.0, 60.0], ..Default::default() }
-        }));
+        app.open_bytes(&ctx, "rotation-cancel.pdf", None, bytes.as_ref().clone()).unwrap();
+        assert!(app.apply_edit(
+            &ctx,
+            Edit::AddText {
+                page: 0,
+                text: pdfcraft_engine::AddedText { text: "Cancel rotation".into(), rect: [20.0, 30.0, 180.0, 60.0], ..Default::default() }
+            }
+        ));
         let id = app.views[0].id;
         let generation = app.session.get(id).unwrap().edit_generation();
         let rect = Rect::from_min_max(Pos2::new(20.0, 30.0), Pos2::new(180.0, 60.0));
-        app.views[0].object_rotation.gesture = Some(Gesture {
+        app.views[0].session.object_rotation.gesture = Some(Gesture {
             page: 0,
             object: ObjectTarget { kind: ObjectKind::Added, index: 0 },
             start: rect.left_top(),
@@ -421,8 +425,8 @@ mod tests {
             mode: DragMode::Rotate,
             preview: rect,
         });
-        crate::control::Host::cancel_pointer_gestures(&mut app);
-        assert!(app.views[0].object_rotation.gesture.is_none());
+        app.views[0].cancel_pointer_gestures(&ctx);
+        assert!(app.views[0].session.object_rotation.gesture.is_none());
         assert_eq!(app.session.get(id).unwrap().edit_generation(), generation);
         assert_eq!(app.session.get(id).unwrap().added()[0].rotation, 0.0);
     }

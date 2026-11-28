@@ -112,6 +112,11 @@ pub(crate) fn form_fonts_as_objects(doc: &mut Document, all: &[crate::Field]) ->
     Ok(())
 }
 
+/// Whether `d` has a non-null entry `key` (a `null` entry is absent per ISO 32000-2 §7.3.9).
+fn dict_has(doc: &Document, d: &Dict, key: &[u8]) -> bool {
+    d.get(key).is_some_and(|v| !matches!(*doc.resolve(v), Object::Null))
+}
+
 /// Whether the field `r`, or the nearest ancestor that has one, holds a `/V` (the entry is
 /// inheritable, ISO 32000-2 §12.7.4). The `/Parent` chain is followed at most 64 deep, as deep
 /// as the field walk goes, so a cyclic chain ends.
@@ -120,7 +125,7 @@ fn holds_value(doc: &Document, r: ObjRef) -> bool {
     for _ in 0..=64 {
         let obj = doc.get(at);
         let Some(d) = obj.as_dict() else { return false };
-        if d.contains(b"V") {
+        if dict_has(doc, d, b"V") {
             return true;
         }
         match d.reference(b"Parent") {
@@ -160,8 +165,8 @@ fn add_to_fields(doc: &mut Document, af: ObjRef, field: ObjRef) -> Result<(), Fo
 /// The most parts a dotted field name may have ("a.b.c" has three).
 const MAX_NAME_PARTS: usize = 32;
 
-/// The field attributes a field inherits from its parents (ISO 32000-2 §12.7.4.1).
-const INHERITED_KEYS: [&[u8]; 7] = [b"FT", b"Ff", b"V", b"DV", b"DA", b"Q", b"MaxLen"];
+/// The field attributes a field inherits from its parents (ISO 32000-2 §12.7.4.1, §12.7.5.2).
+const INHERITED_KEYS: [&[u8]; 8] = [b"FT", b"Ff", b"V", b"DV", b"DA", b"Q", b"MaxLen", b"Opt"];
 
 /// The parts of a full field name: `a.b` is the field `b` under the parent field `a`, since a
 /// field's own (partial) name can't contain a period (ISO 32000-2 §12.7.4.2) (#2696).
@@ -234,7 +239,7 @@ pub(super) fn check_place(doc: &Document, af: ObjRef, field: ObjRef, parts: &[&s
             break;
         };
         // A value, reset value or length limit held by a parent would pass to this field.
-        let held = doc.get(r).as_dict().is_some_and(|d| PASSED_VALUES.iter().any(|k| d.contains(k) && !owned.contains(k)));
+        let held = doc.get(r).as_dict().is_some_and(|d| PASSED_VALUES.iter().any(|k| dict_has(doc, d, k) && !dict_has(doc, &owned, k)));
         if held {
             return invalid(format!("{part:?} holds a value for the fields under it, so {:?} can't be put there", parts.join(".")));
         }
@@ -259,7 +264,7 @@ pub(super) fn attach(doc: &mut Document, af: ObjRef, field: ObjRef, parts: &[&st
     for part in parents {
         let next = match child_named(doc, af, parent, part) {
             Some(r) => {
-                inherits |= doc.get(r).as_dict().is_some_and(|d| d.contains(b"Ff") || d.contains(b"Q"));
+                inherits |= doc.get(r).as_dict().is_some_and(|d| dict_has(doc, d, b"Ff") || dict_has(doc, d, b"Q"));
                 r
             }
             None => {
@@ -308,11 +313,19 @@ pub(super) fn inherited(doc: &Document, field: ObjRef) -> Dict {
         }
         let Some(d) = doc.get(p).as_dict().cloned() else { break };
         for k in INHERITED_KEYS {
-            if let Some(v) = d.get(k).filter(|_| !own.contains(k) && !add.contains(k)) {
+            if let Some(v) = d.get(k).filter(|_| dict_has(doc, &d, k) && !dict_has(doc, &own, k) && !add.contains(k)) {
                 add.set(k.to_vec(), v.clone());
             }
         }
         parent = d.reference(b"Parent");
+    }
+    // /Opt is inheritable for check boxes and radio buttons (Table 230), not choice
+    // fields (Table 234). Classify by effective /FT and /Ff before materializing it.
+    let effective = |key: &[u8]| if dict_has(doc, &own, key) { own.get(key) } else { add.get(key) };
+    let button = effective(b"FT").is_some_and(|v| doc.resolve(v).as_name() == Some(b"Btn"));
+    let flags = effective(b"Ff").and_then(|v| doc.resolve(v).as_int()).and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
+    if !button || flags & crate::flags::PUSH_BUTTON != 0 {
+        add.remove(b"Opt");
     }
     add
 }
@@ -327,7 +340,7 @@ pub(crate) fn ancestor_sets(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
             return false;
         }
         let Some(d) = doc.get(p).as_dict().cloned() else { return false };
-        if d.contains(key) {
+        if dict_has(doc, &d, key) {
             return true;
         }
         parent = d.reference(b"Parent");
@@ -395,4 +408,163 @@ pub(super) fn top_names(doc: &Document) -> Vec<String> {
     };
     let list = af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
     list.iter().filter_map(|o| doc.resolve(o).as_dict().and_then(|d| d.get(b"T").cloned())).filter_map(|t| crate::text_of(&doc.resolve(&t))).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// /Opt is inheritable only for check boxes and radio buttons, using effective FT/Ff.
+    #[test]
+    fn inherited_options_are_limited_to_checkboxes_and_radios() {
+        for (ft, flags, expected) in
+            [("Btn", 0, true), ("Btn", crate::flags::RADIO, true), ("Btn", crate::flags::PUSH_BUTTON, false), ("Ch", 0, false), ("Tx", 0, false)]
+        {
+            for own_type in [false, true] {
+                let mut doc = Document::new_empty();
+                let mut parent = Dict::new();
+                parent.set(b"FT".to_vec(), Object::name(ft));
+                parent.set(b"Ff".to_vec(), Object::Int(i64::from(flags)));
+                parent.set(b"Opt".to_vec(), Object::Array(vec![Object::String(PdfString::text("export"))]));
+                parent.set(b"DA".to_vec(), PdfString::text("/Helv 10 Tf 0 g"));
+                let p = doc.add(parent);
+                let mut child = Dict::new();
+                child.set(b"Parent".to_vec(), Object::Ref(p));
+                if own_type {
+                    child.set(b"FT".to_vec(), Object::name(ft));
+                    child.set(b"Ff".to_vec(), Object::Int(i64::from(flags)));
+                }
+                let c = doc.add(child);
+                let inherited = inherited(&doc, c);
+                assert_eq!(inherited.contains(b"Opt"), expected, "{ft}, flags {flags}, own {own_type}");
+                assert!(inherited.contains(b"DA"));
+            }
+        }
+    }
+
+    fn one_page() -> Document {
+        let mut doc = Document::new_empty();
+        let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        let page = doc.add(page);
+        doc.update_dict(pages, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+            d.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .unwrap();
+        doc
+    }
+
+    fn reopen(doc: &Document) -> Document {
+        let bytes = pdfcraft_cos::write_incremental(doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+        hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+        Document::open(std::sync::Arc::new(bytes)).unwrap()
+    }
+
+    /// Moving a choice field must not turn its ancestor's unrelated /Opt into local choices.
+    #[test]
+    fn moving_choice_fields_does_not_copy_ancestor_options() {
+        for combo in [false, true] {
+            for own_options in [false, true] {
+                let mut doc = one_page();
+                let options = if own_options { vec!["local".into()] } else { Vec::new() };
+                let kind = if combo { crate::NewField::Combo { options, editable: false } } else { crate::NewField::List { options, multi: false } };
+                crate::add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &kind, Some("old.pick")).unwrap();
+                let f = crate::fields(&doc).into_iter().find(|f| f.name == "old.pick").unwrap();
+                let parent = doc.get(f.obj).as_dict().unwrap().reference(b"Parent").unwrap();
+                if !own_options {
+                    doc.update_dict(f.obj, |d| {
+                        d.remove(b"Opt");
+                    })
+                    .unwrap();
+                }
+                doc.update_dict(parent, |d| d.set(b"Opt".to_vec(), Object::Array(vec![Object::String(PdfString::text("borrowed"))]))).unwrap();
+                let before = crate::fields(&doc).into_iter().find(|f| f.name == "old.pick").unwrap().options;
+                crate::set_props(&mut doc, "old.pick", &crate::FieldProps { name: Some("new.pick".into()), ..Default::default() }).unwrap();
+                let after = crate::fields(&doc).into_iter().find(|f| f.name == "new.pick").unwrap();
+                assert_eq!(after.options, before);
+                assert_eq!(doc.get(after.obj).as_dict().unwrap().contains(b"Opt"), own_options);
+                let reopened = reopen(&doc);
+                let after = crate::fields(&reopened).into_iter().find(|f| f.name == "new.pick").unwrap();
+                assert_eq!(after.options, before);
+                assert_eq!(reopened.get(after.obj).as_dict().unwrap().contains(b"Opt"), own_options);
+            }
+        }
+    }
+
+    #[test]
+    fn moving_buttons_preserves_inherited_export_mapping() {
+        for kind in [crate::NewField::CheckBox, crate::NewField::Radio { group: None, export: "0".into() }] {
+            let mut doc = one_page();
+            crate::add_field(&mut doc, 0, [50.0, 700.0, 70.0, 720.0], &kind, Some("old.button")).unwrap();
+            let field = crate::fields(&doc).into_iter().find(|f| f.name == "old.button").unwrap();
+            let state = field.widgets.first().unwrap().on_state.clone().unwrap();
+            let parent = doc.get(field.obj).as_dict().unwrap().reference(b"Parent").unwrap();
+            let opt = Object::Array(vec![Object::String(PdfString::text("exported"))]);
+            doc.update_dict(parent, |d| d.set(b"Opt".to_vec(), opt.clone())).unwrap();
+            doc.update_dict(field.obj, |d| {
+                d.remove(b"Opt");
+            })
+            .unwrap();
+            crate::set_props(&mut doc, "old.button", &crate::FieldProps { name: Some("new.button".into()), ..Default::default() }).unwrap();
+            for doc in [&doc, &reopen(&doc)] {
+                let after = crate::fields(doc).into_iter().find(|f| f.name == "new.button").unwrap();
+                assert_eq!(doc.get(after.obj).as_dict().unwrap().get(b"Opt"), Some(&opt));
+                assert_eq!(after.export_of(0), Some("exported"));
+                assert_eq!(after.state_for("exported"), Some(state.as_str()));
+            }
+        }
+    }
+
+    #[test]
+    fn null_entries_on_parents_and_unsigned_signatures_are_treated_as_absent() {
+        let mut doc = Document::new_empty();
+        let mut sig = Dict::new();
+        sig.set(b"FT".to_vec(), Object::name("Sig"));
+        sig.set(b"T".to_vec(), PdfString::text("sig"));
+        sig.set(b"V".to_vec(), Object::Null);
+        let sig_ref = doc.add(Object::Dict(sig));
+        assert!(!holds_value(&doc, sig_ref));
+
+        let mut grand = Dict::new();
+        grand.set(b"FT".to_vec(), Object::name("Tx"));
+        grand.set(b"MaxLen".to_vec(), Object::Int(10));
+        let grand_ref = doc.add(Object::Dict(grand));
+
+        let mut parent = Dict::new();
+        parent.set(b"Parent".to_vec(), Object::Ref(grand_ref));
+        parent.set(b"T".to_vec(), PdfString::text("group"));
+        parent.set(b"V".to_vec(), Object::Null);
+        parent.set(b"MaxLen".to_vec(), Object::Null);
+        let parent_ref = doc.add(Object::Dict(parent));
+
+        let mut child = Dict::new();
+        child.set(b"Parent".to_vec(), Object::Ref(parent_ref));
+        child.set(b"T".to_vec(), PdfString::text("item"));
+        let child_ref = doc.add(Object::Dict(child));
+
+        let inh = inherited(&doc, child_ref);
+        assert_eq!(inh.get(b"MaxLen"), Some(&Object::Int(10)));
+        assert!(!inh.contains(b"V"));
+        assert!(!ancestor_sets(&doc, child_ref, b"V"));
+        assert!(ancestor_sets(&doc, child_ref, b"MaxLen"));
+
+        // Button /Opt is inherited, text /Opt is not; null kids and /Parent cycles are handled.
+        let opt_val = Object::Array(vec![Object::String(PdfString::text("Choice1"))]);
+        doc.update_dict(grand_ref, |d| {
+            d.set(b"Opt".to_vec(), opt_val.clone());
+            d.set(b"Parent".to_vec(), Object::Ref(parent_ref));
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Null, Object::Ref(parent_ref)]));
+        })
+        .unwrap();
+        assert!(!inherited(&doc, child_ref).contains(b"Opt"));
+        doc.update_dict(grand_ref, |d| d.set(b"FT".to_vec(), Object::name("Btn"))).unwrap();
+        let inh_cycle = inherited(&doc, child_ref);
+        assert_eq!(inh_cycle.get(b"Opt"), Some(&opt_val));
+        assert!(!holds_value(&doc, child_ref));
+        assert_eq!(child_named(&doc, grand_ref, Some(grand_ref), "group"), Some(parent_ref));
+    }
 }
