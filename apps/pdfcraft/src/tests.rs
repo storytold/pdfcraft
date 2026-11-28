@@ -1,3 +1,43 @@
+/// The lockfile package block for `name`, or a panic naming the missing package.
+fn locked_package(root: &std::path::Path, name: &str) -> String {
+    let lock = std::fs::read_to_string(root.join("Cargo.lock")).expect("Cargo.lock");
+    lock.split("[[package]]")
+        .find(|p| p.contains(&format!("\nname = \"{name}\"\n")))
+        .map(str::to_owned)
+        .unwrap_or_else(|| panic!("{name} is not in Cargo.lock"))
+}
+
+/// Interim graph check for the window stack while the reviewed fork revision is not yet
+/// published. The old `vendor/winit` / `vendor/egui-wgpu` path patches were removed from the
+/// published manifest; local integration supplies the reviewed worktrees through an external
+/// Cargo config patch. A git source must name the public storytold fork; a path source is the
+/// local integration graph. Behaviour (surface fitting, error scopes, scroll phases) is tested
+/// directly elsewhere; the retained vendor copies keep provenance until the fork revision is
+/// pinned. No public revision is invented here.
+fn assert_window_stack_graph(root: &std::path::Path, name: &str, version: &str) -> String {
+    let package = locked_package(root, name);
+    assert!(package.contains(&format!("\nversion = \"{version}\"\n")), "{name} must resolve to {version}: {package}");
+    if let Some(source) = package.lines().find_map(|line| line.strip_prefix("source = ")) {
+        // Temporary pinch candidate, pending storytold/winit#20. Only this exact
+        // revision is allowed outside the reviewed storytold forks.
+        let pinch_candidate = name == "winit"
+            && source
+                == "\"git+https://github.com/tomasmark79/winit.git?rev=0bc1a9b7b239d62ee3cb4ce498aa6bf3af208b5a#0bc1a9b7b239d62ee3cb4ce498aa6bf3af208b5a\"";
+        assert!(source.contains("github.com/storytold/") || pinch_candidate, "{name} must come from a reviewed window-stack fork, not {source}");
+        assert!(
+            source.split(|c: char| !c.is_ascii_hexdigit()).any(|part| part.len() == 40),
+            "{name} must pin the fork's 40-character revision, not {source}"
+        );
+    }
+    // A path patch has no `source =` in Cargo.lock. The local integration config is the only
+    // allowed path source; a machine-local path must never be in the published manifest,
+    // which the root-manifest assertion below checks. A path entry carries no remote identity
+    // to verify, so this test does not claim the resolved code is the published fork.
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("root Cargo.toml");
+    assert!(!manifest.contains(&format!("{name} = {{ path = \"vendor/")), "vendor/{name} must not be a published path patch");
+    package
+}
+
 /// Tests that open a real GPU device take this first, so only one of them is inside the
 /// graphics libraries at a time. The test threads otherwise run them together, and on
 /// FreeBSD's CI machine the test process then died with SIGSEGV, in about half the runs:
@@ -236,6 +276,20 @@ fn surface_fit_never_empties_or_overflows_a_surface() {
     }
 }
 
+
+#[test]
+fn vendor_provenance_egui_wgpu_surface_fit_identity() {
+    // Issue #577: egui-wgpu configured a window's surface at the window's size, and
+    // `Surface::configure` panics when that's beyond the device's `max_texture_dimension_2d`
+    // (emilk/egui#8361). The reviewed egui 0.37 worktree carries E2 (`surface_fit`); the
+    // behavioural test above exercises it. The old 0.36 vendor copy is retained for
+    // provenance only and is no longer a published path patch, so reading it would not prove
+    // what the app runs.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    assert_window_stack_graph(&root, "egui-wgpu", "0.37.0");
+    assert!(root.join("vendor/egui-wgpu/src/winit.rs").exists(), "the vendor copy and its provenance stay until the fork revision is pinned");
+}
+
 #[test]
 fn a_gpu_error_while_a_window_is_set_up_is_returned_not_a_panic() {
     // Issue #519: on a 2015 Intel GPU, wgpu's GL backend couldn't configure the window's
@@ -285,6 +339,21 @@ fn a_gpu_error_while_a_window_is_set_up_is_returned_not_a_panic() {
         texture(too_wide)
     }));
     assert!(matches!(caught, Err(wgpu::Error::Validation { .. })), "outer: {caught:?}");
+}
+
+
+#[test]
+fn vendor_provenance_egui_wgpu_catch_errors_identity() {
+    // Issue #519: E3 (`catch_errors`) is tested above against a real device. The reviewed 0.37
+    // worktree carries it around the first configure of every new window's surface, and its
+    // error reaches eframe as `WgpuError` (eframe then returns `Error::Wgpu`, which `main`
+    // retries with OpenGL). Without it a failed configure panics before the app is created.
+    // `catch_errors` is exercised against a real device in the test above and below; the
+    // graph check makes sure the app runs the reviewed 0.37 worktree (the retained vendor
+    // copy is not read as proof of behaviour).
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    assert_window_stack_graph(&root, "egui-wgpu", "0.37.0");
+    assert!(root.join("vendor/egui-wgpu/src/winit.rs").exists(), "the vendor copy and its provenance stay until the fork revision is pinned");
 }
 
 #[test]
@@ -470,6 +539,34 @@ fn linux_display_gpus_reads_connected_connectors() -> std::io::Result<()> {
 
 /// X11 startup notification and docks match a window to its launcher by `StartupWMClass`,
 /// so it has to be the class the window carries: the app id, on Wayland and X11 alike.
+
+#[test]
+fn winit_carries_the_windows_11_monitor_scale_fix() {
+    // Issue #324: winit 0.30.13 as released nudges a window dragged onto a monitor with another
+    // scale factor back onto the one it is leaving, so on Windows 11 it ends up on the wrong
+    // monitor, at the wrong size and scale. vendor/winit carries the fix from winit master. A
+    // dependency bump that resolves winit from crates.io again, or a re-vendored copy without
+    // the patch, would silently bring the bug back: re-apply the patch, or drop the copy once a
+    // winit 0.30 release has the fix (vendor/README.md).
+    // W1 (and W2–W13) were audited against the reviewed winit worktree: the vendor rows in
+    // `vendor/README.md` match the fork's PATCHES.md entries W1–W13. The vendor source is no
+    // longer a published path patch, so this checks the actual graph, not the old copy.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    assert_window_stack_graph(&root, "winit", "0.30.13");
+    let event_loop = std::fs::read_to_string(root.join("vendor/winit/src/platform_impl/windows/event_loop.rs")).unwrap();
+    // The audited W1 hunk itself, not merely the file's presence: Windows 11 applies the
+    // rect Windows suggests, while Windows 10 keeps the old adjustment.
+    for marker in [
+        "PdfCraft patch: from Windows 11 (build 22000) on, apply the rect Windows suggests",
+        "if !WIN10_BUILD_VERSION.is_some_and(|build| build < 22000) {",
+        "new_outer_rect = suggested_rect;",
+    ] {
+        assert!(event_loop.contains(marker), "vendor/winit lost the W1 monitor-scale patch: {marker}");
+    }
+    let provenance = std::fs::read_to_string(root.join("vendor/winit/.cargo_vcs_info.json")).unwrap();
+    assert!(provenance.contains("e9809ef54b18499bb4f2cac945719ecc2a61061b"), "vendor/winit keeps its upstream base provenance");
+}
+
 #[test]
 fn the_desktop_entry_names_the_window_class() {
     let entry = include_str!("../../../packaging/linux/ai.storyteller.pdfcraft.desktop");

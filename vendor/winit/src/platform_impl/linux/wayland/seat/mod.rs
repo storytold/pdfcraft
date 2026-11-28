@@ -11,6 +11,7 @@ use sctk::reexports::client::protocol::wl_touch::WlTouch;
 use sctk::reexports::client::{Connection, Proxy, QueueHandle};
 use sctk::reexports::protocols::wp::relative_pointer::zv1::client::zwp_relative_pointer_v1::ZwpRelativePointerV1;
 use sctk::reexports::protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextInputV3;
+use wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1;
 
 use sctk::seat::pointer::{ThemeSpec, ThemedPointer};
 use sctk::seat::{Capability as SeatCapability, SeatHandler, SeatState};
@@ -25,6 +26,7 @@ mod text_input;
 mod touch;
 
 pub use pointer::relative_pointer::RelativePointerState;
+pub use pointer::pointer_gesture::{PointerGestureData, PointerGesturesState};
 pub use pointer::{PointerConstraintsState, WinitPointerData, WinitPointerDataExt};
 pub use text_input::{TextInputState, ZwpTextInputV3Ext};
 
@@ -48,6 +50,9 @@ pub struct WinitSeatState {
 
     /// The relative pointer bound on the seat.
     relative_pointer: Option<ZwpRelativePointerV1>,
+
+    /// PdfCraft patch: the pinch gesture bound to this seat's pointer.
+    pointer_gesture_pinch: Option<ZwpPointerGesturePinchV1>,
 
     /// The keyboard bound on the seat.
     keyboard_state: Option<KeyboardState>,
@@ -122,6 +127,14 @@ impl SeatHandler for WinitState {
                     )
                 });
 
+                seat_state.pointer_gesture_pinch = self.pointer_gestures.as_ref().map(|manager| {
+                    manager.0.get_pinch_gesture(
+                        themed_pointer.pointer(),
+                        queue_handle,
+                        PointerGestureData::default(),
+                    )
+                });
+
                 let themed_pointer = Arc::new(themed_pointer);
 
                 // Register cursor surface.
@@ -150,6 +163,16 @@ impl SeatHandler for WinitState {
         seat: WlSeat,
         capability: SeatCapability,
     ) {
+        // Cancel before borrowing the seat, since cancellation queues a window event.
+        if matches!(capability, SeatCapability::Pointer) {
+            let gesture = self.seats.get_mut(&seat.id()).and_then(|seat| seat.pointer_gesture_pinch.take());
+            if let Some(gesture) = gesture {
+                if let Some(data) = gesture.data::<PointerGestureData>() {
+                    data.cancel(self);
+                }
+                gesture.destroy();
+            }
+        }
         let seat_state = match self.seats.get_mut(&seat.id()) {
             Some(seat_state) => seat_state,
             None => {
@@ -216,6 +239,12 @@ impl SeatHandler for WinitState {
         seat: WlSeat,
     ) {
         if let Some(mut seat_state) = self.seats.remove(&seat.id()) {
+            if let Some(gesture) = seat_state.pointer_gesture_pinch.take() {
+                if let Some(data) = gesture.data::<PointerGestureData>() {
+                    data.cancel(self);
+                }
+                gesture.destroy();
+            }
             if let Some(text_input) = seat_state.text_input.take() {
                 text_input.destroy();
             }
