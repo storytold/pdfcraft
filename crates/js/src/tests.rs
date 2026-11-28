@@ -2065,6 +2065,34 @@ $host.gotoURL("https://example.org")"#,
         assert!(matches!(o.effects.as_slice(), [XfaEffect::MessageBox(m)] if m.title.as_deref().is_some_and(|t| t.chars().count() <= 4_097)));
     }
 
+    /// `Eval` of a field's value: no string limit held it, since no script built it. Parsed,
+    /// 16 MiB of `1 ` took more than 1.5 GB before the script ran a step of it.
+    #[test]
+    fn eval_of_a_long_field_value_is_refused_before_it_is_parsed() {
+        let mut f = form();
+        let details = f.children[0].children.iter_mut().find(|c| c.name == "details").unwrap();
+        details.children[0].value = "1 ".repeat(8 << 20);
+        let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].total[0]".into(), ..Default::default() };
+        let o = run_formcalc("Eval(details.note)", &ev, &XfaDoc::default(), &f, Limits { loop_iterations: 10_000, recursion: 32 });
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("Eval")), "{:?}", o.error);
+    }
+
+    /// `Eval` reads no more source in a run than one script may hold (`MAX_SCRIPT_BYTES`): the
+    /// syntax tree of each is held while it runs, and kept for good when it declares a function.
+    #[test]
+    fn eval_reads_at_most_a_scripts_worth_of_source_in_a_run() {
+        assert_eq!(run_hostile_formcalc("Eval(Space(262144))").error, None);
+        assert!(run_hostile_formcalc("Eval(Space(262145))").error.is_some_and(|e| e.contains("Eval")));
+        // Each source half the limit, so the second takes the run past it.
+        let declare = "var g = \"1 1 1 1 \"\nfor i = 1 upto 14 do g = Concat(g, g) endfor\n\
+                       for i = 1 upto 3 do Eval(Concat(\"func f\", i, \"() do \", g, \" endfunc\")) endfor";
+        let o = run_hostile_formcalc(declare);
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("Eval")), "{:?}", o.error);
+        // Short sources, many times over, are read.
+        let o = run_hostile_formcalc("var n = 0\nfor i = 1 upto 5000 do n = n + Eval(\"1\") endfor\nn");
+        assert_eq!(o.result.as_deref(), Some("5000"), "{:?}", o.error);
+    }
+
     fn run_hostile_formcalc(script: &str) -> XfaOutcome {
         let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].total[0]".into(), ..Default::default() };
         let doc = XfaDoc::default();
