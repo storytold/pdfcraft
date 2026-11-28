@@ -191,7 +191,7 @@ mod doc_state;
 pub use pdfcraft_edit::ArrangeOrder;
 
 use clock::{local_utc_offset, parse_ymd};
-pub use doc_state::{DocId, ImageEdit, OptimizeReport, RecoverySnapshot, SplitPart, guard, merge_data_files};
+pub use doc_state::{DocId, ImageEdit, OptimizeReport, RecoverySnapshot, SplitPart, guard, merge_data_files, merge_data_files_with_columns};
 use doc_state::{LOW_RESOLUTION_PRINT_DPI, editor_signatures, render_threads, renderer_password, signatures_of, writable};
 
 /// The configuration of the pool that draws the viewer: the document's own, plus installed CJK

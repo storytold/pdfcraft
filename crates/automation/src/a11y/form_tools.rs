@@ -266,10 +266,9 @@ impl Automation {
             let path = self.resolve(p, false)?;
             files.push((p.to_string(), crate::read_input_bytes(&path).map_err(|e| failed(format!("{p}: {e}")))?));
         }
-        let csv = pdfcraft_engine::merge_data_files(&files).map_err(failed)?;
+        let (csv, columns) = pdfcraft_engine::merge_data_files_with_columns(&files).map_err(failed)?;
         let target = self.resolve(a.str("path")?, true)?;
         write_atomic(&target, csv.as_bytes())?;
-        let columns = csv.lines().next().map_or(0, |h| h.split(',').count());
         Ok(json!({ "path": target.to_string_lossy(), "rows": files.len(), "columns": columns }))
     }
 
