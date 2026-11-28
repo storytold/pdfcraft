@@ -43,7 +43,7 @@ pub(crate) use image::{PictureMenu, delete_picture, picture_context, picture_con
 pub(crate) use layout::editor_font;
 #[cfg(test)]
 use layout::{DARK_EDITOR_FILL, contrast, editor_fill, editor_job};
-use layout::{color32, editor_galley, look_of, source_look};
+use layout::{color32, editor_galley, look_of, source_look, word_shapes};
 
 /// What an edit box shows text for: a page paragraph, or text added in this session.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -279,6 +279,10 @@ pub struct LineEditor {
     source_rect: [f32; 4],
     multiline: bool,
     source: Option<(pdfcraft_engine::TextBlock, Vec<pdfcraft_engine::TextLine>)>,
+    /// What Apply will do with the draft of an OCR phrase, and the text that was asked about.
+    words: Option<(String, Option<Arc<pdfcraft_engine::WordPreview>>)>,
+    /// The scan's paper and ink colours around an OCR phrase, once read.
+    scan: Option<Option<([f64; 3], [f64; 3])>>,
     /// The draft extends outside the source container; its frame follows the live draft bounds.
     pub overflow: bool,
     /// The initial source container width in screen pixels.
@@ -380,6 +384,48 @@ impl LineEditor {
 
     pub(crate) fn has_changes(&self) -> bool {
         self.changes_with(&self.text)
+    }
+
+    /// Whether a draft of this paragraph can keep the words it doesn't change: an OCR phrase upright
+    /// on an unrotated page shown unturned, with nothing changed but its text. The words it paints
+    /// are laid out across the page, so a turned page or view (Rotate View) keeps the editor's own
+    /// preview.
+    pub(crate) fn keeps_words(&self, info: &DocInfo, view_rotation: u16) -> bool {
+        self.source.as_ref().is_some_and(|(block, _)| block.invisible)
+            && info.pages.get(self.page).is_some_and(|page| page.rotation == 0)
+            && view_rotation.is_multiple_of(360)
+            && self.look == self.look0
+            && self.extras == self.extras0
+            && !self.family_chosen
+            && !self.size_chosen
+            && self.font_resource.is_none()
+    }
+
+    /// The word plan for `text`, asked of the engine once per text; `None` when Apply will redraw
+    /// the whole phrase.
+    fn words_for(
+        &self,
+        doc: &pdfcraft_engine::Document,
+        info: &DocInfo,
+        view_rotation: u16,
+        text: &str,
+    ) -> (String, Option<Arc<pdfcraft_engine::WordPreview>>) {
+        // Whether the draft may keep words comes first: a plan asked for the same text before the
+        // formatting changed, or the view turned, no longer says what Apply will do.
+        if !self.keeps_words(info, view_rotation) || text == self.original {
+            return (text.to_owned(), None);
+        }
+        if let Some((asked, words)) = &self.words
+            && asked == text
+        {
+            return (asked.clone(), words.clone());
+        }
+        (text.to_owned(), doc.ocr_word_preview(self.page, self.block, text).map(Arc::new))
+    }
+
+    /// The word plan for the draft as it stands, when the last frame found one.
+    pub(crate) fn current_words(&self) -> Option<&pdfcraft_engine::WordPreview> {
+        self.words.as_ref().filter(|(asked, _)| *asked == self.text).and_then(|(_, words)| words.as_deref())
     }
 
     /// Whether the paragraph with `text` in it differs from what was opened.
@@ -859,6 +905,8 @@ fn open_editor(session: &mut PageSession, doc: &pdfcraft_engine::Document, page:
         source_rect: l.rect.map(|v| v as f32),
         multiline: l.rows.len() > 1,
         source: Some((l.clone(), source_lines)),
+        words: None,
+        scan: None,
         overflow: false,
         max_width,
         size: (l.size as f32 * scale).clamp(8.0, 72.0),
@@ -1070,6 +1118,9 @@ fn width_frame(
 /// view. Every edit goes into the box's own history.
 struct ParagraphHost<'a> {
     ctx: &'a egui::Context,
+    doc: &'a pdfcraft_engine::Document,
+    /// The view's turn (Rotate View), in degrees clockwise: a turned view keeps no word plan.
+    view_rotation: u16,
     ed: &'a mut LineEditor,
     faces: &'a BTreeMap<String, FontRef>,
     view: CanvasView,
@@ -1111,10 +1162,14 @@ fn cursor_at(offset: usize) -> egui::text::CCursor {
 }
 
 impl ParagraphHost<'_> {
-    /// The laid-out text, laid out again once an edit has changed it.
+    /// The laid-out text, laid out again once an edit has changed it, on the word plan's boxes when
+    /// the draft keeps the words of an OCR phrase.
     fn galley(&mut self) -> Arc<egui::Galley> {
+        if self.galley.is_none() {
+            self.ed.words = Some(self.ed.words_for(self.doc, &self.doc.info, self.view_rotation, &self.ed.text));
+        }
         let (ctx, ed, faces, scale, width) = (self.ctx, &*self.ed, self.faces, self.scale, self.width);
-        Arc::clone(self.galley.get_or_insert_with(|| editor_galley(ctx, ed, faces, &ed.text, scale, width)))
+        Arc::clone(self.galley.get_or_insert_with(|| editor_galley(ctx, ed, faces, &ed.text, scale, width, ed.current_words())))
     }
 
     /// A point of the laid-out text (screen pixels from its top left) in document units.
@@ -1277,15 +1332,27 @@ fn editor_session(
     // while the format panel was open.
     ed.rect = xf.user_rect(info, ed.page, ed.source_rect);
     ed.max_width = ed.rect.width();
+    ed.words = Some(ed.words_for(doc, info, geo.rotation, &ed.text));
     let scale = (ed.rect.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(0.01)).max(0.01);
     ed.size = (ed.look.size as f32 * scale).clamp(1.0, 300.0);
     let text_color = color32(ed.look.color);
     // A one-row draft grows toward the page's right edge.
     let room = (xf.rect.right() - ed.rect.left() - 36.0 * scale).max(ed.rect.width());
+    // A draft that keeps the words of an OCR phrase paints what Apply will: covers in the paper's
+    // colour and the new words in the ink's, sampled from the scan once. The scan shows through
+    // everywhere else, so there is no cover.
+    if ed.scan.is_none() && ed.current_words().is_some() {
+        ed.scan = Some(doc.scan_colours(ed.page, ed.block));
+    }
+    let words = ed.current_words().map(|words| {
+        let colours = ed.scan.flatten().unwrap_or(([1.0; 3], ed.look.color));
+        word_shapes(&ctx, &ed.look, words, colours, scale, |r| xf.user_rect(info, page, r.map(|v| v as f32)))
+    });
     // The layout in the paragraph's source faces, and the cover under the editor until the textless
     // page is ready.
-    let cover = ed.has_changes() && !background_ready;
-    let laid = ParagraphCover::new(doc, ed, scale, room, draft_rect, cover).show_at(ui, page_clip);
+    let cover = ed.has_changes() && !background_ready && words.is_none();
+    let painted = words.is_some();
+    let laid = ParagraphCover::new(doc, ed, scale, room, draft_rect, cover).words(words).show_at(ui, page_clip);
     let (faces, width, live) = (laid.faces, laid.width, laid.live);
     let frame = [rect_path(doc_rect(&body.view, live.expand(2.0)))];
     let _ = SelectionOutline::solid(tl!("Text editing line").to_string(), &frame).show_at(ui, page_clip);
@@ -1301,8 +1368,20 @@ fn editor_session(
     // An editor opened in this pass takes the keys at once. The press that opened it may lie in the
     // paragraph's reach outside the editor, where the editor sees a click away: it doesn't apply it.
     let fresh = std::mem::replace(&mut ed.focus, false);
+    let before = ed.text.clone();
     let (output, galley) = {
-        let mut host = ParagraphHost { ctx: &ctx, ed: &mut *ed, faces: &faces, view: body.view, scale, width, origin, galley: None };
+        let mut host = ParagraphHost {
+            ctx: &ctx,
+            doc,
+            view_rotation: geo.rotation,
+            ed: &mut *ed,
+            faces: &faces,
+            view: body.view,
+            scale,
+            width,
+            origin,
+            galley: None,
+        };
         // Escape cancels and selects the paragraph's box (Acrobat); ⌘Enter and a press on the page
         // background apply.
         let editor = TextEditor::new(tl!("Text editing line").to_string(), &mut host, Bind::bound(&mut selection)).esc_commits(false);
@@ -1311,11 +1390,24 @@ fn editor_session(
         (output, host.galley())
     };
     ed.selection = Some(selection);
-    if ed.has_changes() {
+    let keeps_words = ed.current_words().is_some();
+    // The word plan painted under the editor was the text's before this pass's typing: the next pass
+    // paints the new one.
+    if (painted || keeps_words) && ed.text != before {
+        ctx.request_repaint();
+    }
+    // A draft that keeps words has its own words painted under the editor; the laid-out text only
+    // places the caret and the selection.
+    if ed.has_changes() && !keeps_words {
         ParagraphText::new(origin, Arc::clone(&galley), text_color).show_at(ui, page_clip);
     }
     let ended = output.ended.filter(|end| !(fresh && *end == EditorEnd::Commit));
-    session.text_background.remember(&xf, page, block, galley, origin, text_color);
+    if keeps_words {
+        // Nothing of the laid-out text was shown, so none of it stays up after Apply.
+        session.text_background.forget_look();
+    } else {
+        session.text_background.remember(&xf, page, block, galley, origin, text_color);
+    }
     match ended {
         None => None,
         Some(EditorEnd::Cancel) => {
@@ -1538,6 +1630,8 @@ mod tests {
             source_rect: block.rect.map(|v| v as f32),
             multiline: block.rows.len() > 1,
             source: None,
+            words: None,
+            scan: None,
             overflow: false,
             max_width: 400.0,
             size: block.size as f32,
@@ -1639,10 +1733,37 @@ mod tests {
         assert_eq!(doc.text_lines(0).iter().map(|l| l.text.as_str()).collect::<String>(), "Text preview");
     }
 
-    /// Typing in a recognised phrase whose words OCR sized at 15, 9 and 11 pt lays every word out
-    /// at the phrase's one size, as the engine redraws it (#3313); each word used its own.
+    /// The words Apply will draw are painted across their place, glyphs and all, not run together
+    /// with letter spacing, over covers in the paper's colour.
     #[test]
-    fn typing_in_an_ocr_phrase_lays_every_word_out_at_one_size() {
+    fn the_words_a_draft_draws_are_squeezed_to_their_place() {
+        let (_app, ed) = preview_app();
+        let words = pdfcraft_engine::WordPreview {
+            covers: vec![[10.0, 10.0, 40.0, 30.0]],
+            drawn: vec![pdfcraft_engine::DrawnWords { text: "Squeezed".into(), rect: [10.0, 10.0, 40.0, 30.0], baseline: 14.0 }],
+            placed: Vec::new(),
+        };
+        let ctx = egui::Context::default();
+        let mut shapes = Vec::new();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let to_screen =
+                |r: [f64; 4]| Rect::from_min_max(Pos2::new(r[0] as f32, 100.0 - r[3] as f32), Pos2::new(r[2] as f32, 100.0 - r[1] as f32));
+            shapes = word_shapes(ui.ctx(), &ed.look, &words, ([0.9, 0.9, 0.8], [0.1, 0.1, 0.2]), 1.0, to_screen);
+        })
+        .textures_delta
+        .clear();
+        let [egui::Shape::Rect(cover), egui::Shape::Text(text)] = shapes.as_slice() else { panic!("a cover, then the words: {shapes:?}") };
+        assert_eq!(cover.rect, Rect::from_min_max(Pos2::new(10.0, 70.0), Pos2::new(40.0, 90.0)));
+        assert_eq!(cover.fill, color32([0.9, 0.9, 0.8]), "the paper's colour");
+        assert!((text.galley.rect.width() - 30.0).abs() < 0.01, "across its place: {}", text.galley.rect.width());
+        let glyphs = text.galley.rows[0].row.visuals.mesh.vertices.iter().map(|v| v.pos.x).fold(f32::MIN, f32::max);
+        assert!(glyphs <= 30.5, "and its glyphs with it: {glyphs}");
+        assert_eq!(text.pos.x, 10.0, "from the word's left edge");
+    }
+
+    /// An app with a scan open, whose OCR phrase's words were sized at 15, 9 and 11 pt, and an editor
+    /// on that phrase.
+    fn ocr_editor() -> (crate::PdfCraftApp, LineEditor) {
         use pdfcraft_engine::ocr::PlacedWord;
         // A word box as OCR draws it around capitals: the cap height of a `size` pt word.
         let word = |text: &str, x0: f64, x1: f64, size: f64| PlacedWord {
@@ -1664,11 +1785,72 @@ mod tests {
         let block = doc.text_blocks(0).remove(0);
         assert!(block.invisible && block.lines.len() == 3, "one phrase of three recognised words: {block:?}");
         let (_, mut ed) = preview_app();
-        ed.text = format!("{}S", block.editor_text);
         ed.original = block.editor_text.clone();
+        ed.text = block.editor_text.clone();
         ed.look = look_of(&block);
         ed.look0 = look_of(&block);
-        ed.source = Some((block, doc.text_lines(0)));
+        let lines = doc.text_lines(0);
+        ed.source = Some((block, lines));
+        (app, ed)
+    }
+
+    /// A word plan is only for a text-only draft: once the formatting changes, Apply redraws the
+    /// whole phrase, so the editor must stop keeping the scan, even for the same text.
+    #[test]
+    fn a_formatting_change_drops_the_word_plan() {
+        let (app, mut ed) = ocr_editor();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        ed.text = "JOHN SMYTH EXAMPLE".into();
+        let asked = ed.words_for(doc, &doc.info, 0, &ed.text);
+        assert!(asked.1.is_some(), "a text-only draft has a plan");
+        ed.words = Some(asked);
+        ed.look.size += 2.0;
+        assert!(ed.words_for(doc, &doc.info, 0, &ed.text).1.is_none(), "a new size: Apply redraws the whole phrase");
+    }
+
+    /// Rotate View turns the boxes but not the words the editor paints, so a turned view keeps the
+    /// editor's own preview.
+    #[test]
+    fn a_turned_view_has_no_word_plan() {
+        let (app, mut ed) = ocr_editor();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        ed.text = "JOHN SMYTH EXAMPLE".into();
+        assert!(ed.words_for(doc, &doc.info, 0, &ed.text).1.is_some());
+        for turn in [90, 180, 270] {
+            assert!(ed.words_for(doc, &doc.info, turn, &ed.text).1.is_none(), "a view turned {turn}°");
+        }
+    }
+
+    /// Backspacing over a word leaves a space either side of the caret. The caret stays by the word
+    /// before, where a word typed next will start, not in the middle of the gap.
+    #[test]
+    fn the_caret_stays_by_the_word_before_a_deleted_word() {
+        let (app, mut ed) = ocr_editor();
+        ed.text = "JOHN  EXAMPLE".into();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let words = doc.ocr_word_preview(0, 0, &ed.text).expect("the spaces are nothing to draw");
+        let ctx = egui::Context::default();
+        let mut places = Vec::new();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let galley = editor_galley(ui.ctx(), &ed, &BTreeMap::new(), &ed.text, 1.0, 400.0, Some(&words));
+            let row = &galley.rows[0];
+            places = row.row.glyphs.iter().map(|glyph| row.pos.x + glyph.pos.x).collect();
+        })
+        .textures_delta
+        .clear();
+        // In points from the phrase's left edge, at 20: JOHN ends at 25, EXAMPLE starts at 62.
+        assert_eq!(places.len(), 13);
+        assert!((places[4] - 25.0).abs() < 0.5, "the first space starts where JOHN ends: {places:?}");
+        assert!(places[5] > 25.0 && places[5] < 30.0, "the caret between the spaces is a space along: {places:?}");
+        assert!((places[6] - 62.0).abs() < 0.5, "EXAMPLE is on its box: {places:?}");
+    }
+
+    /// Typing in a recognised phrase whose words OCR sized at 15, 9 and 11 pt lays every word out
+    /// at the phrase's one size, as the engine redraws it (#3313); each word used its own.
+    #[test]
+    fn typing_in_an_ocr_phrase_lays_every_word_out_at_one_size() {
+        let (_app, mut ed) = ocr_editor();
+        ed.text = format!("{}S", ed.original);
 
         let ctx = egui::Context::default();
         let mut sizes = Vec::new();
@@ -1799,6 +1981,8 @@ mod tests {
             selection: None,
             font_resource: None,
             source: None,
+            words: None,
+            scan: None,
             multiline: false,
             size: 12.0,
             family_chosen: false,

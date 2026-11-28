@@ -59,6 +59,12 @@ impl TextBackground {
         self.look = Some(EditorLook { page, block, galley, at: xf.screen_to_norm(pos), color, page_width: xf.rect.width(), rot: xf.rot });
     }
 
+    /// The open paragraph's editor showed no text of its own this frame (the draft of an OCR phrase
+    /// is painted from the engine's word plan), so there is no look to keep up once it is applied.
+    pub fn forget_look(&mut self) {
+        self.look = None;
+    }
+
     /// An edit was applied. When it is the open paragraph's, its last look stays up over the
     /// textless page until the page is rendered again; any other edit ends both.
     pub fn committed(&mut self, edit: &Edit) {
@@ -113,7 +119,11 @@ impl TextBackground {
         }
         if let Some(ed) = editor {
             let draft_key = (ed.text.clone(), ed.style());
-            if self.draft_key.as_ref() != Some(&draft_key) {
+            // A draft that keeps words has its measure from the engine's word plan already.
+            if ed.current_words().is_some() {
+                self.draft_rect = None;
+                self.draft_key = None;
+            } else if self.draft_key.as_ref() != Some(&draft_key) {
                 self.draft_rect = doc.text_edit_layout(ed.page, ed.block, &ed.text, &draft_key.1).ok().and_then(|layout| layout.draft_rect);
                 self.draft_key = Some(draft_key);
             }
