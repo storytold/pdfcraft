@@ -599,6 +599,20 @@ fn set_quads_draws_perimeter_order_corners_as_the_area() {
     assert!(set_quads(&mut doc, 0, h, &[diagonal], &meta("bad")).is_err());
 }
 
+/// A tiny quad given around its area is still reordered: the sides of its corners are so small
+/// that their product underflows to zero, so the crossing test must compare signs.
+#[test]
+fn set_quads_reorders_a_tiny_perimeter_order_quad() {
+    let z = [0.0, 1e-100, 1e-100, 1e-100, 0.0, 0.0, 1e-100, 0.0];
+    let around = [0.0, 1e-100, 1e-100, 1e-100, 1e-100, 0.0, 0.0, 0.0];
+    let mut doc = fixture();
+    let start = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![start] }), &meta("h")).unwrap();
+    set_quads(&mut doc, 0, h, &[around], &meta("h")).unwrap();
+    let qp: Vec<f64> = list(&doc, 0)[h].get(b"QuadPoints").unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect();
+    assert_eq!(qp, z.to_vec(), "stored in drawing order");
+}
+
 /// Zero-area quadrilaterals, including collinear diagonals with a nonempty bounding box,
 /// never replace a markup. Reject them before even promoting an inline annotation to a reference.
 #[test]

@@ -929,8 +929,10 @@ fn z_order(quad: [f64; 8]) -> Option<[f64; 8]> {
     let [x1, y1, x2, y2, x3, y3, x4, y4] = quad;
     let (p1, p2, p3, p4) = ([x1, y1], [x2, y2], [x3, y3], [x4, y4]);
     let side = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    // Compare signs, not a product, which underflows to zero for a tiny quad.
+    let opposite = |s: f64, t: f64| (s < 0.0 && t > 0.0) || (s > 0.0 && t < 0.0);
     // Whether segments ab and cd cross at a point inside both.
-    let crosses = |a, b, c, d| side(a, b, c) * side(a, b, d) < 0.0 && side(c, d, a) * side(c, d, b) < 0.0;
+    let crosses = |a, b, c, d| opposite(side(a, b, c), side(a, b, d)) && opposite(side(c, d, a), side(c, d, b));
     // The outline drawn from Z-order corners: 1, 2, 4, 3.
     if !crosses(p1, p2, p4, p3) && !crosses(p2, p4, p3, p1) {
         return Some(quad);
