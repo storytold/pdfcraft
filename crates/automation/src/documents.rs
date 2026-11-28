@@ -339,7 +339,7 @@ impl Automation {
     }
 
     pub(crate) fn doc_optimize(&mut self, a: &Args) -> Result<Value> {
-        use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, MonoCompression, Preset};
+        use pdfcraft_engine::optimize::{Compatibility, Compression, FlatePredictor, ImageSettings, MonoCompression, Preset};
         const MONO_KEYS: [&str; 4] = ["downsample", "ppi", "above_ppi", "compression"];
         let id = self.doc(a)?.id;
         let before = self.doc(a)?.bytes.len();
@@ -409,6 +409,10 @@ impl Automation {
                     _ => return Err(unknown(c)),
                 };
             }
+        }
+        if let Some(p) = a.opt_str("flate_predictor")? {
+            settings.flate_predictor =
+                FlatePredictor::from_name(p).ok_or_else(|| ToolError::InvalidArgs(format!("unknown flate_predictor {p:?} (off, png, auto)")))?;
         }
         for (key, flag) in [
             ("merge_fragments", &mut settings.merge_fragments),
@@ -526,6 +530,7 @@ impl Automation {
             "images_refused": o.images_refused,
             "image_bytes_before": o.image_bytes_before,
             "image_bytes_after": o.image_bytes_after,
+            "images_predicted": o.images_predicted,
             "thumbnails": o.thumbnails,
             "alternate_images": o.alternate_images,
             "search_indexes": o.search_indexes,

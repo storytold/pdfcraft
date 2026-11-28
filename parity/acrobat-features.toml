@@ -7556,8 +7556,8 @@ milestone = "M11"
 status = "partial"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/optimize/tests/optimize.rs::images_are_measured_where_drawn_and_downsampled", "crates/optimize/tests/optimize.rs::settings_choose_what_happens", "crates/optimize/tests/jpeg_color_transform.rs::optimize_keeps_the_colours_of_an_rgb_jpeg_whatever_its_colour_transform"]
-notes = "JPEG (quality steps) and ZIP; a JPEG is decoded with its colour transform (Adobe marker, else /ColorTransform), and one whose marker and /ColorTransform disagree is left as it is; no JPEG 2000"
+evidence = ["crates/optimize/tests/optimize.rs::images_are_measured_where_drawn_and_downsampled", "crates/optimize/tests/optimize.rs::settings_choose_what_happens", "crates/optimize/tests/jpeg_color_transform.rs::optimize_keeps_the_colours_of_an_rgb_jpeg_whatever_its_colour_transform", "crates/optimize/tests/optimize.rs::png_prediction_shrinks_resampled_images_and_their_masks_to_the_same_samples", "crates/optimize/tests/optimize.rs::with_a_predictor_a_zip_image_at_its_size_is_stored_again_only_when_smaller", "crates/automation/tests/it/automation.rs::image_samples_are_png_predicted_through_tools"]
+notes = "JPEG (quality steps) and ZIP; a JPEG is decoded with its colour transform (Adobe marker, else /ColorTransform), and one whose marker and /ColorTransform disagree is left as it is. ZIP output can be PNG-predicted (flate_predictor: off by default, png, or auto keeping the smaller), for colour and grey images, the soft masks resampled with them, and 1-bit Flate images; with a predictor, an 8-bit grey or RGB ZIP image is also stored again at its size, kept only if smaller. Not in the optimizer panel yet (automation only). No JPEG 2000"
 
 [[feature]]
 id = "optimize.mono-compression"
@@ -7832,8 +7832,8 @@ milestone = "M11"
 status = "partial"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/optimize/tests/optimize.rs::discards_and_clean_up", "crates/optimize/tests/optimize.rs::lzw_streams_become_flate_and_decode_to_the_same_bytes", "crates/optimize/tests/optimize.rs::a_page_drawn_from_lzw_streams_renders_the_same_after_conversion"]
-notes = "Two Clean Up options, as in Acrobat: unencoded streams are Flate-compressed, and LZW streams (content and image XObjects; EarlyChange 0 and 1, with or without a predictor, LZW anywhere in a filter chain) are decoded and stored with Flate instead, keeping the predictor and the filters after the LZW one; LZW data that doesn't decode cleanly is left as it is. Not yet: LZW inline images inside content streams."
+evidence = ["crates/optimize/tests/optimize.rs::discards_and_clean_up", "crates/optimize/tests/optimize.rs::lzw_streams_become_flate_and_decode_to_the_same_bytes", "crates/optimize/tests/optimize.rs::a_page_drawn_from_lzw_streams_renders_the_same_after_conversion", "crates/optimize/tests/optimize.rs::clean_up_predicts_unencoded_images_of_more_than_eight_bits_and_four_components"]
+notes = "Two Clean Up options, as in Acrobat: unencoded streams are Flate-compressed (an image XObject whose layout is known from direct entries PNG-predicted first under flate_predictor png or auto), and LZW streams (content and image XObjects; EarlyChange 0 and 1, with or without a predictor, LZW anywhere in a filter chain) are decoded and stored with Flate instead, keeping the predictor and the filters after the LZW one; LZW data that doesn't decode cleanly is left as it is. Not yet: LZW inline images inside content streams."
 
 [[feature]]
 id = "optimize.remove-invalid-links"

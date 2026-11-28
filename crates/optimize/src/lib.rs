@@ -22,6 +22,8 @@
 //! - **Clean up:** drop images and forms that pages list but never draw (such as a deleted
 //!   image); Flate-compress streams that have no filter; remove a redundant outer ASCII85 or
 //!   ASCIIHex layer from streams that have one; store LZW-compressed streams with Flate instead.
+//! - **PNG prediction** (off by default, [`Settings::flate_predictor`]): image samples stored with
+//!   Flate are PNG-predicted first, always or only when that is smaller.
 //! - **Discard embedded search index** (off by default): the search indexes stored in the
 //!   catalog's `/PieceInfo` (see [`Settings::discard_search_index`]).
 //!
@@ -43,6 +45,7 @@ pub mod fragments;
 mod images;
 mod links;
 mod pool;
+mod predict;
 mod samples;
 mod tiles;
 mod unused;
@@ -54,6 +57,7 @@ use pdfcraft_filters::{Filter, Params};
 
 pub use images::{ImageTarget, effective_resolutions, recolour_image};
 pub use pool::give_way_to_other_programs;
+pub use predict::FlatePredictor;
 pub use samples::{NotDecoded, Samples, decode_samples, encode_samples};
 pub use tiles::{DOWNSAMPLED_ABOVE, TileReport, tile_large_images};
 
@@ -210,6 +214,12 @@ pub struct Settings {
     pub gray: ImageSettings,
     /// Black-and-white images, image masks, and pictures' one-bit masks.
     pub mono: MonoSettings,
+    /// PNG prediction for the image samples the optimizer stores with Flate: colour and grey
+    /// images, the soft masks resampled with them, 1-bit Flate images, and unfiltered images
+    /// Clean Up compresses (`Off` by default, so existing output is unchanged). With anything but `Off`,
+    /// a colour or grey image set to Flate is also stored again when it isn't JPEG, kept only if
+    /// smaller.
+    pub flate_predictor: FlatePredictor,
     pub discard_thumbnails: bool,
     pub discard_alternate_images: bool,
     pub discard_tags: bool,
@@ -257,6 +267,7 @@ impl Default for Settings {
             color: ImageSettings::REDUCE,
             gray: ImageSettings::REDUCE,
             mono: MonoSettings::REDUCE,
+            flate_predictor: FlatePredictor::Off,
             discard_thumbnails: true,
             discard_alternate_images: true,
             discard_tags: false,
@@ -325,6 +336,9 @@ pub struct Report {
     /// Encoded image bytes before and after (images that changed).
     pub image_bytes_before: usize,
     pub image_bytes_after: usize,
+    /// Images (soft masks included) stored with Flate under a PNG predictor, by the image step or
+    /// by Clean Up.
+    pub images_predicted: usize,
     pub thumbnails: usize,
     pub alternate_images: usize,
     pub tags_removed: bool,
@@ -486,29 +500,39 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
         }
     }
     if settings.flate_unencoded {
-        for num in doc.object_numbers() {
-            let r = ObjRef { num, generation: doc.generation(num) };
-            let obj = doc.get(r);
-            let Object::Stream(s) = &*obj else { continue };
-            // XMP stays readable as plain text (PDF/A requires it); tiny streams don't gain.
-            if s.dict.name(b"Type") == Some(b"Metadata") || s.dict.name(b"Type") == Some(b"XRef") || s.raw.len() < 64 {
-                continue;
-            }
-            let replacement = if s.dict.contains(b"Filter") {
-                strip_ascii_wrapper(s)
-            } else {
-                let mut d = s.dict.clone();
-                d.remove(b"Length");
-                let packed = Stream::flate(d, &s.raw);
-                (packed.raw.len() < s.raw.len()).then_some(packed)
-            };
-            if let Some(replacement) = replacement {
-                doc.set(r, Object::Stream(replacement));
-                report.streams_compressed += 1;
-            }
-        }
+        flate_unencoded(doc, settings.flate_predictor, &mut report);
     }
     Ok(report)
+}
+
+/// Clean Up's pass over streams with no filter: each is stored with Flate (an image predicted as
+/// `predictor` says), and one with an outer ASCII layer loses it, where that is smaller as stored.
+fn flate_unencoded(doc: &mut Document, predictor: FlatePredictor, report: &mut Report) {
+    for num in doc.object_numbers() {
+        let r = ObjRef { num, generation: doc.generation(num) };
+        let obj = doc.get(r);
+        let Object::Stream(s) = &*obj else { continue };
+        // XMP stays readable as plain text (PDF/A requires it); tiny streams don't gain.
+        if s.dict.name(b"Type") == Some(b"Metadata") || s.dict.name(b"Type") == Some(b"XRef") || s.raw.len() < 64 {
+            continue;
+        }
+        let replacement = if s.dict.contains(b"Filter") { strip_ascii_wrapper(s) } else { flate_unfiltered(doc, s, predictor) };
+        if let Some(replacement) = replacement {
+            report.images_predicted += usize::from(predict::is_predicted(&replacement));
+            doc.set(r, Object::Stream(replacement));
+            report.streams_compressed += 1;
+        }
+    }
+}
+
+/// Unfiltered `s` stored with Flate, if smaller as stored: predicted as `predictor` says, or
+/// plain when under `png` the predicted copy isn't smaller.
+fn flate_unfiltered(doc: &Document, s: &Stream, predictor: FlatePredictor) -> Option<Stream> {
+    let mut d = s.dict.clone();
+    d.remove(b"Length");
+    let before = stored_len(s)?;
+    let packed = predict::flate_unfiltered(doc, d, &s.raw, predictor, Some(before));
+    (stored_len(&packed)? < before).then_some(packed)
 }
 
 /// Largest decoded LZW stream converted, as for a page's content: the data and its check are

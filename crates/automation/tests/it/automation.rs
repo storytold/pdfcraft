@@ -9094,6 +9094,70 @@ fn lzw_streams_are_stored_with_flate_through_tools() {
     assert_eq!(filters("kept.pdf"), (Some(Object::name("LZWDecode")), ops));
 }
 
+#[test]
+fn image_samples_are_png_predicted_through_tools() {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_full};
+    let dir = workdir("optimize-predict");
+    // An unfiltered 16-bit grey ramp, which Clean Up stores with Flate.
+    let (w, h) = (48usize, 48usize);
+    let px: Vec<u8> = (0..w * h).flat_map(|i| [((i % w) * 5 + i / w) as u8, (i % w * 3) as u8]).collect();
+    let mut doc = Document::new_empty();
+    let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+    let image = doc.add(Object::Stream(Stream::from_raw(
+        Dict::from_iter([
+            (b"Type".to_vec(), Object::name("XObject")),
+            (b"Subtype".to_vec(), Object::name("Image")),
+            (b"Width".to_vec(), Object::Int(w as i64)),
+            (b"Height".to_vec(), Object::Int(h as i64)),
+            (b"BitsPerComponent".to_vec(), Object::Int(16)),
+            (b"ColorSpace".to_vec(), Object::name("DeviceGray")),
+        ]),
+        px.clone(),
+    )));
+    let content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"q 288 0 0 288 72 72 cm /Im Do Q".to_vec())));
+    let xobjects = Object::Dict(Dict::from_iter([(b"Im".to_vec(), Object::Ref(image))]));
+    let page = doc.add(Object::Dict(Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Page")),
+        (b"Parent".to_vec(), Object::Ref(pages)),
+        (b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()])),
+        (b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"XObject".to_vec(), xobjects)]))),
+        (b"Contents".to_vec(), Object::Ref(content)),
+    ])));
+    doc.update_dict(pages, |d| {
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        d.set(b"Count".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+    std::fs::write(dir.join("ramp.pdf"), write_full(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "ramp.pdf" }))["doc"].as_u64().unwrap();
+    // Whether the saved image is predicted, and what it decodes to.
+    let saved = |name: &str| {
+        let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(name)).unwrap())).unwrap();
+        let images: Vec<_> = saved
+            .scan_objects()
+            .filter_map(|(_, o)| match &*o {
+                Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => {
+                    let predictor = s.dict.get(b"DecodeParms").and_then(|p| p.as_dict()?.int(b"Predictor"));
+                    Some((predictor.is_some(), s.decoded_strict().unwrap()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(images.len(), 1, "{name}");
+        images.into_iter().next().unwrap()
+    };
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "auto.pdf", "flate_predictor": "auto" }));
+    assert_eq!(r["images_predicted"].as_u64(), Some(1), "{r}");
+    assert_eq!(saved("auto.pdf"), (true, px.clone()));
+    let plain = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "plain.pdf" }));
+    assert_eq!(plain["images_predicted"].as_u64(), Some(0), "{plain}");
+    assert_eq!(saved("plain.pdf"), (false, px));
+    assert!(r["bytes_after"].as_u64() < plain["bytes_after"].as_u64(), "{r} {plain}");
+    let refused = err(&mut a, "doc_optimize", json!({ "doc": doc, "path": "x.pdf", "flate_predictor": "tiff" }));
+    assert!(matches!(refused, ToolError::InvalidArgs(_)), "{refused:?}");
+}
+
 /// A one-page PDF drawing a 1-bit scan of text (glyph strokes with ragged edges, as a scanner
 /// leaves them) of 1000 × 400 samples, stored with Flate.
 fn scanned_page() -> Vec<u8> {

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
 use pdfcraft_filters::{Filter, Params};
 use pdfcraft_optimize::{
-    Compatibility, Compression, ImageSettings, MonoCompression, MonoSettings, OptimizeError, Settings, SpaceCategory, audit_space,
+    Compatibility, Compression, FlatePredictor, ImageSettings, MonoCompression, MonoSettings, OptimizeError, Settings, SpaceCategory, audit_space,
     effective_resolutions, optimize,
 };
 
@@ -745,6 +745,35 @@ fn eight_bit_black_and_white_with_a_soft_mask_counts_the_mask() {
         let expected = if grey_wins { (Some(8), Some(&b"DCTDecode"[..])) } else { (Some(1), Some(&b"CCITTFaxDecode"[..])) };
         assert_eq!((s.dict.int(b"BitsPerComponent"), s.dict.name(b"Filter")), expected, "mask {mw} × {mh}: {:?}", s.dict);
     }
+}
+
+/// The soft masks are compared as stored, dictionaries included: the 640 × 800 mask above, under
+/// which packing wins, with a /DecodeParms entry larger than packing's lead. Packed, the image
+/// keeps that dictionary; resampled by the grey settings, the mask is written without it, and wins.
+#[test]
+fn eight_bit_black_and_white_with_a_soft_mask_counts_the_mask_as_stored() {
+    let (w, h, (mw, mh)) = (1200u32, 1500u32, (640u32, 800u32));
+    let mut doc = Document::new_empty();
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let noise: Vec<u8> = (0..mw * mh)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 24) as u8
+        })
+        .collect();
+    let mut parms = Dict::new();
+    parms.set(b"Note".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(vec![b'a'; 600_000])));
+    let mask = mono_image(&mut doc, mw, mh, &noise, None, &[("BitsPerComponent", 8.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    doc.update_dict(mask, |d| d.set(b"DecodeParms".to_vec(), Object::Dict(parms))).unwrap();
+    let grey = [("BitsPerComponent", 8.into()), ("ColorSpace", Object::name("DeviceGray")), ("SMask", Object::Ref(mask))];
+    let img = mono_image(&mut doc, w, h, &eight_bit(&bilevel(w, h, false), w, h), None, &grey);
+    page(&mut doc, &[("A", img)], "q 288 0 0 360 20 400 cm /A Do Q");
+    optimize(&mut doc, &Settings::default()).unwrap();
+    let s = stream(&doc, img);
+    assert_eq!((s.dict.int(b"BitsPerComponent"), s.dict.name(b"Filter")), (Some(8), Some(&b"DCTDecode"[..])), "{:?}", s.dict);
+    assert!(!stream(&doc, mask).dict.contains(b"DecodeParms"));
 }
 
 /// Eight-bit grey images of only black and white (as some scanners and converters write scans)
@@ -5839,4 +5868,337 @@ fn the_fewest_strips_that_make_a_picture_are_merged() {
     let (mut doc, _) = printed_page((MIN_FRAGMENTS - 1) as _, |_| false, |_, s| s);
     let r = optimize(&mut doc, &keep).unwrap();
     assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
+}
+
+/// A smooth `w` × `h` ramp of `n` components at `bpc` bits (8 or 16), as an image XObject stored
+/// with plain Flate, or unfiltered.
+fn ramp_image(doc: &mut Document, (w, h): (u32, u32), (n, bpc): (usize, u32), flate: bool) -> (ObjRef, Vec<u8>) {
+    let mut px = Vec::new();
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            for c in 0..n {
+                let v = (x * 3 + y * 2 + c * 40) % 256;
+                px.push(v as u8);
+                if bpc == 16 {
+                    px.push((x * 5 + y) as u8);
+                }
+            }
+        }
+    }
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w.into()));
+    d.set(b"Height".to_vec(), Object::Int(h.into()));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(bpc.into()));
+    d.set(b"ColorSpace".to_vec(), Object::name(["DeviceGray", "", "DeviceRGB", "DeviceCMYK"][n - 1]));
+    let s = if flate { Stream::flate(d, &px) } else { Stream::from_raw(d, px.clone()) };
+    (doc.add(Object::Stream(s)), px)
+}
+
+fn predicted(s: &Stream) -> bool {
+    matches!(s.dict.get(b"DecodeParms"), Some(Object::Dict(p)) if p.int(b"Predictor") == Some(15))
+}
+
+fn zip_settings(flate_predictor: FlatePredictor) -> Settings {
+    let zip = ImageSettings { compression: Compression::Flate, ..Settings::default().color };
+    Settings { color: zip, gray: zip, flate_predictor, ..Settings::default() }
+}
+
+#[test]
+fn png_prediction_shrinks_resampled_images_and_their_masks_to_the_same_samples() {
+    let run = |predictor| {
+        let mut doc = Document::new_empty();
+        let (mask, _) = ramp_image(&mut doc, (800, 800), (1, 8), true);
+        let (img, _) = ramp_image(&mut doc, (800, 800), (3, 8), true);
+        doc.update_dict(img, |d| d.set(b"SMask".to_vec(), Object::Ref(mask))).unwrap();
+        page(&mut doc, &[("Im", img)], "q 72 0 0 72 36 36 cm /Im Do Q");
+        let report = optimize(&mut doc, &zip_settings(predictor)).unwrap();
+        assert_eq!(report.images_resampled, 1, "{report:?}");
+        let (i, m) = (stream(&doc, img), stream(&doc, mask));
+        let samples = (decoded_image(&doc, &i).unwrap(), decoded_image(&doc, &m).unwrap());
+        (report.images_predicted, [predicted(&i), predicted(&m)], i.raw.len() + m.raw.len(), samples)
+    };
+    let (none, off, plain_len, plain) = run(FlatePredictor::Off);
+    assert_eq!((none, off), (0, [false, false]), "off never predicts");
+    let (count, on, _, samples) = run(FlatePredictor::Png);
+    assert_eq!((count, on), (2, [true, true]), "png predicts the image and its mask");
+    assert!(samples == plain, "png: the same samples");
+    // Auto predicts what that makes smaller, the image at least, and is smaller in all.
+    let (count, on, len, samples) = run(FlatePredictor::Auto);
+    assert!(on[0] && count == on.iter().filter(|p| **p).count(), "{count} {on:?}");
+    assert!(len < plain_len, "auto: {len} vs {plain_len}");
+    assert!(samples == plain, "auto: the same samples");
+}
+
+#[test]
+fn with_a_predictor_a_zip_image_at_its_size_is_stored_again_only_when_smaller() {
+    let run = |predictor| {
+        let mut doc = Document::new_empty();
+        // 300 px across 288 pt is 75 ppi: below the threshold, never resampled.
+        let (img, px) = ramp_image(&mut doc, (300, 300), (1, 8), true);
+        page(&mut doc, &[("Im", img)], "q 288 0 0 288 36 36 cm /Im Do Q");
+        let before = stream(&doc, img);
+        let report = optimize(&mut doc, &zip_settings(predictor)).unwrap();
+        let after = stream(&doc, img);
+        assert_eq!(decoded_image(&doc, &after).unwrap(), px, "{predictor:?}");
+        (report.images_predicted, after.raw == before.raw, after.raw.len() < before.raw.len(), predicted(&after))
+    };
+    assert_eq!(run(FlatePredictor::Off), (0, true, false, false), "off leaves a zip image as it is");
+    assert_eq!(run(FlatePredictor::Auto), (1, false, true, true));
+}
+
+#[test]
+fn clean_up_predicts_unencoded_images_of_more_than_eight_bits_and_four_components() {
+    for (n, bpc) in [(1, 16), (3, 16), (4, 8)] {
+        let run = |predictor| {
+            let mut doc = Document::new_empty();
+            let (img, px) = ramp_image(&mut doc, (40, 40), (n, bpc), false);
+            page(&mut doc, &[("Im", img)], "q 288 0 0 288 36 36 cm /Im Do Q");
+            let report = optimize(&mut doc, &Settings { flate_predictor: predictor, ..Settings::default() }).unwrap();
+            let after = stream(&doc, img);
+            assert_eq!(decoded_image(&doc, &after).unwrap(), px, "{n} × {bpc}, {predictor:?}");
+            (report.images_predicted, predicted(&after), after.raw.len())
+        };
+        let (none, off, plain) = run(FlatePredictor::Off);
+        assert_eq!((none, off), (0, false), "{n} × {bpc}");
+        let (count, on, len) = run(FlatePredictor::Auto);
+        assert_eq!((count, on), (1, true), "{n} × {bpc}");
+        assert!(len < plain, "{n} × {bpc}: {len} vs {plain}");
+    }
+}
+
+/// `w` × `h` 8-bit grey noise, with the first `shifted` samples of row 8 one more than row 7's
+/// (which a PNG Up filter makes cheap and plain Flate can't) and the first `zeros` samples of the
+/// last row 0 (cheap either way).
+fn near_noise(w: usize, h: usize, shifted: usize, zeros: usize) -> Vec<u8> {
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut px: Vec<u8> = (0..w * h)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 24) as u8
+        })
+        .collect();
+    for x in 0..shifted {
+        px[8 * w + x] = px[7 * w + x].wrapping_add(1);
+    }
+    px[(h - 1) * w..][..zeros].fill(0);
+    px
+}
+
+fn grey_image(w: usize, h: usize) -> Dict {
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w as i64));
+    d.set(b"Height".to_vec(), Object::Int(h as i64));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    d
+}
+
+/// The length of `px`'s Flate data PNG-predicted (/Predictor 15) as `w` grey 8-bit samples a row.
+fn png_predicted_len(px: &[u8], w: usize) -> usize {
+    let params = Params { predictor: 15, colors: 1, bits_per_component: 8, columns: w as i64, early_change: 1 };
+    pdfcraft_filters::encode(&Filter::Flate, &params, px).unwrap().len()
+}
+
+#[test]
+fn a_prediction_that_gains_less_than_its_dictionary_keeps_the_original() {
+    // 64 × 64 pixels: fewer aren't stored again at their size.
+    let (w, h) = (128, 32);
+    let px = near_noise(w, h, 120, 0);
+    let zip = Stream::flate(grey_image(w, h), &px);
+    // The predicted data is smaller, by less than its /DecodeParms adds.
+    let gain = zip.raw.len().checked_sub(png_predicted_len(&px, w)).unwrap();
+    assert!((1..60).contains(&gain), "{gain}");
+    for predictor in [FlatePredictor::Png, FlatePredictor::Auto] {
+        // At 75 ppi, below the threshold: stored again only to be predicted.
+        let mut doc = Document::new_empty();
+        let img = doc.add(Object::Stream(zip.clone()));
+        page(&mut doc, &[("Im", img)], "q 122.88 0 0 30.72 36 36 cm /Im Do Q");
+        let report = optimize(&mut doc, &zip_settings(predictor)).unwrap();
+        assert_eq!((report.images_predicted, stream(&doc, img).raw), (0, zip.raw.clone()), "{predictor:?}");
+    }
+    // Unfiltered, and too small to be stored again at its size, Clean Up keeps it so too: plain
+    // Flate makes noise larger.
+    let (h, px) = (16, near_noise(w, 16, 120, 0));
+    let mut doc = Document::new_empty();
+    let img = doc.add(Object::Stream(Stream::from_raw(grey_image(w, h), px.clone())));
+    page(&mut doc, &[("Im", img)], "q 122.88 0 0 15.36 36 36 cm /Im Do Q");
+    let report = optimize(&mut doc, &Settings { flate_predictor: FlatePredictor::Png, ..Settings::default() }).unwrap();
+    let after = stream(&doc, img);
+    assert_eq!((report.images_predicted, after.dict.get(b"Filter").cloned(), after.raw.to_vec()), (0, None, px));
+}
+
+/// A prediction that isn't smaller as stored gives way to plain Flate when that is: the same image
+/// with `/DL 0`, which re-encoding drops, is stored plain by `Png` as by `Auto`.
+#[test]
+fn a_prediction_that_isnt_smaller_gives_way_to_plain_flate_that_is() {
+    let (w, h) = (128, 32);
+    let px = near_noise(w, h, 120, 0);
+    let plain = Stream::flate(grey_image(w, h), &px);
+    let mut zip = plain.clone();
+    zip.dict.set(b"DL".to_vec(), Object::Int(0));
+    for predictor in [FlatePredictor::Png, FlatePredictor::Auto] {
+        let mut doc = Document::new_empty();
+        let img = doc.add(Object::Stream(zip.clone()));
+        page(&mut doc, &[("Im", img)], "q 122.88 0 0 30.72 36 36 cm /Im Do Q");
+        let report = optimize(&mut doc, &zip_settings(predictor)).unwrap();
+        let after = stream(&doc, img);
+        assert_eq!((report.images_predicted, after.dict.get(b"DL").cloned(), predicted(&after)), (0, None, false), "{predictor:?}");
+        assert_eq!(after.raw, plain.raw, "{predictor:?}");
+    }
+}
+
+#[test]
+fn clean_up_keeps_unfiltered_what_flate_saves_less_than_its_filter_entry_on() {
+    let (w, h) = (128, 16);
+    let px = near_noise(w, h, 0, 72);
+    // Plain Flate makes the data smaller, by less than `/Filter /FlateDecode` adds.
+    let gain = px.len().checked_sub(Stream::flate(grey_image(w, h), &px).raw.len()).unwrap();
+    assert!((1..20).contains(&gain), "{gain}");
+    let mut doc = Document::new_empty();
+    let img = doc.add(Object::Stream(Stream::from_raw(grey_image(w, h), px.clone())));
+    page(&mut doc, &[("Im", img)], "q 122.88 0 0 15.36 36 36 cm /Im Do Q");
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    let after = stream(&doc, img);
+    assert_eq!((report.streams_compressed, after.dict.get(b"Filter").cloned(), after.raw.to_vec()), (0, None, px));
+}
+
+#[test]
+fn clean_up_under_png_stores_with_plain_flate_what_prediction_doesnt_make_smaller() {
+    let (w, h) = (128, 16);
+    let px = near_noise(w, h, 0, 128);
+    let plain = Stream::flate(grey_image(w, h), &px).raw.len();
+    // Both smaller than the samples: plain by more than its /Filter, predicted by less than its
+    // /Filter and /DecodeParms.
+    assert!(plain + 40 < px.len() && px.len() < plain + 90, "{plain} of {}", px.len());
+    assert!(png_predicted_len(&px, w) < px.len());
+    let mut doc = Document::new_empty();
+    let img = doc.add(Object::Stream(Stream::from_raw(grey_image(w, h), px.clone())));
+    page(&mut doc, &[("Im", img)], "q 122.88 0 0 15.36 36 36 cm /Im Do Q");
+    let report = optimize(&mut doc, &Settings { flate_predictor: FlatePredictor::Png, ..Settings::default() }).unwrap();
+    let after = stream(&doc, img);
+    assert_eq!(report.images_predicted, 0, "{report:?}");
+    assert_eq!((after.dict.name(b"Filter"), predicted(&after), after.raw.len()), (Some(&b"FlateDecode"[..]), false, plain));
+    assert_eq!(decoded_image(&doc, &after).unwrap(), px);
+}
+
+/// Black-and-white 8-bit samples packing to rows of one-bit bytes each one more than the row
+/// above's (which a PNG Up filter makes cheap), with those packed rows.
+fn up_friendly_bits(stride: usize, h: usize) -> (Vec<u8>, Vec<u8>) {
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let first: Vec<u8> = (0..stride)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 24) as u8
+        })
+        .collect();
+    let bits: Vec<u8> = (0..h).flat_map(|y| first.iter().map(move |b| b.wrapping_add(y as u8))).collect();
+    let samples = bits.iter().flat_map(|b| (0..8).map(move |i| if b & (0x80 >> i) != 0 { 255 } else { 0 })).collect();
+    (samples, bits)
+}
+
+#[test]
+fn one_bit_flate_images_are_png_predicted_or_plain_where_that_is_smaller() {
+    // Packed from 8 bits at their size (72 ppi), where the predictor helps.
+    let (stride, h) = (32usize, 64usize);
+    let (samples, bits) = up_friendly_bits(stride, h);
+    let run = |predictor| {
+        let mut doc = Document::new_empty();
+        let grey = [("BitsPerComponent", 8.into()), ("ColorSpace", Object::name("DeviceGray"))];
+        let im = mono_image(&mut doc, (stride * 8) as u32, h as u32, &samples, None, &grey);
+        page(&mut doc, &[("Im", im)], "q 256 0 0 64 36 36 cm /Im Do Q");
+        let report = optimize(&mut doc, &Settings { flate_predictor: predictor, ..Settings::default() }).unwrap();
+        let s = stream(&doc, im);
+        assert_eq!(s.dict.int(b"BitsPerComponent"), Some(1), "{predictor:?}");
+        (report.images_predicted, predicted(&s), decoded_image(&doc, &s).unwrap())
+    };
+    assert_eq!(run(FlatePredictor::Off).0, 0);
+    assert_eq!(run(FlatePredictor::Png), (1, true, bits));
+    // Text resampled at one bit, which the predictor makes larger: under png, plain Flate as with
+    // off, resampled all the same.
+    let (w, h) = (1200u32, 960u32);
+    let text = font_text(w, h, 7);
+    let run = |predictor| {
+        let mut doc = Document::new_empty();
+        let im = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+        // 1200 samples over 144 pt: 600 ppi, resampled to 300.
+        page(&mut doc, &[("Im", im)], "q 144 0 0 115.2 6 300 cm /Im Do Q");
+        let report = optimize(&mut doc, &Settings { mono: RETAIN, flate_predictor: predictor, ..Settings::default() }).unwrap();
+        let s = stream(&doc, im);
+        (report.images_resampled, report.images_predicted, s.raw)
+    };
+    let off = run(FlatePredictor::Off);
+    assert_eq!(off.0, 1);
+    assert!(run(FlatePredictor::Png) == off, "png: as off");
+}
+
+#[test]
+fn clean_up_predicts_indexed_and_icc_based_images() {
+    let mut doc = Document::new_empty();
+    let icc = doc.add(Object::Stream(Stream::from_raw(Dict::from_iter([(b"N".to_vec(), Object::Int(3))]), vec![0; 32])));
+    let lookup: Vec<u8> = (0..=255u8).flat_map(|i| [i, 255 - i, i / 2]).collect();
+    let indexed = Object::Array(vec![
+        Object::name("Indexed"),
+        Object::name("DeviceRGB"),
+        Object::Int(255),
+        Object::String(pdfcraft_cos::PdfString::literal(lookup)),
+    ]);
+    let mut images = Vec::new();
+    for (n, cs) in [(1, indexed), (3, Object::Array(vec![Object::name("ICCBased"), Object::Ref(icc)]))] {
+        let (img, px) = ramp_image(&mut doc, (40, 40), (n, 8), false);
+        doc.update_dict(img, |d| d.set(b"ColorSpace".to_vec(), cs)).unwrap();
+        images.push((img, n, px));
+    }
+    page(&mut doc, &[("A", images[0].0), ("B", images[1].0)], "q 288 0 0 288 36 36 cm /A Do /B Do Q");
+    let report = optimize(&mut doc, &Settings { flate_predictor: FlatePredictor::Auto, ..Settings::default() }).unwrap();
+    assert_eq!(report.images_predicted, 2, "{report:?}");
+    for (img, n, px) in images {
+        let after = stream(&doc, img);
+        let parms = after.dict.get(b"DecodeParms").and_then(Object::as_dict).map(|p| p.int(b"Colors"));
+        assert_eq!(parms, Some(Some(n as i64)), "{n}");
+        assert_eq!(decoded_image(&doc, &after).unwrap(), px, "{n}");
+    }
+}
+
+/// A /DecodeParms with no /Filter means nothing: Clean Up's Flate data must not be read with it.
+#[test]
+fn clean_up_drops_a_decode_parms_that_has_no_filter() {
+    for predictor in FlatePredictor::ALL {
+        let mut doc = Document::new_empty();
+        let (img, px) = ramp_image(&mut doc, (40, 40), (1, 8), false);
+        let parms = Dict::from_iter([(b"Predictor".to_vec(), Object::Int(12)), (b"Columns".to_vec(), Object::Int(40))]);
+        doc.update_dict(img, |d| d.set(b"DecodeParms".to_vec(), Object::Dict(parms))).unwrap();
+        page(&mut doc, &[("Im", img)], "q 288 0 0 288 36 36 cm /Im Do Q");
+        optimize(&mut doc, &Settings { flate_predictor: predictor, ..Settings::default() }).unwrap();
+        let after = stream(&doc, img);
+        assert_eq!(after.dict.name(b"Filter"), Some(&b"FlateDecode"[..]), "{predictor:?}");
+        assert_eq!(decoded_image(&doc, &after).unwrap(), px, "{predictor:?}");
+    }
+}
+
+/// A ZIP image behind ASCII85, already Up-predicted with its parameters in an array, is stored
+/// again with one filter and a /Predictor 15 dictionary, and the same samples.
+#[test]
+fn a_zip_image_with_a_filter_array_and_decode_parms_is_predicted_again() {
+    let mut doc = Document::new_empty();
+    let (img, px) = ramp_image(&mut doc, (300, 300), (1, 8), false);
+    let up = Params { predictor: 12, colors: 1, bits_per_component: 8, columns: 300, early_change: 1 };
+    let coded = ascii85(&pdfcraft_filters::encode(&Filter::Flate, &up, &px).unwrap());
+    let parms = Dict::from_iter([(b"Predictor".to_vec(), Object::Int(12)), (b"Columns".to_vec(), Object::Int(300))]);
+    let mut d = stream(&doc, img).dict;
+    d.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCII85Decode"), Object::name("FlateDecode")]));
+    d.set(b"DecodeParms".to_vec(), Object::Array(vec![Object::Null, Object::Dict(parms)]));
+    doc.set(img, Object::Stream(Stream::from_raw(d, coded)));
+    page(&mut doc, &[("Im", img)], "q 288 0 0 288 36 36 cm /Im Do Q");
+    let report = optimize(&mut doc, &zip_settings(FlatePredictor::Auto)).unwrap();
+    let after = stream(&doc, img);
+    assert_eq!((report.images_predicted, after.dict.name(b"Filter"), predicted(&after)), (1, Some(&b"FlateDecode"[..]), true), "{report:?}");
+    assert_eq!(decoded_image(&doc, &after).unwrap(), px);
 }

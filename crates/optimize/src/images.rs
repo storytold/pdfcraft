@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ImageBudget, ObjRef, Object, Stream};
 
+use crate::predict::{self, FlatePredictor, Layout};
 use crate::{Compression, ImageSettings, MonoCompression, MonoSettings, OptimizeError, Report, Settings, Stage};
 
 /// Images with more pixels than this are left alone (memory).
@@ -718,8 +719,17 @@ pub(crate) fn is_identity_decode(doc: &Document, decode: &Object, n: usize) -> b
 /// A new image stream from 8-bit samples: the original dictionary with the new size and filter.
 /// A decode array is dropped: only images without one, or with the default one, get here. So are
 /// the filter parameters: the samples are decoded, and a JPEG written here is plain YCbCr with no
-/// Adobe marker, which is what a missing /ColorTransform means.
-fn image_stream(old: &Dict, px: &[u8], n: usize, w: u32, h: u32, compression: Compression, was_dct: bool) -> Option<Stream> {
+/// Adobe marker, which is what a missing /ColorTransform means. Flate output is PNG-predicted as
+/// `predictor` says.
+fn image_stream(
+    old: &Dict,
+    px: &[u8],
+    n: usize,
+    (w, h): (u32, u32),
+    compression: Compression,
+    was_dct: bool,
+    predictor: FlatePredictor,
+) -> Option<Stream> {
     let mut d = old.clone();
     for k in [&b"Filter"[..], b"DecodeParms", b"Decode", b"Length", b"DL"] {
         d.remove(k);
@@ -741,7 +751,8 @@ fn image_stream(old: &Dict, px: &[u8], n: usize, w: u32, h: u32, compression: Co
         d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
         Some(Stream::from_raw(d, data))
     } else {
-        Some(Stream::flate(d, px))
+        let layout = Layout { colors: u32::try_from(n).ok()?, bpc: 8, columns: w, rows: h };
+        Some(predict::flate_image(d, px, layout, predictor))
     }
 }
 
@@ -751,12 +762,13 @@ fn is_stencil(doc: &Document, mask: &Object) -> bool {
 }
 
 /// One image: resample and/or recompress per `settings`; `ppi` is its effective resolution.
-/// Returns the new image and its new soft mask, if the result is smaller.
+/// Returns the new image and its new soft mask, if the result is smaller. With a `predictor`, an
+/// image set to Flate is stored again at its size when it isn't JPEG, to be predicted.
 fn process(
     doc: &Document,
     s: &Stream,
     ppi: f64,
-    settings: &ImageSettings,
+    (settings, predictor): (&ImageSettings, FlatePredictor),
     n: usize,
     budget: &mut ImageBudget,
 ) -> Option<(Stream, Option<(ObjRef, Stream)>)> {
@@ -780,7 +792,8 @@ fn process(
         return None;
     }
     let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0 && settings.target_ppi.is_finite();
-    let recompress = matches!(settings.compression, Compression::Jpeg(_)) || (matches!(settings.compression, Compression::Flate) && was_dct);
+    let to_flate = matches!(settings.compression, Compression::Flate) && (was_dct || predictor != FlatePredictor::Off);
+    let recompress = matches!(settings.compression, Compression::Jpeg(_)) || to_flate;
     let (nw, nh) = if resize {
         // Downsampling never enlarges: a target above the image's own resolution (or a hostile
         // settings value) must not size a buffer from the setting.
@@ -800,29 +813,59 @@ fn process(
     }
     let px = pixels(doc, s, n, budget)?;
     let px = if (nw, nh) != (w, h) { resample(&px, n, w, h, nw, nh)? } else { px };
-    let new = image_stream(d, &px, n, nw, nh, settings.compression, was_dct)?;
-    // A soft mask must keep the image's dimensions: resample it with the image (lossless).
-    let mut smask = None;
-    if let Some(mr) = d.reference(b"SMask") {
-        let mobj = doc.get(mr);
-        let Object::Stream(m) = &*mobj else { return None };
-        if (nw, nh) != (w, h) {
-            if m.dict.int(b"BitsPerComponent") != Some(8) || m.dict.contains(b"Matte") || m.dict.contains(b"Decode") {
-                return None;
-            }
-            let (mw, mh) = (u32::try_from(m.dict.int(b"Width")?).ok()?, u32::try_from(m.dict.int(b"Height")?).ok()?);
-            let mpx = pixels(doc, m, 1, budget)?;
-            let mpx = resample(&mpx, 1, mw, mh, nw, nh)?;
-            smask = Some((mr, image_stream(&m.dict, &mpx, 1, nw, nh, Compression::Flate, false)?));
-        }
+    let mask = resampled_mask(doc, d, (w, h), (nw, nh), budget)?;
+    let build = |predictor| {
+        let new = image_stream(d, &px, n, (nw, nh), settings.compression, was_dct, predictor)?;
+        let smask = match &mask {
+            Some((r, m, mpx)) => Some((*r, image_stream(m, mpx, 1, (nw, nh), Compression::Flate, false, predictor)?)),
+            None => None,
+        };
+        Some((new, smask))
+    };
+    let first = build(predictor)?;
+    if smaller(doc, s, &first)? {
+        return Some(first);
     }
-    let before = s.raw.len()
-        + smask.as_ref().map_or(0, |(r, _)| match &*doc.get(*r) {
-            Object::Stream(m) => m.raw.len(),
-            _ => 0,
-        });
-    let after = new.raw.len() + smask.as_ref().map_or(0, |(_, m)| m.raw.len());
-    (after < before).then_some((new, smask))
+    // Predicted output that isn't smaller may still lose to plain Flate, as `Auto` would find.
+    let predicted = predict::is_predicted(&first.0) || first.1.as_ref().is_some_and(|(_, m)| predict::is_predicted(m));
+    let plain = (predictor == FlatePredictor::Png && predicted).then(|| build(FlatePredictor::Off)).flatten()?;
+    smaller(doc, s, &plain)?.then_some(plain)
+}
+
+/// A soft mask must keep the image's dimensions: resampled to `(nw, nh)` with the image
+/// (lossless), it is returned with its dictionary and samples. `Some(None)` when the image has no
+/// mask or keeps its size; `None` when the mask can't be resampled, and the image stays.
+fn resampled_mask(
+    doc: &Document,
+    d: &Dict,
+    (w, h): (u32, u32),
+    (nw, nh): (u32, u32),
+    budget: &mut ImageBudget,
+) -> Option<Option<(ObjRef, Dict, Vec<u8>)>> {
+    let Some(mr) = d.reference(b"SMask") else { return Some(None) };
+    let mobj = doc.get(mr);
+    let Object::Stream(m) = &*mobj else { return None };
+    if (nw, nh) == (w, h) {
+        return Some(None);
+    }
+    if m.dict.int(b"BitsPerComponent") != Some(8) || m.dict.contains(b"Matte") || m.dict.contains(b"Decode") {
+        return None;
+    }
+    let (mw, mh) = (u32::try_from(m.dict.int(b"Width")?).ok()?, u32::try_from(m.dict.int(b"Height")?).ok()?);
+    let mpx = pixels(doc, m, 1, budget)?;
+    Some(Some((mr, m.dict.clone(), resample(&mpx, 1, mw, mh, nw, nh)?)))
+}
+
+/// Whether the replacement `(new, smask)` is smaller as stored than image `s` and the soft mask
+/// it resamples, counting the dictionaries: a predicted stream's /DecodeParms among them.
+fn smaller(doc: &Document, s: &Stream, (new, smask): &(Stream, Option<(ObjRef, Stream)>)) -> Option<bool> {
+    let old_mask = smask.as_ref().map_or(Some(0), |(r, _)| match &*doc.get(*r) {
+        Object::Stream(m) => crate::stored_len(m),
+        _ => Some(0),
+    });
+    let before = crate::stored_len(s)?.checked_add(old_mask?)?;
+    let after = crate::stored_len(new)?.checked_add(smask.as_ref().map_or(Some(0), |(_, m)| crate::stored_len(m))?)?;
+    Some(after < before)
 }
 
 /// Whether colour space `cs` has one colour component, so a 1-bit image in it has one bit per
@@ -1183,7 +1226,7 @@ fn mono(
     s: &Stream,
     ppi: f64,
     defaults: bool,
-    settings: &MonoSettings,
+    (settings, predictor): (&MonoSettings, FlatePredictor),
     budget: &mut ImageBudget,
 ) -> Option<(Stream, bool, Option<Vec<u8>>)> {
     let d = &s.dict;
@@ -1266,7 +1309,8 @@ fn mono(
     } else {
         None
     };
-    let flate = ((resampled || packed_from_more) && !(retain && (ccitt || jbig2))).then(|| Stream::flate(dict, &data));
+    let flate = ((resampled || packed_from_more) && !(retain && (ccitt || jbig2)))
+        .then(|| predict::flate_one_bit(dict, &data, (nw, nh), predictor, crate::stored_len(s)));
     // Smaller as stored, counting the dictionary: a tiny image can lose by Group 4's parameters.
     let best = [g4, jbig, flate].into_iter().flatten().filter_map(|c| Some((crate::stored_len(&c)?, c))).min_by_key(|(len, _)| *len)?;
     let shareable = settings.compression == MonoCompression::Jbig2 && best.1.dict.name(b"Filter") == Some(b"JBIG2Decode");
@@ -1581,7 +1625,7 @@ fn decide_mask(doc: &Document, r: ObjRef, settings: &Settings, budget: &mut Imag
     let refused = budget.refused();
     // Its resolution unmeasured, it isn't resampled. As where a default colour space is in force:
     // at one bit a sample that changes nothing, and nothing is packed.
-    match mono(doc, s, f64::NAN, true, &settings.mono, budget) {
+    match mono(doc, s, f64::NAN, true, (&settings.mono, settings.flate_predictor), budget) {
         Some((new, _, _)) => Decision::Replace { image: r, before: s.raw.len(), new, resampled: false, smask: None, bits: None },
         None => Decision::Stays { refused: budget.refused() > refused },
     }
@@ -1696,6 +1740,7 @@ fn apply(doc: &mut Document, decision: Decision, report: &mut Report, jbig2: &mu
     *jbig2 |= new.dict.name(b"Filter") == Some(b"JBIG2Decode");
     report.image_bytes_before += before;
     report.image_bytes_after += new.raw.len();
+    report.images_predicted += usize::from(predict::is_predicted(&new)) + usize::from(smask.as_ref().is_some_and(|(_, m)| predict::is_predicted(m)));
     if resampled {
         report.images_resampled += 1;
     } else {
@@ -1721,7 +1766,7 @@ fn decide(doc: &Document, r: ObjRef, ppi: f64, defaults: bool, settings: &Settin
     // Packed from more bits a sample, it is lossless at one bit, but the grey or colour
     // settings can make it smaller still (below).
     let packed_from_more = s.dict.int(b"BitsPerComponent").is_some_and(|b| b > 1);
-    let (packed, mono) = match mono(doc, s, ppi, defaults, &settings.mono, budget) {
+    let (packed, mono) = match mono(doc, s, ppi, defaults, (&settings.mono, settings.flate_predictor), budget) {
         Some(m) if packed_from_more => (Some(m), None),
         m => (None, m),
     };
@@ -1730,13 +1775,14 @@ fn decide(doc: &Document, r: ObjRef, ppi: f64, defaults: bool, settings: &Settin
         return Decision::Replace { image: r, before: s.raw.len(), new, resampled, smask: None, bits };
     }
     let n = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs));
-    let processed = n.and_then(|n| process(doc, s, ppi, if n == 1 { &settings.gray } else { &settings.color }, n, budget));
+    let processed =
+        n.and_then(|n| process(doc, s, ppi, (if n == 1 { &settings.gray } else { &settings.color }, settings.flate_predictor), n, budget));
     // A dithered scan, say, downsampled and JPEG-compressed: the smaller wins, counting a soft
     // mask resampled with it.
     let smask_len = |smask: Option<&(ObjRef, Stream)>| match smask {
-        Some((_, m)) => Some(m.raw.len()),
+        Some((_, m)) => Some(crate::stored_len(m).unwrap_or(0)),
         None => s.dict.reference(b"SMask").map(|m| match &*doc.get(m) {
-            Object::Stream(m) => m.raw.len(),
+            Object::Stream(m) => crate::stored_len(m).unwrap_or(0),
             _ => 0,
         }),
     };
@@ -1838,7 +1884,7 @@ pub fn recolour_image(doc: &Document, s: &Stream, target: ImageTarget) -> Option
         }),
     );
     let compression = if want == 4 { Compression::Flate } else { Compression::Retain };
-    image_stream(&dict, &out, want, w, h, compression, was_dct)
+    image_stream(&dict, &out, want, (w, h), compression, was_dct, FlatePredictor::Off)
 }
 
 #[cfg(test)]
@@ -2043,7 +2089,7 @@ mod dimension_tests {
         let settings = MonoSettings { compression: MonoCompression::CcittG4, ..MonoSettings::REDUCE };
         let decoded = |s: &Stream, settings: &MonoSettings| {
             DECODED_PIXELS.with(|c| c.set(0));
-            mono(&Document::new_empty(), s, 300.0, false, settings, &mut ImageBudget::with_work(u64::MAX));
+            mono(&Document::new_empty(), s, 300.0, false, (settings, FlatePredictor::Off), &mut ImageBudget::with_work(u64::MAX));
             DECODED_PIXELS.with(|c| c.get())
         };
         let alone = image(Object::name("JBIG2Decode"), coded.clone());
@@ -2385,7 +2431,7 @@ mod dimension_tests {
         dict.set(b"Height".to_vec(), Object::Int(8));
         dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
         dict.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
-        let jpeg = image_stream(&dict, &[120; 16 * 8 * 3], 3, 16, 8, Compression::Jpeg(60), false).expect("a JPEG");
+        let jpeg = image_stream(&dict, &[120; 16 * 8 * 3], 3, (16, 8), Compression::Jpeg(60), false, FlatePredictor::Off).expect("a JPEG");
         let doc = Document::new_empty();
         let cost = 2 * 16 * 8 * 3 + 4 * jpeg.raw.len() as u64;
         let mut budget = ImageBudget::with_work(cost);
@@ -2425,7 +2471,7 @@ mod dimension_tests {
         with_mask.dict.set(b"SMask".to_vec(), Object::Ref(masked));
         let spent = |s: &Stream| {
             let mut budget = ImageBudget::with_work(u64::MAX);
-            process(&doc, s, 720.0, &Settings::default().gray, 1, &mut budget).expect("resampled, and smaller");
+            process(&doc, s, 720.0, (&Settings::default().gray, FlatePredictor::Off), 1, &mut budget).expect("resampled, and smaller");
             u64::MAX - budget.work_left()
         };
         assert_eq!(spent(&with_mask), spent(&image("DeviceGray")) + cost);
@@ -2449,7 +2495,7 @@ mod dimension_tests {
         let spent_at = |target_ppi: f64, s: &Stream, defaults: bool| {
             let settings = MonoSettings { compression: MonoCompression::Retain, above_ppi: 100.0, target_ppi, ..MonoSettings::REDUCE };
             let mut budget = ImageBudget::with_work(u64::MAX);
-            let _ = mono(&Document::new_empty(), s, 720.0, defaults, &settings, &mut budget);
+            let _ = mono(&Document::new_empty(), s, 720.0, defaults, (&settings, FlatePredictor::Off), &mut budget);
             u64::MAX - budget.work_left()
         };
         let spent = |s: &Stream, defaults: bool| spent_at(300.0, s, defaults);
