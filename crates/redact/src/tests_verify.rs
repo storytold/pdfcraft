@@ -735,6 +735,46 @@ fn images_and_paths_under_a_region_are_checked_independently() {
     assert!(e.detail.contains("image") && e.detail.contains("path"), "{}", e.detail);
 }
 
+/// An image drawn turned a quarter turn, or three, has rows that run up or down the page: each row
+/// is a vertical line, which the check of what reaches the region must still let through. A 20 x
+/// 20 image covering the region, and 2 x 2 images whose only row under the region lies on its
+/// right edge or on its left edge, each fail the proof unredacted, and pass it once the redaction
+/// has cleared them.
+#[test]
+fn an_image_drawn_turned_a_quarter_turn_is_checked_under_a_region() {
+    for (cm, side) in [("0 100 -100 0 200 100", 20), ("0 -100 100 0 100 200", 20), ("0 100 -100 0 225 100", 2), ("0 100 -100 0 125 100", 2)] {
+        let page = || {
+            let dict = format!("/Type /XObject /Subtype /Image /Width {side} /Height {side} /ColorSpace /DeviceGray /BitsPerComponent 8");
+            let image = stream(&dict, &vec![0xFFu8; side * side]);
+            let spec = Spec { resources: "/XObject << /Im1 7 0 R >>", extra: vec![image], ..Spec::default() };
+            marked_region(format!("q {cm} cm /Im1 Do Q").as_bytes(), spec)
+        };
+        let proof = prove_unapplied(&mut page());
+        let e = &proof.entries[0];
+        assert_eq!(e.status, Status::Failed, "cm {cm}: {}", proof.to_text());
+        assert!(e.detail.contains("image"), "cm {cm}: {}", e.detail);
+
+        let mut doc = page();
+        let (r, proof) = run(&mut doc);
+        assert_eq!(r.unwrap().images_cleared, 1, "cm {cm}: the image is cleared, not removed");
+        assert!(proof.passed(), "cm {cm}: {}", proof.to_text());
+    }
+}
+
+/// An annotation's appearance turned a quarter turn by its `/Matrix` draws an image the same way:
+/// its rows run up the page under the region, and unredacted it fails the proof.
+#[test]
+fn an_image_in_an_appearance_turned_by_its_matrix_is_checked_under_a_region() {
+    let annot = b"<< /Type /Annot /Subtype /Square /Rect [100 100 200 200] /AP << /N 8 0 R >> >>".to_vec();
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Matrix [0 1 -1 0 0 0] /Resources << /XObject << /Im1 9 0 R >> >>", b"/Im1 Do");
+    let image = stream("/Type /XObject /Subtype /Image /Width 20 /Height 20 /ColorSpace /DeviceGray /BitsPerComponent 8", &[0xFFu8; 400]);
+    let spec = Spec { page: "/Annots [7 0 R]", extra: vec![annot, form, image], ..Spec::default() };
+    let proof = prove_unapplied(&mut marked_region(b"", spec));
+    let e = &proof.entries[0];
+    assert_eq!(e.status, Status::Failed, "{}", proof.to_text());
+    assert!(e.detail.contains("image"), "{}", e.detail);
+}
+
 #[test]
 fn a_shading_under_a_region_must_be_clipped() {
     let sh =
