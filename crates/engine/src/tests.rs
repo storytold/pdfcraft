@@ -2217,6 +2217,20 @@ fn an_unrestricted_copy_needs_no_permissions_password() {
     assert!(s.get(id).unwrap().info.encrypted, "the original stays protected");
 }
 
+/// A damaged protected file opened after repair can rewrite without a page tree: Unlock for
+/// editing refuses that copy, as a save does, instead of returning bytes that don't reopen.
+#[test]
+fn an_unrestricted_copy_that_does_not_reopen_is_refused() {
+    // Cut off before the final `startxref`: it opens with its pages, the rewrite has none.
+    let mut bytes = (*protected("", "owner", 0b1100)).clone();
+    let at = bytes.windows(9).rposition(|w| w == b"startxref").unwrap();
+    bytes.truncate(at);
+    let mut s = Session::new();
+    let id = s.open("r.pdf", None, Arc::new(bytes), None).unwrap();
+    assert!(!s.get(id).unwrap().info.pages.is_empty(), "the damaged file opens with its pages");
+    assert!(matches!(s.unrestricted_copy_bytes(id), Err(EditError::Reopen(_))));
+}
+
 #[test]
 fn remove_security_from_a_file_with_its_encrypt_dictionary_in_the_trailer() {
     // MuPDF writes /Encrypt inline in the trailer rather than as an object (#2661).

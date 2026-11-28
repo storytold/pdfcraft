@@ -5709,7 +5709,7 @@ milestone = "M8"
 status = "shipped"
 commands = ["protect.unlock_copy"]
 tools = ["doc_unlock_copy"]
-evidence = ["crates/engine/src/tests.rs::an_unrestricted_copy_needs_no_permissions_password", "crates/automation/tests/it/automation.rs::unlocking_a_copy_for_editing_without_the_permissions_password"]
+evidence = ["crates/engine/src/tests.rs::an_unrestricted_copy_needs_no_permissions_password", "crates/engine/src/tests.rs::an_unrestricted_copy_that_does_not_reopen_is_refused", "crates/automation/tests/it/automation.rs::unlocking_a_copy_for_editing_without_the_permissions_password"]
 notes = "Beyond Acrobat (#2465): an editable copy, written as a new file and opened beside the original, without the permissions password. The original file and document keep their security; a signature in the original doesn't validate in the copy."
 
 [[feature]]
