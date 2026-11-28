@@ -306,6 +306,14 @@ pub fn declared(doc: &Document) -> Declared {
     d
 }
 
+/// Whether the document declares PDF/A-4 (ISO 19005-4: `pdfaid:part` 4 in its XMP, as
+/// [`declared`] reads it), at any conformance level. Such a file keeps its document metadata
+/// in XMP only: its trailer has no `/Info` unless the catalog has `/PieceInfo` (ISO 19005-4
+/// §6.1.3), so the engine asks this before a save or a Document Properties change writes one.
+pub fn declares_pdfa4(doc: &Document) -> bool {
+    declared(doc).pdfa.is_some_and(|(part, _)| part == 4)
+}
+
 /// The most bytes of an output condition identifier [`declared`] keeps (a real one is a few
 /// dozen).
 const MAX_IDENTIFIER_BYTES: usize = 1024;

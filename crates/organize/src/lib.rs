@@ -19,6 +19,7 @@ mod comments;
 mod dedupe;
 mod import;
 mod labels;
+pub mod metadata;
 mod outline;
 mod outline_io;
 mod pdfx;
@@ -38,6 +39,7 @@ pub use import::{
     insert_file_pages, page_as_form, reachable, split, split_ranges,
 };
 pub use labels::{LabelRange, LabelStyle, PageLabels, number_pages, page_label_ranges, page_labels, set_page_label_ranges};
+pub use metadata::MetadataHome;
 pub use outline::{
     Bookmark, BookmarkPage, OutlineEntry, OutlineError, add_bookmark, add_bookmark_at, add_bookmark_tree, bookmark_page, bookmarks, delete_bookmark,
     move_bookmark, rename_bookmark, set_bookmark_color, set_bookmark_open, set_bookmark_page, set_bookmark_style, top_level_bookmarks,
@@ -694,7 +696,8 @@ pub fn has_info(doc: &Document, key: &str) -> bool {
 /// Documents with XMP metadata also carry Title, Author, Subject, Keywords, Creator and Producer
 /// in the XMP packet, and viewers that read XMP first show its value: the packet's property is
 /// changed (or removed) to match, and a custom property is kept there as `pdfx:<key>` as Acrobat
-/// keeps it (see `xmp`).
+/// keeps it (see `xmp`). A document that keeps its metadata in XMP alone (PDF/A-4) is changed
+/// through [`metadata::set_info_in`] instead.
 pub fn set_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
     if !STANDARD_INFO_KEYS.contains(&key) {
         check_custom_key(key)?;
