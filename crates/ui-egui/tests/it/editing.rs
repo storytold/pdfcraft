@@ -11646,6 +11646,83 @@ fn affine_review_cropped_rotation_preview_matches_saved_corners() {
     }
 }
 
+/// Edit text & images: a click through the transparent margin of a picture selects the picture
+/// below it, and a click where it shows selects it. Once selected, a picture keeps its whole frame.
+#[test]
+fn a_click_through_a_pictures_transparent_margin_selects_the_picture_below() {
+    let stream = |dict: &str, data: &[u8]| {
+        let mut o = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
+        o.extend_from_slice(data);
+        o.extend_from_slice(b"\nendstream");
+        o
+    };
+    let image = "/Type /XObject /Subtype /Image /Width 4 /Height 4 /BitsPerComponent 8";
+    // The top picture's soft mask shows its top-right quarter only.
+    let mask: Vec<u8> = [[0, 0, 255, 255], [0, 0, 255, 255], [0; 4], [0; 4]].concat();
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Low 5 0 R /Top 6 0 R >> >> >>".to_vec(),
+        stream("", b"q 100 0 0 100 20 20 cm /Low Do Q q 100 0 0 100 60 60 cm /Top Do Q"),
+        stream(&format!("{image} /ColorSpace /DeviceRGB"), &[0x80; 48]),
+        stream(&format!("{image} /ColorSpace /DeviceRGB /SMask 7 0 R"), &[0x40; 48]),
+        stream(&format!("{image} /ColorSpace /DeviceGray"), &mask),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        bytes.extend_from_slice(o);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let harness = || {
+        let bytes = bytes.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 800.0)).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "overlap.pdf", None, bytes).unwrap();
+            app
+        });
+        h.run_steps(4);
+        assert!(h.execute("edit.edit_text"));
+        h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
+        h.run_steps(4);
+        h
+    };
+    let click = |h: &mut Harness<'static, PdfCraftApp>, x: f32, y: f32| {
+        let id = h.state().views[0].id;
+        let info = h.state().session.get(id).unwrap().info.pages[0].clone();
+        let page = h.state().views[0].page_screen_rect(0).unwrap();
+        let v = info.user_to_view(x, y);
+        let p = page.min + egui::vec2(v[0], v[1]) * (page.width() / info.width);
+        h.hover_at(p);
+        h.run_steps(1);
+        h.drag_at(p);
+        h.run_steps(1);
+        h.drop_at(p);
+        h.run_steps(3);
+        h.state().views[0].session.image_selection.as_ref().map(|s| s.index)
+    };
+    // With nothing selected: where the top picture shows, it is picked; through its transparent
+    // three quarters, the picture below is.
+    for ((x, y), want) in [((70.0, 70.0), 0), ((150.0, 150.0), 1), ((100.0, 100.0), 0), ((115.0, 145.0), 1)] {
+        let mut h = harness();
+        assert_eq!(click(&mut h, x, y), Some(want), "click at {x}, {y}");
+    }
+    // The selected picture's frame is its own, its transparent parts included.
+    let mut h = harness();
+    assert_eq!(click(&mut h, 150.0, 150.0), Some(1));
+    assert_eq!(click(&mut h, 100.0, 100.0), Some(1), "the selected picture keeps its frame");
+}
+
 /// The Escape that closes a dialog opened from a menu while a paragraph is being typed is the
 /// dialog's: the typing stays, in the open paragraph or applied to the page. It was thrown away.
 #[test]

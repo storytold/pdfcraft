@@ -610,14 +610,18 @@ fn picture_change(
 }
 
 /// The parts of the pictures of `page`, in paint order so the topmost wins a press: a picture's
-/// visible shape, and for the selected one its whole frame, a hole in it included. None while
-/// the picture is cropped, whose crop overlay holds the page.
+/// visible shape where it shows, and for the selected one its whole frame, a hole in it included.
+/// None while the picture is cropped, whose crop overlay holds the page.
+///
+/// A picture with transparency is picked only where it shows: with the pointer at `pointer` over
+/// one of its see-through parts, it has no part this pass, so the press goes to what lies below.
 pub(crate) fn picture_parts(
     session: &PageSession,
     doc: &pdfcraft_engine::Document,
     page: usize,
     placed: &PlacedPage,
     geo: PageGeometry<'_>,
+    pointer: Option<Pos2>,
 ) -> Vec<PagePart> {
     let Some(xf) = session.page_xform(page, geo) else { return Vec::new() };
     let selection = session.image_selection.as_ref().filter(|s| s.page == page);
@@ -628,7 +632,7 @@ pub(crate) fn picture_parts(
     doc.page_images(page)
         .iter()
         .enumerate()
-        .map(|(index, image)| {
+        .filter_map(|(index, image)| {
             let quad = picture_quad(&xf, &doc.info, page, image);
             let visible = image.visible_rect.map(|r| xf.user_rect(&doc.info, page, r.map(|v| v as f32)).intersect(placed.rect));
             let (shape, icon) = if selected == Some(index) {
@@ -636,7 +640,13 @@ pub(crate) fn picture_parts(
             } else {
                 (visible.map_or_else(|| HitShape::Polygon(quad.to_vec()), HitShape::Rect), CursorIcon::PointingHand)
             };
-            PagePart::new(Owner::Picture { index }, page, shape, PageLayer::Picture).cursor(icon)
+            // Through a picture's transparent parts, the one below is picked (the selected one keeps its frame).
+            let see_through = selected != Some(index)
+                && pointer.is_some_and(|at| {
+                    let (x, y) = screen_to_user(&xf, &doc.info, page, at);
+                    shape.hit(at) && !doc.image_shows_at(image, [x, y])
+                });
+            (!see_through).then(|| PagePart::new(Owner::Picture { index }, page, shape, PageLayer::Picture).cursor(icon))
         })
         .collect()
 }

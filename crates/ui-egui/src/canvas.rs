@@ -976,8 +976,9 @@ fn page_parts_of(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSessi
     }
     if cx.editing_content {
         if cx.tool == QuickTool::EditText && cx.can_modify {
+            let pointer = ui.input(|i| i.pointer.latest_pos());
             for placed in body.pages {
-                parts.extend(crate::edit_text_ui::picture_parts(session, cx.doc, placed.page, placed, geo));
+                parts.extend(crate::edit_text_ui::picture_parts(session, cx.doc, placed.page, placed, geo, pointer));
             }
         }
         // A picture being cropped holds every press on its page: its paragraphs and added text take none there.
