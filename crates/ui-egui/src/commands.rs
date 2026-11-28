@@ -428,6 +428,7 @@ impl PdfCraftApp {
             "file.close_all" => self.close_all(ctx),
             // PLAN: assumed the dialog openers are `PdfCraftApp` methods named as the sheet gives them (dialogs A-3..A-10), taking no argument unless the sheet names one.
             "file.revert" => self.ask_revert(),
+            "file.send_email" => self.send_by_email(ctx),
             "file.properties" => self.open_properties(ctx, PropsTab::Description),
             "file.word_count" => self.open_word_count(),
             "protect.properties" => self.open_properties(ctx, PropsTab::Security),

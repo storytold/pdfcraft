@@ -418,6 +418,7 @@ impl PdfCraftApp {
             #[cfg(target_arch = "wasm32")]
             ocr_web_waiting: None,
             ocr_verify: ocr_verify::OcrVerify::default(),
+            send_email: Default::default(),
             panicking_frames: 0,
             frame_panicked: false,
             logic_without_ui: false,
@@ -824,6 +825,7 @@ impl PdfCraftApp {
         if self.ocr_verify.awaiting_models.is_some() {
             workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_models);
         }
+        self.poll_send_email(ctx);
         self.reopen_returned_rename(ctx);
         self.settle_presign(ctx);
         self.sync_titles(ctx);

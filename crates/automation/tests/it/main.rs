@@ -10,6 +10,7 @@ mod batch_failures;
 mod batch_secrets;
 mod button_caption;
 mod document_actions;
+mod email;
 mod find_text;
 mod form_bulk;
 mod hostile_args;

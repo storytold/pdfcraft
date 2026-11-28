@@ -181,6 +181,7 @@ use workflows::optimize_ui;
 use workflows::print_paper;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
+use workflows::send_email_ui;
 use workflows::web_print;
 
 /// A background job queue of the app, built over the host's jobs and the app's wake.
@@ -551,6 +552,8 @@ pub struct PdfCraftApp {
     pub ocr_verify: ocr_verify::OcrVerify,
     /// The OCR Verify screen's runs and re-reads.
     pub(crate) verify_jobs: Queue<ocr_verify::VerifyJob, ocr_verify::VerifyDone>,
+    /// File ▸ Attach to email: the request under way and the file that couldn't be attached.
+    pub send_email: send_email_ui::SendEmailState,
     /// Frames in a row whose logic or drawing panicked, and whether this frame's did
     /// (`frame_guard`, #3914).
     panicking_frames: u32,

@@ -82,6 +82,9 @@ config works across the suite) keep the agent to the folders you give it:
   `comments_summarize`, the accessibility report and review record, `doc_compare_report`,
   `form_merge_data`, the output folders of `action_run` and `ocr_recognize_files`, `sign_id_create`
   and `sign_document`.
+- `doc_email` (File ▸ Attach to email…) opens a message in the computer's email program with the
+  document attached. A document with edits not yet saved goes as a copy in the system's temp folder,
+  which a write root doesn't cover, so with one set only a saved file is sent: `doc_save` first.
 - Read and write access are separate. Give the same folder twice for both. A root left out grants
   none of its access: with only `--automation-read-root`, nothing can be written to disk, though
   tools that give their result back instead of a path still do. Without either flag nothing changes.
