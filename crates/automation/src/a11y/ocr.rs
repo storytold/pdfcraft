@@ -506,6 +506,11 @@ impl Automation {
         let mut input = String::new();
         match std::fs::File::open(&path) {
             Ok(file) => {
+                // An update reads the existing words and returns them, so the file must also be
+                // readable: a write root alone may create a dictionary, never read one (#7889).
+                if writing {
+                    self.check_roots(a.str("path")?, &path, crate::file_access::Access::Read)?;
+                }
                 file.take((dictionary::MAX_BYTES + 1) as u64).read_to_string(&mut input).map_err(|e| failed(format!("OCR dictionary: {e}")))?;
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && writing => {}
