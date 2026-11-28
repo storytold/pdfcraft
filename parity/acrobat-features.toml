@@ -3627,9 +3627,9 @@ tier = "P1"
 milestone = "M4"
 status = "shipped"
 commands = ["file.properties"]
-tools = ["doc_initial_view"]
-evidence = ["crates/organize/src/tests.rs::initial_view_round_trips_and_keeps_scripts", "crates/automation/tests/it/automation.rs::initial_view_through_tools"]
-notes = "Advanced ▸ Reading Options: binding and language"
+tools = ["doc_initial_view", "doc_info"]
+evidence = ["crates/organize/src/tests.rs::initial_view_round_trips_and_keeps_scripts", "crates/automation/tests/it/automation.rs::initial_view_through_tools", "crates/automation/tests/it/automation.rs::doc_info_reports_the_document_language"]
+notes = "Advanced ▸ Reading Options: binding and language. doc_info reports the catalog /Lang as language, trimmed (null when missing, blank, over 256 bytes or not a text string). Not yet: the language in accessibility_check's primary-language result"
 
 [[feature]]
 id = "organize.print-presets"
