@@ -4664,6 +4664,37 @@ fn pop_ups_open_close_and_move_and_are_reported() {
     assert_eq!(listed.popup, Some(PopupInfo { rect: [150.0, 100.0, 290.0, 200.0], open: false }), "listed through {via:?}");
 }
 
+/// #7434: a comment nobody wrote in is saved without `/Contents`, as Acrobat saves a highlight
+/// without a note. macOS Preview marks a markup comment that has the key, even empty, as
+/// holding a note. Clearing a comment's text removes the key, and its summary reads no text
+/// either way.
+#[test]
+fn a_comment_without_text_is_saved_without_contents() {
+    let mut doc = fixture();
+    let quads = vec![[20.0, 200.0, 120.0, 200.0, 20.0, 190.0, 120.0, 190.0]];
+    let highlight = |doc: &mut Document, contents: &str, id: &str| {
+        let shape = Shape::TextMarkup { kind: Markup::Highlight, quads: quads.clone() };
+        add_annotation(doc, &NewAnnotation { contents: contents.into(), ..new(0, shape) }, &meta(id)).unwrap()
+    };
+    let plain = highlight(&mut doc, "", "h1");
+    let noted = highlight(&mut doc, "hello", "h2");
+    let saved = list(&reopen(&doc), 0);
+    assert_eq!(saved[plain].get(b"Contents"), None, "a highlight without a note");
+    assert_eq!(text(&saved[noted], b"Contents"), "hello");
+
+    // A note opened on it (a double-click) gives it a pop-up; still no text, so still no key.
+    set_popup(&mut doc, 0, plain, None, Some(true), &meta("h1")).unwrap();
+    let popup = summaries(&doc).into_iter().find(|s| s.index == plain).unwrap().popup;
+    assert_eq!(popup.map(|p| p.open), Some(true), "the pop-up is open");
+    assert_eq!(list(&reopen(&doc), 0)[plain].get(b"Contents"), None, "with an open pop-up");
+
+    set_contents(&mut doc, 0, noted, "", &meta("h2")).unwrap();
+    assert_eq!(list(&reopen(&doc), 0)[noted].get(b"Contents"), None, "its text cleared");
+    for index in [plain, noted] {
+        assert_eq!(summaries(&doc).into_iter().find(|s| s.index == index).unwrap().contents, None);
+    }
+}
+
 /// #2137 review: a pop-up that is not the mark's own is neither reported as its pop-up nor
 /// changed through it (part of `pop_ups_open_close_and_move_and_are_reported`).
 fn foreign_pop_ups_are_not_the_marks(doc: &mut Document, note: ObjRef, mark: usize, mr: ObjRef) {

@@ -149,7 +149,11 @@ pub(crate) fn base_dict(subtype: &str, rect: [f64; 4], page: ObjRef, contents: &
     d.set(b"Type".to_vec(), Object::name("Annot"));
     d.set(b"Subtype".to_vec(), Object::name(subtype));
     d.set(b"Rect".to_vec(), num_array(&rect));
-    d.set(b"Contents".to_vec(), PdfString::text(contents));
+    // Only a comment with text has `/Contents`, as in Acrobat: macOS Preview marks a markup
+    // comment with the key, even empty, as holding a note (#7434).
+    if !contents.is_empty() {
+        d.set(b"Contents".to_vec(), PdfString::text(contents));
+    }
     if !author.is_empty() {
         d.set(b"T".to_vec(), PdfString::text(author));
     }
