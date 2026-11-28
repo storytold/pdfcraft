@@ -279,6 +279,52 @@ fn both_parsers_read_a_doubled_minus_as_one_number() {
     assert_eq!(pdfcraft_content::parse(data).skipped, 0, "--280 is read as one number, not recovered from -280");
 }
 
+/// `\ddd` in a literal string is one to three octal digits, and "high-order overflow shall be
+/// ignored" (ISO 32000-2 §7.3.4.2, Table 3). The cos lexer, and so the content crate, kept the
+/// low eight bits; hayro dropped the byte of any escape above `\377`, so `(Abschlie\737en)`
+/// reached the renderer and text extraction as "Abschlieen" (PDFBOX-142) while the editor read
+/// "Abschließen". Closed by hayro-syntax patch 54: both keep `\737` as 0xDF.
+#[test]
+fn both_parsers_keep_the_low_eight_bits_of_an_octal_escape() {
+    let cases: [(&[u8], &[u8]); 9] = [
+        (b"(\\737)", &[0xDF]),
+        (b"(\\400)", &[0x00]),
+        (b"(\\777)", &[0xFF]),
+        (b"(\\101)", b"A"),
+        (b"(\\12)", &[0x0A]),
+        (b"(\\7)", &[0x07]),
+        // Three digits at most: the fourth is an ordinary byte.
+        (b"(\\1234)", b"S4"),
+        (b"(\\7377)", &[0xDF, b'7']),
+        // An escape cut short by a byte that is not an octal digit.
+        (b"(\\48\\59)", &[0x04, b'8', 0x05, b'9']),
+    ];
+    for (string, bytes) in cases {
+        let data = [string, b" Tj"].concat();
+        agree("octal escape", &data, &["Tj"]);
+        assert_eq!(hayro(&data)[0].operands, [format!("({})", hex(bytes))], "{}", String::from_utf8_lossy(string));
+    }
+    agree("PDFBOX-142's button label", b"BT (Abschlie\\737en) Tj (L\\766schen) Tj ET", &["BT", "Tj", "Tj", "ET"]);
+    assert_eq!(hayro(b"(Abschlie\\737en) Tj")[0].operands, [format!("({})", hex(b"Abschlie\xDFen"))]);
+}
+
+/// The pieces [`random_escape_sequences_read_alike`] builds literal strings from: a backslash,
+/// octal and other digits, an escape letter, a space and an escaped backslash.
+const STRING_PIECES: [&[u8]; 12] = [b"\\", b"0", b"1", b"3", b"4", b"7", b"8", b"9", b"a", b"n", b" ", b"\\\\"];
+
+proptest::proptest! {
+    /// Literal strings made of octal escapes, other escapes and digits never panic hayro's
+    /// tokenizer, and both parsers read the same bytes from them.
+    #[test]
+    fn random_escape_sequences_read_alike(body in proptest::collection::vec(proptest::sample::select(&STRING_PIECES[..]), 0..24)) {
+        // A space before the closing parenthesis, so a final backslash escapes the space.
+        let data = [&b"("[..], &body.concat(), b" ) Tj q Q"].concat();
+        let (c, h) = (content(&data), hayro(&data));
+        proptest::prop_assert_eq!(&c, &h, "{:?}", String::from_utf8_lossy(&data));
+        proptest::prop_assert_eq!(ops(&h), ["Tj", "q", "Q"]);
+    }
+}
+
 // ── known divergences, pinned on both sides ─────────────────────────────────────────────────
 
 /// No issue filed; #2877 (open) changes number reading in cos and render. ISO 32000-2 §7.3.3
