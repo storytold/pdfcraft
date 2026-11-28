@@ -935,6 +935,16 @@ mod xfa_model {
 
     /// A calculate script finds its siblings by name and yields its last expression, and a
     /// value it sets comes back as an effect.
+    /// `#class` selects a node's children of that class, named or not, an index counting them (XFA 3.3 p. 96):
+    /// `xfa.form.resolveNode("#subform")` is the root subform whatever its name.
+    #[test]
+    fn som_steps_select_children_by_class() {
+        let src = "xfa.form.resolveNode('#subform').name + ',' + page1.resolveNode('#subform[1]').name + ',' + page1.resolveNodes('#field[*]').length \
+                   + ',' + page1.resolveNode('#draw')";
+        let o = go(src, "form1[0].page1[0].total[0]", "calculate");
+        assert_eq!(o.result.as_deref(), Some("form1,table,4,null"), "{o:?}");
+    }
+
     #[test]
     fn calculate_scripts_see_siblings_by_name_and_yield_their_last_expression() {
         let o = go("qty.rawValue * price.rawValue", "form1[0].page1[0].total[0]", "calculate");
