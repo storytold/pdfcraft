@@ -3228,7 +3228,21 @@ fn unlocking_a_copy_for_editing_without_the_permissions_password() {
     let mut b = auto(&dir);
     let re = ok(&mut b, "doc_open", json!({ "path": "locked.pdf" }))["doc"].as_u64().unwrap();
     assert!(matches!(b.call("doc_unprotect", &json!({ "doc": re })), Err(ToolError::Failed(_))), "Remove security still needs the password");
-    assert!(matches!(b.call("doc_unlock_copy", &json!({ "doc": re, "path": "locked.pdf" })), Err(ToolError::Failed(_))), "never over the original");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    for own in ["locked.pdf", "sub/../locked.pdf", "./locked.pdf"] {
+        assert!(matches!(b.call("doc_unlock_copy", &json!({ "doc": re, "path": own })), Err(ToolError::Failed(_))), "never over the original: {own}");
+    }
+    // Without a root, paths are taken as given: the same file under another spelling is refused too.
+    let mut free = Automation::new();
+    let abs = |p: &str| dir.join(p).to_string_lossy().into_owned();
+    let freed = ok(&mut free, "doc_open", json!({ "path": abs("locked.pdf") }))["doc"].as_u64().unwrap();
+    assert!(
+        matches!(free.call("doc_unlock_copy", &json!({ "doc": freed, "path": abs("sub/../locked.pdf") })), Err(ToolError::Failed(_))),
+        "an alias of the original"
+    );
+    let mut check = auto(&dir);
+    let still = ok(&mut check, "doc_open", json!({ "path": "locked.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut check, "doc_info", json!({ "doc": still }))["security"]["protected"], true, "the original file keeps its security");
     let copy = ok(&mut b, "doc_unlock_copy", json!({ "doc": re, "path": "editable.pdf" }));
     let id = copy["doc"].as_u64().unwrap();
     assert_ne!(id, re, "the copy opens as its own document");
