@@ -155,9 +155,28 @@ surviving paint uses it. If a cell remains reachable after rewriting the selecte
 contain text, images, replacement descriptions, or unreadable content, Apply refuses with a
 `RedactError::Pattern` and restores the document and pending marks. This includes patterns owned
 by Forms and patterns inherited by Forms. Vector-only retained cells remain supported. The
-bounded check is conservative: an unrelated retained pattern on a selected page can also cause
-refusal when its content cannot be proven safe. If a selected page had a pattern resource, the
-check covers all pages after rewriting so another page cannot keep the same cell in the saved PDF.
+bounded check is conservative: once a mark may have reached something a pattern painted, an
+unrelated retained pattern on a selected page can also cause refusal when its content cannot be
+proven safe. If a selected page had a pattern resource, the check covers all pages after
+rewriting so another page cannot keep the same cell in the saved PDF.
+
+The check is skipped when no pattern can have painted under a mark, so a page that only lists
+such a pattern in its resources, or paints with it away from every mark, is redacted and its
+cells stay as they were. That is decided without trusting which pattern is current. A pattern
+counts as possibly painting from a `scn`/`SCN` that names one, or a `cs`/`CS` whose space isn't
+known not to be a Pattern space (a name the resources don't define included), until `g`, `rg`,
+`k` (`G`, `RG`, `K`) or a `cs`/`CS` with a space known not to be one; a numbers-only `scn`
+changes nothing, `q`/`Q` save and restore it, and a form starts with its caller's. A soft mask
+set by an ExtGState counts until the `Q` that drops it, and a default colour space that may be
+a Pattern space makes every operator of its scope count. The check then runs if such an
+operator was rewritten, if text was shown at all while a pattern could paint (a glyph a mark
+only grazes stays), if a form under a mark was removed unread, if an annotation under a mark was
+removed, or if a pattern was pruned. Text in a Type 3 font counts as well, unless every glyph
+description of the font only constructs and paints paths, as in the Type 3 fonts a browser
+prints web fonts as: such a glyph paints with the colour in force and can select no pattern.
+A description that holds any other operator (a colour space, `gs`, `Do`, text), isn't a stream
+given by reference, has filter parameters by reference or doesn't decode makes the font count;
+so do more than 4,096 descriptions in a font, one over 1 MiB, or 16 MiB of them on a page.
 
 Before changing any page, `apply` prepares the redaction appearances with a shared 8 MiB
 budget for their uncompressed PDF content across the selected pages. It bounds repeated-text
