@@ -642,7 +642,7 @@ pub fn check(doc: &Document, options: &Options) -> Report {
         None => (0..pages.len()).collect(),
     };
     let tagged = structure::has_struct_tree(doc);
-    let scan = content::Scan::run(doc, &pages, &page_list);
+    let scan = content::Scan::run(doc, &pages, &page_list, options.rules.contains(&Rule::CharacterEncoding));
     let mut tree_rules = structure::run(doc, &pages, &options.rules);
     let mut figure_bounds: Option<HashMap<pdfcraft_cos::ObjRef, (usize, [f64; 4])>> = None;
     let mut results = Vec::with_capacity(32);
@@ -688,13 +688,14 @@ pub fn check(doc: &Document, options: &Options) -> Report {
             }
         }
         // A page read only in part may hold what the scan didn't find: text that makes the
-        // document more than images, untagged content, or a font without Unicode mappings.
-        let unsure = !scan.incomplete.is_empty()
-            && match rule {
-                Rule::ImageOnly => !scan.has_text,
-                Rule::TaggedContent | Rule::CharacterEncoding => findings.is_empty(),
-                _ => false,
-            };
+        // document more than images, untagged content, or a font without Unicode mappings
+        // (in its content or in an annotation's appearance).
+        let unsure = match rule {
+            Rule::ImageOnly => !scan.incomplete.is_empty() && !scan.has_text,
+            Rule::TaggedContent => !scan.incomplete.is_empty() && findings.is_empty(),
+            Rule::CharacterEncoding => !(scan.incomplete.is_empty() && scan.incomplete_appearances.is_empty()) && findings.is_empty(),
+            _ => false,
+        };
         if unsure {
             results.push(RuleResult { rule, status: Status::Manual, findings: Vec::new() });
             continue;

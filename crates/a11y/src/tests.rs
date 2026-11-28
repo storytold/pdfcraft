@@ -1148,6 +1148,364 @@ fn character_encoding_resolves_indirect_cid_metadata() {
     assert_eq!(status(&report, Rule::CharacterEncoding), Status::Passed);
 }
 
+/// A tagged one-page document whose content shows text in Helvetica, with `annots` on its page
+/// and `extra` objects from number 6 on (object 5 is the page content).
+fn annotated_pdf(annots: &str, extra: &[String]) -> Document {
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 4 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 5 0 R /Resources << /Font << /F1 {FONT} >> >> /Annots [{annots}] >>"),
+        "<< /Type /StructTreeRoot >>".into(),
+        stream("/P << /MCID 0 >> BDC BT /F1 12 Tf 10 10 Td (Hello) Tj ET EMC"),
+    ];
+    objects.extend_from_slice(extra);
+    pdf(&objects, "")
+}
+
+/// A check box whose appearance states draw the check mark in `font`, which the page content
+/// never uses: objects 6 (the widget), 7 and 8 (its On and Off appearances) and 9 (the font).
+fn check_box(font: &str) -> Vec<String> {
+    vec![
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (Agree) /Rect [10 10 30 30] /AS /On /AP << /N << /On 7 0 R /Off 8 0 R >> >> >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Resources << /Font << /ZaDb 9 0 R >> >> /Length 31 >>\nstream\nBT /ZaDb 12 Tf 4 4 Td (4) Tj ET\nendstream"
+            .into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 0 >>\nstream\n\nendstream".into(),
+        font.into(),
+    ]
+}
+
+/// The PDFBox corpus' AcroForm files (PDFBOX-3828, PDFBOX-4066, PDFBOX-2419 and 33 more) draw
+/// their check marks in ZapfDingbats, in the check boxes' appearance streams only, without a
+/// ToUnicode map. The rule read page content alone, so those fonts were never looked at.
+#[test]
+fn character_encoding_reads_the_fonts_of_annotation_appearances() {
+    let zapf = "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>";
+    let doc = annotated_pdf("6 0 R", &check_box(zapf));
+    let report = check(&doc, &Options::default());
+    let result = report.result(Rule::CharacterEncoding).unwrap();
+    assert_eq!(result.status, Status::Failed, "{:?}", result.findings);
+    assert_eq!(result.findings.len(), 1);
+    assert!(result.findings[0].message.contains("ZapfDingbats"), "{}", result.findings[0].message);
+    assert_eq!(result.findings[0].page, Some(0));
+    // What an appearance paints is the annotation's, not untagged page content.
+    assert_eq!(status(&report, Rule::TaggedContent), Status::Passed);
+    assert_eq!(status(&report, Rule::ImageOnly), Status::Passed);
+
+    // A font that no name excuses: an Identity-H font of no known collection.
+    let identity = "<< /Type /Font /Subtype /Type0 /BaseFont /AppearanceCID /Encoding /Identity-H /DescendantFonts [<< /Type /Font /Subtype /CIDFontType2 /BaseFont /AppearanceCID /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >>] >>";
+    let doc = annotated_pdf("6 0 R", &check_box(identity));
+    let report = checked(&doc, &[Rule::CharacterEncoding]);
+    let result = report.result(Rule::CharacterEncoding).unwrap();
+    assert_eq!(result.status, Status::Failed, "{:?}", result.findings);
+    assert!(result.findings[0].message.contains("AppearanceCID"));
+
+    // The down appearance is read too, and a state dictionary given by reference.
+    let mut objects = check_box(identity);
+    objects[0] = "<< /Type /Annot /Subtype /Widget /FT /Btn /T (Agree) /Rect [10 10 30 30] /AS /Off /AP << /N 8 0 R /D 10 0 R >> >>".into();
+    objects.push("<< /On 7 0 R >>".into());
+    let doc = annotated_pdf("6 0 R", &objects);
+    assert_eq!(status(&checked(&doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding), Status::Failed, "down appearance");
+
+    // With a ToUnicode map, the same appearance passes.
+    let mapped = "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats /ToUnicode 10 0 R >>";
+    let mut objects = check_box(mapped);
+    objects.push(stream(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap 1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <34> <2714> endbfchar endcmap end end",
+    ));
+    let doc = annotated_pdf("6 0 R", &objects);
+    assert_eq!(status(&checked(&doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding), Status::Passed);
+}
+
+/// Appearances that refer to themselves, to nothing, or to things that aren't streams end the
+/// walk; appearances past their decode budget leave the rule to a person, without touching the
+/// page content's rules.
+#[test]
+fn appearance_oddities_and_budgets_end_without_a_guess() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let odd = vec![
+        "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /AP << /N 8 0 R /R 3 0 R /D << /On 99 0 R /Off 3 0 R >> >> >>".to_string(),
+        "<< /Type /Annot /Subtype /Square /Rect [0 0 10 10] /AP 9 0 R >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /Me 8 0 R >> >> /Length 6 >>\nstream\n/Me Do\nendstream".into(),
+        "<< /N 9 0 R >>".into(),
+    ];
+    let doc = annotated_pdf("6 0 R 7 0 R 99 0 R 4 0 R", &odd);
+    let report = check(&doc, &Options::default());
+    assert_eq!(status(&report, Rule::CharacterEncoding), Status::Passed);
+
+    // One appearance draws a 1 MiB form 300 times: more than a page's decode budget.
+    let mut doc = annotated_pdf("6 0 R", &check_box("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"));
+    let mut filler = Dict::new();
+    filler.set(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()));
+    let filler = doc.add(Stream::flate(filler, &vec![b' '; 1 << 20]));
+    let mut xobjects = Dict::new();
+    xobjects.set(b"Fm".to_vec(), Object::Ref(filler));
+    let mut resources = Dict::new();
+    resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()));
+    form.set(b"Resources".to_vec(), Object::Dict(resources));
+    let heavy = doc.add(Stream::from_raw(form, "/Fm Do ".repeat(300).into_bytes()));
+    doc.update_dict(ObjRef::new(6, 0), |w| {
+        let mut states = Dict::new();
+        states.set(b"On".to_vec(), Object::Ref(heavy));
+        let mut ap = Dict::new();
+        ap.set(b"N".to_vec(), Object::Dict(states));
+        w.set(b"AP".to_vec(), Object::Dict(ap));
+    })
+    .unwrap();
+    let report = check(&doc, &Options::default());
+    assert_eq!(status(&report, Rule::CharacterEncoding), Status::Manual);
+    assert_eq!(status(&report, Rule::TaggedContent), Status::Passed, "the page content was read whole");
+
+    // A page of one image, with a check box: the check mark's text is not page text.
+    let mut doc = annotated_pdf("6 0 R", &check_box("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"));
+    let image = doc.add(Stream::from_raw(
+        {
+            let mut d = Dict::new();
+            for (k, v) in [("Subtype", "Image"), ("ColorSpace", "DeviceGray")] {
+                d.set(k.as_bytes().to_vec(), Object::Name(v.as_bytes().to_vec()));
+            }
+            for k in ["Width", "Height"] {
+                d.set(k.as_bytes().to_vec(), Object::Int(1));
+            }
+            d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+            d
+        },
+        vec![0],
+    ));
+    let content = doc.add(Stream::from_raw(Dict::new(), b"/Artifact BMC q 200 0 0 200 0 0 cm /Im Do Q EMC".to_vec()));
+    doc.update_dict(ObjRef::new(3, 0), |p| {
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Im".to_vec(), Object::Ref(image));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        p.set(b"Resources".to_vec(), Object::Dict(resources));
+        p.set(b"Contents".to_vec(), Object::Ref(content));
+    })
+    .unwrap();
+    assert_eq!(status(&check(&doc, &Options::default()), Rule::ImageOnly), Status::Failed);
+}
+
+/// ZapfDingbats' built-in glyph names (a1 to a191) map to no Unicode value, and a symbolic
+/// TrueType font has no glyph names to go by, so neither passes by its name alone (PDFBOX-2710,
+/// PDFBOX-2164 and PDFBOX-2543 in the PDFBox corpus). Symbol, as a Type 1 font, still does: ISO
+/// 14289-1 7.21.7 accepts the Symbol font's named characters.
+#[test]
+fn character_encoding_needs_a_map_for_zapfdingbats_and_symbolic_truetype() {
+    let one = |font: &str| {
+        let doc = pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+                stream("BT /F1 12 Tf 10 10 Td (4) Tj ET"),
+                font.into(),
+            ],
+            "",
+        );
+        status(&checked(&doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding)
+    };
+    for (font, expected) in [
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>", Status::Failed),
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats /FontDescriptor << /Flags 32 >> >>", Status::Failed),
+        ("<< /Type /Font /Subtype /TrueType /BaseFont /Symbol /FontDescriptor << /Flags 4 >> >>", Status::Failed),
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>", Status::Passed),
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /Symbol /FontDescriptor << /Flags 4 >> >>", Status::Passed),
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats /Encoding /WinAnsiEncoding >>", Status::Passed),
+        ("<< /Type /Font /Subtype /TrueType /BaseFont /ZapfDingbats /FontDescriptor << /Flags 32 >> >>", Status::Passed),
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", Status::Passed),
+        // An encoding dictionary that changes nothing leaves the built-in encoding (ISO 32000-2
+        // Table 112); one with a base encoding or differences is the font's own declaration.
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats /Encoding << /Type /Encoding >> >>", Status::Failed),
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats /Encoding << /BaseEncoding /WinAnsiEncoding >> >>", Status::Passed),
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats /Encoding << /Differences [52 /four] >> >>", Status::Passed),
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << >> >>", Status::Passed),
+    ] {
+        assert_eq!(one(font), expected, "{font}");
+    }
+}
+
+/// Two pages, page 1 with `/F1` Helvetica and page 2 with `/F1` ZapfDingbats (objects 6 and 7),
+/// each with an empty content stream (10) and widgets: page 1 `annots1`, page 2 `annots2`. Object 8
+/// and 9 are widgets whose normal appearance is object 11, `appearance`.
+fn two_page_appearances(annots1: &str, annots2: &str, appearance: &str) -> Document {
+    let widget = "<< /Type /Annot /Subtype /Widget /FT /Btn /T (Agree) /Rect [10 10 30 30] /AP << /N 11 0 R >> >>";
+    pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 10 0 R /Resources << /Font << /F1 6 0 R >> >> /Annots [{annots1}] >>"
+            ),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 10 0 R /Resources << /Font << /F1 7 0 R >> >> /Annots [{annots2}] >>"
+            ),
+            "<< /Type /StructTreeRoot >>".into(),
+            FONT.into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>".into(),
+            widget.into(),
+            widget.into(),
+            stream(""),
+            appearance.into(),
+        ],
+        "",
+    )
+}
+
+/// An appearance's fonts are found however its text selects one and however its stream is
+/// compressed: an ExtGState's /Font through `gs` (ISO 32000-2 Table 57), and a Flate predictor
+/// given in /DecodeParms by reference, in the appearance and in a form it draws.
+#[test]
+fn appearance_fonts_are_found_through_gs_and_indirect_decode_parameters() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let encoding = |doc: &Document| status(&checked(doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding);
+    // ZapfDingbats (object 7) selected by `/GS1 gs`, with no Tf.
+    let draws = "BT /GS1 gs 4 4 Td (4) Tj ET";
+    let by_gs = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Resources << /ExtGState << /GS1 << /Font [7 0 R 12] >> >> >> /Length {} >>\nstream\n{draws}\nendstream",
+        draws.len()
+    );
+    assert_eq!(encoding(&two_page_appearances("8 0 R", "", &by_gs)), Status::Failed);
+    // Behind a PNG predictor whose parameters are an indirect dictionary: every byte after a zero.
+    let predicted = |doc: &mut Document, text: &str, resources: Dict| {
+        let parms = doc.add(Object::Dict(Dict::from_iter([(b"Predictor".to_vec(), Object::Int(10)), (b"Columns".to_vec(), Object::Int(1))])));
+        let rows: Vec<u8> = text.bytes().flat_map(|b| [0, b]).collect();
+        let mut dict = Dict::new();
+        dict.set(b"Subtype".to_vec(), Object::name("Form"));
+        dict.set(b"Resources".to_vec(), Object::Dict(resources));
+        let mut s = Stream::flate(dict, &rows);
+        s.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+        s
+    };
+    let zadb = Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"ZaDb".to_vec(), Object::Ref(ObjRef::new(7, 0)))])))]);
+    let mut doc = two_page_appearances("8 0 R", "", "null");
+    let appearance = predicted(&mut doc, "BT /ZaDb 12 Tf 4 4 Td (4) Tj ET", zadb.clone());
+    doc.set(ObjRef::new(11, 0), appearance);
+    assert_eq!(encoding(&doc), Status::Failed, "the appearance");
+    let mut doc = two_page_appearances("8 0 R", "", "null");
+    let inner = predicted(&mut doc, "BT /ZaDb 12 Tf 4 4 Td (4) Tj ET", zadb);
+    let inner = doc.add(inner);
+    let outer = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Fm".to_vec(), Object::Ref(inner))])))]);
+    let appearance = predicted(&mut doc, "/Fm Do", outer);
+    doc.set(ObjRef::new(11, 0), appearance);
+    assert_eq!(encoding(&doc), Status::Failed, "a form the appearance draws");
+}
+
+/// An appearance stream that decodes only up to damage is no pass: the font the damage hid may
+/// be unmapped, so with nothing found the rule is left to a manual check.
+#[test]
+fn a_damaged_appearance_stream_leaves_character_encoding_to_a_manual_check() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let encoding = |doc: &Document| status(&checked(doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding);
+    let zadb = Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"ZaDb".to_vec(), Object::Ref(ObjRef::new(7, 0)))])))]);
+    // Paths that paint nothing, then ZapfDingbats text.
+    let text: String = (0..400).map(|i| format!("{} {} m ", i * 7 % 13, i * 11 % 17)).collect::<String>() + "n BT /ZaDb 12 Tf 4 4 Td (4) Tj ET";
+    let mut dict = Dict::new();
+    dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    dict.set(b"Resources".to_vec(), Object::Dict(zadb));
+    let whole = Stream::flate(dict, text.as_bytes());
+    let mut doc = two_page_appearances("8 0 R", "", "null");
+    doc.set(ObjRef::new(11, 0), whole.clone());
+    assert_eq!(encoding(&doc), Status::Failed, "read whole");
+    // Cut off halfway: the ZapfDingbats text is lost with the rest.
+    let cut = whole.raw.get(..whole.raw.len() / 2).unwrap().to_vec();
+    doc.set(ObjRef::new(11, 0), Stream::from_raw(whole.dict.clone(), cut));
+    assert_eq!(encoding(&doc), Status::Manual, "read up to the damage");
+}
+
+/// An appearance is read once per resource context, and again where a walk of it was cut short;
+/// one past the form depth limit, or that is not a form XObject, is no guess either way.
+#[test]
+fn appearance_walks_follow_their_resources_their_budget_and_their_type() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let encoding = |doc: &Document| status(&checked(doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding);
+    // No /Resources of its own: /F1 is Helvetica on page 1 and ZapfDingbats on page 2.
+    let draws = "BT /F1 12 Tf 4 4 Td (4) Tj ET";
+    let bare = format!("<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length {} >>\nstream\n{draws}\nendstream", draws.len());
+    assert_eq!(encoding(&two_page_appearances("8 0 R", "9 0 R", &bare)), Status::Failed, "page 2's /F1 is read");
+    assert_eq!(encoding(&two_page_appearances("8 0 R", "", &bare)), Status::Passed);
+
+    // A walk cut short on page 1, past the budget a heavy appearance spent, is read again on page 2.
+    let own = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Resources << /Font << /ZaDb 7 0 R >> >> /Length {} >>\nstream\n{}\nendstream",
+        draws.len(),
+        draws.replace("/F1", "/ZaDb")
+    );
+    let mut doc = two_page_appearances("8 0 R 9 0 R", "9 0 R", &own);
+    let mut filler = Dict::new();
+    filler.set(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()));
+    let filler = doc.add(Stream::flate(filler, &vec![b' '; 1 << 20]));
+    let mut xobjects = Dict::new();
+    xobjects.set(b"Fm".to_vec(), Object::Ref(filler));
+    let mut resources = Dict::new();
+    resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()));
+    form.set(b"Resources".to_vec(), Object::Dict(resources));
+    let heavy = doc.add(Stream::from_raw(form, "/Fm Do ".repeat(300).into_bytes()));
+    doc.update_dict(ObjRef::new(8, 0), |w| {
+        let mut ap = Dict::new();
+        ap.set(b"N".to_vec(), Object::Ref(heavy));
+        w.set(b"AP".to_vec(), Object::Dict(ap));
+    })
+    .unwrap();
+    // Page 1 alone: its walk is cut short before the appearance's font, so it can't tell.
+    let first = check(&doc, &Options { rules: [Rule::CharacterEncoding].into(), pages: Some(vec![0]) });
+    assert_eq!(status(&first, Rule::CharacterEncoding), Status::Manual, "page 1 is cut short");
+    assert_eq!(encoding(&doc), Status::Failed, "read again with page 2's budget");
+
+    // ZapfDingbats in the fourteenth form down from the appearance: past the depth limit.
+    let nested = |levels: usize| {
+        let mut objs = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [5 0 R] >>".into(),
+            stream(""),
+            "<< /Type /Annot /Subtype /Widget /Rect [10 10 30 30] /AP << /N 6 0 R >> >>".into(),
+        ];
+        for i in 0..levels {
+            let next = 7 + i;
+            objs.push(format!(
+                "<< /Subtype /Form /BBox [0 0 20 20] /Resources << /XObject << /Fm {next} 0 R >> >> /Length 6 >>\nstream\n/Fm Do\nendstream"
+            ));
+        }
+        objs.push(format!(
+            "<< /Subtype /Form /BBox [0 0 20 20] /Resources << /Font << /ZaDb {} 0 R >> >> /Length {} >>\nstream\n{}\nendstream",
+            7 + levels,
+            draws.len(),
+            draws.replace("/F1", "/ZaDb")
+        ));
+        objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>".into());
+        encoding(&pdf(&objs, ""))
+    };
+    assert_eq!(nested(3), Status::Failed);
+    assert_eq!(nested(13), Status::Manual, "past the depth limit");
+
+    // An appearance that doesn't decode at all (nine filters, past the chain the decoder reads)
+    // may select any font: it can't tell either.
+    let undecodable = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Filter [{}] /Length 1 >>
+stream
+>
+endstream",
+        "/ASCIIHexDecode ".repeat(9)
+    );
+    assert_eq!(encoding(&two_page_appearances("8 0 R", "", &undecodable)), Status::Manual, "an undecodable appearance");
+
+    // An appearance state that is an image is not read as content.
+    let image = format!(
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Resources << /Font << /F1 7 0 R >> >> /Length {} >>\nstream\n{draws}\nendstream",
+        draws.len()
+    );
+    assert_eq!(encoding(&two_page_appearances("8 0 R", "", &image)), Status::Passed);
+
+    // Without the Character Encoding rule, appearances are not read at all.
+    let doc = two_page_appearances("8 0 R", "9 0 R", &own);
+    let pages = pdfcraft_model::pages(&doc);
+    assert!(!content::Scan::run(&doc, &pages, &[0, 1], true).fonts.is_empty());
+    assert!(content::Scan::run(&doc, &pages, &[0, 1], false).fonts.is_empty());
+}
+
 #[test]
 fn rules_have_ids_and_the_report_lists_them() {
     assert_eq!(Rule::ALL.len(), 32);
