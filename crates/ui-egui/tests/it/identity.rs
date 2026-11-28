@@ -57,14 +57,21 @@ fn the_identity_name_signs_new_comments_and_is_remembered() {
     };
     crate::support::wait_until(&mut h, "the highlight", |app| app.session.get(app.views[0].id).is_some_and(|d| !d.info.annotations.is_empty()));
     assert_eq!(author(&h).as_deref(), Some("Grace Hopper"));
-    // It survives a restart; an empty or missing name keeps the default, and a huge one is cut.
+    // It survives a restart.
     let mut restored = crate::control::new_app();
     restored.set_option(&egui::Context::default(), "language", "en").unwrap();
     // PLAN: assumed `PdfCraftApp::settings_snapshot(&self) -> PdfCraftSettings` and `apply_settings(&mut self, &PdfCraftSettings)` (pdf-shell-w9); neither exists in this tree until that set lands.
     restored.apply_settings(&h.state().settings_snapshot());
     assert_eq!(restored.comment_prefs.author, "Grace Hopper");
+    // A blank name is kept as no name, across a restart too, instead of turning back into the
+    // login name (#8497).
     restored.apply_settings(&pdfcraft_ui_egui::settings::import_json(r#"{"author": "  "}"#).0);
-    assert_eq!(restored.comment_prefs.author, "Grace Hopper");
+    assert!(restored.comment_prefs.author.is_empty());
+    let mut again = crate::control::new_app();
+    assert!(!again.comment_prefs.author.is_empty(), "a new app starts with the login name");
+    again.apply_settings(&restored.settings_snapshot());
+    assert!(again.comment_prefs.author.is_empty());
+    // A huge name is cut.
     restored.apply_settings(&pdfcraft_ui_egui::settings::import_json(&format!(r#"{{"author": "{}"}}"#, "x".repeat(10_000))).0);
     assert_eq!(restored.comment_prefs.author.chars().count(), 200);
 }
