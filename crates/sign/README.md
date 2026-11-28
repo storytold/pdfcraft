@@ -27,7 +27,8 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   widget gets `/MK /R` and its appearance is laid out in the displayed box and turned back by a
   `/Matrix`; an existing field follows its own `/MK /R`. The document is written incrementally
   with a zero-filled `/Contents` and fixed-width `/ByteRange`, which are then patched in
-  place. Encrypted documents are refused for now.
+  place. Already-encrypted documents retain their encryption and can be signed when their
+  permissions allow it. After changing security settings, save and reopen the document before signing.
 - **Timestamps (PAdES B-T):** the `timestamp` module builds and parses RFC 3161 requests,
   responses and TSTInfo tokens (size-capped, imprint- and signature-checked). `sign_with_timestamp`
   attaches the TSA's token as an unsigned attribute over the signature value; the transport is
