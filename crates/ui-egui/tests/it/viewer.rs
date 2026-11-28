@@ -2874,3 +2874,70 @@ fn the_accessible_window_has_the_window_title_as_its_name() {
     assert_eq!(name(&h).as_deref(), Some("Quarterly report • — PdfCraft"));
     assert_eq!(name(&h), Some(h.state().window_title.clone()));
 }
+
+/// View ▸ Zoom ▸ Loupe tool: activates via `view.loupe`, tracks a target point on a page,
+/// steps zoom up and down with clamping at 100% and 800%, validates control options, and ends
+/// when another tool is chosen.
+#[test]
+fn loupe_tool_tracks_target_steps_zoom_and_ends_on_tool_switch() {
+    use pdfcraft_ui_egui::QuickTool;
+    use pdfcraft_ui_egui::loupe_ui::{LOUPE_ZOOM_DEFAULT, LOUPE_ZOOM_MAX, LOUPE_ZOOM_MIN};
+
+    let mut h = harness();
+    h.run_steps(3);
+    assert!(h.state().loupe.is_none());
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+
+    // Activate via the registered command.
+    assert!(h.execute("view.loupe"));
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Loupe);
+    let loupe = h.state().loupe.as_ref().expect("loupe active");
+    assert_eq!(loupe.zoom, LOUPE_ZOOM_DEFAULT);
+    assert_eq!(loupe.target.map(|(p, _)| p), Some(0));
+
+    // Set a target on page 0 (out-of-bounds coordinates clamp to page bounds).
+    h.state_mut().set_loupe_target(0, [40.0, 90.0]);
+    assert_eq!(h.state().loupe.as_ref().unwrap().target, Some((0, [40.0, 90.0])));
+    h.state_mut().set_loupe_target(0, [-20.0, 9999.0]);
+    let clamped = h.state().loupe.as_ref().unwrap().target.expect("clamped target").1;
+    assert_eq!(clamped[0], 0.0);
+    assert!(clamped[1] <= 300.0 && clamped[1] > 0.0);
+
+    // Step zoom up to 800% and verify clamping at the upper bound.
+    for _ in 0..16 {
+        h.state_mut().step_loupe_zoom(true);
+    }
+    assert_eq!(h.state().loupe.as_ref().unwrap().zoom, LOUPE_ZOOM_MAX);
+    h.state_mut().step_loupe_zoom(true);
+    assert_eq!(h.state().loupe.as_ref().unwrap().zoom, LOUPE_ZOOM_MAX);
+
+    // Step zoom down to 100% and verify clamping at the lower bound.
+    for _ in 0..16 {
+        h.state_mut().step_loupe_zoom(false);
+    }
+    assert_eq!(h.state().loupe.as_ref().unwrap().zoom, LOUPE_ZOOM_MIN);
+    h.state_mut().step_loupe_zoom(false);
+    assert_eq!(h.state().loupe.as_ref().unwrap().zoom, LOUPE_ZOOM_MIN);
+
+    // Control options: valid values work, invalid values error.
+    h.set_option("loupe_zoom", "400").unwrap();
+    assert_eq!(h.state().loupe.as_ref().unwrap().zoom, 4.0);
+    assert!(h.set_option("loupe_zoom", "50").is_err());
+    assert!(h.set_option("loupe_zoom", "900").is_err());
+    assert!(h.set_option("loupe", "maybe").is_err());
+
+    // Switching to another tool ends the loupe.
+    assert!(h.execute("view.select_tool"));
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    assert!(h.state().loupe.is_none());
+
+    // Re-enable and disable via set_option("loupe", ...).
+    h.set_option("loupe", "on").unwrap();
+    assert!(h.state().loupe.is_some());
+    assert_eq!(h.state().quick_tool, QuickTool::Loupe);
+    h.set_option("loupe", "off").unwrap();
+    assert!(h.state().loupe.is_none());
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+}

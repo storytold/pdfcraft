@@ -229,6 +229,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     // View menu (where it would show twice). The palette and ⌘3 still run it.
     c("view.fit_visible", "Fit visible", None, Some(Shortcut::cmd("3")), Document, "scan"),
     c("view.marquee_zoom", "Marquee zoom", VIEW, None, Document, "zoom_in"),
+    c("view.loupe", "Loupe tool", VIEW, None, Document, "search"),
     // The view-local zoom, rotation and page-step commands: the catalogue places them in the View menu
     // and adds their further default chords.
     c("view.zoom.in", "Zoom in", None, Some(Shortcut::cmd("+")), Document, "zoom_in"),

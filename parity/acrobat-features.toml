@@ -1066,11 +1066,17 @@ title = "Loupe magnifier tool"
 area = "B"
 tier = "P2"
 milestone = "M3"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["view.loupe"]
 tools = []
-evidence = []
-notes = ""
+evidence = [
+    "crates/ui-egui/src/loupe_ui.rs::loupe_zoom_clamps_to_supported_range",
+    "crates/ui-egui/src/loupe_ui.rs::loupe_zoom_steps_follow_viewer_ladder_and_clamp",
+    "crates/ui-egui/src/loupe_ui.rs::loupe_target_clamps_to_page_bounds",
+    "crates/ui-egui/src/loupe_ui.rs::loupe_aperture_rect_shrinks_with_zoom_and_stays_inside_page",
+    "crates/ui-egui/tests/it/viewer.rs::loupe_tool_tracks_target_steps_zoom_and_ends_on_tool_switch",
+]
+notes = "View ▸ Zoom ▸ Loupe tool: floating movable resizable non-modal window rendering a magnified aperture (100%–800% with slider, zoom ladder buttons, and drag-to-pan), accent aperture overlay on the page, and control-channel state/options."
 
 [[feature]]
 id = "view.pan-and-zoom"

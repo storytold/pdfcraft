@@ -408,6 +408,8 @@ pub struct PageSession {
     pub(crate) mark_gesture: crate::tools::redact_ui::tool::AreaMarkGesture,
     /// The Stamp tool's press, from the press to its release.
     pub(crate) stamp_press: Option<crate::stamps_ui::StampPress>,
+    /// The Loupe tool's active drag page, kept from press to release so drags past a page edge clamp to it.
+    pub(crate) loupe_drag_page: Option<usize>,
     /// What the last secondary press on a page went to, and on which page (`None` off the pages): the page's menu
     /// shows its entries when it has a menu and is the one selected, or else the page's own.
     pub(crate) menu_for: Option<(usize, Owner)>,
@@ -476,6 +478,7 @@ impl PageSession {
             marquee_zoom: craft::ui::canvas::ZoomTool::new(Default::default()),
             mark_gesture: Default::default(),
             stamp_press: None,
+            loupe_drag_page: None,
             menu_for: None,
             context_held: false,
         }
@@ -671,6 +674,7 @@ impl DocView {
         // A Snapshot area names a page by its index and a rectangle on it: after pages were
         // deleted or moved it would outline, print and save a different page.
         self.session.area_pick = None;
+        self.session.loupe_drag_page = None;
         self.view.go_to = None;
         self.session.flash = None;
         // Thumbnail drags hold page indexes from before the change.
@@ -915,6 +919,8 @@ struct PageBodyCx<'a> {
     units: crate::units::Unit,
     find_marks: &'a [TextMark],
     table_preview: Option<&'a crate::field_table_ui::Preview>,
+    /// Active Loupe tool's magnified aperture on this document: `(page, view-space rect)`.
+    loupe_aperture: Option<(usize, [f32; 4])>,
 }
 
 impl PageBodyCx<'_> {
@@ -943,6 +949,8 @@ struct BodyOut {
     back_to_select: bool,
     /// A Snapshot area drawn: (page, view-space rect).
     snapshot: Option<(usize, [f32; 4])>,
+    /// The Loupe tool's target updated on press or drag: (page, view-space point).
+    loupe_target: Option<(usize, [f32; 2])>,
     /// What the prepare tool asked for this pass.
     prepare: Option<crate::prepare::PrepareOutcome>,
     /// Full screen: the page or spread to turn to, forward when `true`.
@@ -1370,6 +1378,7 @@ fn page_before(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallb
         out.context = reply.context;
         out.back_to_select = finish.back_to_select;
         out.snapshot = finish.snapshot;
+        out.loupe_target = finish.loupe_target;
         // Set Page Boxes opens on the current page: the page double-clicked becomes it first.
         if let Some(page) = finish.open_boxes {
             session.pending_page = Some((page, None));
@@ -1429,6 +1438,9 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
         }
         if let Some((_, area)) = kept.filter(|(p, _)| p == page) {
             overlays = overlays.kept_area(area);
+        }
+        if let Some((_, aperture)) = cx.loupe_aperture.filter(|(p, _)| p == page) {
+            overlays = overlays.loupe_aperture(aperture);
         }
         overlays.show_at(ui, body.rect);
     }
@@ -1800,6 +1812,11 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         by_line: &by_line,
         custom_stamp,
     };
+    let loupe_aperture = app.loupe.as_ref().filter(|l| l.doc_id == Some(doc_id)).and_then(|l| {
+        let (page, point) = l.target?;
+        let p = info.pages.get(page)?;
+        Some((page, crate::loupe_ui::aperture_rect_for_rotation(point, [p.width, p.height], l.zoom, l.viewport_size, state.rotation)))
+    });
     let cx = PageBodyCx {
         doc,
         info,
@@ -1831,6 +1848,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         units: app.units,
         find_marks: &find_marks,
         table_preview: table_preview.as_ref(),
+        loupe_aperture,
     };
     let source = DocPages::new(&app.session, doc_id).rotated(state.rotation).revisions(revisions).reports(reports);
     // A modal over the pages blocks the canvas's keys and presses in the framework, so the view needs no gate here.
@@ -2051,6 +2069,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         open_table: prepare.table,
         open_boxes: body_out.open_boxes,
         open_signature: body_out.open_signature,
+        loupe_target: body_out.loupe_target,
         form,
         generation: app.session.get(doc_id).map_or(0, |d| d.edit_generation()),
     };
@@ -2076,6 +2095,8 @@ struct FrameRequests {
     open_boxes: bool,
     /// Fill & Sign needs a signature (`false`) or initials (`true`) first.
     open_signature: Option<bool>,
+    /// The Loupe tool's target updated on press or drag: `(page, view-space point)`.
+    loupe_target: Option<(usize, [f32; 2])>,
     form: Arc<Vec<pdfcraft_engine::FormField>>,
     generation: u64,
 }
@@ -2096,9 +2117,13 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
         open_table,
         open_boxes,
         open_signature,
+        loupe_target,
         form,
         generation,
     } = requests;
+    if let Some((page, point)) = loupe_target {
+        app.set_loupe_target(page, point);
+    }
     if let Some((page, at)) = app.views[index].session.comments.attach_at.take() {
         app.attach_file_comment(page, at);
     }

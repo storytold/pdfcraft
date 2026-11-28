@@ -138,6 +138,8 @@ enum Arm<'a> {
     Hand(&'a mut HandTool),
     /// Marquee Zoom: the framework's Zoom tool without scrubbing, so a drag draws the rectangle; the session's.
     MarqueeZoom(&'a mut ZoomTool),
+    /// Loupe tool: clicks and drags set the magnified target on a page.
+    Loupe(crate::loupe_ui::LoupeTool<'a>),
     /// A tool whose result is all in the session it borrows.
     Area(Box<dyn CanvasTool + 'a>),
     /// The camera quadrilateral, moved to the page a click went to.
@@ -180,6 +182,8 @@ pub(crate) struct ToolFinish {
     pub(crate) back_to_select: bool,
     /// A Snapshot area drawn: (page, view-space rect).
     pub(crate) snapshot: Option<(usize, [f32; 4])>,
+    /// The Loupe tool's target updated on press or drag: (page, view-space point).
+    pub(crate) loupe_target: Option<(usize, [f32; 2])>,
     /// The Crop tool's double click: open Set Page Boxes on that page.
     pub(crate) open_boxes: Option<usize>,
     /// The Crop tool's drawn rectangle, which the page body turns into the crop edit.
@@ -233,6 +237,7 @@ pub(crate) fn tool_selects_text(tool: QuickTool, preparing: bool) -> bool {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
+        | QuickTool::Loupe
         | QuickTool::Snapshot => false,
     }
 }
@@ -362,6 +367,7 @@ pub(crate) fn page_tool<'a>(
             session.marquee_zoom.options = options;
             Arm::MarqueeZoom(&mut session.marquee_zoom)
         }
+        QuickTool::Loupe => Arm::Loupe(crate::loupe_ui::LoupeTool::new(&mut session.loupe_drag_page, cx.pages, cx.rotation, size)),
         QuickTool::Measure(t) => Arm::Measure(MeasureTool::new(&mut session.measure, cx.doc, map, t, cx.units, cx.author, cx.host, cx.wake.clone())),
         QuickTool::Crop => Arm::Crop(CropTool::new(cx.can_crop, &mut session.box_drag, cx.pages, cx.rotation, size)),
         QuickTool::EnhanceCamera => Arm::Camera(CameraTool::new(cx.can_modify, cx.pages, press)),
@@ -443,6 +449,7 @@ impl<'a> PageTool<'a> {
             Arm::Select(t) => t,
             Arm::Hand(t) => &**t,
             Arm::MarqueeZoom(t) => &**t,
+            Arm::Loupe(t) => t,
             Arm::Area(t) => &**t,
             Arm::Camera(t) => t,
             Arm::Measure(t) => t,
@@ -458,6 +465,7 @@ impl<'a> PageTool<'a> {
             Arm::Select(t) => t,
             Arm::Hand(t) => &mut **t,
             Arm::MarqueeZoom(t) => &mut **t,
+            Arm::Loupe(t) => t,
             Arm::Area(t) => &mut **t,
             Arm::Camera(t) => t,
             Arm::Measure(t) => t,
@@ -489,6 +497,7 @@ impl<'a> PageTool<'a> {
             }
             Arm::SignArea(mut tool) => finish.sign_drawn = tool.finished(),
             Arm::Snapshot(mut tool) => finish.snapshot = tool.take_result(),
+            Arm::Loupe(mut tool) => finish.loupe_target = tool.take_target(),
             Arm::Crop(mut tool) => {
                 finish.crop = tool.take_result();
                 finish.back_to_select = finish.crop.is_some();
