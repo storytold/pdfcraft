@@ -245,6 +245,27 @@ fn clicking_elsewhere_keeps_the_text_and_starts_a_new_box() {
 }
 
 #[test]
+fn choosing_another_tool_keeps_the_text_being_typed() {
+    // Picking Select from the toolbar left the box open: the document stayed unmodified, with
+    // nothing to undo, until a click on the page or a save applied the text.
+    let mut h = harness();
+    assert!(h.execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 100.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("Typed".into()));
+    h.run_steps(2);
+    assert!(h.execute("view.select_tool"));
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["Typed"]);
+    assert!(h.state().views[0].session.content.draft.is_none(), "the box closed");
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert!(doc.dirty, "the document is modified");
+    assert!(doc.can_undo().is_some(), "the text is one undo step");
+}
+
+#[test]
 fn typing_moving_styling_and_deleting_added_content() {
     let mut h = harness();
     assert!(h.execute("edit.text"));
