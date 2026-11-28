@@ -8728,3 +8728,375 @@ fn xfa_line_without_width_is_vertical_and_without_height_is_horizontal() {
         lines[5]
     );
 }
+
+fn png_with_header(w: u32, h: u32, phys: Option<(u32, u32, u8)>) -> Vec<u8> {
+    let mut png = tiny_png();
+    png[16..20].copy_from_slice(&w.to_be_bytes());
+    png[20..24].copy_from_slice(&h.to_be_bytes());
+    if let Some((px, py, unit)) = phys {
+        let mut chunk = Vec::with_capacity(21);
+        chunk.extend_from_slice(&9u32.to_be_bytes());
+        chunk.extend_from_slice(b"pHYs");
+        chunk.extend_from_slice(&px.to_be_bytes());
+        chunk.extend_from_slice(&py.to_be_bytes());
+        chunk.push(unit);
+        chunk.extend_from_slice(&[0; 4]);
+        // Insert right after IHDR (8-byte signature + 25-byte IHDR chunk = 33).
+        png.splice(33..33, chunk);
+    }
+    png
+}
+
+fn jpeg_with_jfif(w: u16, h: u16, units: u8, xd: u16, yd: u16) -> Vec<u8> {
+    let mut j = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+    j.extend_from_slice(b"JFIF\0");
+    j.extend_from_slice(&[1, 1, units]);
+    j.extend_from_slice(&xd.to_be_bytes());
+    j.extend_from_slice(&yd.to_be_bytes());
+    j.extend_from_slice(&[0, 0]);
+    j.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 8]);
+    j.extend_from_slice(&h.to_be_bytes());
+    j.extend_from_slice(&w.to_be_bytes());
+    j.extend_from_slice(&[1, 1, 0x11, 0, 0xFF, 0xD9]);
+    j
+}
+
+fn first_image_rect(items: &[Item]) -> Rect {
+    items.iter().find_map(|i| if let Item::Image { rect, .. } = i { Some(*rect) } else { None }).expect("image item")
+}
+
+#[test]
+fn image_draw_aspect_modes_size_pictures_per_spec() {
+    use base64::Engine;
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let draw_rect = |bytes: &[u8], content_type: &str, aspect_attr: &str| {
+        let data = b64(bytes);
+        let items = positioned(&format!(
+            r#"<draw name="pic" x="0pt" y="0pt" w="100pt" h="100pt"><value><image contentType="{content_type}"{aspect_attr}>{data}</image></value></draw>"#
+        ));
+        first_image_rect(&items)
+    };
+    let assert_size = |r: Rect, ew: f64, eh: f64, label: &str| {
+        assert!((r.x - 36.0).abs() < 0.01 && (r.y - 36.0).abs() < 0.01, "{label}: top-left moved: {r:?}");
+        assert!((r.w - ew).abs() < 0.02 && (r.h - eh).abs() < 0.02, "{label}: expected {ew}x{eh}, got {r:?}");
+    };
+
+    let png_20x10 = png_with_header(20, 10, None);
+    assert_size(draw_rect(&png_20x10, "image/png", ""), 100.0, 50.0, "default (fit)");
+    assert_size(draw_rect(&png_20x10, "image/png", r#" aspect="fit""#), 100.0, 50.0, "fit");
+    assert_size(draw_rect(&png_20x10, "image/png", r#" aspect="none""#), 100.0, 100.0, "none");
+    assert_size(draw_rect(&png_20x10, "image/png", r#" aspect="width""#), 100.0, 50.0, "width landscape");
+    assert_size(draw_rect(&png_20x10, "image/png", r#" aspect="height""#), 200.0, 100.0, "height");
+    assert_size(draw_rect(&png_20x10, "image/png", r#" aspect="actual""#), 20.0, 10.0, "actual 72 dpi");
+
+    // Portrait 10x20 under width overflows the 100pt box height (unlike fit's 50x100).
+    let png_10x20 = png_with_header(10, 20, None);
+    assert_size(draw_rect(&png_10x20, "image/png", r#" aspect="width""#), 100.0, 200.0, "width portrait");
+    assert_size(draw_rect(&png_10x20, "image/png", r#" aspect="fit""#), 50.0, 100.0, "fit portrait");
+
+    // Actual size honours PNG pHYs (unit 1: pixels per metre) and JPEG JFIF (units 1 and 2).
+    // 5669 px/m ≈ 143.99 dpi -> 20x10 px is 10x5 pt.
+    let png_144 = png_with_header(20, 10, Some((5669, 5669, 1)));
+    assert_size(draw_rect(&png_144, "image/png", r#" aspect="actual""#), 10.0, 5.0, "actual PNG 144 dpi");
+    // PNG pHYs unit 0 is aspect-ratio only, not a physical resolution -> 72 dpi fallback.
+    let png_unit0 = png_with_header(20, 10, Some((5669, 5669, 0)));
+    assert_size(draw_rect(&png_unit0, "image/png", r#" aspect="actual""#), 20.0, 10.0, "actual PNG unit 0");
+
+    let jpg_144 = jpeg_with_jfif(20, 10, 1, 144, 144);
+    assert_size(draw_rect(&jpg_144, "image/jpeg", r#" aspect="actual""#), 10.0, 5.0, "actual JPEG 144 dpi");
+    let jpg_100_dpcm = jpeg_with_jfif(20, 10, 2, 100, 100);
+    assert_size(draw_rect(&jpg_100_dpcm, "image/jpeg", r#" aspect="actual""#), 20.0 * 72.0 / 254.0, 10.0 * 72.0 / 254.0, "actual JPEG dpcm");
+    let jpg_unit0 = jpeg_with_jfif(20, 10, 0, 144, 144);
+    assert_size(draw_rect(&jpg_unit0, "image/jpeg", r#" aspect="actual""#), 20.0, 10.0, "actual JPEG unit 0");
+
+    // Unknown and wrong-case aspect values fall back to fit.
+    for attr in [r#" aspect="stretch""#, r#" aspect="NONE""#, r#" aspect="Height""#] {
+        assert_size(draw_rect(&png_20x10, "image/png", attr), 100.0, 50.0, attr);
+    }
+}
+
+#[test]
+fn image_field_from_datasets_honours_template_image_aspect() {
+    use base64::Engine;
+    let data_png = base64::engine::general_purpose::STANDARD.encode(png_with_header(20, 10, None));
+    let field_rect = |value_xml: &str| {
+        let xdp = format!(
+            r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="box" w="7.5in" h="3in">
+  <field name="photo" x="0pt" y="0pt" w="100pt" h="100pt"><ui><imageEdit/></ui>{value_xml}</field>
+ </subform>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><box><photo>{data_png}</photo></box></form></xfa:data></xfa:datasets>
+</xdp:xdp>"##
+        );
+        first_image_rect(&layout_xml(&xdp).unwrap().pages[0].items)
+    };
+
+    let r_none = field_rect(r#"<value><image aspect="none"/></value>"#);
+    assert!((r_none.w - 100.0).abs() < 0.01 && (r_none.h - 100.0).abs() < 0.01, "data image field none: {r_none:?}");
+
+    // Also when the template holds its own fallback picture, datasets' picture still takes its aspect.
+    let tpl_png = base64::engine::general_purpose::STANDARD.encode(tiny_png());
+    let r_override = field_rect(&format!(r#"<value><image contentType="image/png" aspect="none">{tpl_png}</image></value>"#));
+    assert!(
+        (r_override.w - 100.0).abs() < 0.01 && (r_override.h - 100.0).abs() < 0.01,
+        "data overrides template picture keeping aspect: {r_override:?}"
+    );
+
+    let r_height = field_rect(r#"<value><image aspect="height"/></value>"#);
+    assert!((r_height.w - 200.0).abs() < 0.01 && (r_height.h - 100.0).abs() < 0.01, "data image field height: {r_height:?}");
+
+    let r_default = field_rect("");
+    assert!((r_default.w - 100.0).abs() < 0.01 && (r_default.h - 50.0).abs() < 0.01, "data image field without template image: {r_default:?}");
+}
+
+#[test]
+fn hostile_image_aspect_and_resolution_headers_produce_sane_rects() {
+    use base64::Engine;
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let draw_rect = |bytes: &[u8], content_type: &str, aspect: &str| {
+        let data = b64(bytes);
+        let items = positioned(&format!(
+            r#"<draw name="pic" x="0pt" y="0pt" w="100pt" h="100pt"><value><image contentType="{content_type}" aspect="{aspect}">{data}</image></value></draw>"#
+        ));
+        first_image_rect(&items)
+    };
+
+    // Zero, tiny and huge DPIs fall back to 72 dpi without division by zero or overflow.
+    for bad in [
+        png_with_header(20, 10, Some((0, 0, 1))),
+        png_with_header(20, 10, Some((1, 1, 1))),
+        png_with_header(20, 10, Some((u32::MAX, u32::MAX, 1))),
+        jpeg_with_jfif(20, 10, 1, 0, 0),
+        jpeg_with_jfif(20, 10, 1, u16::MAX, u16::MAX),
+    ] {
+        assert_eq!(crate::image::resolution(&bad), None);
+        let ct = if bad.starts_with(b"\xFF\xD8") { "image/jpeg" } else { "image/png" };
+        let r = draw_rect(&bad, ct, "actual");
+        assert!(r.w.is_finite() && r.h.is_finite());
+        assert!((r.w - 20.0).abs() < 0.01 && (r.h - 10.0).abs() < 0.01, "fallback 72 dpi: {r:?}");
+    }
+
+    // Truncated headers return None without panicking.
+    assert_eq!(crate::image::resolution(b"\x89PNG\r\n\x1a\n\x00\x00\x00\x09pHYs\x00\x00"), None);
+    assert_eq!(crate::image::resolution(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F']), None);
+
+    // Zero-size images fall back to the box under every aspect without panicking or NaN.
+    for zero in [png_with_header(0, 10, None), png_with_header(20, 0, None)] {
+        for aspect in ["fit", "none", "actual", "width", "height"] {
+            let r = draw_rect(&zero, "image/png", aspect);
+            assert!(r.w.is_finite() && r.h.is_finite(), "{aspect}: {r:?}");
+            assert!((r.w - 100.0).abs() < 0.01 && (r.h - 100.0).abs() < 0.01, "{aspect}: {r:?}");
+        }
+    }
+
+    // Extreme aspect ratio is clamped to the 100,000 pt layout bound.
+    let strip = png_with_header(1, 65_535, None);
+    let data = b64(&strip);
+    let items = positioned(&format!(
+        r#"<draw name="pic" x="0pt" y="0pt" w="1000pt" h="100pt"><value><image contentType="image/png" aspect="width">{data}</image></value></draw>"#
+    ));
+    let r = first_image_rect(&items);
+    assert!(r.w.is_finite() && r.h.is_finite() && r.h <= 100_000.0, "clamped strip: {r:?}");
+}
+
+fn tiff_with_resolution(le: bool, w: u32, h: u32, x_res: (u32, u32), y_res: (u32, u32), unit: Option<u16>) -> Vec<u8> {
+    let push_u16 = |buf: &mut Vec<u8>, v: u16| {
+        buf.extend_from_slice(&if le { v.to_le_bytes() } else { v.to_be_bytes() });
+    };
+    let push_u32 = |buf: &mut Vec<u8>, v: u32| {
+        buf.extend_from_slice(&if le { v.to_le_bytes() } else { v.to_be_bytes() });
+    };
+    let mut b = if le { b"II*\0".to_vec() } else { b"MM\0*".to_vec() };
+    push_u32(&mut b, 8);
+    let count: u16 = if unit.is_some() { 5 } else { 4 };
+    push_u16(&mut b, count);
+    // Header (8) + count (2) + entries (12 * count) + next-IFD (4).
+    let x_off = 8 + 2 + 12 * u32::from(count) + 4;
+    let y_off = x_off + 8;
+    let push_entry = |buf: &mut Vec<u8>, tag: u16, ty: u16, num: u32, val: [u8; 4]| {
+        push_u16(buf, tag);
+        push_u16(buf, ty);
+        push_u32(buf, num);
+        buf.extend_from_slice(&val);
+    };
+    let u32_bytes = |v: u32| if le { v.to_le_bytes() } else { v.to_be_bytes() };
+    let u16_field = |v: u16| {
+        let lo = if le { v.to_le_bytes() } else { v.to_be_bytes() };
+        [lo[0], lo[1], 0, 0]
+    };
+    push_entry(&mut b, 256, 4, 1, u32_bytes(w));
+    push_entry(&mut b, 257, 4, 1, u32_bytes(h));
+    push_entry(&mut b, 282, 5, 1, u32_bytes(x_off));
+    push_entry(&mut b, 283, 5, 1, u32_bytes(y_off));
+    if let Some(u) = unit {
+        push_entry(&mut b, 296, 3, 1, u16_field(u));
+    }
+    push_u32(&mut b, 0);
+    push_u32(&mut b, x_res.0);
+    push_u32(&mut b, x_res.1);
+    push_u32(&mut b, y_res.0);
+    push_u32(&mut b, y_res.1);
+    b
+}
+
+fn bmp_with_resolution(w: u32, h: u32, xp: i32, yp: i32) -> Vec<u8> {
+    // 1-bit monochrome BMP with a 2-entry colour table and zeroed rows so probe_size accepts it.
+    let row_bytes = (w as usize).div_ceil(32) * 4;
+    let pixel_bytes = row_bytes * h as usize;
+    let offset = 54u32 + 8;
+    let file_size = offset + pixel_bytes as u32;
+    let mut b = Vec::with_capacity(file_size as usize);
+    b.extend_from_slice(b"BM");
+    b.extend_from_slice(&file_size.to_le_bytes());
+    b.extend_from_slice(&[0; 4]);
+    b.extend_from_slice(&offset.to_le_bytes());
+    b.extend_from_slice(&40u32.to_le_bytes());
+    b.extend_from_slice(&w.to_le_bytes());
+    b.extend_from_slice(&h.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&0u32.to_le_bytes());
+    b.extend_from_slice(&(pixel_bytes as u32).to_le_bytes());
+    b.extend_from_slice(&xp.to_le_bytes());
+    b.extend_from_slice(&yp.to_le_bytes());
+    b.extend_from_slice(&2u32.to_le_bytes());
+    b.extend_from_slice(&0u32.to_le_bytes());
+    b.extend_from_slice(&[0, 0, 0, 0, 255, 255, 255, 0]);
+    b.resize(file_size as usize, 0);
+    b
+}
+
+#[test]
+fn tiff_and_bmp_resolution_reads_headers_and_rejects_bad_metadata() {
+    use crate::image::resolution;
+
+    for le in [true, false] {
+        // Explicit inch unit (2) and omitted unit (defaults to 2).
+        for unit in [Some(2), None] {
+            let tiff = tiff_with_resolution(le, 554, 194, (350, 1), (350, 1), unit);
+            let (dx, dy) = resolution(&tiff).expect("TIFF inch dpi");
+            assert!((dx - 350.0).abs() < 1e-6 && (dy - 350.0).abs() < 1e-6, "le={le} unit={unit:?}: ({dx}, {dy})");
+        }
+        // Centimetre unit (3): 100 dpcm == 254 dpi.
+        let cm = tiff_with_resolution(le, 20, 10, (100, 1), (100, 1), Some(3));
+        let (dx, dy) = resolution(&cm).expect("TIFF cm dpi");
+        assert!((dx - 254.0).abs() < 1e-6 && (dy - 254.0).abs() < 1e-6, "le={le} cm: ({dx}, {dy})");
+        // Unit 1 (no absolute unit) and unknown units -> None.
+        assert_eq!(resolution(&tiff_with_resolution(le, 20, 10, (350, 1), (350, 1), Some(1))), None);
+        assert_eq!(resolution(&tiff_with_resolution(le, 20, 10, (350, 1), (350, 1), Some(4))), None);
+        // Zero denominator -> None.
+        assert_eq!(resolution(&tiff_with_resolution(le, 20, 10, (350, 0), (350, 1), Some(2))), None);
+        assert_eq!(resolution(&tiff_with_resolution(le, 20, 10, (350, 1), (350, 0), Some(2))), None);
+        // Out-of-bounds DPI -> None.
+        assert_eq!(resolution(&tiff_with_resolution(le, 20, 10, (1, 2), (1, 2), Some(2))), None);
+        assert_eq!(resolution(&tiff_with_resolution(le, 20, 10, (20_000, 1), (20_000, 1), Some(2))), None);
+        // Truncated IFD and truncated rational data -> None, no panic.
+        let full = tiff_with_resolution(le, 20, 10, (350, 1), (350, 1), Some(2));
+        for cut in [4, 8, 10, 20, full.len() - 4] {
+            assert_eq!(resolution(&full[..cut]), None, "le={le} cut={cut}");
+        }
+    }
+
+    // BMP 1200 dpi (47244 px/m ≈ 1199.9976 dpi).
+    let bmp_1200 = bmp_with_resolution(1899, 664, 47_244, 47_244);
+    let (dx, dy) = resolution(&bmp_1200).expect("BMP 1200 dpi");
+    let expected = 47_244.0 * 0.0254;
+    assert!((dx - expected).abs() < 1e-6 && (dy - expected).abs() < 1e-6 && (dx - 1200.0).abs() < 0.01);
+
+    // Zero, negative and out-of-bounds ppm -> None.
+    assert_eq!(resolution(&bmp_with_resolution(20, 10, 0, 0)), None);
+    assert_eq!(resolution(&bmp_with_resolution(20, 10, -47_244, 47_244)), None);
+    assert_eq!(resolution(&bmp_with_resolution(20, 10, 1, 1)), None);
+    assert_eq!(resolution(&bmp_with_resolution(20, 10, 500_000, 500_000)), None);
+
+    // OS/2 12-byte BITMAPCOREHEADER -> None even when padded past offset 46 with ppm-like bytes.
+    let mut core = b"BM".to_vec();
+    core.extend_from_slice(&64u32.to_le_bytes());
+    core.extend_from_slice(&[0; 4]);
+    core.extend_from_slice(&26u32.to_le_bytes());
+    core.extend_from_slice(&12u32.to_le_bytes());
+    core.extend_from_slice(&2u16.to_le_bytes());
+    core.extend_from_slice(&1u16.to_le_bytes());
+    core.extend_from_slice(&1u16.to_le_bytes());
+    core.extend_from_slice(&24u16.to_le_bytes());
+    core.resize(38, 0);
+    core.extend_from_slice(&47_244i32.to_le_bytes());
+    core.extend_from_slice(&47_244i32.to_le_bytes());
+    assert_eq!(resolution(&core), None);
+
+    // GIF has no physical resolution header -> None.
+    assert_eq!(resolution(TINY_GIF), None);
+}
+
+#[test]
+fn aspect_actual_uses_tiff_and_bmp_header_resolution() {
+    use base64::Engine;
+    let draw_actual = |bytes: &[u8], content_type: &str| {
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let items = positioned(&format!(
+            r#"<draw name="pic" x="0pt" y="0pt" w="200pt" h="200pt"><value><image contentType="{content_type}" aspect="actual">{data}</image></value></draw>"#
+        ));
+        first_image_rect(&items)
+    };
+
+    let tiff = tiff_with_resolution(true, 554, 194, (350, 1), (350, 1), Some(2));
+    let rt = draw_actual(&tiff, "image/tiff");
+    let (tw, th) = (554.0 * 72.0 / 350.0, 194.0 * 72.0 / 350.0);
+    assert!((rt.w - tw).abs() < 1e-6 && (rt.h - th).abs() < 1e-6, "TIFF actual: expected {tw}x{th}, got {rt:?}");
+    assert!(rt.w < 554.0 && rt.h < 194.0, "TIFF actual should scale by 350 dpi, not 72 dpi: {rt:?}");
+
+    let bmp = bmp_with_resolution(1899, 664, 47_244, 47_244);
+    let rb = draw_actual(&bmp, "image/bmp");
+    let dpi = 47_244.0 * 0.0254;
+    let (bw, bh) = (1899.0 * 72.0 / dpi, 664.0 * 72.0 / dpi);
+    assert!((rb.w - bw).abs() < 1e-6 && (rb.h - bh).abs() < 1e-6, "BMP actual: expected {bw}x{bh}, got {rb:?}");
+    assert!(rb.w < 1899.0 && rb.h < 664.0, "BMP actual should scale by 1200 dpi, not 72 dpi: {rb:?}");
+}
+
+/// A flowed draw without a height takes the height its picture is drawn at: an `actual` picture
+/// keeps its own size whatever the draw's width, so the next object starts below it, not inside it.
+#[test]
+fn aspect_actual_picture_without_a_height_pushes_the_next_object_below_it() {
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode(png_with_header(600, 300, None));
+    let rule = base64::engine::general_purpose::STANDARD.encode(png_with_header(10, 1, None));
+    let xdp = format!(
+        r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="flow" layout="tb" w="7.5in">
+  <draw name="pic" w="200pt"><value><image contentType="image/png" aspect="actual">{data}</image></value></draw>
+  <draw name="next" w="100pt" h="10pt"><value><image contentType="image/png" aspect="none">{rule}</image></value></draw>
+ </subform>
+</subform>
+</template></xdp:xdp>"##
+    );
+    let items = layout_xml(&xdp).unwrap().pages.into_iter().next().unwrap().items;
+    let rects: Vec<Rect> = items.iter().filter_map(|i| if let Item::Image { rect, .. } = i { Some(*rect) } else { None }).collect();
+    let [pic, next] = rects[..] else { panic!("two pictures, got {rects:?}") };
+    assert!((pic.w - 600.0).abs() < 1e-6 && (pic.h - 300.0).abs() < 1e-6, "actual at 72 dpi: {pic:?}");
+    assert!((next.y - pic.y).abs() >= 300.0 - 1e-6, "the next draw starts inside the picture: {pic:?} then {next:?}");
+}
+
+#[test]
+fn aspect_none_with_large_negative_margins_stays_within_extent_bound() {
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode(png_with_header(20, 10, None));
+    let items = positioned(&format!(
+        r#"<draw name="pic" x="0pt" y="0pt" w="50000pt" h="50000pt"><margin leftInset="-60000pt" rightInset="-60000pt" topInset="-60000pt" bottomInset="-60000pt"/><value><image contentType="image/png" aspect="none">{data}</image></value></draw>"#
+    ));
+    let r = first_image_rect(&items);
+    assert!(r.w.is_finite() && r.h.is_finite() && r.w <= 100_000.0 && r.h <= 100_000.0, "aspect=none clamped: {r:?}");
+
+    // Unknown-size fallback under large negative margins is also clamped.
+    let bad = base64::engine::general_purpose::STANDARD.encode(b"not an image");
+    let items_bad = positioned(&format!(
+        r#"<draw name="pic" x="0pt" y="0pt" w="50000pt" h="50000pt"><margin leftInset="-60000pt" rightInset="-60000pt" topInset="-60000pt" bottomInset="-60000pt"/><value><image contentType="image/png" aspect="fit">{bad}</image></value></draw>"#
+    ));
+    let rb = first_image_rect(&items_bad);
+    assert!(rb.w.is_finite() && rb.h.is_finite() && rb.w <= 100_000.0 && rb.h <= 100_000.0, "unknown-size clamped: {rb:?}");
+}

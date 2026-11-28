@@ -1,7 +1,7 @@
 use super::common::clean_name;
 use super::items::{Item, Rounded, Turned};
 use super::{
-    Arc, Border, Ctx, Draw, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Rect, SomIndices, Stroke,
+    Arc, Aspect, Border, Ctx, Draw, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Rect, SomIndices, Stroke,
     Subform, Value, XfaError, data_path, text,
 };
 
@@ -349,7 +349,7 @@ impl Layouter<'_> {
         let inner = rect.inset(&d.common.margin);
         match &d.value {
             Value::Text(_) | Value::Rich(_) => self.draw_value_text(&d.value, inner, &ctx.font, &ctx.para, &ctx.som),
-            Value::Image { content_type, data, .. } => self.draw_image(data, content_type, inner),
+            Value::Image { content_type, data, aspect, .. } => self.draw_image(data, content_type, inner, *aspect),
             Value::Line { slope_up, edge } => {
                 if !edge.visible() {
                     return Ok(());
@@ -453,18 +453,54 @@ impl Layouter<'_> {
         Ok(())
     }
 
-    /// A picture scaled to fit `inner`, keeping its shape, from its top left.
-    pub(super) fn draw_image(&mut self, data: &[u8], content_type: &str, inner: Rect) -> Result<(), XfaError> {
+    /// A picture laid out in `inner` from its top left according to `aspect` (XFA 3.3 `<image>`).
+    /// Sizes are kept finite and clamped to `100_000` pt (matching [`crate::parse::measure`]).
+    /// Overflowing `Width`, `Height` and `Actual` pictures are not clipped (layout items carry no
+    /// clip rectangle).
+    pub(super) fn draw_image(&mut self, data: &[u8], content_type: &str, inner: Rect, aspect: Aspect) -> Result<(), XfaError> {
+        const MAX_IMAGE_EXTENT: f64 = 100_000.0;
+        let clamp = |v: f64, fallback: f64| -> f64 {
+            let v = if v.is_finite() {
+                v
+            } else if fallback.is_finite() {
+                fallback
+            } else {
+                0.0
+            };
+            v.clamp(0.0, MAX_IMAGE_EXTENT)
+        };
         self.image_bytes = self.image_bytes.saturating_add(data.len());
         if self.image_bytes > MAX_IMAGE_BYTES {
             return Err(XfaError::TooLarge("the form's pictures are too large together to lay out".into()));
         }
-        let fitted = match crate::image::size(data) {
-            Some((iw, ih)) if iw > 0 && ih > 0 && inner.w > 0.0 && inner.h > 0.0 => {
-                let k = (inner.w / iw as f64).min(inner.h / ih as f64);
-                Rect::new(inner.x, inner.y, iw as f64 * k, ih as f64 * k)
-            }
-            _ => inner,
+        let inner = Rect::new(inner.x, inner.y, clamp(inner.w, 0.0), clamp(inner.h, 0.0));
+        let fitted = match aspect {
+            Aspect::None => inner,
+            Aspect::Fit => match crate::image::size(data) {
+                Some((iw, ih)) if iw > 0 && ih > 0 && inner.w > 0.0 && inner.h > 0.0 => {
+                    let k = (inner.w / f64::from(iw)).min(inner.h / f64::from(ih));
+                    Rect::new(inner.x, inner.y, clamp(f64::from(iw) * k, inner.w), clamp(f64::from(ih) * k, inner.h))
+                }
+                _ => inner,
+            },
+            Aspect::Width => match crate::image::size(data) {
+                Some((iw, ih)) if iw > 0 && ih > 0 && inner.w > 0.0 => {
+                    let k = inner.w / f64::from(iw);
+                    Rect::new(inner.x, inner.y, inner.w, clamp(f64::from(ih) * k, inner.h))
+                }
+                _ => inner,
+            },
+            Aspect::Height => match crate::image::size(data) {
+                Some((iw, ih)) if iw > 0 && ih > 0 && inner.h > 0.0 => {
+                    let k = inner.h / f64::from(ih);
+                    Rect::new(inner.x, inner.y, clamp(f64::from(iw) * k, inner.w), inner.h)
+                }
+                _ => inner,
+            },
+            Aspect::Actual => match crate::image::actual_size(data) {
+                Some((w, h)) => Rect::new(inner.x, inner.y, clamp(w, inner.w), clamp(h, inner.h)),
+                None => inner,
+            },
         };
         self.push(Item::Image { rect: fitted, data: Arc::new(data.to_vec()), content_type: content_type.to_string() })
     }
