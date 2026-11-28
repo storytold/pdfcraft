@@ -145,6 +145,7 @@ impl PdfCraftApp {
             pinned_folders: json_text(&self.pinned.folders),
             pinned_folders_collapsed: json_text(&self.pinned.collapsed),
             pinned_tools: Some(self.pinned_tools.clone()),
+            hidden_tools: Some(self.hidden_tools.ids().iter().map(|id| (*id).to_string()).collect()),
             theme: Some(self.theme_preference),
             scroll_speed: Some(self.scroll_speed),
             invert_middle_drag: Some(self.invert_middle_drag),
@@ -364,6 +365,8 @@ impl PdfCraftApp {
             }
             self.pinned_tools = tools;
         }
+        // Settings are untrusted: unknown tool ids are dropped, and a value that isn't a list hides nothing.
+        self.hidden_tools = s.hidden_tools.as_deref().map(crate::tool_visibility::HiddenTools::from_names).unwrap_or_default();
         if let Some(preference) = s.theme {
             self.set_theme_preference(preference);
         }

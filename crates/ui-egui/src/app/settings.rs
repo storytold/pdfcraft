@@ -30,6 +30,8 @@ pub struct Layout {
     /// JSON text: which pinned folders are collapsed.
     pub pinned_folders_collapsed: Option<String>,
     pub pinned_tools: Option<Vec<String>>,
+    /// The tools All tools, the palette and Home leave out (Preferences ▸ Tools shown in All tools).
+    pub hidden_tools: Option<Vec<String>>,
     pub theme: Option<ModeChoice>,
     pub scroll_speed: Option<crate::scroll_speed::ScrollSpeed>,
     pub invert_middle_drag: Option<bool>,
@@ -536,6 +538,7 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
             pinned_folders: r.text("pinned_folders"),
             pinned_folders_collapsed: r.text("pinned_folders_collapsed"),
             pinned_tools: r.list("pinned_tools"),
+            hidden_tools: r.list("hidden_tools"),
             theme,
             scroll_speed: r.typed("scroll_speed"),
             invert_middle_drag: r.bool("invert_middle_drag"),

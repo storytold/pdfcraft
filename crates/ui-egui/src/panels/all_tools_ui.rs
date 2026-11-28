@@ -98,7 +98,15 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             let mut spans = Vec::new();
             for category in TOOL_CATEGORIES {
                 let start = shown.len();
-                shown.extend(category.groups.iter().filter_map(|id| catalog::group(id)).filter_map(|g| matches(&matcher, g).map(|m| (g, m))));
+                // Tools hidden in Preferences are left out, as in the sidebar; the menus and mode tabs still reach them.
+                shown.extend(
+                    category
+                        .groups
+                        .iter()
+                        .filter(|id| app.hidden_tools.shows(id))
+                        .filter_map(|id| catalog::group(id))
+                        .filter_map(|g| matches(&matcher, g).map(|m| (g, m))),
+                );
                 if shown.len() > start {
                     spans.push((start, shown.len() - start, tl!(category.label).to_owned()));
                 }
@@ -115,7 +123,14 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 .groups(&groups)
                 .selection(Bind::given(Selection::default()))
                 .rows_stamp(query_stamp(&query))
-                .empty(tl!("No tools match your search.").to_owned())
+                .empty(
+                    if catalog::TOOL_GROUPS.iter().any(|g| app.hidden_tools.shows(g.id)) {
+                        tl!("No tools match your search.")
+                    } else {
+                        tl!("No tools are shown. Choose them in Preferences.")
+                    }
+                    .to_owned(),
+                )
                 .show_items(ui, &Rows(shown.len()), &mut |at, _| match shown.get(*at) {
                     Some((g, items)) => tile(g, items),
                     None => Tile::new(String::new()),
