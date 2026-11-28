@@ -201,12 +201,17 @@ fn editable_combo(f: &FormField) -> bool {
 
 /// The text a field's editor starts with: its value, or for a combo box the shown text of the
 /// option it picks (a free value typed into an editable one has no option, and shows as is).
+/// A multiline text value may break its lines with CR or CR LF, as the page appearance reads
+/// it; the editor breaks lines at LF only, so those become LF.
 pub(crate) fn draft_text(f: &FormField) -> String {
     let value = f.value.first().cloned().unwrap_or_default();
     if f.kind == FormFieldKind::Combo
         && let Some((_, shown)) = f.options.iter().find(|(export, _)| *export == value)
     {
         return shown.clone();
+    }
+    if f.kind == FormFieldKind::Text && f.has(field_flags::MULTILINE) {
+        return value.replace("\r\n", "\n").replace('\r', "\n");
     }
     value
 }
@@ -667,7 +672,9 @@ pub(crate) fn draft_edit(focus: &Focus, form: &[FormField]) -> Option<Edit> {
         return None;
     }
     let value = match f.kind {
-        FormFieldKind::Text if f.value.first().map(String::as_str).unwrap_or("") != focus.text => FieldValue::Text(focus.text.clone()),
+        // Against the text the editor opened with, so opening and leaving a field whose line
+        // breaks the editor normalised writes nothing.
+        FormFieldKind::Text if draft_text(f) != focus.text => FieldValue::Text(focus.text.clone()),
         // Typed into an editable combo box: a shown text picks its option, anything else is the
         // value itself (the engine maps it, and refuses free text when Edit is clear).
         FormFieldKind::Combo if editable_combo(f) && focus.text != draft_text(f) && f.value.first() != Some(&focus.text) => {
@@ -1009,6 +1016,57 @@ mod tests {
         combo.text = "Apple".into();
         refresh_draft(&mut combo, ("Apple", &["a".to_string()]), ("Banana".into(), &["b".to_string()]));
         assert_eq!((combo.text.as_str(), combo.picked.as_slice()), ("Banana", ["b".to_string()].as_slice()));
+    }
+
+    /// A multiline text field holding `value`, with one widget on page 0.
+    fn multiline(value: &str) -> FormField {
+        let obj = pdfcraft_cos::ObjRef::new(4, 0);
+        FormField {
+            name: "notes".into(),
+            obj,
+            kind: FormFieldKind::Text,
+            value: vec![value.into()],
+            default: Vec::new(),
+            flags: field_flags::MULTILINE,
+            max_len: None,
+            options: Vec::new(),
+            selected: Vec::new(),
+            single_value_is_array: false,
+            da: String::new(),
+            quadding: 0,
+            tooltip: None,
+            widgets: vec![pdfcraft_engine::FormWidget {
+                mouse_up_script: None,
+                mouse_down: false,
+                obj,
+                page: Some(0),
+                rect: [20.0, 20.0, 220.0, 120.0],
+                on_state: None,
+                state: None,
+                tab: 0,
+                locked: false,
+                hidden: false,
+                read_only: false,
+                rotation: 0,
+                caption: None,
+                list: None,
+                round: false,
+            }],
+            actions: Default::default(),
+            button: None,
+        }
+    }
+
+    /// A value whose lines break with CR or CR LF (as the page shows them) opens in the editor
+    /// with the same lines, and leaving it untouched writes nothing (#7677).
+    #[test]
+    fn the_editor_keeps_the_line_breaks_a_value_has_on_the_page() {
+        for value in ["one\rtwo\r\rfour", "one\r\ntwo\r\n\r\nfour", "one\ntwo\n\nfour"] {
+            let f = multiline(value);
+            let focus = open_focus(&f, 0);
+            assert_eq!(focus.text.split('\n').collect::<Vec<_>>(), ["one", "two", "", "four"], "{value:?}");
+            assert!(draft_edit(&focus, std::slice::from_ref(&f)).is_none(), "{value:?}: opening and leaving writes nothing");
+        }
     }
 
     #[test]
