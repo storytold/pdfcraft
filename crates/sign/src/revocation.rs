@@ -2,7 +2,9 @@
 //! status lookup for evidence embedded in a DSS or supplied by the caller. Never fetches:
 //! the transport and the choice of evidence stay with the caller.
 
-use crate::der::{Tlv, tag};
+use crate::der::Tlv;
+#[cfg(test)]
+use crate::der::tag;
 use crate::keys::{self, DigestAlg, PublicKey};
 use crate::x509::Certificate;
 use crate::{SignError, Time};
@@ -26,6 +28,7 @@ pub enum RevocationStatus {
     Unknown,
 }
 
+#[cfg(test)]
 fn bad(what: impl Into<String>) -> SignError {
     SignError::Malformed(format!("revocation: {}", what.into()))
 }
@@ -263,7 +266,7 @@ impl OcspResponse {
             if t.tag == tag::ctx(0) {
                 for c in t.children()? {
                     if c.tag == tag::SEQUENCE
-                        && let Ok(cert) = Certificate::parse(c.raw)
+                        && let Ok(cert) = Certificate::parse_legacy(c.raw)
                     {
                         responder_cert.get_or_insert(cert);
                     }
@@ -390,6 +393,30 @@ mod shared_ocsp_tests {
             (Err(a), Err(b)) => assert_eq!(format!("{a:?}"), format!("{b:?}")),
             _ => panic!("shared and retained OCSP parsers disagree"),
         }
+    }
+
+    #[test]
+    fn standard_certificate_wrapper_intentionally_improves_on_legacy() -> Result<(), SignError> {
+        let date = Time { year: 2026, month: 6, day: 15, hour: 12, minute: 0, second: 0 };
+        let cert = crate::pkcs12::open(include_bytes!("../tests/data/ec-p256.p12"), "test")?.certificate;
+        let hash = DigestAlg::Sha256;
+        let id = der::seq(&[&hash.algorithm(), &der::octets(&[1]), &der::octets(&[2]), &der::uint(&[0x80])]);
+        let single = der::seq(&[&id, &der::tlv(tag::ctx_prim(0), &[]), &date.encode()]);
+        let identity = der::tlv(tag::ctx(1), &cert.subject.raw);
+        let tbs = der::seq(&[&identity, &date.encode(), &der::seq(&[&single])]);
+        let basic = der::seq(&[&tbs, &hash.algorithm(), &der::bit_string(&[1, 2, 3]), &der::explicit(0, &der::seq(&[&cert.raw]))]);
+        let response =
+            der::seq(&[&der::tlv(tag::ENUMERATED, &[0]), &der::explicit(0, &der::seq(&[&der::oid(ID_PKIX_OCSP_BASIC), &der::octets(&basic)]))]);
+        let parsed = OcspResponse::parse(&response)?;
+        let legacy = OcspResponse::parse_legacy(&response)?;
+        // Deliberate correction from shared #2245: the frozen oracle dropped the RFC 6960
+        // SEQUENCE OF wrapper. Keep that baseline unchanged rather than hiding the difference.
+        assert_eq!(parsed.responder_cert.as_ref(), Some(&cert));
+        assert!(legacy.responder_cert.is_none());
+        assert_eq!(parsed.responses, legacy.responses);
+        // Finding a certificate must not make this fabricated response trusted.
+        assert_eq!(parsed.check(&cert, &cert, date), RevocationStatus::Unknown);
+        Ok(())
     }
 
     #[test]

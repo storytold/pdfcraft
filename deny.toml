@@ -1,6 +1,7 @@
 # cargo-deny policy (M0.4). Run with `cargo xtask deny`; part of `cargo xtask ci`.
-# Code dependencies follow the same rule as assets (AGENTS.md): permissive licences only.
+# Code dependencies follow the same rule as assets (AGENTS.md and standards/licences.md).
 # Copyleft (GPL, AGPL, LGPL) is never linked; such tools run only as external oracle processes.
+# MPL-2.0 is allowed for third-party crates used unmodified (file-level copyleft; licences.md).
 
 [graph]
 all-features = true
@@ -20,6 +21,9 @@ allow = [
     "BSL-1.0",
     "CC0-1.0",
     "IJG",
+    "MPL-2.0",
+    # Permissive data licence of the certificate bundle in webpki-roots (rustls' roots via ureq).
+    "CDLA-Permissive-2.0",
 ]
 
 [licenses.private]
@@ -33,7 +37,7 @@ allow-wildcard-paths = true
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# Shared UI components and spooler; Cargo.toml pins the immutable revision. craft-print pins
+# Shared UI, PDF components and spooler; Cargo.toml pins immutable revisions. craft-print pins
 # storytold's winprint fork (Windows printing, #1107) to an immutable revision of its own.
 allow-git = [
     "https://github.com/storytold/craft-libs",
@@ -42,9 +46,12 @@ allow-git = [
     "https://github.com/storytold/egui",
     "https://github.com/storytold/winit",
 ]
+# The framework crates reach vectorcraft (craft-svg's geometry and path ops) from the same
+# organisation, pinned by revision in Cargo.lock; any storytold repository is a first-party source.
+allow-org = { github = ["storytold"] }
 
 [advisories]
-yanked = "warn"
+yanked = "deny"
 ignore = [
     # Marvin (RSA private-key timing side channel, no fixed `rsa` release). pdfcraft-sign uses
     # `rsa` only for public-key signature verification, which the advisory does not affect; RSA
@@ -70,7 +77,7 @@ ignore = [
 ]
 
 # egui's default UI fonts (Ubuntu-Light, Hack, emoji-icon-font): font licences on the AGENTS.md
-# §1.2 allowlist, attributed in ATTRIBUTION.toml as dependency-bundled assets.
+# licences.md allowlist, attributed in ATTRIBUTION.toml as dependency-bundled assets.
 [[licenses.exceptions]]
 crate = "epaint_default_fonts"
 allow = ["OFL-1.1", "Ubuntu-font-1.0"]
