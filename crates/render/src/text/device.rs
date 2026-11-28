@@ -289,11 +289,21 @@ impl TextDevice {
         self.replaced.push(Replaced { at, text, originals });
     }
 
+    /// Whether the active clip stack encloses no area: a degenerate clip path whose bounding box
+    /// has zero width or zero height, or an empty intersection of nested clips. A NaN edge (a
+    /// damaged clip) does not count as empty and leaves that edge unclipped.
+    pub(super) fn clip_empty(&self) -> bool {
+        self.clips.last().is_some_and(|c| c.x0 >= c.x1 || c.y0 >= c.y1)
+    }
+
     /// Record view-space box `b`, drawn with `transform`, as painted by the open `/ActualText`
     /// replacement, cut to the visible area (the crop box, and the clip in force); paint wholly
     /// outside the crop box, or that an exclusion leaves out (`excluded`), only marks the
     /// replacement.
     fn paint(&mut self, b: Rect, transform: Affine, excluded: bool) {
+        if self.clip_empty() {
+            return;
+        }
         // Wholly outside the crop box, as a glyph dropped there is: the replacement can't be read.
         let Some(on_page) = cut(b, self.page) else {
             self.paint_cropped = true;
@@ -459,6 +469,12 @@ impl<'a> Device<'a> for TextDevice {
     }
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
     fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, _: &Paint<'a>, mode: &GlyphDrawMode) {
+        if self.clip_empty() {
+            // A replacement that loses a glyph this way keeps only the glyphs it still draws, as one
+            // the crop box cuts does: its full text would bring the hidden glyph back.
+            self.actual_cropped |= self.actual.is_some();
+            return;
+        }
         if self.excluded_depth.is_some() || (self.filter.images && matches!(mode, GlyphDrawMode::Invisible)) {
             self.actual_filtered |= self.actual.is_some();
             return;

@@ -4312,3 +4312,113 @@ fn an_unattached_alphabetic_mark_reads_with_the_glyphs_at_its_place() {
     let text = layout(v).plain_text();
     assert_eq!(text, "שלום\u{345}ab");
 }
+
+/// Issue #8213: glyphs drawn inside a clipping path that encloses no area never paint on the page
+/// and are left out of extracted text, while glyphs outside it or after the closing `Q` stay.
+#[test]
+fn glyphs_inside_a_zero_area_clip_are_not_extracted() {
+    let pdf = marked_pages(&[
+        // Degenerate 0x0 rectangle clip hides `v`, leaving only the visible `5`.
+        "q 0 0 0 0 re W n BT /F1 12 Tf 1 0 0 1 100 150 Tm (v) Tj ET Q BT /F1 12 Tf 1 0 0 1 120 150 Tm (5) Tj ET",
+        // Singular CTM collapses the clip to zero width after the CTM; text after `Q` is extracted again.
+        "q 0 0 0 1 10 0 cm 10 10 50 50 re W n BT /F1 12 Tf 1 0 0 1 20 150 Tm (hidden) Tj ET Q BT /F1 12 Tf 1 0 0 1 20 120 Tm (after) Tj ET",
+        // Singular CTM collapses the clip to zero height after the CTM; text after `Q` is extracted again.
+        "q 1 0 0 0 0 10 cm 10 10 50 50 re W n BT /F1 12 Tf 1 0 0 1 20 150 Tm (hidden) Tj ET Q BT /F1 12 Tf 1 0 0 1 20 120 Tm (after) Tj ET",
+        // A normal non-empty clip still extracts its text, including text partly outside the clip.
+        "q 50 100 30 60 re W n BT /F1 12 Tf 1 0 0 1 60 130 Tm (partially clipped) Tj ET Q",
+        // A valid rectangle with negative width and height still encloses area and extracts text.
+        "q 150 200 -80 -60 re W n BT /F1 12 Tf 1 0 0 1 80 150 Tm (negative) Tj ET Q",
+        // Invisible text (`3 Tr`, OCR layers) with no clip is still extracted.
+        "BT /F1 12 Tf 3 Tr 1 0 0 1 50 150 Tm (ocr) Tj ET",
+    ]);
+    assert_eq!(marked_text(&pdf, 0).plain_text(), "5");
+    assert_eq!(marked_text(&pdf, 1).plain_text(), "after");
+    assert_eq!(marked_text(&pdf, 2).plain_text(), "after");
+    assert_eq!(marked_text(&pdf, 3).plain_text(), "partially clipped");
+    assert_eq!(marked_text(&pdf, 4).plain_text(), "negative");
+    assert_eq!(marked_text(&pdf, 5).plain_text(), "ocr");
+}
+
+/// Nested clips intersect: an empty clip inside a normal clip, or two disjoint or edge-touching
+/// rectangle clips whose intersection has no area, hide glyphs until the inner clip is popped by `Q`.
+#[test]
+fn nested_and_disjoint_empty_clips_hide_glyphs_until_popped() {
+    let pdf = marked_pages(&[
+        // Empty clip nested inside a normal clip hides only the inner text.
+        "q 0 0 300 300 re W n BT /F1 12 Tf 1 0 0 1 20 200 Tm (outer) Tj ET q 0 0 0 0 re W n BT /F1 12 Tf 1 0 0 1 20 160 Tm (inner) Tj ET Q BT /F1 12 Tf 1 0 0 1 20 120 Tm (restored) Tj ET Q",
+        // Two disjoint rectangle clips have an empty intersection; popping the second restores extraction.
+        "q 0 0 80 80 re W n q 120 120 80 80 re W n BT /F1 12 Tf 1 0 0 1 20 200 Tm (gone) Tj ET Q BT /F1 12 Tf 1 0 0 1 20 160 Tm (back) Tj ET Q",
+        // Two rectangle clips that touch only along an edge intersect with zero width.
+        "q 0 0 80 80 re W n q 80 0 80 80 re W n BT /F1 12 Tf 1 0 0 1 20 200 Tm (edge) Tj ET Q BT /F1 12 Tf 1 0 0 1 20 160 Tm (back) Tj ET Q",
+        // A normal clip nested inside an already-empty clip stays hidden until the empty one pops.
+        "q 0 0 0 0 re W n q 0 0 300 300 re W n BT /F1 12 Tf 1 0 0 1 20 200 Tm (still gone) Tj ET Q Q BT /F1 12 Tf 1 0 0 1 20 160 Tm (visible) Tj ET",
+        // Extra unbalanced `Q`s before visible text do not underflow or drop text.
+        "Q Q q 0 0 0 0 re W n BT /F1 12 Tf 1 0 0 1 20 200 Tm (gone) Tj ET Q Q BT /F1 12 Tf 1 0 0 1 20 160 Tm (kept) Tj ET",
+    ]);
+    assert_eq!(marked_text(&pdf, 0).plain_text(), "outer\nrestored");
+    assert_eq!(marked_text(&pdf, 1).plain_text(), "back");
+    assert_eq!(marked_text(&pdf, 2).plain_text(), "back");
+    assert_eq!(marked_text(&pdf, 3).plain_text(), "visible");
+    assert_eq!(marked_text(&pdf, 4).plain_text(), "kept");
+}
+
+/// Zero-width, zero-height, NaN, and infinite clip paths on `TextDevice`, as well as unbalanced
+/// clip pops, never panic or underflow.
+#[test]
+fn non_finite_clips_and_unbalanced_pops_do_not_panic() {
+    use craft_pdf::interpret::FillRule;
+    let rect_clip = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        let mut path = BezPath::new();
+        path.move_to((x0, y0));
+        path.line_to((x1, y0));
+        path.line_to((x1, y1));
+        path.line_to((x0, y1));
+        path.close_path();
+        ClipPath { path, fill: FillRule::NonZero }
+    };
+    let mut dev = TextDevice::new();
+    // Unbalanced pop on an empty stack saturates without panicking.
+    dev.pop_clip_path();
+    assert!(!dev.clip_empty());
+
+    // Zero-width and zero-height clips pushed directly on the device mark the clip empty.
+    dev.push_clip_path(&rect_clip(10.0, 10.0, 10.0, 60.0));
+    assert!(dev.clip_empty());
+    dev.pop_clip_path();
+    assert!(!dev.clip_empty());
+
+    dev.push_clip_path(&rect_clip(10.0, 10.0, 60.0, 10.0));
+    assert!(dev.clip_empty());
+    dev.pop_clip_path();
+    assert!(!dev.clip_empty());
+
+    // NaN clip leaves edges unclipped without panicking.
+    dev.push_clip_path(&rect_clip(f64::NAN, f64::NAN, f64::NAN, f64::NAN));
+    assert!(!dev.clip_empty());
+
+    // Infinite zero-width clip does not panic and counts as empty.
+    dev.push_clip_path(&rect_clip(f64::INFINITY, 0.0, f64::INFINITY, 50.0));
+    assert!(dev.clip_empty());
+
+    // Popping restores the outer clip state and extra pops saturate.
+    dev.pop_clip_path();
+    assert!(!dev.clip_empty());
+    dev.pop_clip_path();
+    dev.pop_clip_path();
+    assert!(!dev.clip_empty());
+}
+
+/// An `/ActualText` span that draws one glyph in view and one under a clip enclosing no area keeps
+/// only the glyph that shows, rather than the whole replacement; a span drawn wholly in view still
+/// reads as its replacement, and one drawn wholly under the empty clip reads as nothing.
+#[test]
+fn actual_text_losing_a_glyph_to_an_empty_clip_keeps_only_what_shows() {
+    let pdf = marked_pages(&[
+        "/Span <</ActualText (AB)>> BDC BT /F1 20 Tf 1 0 0 1 100 150 Tm (a) Tj ET q 0 0 0 0 re W n BT /F1 20 Tf 1 0 0 1 130 150 Tm (b) Tj ET Q EMC",
+        "BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</ActualText (AB)>> BDC (ab) Tj EMC ET",
+        "q 0 0 0 0 re W n BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</ActualText (AB)>> BDC (ab) Tj EMC ET Q BT /F1 20 Tf 1 0 0 1 100 100 Tm (c) Tj ET",
+    ]);
+    assert_eq!(marked_text(&pdf, 0).plain_text(), "a");
+    assert_eq!(marked_text(&pdf, 1).plain_text(), "AB");
+    assert_eq!(marked_text(&pdf, 2).plain_text(), "c");
+}
