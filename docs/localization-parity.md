@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-15 · **Change:** minor (Bosnian (`bs`) offered, its catalog from craft-i18n); previously minor (every catalog restated from `cargo xtask i18n-report` on `main` at `14ae839a`: 2,897 strings in the report's denominator; Hindi, Indonesian, Korean, Thai, Lao and Central Kurdish listed with their catalogs. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-15 · **Change:** minor (Bosnian (`bs`) offered, its catalog from craft-i18n); previously minor (every catalog restated from `cargo xtask i18n-report` on `main` at `14ae839a`: 2,897 strings in the report's denominator; Hindi, Indonesian, Korean, Thai, Lao and Central Kurdish listed with their catalogs. Scores and estimates unchanged); previously minor (M7: Add text draws Japanese, including U+3000 and full-width punctuation, through the craft-fonts document faces; #2918, #3707, #184; estimates unchanged); previously minor (gap 6 #3673: Character encoding CJK mapping routes corrected; no readiness re-estimate) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Per-language status of PdfCraft's interface against Acrobat Pro's. How translations work and how to
 add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../ROADMAP.md).
@@ -50,7 +50,7 @@ add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../R
 | French | `fr` | 2,851 (98.4%) | dialogs and tooltips; no help | Latin | no | partial | yes | 1–2 |
 | Portuguese (Brazil) | `pt-br` | 2,851 (98.4%) | dialogs and tooltips; no help | Latin | community (#288) | partial | yes | 1–2 |
 | Indonesian | `id` | 2,825 (97.5%) | dialogs and tooltips; no help | Latin | no | partial | no | 3–5 |
-| Japanese | `ja` | 2,597 (89.6%) | dialogs and tooltips; no help | BIZ UDPGothic from craft-fonts; IME patched on macOS, Windows, X11, Wayland; vertical text renders but can't be edited | no | partial | yes | 4–8 |
+| Japanese | `ja` | 2,597 (89.6%) | dialogs and tooltips; no help | BIZ UDPGothic from craft-fonts; IME patched on macOS, Windows, X11, Wayland; Add text draws kana, kanji and U+3000 through the document Japanese faces (#3707), but vertical text renders without editing | no | partial | yes | 4–8 |
 | German | `de` | 2,600 (89.7%) | dialogs and tooltips; no help | Latin | community, in progress (#828: terminology, clipping) | partial | yes | 2–4 |
 | Korean | `ko` | 2,825 (97.5%) | dialogs and tooltips; no help | Hangul IME patched (Microsoft and Apple Korean, `vendor/README.md` winit 3, 6, 9, 10); no Hangul UI face in craft-fonts | no | partial | yes | 6–10 |
 | Vietnamese | `vi` | 2,851 (98.4%) | dialogs and tooltips; no help | Latin with stacked diacritics; bundled Inter covers them (fonts test) | community | partial | no | 2–4 |

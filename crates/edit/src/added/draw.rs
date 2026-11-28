@@ -1,5 +1,6 @@
 use super::layout::{
-    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, norm, shaped_layout, text_rect, thai_error, wrapped,
+    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_japanese_fallback, is_thai, japanese_error, japanese_face, latin_width, norm,
+    shaped_layout, text_rect, thai_error, wrapped,
 };
 use super::types::{AddedText, Align, Family, Ink};
 use super::{
@@ -45,11 +46,19 @@ fn draw_shaped(doc: &mut Document, t: &AddedText, taken: &Dict, fonts: &mut Dict
         .into_iter()
         .map(|(line, rtl, paragraph)| shaped_layout(t, &line, rtl).map(|(pieces, w)| (line, rtl, paragraph, pieces, w)))
         .collect::<Result<Vec<_>, _>>()?;
-    draw_laid_shaped(doc, t, &laid, taken, fonts, out, shaped_glyph)
+    // Japanese outlines come from the same style face the clusters were shaped with, so the glyph
+    // ids and the paths they are drawn from belong to one face.
+    let japanese = japanese_face(t);
+    draw_laid_shaped(doc, t, &laid, taken, fonts, out, japanese, |script, id| match script {
+        ShapedScript::Japanese => japanese.ok_or(GlyphError::NoFont).and_then(|face| pdfcraft_fonts::glyph_outline_from(face, id)),
+        other => shaped_glyph(other, id),
+    })
 }
 
 /// [`draw_shaped`] for lines that are already laid out. `outline` is the source of glyph outlines
-/// for a script's face (the craft-fonts faces, or a stand-in in tests).
+/// for a script's face (the craft-fonts faces, or a stand-in in tests); `japanese` is the item's
+/// Japanese style face, whose family names the Type 3 font that holds its outlines.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_laid_shaped(
     doc: &mut Document,
     t: &AddedText,
@@ -57,20 +66,27 @@ pub(super) fn draw_laid_shaped(
     taken: &Dict,
     fonts: &mut Dict,
     out: &mut Vec<u8>,
+    japanese: Option<&'static pdfcraft_fonts::EmbeddedFace>,
     outline: impl Fn(ShapedScript, u32) -> Result<GlyphOutline, GlyphError>,
 ) -> Result<(), EditError> {
     let r = text_rect(t);
     let latin = font_name(t.family.base_font(t.bold, t.italic));
-    let shaped =
-        ShapedFonts::new(shaped_text::clusters(laid.iter().map(|(_, _, _, pieces, _)| pieces.as_slice())), outline, taken, fonts, "PCAr", &mut |o| {
-            Object::Ref(doc.add(o))
-        })
-        .map_err(|(e, c)| match c.script {
-            ShapedScript::Arabic => arabic_error(e, &c.text),
-            ShapedScript::Hebrew => hebrew_error(e, &c.text),
-            ShapedScript::Thai => thai_error(e, &c.text),
-            ShapedScript::Latin => EditError::Invalid(pdfcraft_fonts::shaped_text::latin_message(e, &c.text)),
-        })?;
+    let shaped = ShapedFonts::new(
+        shaped_text::clusters(laid.iter().map(|(_, _, _, pieces, _)| pieces.as_slice())),
+        outline,
+        japanese,
+        taken,
+        fonts,
+        "PCAr",
+        &mut |o| Object::Ref(doc.add(o)),
+    )
+    .map_err(|(e, c)| match c.script {
+        ShapedScript::Arabic => arabic_error(e, &c.text),
+        ShapedScript::Hebrew => hebrew_error(e, &c.text),
+        ShapedScript::Thai => thai_error(e, &c.text),
+        ShapedScript::Japanese => japanese_error(e, &c.text),
+        ShapedScript::Latin => EditError::Invalid(pdfcraft_fonts::shaped_text::latin_message(e, &c.text)),
+    })?;
     out.extend(format!("BT {}\n", t.fill_op()).bytes());
     if t.char_spacing != 0.0 {
         out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
@@ -137,6 +153,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             if t.text.chars().any(is_thai)
                 || face_or_new(is_arabic, pdfcraft_fonts::document_arabic_font().is_some())
                 || face_or_new(is_hebrew, pdfcraft_fonts::document_hebrew_font(false).is_some())
+                || face_or_new(is_japanese_fallback, japanese_face(t).is_some())
             {
                 draw_shaped(doc, t, taken, &mut fonts, &mut out)?;
                 res.set(b"Font".to_vec(), Object::Dict(fonts));

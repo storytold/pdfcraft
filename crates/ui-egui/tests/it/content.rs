@@ -23,7 +23,22 @@ fn harness_bytes(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
 }
 
 fn harness_bytes_with_step_dt(bytes: Vec<u8>, step_dt: f32) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(step_dt).build_eframe(move |cc| {
+    harness_with(bytes, step_dt, false)
+}
+
+/// The harness for a test that lays out text no font in the build can draw on purpose. egui_kittest
+/// panics on a missing glyph by default, which made #125's emoji depend on whether the machine
+/// happens to have an installed emoji face (macOS does, the Linux runners do not).
+fn harness_allowing_missing_glyphs() -> Harness<'static, PdfCraftApp> {
+    harness_with(include_bytes!("../data/form.pdf").to_vec(), 0.25, true)
+}
+
+fn harness_with(bytes: Vec<u8>, step_dt: f32, allow_missing_glyphs: bool) -> Harness<'static, PdfCraftApp> {
+    let mut builder = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(step_dt);
+    if allow_missing_glyphs {
+        builder = builder.allow_missing_glyphs();
+    }
+    let mut h = builder.build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
             let mut app = crate::control::new_app();
@@ -365,22 +380,26 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     assert_eq!(images(&h), 2, "Prepare Form pastes fields");
 }
 
-/// #125: text the standard fonts can't draw stays in the editor with a warning instead of being
-/// written to the page as `?` (or lost).
+/// #125: text no font in the build can draw stays in the editor with a warning instead of being
+/// written to the page as `?` (or lost). Japanese is no longer such text where craft-fonts has a
+/// `Jpan` face (#3707); an emoji is, in every build.
 #[test]
 fn text_the_standard_fonts_cant_draw_stays_in_the_editor() {
     if crate::support::skip_without_glyphs("text_the_standard_fonts_cant_draw_stays_in_the_editor", "en", "Hello 世界") {
         return;
     }
     let _gpu = gpu();
-    let mut h = harness();
+    // The emoji below is drawn as a tofu box on purpose: the test is about the editor keeping text
+    // no face can draw, so a harness that panics on a missing glyph would only pass on a machine
+    // with an installed emoji font.
+    let mut h = harness_allowing_missing_glyphs();
     assert!(h.execute("edit.text"));
     h.run_steps(2);
     let p = at(&h, 40.0, 300.0);
     click(&mut h, p);
-    h.event(egui::Event::Text("Hello 世界".into()));
+    h.event(egui::Event::Text("Hello 🙂".into()));
     h.run_steps(2);
-    h.get_by_label_contains("can't draw “世” (U+4E16)");
+    h.get_by_label_contains("can't draw “🙂” (U+1F642)");
     if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
         h.render().unwrap().save(format!("{dir}/undrawable-text.png")).unwrap();
     }
@@ -388,12 +407,12 @@ fn text_the_standard_fonts_cant_draw_stays_in_the_editor() {
     h.run_steps(3);
     assert!(texts(&h).is_empty(), "nothing was written to the page");
     let draft = h.state().views[0].session.content.draft.as_ref().map(|d| d.text.clone());
-    assert_eq!(draft.as_deref(), Some("Hello 世界"), "the typed text is kept");
+    assert_eq!(draft.as_deref(), Some("Hello 🙂"), "the typed text is kept");
     // A click elsewhere on the page doesn't finish it, or replace it with a new box.
     let elsewhere = at(&h, 40.0, 150.0);
     click(&mut h, elsewhere);
     let draft = h.state().views[0].session.content.draft.as_ref().map(|d| d.text.clone());
-    assert_eq!(draft.as_deref(), Some("Hello 世界"), "clicking elsewhere keeps the typed text");
+    assert_eq!(draft.as_deref(), Some("Hello 🙂"), "clicking elsewhere keeps the typed text");
     assert!(texts(&h).is_empty());
     // Once the text can be drawn, Done adds it (Done took the focus, so edit the draft directly).
     if let Some(d) = h.state_mut().views[0].session.content.draft.as_mut() {
@@ -403,6 +422,28 @@ fn text_the_standard_fonts_cant_draw_stays_in_the_editor() {
     h.get_by_label("Done adding text").click();
     h.run_steps(3);
     assert_eq!(texts(&h), ["Hello world"]);
+}
+
+/// #3707: where the build has a craft-fonts `Jpan` face, Add text draws Japanese instead of
+/// refusing it. Both CI jobs run this: the Linux one has the face and checks the insert, the
+/// Windows one skips it.
+#[test]
+fn japanese_text_is_added_when_the_font_is_built_in() {
+    let probe = pdfcraft_engine::AddedText { rect: [0.0, 0.0, 200.0, 20.0], text: "日本語".into(), ..Default::default() };
+    if pdfcraft_engine::first_undrawable(&probe).is_some() {
+        eprintln!("skipping: built without a craft-fonts Jpan face (set CRAFT_FONTS_DIR)");
+        return;
+    }
+    let mut h = harness();
+    assert!(h.execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 300.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("日本語".into()));
+    h.run_steps(2);
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["日本語"]);
 }
 
 /// Text kept because it can't be drawn goes with its page when the page is deleted, so nothing
