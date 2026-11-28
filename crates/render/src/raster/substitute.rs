@@ -1,11 +1,7 @@
-//! The faces that draw a Type 0 font the document doesn't embed (#5329), as the substitution chain
-//! (`pdfcraft_fonts::fallback`) ranks them, so the face a font report names is the face drawn.
+//! Adapts `pdfcraft_fonts::fallback` to hayro's Type 0 font resolver callbacks.
 //!
-//! hayro's own substitutes are the Latin standard 14, so text in a CID font of an Adobe CJK
-//! collection that isn't embedded (`STSong-Light`, `HeiseiMin-W3`, `HYSMyeongJo-Medium`, …) drew
-//! nothing, and any other character such a font's substitute lacks drew nothing or an unrelated
-//! glyph. Now the chain's stand-in draws such a font, and its ranked faces are the further faces
-//! (`InterpreterSettings::further_faces`) for the characters the substitute lacks.
+//! `resolve` selects the stand-in. `further_faces` supplies ranked faces for missing Unicode
+//! glyphs.
 
 use std::sync::Arc;
 

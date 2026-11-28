@@ -1,26 +1,23 @@
-//! Font substitution shared by inspection and rendering.
-//!
-//! [`substitute`] selects the stand-in for an unembedded font from its name, descriptor, CID
-//! collection, and available `craft-fonts` faces. [`stand_in`] gives the renderer that face;
-//! [`further_faces`] ranks additional faces for per-character fallback when it draws Type 0 text.
+//! Font substitution shared by inspection and rendering. [`substitute`] reports the selected face
+//! and reason; [`stand_in`] returns the face used by the renderer; [`further_faces`] ranks extra
+//! faces for Type 0 per-character fallback.
 //!
 //! The chain is tried in order, and the first step that yields a face wins:
 //!
 //! 1. The document embeds the program. Nothing is substituted.
-//! 2. `/BaseFont` names one of the standard 14 (or a well-known alias such as Arial). Exact
-//!    published metrics apply, so this is as close to right as a substitution gets. A name that
-//!    only hints at a family ("Mono", "Serif", "Roman") gives way to step 4's stand-in for a CJK
-//!    font that has one.
-//! 3. craft-fonts holds that exact family. Never another family — see [`crate::embedding`].
+//! 2. `/BaseFont` names a standard-14 font or known alias; use its exact metrics. For CJK fonts,
+//!    a name that only hints at a family ("Mono", "Serif", "Roman") gives way to step 4 when a
+//!    CJK face is available.
+//! 3. craft-fonts holds the exact family. Other families are not substituted here; see
+//!    [`crate::embedding`].
 //! 4. The descendant font's `/CIDSystemInfo /Ordering` names a CJK collection (Japan1, GB1, CNS1,
 //!    Korea1, KR) and craft-fonts has a Han face: the best-ranked one stands in ([`cjk_stand_in`]),
 //!    a face for that script when there is one (Simplified Chinese for GB1, Hangul for Korea1),
 //!    else the face of the nearest Han script (Japanese for CNS1, whose kanji keep the
 //!    traditional forms), each of the Mincho/Song, Gothic/Hei or Kai design and the weight the
 //!    font asks for.
-//! 5. The ordering names a CJK collection and there is **no** Han face (built without craft-fonts).
-//!    There is no honest substitute, so the chain reports none: the caller draws nothing and can
-//!    say why.
+//! 5. The ordering names a CJK collection and no Han face is available. The chain reports no
+//!    substitute so the caller draws nothing rather than an unrelated glyph.
 //! 6. Otherwise, the nearest of the standard 14 by `/FontDescriptor /Flags` — serif, fixed pitch,
 //!    bold and italic. This step always succeeds, so a simple font is never left without a face.
 
@@ -223,16 +220,9 @@ pub fn cjk_stand_in(req: &Request<'_>) -> Option<&'static EmbeddedFace> {
     stand_in_from(req, &candidates())
 }
 
-/// Every face there is, best first, for the characters a substitute for `req`'s font has no glyph
-/// for. The stand-in, if any, comes first: a caller drawing with it skips it.
-///
-/// The order: the exact family the font names; then the script its ordering is for (or, for an
-/// ordering that names none, such as Identity, the script its name suggests: `SimSun` is
-/// Simplified Chinese); then, for a CJK font, the other Han scripts, nearest first, before every
-/// other face, and for any other font every other face (the bundled Inter, whose Cyrillic is
-/// complete) before the Han ones. Within each, the faces of the font's design (Mincho/Song,
-/// Gothic/Hei or Kai, by its name or else its Serif flag) and weight come first. Never empty:
-/// craft-fonts is optional, but the bundled Inter is in every build.
+/// Available faces, best first, for characters the substitute lacks. The stand-in comes first so
+/// the renderer can skip it. Ranking uses the exact family, collection or name-derived script,
+/// other Han scripts, design and weight. Bundled Inter is available even without craft-fonts.
 pub fn further_faces(req: &Request<'_>) -> Vec<&'static EmbeddedFace> {
     ranked_from(req, &candidates())
 }
