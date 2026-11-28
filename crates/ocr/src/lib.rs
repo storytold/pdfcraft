@@ -23,9 +23,11 @@
 pub mod confidence;
 pub mod merge;
 mod ocrs;
+mod pitch;
 pub mod preprocess;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tesseract;
+mod tiles;
 
 pub use confidence::{ConfidenceBand, band_for, is_suspect, low_confidence};
 pub use merge::{MergeStrategy, StrategyOutcome, mean_confidence, recognize_with_strategy, rover_merge};
@@ -867,6 +869,38 @@ mod tests {
         assert!(word.rect[0] >= 10.0 && word.rect[0] < 60.0, "{word:?}");
     }
 
+    /// A large page with small print: shrunk whole to the detector's input, its letters are too
+    /// small to find; in tiles they are found. The words come back in page pixels, once each,
+    /// also where they lie in the overlap of two tiles or across a cut.
+    #[test]
+    fn finds_small_print_on_a_large_page() {
+        let Some(models) = Models::find() else {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        };
+        let ocr = Ocr::load(&models).unwrap();
+        assert_eq!(ocr.detector_input, Some((600, 800)), "the tiling rule assumes the ocrs detector");
+        let (w, h, dot) = (2480u32, 3508u32, DOT);
+        // An A4 page at 300 dpi is cut at x = 1240 and y = 1754, its tiles overlapping by 99 and
+        // 140 pixels around the cuts. The lines lie: in one tile only; across the vertical cut;
+        // half in the overlap left of it; across the horizontal cut.
+        let at = [(300, 400), (1170, 1000), (1100, 2500), (300, 1748)];
+        let px = test_image::hello_on(w, h, dot, &at);
+        let lines = ocr.recognize(&px, w, h).unwrap();
+        let words: Vec<&Word> = lines.iter().flat_map(|l| &l.words).collect();
+        // Two words per line, each once: none lost, none doubled where tiles overlap. The letters
+        // are tiny and blocky, so the text itself may be a letter off ("HFLLO").
+        assert_eq!(words.len(), 2 * at.len(), "{lines:?}");
+        for (x, y) in at {
+            let near = |w: &&&Word| (w.rect[0] - x as f32).abs() < 4.0 * dot as f32 && (w.rect[1] - y as f32).abs() < 4.0 * dot as f32;
+            assert_eq!(words.iter().filter(near).count(), 1, "no first word at ({x}, {y}): {lines:?}");
+        }
+        assert!(words.iter().any(|w| w.text == "HELLO"), "{lines:?}");
+    }
+
+    /// The letter size of [`finds_small_print_on_a_large_page`], in pixels per dot of a 5×7 letter.
+    const DOT: u32 = 2;
+
     /// The recognised words name their engine.
     #[test]
     fn ocrs_recognizer_names_its_words() {
@@ -994,6 +1028,14 @@ mod tests {
     mod test_image {
         /// "HELLO WORLD" drawn with blocky 5×7 letters, 4 pixels per dot, black on white.
         pub fn hello() -> (u32, u32, Vec<u8>) {
+            let (dot, x0, y0) = (4u32, 40u32, 40u32);
+            let (w, h) = (x0 * 2 + 11 * 6 * dot, y0 * 2 + 7 * dot);
+            (w, h, hello_on(w, h, dot, &[(x0, y0)]))
+        }
+
+        /// A white `w` × `h` page with "HELLO WORLD" at each of `at` (top left corner), `dot`
+        /// pixels per dot of the letters.
+        pub fn hello_on(w: u32, h: u32, dot: u32, at: &[(u32, u32)]) -> Vec<u8> {
             const GLYPHS: &[(char, [&str; 7])] = &[
                 ('H', ["X...X", "X...X", "X...X", "XXXXX", "X...X", "X...X", "X...X"]),
                 ('E', ["XXXXX", "X....", "X....", "XXXX.", "X....", "X....", "XXXXX"]),
@@ -1004,10 +1046,8 @@ mod tests {
                 ('D', ["XXXX.", "X...X", "X...X", "X...X", "X...X", "X...X", "XXXX."]),
             ];
             let text = "HELLO WORLD";
-            let (dot, x0, y0) = (4u32, 40u32, 40u32);
-            let (w, h) = (x0 * 2 + text.len() as u32 * 6 * dot, y0 * 2 + 7 * dot);
             let mut px = vec![255u8; (w * h * 4) as usize];
-            for (i, c) in text.chars().enumerate() {
+            for ((i, c), &(x0, y0)) in at.iter().flat_map(|p| text.chars().enumerate().map(move |c| (c, p))) {
                 let Some((_, rows)) = GLYPHS.iter().find(|g| g.0 == c) else { continue };
                 for (ry, row) in rows.iter().enumerate() {
                     for (rx, b) in row.bytes().enumerate() {
@@ -1025,7 +1065,7 @@ mod tests {
                     }
                 }
             }
-            (w, h, px)
+            px
         }
     }
 }
