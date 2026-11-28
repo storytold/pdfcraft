@@ -2367,3 +2367,221 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// What `verify` says about interpolated images under ISO 19005-2 6.2.8.
+fn interpolation_said(doc: &Document) -> Vec<String> {
+    verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.8").map(|i| i.message).collect()
+}
+
+#[test]
+fn an_interpolated_inline_image_is_reported_clause_6_2_8() {
+    let inline = || vec!["An inline image asks to be interpolated".to_string()];
+    // `I` is the abbreviation of `Interpolate` (ISO 32000-2 Table 91); PDFBOX-4750's K17 file
+    // writes the full key.
+    for content in ["BI /W 1 /H 1 /CS /G /BPC 8 /I true ID \u{0} EI", "q BI /Interpolate true /W 1 /H 1 /CS /RGB /BPC 8 ID abc EI Q"] {
+        assert_eq!(interpolation_said(&drawing(content, "", &[])), inline(), "{content}");
+    }
+    // In a form XObject too.
+    let content = "BI /W 1 /H 1 /CS /G /BPC 8 /I true ID \u{0} EI";
+    let form = format!("<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length {} >>\nstream\n{content}\nendstream", content.len());
+    assert_eq!(interpolation_said(&drawing("/X Do", "/XObject << /X 5 0 R >>", &[&form])), inline());
+    // `false`, no key, the bytes `/I true` inside image data or a string, and a stream that isn't content.
+    for content in [
+        "BI /W 1 /H 1 /CS /G /BPC 8 /I false ID \u{0} EI",
+        "BI /W 1 /H 1 /CS /G /BPC 8 ID \u{0} EI",
+        "BI /W 6 /H 1 /CS /G /BPC 8 ID /I tru EI (BI /I true ID) Tj",
+    ] {
+        assert!(interpolation_said(&drawing(content, "", &[])).is_empty(), "{content}");
+    }
+    let data = "BI /W 1 /H 1 /CS /G /BPC 8 /I true ID \u{0} EI";
+    let not_content = format!("<< /Length {} >>\nstream\n{data}\nendstream", data.len());
+    assert!(interpolation_said(&drawing("", "", &[&not_content])).is_empty());
+    // The image XObject check is unchanged, and fixable as before; the inline one isn't.
+    let issues = verify(&messy(), Level::A2b);
+    assert!(issues.iter().any(|i| i.message == "An image asks to be interpolated" && i.fixable));
+    let doc = drawing("BI /W 1 /H 1 /CS /G /BPC 8 /I true ID \u{0} EI", "", &[]);
+    assert!(verify(&doc, Level::A2b).iter().any(|i| i.message == "An inline image asks to be interpolated" && !i.fixable));
+}
+
+/// A page's `/Contents` parts are one stream: a part may end inside an inline image's dictionary
+/// (ISO 32000-2 7.8.2), and the `/I true` in the next part still belongs to that image.
+#[test]
+fn an_inline_image_split_across_content_parts_is_read_whole() {
+    let stream = |content: &str| format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let (first, second) = (stream("q BI /W 1 /H 1 /CS /G /BPC 8"), stream("/I true ID \u{0} EI Q"));
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] >>",
+        first.as_str(),
+        second.as_str(),
+    ];
+    assert_eq!(interpolation_said(&build(&objs, "")), ["An inline image asks to be interpolated"]);
+    // A comment that ends a part without an end-of-line marker goes on into the next part: the
+    // image there is commented out.
+    let (first, second) = (stream("q %"), stream("BI /W 1 /H 1 /CS /G /BPC 8 /I true ID x EI\nQ"));
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] >>",
+        first.as_str(),
+        second.as_str(),
+    ];
+    assert!(interpolation_said(&build(&objs, "")).is_empty());
+    // A form a page lists among its parts is still read alone when another page draws it: the
+    // image commented out on page 3 is drawn on page 6.
+    let form = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 42 >>\nstream\n{}\nendstream",
+        "BI /W 1 /H 1 /CS /G /BPC 8 /I true ID x EI"
+    );
+    let (comment, draw) = (stream("q %"), stream("/X Do"));
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] >>",
+        comment.as_str(),
+        form.as_str(),
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /XObject << /X 5 0 R >> >> >>",
+        draw.as_str(),
+    ];
+    assert_eq!(interpolation_said(&build(&objs, "")), ["An inline image asks to be interpolated"]);
+}
+
+/// Content is decoded with the document's decode parameters, given by reference too, and a stream
+/// damaged partway, read up to the damage, is reported as not read in full.
+#[test]
+fn inline_images_are_read_with_indirect_decode_parameters_and_past_damage() {
+    use std::io::Write as _;
+    let zlib = |data: &[u8]| {
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        z.write_all(data).unwrap();
+        z.finish().unwrap()
+    };
+    // The page's content (4), hex-encoded and compressed, with the stream entries `entries`.
+    let page = |entries: &str, data: &[u8], more: &[&str]| {
+        let hex: String = data.iter().map(|b| format!("{b:02X}")).chain([">".to_owned()]).collect();
+        let content = format!("<< /Filter [/ASCIIHexDecode /FlateDecode] {entries} /Length {} >>\nstream\n{hex}\nendstream", hex.len());
+        let mut objs = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+            content.as_str(),
+        ];
+        objs.extend_from_slice(more);
+        build(&objs, "")
+    };
+    // The PNG Sub predictor (ISO 32000-2 7.4.4.4): one row, each byte less the one before it.
+    let image = b"BI /W 1 /H 1 /CS /G /BPC 8 /I true ID x EI";
+    let mut row = vec![1u8];
+    row.extend(image.iter().zip([0u8].iter().chain(image.iter())).map(|(b, before)| b.wrapping_sub(*before)));
+    let parms = format!("<< /Predictor 11 /Columns {} >>", image.len());
+    let said = ["An inline image asks to be interpolated"];
+    assert_eq!(interpolation_said(&page(&format!("/DecodeParms [null {parms}]"), &zlib(&row), &[])), said);
+    assert_eq!(interpolation_said(&page("/DecodeParms [null 5 0 R]", &zlib(&row), &[&parms])), said);
+    // Content cut short partway through its compressed data, with no inline image before the cut.
+    let content: String = (0..4000).map(|i| format!("{i} {i} 1 1 re f\n")).collect();
+    let mut cut = zlib(content.as_bytes());
+    cut.truncate(cut.len() / 2);
+    let doc = page("", &cut, &[]);
+    let Object::Stream(s) = &*doc.get(ObjRef::new(4, 0)) else { panic!("object 4 is the page's content") };
+    let read = pdfcraft_cos::DecodeBudget::new(usize::MAX, usize::MAX).decode_with_damage(&doc, s, usize::MAX);
+    assert!(matches!(read, Ok((_, true))), "the fixture is read up to its damage");
+    assert_eq!(interpolation_said(&doc), ["Some content could not be read for inline images"]);
+}
+
+/// Content that cannot be read may hold an interpolated inline image: the report says it was not
+/// read rather than saying nothing, whether the decode allowance ran out or a filter is unknown.
+#[test]
+fn unreadable_content_is_reported_for_inline_images() {
+    let unreadable = ["Some content could not be read for inline images"];
+    // Past the allowance: 40 bytes allowed, the page's content is longer.
+    let doc = drawing("BI /W 1 /H 1 /CS /G /BPC 8 ID \u{0} EI 0 0 10 10 re f 0 0 20 20 re f", "", &[]);
+    let found = inline_images(&doc, &objects(&doc), 40);
+    assert!(found.incomplete && !found.interpolate);
+    assert!(!inline_images(&doc, &objects(&doc), MAX_INLINE_DECODED).incomplete);
+    // A form XObject with a filter no reader knows.
+    let form = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 3 /Filter /NoSuchDecode >>\nstream\nabc\nendstream";
+    assert_eq!(interpolation_said(&drawing("/X Do", "/XObject << /X 5 0 R >>", &[form])), unreadable);
+    // An interpolated image that was read is reported as such, whatever else could not be.
+    let doc = drawing("BI /W 1 /H 1 /CS /G /BPC 8 /I true ID \u{0} EI /X Do", "/XObject << /X 5 0 R >>", &[form]);
+    assert_eq!(interpolation_said(&doc), ["An inline image asks to be interpolated"]);
+    // Readable content says nothing.
+    assert!(interpolation_said(&drawing("0 0 1 1 re f", "", &[])).is_empty());
+}
+
+/// An inline image whose parameters can't be read, or a content part that is there but can't be
+/// read, may hold an interpolated image: the report says the content was not read in full. A
+/// part that isn't there holds nothing.
+#[test]
+fn unreadable_inline_images_and_content_parts_are_reported() {
+    let unreadable = ["Some content could not be read for inline images"];
+    // The stray `7` leaves the image's parameters unreadable.
+    assert_eq!(interpolation_said(&drawing("q BI /W 1 /H 1 /BPC 8 /CS /G /I true 7 ID x EI Q", "", &[])), unreadable);
+    // An interpolated image that was read is still reported as such.
+    let content = "BI /W 1 /H 1 /CS /G /BPC 8 /I true ID \u{0} EI q BI /W 1 /H 1 /BPC 8 /CS /G 7 ID x EI Q";
+    assert_eq!(interpolation_said(&drawing(content, "", &[])), ["An inline image asks to be interpolated"]);
+    // A page whose second part is an object that is there but can't be read.
+    let content = "0 0 1 1 re f";
+    let first = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let page = |parts: &str| {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Contents [{parts}] >>");
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            page.as_str(),
+            first.as_str(),
+            "<< /Odd Key(x) >>",
+        ];
+        build(&objs, "")
+    };
+    let doc = page("4 0 R 5 0 R");
+    assert!(doc.try_get(5).is_err(), "the fixture's object 5 can't be read");
+    assert_eq!(interpolation_said(&doc), unreadable);
+    // Parts that aren't there: an unknown object, and the unreadable one at a generation it
+    // doesn't have.
+    assert!(interpolation_said(&page("4 0 R 9 0 R 5 1 R")).is_empty());
+}
+
+/// A Type 3 glyph procedure is found by the reference in `/CharProcs` at any generation the
+/// document accepts for it: here the xref says generation 0 and the object's header says 1, and
+/// the glyph, referred to as `5 1 R`, holds an interpolated inline image. A reference at a
+/// generation the document doesn't accept leads to no glyph.
+#[test]
+fn a_type3_glyph_at_its_header_generation_is_read_for_inline_images() {
+    let glyph = "BI /W 1 /H 1 /CS /G /BPC 8 /I true ID x EI";
+    let with_ref = |r: &str| {
+        let font = format!(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a {r} >> /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] >>"
+        );
+        let content = format!("<< /Length {} >>\nstream\n{glyph}\nendstream", glyph.len());
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /Font << /T3 6 0 R >> >> >>",
+            "<< /Length 0 >>\nstream\n\nendstream",
+            content.as_str(),
+            font.as_str(),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            // Object 5's header says generation 1; the xref below says 0.
+            let generation = if i + 1 == 5 { 1 } else { 0 };
+            out.extend_from_slice(format!("{} {generation} obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        Document::open(std::sync::Arc::new(out)).unwrap()
+    };
+    let doc = with_ref("5 1 R");
+    assert_eq!(doc.generation(5), 0, "the fixture's xref generation");
+    assert!(doc.accepted_generations(5).contains(&1), "the fixture's header generation is accepted");
+    assert_eq!(interpolation_said(&doc), ["An inline image asks to be interpolated"]);
+    assert_eq!(interpolation_said(&with_ref("5 0 R")), ["An inline image asks to be interpolated"]);
+    assert!(interpolation_said(&with_ref("5 2 R")).is_empty());
+}
