@@ -29,7 +29,7 @@ mod resources;
 #[cfg(test)]
 use annotations::{MAX_ANNOTATION_BYTES, MAX_LINK_ATTACHMENT_TEXT_BYTES, MAX_REMOTE_FILE_SPEC_BYTES, retained};
 use core::Inspector;
-pub use core::{check_pages, inspect, pretty_date};
+pub use core::{check_pages, inspect, page_objects, page_tree_node_attributes, pretty_date};
 #[cfg(test)]
 use core::{inspect_structure, spend};
 pub use model::{

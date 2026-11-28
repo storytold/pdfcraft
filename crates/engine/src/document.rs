@@ -924,10 +924,15 @@ fn with_field_appearances(comments: Option<pdfcraft_cos::Document>, doc: &pdfcra
     pdfcraft_forms::with_field_appearances(comments.as_ref().unwrap_or(doc)).or(comments)
 }
 
-/// The reader shows the same pages in `a` and `b`: count, displayed size and rotation.
+/// The reader shows the same pages in `a` and `b`: count, displayed size, rotation, and the region
+/// of user space shown (the crop box, "the visible region of default user space", ISO 32000-2
+/// Table 31: two crop boxes of one size at different places show different parts of the page).
 pub(crate) fn same_pages(a: &[pdfcraft_render::PageInfo], b: &[pdfcraft_render::PageInfo]) -> bool {
+    let near = |p: f32, q: f32| (p - q).abs() < 0.01;
     a.len() == b.len()
-        && a.iter().zip(b).all(|(x, y)| (x.width - y.width).abs() < 0.01 && (x.height - y.height).abs() < 0.01 && x.rotation == y.rotation)
+        && a.iter().zip(b).all(|(x, y)| {
+            near(x.width, y.width) && near(x.height, y.height) && x.rotation == y.rotation && x.crop.iter().zip(&y.crop).all(|(p, q)| near(*p, *q))
+        })
 }
 
 /// Each document-information field of `info` with its value in `cos` (`/Info`, else XMP), read

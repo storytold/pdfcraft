@@ -11634,6 +11634,194 @@ fn a_recovered_page_tree_opens_unmodified_and_edits_the_pages_shown() {
     assert_eq!(s.get(id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>(), [0, 90]);
 }
 
+/// Three pages, 200 × 300, the last two under a page tree node (object 6) whose `/Kids` holds an
+/// entry that is no object (`9`, a NUL, then `\xff0`), as in a damaged file: the document model
+/// reads that node as no dictionary, while the reader skips the entry and shows all three pages.
+/// With `broken_startxref`, the file opens only by rebuilding it from object headers, so every
+/// save of it is a full rewrite.
+fn fixture_with_an_unreadable_page_tree_node(broken_startxref: bool) -> Vec<u8> {
+    let bodies: [&[u8]; 6] = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 3 /MediaBox [0 0 200 300] >>",
+        b"<< /Type /Page /Parent 2 0 R >>",
+        b"<< /Type /Page /Parent 6 0 R >>",
+        b"<< /Type /Page /Parent 6 0 R /Rotate 90 >>",
+        b"<< /Type /Pages /Parent 2 0 R /Kids [4 0 R 9\x00\xff0 R 5 0 R] /Count 2 >>",
+    ];
+    pdf_of_bodies(&bodies, broken_startxref)
+}
+
+/// A classic-xref file of `bodies` as objects 1, 2, …; object 1 is the catalog. With
+/// `broken_startxref`, `startxref` points nowhere, so the file opens only by rebuilding.
+fn pdf_of_bodies(bodies: &[&[u8]], broken_startxref: bool) -> Vec<u8> {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, b) in bodies.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(b);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = if broken_startxref { 1 } else { out.len() };
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+    out
+}
+
+/// The pages the reader shows and the pages the document model walks, for `bytes`.
+fn shown_and_walked(bytes: Arc<Vec<u8>>) -> (usize, usize) {
+    let mut s = Session::new();
+    let id = s.open("x.pdf", None, bytes, None).unwrap();
+    let d = s.get(id).unwrap();
+    (d.info.pages.len(), pdfcraft_organize::page_count(&d.editor.as_ref().unwrap().cos).unwrap())
+}
+
+#[test]
+fn pages_under_an_unreadable_page_tree_node_are_the_pages_edited_and_saved() {
+    for broken_startxref in [false, true] {
+        let bytes = Arc::new(fixture_with_an_unreadable_page_tree_node(broken_startxref));
+        let mut s = Session::new();
+        let id = s.open("damaged.pdf", None, bytes, None).unwrap();
+        let doc = s.get(id).unwrap();
+        assert_eq!(doc.info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>(), [0, 0, 90]);
+        assert_eq!(pdfcraft_organize::page_count(&doc.editor.as_ref().unwrap().cos).unwrap(), 3, "the model edits the pages shown");
+        assert!(!doc.editor.as_ref().unwrap().cos.is_modified(), "the repair is a revision of the opened file, not an unsaved edit");
+        assert!(doc.repair_log().iter().any(|l| l.contains("page tree node could not be read")), "{:?}", doc.repair_log());
+        // A save after an edit that touches no page keeps every page.
+        s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Report".into() }).unwrap();
+        assert_eq!(shown_and_walked(s.save_bytes(id).unwrap()), (3, 3), "broken startxref: {broken_startxref}");
+        // A page edit addresses the page shown at that position.
+        s.apply(id, Edit::RotatePages { pages: vec![1], degrees: 90 }).unwrap();
+        assert_eq!(s.get(id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>(), [0, 90, 90]);
+        assert_eq!(shown_and_walked(s.save_bytes(id).unwrap()), (3, 3), "broken startxref: {broken_startxref}");
+    }
+}
+
+#[test]
+fn pages_cropped_at_another_place_are_not_the_same_pages() {
+    let page = |crop: [f32; 4]| pdfcraft_render::PageInfo { width: 100.0, height: 200.0, label: "1".into(), crop, rotation: 0 };
+    assert!(same_pages(&[page([0.0, 0.0, 100.0, 200.0])], &[page([0.0, 0.0, 100.0, 200.0])]));
+    assert!(!same_pages(&[page([0.0, 0.0, 100.0, 200.0])], &[page([10.0, 20.0, 110.0, 220.0])]), "same size, other region");
+}
+
+/// [`fixture_with_an_unreadable_page_tree_node`] with the root cropping to `[0 0 100 200]`, the
+/// unreadable node (object 6) also holding `node`, page 4 also holding `page4`, and objects 7, …
+/// of `more`.
+fn unreadable_node_with(node: &[u8], page4: &[u8], more: &[&[u8]]) -> Vec<u8> {
+    let node = [&b"<< /Type /Pages /Parent 2 0 R /Kids [4 0 R 9\x00\xff0 R 5 0 R] /Count 2 "[..], node, b" >>"].concat();
+    let page4 = [&b"<< /Type /Page /Parent 6 0 R "[..], page4, b" >>"].concat();
+    let mut bodies: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 3 /MediaBox [0 0 200 300] /CropBox [0 0 100 200] >>",
+        b"<< /Type /Page /Parent 2 0 R >>",
+        &page4,
+        b"<< /Type /Page /Parent 6 0 R /Rotate 90 >>",
+        &node,
+    ];
+    bodies.extend_from_slice(more);
+    pdf_of_bodies(&bodies, false)
+}
+
+#[test]
+fn pages_gathered_from_an_unreadable_node_keep_the_crop_box_and_resources_it_gives_them() {
+    // Node 6 crops its pages elsewhere than the root does, at the same size, and gives them
+    // resources.
+    let bytes = Arc::new(unreadable_node_with(b"/CropBox [10 20 110 220] /Resources 7 0 R", b"", &[b"<< /ProcSet [/PDF] >>"]));
+    let mut s = Session::new();
+    let id = s.open("damaged.pdf", None, bytes, None).unwrap();
+    let crops = |s: &Session, id| s.get(id).unwrap().info.pages.iter().map(|p| p.crop).collect::<Vec<_>>();
+    let shown = crops(&s, id);
+    assert_eq!(shown, [[0.0, 0.0, 100.0, 200.0], [10.0, 20.0, 110.0, 220.0], [10.0, 20.0, 110.0, 220.0]]);
+    let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+    assert_eq!(pdfcraft_organize::page_count(cos).unwrap(), 3, "{:?}", s.get(id).unwrap().info.warnings);
+    for page in [4, 5] {
+        let resources = cos.get(pdfcraft_cos::ObjRef::new(page, 0)).as_dict().and_then(|d| d.get(b"Resources").cloned());
+        assert_eq!(resources, Some(pdfcraft_cos::Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))), "page {page}");
+    }
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Report".into() }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let again = s.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(crops(&s, again), shown);
+}
+
+#[test]
+fn pages_under_an_unreadable_node_with_resources_written_in_place_stay_there_with_a_warning() {
+    // Node 6 gives page 4 the image it draws in a resource dictionary written in place, which
+    // cannot be carried out of a node the document model cannot read: the tree stays as it is.
+    let bytes = Arc::new(unreadable_node_with(
+        b"/Resources << /XObject << /Im1 7 0 R >> >>",
+        b"/Contents 8 0 R",
+        &[
+            b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\x00\nendstream",
+            b"<< /Length 30 >>\nstream\nq 50 0 0 50 10 10 cm /Im1 Do Q\nendstream",
+        ],
+    ));
+    let mut s = Session::new();
+    let id = s.open("damaged.pdf", None, bytes, None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), 3);
+    let cos = &doc.editor.as_ref().unwrap().cos;
+    assert_eq!(pdfcraft_organize::page_count(cos).unwrap(), 1, "the pages stay under the node that gives them their resources");
+    assert!(!cos.is_modified());
+    assert!(doc.repair_log().iter().all(|l| !l.contains("page tree node")), "{:?}", doc.repair_log());
+    assert!(doc.info.warnings.iter().any(|w| w.contains("2 of the 3 pages shown are under a page tree node")), "{:?}", doc.info.warnings);
+}
+
+#[test]
+fn a_signature_outside_the_form_fields_keeps_an_unreadable_page_tree_node_as_it_is() {
+    // Page 4 holds a signed signature widget that no /AcroForm lists.
+    let bytes = Arc::new(unreadable_node_with(
+        b"",
+        b"/Annots [7 0 R]",
+        &[
+            b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Sig1) /Rect [0 0 10 10] /P 4 0 R /V 8 0 R >>",
+            b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 10 20 30] /Contents <3082000a> >>",
+        ],
+    ));
+    let mut s = Session::new();
+    let id = s.open("signed.pdf", None, bytes, None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), 3);
+    assert_eq!(pdfcraft_organize::page_count(&doc.editor.as_ref().unwrap().cos).unwrap(), 1, "{:?}", doc.repair_log());
+}
+
+#[test]
+fn a_page_tree_repair_keeps_the_warnings_opening_noted_before_it() {
+    // A static XFA form whose datasets give its field a value on opening, with its last two pages
+    // under an unreadable page tree node: the page tree is repaired after the values were taken
+    // from the data, and the note saying so stays.
+    let xdp = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"/></template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form1><page1><name>Ada</name></page1></form1></xfa:data></xfa:datasets></xdp:xdp>";
+    let xfa = format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes();
+    let bytes = Arc::new(pdf_of_bodies(
+        &[
+            b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 7 0 R /Fields [8 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
+            b"<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 3 /MediaBox [0 0 200 300] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [10 0 R] >>",
+            b"<< /Type /Page /Parent 6 0 R >>",
+            b"<< /Type /Page /Parent 6 0 R /Rotate 90 >>",
+            b"<< /Type /Pages /Parent 2 0 R /Kids [4 0 R 99\x00\xff0 R 5 0 R] /Count 2 >>",
+            &xfa,
+            b"<< /T (form1[0]) /Kids [9 0 R] >>",
+            b"<< /T (page1[0]) /Parent 8 0 R /Kids [10 0 R] >>",
+            b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (name[0]) /Parent 9 0 R /Rect [10 10 100 30] /P 3 0 R /DA (/Helv 10 Tf 0 g) >>",
+        ],
+        false,
+    ));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, bytes, None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.xfa, Some(pdfcraft_render::Xfa::Static));
+    assert_eq!(doc.form.iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap().value, vec!["Ada".to_string()]);
+    assert_eq!(pdfcraft_organize::page_count(&doc.editor.as_ref().unwrap().cos).unwrap(), 3, "{:?}", doc.info.warnings);
+    assert!(doc.repair_log().iter().any(|l| l.contains("page tree node could not be read")), "{:?}", doc.repair_log());
+    let noted = |w: &[String]| w.iter().filter(|w| w.contains("taken from this form's XFA data")).count();
+    assert_eq!(noted(&doc.info.warnings), 1, "{:?}", doc.info.warnings);
+    assert_eq!(noted(&doc.xfa_warnings), 1, "{:?}", doc.xfa_warnings);
+}
+
 #[test]
 fn a_signed_document_rebuilt_from_object_headers_refuses_edits() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();

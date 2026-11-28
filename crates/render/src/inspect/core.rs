@@ -29,6 +29,70 @@ pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize)
     Ok(())
 }
 
+/// The page objects the viewer shows, in its order; `None` for a page that has no object number
+/// of its own (or one out of range). The engine lines the document model's page tree up with these
+/// where the model cannot read part of the tree. Never panics: parser crashes are caught and
+/// reported.
+pub fn page_objects(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<Vec<Option<pdfcraft_cos::ObjRef>>, OpenError> {
+    let pdf = crate::backend::open(bytes, password)?;
+    catch_unwind(AssertUnwindSafe(|| {
+        pdf.pages()
+            .iter()
+            .map(|page| {
+                let id = page.raw().obj_id()?;
+                Some(pdfcraft_cos::ObjRef::new(u32::try_from(id.obj_number).ok()?, u16::try_from(id.gen_number).ok()?))
+            })
+            .collect()
+    }))
+    .map_err(|p| OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p))))
+}
+
+/// The attributes a page inherits (ISO 32000-2 §7.7.3.4) from page tree node `node`, read and
+/// used as the viewer reads and uses them while it walks the page tree, in the document model's
+/// terms, so that a page taken out from under the node can carry them: `/MediaBox`, `/CropBox`
+/// and `/Rotate` as values, `/Resources` as the reference it is written as. An entry the viewer
+/// cannot use (a box that is no rectangle, say) is left out, as the viewer inherits past it.
+/// `None` when the viewer cannot read the node, or uses an entry that cannot be carried
+/// faithfully: a `/Resources` dictionary written in place, or a number that is not finite.
+/// Never panics: parser crashes are caught.
+pub fn page_tree_node_attributes(bytes: Arc<Vec<u8>>, password: Option<&str>, node: pdfcraft_cos::ObjRef) -> Option<pdfcraft_cos::Dict> {
+    use craft_pdf::syntax::object::{Dict, ObjectIdentifier, Rect};
+    use pdfcraft_cos::Object as Cos;
+    let pdf = crate::backend::open(bytes, password).ok()?;
+    let number = |v: f64| -> Option<Cos> {
+        if !v.is_finite() {
+            None
+        } else if v.fract() == 0.0 && v.abs() <= 9_007_199_254_740_992.0 {
+            // Exact: `v` is whole and within ±2^53, where every integer is an f64.
+            Some(Cos::Int(v as i64))
+        } else {
+            Some(Cos::Real(v))
+        }
+    };
+    catch_unwind(AssertUnwindSafe(|| {
+        let id = ObjectIdentifier::new(i32::try_from(node.num).ok()?, i32::from(node.generation));
+        let d = pdf.xref().get::<Dict<'_>>(id)?;
+        let mut out = pdfcraft_cos::Dict::new();
+        for key in [&b"MediaBox"[..], b"CropBox"] {
+            if let Some(r) = d.get::<Rect>(key) {
+                let corners = [r.x0, r.y0, r.x1, r.y1].into_iter().map(number).collect::<Option<Vec<_>>>()?;
+                out.set(key.to_vec(), Cos::Array(corners));
+            }
+        }
+        if let Some(rotate) = d.get::<i32>(b"Rotate") {
+            out.set(b"Rotate".to_vec(), Cos::Int(i64::from(rotate)));
+        }
+        if d.get::<Dict<'_>>(b"Resources").is_some() {
+            let r = d.get_ref(b"Resources")?;
+            let r = pdfcraft_cos::ObjRef::new(u32::try_from(r.obj_number).ok()?, u16::try_from(r.gen_number).ok()?);
+            out.set(b"Resources".to_vec(), Cos::Ref(r));
+        }
+        Some(out)
+    }))
+    .ok()
+    .flatten()
+}
+
 /// Inspect a document. Fails only if the renderer itself cannot open the file (or needs a
 /// password). Never panics: parser crashes are caught and reported.
 pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, OpenError> {

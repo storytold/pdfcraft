@@ -269,26 +269,27 @@ impl Session {
             },
             (_, cos) => (bytes, info, cos),
         };
-        // The catalog leads to no page, but the reader found pages by scanning: gather the page
-        // objects into a page tree as one more revision, or page edits address none of them
-        // (#1656). Kept only when the reader then shows the same pages, and never on a signed
-        // document, where writing the repair could rewrite the file under its signatures.
+        // The document model's page tree leads to fewer pages than the reader shows: line it up
+        // with them as one more revision ([`repair_page_tree`]), or edits and saves address only
+        // the pages the model reaches.
         let (bytes, info, cos) = match cos {
-            Ok(Ok(cos)) if !info.pages.is_empty() && pdfcraft_organize::page_count(&cos).unwrap_or(0) == 0 => {
-                let mut work = cos.clone();
-                let signed = || pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust).iter().any(|s| s.signed);
-                let rebuilt = match pdfcraft_organize::recover_page_tree(&mut work) {
-                    Ok(n) if n > 0 && !signed() => rebase(&work).ok().filter(|(_, i, _)| same_pages(&i.pages, &info.pages)),
-                    _ => None,
-                };
-                match rebuilt {
-                    Some((b, i, mut c)) => {
-                        c.note_repair(format!("the page tree is missing; its {} pages were found by scanning the file", i.pages.len()));
-                        (b, i, Ok(Ok(c)))
+            Ok(Ok(cos)) if !info.pages.is_empty() => match repair_page_tree(context, &cos, &bytes, &info, render_password.as_deref(), &rebase) {
+                // The warnings opening noted so far (an XFA form's scripts changing it, say) stay,
+                // beside those of the repaired file's inspection.
+                Ok((b, mut i, c)) => {
+                    for w in info.warnings {
+                        if !i.warnings.contains(&w) {
+                            i.warnings.push(w);
+                        }
                     }
-                    None => (bytes, info, Ok(Ok(cos))),
+                    (b, i, Ok(Ok(c)))
                 }
-            }
+                Err(refused) => {
+                    let mut info = info;
+                    info.warnings.extend(refused);
+                    (bytes, info, Ok(Ok(cos)))
+                }
+            },
             cos => (bytes, info, cos),
         };
         // XFA notes survive the document being re-read after edits.
@@ -410,4 +411,70 @@ impl Session {
             edit_notices: Vec::new(),
         }
     }
+}
+
+/// The bytes, inspection and document model of a document after one more revision.
+type Rebased = (Arc<Vec<u8>>, DocInfo, pdfcraft_cos::Document);
+
+/// Line the page tree of `cos` up with the pages `info` shows, where the document model's walk
+/// reaches fewer of them, written as one more revision with `rebase`:
+/// - the catalog leads to no page, but the reader found pages by scanning: the page objects are
+///   gathered into a page tree (#1656);
+/// - a page tree node could not be read (one bad `/Kids` entry makes the model reject the node,
+///   where the reader skips the entry): the pages the reader shows under it are gathered into the
+///   page tree, in the order shown.
+///
+/// Kept only when the reader then shows the same pages, and never on a signed document, where
+/// writing the repair could rewrite the file under its signatures. `Err` leaves it as it is, with
+/// a warning when pages are shown under an unreadable node but cannot be taken out from under it
+/// without changing how they look.
+fn repair_page_tree(
+    context: &OpenContext,
+    cos: &pdfcraft_cos::Document,
+    bytes: &Arc<Vec<u8>>,
+    info: &DocInfo,
+    render_password: Option<&str>,
+    rebase: &dyn Fn(&pdfcraft_cos::Document) -> Result<Rebased, String>,
+) -> Result<Rebased, Option<String>> {
+    let walked = pdfcraft_organize::page_count(cos).unwrap_or(0);
+    if walked >= info.pages.len() {
+        return Err(None);
+    }
+    let mut work = cos.clone();
+    let uncarried = std::cell::Cell::new(false);
+    let added = if walked == 0 {
+        pdfcraft_organize::recover_page_tree(&mut work).map_err(|_| None)?
+    } else {
+        let shown = pdfcraft_render::page_objects(bytes.clone(), render_password).unwrap_or_default();
+        // What the reader inherits from a node the model cannot read; the pages taken out from
+        // under it carry that, or stay where they are.
+        let node_attributes = |node| {
+            let read = pdfcraft_render::page_tree_node_attributes(bytes.clone(), render_password, node);
+            uncarried.set(uncarried.get() || read.is_none());
+            read
+        };
+        pdfcraft_organize::recover_unreadable_page_tree_nodes(&mut work, &shown, &node_attributes).map_err(|_| None)?
+    };
+    if added == 0 {
+        return Err(uncarried.get().then(|| {
+            let hidden = info.pages.len().saturating_sub(walked);
+            format!(
+                "{hidden} of the {} pages shown are under a page tree node that could not be read, and could not be moved out of it \
+                 without changing how they look; edits reach only the other {walked}",
+                info.pages.len()
+            )
+        }));
+    }
+    // A signature field the form's field list leaves out is still found by its signature dictionary.
+    if pdfcraft_sign::pdf::list(cos, bytes, &context.trust).iter().any(|s| s.signed) || pdfcraft_sign::has_signatures(cos) {
+        return Err(None);
+    }
+    let (b, i, mut c) = rebase(&work).ok().filter(|(_, i, _)| same_pages(&i.pages, &info.pages)).ok_or(None)?;
+    if walked == 0 {
+        c.note_repair(format!("the page tree is missing; its {} pages were found by scanning the file", i.pages.len()));
+    } else {
+        let (pages, were) = if added == 1 { ("page", "was") } else { ("pages", "were") };
+        c.note_repair(format!("a page tree node could not be read; the {added} {pages} shown under it {were} gathered into the page tree"));
+    }
+    Ok((b, i, c))
 }
