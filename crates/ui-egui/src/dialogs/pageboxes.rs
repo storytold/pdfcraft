@@ -4,7 +4,7 @@
 //! millimetres or centimetres, and the pages. A preview shows the current page's media box and the new box.
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
-use pdfcraft_engine::{BoxSpec, Edit, PageBox};
+use pdfcraft_engine::{BoxSpec, DocId, Edit, PageBox};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
@@ -34,11 +34,16 @@ pub struct BoxesDraft {
     /// becomes current, can be another. `None` is the current page; closing the dialog by any
     /// route sets it back.
     pub page: Option<usize>,
+    /// The document a crop rectangle was drawn in, with [`BoxesDraft::page`]: the draft is that
+    /// document's alone. Another document coming forward while the dialog is open (a file opened
+    /// from the system that is already in a tab) dismisses it, so its margins never reach the page
+    /// of the same number in the other document. `None` when it was not opened from a rectangle.
+    pub doc: Option<DocId>,
 }
 
 impl Default for BoxesDraft {
     fn default() -> Self {
-        Self { which: PageBox::Crop, unit: Unit::Inches, margins: [0.0; 4], range: Range::All, seeded: None, page: None }
+        Self { which: PageBox::Crop, unit: Unit::Inches, margins: [0.0; 4], range: Range::All, seeded: None, page: None, doc: None }
     }
 }
 
@@ -48,6 +53,12 @@ impl BoxesDraft {
     /// page, so what the dialog shows and what OK changes stay the same page.
     pub fn page_or(&self, current: usize, count: usize) -> usize {
         self.page.filter(|p| *p < count).unwrap_or(current)
+    }
+
+    /// Whether the draft may be shown or applied with `active` the active document: always, unless
+    /// a crop rectangle in another document seeded it.
+    pub fn for_document(&self, active: DocId) -> bool {
+        self.doc.is_none_or(|doc| doc == active)
     }
 
     /// The pages (0-based) the dialog applies to.
@@ -131,6 +142,10 @@ fn box_index(b: PageBox) -> usize {
 /// Draw the dialog body; returns (apply, cancel).
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let Some((i, id)) = app.active_ids() else { return (false, true) };
+    // A draft from a crop rectangle in another document closes: it is not this one's.
+    if !app.boxes_draft.for_document(id) {
+        return (false, true);
+    }
     let Some(doc) = app.session.get(id) else { return (false, true) };
     let boxes = doc.page_boxes();
     // The page this is for: the one a crop rectangle was drawn on, else the current one.

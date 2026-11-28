@@ -3899,6 +3899,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         app.boxes_draft.range = crate::pageboxes::Range::Current;
         app.boxes_draft.seeded = None;
         app.boxes_draft.page = None;
+        app.boxes_draft.doc = None;
         // A rectangle drawn with the Crop tool fills in the crop box's margins, to adjust before
         // OK (#5695); a double-click starts from the page's own box. The rectangle is in the
         // coordinates of the page it was drawn on, which need not be the page current by now
@@ -3909,6 +3910,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
             if let Some((media, user_unit)) = drawn {
                 let units = app.units;
                 app.boxes_draft.seed_crop_rect(page, media, rect, user_unit, units);
+                app.boxes_draft.doc = Some(app.views[index].id);
             }
         }
         app.dialog = Some(crate::Dialog::PageBoxes);

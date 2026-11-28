@@ -284,3 +284,64 @@ fn cancelling_set_page_boxes_after_a_drawn_rectangle_crops_nothing() {
     h.run_steps(3);
     assert_eq!(h.state().boxes_draft.margins, [0.0; 4]);
 }
+
+/// A crop rectangle drawn in one document, then another document already open in a tab coming
+/// forward (the system opening that file again, which focuses its tab) while Set Page Boxes is
+/// still open: the draft is the first document's alone, so the dialog closes and neither document
+/// is cropped. Its margins never reach the page of the same number in the other document.
+#[test]
+fn a_crop_rectangle_draft_closes_when_another_document_comes_forward() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-pageboxes-tabs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (first, second) = (dir.join("first.pdf"), dir.join("second.pdf"));
+    for path in [&first, &second] {
+        std::fs::write(path, FIXTURE).unwrap();
+    }
+    let (first_path, second_path) = (first.to_string_lossy().into_owned(), second.to_string_lossy().into_owned());
+    let (a, b) = (first_path.clone(), second_path.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("second.pdf", Some(b), FIXTURE.to_vec()).unwrap();
+        app.open_bytes("first.pdf", Some(a), FIXTURE.to_vec()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    let view_of = |h: &Harness<'static, PdfCraftApp>, name: &str| {
+        h.state().views.iter().position(|v| h.state().session.get(v.id).is_some_and(|d| d.name == name)).unwrap()
+    };
+    let size_in = |h: &Harness<'static, PdfCraftApp>, name: &str| {
+        let s = h.state();
+        let p = &s.session.get(s.views[view_of(h, name)].id).unwrap().info.pages[0];
+        (p.width, p.height)
+    };
+    let first_view = view_of(&h, "first.pdf");
+    assert_eq!(h.state().active, Some(first_view), "the document opened last is in front");
+
+    assert!(h.state_mut().execute("page.crop"));
+    h.run_steps(2);
+    let r = h.state().views[first_view].page_screen_rect(0).unwrap();
+    let (from, to) = (r.min + r.size() * 0.25, r.min + r.size() * 0.75);
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, Some(Dialog::PageBoxes), "the rectangle opens Set Page Boxes");
+
+    // The other file, opened again from the system, comes forward with the dialog still open.
+    assert_eq!(h.state_mut().open_path(&second_path), pdfcraft_ui_egui::OpenOutcome::Focused);
+    h.run_steps(4);
+    assert_eq!(h.state().active, Some(view_of(&h, "second.pdf")));
+    assert_eq!(h.state().dialog, None, "the first document's draft closes");
+    assert_eq!(size_in(&h, "second.pdf"), (300.0, 400.0), "the other document's page is not cropped");
+    assert_eq!(size_in(&h, "first.pdf"), (300.0, 400.0), "nothing was applied to the first either");
+    let _ = std::fs::remove_dir_all(&dir);
+}

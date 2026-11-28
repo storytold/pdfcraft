@@ -2167,6 +2167,8 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     }
     if req.boxes_now
         && let Some((i, id)) = app.active_ids()
+        // Never another document's page of the same number (a draft from a crop rectangle).
+        && app.boxes_draft.for_document(id)
     {
         let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
         let units = app.session.get(id).map(|d| d.page_user_units()).unwrap_or_default();
@@ -2220,6 +2222,7 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
         // is for the current page unless a new crop rectangle says otherwise.
         if dialog == Dialog::PageBoxes {
             app.boxes_draft.page = None;
+            app.boxes_draft.doc = None;
         }
         app.discard_properties();
         app.bulk_field_props = None;
