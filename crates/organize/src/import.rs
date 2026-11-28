@@ -39,7 +39,7 @@ pub use combine::{
 };
 pub(crate) use copy::{Copier, copy_object};
 use copy::{MAX_COPY_DEPTH, SKIP_ON_PAGE};
-use fields::{add_kid, field_and_widget, register_fields, resolve_field_conflicts, split_own_field};
+use fields::{add_kid, carry_form_fonts, field_and_widget, register_fields, resolve_field_conflicts, split_own_field};
 pub use fields::{combine_field_conflicts, field_name_conflicts};
 pub(crate) use fields::{listed_fields, share_fields_with_originals};
 
@@ -88,8 +88,10 @@ pub fn import_pages_with(
             return Err(e);
         }
     };
-    let created = added_objects(dst, &before);
-    crate::dedupe::dedupe_resources(dst, &created, true);
+    // The form's own objects hold references to the copied fonts too: deduplication must rewrite
+    // them as well, or a copy it merges into an equal font already there leaves them dangling.
+    // They are only rewritten, never merged away: the catalog and the pages still point at them.
+    crate::dedupe::dedupe_resources_rewriting(dst, &added_objects(dst, &before), &imported.font_owners, true);
     Ok(ImportOutcome { pages: imported.pages, renamed_fields: imported.renamed_fields })
 }
 
@@ -118,8 +120,7 @@ pub fn insert_file_pages(
 ) -> Result<ImportOutcome, OrganizeError> {
     let before: HashSet<u32> = dst.object_numbers().into_iter().collect();
     let imported = import_pages_mapped(dst, src, src_pages, at, conflicts)?;
-    let created = added_objects(dst, &before);
-    crate::dedupe::dedupe_resources(dst, &created, true);
+    crate::dedupe::dedupe_resources_rewriting(dst, &added_objects(dst, &before), &imported.font_owners, true);
     let outline = source_outline(src, imported.page_map);
     if let Some(first) = imported.pages.first()
         && !outline.is_empty()
@@ -184,6 +185,9 @@ struct Imported {
     objects: HashMap<ObjRef, ObjRef>,
     /// Fields renamed to keep their names separate (old → new fully-qualified name).
     renamed_fields: Vec<(String, String)>,
+    /// Objects that already existed and now refer to a carried form font: deduplication must
+    /// rewrite these too.
+    font_owners: Vec<ObjRef>,
 }
 
 /// The annotations on `pages` and, above each widget among them, its fields up to the top one.
@@ -356,13 +360,18 @@ fn import_pages_mapped(
         FieldConflicts::Rename => resolve_field_conflicts(dst, &copier.fields)?,
         FieldConflicts::Merge => Vec::new(),
     };
-    register_fields(dst, &copier.fields)?;
+    // The fonts come first: copying one can refuse (a source font graph too deep to follow), and
+    // until then the destination's form is untouched, so the caller has only added objects to
+    // free.
+    let fields = copier.fields.clone();
+    let font_owners = carry_form_fonts(dst, &mut copier, &fields)?;
+    register_fields(dst, &fields)?;
     register_layers(dst, src, &copier.ocgs)?;
     let at = at.min(existing.len());
     let inserted: Vec<(ObjRef, Dict)> = new_pages.iter().map(|r| (*r, Dict::new())).collect();
     existing.splice(at..at, inserted);
     rebuild(dst, &existing)?;
-    Ok(Imported { pages: new_pages, page_map: copier.pages, objects: copier.map, renamed_fields })
+    Ok(Imported { pages: new_pages, page_map: copier.pages, objects: copier.map, renamed_fields, font_owners })
 }
 
 /// A page's `/Resources` with the names that only its page-tree ancestors list, or `None` when

@@ -50,20 +50,27 @@ pub(super) fn patch_da(da: &str, size: Option<f64>, patch: &LookPatch) -> String
     let numeric = |s: &str| s.parse::<f64>().is_ok();
     if patch.font.is_some() || size.is_some() {
         let old = appearance::parse_da(da);
-        let font = patch.font.map_or_else(|| old.font.clone(), |f| f.resource().to_string());
+        let at = toks.iter().enumerate().rev().find(|(i, t)| t.as_str() == "Tf" && *i >= 2).map(|(i, _)| i);
+        // A `/DA` is a string: a selected font is written escaped, as `parse_da` reads it back.
+        let font = patch.font.map(|f| format!("/{}", appearance::name_token(f.resource())));
         // `parse_da` reads sizes up to 300 points; keep the same bound when writing.
         let size = appearance::fmt(size.unwrap_or(old.size).clamp(0.0, 300.0));
-        let at = toks.iter().enumerate().rev().find(|(i, t)| t.as_str() == "Tf" && *i >= 2).map(|(i, _)| i);
         match at {
             Some(i) => {
-                if let Some(slot) = toks.get_mut(i - 2) {
-                    *slot = format!("/{font}");
+                // A size-only edit keeps the font token as written. `parse_da` keeps a name whose
+                // bytes are not text (`/A#FF`) as written, so escaping it again would name
+                // `/A#23FF`, a different resource.
+                if let (Some(slot), Some(font)) = (toks.get_mut(i - 2), font) {
+                    *slot = font;
                 }
                 if let Some(slot) = toks.get_mut(i - 1) {
                     *slot = size;
                 }
             }
-            None => toks.extend([format!("/{font}"), size, "Tf".into()]),
+            None => {
+                let font = font.unwrap_or_else(|| format!("/{}", appearance::name_token(&old.font)));
+                toks.extend([font, size, "Tf".into()]);
+            }
         }
     }
     if let Some(c) = patch.text {
@@ -514,4 +521,21 @@ pub fn set_button_icon_target(doc: &mut Document, name: &str, object: Option<Obj
 fn empty_box(doc: &Document, w: &Widget) -> Stream {
     let (c, place) = frame_only(doc, w);
     form_stream(place, c.into_bytes(), Dict::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A size-only edit keeps the font token as written: `parse_da` keeps a name whose bytes are
+    /// not text (`/A#FF`) as written, so escaping it again would name `/A#23FF`, another resource.
+    /// A selected font is still written escaped, as `parse_da` reads it back.
+    #[test]
+    fn a_size_only_edit_keeps_the_font_token_as_written() {
+        let size_only = LookPatch::default();
+        assert_eq!(patch_da("/A#FF 12 Tf 0 g", Some(14.0), &size_only), "/A#FF 14 Tf 0 g");
+        assert_eq!(patch_da("/F#20x_1 12 Tf 0 g", Some(9.0), &size_only), "/F#20x_1 9 Tf 0 g");
+        let courier = LookPatch { font: Some(FieldFont::Courier), ..Default::default() };
+        assert_eq!(patch_da("/A#FF 12 Tf 0 g", None, &courier), "/Cour 12 Tf 0 g");
+    }
 }

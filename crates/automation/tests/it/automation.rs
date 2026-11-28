@@ -5838,6 +5838,85 @@ fn inserting_a_file_brings_its_bookmarks() {
     assert_eq!(kids, [("Annex intro", json!(2)), ("Annex table", json!(3))], "{list}");
 }
 
+/// One page with a text field `field` whose `/DA` names the form's `/DR` font `alias`, the
+/// standard-14 face `face`; its appearance names the same font.
+fn field_font_pdf(face: &str, field: &str, alias: &str) -> Vec<u8> {
+    let ap = format!("BT /{alias} 18 Tf 2 14 Td (INITIAL) Tj ET");
+    let objs = [
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /DR << /Font << /{alias} 4 0 R >> >> /DA (/{alias} 18 Tf 0 g) >> >>"),
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 160] /Resources << >> /Annots [5 0 R] >>".into(),
+        format!("<< /Type /Font /Subtype /Type1 /BaseFont /{face} >>"),
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T ({field}) /V (INITIAL) /DA (/{alias} 18 Tf 0 g) /Rect [25 70 275 110] /P 3 0 R /AP << /N 6 0 R >> >>"
+        ),
+        format!(
+            "<< /Length {} /Type /XObject /Subtype /Form /BBox [0 0 250 40] /Resources << /Font << /{alias} 4 0 R >> >> >>\nstream\n{ap}\nendstream",
+            ap.len()
+        ),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// The base fonts the normal appearance of the widget of field `name` draws with, in `pdf`.
+fn appearance_fonts(pdf: Vec<u8>, name: &str) -> Vec<String> {
+    let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(pdf)).unwrap();
+    let mut fonts = Vec::new();
+    for n in doc.object_numbers() {
+        let obj = doc.get(pdfcraft_cos::ObjRef::new(n, doc.generation(n)));
+        let Some(w) = obj.as_dict().filter(|w| w.name(b"Subtype") == Some(b"Widget")) else { continue };
+        // A widget that is its own field, or the widget child the insert split it into.
+        let field = w.get(b"Parent").map_or_else(|| obj.clone(), |p| doc.resolve(p));
+        if field.as_dict().and_then(|f| f.get(b"T")).and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).as_deref() != Some(name) {
+            continue;
+        }
+        let ap = doc.resolve(w.get(b"AP").unwrap());
+        let normal = doc.resolve(ap.as_dict().unwrap().get(b"N").unwrap());
+        let pdfcraft_cos::Object::Stream(stream) = normal.as_ref() else { continue };
+        let res = doc.resolve(stream.dict.get(b"Resources").unwrap());
+        let list = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+        for (_, font) in list.as_dict().unwrap().iter() {
+            let font = doc.resolve(font);
+            fonts.push(String::from_utf8_lossy(font.as_dict().unwrap().name(b"BaseFont").unwrap()).into_owned());
+        }
+    }
+    fonts
+}
+
+/// #7279: a form field inserted from another file keeps its font when its value is edited, also
+/// when the destination's form gives the font's name to another font, and when it lacks the name.
+#[test]
+fn an_inserted_field_keeps_its_font_when_filled() {
+    let dir = workdir("insert-field-font");
+    std::fs::write(dir.join("dest.pdf"), field_font_pdf("Helvetica", "destination", "F1")).unwrap();
+    std::fs::write(dir.join("same-alias.pdf"), field_font_pdf("Courier", "imported", "F1")).unwrap();
+    std::fs::write(dir.join("own-alias.pdf"), field_font_pdf("Courier", "imported", "F2")).unwrap();
+    let mut a = auto(&dir);
+    for source in ["same-alias.pdf", "own-alias.pdf"] {
+        let doc = ok(&mut a, "doc_open", json!({ "path": "dest.pdf" }))["doc"].as_u64().unwrap();
+        ok(&mut a, "page_insert_file", json!({ "doc": doc, "path": source, "at": 2 }));
+        ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "imported": "MMMM iii 123" } }));
+        let out = format!("out/{source}");
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": out }));
+        let saved = std::fs::read(dir.join(&out)).unwrap();
+        assert_eq!(appearance_fonts(saved.clone(), "imported"), ["Courier"], "{source}");
+        assert_eq!(appearance_fonts(saved, "destination"), ["Helvetica"], "{source}");
+        ok(&mut a, "doc_close", json!({ "doc": doc }));
+    }
+}
+
 #[test]
 fn replacing_pages_through_tools() {
     let dir = workdir("replace");
