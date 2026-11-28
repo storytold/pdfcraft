@@ -79,6 +79,40 @@ fn editing_an_ocr_word_covers_the_scan_and_shows_the_new_text() {
     assert!(ink * 100 > px.len() * 3, "the new text shows in the scan's ink colour: {ink} of {}", px.len());
 }
 
+/// #8501: in a tight title-block cell the rules and their halo fill most of the ring the paper is
+/// read from; the cover must still be the paper's colour, not the rules' or their halo's.
+#[test]
+fn a_word_in_a_tight_cell_is_covered_in_the_paper_colour() {
+    let (w, h) = (200u32, 100u32);
+    let rule = |x: u32, y: u32| {
+        // 6 px rules just outside the OCR block's box (which reaches from the font's descender to
+        // its ascender, 35 to 67 here) above, below and at the left, as a bordered title block
+        // prints; the cell's right rule is further off, so a little paper is in the ring there.
+        let across = (26..110).contains(&x) && ((27..33).contains(&y) || (69..75).contains(&y));
+        let down = (32..38).contains(&x) && (27..75).contains(&y);
+        across || down
+    };
+    let mut rgba = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            let ink = ((WORD[0]..WORD[2]).contains(&x) && (WORD[1]..WORD[3]).contains(&y)) || rule(x, y);
+            rgba.extend(if ink { INK } else { PAPER });
+            rgba.push(255);
+        }
+    }
+    let png = export::encode_png(w, h, &rgba).unwrap();
+    let mut s = Session::new();
+    let bytes = s.create_from_images(&[("scan.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, bytes, None).unwrap();
+    let words =
+        vec![PlacedWord { text: "John".into(), origin: [40.0, 40.0], across: [60.0, 0.0], up: [0.0, 20.0], confidence: None, source: "ocrs".into() }];
+    s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "Jane".into(), style: Default::default() }).unwrap();
+    let px = word_pixels(&s, id);
+    let paper = px.iter().filter(|p| near(**p, PAPER)).count();
+    assert!(paper * 10 > px.len() * 4, "covered in the paper's colour, not the rules': {paper} of {}", px.len());
+}
+
 #[test]
 fn an_explicit_colour_is_kept_for_the_new_text() {
     let (mut s, id) = scanned();
