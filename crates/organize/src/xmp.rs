@@ -256,20 +256,16 @@ fn list_items(inner: &str) -> Vec<(Option<String>, &str)> {
     let mut items = Vec::new();
     let mut rest = inner;
     while let Some(i) = rest.find("<rdf:li") {
-        let Some(after) = rest.get(i + "<rdf:li".len()..) else { break };
+        let Some(item) = rest.get(i..) else { break };
+        let Some(after) = item.get("<rdf:li".len()..) else { break };
         // `<rdf:li` must end there: not `<rdf:link`.
         if !after.starts_with(|c: char| c == '>' || c == '/' || c.is_whitespace()) {
             rest = after;
             continue;
         }
         let Some(tag_end) = after.find('>') else { break };
-        let tag = after.get(..tag_end).unwrap_or_default();
-        let lang = tag.find("xml:lang=").and_then(|at| {
-            let v = tag.get(at + "xml:lang=".len()..)?;
-            let quote = v.chars().next().filter(|c| matches!(c, '"' | '\''))?;
-            let v = v.get(1..)?;
-            Some(v.get(..v.find(quote)?)?.to_string())
-        });
+        let tag = item.get(.."<rdf:li".len() + tag_end).unwrap_or_default();
+        let lang = attribute_span(tag, "xml:lang").and_then(|(_, start, end, _)| tag.get(start..end)).map(str::to_owned);
         let Some(body) = after.get(tag_end + 1..) else { break };
         if tag.ends_with('/') {
             items.push((lang, ""));
@@ -448,6 +444,26 @@ fn attribute_span(xmp: &str, name: &str) -> Option<(usize, usize, usize, char)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// XML whitespace around `=` does not change which language alternative is the default.
+    #[test]
+    fn language_alternatives_accept_spaced_language_attributes() {
+        for attribute in ["xml:lang='x-default'", "xml:lang = 'x-default'", "xml:lang= \"x-default\"", "xml:lang\t=\n'x-default'"] {
+            for name in ["dc:title", "dc:description"] {
+                let packet = format!("<{name}><rdf:Alt><rdf:li xml:lang='fr'>Rapport</rdf:li><rdf:li {attribute}>Report</rdf:li></rdf:Alt></{name}>");
+                assert_eq!(get_property(&packet, name, Shape::LangAlt).as_deref(), Some("Report"), "{attribute}");
+            }
+        }
+    }
+
+    /// Only the item's own `xml:lang` attribute identifies its language.
+    #[test]
+    fn language_alternatives_ignore_lookalike_and_quoted_attributes() {
+        for attribute in ["data-xml:lang='x-default'", "note='xml:lang=\"x-default\"'"] {
+            let packet = format!("<dc:title><rdf:Alt><rdf:li xml:lang='fr'>Rapport</rdf:li><rdf:li {attribute}>Other</rdf:li></rdf:Alt></dc:title>");
+            assert_eq!(get_property(&packet, "dc:title", Shape::LangAlt).as_deref(), Some("Rapport"), "{attribute}");
+        }
+    }
 
     /// The shape of a LibreOffice export: one description per schema, element forms.
     const PACKET: &str = "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
