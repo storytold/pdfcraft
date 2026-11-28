@@ -45,6 +45,8 @@ pub const SCENES: &[(&str, &str, &str, &[&str])] = &[
 const PDF: &str = "dist/demo/pdfcraft-showcase.pdf";
 
 pub fn run(args: &[String]) -> Result<()> {
+    // Reject typos before building the showcase or rewriting any screenshot attribution.
+    validate_scene_names(args)?;
     let root = crate::assets::root();
     if !root.join(PDF).is_file() {
         println!("screenshots: building the showcase PDF first");
@@ -82,6 +84,15 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     update_attribution(&root)?;
     crate::assets::run(&["--write".to_string()])
+}
+
+/// Every requested name must be a scene; an empty list means all scenes.
+fn validate_scene_names(args: &[String]) -> Result<()> {
+    if let Some(unknown) = args.iter().find(|arg| !SCENES.iter().any(|(name, ..)| arg == name)) {
+        let names = SCENES.iter().map(|(name, ..)| *name).collect::<Vec<_>>().join(", ");
+        bail!("unknown screenshot scene `{unknown}`; expected one of: {names}");
+    }
+    Ok(())
 }
 
 /// Replace the `docs/images/` entries of ATTRIBUTION.toml with one per screenshot on disk.
@@ -126,4 +137,32 @@ fn update_attribution(root: &Path) -> Result<()> {
     }
     std::fs::write(&path, out)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SCENES, run, validate_scene_names};
+
+    #[test]
+    fn accepts_all_or_declared_scenes() {
+        validate_scene_names(&[]).unwrap();
+        let names = SCENES.iter().map(|(name, ..)| (*name).to_owned()).collect::<Vec<_>>();
+        validate_scene_names(&names).unwrap();
+        validate_scene_names(&["pdfcraft-viewer".into(), "pdfcraft-dark".into(), "pdfcraft-viewer".into()]).unwrap();
+    }
+
+    #[test]
+    fn rejects_unknown_scene_before_building() {
+        let error = run(&["pdfcraft-vieewr".into()]).unwrap_err().to_string();
+        assert!(error.contains("unknown screenshot scene `pdfcraft-vieewr`"), "{error}");
+        for (name, ..) in SCENES {
+            assert!(error.contains(name), "missing allowed scene {name}: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_mixed_scene_names_before_building() {
+        let error = run(&["pdfcraft-viewer".into(), "typo".into()]).unwrap_err().to_string();
+        assert!(error.contains("unknown screenshot scene `typo`"), "{error}");
+    }
 }
