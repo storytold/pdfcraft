@@ -632,10 +632,23 @@ impl OcrVerify {
         true
     }
 
-    fn reread_settings(&self, draft: &super::ocr_ui::OcrDraft) -> OcrSettings {
+    /// The settings a page or a region is read again with: the options bar's choices, in the
+    /// language the reading under review was made in. Refused when the engine chosen now
+    /// cannot be asked for that language (Tesseract read the review in a language of its own
+    /// and the engine was changed since): read again in English, the page's words would be
+    /// replaced by another language's.
+    fn reread_settings(&self, draft: &super::ocr_ui::OcrDraft) -> Result<OcrSettings, String> {
         let mut settings = draft.settings();
-        settings.language = self.dictionary_language.clone();
-        settings
+        let language = &self.dictionary_language;
+        if pdfcraft_engine::ocr::language_for(settings.engine, language) != language {
+            let name = pdfcraft_engine::ocr::language_name(language).map_or(language.as_str(), |name| tl!(name));
+            return Err(crate::i18n::fmt(
+                tl!("This review was read in {language}; choose Tesseract as the engine to read it again"),
+                &[("language", name)],
+            ));
+        }
+        settings.language.clone_from(language);
+        Ok(settings)
     }
 
     /// Whether this word's text was corrected in the review (the inspector says so, and the
@@ -904,7 +917,13 @@ impl OcrVerify {
             return; // one re-read at a time, and never under a run
         }
         let Some(doc) = self.doc else { return };
-        let settings = self.reread_settings(&app.ocr_draft);
+        let settings = match self.reread_settings(&app.ocr_draft) {
+            Ok(settings) => settings,
+            Err(why) => {
+                app.notify_error(why);
+                return;
+            }
+        };
         #[cfg(target_arch = "wasm32")]
         if app.web_models_missing(settings.engine) {
             self.wait_for_models(AwaitingModels::Reread { page, region });
@@ -2206,10 +2225,20 @@ mod tests {
         let mut session = Session::new();
         let (_, mut v) = loaded(&mut session, &[Some(40.0)]);
         v.dictionary_language = "ja".into();
-        let draft = super::super::ocr_ui::OcrDraft { language: "fr".into(), ..Default::default() };
-        let settings = v.reread_settings(&draft);
+        let draft = super::super::ocr_ui::OcrDraft { language: "fr".into(), engine: EngineChoice::Tesseract, ..Default::default() };
+        let settings = v.reread_settings(&draft).expect("Tesseract can be asked for it");
         assert_eq!(settings.language, "ja");
         assert_eq!(settings.dpi, draft.settings().dpi);
+        // The engine was changed since the reading: the built-in engine (alone, or first under
+        // Automatic) cannot be asked for a Tesseract language, and the page is not quietly
+        // read again in English.
+        for engine in [EngineChoice::Ocrs, EngineChoice::Auto] {
+            let draft = super::super::ocr_ui::OcrDraft { engine, ..Default::default() };
+            assert!(v.reread_settings(&draft).is_err(), "{engine:?}");
+        }
+        v.dictionary_language = "en".into();
+        let draft = super::super::ocr_ui::OcrDraft { language: "fr".into(), ..Default::default() };
+        assert_eq!(v.reread_settings(&draft).expect("every engine reads English").language, "en");
         assert!(dictionary_path(std::path::Path::new("prefs"), "../outside").is_err());
     }
 

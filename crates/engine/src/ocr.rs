@@ -621,6 +621,82 @@ pub fn engine_unavailable_reason(engine: EngineChoice) -> Option<String> {
     }
 }
 
+/// The English name of a document language code some engine can be asked for (the interface
+/// translates it): the built-in engine's table, then Tesseract's allow-list (not on the web,
+/// which has no Tesseract). `None` for a code no engine knows. A saved choice is checked
+/// against this; what can be chosen right now is [`document_languages`].
+pub fn language_name(code: &str) -> Option<&'static str> {
+    if let Some(l) = LANGUAGES.iter().find(|l| l.0 == code) {
+        return Some(l.1);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(l) = pdfcraft_ocr::tesseract::LANGUAGE_NAMES.iter().find(|l| l.0 == code) {
+        return Some(l.1);
+    }
+    None
+}
+
+/// The language a run with `engine` is asked for: `language` when that engine can be asked
+/// for it, else English. The built-in engine's languages go with every choice; Tesseract's
+/// allow-listed ones only with Tesseract chosen. Automatic does not get them, even on a
+/// machine where Tesseract is the only engine it has: Automatic reads with the built-in
+/// engine first wherever that one is installed, and it would read such a page as Latin
+/// letters, so the same saved choice would read differently from one machine to the next.
+/// Never starts a process: whether the language pack is installed is
+/// [`document_languages`]' question, and a run that asks for a missing pack fails with
+/// Tesseract's own message.
+pub fn language_for(engine: EngineChoice, language: &str) -> &'static str {
+    if let Some(l) = LANGUAGES.iter().find(|l| l.0 == language) {
+        return l.0;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if engine == EngineChoice::Tesseract
+        && let Some(l) = pdfcraft_ocr::tesseract::LANGUAGE_NAMES.iter().find(|l| l.0 == language)
+    {
+        return l.0;
+    }
+    // The web build has no Tesseract, so nothing above reads the choice there.
+    #[cfg(target_arch = "wasm32")]
+    let _ = engine;
+    "en"
+}
+
+/// What the Document language dropdown offers for `engine` right now: the built-in engine's
+/// languages, and with Tesseract chosen also the allow-listed languages whose pack the
+/// installed program reports (#7496). Called on the UI thread every frame, so it never waits
+/// on a process: until the background probe lands (see [`engine_probe_running`]) only the
+/// built-in languages are listed.
+pub fn document_languages(engine: EngineChoice) -> Vec<(&'static str, &'static str)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if engine == EngineChoice::Tesseract {
+        let configured = std::env::var_os("PDFCRAFT_TESSERACT").map(|v| v.to_string_lossy().into_owned());
+        if let Probe::Known(Some(tesseract)) = tesseract_engine_now(configured.as_deref()) {
+            // The probe that found the program already listed its packs, and Tesseract's
+            // `languages` reports them under their tessdata names (`ara`): this reads that
+            // list and starts no process.
+            let installed: Vec<String> = tesseract.languages().into_iter().map(|(pack, _)| pack).collect();
+            return languages_with(&installed);
+        }
+    }
+    // The web build has no Tesseract, so nothing above reads the choice there.
+    #[cfg(target_arch = "wasm32")]
+    let _ = engine;
+    LANGUAGES.to_vec()
+}
+
+/// [`document_languages`] for a Tesseract that reports the packs `installed`: the built-in
+/// languages first, then the installed allow-listed ones not already listed.
+#[cfg(not(target_arch = "wasm32"))]
+fn languages_with(installed: &[String]) -> Vec<(&'static str, &'static str)> {
+    let mut out: Vec<(&'static str, &'static str)> = LANGUAGES.to_vec();
+    for entry in pdfcraft_ocr::tesseract::offered_languages(installed) {
+        if !out.iter().any(|l| l.0 == entry.0) {
+            out.push(entry);
+        }
+    }
+    out
+}
+
 /// Why Tesseract cannot be chosen yet: its probe is still running in the background.
 #[cfg(not(target_arch = "wasm32"))]
 fn tesseract_checking() -> String {
@@ -1464,6 +1540,41 @@ mod tests {
         assert!(!tesseract.available, "{tesseract:?}");
         assert!(tesseract.why_not.as_deref().is_some_and(|why| why.contains("not/a/program")), "{tesseract:?}");
         assert_eq!(tesseract.program.as_deref(), Some("not/a/program"));
+    }
+
+    /// The Document language list (#7496): with Tesseract chosen it holds the built-in
+    /// languages and then the allow-listed ones whose pack is installed; a pack that is
+    /// installed but not allow-listed is not offered, and no language is listed twice.
+    #[test]
+    fn document_languages_add_the_installed_tesseract_ones() {
+        let installed = |codes: &[&str]| codes.iter().map(|c| (*c).to_string()).collect::<Vec<_>>();
+        assert_eq!(languages_with(&installed(&["ara", "eng", "osd", "script\\Arabic"])), vec![("en", "English"), ("ar", "Arabic")]);
+        assert_eq!(languages_with(&installed(&["rus", "deu"])), vec![("en", "English"), ("de", "German"), ("ru", "Russian")]);
+        assert_eq!(languages_with(&installed(&["slv", "osd"])), LANGUAGES.to_vec(), "not allow-listed: not offered");
+        assert_eq!(languages_with(&[]), LANGUAGES.to_vec());
+        // Only Tesseract adds languages: the other choices list the built-in table whatever
+        // is installed (and never start the probe for it).
+        assert_eq!(document_languages(EngineChoice::Ocrs), LANGUAGES.to_vec());
+        assert_eq!(document_languages(EngineChoice::Auto), LANGUAGES.to_vec());
+    }
+
+    /// A language is only asked of an engine that can be asked for it: Tesseract's languages
+    /// need Tesseract chosen, and anything unknown reads as English, as before.
+    #[test]
+    fn a_tesseract_language_needs_tesseract_chosen() {
+        assert_eq!(language_for(EngineChoice::Tesseract, "ar"), "ar");
+        assert_eq!(language_for(EngineChoice::Tesseract, "en"), "en");
+        assert_eq!(language_for(EngineChoice::Auto, "ar"), "en", "the built-in engine reads first under Automatic");
+        assert_eq!(language_for(EngineChoice::Ocrs, "ar"), "en");
+        assert_eq!(language_for(EngineChoice::Ocrs, "en"), "en");
+        for bogus in ["", "ara", "AR", " ar", "klingon", "ar;rm"] {
+            assert_eq!(language_for(EngineChoice::Tesseract, bogus), "en", "{bogus:?}");
+        }
+        // Every code that can be offered has a name to show, and no other code has one.
+        for (code, _) in LANGUAGES.iter().chain(pdfcraft_ocr::tesseract::LANGUAGE_CODES) {
+            assert!(language_name(code).is_some(), "{code}");
+        }
+        assert_eq!(language_name("klingon"), None);
     }
 
     /// What the interface sees of the cache: a fresh answer as is, an expired failed probe as

@@ -200,8 +200,12 @@ fn options_bar(app: &mut PdfCraftApp, ui: &mut Ui, n: &mut Intents) {
     let (running, rereading, can_reject) = (v.phase == Phase::Running, v.reread.is_some(), v.can_reject());
     let page_done = review && v.review.verified_pages.contains(&v.current);
 
-    let languages: Vec<Entry<String>> =
-        pdfcraft_engine::ocr::LANGUAGES.iter().map(|(code, name)| Entry::new((*code).to_string(), language_name(code, name))).collect();
+    // The built-in languages, and with Tesseract chosen the allow-listed ones whose pack is
+    // installed (#7496).
+    let languages: Vec<Entry<String>> = ocr_ui::language_choices(d.engine, &d.language)
+        .into_iter()
+        .map(|(code, name)| Entry::new(code.to_string(), language_name(code, name)))
+        .collect();
     let engines = engine_entries();
     let strategies = [
         (MergeStrategy::PrimaryOnly, tl!("Use the chosen engine's reading alone")),
@@ -342,6 +346,8 @@ fn options_bar(app: &mut PdfCraftApp, ui: &mut Ui, n: &mut Intents) {
     if d.engine != engine_before && d.engine == EngineChoice::Auto && d.strategy == MergeStrategy::PrimaryOnly {
         d.strategy = d.engine.default_strategy();
     }
+    // A Tesseract language does not stay chosen with another engine.
+    d.keep_language_readable();
 }
 
 /// The info strip: where the review stands, in facts — page, average confidence, how many

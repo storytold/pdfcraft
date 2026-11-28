@@ -12,7 +12,7 @@ use craft::ui::display::Text;
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
 use craft::ui::runtime::env::Label;
 use pdfcraft_engine::DocId;
-use pdfcraft_engine::ocr::{EngineChoice, LANGUAGES, MergeStrategy, OcrGuard, OcrPage, OcrSettings, OutputMode};
+use pdfcraft_engine::ocr::{EngineChoice, MergeStrategy, OcrGuard, OcrPage, OcrSettings, OutputMode};
 
 use super::job_count::JobCount;
 // PLAN: assumed `crate::notices::{set_progress, end_progress, ProgressKey, ProgressNotice}` from pdf-chrome-w19 (free functions taking the app).
@@ -88,11 +88,21 @@ impl Default for OcrDraft {
 }
 
 impl OcrDraft {
+    /// Keep the language one the chosen engine can be asked for: Tesseract's languages need
+    /// Tesseract chosen, so changing the engine away from it goes back to English.
+    pub(crate) fn keep_language_readable(&mut self) {
+        let readable = pdfcraft_engine::ocr::language_for(self.engine, &self.language);
+        if readable != self.language {
+            self.language = readable.to_string();
+        }
+    }
+
     /// The recognition settings these choices make.
     pub fn settings(&self) -> OcrSettings {
         OcrSettings {
             dpi: self.dpi as f32,
-            language: self.language.clone(),
+            // Only a language the chosen engine can be asked for reaches a run.
+            language: pdfcraft_engine::ocr::language_for(self.engine, &self.language).to_string(),
             engine: self.engine,
             strategy: self.strategy,
             auto_rotate: self.auto_rotate,
@@ -110,12 +120,14 @@ impl OcrDraft {
     /// Restore from the preferences JSON (`ocr` object); unknown or malformed values keep the
     /// defaults, like every other restored setting.
     pub fn apply_pref(&mut self, v: &serde_json::Value) {
-        if let Some(l) = v["language"].as_str().filter(|l| LANGUAGES.iter().any(|x| x.0 == *l)) {
+        if let Some(l) = v["language"].as_str().filter(|l| pdfcraft_engine::ocr::language_name(l).is_some()) {
             self.language = l.to_string();
         }
         if let Some(e) = v["engine"].as_str() {
             self.engine = EngineChoice::parse(e);
         }
+        // A Tesseract language saved with another engine (a hand-edited file) reads as English.
+        self.keep_language_readable();
         if let Some(s) = v["strategy"].as_str() {
             self.strategy = parse_strategy(s);
         } else if self.engine == EngineChoice::Auto {
@@ -209,6 +221,9 @@ pub struct OcrRun {
     /// The dialog promised an editable document: the result goes to the OCR Verify screen
     /// (whose Accept produces the editable document), not to an invisible layer.
     pub editable: bool,
+    /// The language the pages are read in. The review of an editable result keeps its
+    /// dictionary in it and reads a page or a region again in it.
+    pub language: String,
     /// The web build reads the pages in Web Workers, pumped by [`PdfCraftApp::poll_ocr`].
     #[cfg(target_arch = "wasm32")]
     pub web: Option<crate::ocr_web::Pages>,
@@ -262,6 +277,21 @@ fn page_range_of(d: &OcrDraft, count: usize) -> PageRange {
     PageRange { scope, from: d.from.clamp(1, to), to: Some(to), ..PageRange::default() }
 }
 
+/// What a Document language choice lists for `engine`: the built-in languages, with Tesseract
+/// chosen also the allow-listed ones whose pack is installed, and the language chosen now when
+/// that list lacks it (its pack is gone, or Tesseract is still being looked for), so the
+/// choice shows as what it is and a run with it fails with Tesseract's own message.
+pub(crate) fn language_choices(engine: EngineChoice, chosen: &str) -> Vec<(&'static str, &'static str)> {
+    let mut choices = pdfcraft_engine::ocr::document_languages(engine);
+    let chosen = pdfcraft_engine::ocr::language_for(engine, chosen);
+    if !choices.iter().any(|choice| choice.0 == chosen)
+        && let Some(name) = pdfcraft_engine::ocr::language_name(chosen)
+    {
+        choices.push((chosen, name));
+    }
+    choices
+}
+
 /// Why `engine` cannot run, in the interface's language: the built-in engine's missing models get
 /// the notice users know; Tesseract's reasons are catalog keys of their own.
 fn engine_unavailable_text(engine: EngineChoice) -> Option<String> {
@@ -312,12 +342,13 @@ fn draft_from(d: &mut OcrDraft, fields: &DialogFields, count: usize) {
             _ => {}
         }
     }
-    if let Some(l) = fields.text("language").filter(|l| LANGUAGES.iter().any(|x| x.0 == *l)) {
+    if let Some(l) = fields.text("language").filter(|l| pdfcraft_engine::ocr::language_name(l).is_some()) {
         d.language = l.to_string();
     }
     if let Some(e) = fields.text("engine") {
         d.engine = EngineChoice::parse(e);
     }
+    d.keep_language_readable();
     if let Some(s) = fields.text("strategy") {
         d.strategy = parse_strategy(s);
     }
@@ -353,7 +384,15 @@ fn recognize_dialog(fields: &mut DialogFields, count: usize, current: usize) -> 
     let engine = EngineChoice::parse(fields.text("engine").unwrap_or_default());
     let reason = engine_unavailable_text(engine);
 
-    let languages = LANGUAGES.iter().map(|(code, name)| ((*code).to_string(), tl!(*name).into())).collect();
+    // The built-in languages, and with Tesseract chosen the allow-listed ones whose pack is
+    // installed (#7496). A language the engine chosen now cannot be asked for (the engine was
+    // changed away from Tesseract) goes back to English, so the row never shows a choice its
+    // list lacks.
+    let readable = pdfcraft_engine::ocr::language_for(engine, fields.text("language").unwrap_or_default());
+    if fields.text("language") != Some(readable) {
+        fields.set("language", readable.to_string());
+    }
+    let languages = language_choices(engine, readable).into_iter().map(|(code, name)| (code.to_string(), tl!(name).into())).collect();
     let engine_names = |choice: EngineChoice| match choice {
         EngineChoice::Auto => tl!("Automatic"),
         EngineChoice::Ocrs => tl!("Built-in"),
@@ -668,8 +707,9 @@ impl PdfCraftApp {
         count.set(0, job.pages.len());
         #[cfg(target_arch = "wasm32")]
         {
+            let language = job.settings.language.clone();
             let web = Some(crate::ocr_web::Pages::new(job.steps()));
-            self.ocr_run = Some(OcrRun { doc: id, count, guard, automatic: auto, editable, web, web_result: None });
+            self.ocr_run = Some(OcrRun { doc: id, count, guard, automatic: auto, editable, language, web, web_result: None });
             self.poll_ocr(ctx);
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -693,6 +733,7 @@ impl PdfCraftApp {
     ) {
         let reading = count.clone();
         let wake = self.wake.clone();
+        let language = job.settings.language.clone();
         // A failure is written on the worker thread: in the UI's language.
         let lang = crate::i18n::current();
         self.ocr_runs.submit(id, craft::host::queue::Priority::default(), move |_| {
@@ -707,7 +748,7 @@ impl PdfCraftApp {
                 })
             })
         });
-        self.ocr_run = Some(OcrRun { doc: id, count, guard, automatic: auto, editable });
+        self.ocr_run = Some(OcrRun { doc: id, count, guard, automatic: auto, editable, language });
         self.poll_ocr(ctx);
     }
 
@@ -979,7 +1020,9 @@ impl PdfCraftApp {
     /// has delivered it.
     fn poll_ocr_run(&mut self, ctx: &egui::Context) {
         let Some(run) = self.ocr_run.as_ref() else { return };
-        let (doc, count, auto, guard, editable) = (run.doc, run.count.clone(), run.automatic, run.guard.clone(), run.editable);
+        let (doc, count, auto, guard) = (run.doc, run.count.clone(), run.automatic, run.guard.clone());
+        // An editable result is reviewed in the language its pages were read in.
+        let review_in = run.editable.then(|| run.language.clone());
         let automatic = auto.is_some();
         // The result of a run Edit started waits while Read mode or a dialog is up: nothing may change
         // the document beneath them, and the run may have been started before they appeared. It stays
@@ -1005,19 +1048,20 @@ impl PdfCraftApp {
             notices::end_progress(self, ProgressKey::Ocr);
         }
         self.ocr_run = None;
-        self.land_ocr(ctx, doc, guard, auto, editable, result);
+        self.land_ocr(ctx, doc, guard, auto, review_in, result);
     }
 
     /// Applies a finished run's `result` to document `doc`: dropped for an automatic run whose
     /// document changed, handed to the OCR Verify screen for an editable output, else written as
-    /// one undoable step (the guard refuses it when the user edited meanwhile).
+    /// one undoable step (the guard refuses it when the user edited meanwhile). `review_in` is
+    /// set for a run that promised an editable document: the language its pages were read in.
     fn land_ocr(
         &mut self,
         ctx: &egui::Context,
         doc: DocId,
         guard: OcrGuard,
         auto: Option<AutoOcr>,
-        editable: bool,
+        review_in: Option<String>,
         result: Result<Vec<OcrPage>, String>,
     ) {
         let automatic = auto.is_some();
@@ -1042,7 +1086,10 @@ impl PdfCraftApp {
         // The dialog's "Editable text" choice is honored: the recognition is not written as an
         // invisible layer here. It opens in the OCR Verify screen, whose Accept produces the
         // editable document (a NEW file) the choice promises.
-        if editable && !automatic {
+        if !automatic && let Some(language) = review_in {
+            // The review goes on in the language the pages were read in: its dictionary, and a
+            // page or a region read again.
+            self.ocr_verify.dictionary_language = language;
             self.ocr_verify.load(doc, guard, found);
             self.ocr_verify.open = true;
             self.notify_tr("Review the recognition, then Accept to write the editable document");
@@ -1259,6 +1306,7 @@ mod tests {
             guard: app.session.ocr_guard(doc).unwrap(),
             automatic: automatic.then_some(AutoOcr { page: 0, generation }),
             editable,
+            language: "en".into(),
         }
     }
 
@@ -1497,6 +1545,51 @@ mod tests {
         assert!(!run(30.0).contains("low-confidence"), "a lower threshold leaves the word alone: {}", run(30.0));
     }
 
+    /// A Tesseract language (#7496) is kept with Tesseract chosen, through the preferences
+    /// round trip and into the run's settings; with another engine the language goes back to
+    /// English; an unknown code never replaces the saved choice.
+    #[test]
+    fn a_tesseract_language_stays_with_the_tesseract_engine() {
+        let mut d = OcrDraft::default();
+        d.apply_pref(&serde_json::json!({ "engine": "tesseract", "language": "ar" }));
+        assert_eq!((d.engine, d.language.as_str()), (EngineChoice::Tesseract, "ar"));
+        assert_eq!(d.settings().language, "ar");
+        let mut r = OcrDraft::default();
+        r.apply_pref(&d.to_pref());
+        assert_eq!((r.engine, r.language.as_str()), (EngineChoice::Tesseract, "ar"), "the choice survives a restart");
+
+        for other in ["ocrs", "auto"] {
+            let mut e = OcrDraft::default();
+            e.apply_pref(&serde_json::json!({ "engine": other, "language": "ar" }));
+            assert_eq!(e.language, "en", "{other}");
+        }
+        let mut bogus = OcrDraft::default();
+        bogus.apply_pref(&serde_json::json!({ "engine": "tesseract", "language": "ar" }));
+        bogus.apply_pref(&serde_json::json!({ "language": "klingon" }));
+        assert_eq!(bogus.language, "ar", "an unknown code keeps what was there");
+    }
+
+    /// The Recognize Text dialog (#7496): a Tesseract language confirmed with Tesseract comes
+    /// back as chosen, and its row lists it even before the installed packs are known;
+    /// changing the engine in the dialog takes the row back to English with it.
+    #[test]
+    fn the_dialog_keeps_a_language_only_with_an_engine_that_reads_it() {
+        let mut chosen = OcrDraft::default();
+        chosen.apply_pref(&serde_json::json!({ "engine": "tesseract", "language": "ar" }));
+        let mut fields = fields_from(&chosen, 1);
+        let mut confirmed = OcrDraft::default();
+        draft_from(&mut confirmed, &fields, 1);
+        assert_eq!((confirmed.engine, confirmed.language.as_str()), (EngineChoice::Tesseract, "ar"));
+        assert!(language_choices(EngineChoice::Tesseract, "ar").iter().any(|choice| choice.0 == "ar"), "the choice is in its own list");
+        assert!(!language_choices(EngineChoice::Auto, "ar").iter().any(|choice| choice.0 == "ar"), "and in no other engine's");
+
+        fields.set("engine", EngineChoice::Auto.name().to_string());
+        let _ = recognize_dialog(&mut fields, 1, 1);
+        assert_eq!(fields.text("language"), Some("en"), "the row follows the engine");
+        draft_from(&mut confirmed, &fields, 1);
+        assert_eq!((confirmed.engine, confirmed.language.as_str()), (EngineChoice::Auto, "en"));
+    }
+
     /// The remembered output folder survives the preferences round trip; an absent or empty
     /// value keeps the default (ask each time).
     #[test]
@@ -1585,7 +1678,7 @@ mod tests {
         app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).expect("an edit while the worker runs");
         let after_edit = app.session.get(id).and_then(|d| d.can_undo().map(str::to_owned));
         let page = one_word_page(Some(95.0), Vec::new());
-        app.land_ocr(&egui::Context::default(), id, guard, None, false, Ok(vec![page]));
+        app.land_ocr(&egui::Context::default(), id, guard, None, None, Ok(vec![page]));
         let toast = posted(&mut app);
         assert!(toast.contains("changed since recognition started"), "{toast}");
         assert_eq!(
@@ -1605,7 +1698,7 @@ mod tests {
         let note = "3 characters had no font that could show them and appear as ? in the output";
         let page = one_word_page(Some(95.0), vec![note.into()]);
         let guard = app.session.ocr_guard(id).unwrap();
-        app.land_ocr(&egui::Context::default(), id, guard, None, false, Ok(vec![page]));
+        app.land_ocr(&egui::Context::default(), id, guard, None, None, Ok(vec![page]));
         let toast = posted(&mut app);
         assert!(toast.contains(note), "{toast}");
     }
@@ -1621,9 +1714,12 @@ mod tests {
         let page = one_word_page(Some(95.0), Vec::new());
         let guard = app.session.ocr_guard(id).unwrap();
         app.ocr_draft.output_mode = pdfcraft_engine::ocr::OutputMode::EditableText;
-        app.land_ocr(&egui::Context::default(), id, guard, None, true, Ok(vec![page]));
+        app.land_ocr(&egui::Context::default(), id, guard, None, Some("ar".into()), Ok(vec![page]));
         assert_eq!(app.session.get(id).unwrap().can_undo(), None, "no invisible layer was written");
         assert!(app.ocr_verify.open, "the review opens, to accept as an editable document");
         assert_eq!(app.ocr_verify.phase, crate::workflows::ocr_verify::Phase::ReviewReady);
+        // The review goes on in the language the pages were read in (its dictionary, and what
+        // a page or a region is read again in), not in the one a review before it left behind.
+        assert_eq!(app.ocr_verify.dictionary_language, "ar");
     }
 }

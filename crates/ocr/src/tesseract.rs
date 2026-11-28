@@ -67,6 +67,19 @@ pub fn language_code(code: &str) -> &'static str {
     LANGUAGE_CODES.iter().find(|(k, _)| *k == c).map(|(_, v)| *v).unwrap_or("eng")
 }
 
+/// The languages PdfCraft offers that this Tesseract can read: the allow-listed codes whose
+/// tessdata name is among `installed` (the codes a `--list-langs` run reported), in
+/// [`LANGUAGE_CODES`] order, each with its English name. A pack that is installed but not
+/// allow-listed (`osd`, `script/Arabic`, …) is never offered, and neither is an allow-listed
+/// language whose pack is missing: choosing it could only fail.
+pub fn offered_languages<S: AsRef<str>>(installed: &[S]) -> Vec<(&'static str, &'static str)> {
+    LANGUAGE_CODES
+        .iter()
+        .filter(|(_, tess)| installed.iter().any(|i| i.as_ref() == *tess))
+        .filter_map(|(code, _)| LANGUAGE_NAMES.iter().find(|(c, _)| c == code).map(|(_, name)| (*code, *name)))
+        .collect()
+}
+
 /// The user-configured program location, when valid: `$PDFCRAFT_TESSERACT` (a user
 /// preference, never taken from document data). An invalid value — relative, missing, a
 /// directory, not executable — means unavailable: an explicit setting is never silently
@@ -461,6 +474,11 @@ impl Recognizer for TesseractCli {
         }
     }
 
+    /// The tessdata packs the program reported, as `--list-langs` printed them (`ara`, `eng`,
+    /// `osd`, `script/Arabic`, …): the pack's own name is the code here, not the two-letter
+    /// code the settings use, and [`offered_languages`] maps the one to the other. For a
+    /// program found by [`TesseractCli::at`] this is the list its probe left and starts no
+    /// process.
     fn languages(&self) -> Vec<(String, String)> {
         if self.probed.load(Ordering::Relaxed) == 2 {
             return Vec::new();
@@ -676,6 +694,21 @@ mod tests {
         assert_eq!(lines.last().and_then(|l| l.words.last()).map(|w| w.text.as_str()), Some(&*format!("w{}", MAX_WORDS - 1)));
     }
 
+    /// The dropdown offers what is both allow-listed and installed (#7496): Arabic appears once
+    /// `ara` is installed, `osd` and script packs never do, and a missing pack is not offered.
+    #[test]
+    fn offered_languages_are_the_installed_allow_listed_ones() {
+        let installed = ["ara", "eng", "osd", "script\\Arabic", "script/Arabic", "slv"];
+        assert_eq!(offered_languages(&installed), vec![("en", "English"), ("ar", "Arabic")]);
+        assert_eq!(offered_languages(&["deu".to_string(), "chi_sim".to_string()]), vec![("de", "German"), ("zh", "Chinese (Simplified)")]);
+        assert!(offered_languages::<&str>(&[]).is_empty());
+        // Codes are compared whole: no prefix, case or path trick selects a pack.
+        assert!(offered_languages(&["ARA", "ara ", "ar", "ara/../eng"]).is_empty());
+        // Every allow-listed code has a name, so none is silently dropped.
+        let all: Vec<&str> = LANGUAGE_CODES.iter().map(|(_, t)| *t).collect();
+        assert_eq!(offered_languages(&all).len(), LANGUAGE_CODES.len());
+    }
+
     #[test]
     fn language_table_maps_and_falls_back() {
         assert_eq!(language_code("en"), "eng");
@@ -814,6 +847,25 @@ mod tests {
         std::fs::write(dir.path.join("reading.tsv"), exact).unwrap();
         let complete = recognizer.recognize(&blot(8, 8, 0, 0, 4, 4), &RecognizeOptions::default()).unwrap();
         assert_eq!(complete.iter().map(|line| line.words.len()).sum::<usize>(), MAX_WORDS);
+    }
+
+    /// From the program's own answer to the dropdown (#7496), with a fake `tesseract` that
+    /// lists its packs the way the real one does: `languages` keeps the packs as reported
+    /// (the dropdown relies on that), and the languages offered are the allow-listed ones
+    /// among them. Unix only (it needs a real process), so it runs where no Tesseract is
+    /// installed.
+    #[cfg(unix)]
+    #[test]
+    fn the_packs_a_program_lists_decide_what_is_offered() {
+        let dir = TempDir::create().unwrap();
+        let script = dir.path.join("tesseract-lists");
+        std::fs::write(&script, "#!/bin/sh\nprintf 'List of available languages in \"/tessdata/\" (4):\\nara\\neng\\nosd\\nscript/Arabic\\n'\n")
+            .unwrap();
+        make_executable(&script);
+        let found = TesseractCli::at(script).expect("the program answers --list-langs");
+        let packs: Vec<String> = found.languages().into_iter().map(|(pack, _)| pack).collect();
+        assert_eq!(packs, ["ara", "eng", "osd", "script/Arabic"]);
+        assert_eq!(offered_languages(&packs), vec![("en", "English"), ("ar", "Arabic")]);
     }
 
     /// A hung binary is killed at the timeout and reported (Unix: a fake `tesseract` script;
