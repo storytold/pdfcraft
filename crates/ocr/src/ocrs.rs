@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use rten_imageproc::{RectF, RotatedRect};
 
-use super::{Line, MAX_PIXELS, MAX_SIDE, OcrError, OcrImage, RecognizeOptions, Recognizer, Word};
+use super::{Line, MAX_PIXELS, MAX_SIDE, OcrError, OcrImage, RecognizeOptions, Recognizer, Word, symbols};
 
 /// The validated byte length of a `width` × `height` RGBA raster, with the same caps
 /// [`OcrImage::new`] applies: zero sides are empty, sides over [`MAX_SIDE`] or totals over
@@ -189,22 +189,25 @@ impl Ocr {
         let found = self.detect_words(&rgb, width, height, &input)?;
         let mut lines = self.engine.find_text_lines(&input, &found);
         let before: Vec<Option<RectF>> = lines.iter_mut().map(|l| pad_line(l)).collect();
+        let upright: Vec<bool> = lines.iter().map(|l| is_upright(l)).collect();
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
-        use ocrs::TextItem;
+        let gray = gray_reader(&rgb, width, height);
+        // A fraction glyph's small numeral, cut out and read as a line of its own: the model
+        // sees it at the height it reads full-size digits at.
+        let numeral = |rect: [f32; 4]| -> Option<String> {
+            let [l, t, r, b] = rect;
+            if !(rect.iter().all(|v| v.is_finite()) && r - l >= 2.0 && b - t >= 2.0) {
+                return None;
+            }
+            let line = vec![RotatedRect::from_rect(RectF::from_tlbr(t, l, b, r))];
+            let read = self.engine.recognize_text(&input, std::slice::from_ref(&line)).ok()?;
+            read.into_iter().next().flatten().map(|l| l.to_string())
+        };
         Ok(read
             .into_iter()
-            .zip(before)
-            .filter_map(|(line, before)| line.map(|l| (l, before)))
-            .map(|(line, before)| Line {
-                words: line
-                    .words()
-                    .map(|w| {
-                        let r = w.bounding_rect();
-                        Word::new(w.to_string(), clip([r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32], before), "ocrs")
-                    })
-                    .filter(|w| !w.text.trim().is_empty())
-                    .collect(),
-            })
+            .zip(before.into_iter().zip(upright))
+            .filter_map(|(line, (before, upright))| line.map(|l| (l, before, upright)))
+            .map(|(line, before, upright)| read_line(&line, before, upright, &gray, &numeral))
             .filter(|l| !l.words.is_empty())
             .collect())
     }
@@ -242,6 +245,81 @@ impl Ocr {
         }
         Ok(words)
     }
+}
+
+/// Whether a found line reads along the page rather than down it (within 45° of level): the
+/// symbol check reads glyphs by rows and columns, so a line on its side is taken as read. The
+/// detector tilts the boxes of short or slanted words on a drawing (a lone `⅛`, a slash, a
+/// word along a dimension line) by a good deal, while a line on its side is a quarter turn
+/// away, so the tolerance is wide; a line of two or more words is judged by the run from its
+/// first word's centre to its last word's, a line of one word by that word's up axis.
+fn is_upright(line: &[RotatedRect]) -> bool {
+    let (Some(first), Some(last)) = (line.first(), line.last()) else { return false };
+    if line.len() >= 2 {
+        let (a, b) = (first.center(), last.center());
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        let run = (dx * dx + dy * dy).sqrt();
+        if run > 0.0 {
+            return dy.abs() <= 0.7 * run;
+        }
+    }
+    let up = first.up_axis();
+    up.x.abs() <= 0.7 * up.length()
+}
+
+/// The grey value at an image pixel of `rgb` (1 or 3 bytes per pixel), 255 (paper) outside it.
+fn gray_reader(rgb: &[u8], width: u32, height: u32) -> impl Fn(i64, i64) -> u8 + '_ {
+    let area = (width as usize).saturating_mul(height as usize).max(1);
+    let channels = if rgb.len() == area * 3 { 3 } else { 1 };
+    move |x, y| {
+        if x < 0 || y < 0 || x >= i64::from(width) || y >= i64::from(height) {
+            return 255;
+        }
+        let o = (y as usize * width as usize + x as usize) * channels;
+        match rgb.get(o..o + channels) {
+            Some([g]) => *g,
+            Some([r, g, b]) => ((299 * u32::from(*r) + 587 * u32::from(*g) + 114 * u32::from(*b)) / 1000) as u8,
+            _ => 255,
+        }
+    }
+}
+
+/// The words of a recognised line, each clipped to the line found (`before`) and, on an upright
+/// line, checked for the symbols the model cannot name (`symbols`), `numeral` reading a fraction
+/// glyph's small numerals for it.
+fn read_line(line: &ocrs::TextLine, before: Option<RectF>, upright: bool, gray: &dyn Fn(i64, i64) -> u8, numeral: symbols::Numeral) -> Line {
+    use ocrs::TextItem;
+    let words: Vec<ocrs::TextWord<'_>> = line.words().collect();
+    let next_digit = |i: usize| words.get(i + 1).and_then(|n| n.chars().first()).is_some_and(|c| symbols::leads_with_a_number(c.char));
+    let repair = |i: usize, next_digit: bool, prev_grown: Option<f32>| {
+        let (w, line_box) = (words.get(i)?, before?);
+        let chars: Vec<symbols::ReadChar> =
+            w.chars().iter().map(|c| symbols::ReadChar { ch: c.char, left: c.rect.left() as f32, right: c.rect.right() as f32 }).collect();
+        let prev_right = i.checked_sub(1).and_then(|p| words.get(p)).map(|p| p.bounding_rect().right() as f32);
+        let beside = symbols::Neighbours {
+            prev_right: prev_right.map(|r| prev_grown.map_or(r, |g| g.max(r))),
+            next_left: words.get(i + 1).map(|n| n.bounding_rect().left() as f32),
+            next_digit,
+        };
+        symbols::repair_word(&chars, line_box.top(), line_box.bottom(), beside, gray, numeral)
+    };
+    let mut fixes = if upright { symbols::repair_words(words.len(), next_digit, repair) } else { Vec::new() }.into_iter();
+    let read = |w: &ocrs::TextWord<'_>| {
+        let r = w.bounding_rect();
+        let mut rect = clip([r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32], before);
+        let mut text = w.to_string();
+        if let Some(fix) = fixes.next().flatten() {
+            text = fix.text;
+            if let Some(left) = fix.left {
+                rect[0] = rect[0].min(left);
+            }
+            if let Some(right) = fix.right {
+                rect[2] = rect[2].max(right);
+            }
+        }
+        Word::new(text, rect, "ocrs")
+    };
+    Line { words: words.iter().map(read).filter(|w| !w.text.trim().is_empty()).collect() }
 }
 
 /// The detection model's input size, (width, height) pixels, if its input is an NCHW image of a
@@ -323,6 +401,25 @@ mod tests {
         pad_line(&mut side).unwrap();
         assert!((side[0].height() - (80.0 + 2.0 * 0.12 * 80.0)).abs() < 1e-3 && (side[0].width() - (40.0 + 2.0 * 0.1 * 80.0)).abs() < 1e-3);
         assert!(pad_line(&mut []).is_none());
+    }
+
+    /// A slanted glyph at the head of a line, or a long word along a dimension line, gets a
+    /// tilted box of its own; a line of several words is judged by the run between its first
+    /// and last word, a line of one by that word's box, and only a line a quarter turn from
+    /// level is on its side.
+    #[test]
+    fn a_line_is_upright_by_its_run_and_only_a_quarter_turn_puts_it_on_its_side() {
+        let tilted = RotatedRect::new(PointF::from_yx(50.0, 10.0), Vec2::from_yx(-0.8, 0.6), 12.0, 30.0);
+        let upright = RotatedRect::from_rect(RectF::from_tlbr(35.0, 30.0, 65.0, 200.0));
+        let slanted_long = RotatedRect::new(PointF::from_yx(48.0, 300.0), Vec2::from_yx(-0.8, 0.6), 160.0, 30.0);
+        assert!(is_upright(&[tilted, upright]));
+        assert!(is_upright(&[upright, slanted_long]), "a long slanted word does not turn its level line");
+        assert!(is_upright(&[tilted]), "a lone tilted box is within the tolerance");
+        let on_its_side = RotatedRect::new(PointF::from_yx(100.0, 100.0), Vec2::from_yx(0.0, 1.0), 200.0, 30.0);
+        assert!(!is_upright(&[on_its_side]));
+        let below = RotatedRect::from_rect(RectF::from_tlbr(135.0, 30.0, 165.0, 200.0));
+        assert!(!is_upright(&[upright, below]), "words stacked down the page are a line on its side");
+        assert!(!is_upright(&[]));
     }
 
     #[test]
