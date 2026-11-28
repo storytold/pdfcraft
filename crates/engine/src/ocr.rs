@@ -700,11 +700,20 @@ impl OcrJob {
     pub fn render_scale(&self, page: usize) -> f32 {
         let wanted = self.settings.dpi.clamp(72.0, 600.0) / 72.0;
         let Some(native) = self.native.get(page).copied().flatten() else { return wanted };
-        // A scan whose page is larger than a sheet (often a box given in pixels, one point per
-        // pixel, #1848) is measured as if shrunk to one: otherwise 1 px/pt is already its full
-        // image, and no "Downsample to" choice could ask for less.
-        let fit = self.infos.get(page).map_or(1.0, |i| (SHEET / i.width.max(i.height).max(1e-3)).min(1.0));
+        let fit = self.sheet_fit(page);
         native.clamp(fit, wanted * fit)
+    }
+
+    /// How much [`Self::render_scale`] shrinks `page` to measure it: a scan whose page is larger
+    /// than a sheet (often a box given in pixels, one point per pixel, #1848) is measured as if
+    /// shrunk to one, since otherwise 1 px/pt is already its full image, and no "Downsample to"
+    /// choice could ask for less. `1.0` for a page of a sheet or smaller, and for a page without
+    /// a scan (rendered at the chosen dpi).
+    fn sheet_fit(&self, page: usize) -> f32 {
+        if self.native.get(page).copied().flatten().is_none() {
+            return 1.0;
+        }
+        self.infos.get(page).map_or(1.0, |i| (SHEET / i.width.max(i.height).max(1e-3)).min(1.0))
     }
 
     /// Whether any of the job's pages already has text (at least one non-blank run): the
@@ -819,10 +828,12 @@ impl OcrSteps {
         // Preprocessing sits between the page raster and recognition; its word boxes come
         // back in processed coordinates and are mapped to the ORIGINAL raster's before
         // placement. The render dpi is the real one (pixels per point × 72), never a
-        // fixed value.
+        // fixed value, and a scan page larger than a sheet is measured on a sheet, as
+        // `render_scale` measures it. Measured on its own page, a scan given one point per
+        // pixel counted as 72 dpi and was enlarged past `MAX_SIDE`, so the page was skipped.
         let pre = pdfcraft_ocr::preprocess::preprocess(
             image,
-            scale * 72.0,
+            scale * 72.0 / self.job.sheet_fit(page),
             &pdfcraft_ocr::preprocess::PreprocessOptions {
                 auto_rotate: settings.auto_rotate,
                 deskew: settings.deskew,
@@ -2295,6 +2306,32 @@ mod tests {
             selected.render_scale(0),
             all.render_scale(0)
         );
+    }
+
+    /// Scans whose page box is their pixel size (one point per pixel, #1848) are read with
+    /// `auto_rotate` or `deskew` on. Preprocessing counted them at 72 dpi and enlarged them
+    /// 4.17 times, past `MAX_SIDE`, so the page was skipped. Measured on a sheet, as
+    /// `render_scale` measures them, an A4 scan at 300 dpi is left as it is and one at 216 dpi
+    /// is enlarged to 300 dpi on a sheet.
+    #[test]
+    fn preprocessing_measures_a_page_box_given_in_pixels_on_a_sheet() {
+        let mut s = Session::new();
+        let page = |w: u32, h: u32| export::encode_png(w, h, &vec![255; (w * h * 4) as usize]).unwrap();
+        let bytes = s.create_from_images(&[("300.png".into(), page(2480, 3508)), ("216.png".into(), page(1785, 2526))]).unwrap();
+        let id = s.open("scan.pdf", None, bytes, None).unwrap();
+        for settings in [OcrSettings { auto_rotate: true, ..Default::default() }, OcrSettings { deskew: true, ..Default::default() }] {
+            let mut steps = s.ocr_job(id, &[], settings).unwrap().steps();
+            for want in [[2480, 3508], [2480, 3509]] {
+                let shot = match steps.next_page() {
+                    Some(Ok(shot)) => shot,
+                    Some(Err(skipped)) => panic!("page {} skipped: {:?}", skipped.page, skipped.skipped),
+                    None => panic!("no page"),
+                };
+                let image = shot.image.as_ref().unwrap();
+                let near = |got: u32, want: u32| got.abs_diff(want) <= 1;
+                assert!(near(image.width(), want[0]) && near(image.height(), want[1]), "page {}: {}x{}", shot.page, image.width(), image.height());
+            }
+        }
     }
 
     /// A job requested with the same page twice carries each page once: a duplicate would
