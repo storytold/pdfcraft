@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use pdfcraft_cos::{Document, ObjRef, Object, PdfString};
 
-use crate::{Field, FieldKind, FieldValue, FormError, fields, flags};
+use crate::{Field, FieldKind, FieldValue, FormError, LazyPool, fields, flags};
 
 /// The field events forms run scripts for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,7 +117,13 @@ impl Scripts for NoScripts {
 
 /// Run the Keystroke (commit) and Validate scripts for a new text value. Returns the value to
 /// store, or why it is rejected.
-pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Result<(String, bool), FormError> {
+pub(crate) fn accept(
+    doc: &mut Document,
+    f: &Field,
+    value: &str,
+    scripts: &mut dyn Scripts,
+    pool: &mut LazyPool,
+) -> Result<(String, bool), FormError> {
     let mut v = value.to_string();
     let mut refresh_field = false;
     for (event, script, default) in [
@@ -128,7 +134,7 @@ pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut d
         let all = fields(doc);
         let r = scripts.run(event, js, f, &v, &all, doc);
         refresh_field |= r.changes.iter().any(|change| change.name == f.name && change.object.is_none_or(|id| id == f.obj));
-        apply_changes(doc, &r.changes, &f.name, Some(f.obj), scripts)?;
+        apply_changes(doc, &r.changes, &f.name, Some(f.obj), scripts, pool)?;
         if !r.rc {
             return Err(FormError::Invalid(r.message.unwrap_or_else(|| format!("{default} [ {} ]", f.name))));
         }
@@ -252,13 +258,15 @@ pub(crate) fn formatted_in_english(doc: &Document, f: &Field, value: &str, scrip
 
 /// Apply script changes to other fields (values written without re-running their scripts;
 /// read-only, required and visibility as flags; button captions). `except` is the event's own
-/// field, whose value the event sets.
+/// field, whose value the event sets. Values are drawn storing glyph procedures through `pool`,
+/// the calling entry point's.
 pub(crate) fn apply_changes(
     doc: &mut Document,
     changes: &[FieldChange],
     except: &str,
     except_object: Option<ObjRef>,
     scripts: &mut dyn Scripts,
+    pool: &mut LazyPool,
 ) -> Result<(), FormError> {
     if changes.is_empty() {
         return Ok(());
@@ -311,9 +319,9 @@ pub(crate) fn apply_changes(
                 let mut tmp = f.clone();
                 tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
                 tmp.actions = Default::default();
-                crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+                crate::write_value(doc, &tmp, &value, &mut NoScripts, pool)?;
                 if c.formatted {
-                    crate::redraw_calculated_value(doc, f, v, scripts)?;
+                    crate::redraw_calculated_value(doc, f, v, scripts, pool)?;
                 }
             }
         }
@@ -461,11 +469,13 @@ fn js_color(values: &[String]) -> Result<Option<[f64; 3]>, FormError> {
 /// Apply what a button or console script changed (values, read-only, required, visibility),
 /// then recalculate.
 pub fn apply_script_changes(doc: &mut Document, changes: &[FieldChange], scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    apply_changes(doc, changes, "", None, scripts)?;
+    // One pool for the apply and the recalculation that follows it.
+    let mut pool = LazyPool::new();
+    apply_changes(doc, changes, "", None, scripts, &mut pool)?;
     // Acrobat's automatic calculation is driven by value changes. A keypad caption,
     // position or visibility update must not execute every calculated field again.
     if changes.iter().any(|change| change.value.is_some()) {
-        crate::recalculate_with(doc, scripts)?;
+        crate::recalculate_in(doc, scripts, &mut pool)?;
     }
     Ok(())
 }
