@@ -1260,6 +1260,70 @@ fn thai_a_field_font_cannot_hold_is_drawn_from_the_thai_face() {
     }
 }
 
+/// Accented capitals rise past Helvetica's cap height (Å nearly to the top of the em), so at a
+/// large size their tops were cut off at the field's top (#8562). A value's ink is measured past
+/// the font's bounds, as Thai is, and stays inside the box: a fixed size that fits by the font's
+/// own measure, an automatic size (which shrinks to keep it there) and the first line of a
+/// multiline field. A value within the bounds keeps its place.
+#[test]
+fn accented_capitals_stay_inside_a_text_field() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R 9 0 R 10 0 R] >>".into(),
+        "<< /Fields [6 0 R 7 0 R 8 0 R 9 0 R 10 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (auto) /DA (/Helv 0 Tf 0 g) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (big) /DA (/Helv 30 Tf 0 g) /Rect [50 600 350 640] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /Ff 4096 /DA (/Helv 40 Tf 0 g) /Rect [50 400 350 500] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (plain) /DA (/Helv 30 Tf 0 g) /Rect [50 300 350 340] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (marked) /DA (/Helv 30 Tf 0 g) /Rect [50 200 350 240] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let (hi, lo) = {
+        let reach = pdfcraft_fonts::shaped_text::line_reach;
+        (reach("ÅÉ").unwrap()[1], reach("Étage").unwrap()[0].min(-0.207))
+    };
+    assert!(hi > 0.95, "{hi}: Å rises nearly to the top of the em");
+    set_value(&mut doc, "auto", &FieldValue::Text("ÅRHUS École".into())).unwrap();
+    set_value(&mut doc, "big", &FieldValue::Text("ÅRHUS École".into())).unwrap();
+    set_value(&mut doc, "note", &FieldValue::Text("ÅRHUS École\nÉtage".into())).unwrap();
+    set_value(&mut doc, "plain", &FieldValue::Text("Hello Ada".into())).unwrap();
+    // The same capitals as a letter and a combining mark, drawn together from the bundled face.
+    set_value(&mut doc, "marked", &FieldValue::Text("A\u{030A}RHUS E\u{0301}cole".into())).unwrap();
+    let doc = reopen(&doc);
+    assert!(undrawn_fields(&doc).is_empty() && !need_appearances(&doc));
+    let appearance = |name: &str| {
+        let all = fields(&doc);
+        let w = &field(&all, name).widgets[0];
+        let wd = doc.get(w.obj).as_dict().unwrap().clone();
+        let n = wd.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        let ap = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+        let size: f64 = ap.split(" Tf").next().and_then(|s| s.rsplit(' ').next()).and_then(|s| s.parse().ok()).unwrap();
+        let ys: Vec<f64> = ap.split(" Tm").filter_map(|s| s.rsplit(' ').next()?.parse().ok()).collect();
+        (ap, size, ys)
+    };
+    for (name, height) in [("auto", 20.0), ("big", 40.0), ("note", 100.0)] {
+        let (ap, size, ys) = appearance(name);
+        assert!(!ap.contains('?'), "{ap}");
+        // Every line's ink is inside the box.
+        let (top, bottom) = (ys.iter().copied().fold(f64::MIN, f64::max), ys.iter().copied().fold(f64::MAX, f64::min));
+        assert!(top + hi * size <= height + 1e-3 && bottom + lo * size >= -1e-3, "{name}: {ys:?} at {size} in {height}");
+        if name == "big" {
+            assert_eq!(size, 30.0, "a fixed size stays");
+        }
+    }
+    // Text within the font's bounds is centred by them, as before.
+    let (_, size, ys) = appearance("plain");
+    assert!(size == 30.0 && (ys[0] - ((40.0 - 0.925 * 30.0) / 2.0 + 0.207 * 30.0)).abs() < 1e-3, "{ys:?}");
+    // A letter with a combining mark is measured with its mark, as it is drawn: the decomposed
+    // value sits where the precomposed one does (review on #8570).
+    let (_, _, big) = appearance("big");
+    let (ap, _, marked) = appearance("marked");
+    assert!(!ap.contains('?') && (marked[0] - big[0]).abs() < 1e-3, "{marked:?} against {big:?}: {ap}");
+}
+
 /// #6822: Greek typed into a field whose font (Helvetica, WinAnsi) can't hold it is stored as typed
 /// (a UTF-16BE text string) and drawn from the bundled Inter face, beside the field's font, rather
 /// than as `?`: nothing is marked and other viewers aren't asked to redraw. Latin beside it stays

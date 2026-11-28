@@ -508,7 +508,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 if matches!(turn, 90 | 180 | 270) {
                     d.set(b"PCTextRotate".to_vec(), Object::Int(turn));
                 }
-                let rect = fit_thai_ink(rect, turn, &new.contents, size, 2.0 + appearance::border_width(&d));
+                let rect = fit_ink(rect, turn, &new.contents, size, 2.0 + appearance::border_width(&d));
                 // An oval or a circle goes around the text box, its text wrapped as displayed:
                 // after `/PCTextRotate`, which swaps the box's sides on a quarter-turned page.
                 shape_text_box(&mut d, rect, style.border_shape, style.width);
@@ -540,16 +540,19 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
 }
 
 /// Text box `tb` (user space; its text upright on a page turned by `turn`), grown down as displayed
-/// until the ink of `text`'s Thai (stacked marks above its first line, descenders below its last)
-/// fits inside the padding `pad`, as the appearance lays it out at `size`. Other text, and a box
-/// tall enough already, keep the box they were given.
-fn fit_thai_ink(tb: [f64; 4], turn: i64, text: &str, size: f64, pad: f64) -> [f64; 4] {
-    if !text.chars().any(pdfcraft_fonts::shaped_text::is_thai) {
-        return tb;
-    }
+/// until the ink of `text` that reaches past its lines (Thai stacked marks and accented capitals
+/// above its first line, descenders below its last) fits inside the padding `pad`, as the
+/// appearance lays it out at `size`; text with Thai anywhere grows the box to hold every line,
+/// as it always has. Other text that stays within its lines, and a box tall enough already, keep
+/// the box they were given.
+fn fit_ink(tb: [f64; 4], turn: i64, text: &str, size: f64, pad: f64) -> [f64; 4] {
     let [x0, y0, x1, y1] = normalize(tb);
     let (w, h) = if matches!(turn, 90 | 270) { (y1 - y0, x1 - x0) } else { (x1 - x0, y1 - y0) };
-    let need = appearance::text_lines_height(&appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)), size) + 2.0 * pad + 2.0;
+    let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0));
+    if !text.chars().any(pdfcraft_fonts::shaped_text::is_thai) && appearance::text_lines_overreach(&lines, size) <= 0.0 {
+        return tb;
+    }
+    let need = appearance::text_lines_height(&lines, size) + 2.0 * pad + 2.0;
     let by = need - h;
     if !(by.is_finite() && by > 0.0) {
         return tb;

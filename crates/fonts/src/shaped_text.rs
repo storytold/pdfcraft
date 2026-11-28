@@ -357,17 +357,47 @@ pub fn thai_reach(line: &str) -> Option<[f64; 2]> {
         return None;
     }
     let pieces = thai_pieces(line).ok()?;
-    let mut reach: Option<[f64; 2]> = None;
-    for c in clusters([pieces.as_slice()]) {
-        for (id, [_, dy]) in &c.glyphs {
-            let g = shaped_glyph(c.script, *id).ok()?;
-            if !g.contours.is_empty() {
-                let b = [g.bbox[1] + dy, g.bbox[3] + dy];
-                reach = Some(reach.map_or(b, |r| [r[0].min(b[0]), r[1].max(b[1])]));
+    let mut reach = None;
+    widen_reach(&mut reach, clusters([pieces.as_slice()]))?;
+    reach
+}
+
+/// How far the glyphs of `line` reach below and above its baseline, in em units: its Thai as
+/// [`thai_reach`] measures it, and the text left to the standard font measured in the bundled
+/// Inter face, whose capitals and accents rise as the standard faces' do (Á to 0.94 em, Å to the
+/// top of the em, past the 0.9 a text line is given; #8550). Characters the bundled face lacks
+/// are left out. `None` with Thai the face can't draw, a glyph that can't be read, or nothing to
+/// measure.
+pub fn line_reach(line: &str) -> Option<[f64; 2]> {
+    let pieces = thai_pieces(line).ok()?;
+    let mut reach = None;
+    for p in &pieces {
+        match p {
+            Piece::Shaped(c) => widen_reach(&mut reach, c)?,
+            Piece::Latin(s) => {
+                let measurable: String = s.chars().filter(|c| latin_has(*c)).collect();
+                if !measurable.is_empty() {
+                    widen_reach(&mut reach, &shape_latin(&measurable).ok()?)?;
+                }
             }
         }
     }
     reach
+}
+
+/// Widens `reach` to the lowest and highest ink of `clusters`' glyphs; `None` when a glyph can't
+/// be read.
+fn widen_reach<'a>(reach: &mut Option<[f64; 2]>, clusters: impl IntoIterator<Item = &'a ShapedCluster>) -> Option<()> {
+    for c in clusters {
+        for (id, [_, dy]) in &c.glyphs {
+            let g = shaped_glyph(c.script, *id).ok()?;
+            if !g.contours.is_empty() {
+                let b = [g.bbox[1] + dy, g.bbox[3] + dy];
+                *reach = Some(reach.map_or(b, |r| [r[0].min(b[0]), r[1].max(b[1])]));
+            }
+        }
+    }
+    Some(())
 }
 
 /// The first character of `s` a generated appearance would draw as `?`: one the standard fonts
@@ -624,6 +654,19 @@ mod tests {
         assert_eq!(first_undrawable_in_line(" 北"), Some('北'));
     }
 
+    /// The bundled face measures a line's Latin: capitals and ascenders stay under the 0.9 em a
+    /// text line is given, accented capitals rise past it (#8550), and what the face lacks is left out.
+    #[test]
+    fn a_lines_reach_is_measured_in_the_bundled_face() {
+        let [lo, hi] = line_reach("Hg").unwrap();
+        assert!((0.65..0.9).contains(&hi) && (-0.3..-0.1).contains(&lo), "{lo} {hi}");
+        let [_, a_acute] = line_reach("Á").unwrap();
+        let [_, a_ring] = line_reach("Å").unwrap();
+        assert!(a_acute > 0.9 && a_ring > 0.95 && a_ring > a_acute, "{a_acute} {a_ring}");
+        assert_eq!(line_reach("Á ☃").map(|r| r[1]), Some(a_acute), "the snowman isn't the face's to measure");
+        assert_eq!((line_reach(""), line_reach("☃")), (None, None));
+    }
+
     #[test]
     fn thai_runs_are_shaped_and_the_rest_left_to_the_standard_font() {
         assert_eq!(thai_pieces("Hello").unwrap(), [Piece::Latin("Hello".into())]);
@@ -643,6 +686,9 @@ mod tests {
         let [_, top] = thai_reach("น้ำ").unwrap();
         let [bottom, _] = thai_reach("ฎู").unwrap();
         assert!(top > 0.95 && bottom < -0.35, "{top} {bottom}");
+        // A whole line reaches as far as its Thai and its other text together.
+        let [lo, hi] = line_reach("น้ำ Åg ฎู").unwrap();
+        assert!((hi - top).abs() < 1e-9 && (lo - bottom).abs() < 1e-9, "{lo} {hi}");
         let pieces = thai_pieces("ชื่อ: บุญฤทธิ์ 12").unwrap();
         assert!(matches!(&pieces[..], [Piece::Shaped(_), Piece::Latin(a), Piece::Shaped(_), Piece::Latin(b)] if a == ": " && b == " 12"));
         let text: String = clusters([pieces.as_slice()]).map(|c| c.text.as_str()).collect();
