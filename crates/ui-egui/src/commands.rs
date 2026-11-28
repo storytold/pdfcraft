@@ -40,6 +40,23 @@ pub(crate) fn mac_shortcuts(ctx: &egui::Context) -> bool {
     ctx.os() == egui::os::OperatingSystem::Mac
 }
 
+/// How a shortcut is written in the current interface language: `⇧⌘S` on macOS, and elsewhere the key names
+/// of the catalog's `key` context (`Strg+Umschalt+S`), which fall back to the English names.
+pub(crate) fn shortcut_text(shortcut: Shortcut, mac: bool) -> String {
+    if mac {
+        return shortcut.label(true);
+    }
+    let mut parts = Vec::new();
+    if shortcut.command || shortcut.mac_ctrl {
+        parts.push(crate::i18n::key_name("Ctrl"));
+    }
+    if shortcut.shift {
+        parts.push(crate::i18n::key_name("Shift"));
+    }
+    parts.push(crate::i18n::key_name(shortcut.key));
+    parts.join("+")
+}
+
 /// How a command's chord is written in a menu row (`⌘C` or `Ctrl+C`): the registry's shortcut, and the
 /// clipboard chords for Copy and Paste, which the framework's clipboard commands own.
 pub(crate) fn chord_label(ctx: &egui::Context, id: &str) -> Option<String> {
@@ -48,7 +65,7 @@ pub(crate) fn chord_label(ctx: &egui::Context, id: &str) -> Option<String> {
         .and_then(|c| c.shortcut_for(mac))
         .or((id == "edit.copy").then_some(COPY))
         .or((id == "edit.paste").then_some(Shortcut::cmd("V")))?;
-    Some(shortcut.label(mac))
+    Some(shortcut_text(shortcut, mac))
 }
 
 impl PdfCraftApp {
