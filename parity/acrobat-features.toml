@@ -8592,11 +8592,11 @@ title = "Ink aliases and spot-to-process"
 area = "L"
 tier = "P2"
 milestone = "M11"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_rename_ink"]
+evidence = ["crates/edit/src/rename_ink.rs::renaming_an_ink_renames_every_space_and_attribute_that_names_it", "crates/edit/src/rename_ink.rs::renaming_onto_a_named_ink_merges_them_and_leaves_a_devicen_naming_both", "crates/edit/src/rename_ink.rs::a_name_given_with_hex_escapes_is_the_ink_with_those_bytes", "crates/edit/src/rename_ink.rs::an_indirect_name_is_renamed_where_it_is_used_and_never_in_the_object_shared", "crates/edit/src/rename_ink.rs::a_refused_devicen_sharing_objects_with_a_renamed_space_refuses_the_rename", "crates/automation/tests/it/automation.rs::renaming_an_ink_through_tools"]
+notes = "doc_rename_ink renames a spot ink in the file: every Separation and DeviceN space naming it, the DeviceN colorant and mixing-hint entries keyed by it, and a page's separation info. Names are written as print_inks lists them, #XX for bytes that aren't text. Renaming onto an ink already named prints both on one plate, each space keeping its own alternate. One undo step. A DeviceN naming both inks is left as it is and reported; when renaming would change an object it uses, nothing is renamed. A rename that couldn't read every space is refused. Missing: inline images' own colour spaces keep the old name (content streams aren't rewritten); converting a spot to process; an output-time alias that leaves the file alone; a panel"
 
 [[feature]]
 id = "print.printer-marks"

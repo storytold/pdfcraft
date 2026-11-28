@@ -106,7 +106,7 @@ pub use pdfcraft_edit::added::{
 pub use pdfcraft_edit::paragraph_align;
 pub use pdfcraft_edit::{
     Added, AddedImage, AddedText, Align as TextAlign, Background, ColourTarget, ColoursConverted, Content as AddedContent, ConvertColours,
-    Family as FontFamily, Hairlines, HairlinesFixed, HeaderFooter, Ink as TextInk, MarkKind, PrinterMarks, Watermark,
+    Family as FontFamily, Hairlines, HairlinesFixed, HeaderFooter, Ink as TextInk, InkRenamed, MarkKind, PrinterMarks, Watermark, ink_rename_refusal,
 };
 pub use pdfcraft_forms::{
     BorderStyle, CalculatedField, CalculationIssue, CalculationOrder, CheckStyle, Field as FormField, FieldAction, FieldChange, FieldFont,

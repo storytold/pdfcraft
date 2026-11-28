@@ -393,6 +393,12 @@ pub enum Edit {
         pages: Vec<usize>,
         settings: Hairlines,
     },
+    /// Print production ▸ Rename ink: every colour space naming spot ink `from` names `to`
+    /// instead; renaming onto an ink the file already names prints the two on one plate.
+    RenameInk {
+        from: String,
+        to: String,
+    },
     /// Edit ▸ Attach a file: a document-level attachment (`/Names /EmbeddedFiles`) under
     /// `name`, made unique; `mime` is the embedded file's `/Subtype` when known.
     AddAttachment {

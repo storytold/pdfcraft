@@ -73,6 +73,8 @@ pub mod hairlines;
 mod page_streams;
 pub use convert_colours::{ColourTarget, ConvertColours, Converted as ColoursConverted, ImageRecolour, convert_colours};
 pub use hairlines::{Fixed as HairlinesFixed, Hairlines, fix_hairlines};
+pub mod rename_ink;
+pub use rename_ink::{InkRenamed, MAX_INK_NAME, ink_name_bytes, ink_rename_refusal, rename_ink};
 pub mod added;
 pub use added::{
     Added, AddedImage, AddedText, Align, Content, Family, Ink, MarkerScan, add_content, delete_content, first_undrawable, isolate_content,

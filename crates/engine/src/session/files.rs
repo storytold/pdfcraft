@@ -217,6 +217,15 @@ impl Session {
         pdfcraft_edit::fix_hairlines(&mut cos, pages, settings).unwrap_or_default()
     }
 
+    /// What [`Edit::RenameInk`] would change in `id`, without changing the document; the
+    /// default (nothing) when the names are refused or the document isn't open for editing.
+    pub fn count_ink_rename(&self, id: DocId, from: &str, to: &str) -> Result<pdfcraft_edit::InkRenamed, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+        let mut cos = editor.cos.clone();
+        pdfcraft_edit::rename_ink(&mut cos, from, to).map_err(EditError::Edit)
+    }
+
     /// XFDF with these comments (0-based page, position in the page's `/Annots`) and their
     /// replies: what Copy puts on the clipboard; [`Edit::PasteComments`] takes it back in.
     pub fn export_comments(&self, id: DocId, which: &[(usize, usize)]) -> Result<String, EditError> {

@@ -13251,6 +13251,55 @@ fn fix_hairlines_through_tools() {
     }
 }
 
+/// Rename ink through the tools: the rename is one undoable edit, and an ink no space names is
+/// zero counts and no edit.
+#[test]
+fn renaming_an_ink_through_tools() {
+    let dir = workdir("rename-ink");
+    std::fs::write(
+        dir.join("inks.pdf"),
+        pdf_of(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << /G [/Separation /Gold /DeviceCMYK 4 0 R] /N [/DeviceN [/Gold /Cyan] /DeviceCMYK 4 0 R] >> >> >>",
+            "<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0 1 0] /N 1 >>",
+        ]),
+    )
+    .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "inks.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_rename_ink", json!({ "doc": doc, "from": "Gold", "to": "Silver" }));
+    assert!(r["spaces"].as_u64().unwrap_or(0) >= 2 && r["complete"] == true, "{r}");
+    assert_eq!(r["undo"], "Rename ink", "{r}");
+    assert_eq!((r["doc"].as_u64(), r["dirty"].as_bool(), r["pages"].as_u64()), (Some(doc), Some(true), Some(1)), "the document's summary: {r}");
+    let again = ok(&mut a, "doc_rename_ink", json!({ "doc": doc, "from": "Gold", "to": "Silver" }));
+    assert_eq!((again["spaces"].as_u64(), again["undo"].is_null()), (Some(0), true), "nothing names Gold now: {again}");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    let back = ok(&mut a, "doc_rename_ink", json!({ "doc": doc, "from": "Gold", "to": "Copper" }));
+    assert!(back["spaces"].as_u64().unwrap_or(0) >= 2, "undo brings Gold back: {back}");
+    for (from, to) in [("Black", "Gold"), ("Gold", "None"), ("Gold", "Gold")] {
+        let args = json!({ "doc": doc, "from": from, "to": to });
+        assert!(matches!(a.call("doc_rename_ink", &args), Err(ToolError::InvalidArgs(_))), "{from} -> {to}");
+    }
+    // A space nested past the walk's depth: the rename can't be complete, so nothing is changed.
+    let deep = format!("{}[/Separation /Gold /DeviceCMYK 4 0 R]{}", "[".repeat(80), "]".repeat(80));
+    std::fs::write(
+        dir.join("deep.pdf"),
+        pdf_of(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << /G [/Separation /Gold /DeviceCMYK 4 0 R] /D 5 0 R >> >> >>",
+            "<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0 1 0] /N 1 >>",
+            &deep,
+        ]),
+    )
+    .unwrap();
+    let deep = ok(&mut a, "doc_open", json!({ "path": "deep.pdf" }))["doc"].as_u64().unwrap();
+    let args = json!({ "doc": deep, "from": "Gold", "to": "Silver" });
+    assert!(matches!(a.call("doc_rename_ink", &args), Err(ToolError::Failed(_))), "an incomplete rename is refused");
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": deep }))["document"]["dirty"], false, "and changes nothing");
+}
+
 #[test]
 fn attaching_and_deleting_files_through_the_tools() {
     let dir = workdir("attach");

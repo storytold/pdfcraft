@@ -165,6 +165,15 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc"],
             )),
+        t("doc_rename_ink", "Rename ink", "Print production: every Separation and DeviceN colour space naming spot ink from names to instead, with the DeviceN colorant and mixing-hint entries and a page's separation info; each keeps its own alternate and tint transform. to may be a process ink or another spot; renaming onto an ink the file already names prints the two on one plate (merged), and alternates_differ says their alternate spaces differ. A DeviceN naming both is left as it is and counted in refused; if renaming would change an object it uses, the rename fails and nothing changes. Content streams aren't rewritten, so an inline image's own colour space keeps the old name. Process inks, All and None can't be renamed. Names are UTF-8 text, with # and two hex digits for any other byte and for # itself, as in a PDF name and as print_inks lists them; at most 127 bytes once decoded. Returns the document summary with spaces, objects, refused, merged, alternates_differ and complete added; a rename that stopped at a limit or an unreadable object fails with no edit, and no space naming from gives 0 and no edit.")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "from": { "type": "string", "minLength": 1, "maxLength": 381, "description": "The spot ink to rename." },
+                    "to": { "type": "string", "minLength": 1, "maxLength": 381, "description": "Its new name." },
+                }),
+                &["doc", "from", "to"],
+            )),
         t("attachment_add", "Attach a file", "Attach the file at path to the document (document level, the Attachments panel; not a paper-clip comment on a page). name defaults to the file's name; the attachment's key, unique in the document, is returned. Undoable.")
             .cmd("edit.attach")
             .with(schema(json!({"doc": doc(), "path": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}}), &["doc", "path"])),
