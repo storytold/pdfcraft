@@ -1,4 +1,4 @@
-//! Export a PDF ▸ Image (PNG, JPEG, TIFF) and Text (Acrobat's Export a PDF tool, first formats).
+//! Export a PDF ▸ Image (PNG, JPEG, TIFF), Text and Excel (Acrobat's Export a PDF tool).
 //!
 //! The export runs as a job and reports progress in the notice bar; the files go through the host's
 //! file service, which downloads them on the web.
@@ -15,6 +15,7 @@ use craft::ui::dialog::{DialogResult, dialog_id};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind};
 use craft::ui::runtime::env::Label;
 use craft::ui::value_drag::SliderScale;
+use pdfcraft_engine::compare::XlsxSheets;
 use pdfcraft_engine::export::{ExportSource, Exporter, ImageFormat};
 
 use super::job_count::JobCount;
@@ -30,10 +31,12 @@ pub enum ExportKind {
     Text,
     /// Export all images: the images pages use, as files.
     AllImages,
+    /// Excel: the pages on one sheet or a sheet each, saved as one workbook.
+    Excel,
 }
 
 impl ExportKind {
-    const ALL: [ExportKind; 3] = [ExportKind::Image, ExportKind::Text, ExportKind::AllImages];
+    const ALL: [ExportKind; 4] = [ExportKind::Image, ExportKind::Text, ExportKind::AllImages, ExportKind::Excel];
 
     /// The dialog's key: the command that opens it. Each kind has its own so a result says which it answers.
     fn key(self) -> &'static str {
@@ -41,6 +44,7 @@ impl ExportKind {
             ExportKind::Image => "export.image",
             ExportKind::Text => "export.text",
             ExportKind::AllImages => "export.all_images",
+            ExportKind::Excel => "export.xlsx",
         }
     }
 }
@@ -52,11 +56,13 @@ pub struct ExportDraft {
     pub format: ImageFormat,
     /// Export all images ▸ skip images with fewer pixels than this on their shorter side.
     pub min_side: u32,
+    /// Excel ▸ one sheet for the whole document (the default) or a sheet per page.
+    pub sheets: XlsxSheets,
 }
 
 impl Default for ExportDraft {
     fn default() -> Self {
-        Self { dpi: 150.0, range: PageRange::default(), format: ImageFormat::Png, min_side: 0 }
+        Self { dpi: 150.0, range: PageRange::default(), format: ImageFormat::Png, min_side: 0, sheets: XlsxSheets::default() }
     }
 }
 
@@ -73,6 +79,13 @@ fn format_id(format: ImageFormat) -> &'static str {
         ImageFormat::Png => "png",
         ImageFormat::Jpeg { .. } => "jpeg",
         ImageFormat::Tiff => "tiff",
+    }
+}
+
+fn sheets_id(sheets: XlsxSheets) -> &'static str {
+    match sheets {
+        XlsxSheets::WholeDocument => "whole",
+        XlsxSheets::PerPage => "pages",
     }
 }
 
@@ -106,6 +119,17 @@ fn params(kind: ExportKind, count: usize, current: usize) -> Vec<Param> {
             let sides = MIN_SIDES.iter().map(|n| (n.to_string(), Label::from(min_side_label(*n)))).collect();
             rows.push(Param::new("min", tl!("Exclude images smaller than"), ParamKind::choice(sides, Some("0".into()))));
         }
+        ExportKind::Excel => {
+            let sheets = vec![
+                ("whole".to_string(), Label::from(tl!("One sheet for the whole document"))),
+                ("pages".to_string(), Label::from(tl!("One sheet per page"))),
+            ];
+            rows.push(
+                Param::new("sheets", tl!("Sheets"), ParamKind::radio(sheets, Some("whole".into())))
+                    .option_description("whole", tl!("A table that runs across pages stays together; the pages follow one another down the sheet."))
+                    .option_description("pages", tl!("Each page on its own sheet, named Page 1, Page 2…")),
+            );
+        }
         ExportKind::Text => {}
     }
     rows.push(PageRangeOptions::param("pages", tl!("Pages"), count, current, PageRangeChoices::Acrobat));
@@ -121,6 +145,7 @@ fn fields_of(d: &ExportDraft) -> DialogFields {
         fields.set("quality", FieldValue::Number(f64::from(quality)));
     }
     fields.set("min", FieldValue::Text(d.min_side.to_string()));
+    fields.set("sheets", FieldValue::Text(sheets_id(d.sheets).into()));
     fields.set("pages", PageRangeOptions::field_value(&d.range));
     fields
 }
@@ -147,6 +172,11 @@ pub(crate) fn open(app: &mut PdfCraftApp, ctx: &egui::Context, kind: ExportKind)
             ExportKind::AllImages => (
                 tl!("Export All Images"),
                 tl!("Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.").to_string(),
+            ),
+            ExportKind::Excel => (
+                tl!("Export to Excel"),
+                tl!("Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.")
+                    .to_string(),
             ),
         };
         ParamDialog::new(kind.key(), title, params(kind, count, current))
@@ -178,6 +208,11 @@ pub(crate) fn pass(ctx: &egui::Context, app: &mut PdfCraftApp) {
         }
         if let Some(n) = f.text("min").and_then(|t| t.parse::<u32>().ok()) {
             d.min_side = n;
+        }
+        match f.text("sheets") {
+            Some("pages") => d.sheets = XlsxSheets::PerPage,
+            Some("whole") => d.sheets = XlsxSheets::WholeDocument,
+            _ => {}
         }
         match f.text("format") {
             Some("jpeg") => {
@@ -238,8 +273,8 @@ fn run(task: ExportTask<'_>, mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), S
     }
     let mut ex = Exporter::from_source(src);
     match kind {
-        // Handled above.
-        ExportKind::AllImages => String::new(),
+        // Handled above (all images) or in `start_export` (Excel).
+        ExportKind::AllImages | ExportKind::Excel => String::new(),
         ExportKind::Image => {
             set(0);
             // Pages are drawn several at once and handed over in order: the progress counts the
@@ -298,6 +333,15 @@ impl PdfCraftApp {
             return;
         }
         let Some(doc) = self.session.get(id) else { return };
+        // Excel: one workbook of the pages chosen, written through the save dialog.
+        if kind == ExportKind::Excel {
+            let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
+            let pages = self.export_draft.range.pages(doc.info.pages.len(), self.views[view].current(), &[]);
+            let folder = super::files::document_folder(doc.path.as_deref());
+            let bytes = doc.export_xlsx(self.export_draft.sheets, Some(&pages));
+            self.save_export_file(&stem, "xlsx", folder, bytes);
+            return;
+        }
         let src = doc.export_source();
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         let current = self.views[view].current();

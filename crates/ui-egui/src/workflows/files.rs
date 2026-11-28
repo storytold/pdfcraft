@@ -719,7 +719,7 @@ pub(crate) fn strip_pdf(name: &str) -> &str {
 }
 
 /// The folder holding the document at `path`, where a save picker starts the first time.
-fn document_folder(path: Option<&str>) -> Option<std::path::PathBuf> {
+pub(crate) fn document_folder(path: Option<&str>) -> Option<std::path::PathBuf> {
     path.and_then(|p| std::path::Path::new(p).parent()).map(std::path::Path::to_path_buf)
 }
 
@@ -780,9 +780,14 @@ impl PdfCraftApp {
         }
         let Some(doc) = self.session.get(id) else { return };
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
-        let ext = format.extension();
         let folder = document_folder(doc.path.as_deref());
         let bytes = doc.export_office(format);
+        self.save_export_file(&stem, format.extension(), folder, bytes);
+    }
+
+    /// Ask where to save an exported file named after the document, starting in the document's
+    /// folder (`folder`), then write it; on the web the host downloads it.
+    pub(crate) fn save_export_file(&mut self, stem: &str, ext: &'static str, folder: Option<std::path::PathBuf>, bytes: Vec<u8>) {
         let mut request =
             PickRequest::save("export.office").title(tl!("Export")).filter(ext.to_uppercase(), &[ext]).file_name(format!("{stem}.{ext}"));
         if let Some(folder) = folder {

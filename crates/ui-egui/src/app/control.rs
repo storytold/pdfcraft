@@ -493,6 +493,7 @@ impl PdfCraftApp {
             "export-image" => export_ui::open(self, ctx, export_ui::ExportKind::Image),
             "word-count" => self.open_word_count(),
             "export-text" => export_ui::open(self, ctx, export_ui::ExportKind::Text),
+            "export-excel" => export_ui::open(self, ctx, export_ui::ExportKind::Excel),
             "export-all-images" => export_ui::open(self, ctx, export_ui::ExportKind::AllImages),
             "accessibility-options" => crate::a11y_ui::open_a11y_options(self, ctx),
             "recognize-text" => self.open_recognize_text(ctx),

@@ -773,6 +773,7 @@ impl PdfCraftApp {
             }
             "export.image" => crate::export_ui::open(self, ctx, crate::export_ui::ExportKind::Image),
             "export.text" => crate::export_ui::open(self, ctx, crate::export_ui::ExportKind::Text),
+            "export.xlsx" => crate::export_ui::open(self, ctx, crate::export_ui::ExportKind::Excel),
             "ocr.recognize" => self.open_recognize_text(ctx),
             "ocr.enhance" => self.open_enhance_scan(ctx),
             "ocr.recognize_batch" => self.ocr_files_dialog(),
