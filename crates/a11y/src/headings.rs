@@ -10,7 +10,8 @@ use pdfcraft_model::Page;
 
 use crate::alt::{page_content, standard, tree_root};
 
-const MAX_HEADINGS: usize = 10_000;
+/// The most headings [`headings`] returns.
+pub const MAX_HEADINGS: usize = 10_000;
 const MAX_VISITS: usize = 1_000_000;
 const MAX_DEPTH: usize = 256;
 /// Characters kept of a heading's title.
@@ -39,7 +40,13 @@ struct Walker<'a> {
     texts: HashMap<usize, HashMap<i64, String>>,
     /// What is left of [`MAX_TITLE_SOURCE_BYTES`].
     title_left: usize,
+    /// [`Walker::attr`] declined a string the allowance could not hold, since the last reset.
+    declined: bool,
     out: Vec<Heading>,
+    /// A limit left out a heading that could have been found.
+    cut: bool,
+    /// [`MAX_HEADINGS`] were found and one more was met: the walk stops.
+    full: bool,
 }
 
 /// Bytes of `/ActualText`, `/Alt` and `/T` strings the headings of one document decode in all.
@@ -49,7 +56,14 @@ const MAX_TITLE_SOURCE_BYTES: usize = 32 << 20;
 
 /// The headings, in document order. Headings without text or a page are left out.
 pub fn headings(doc: &Document) -> Vec<Heading> {
-    let Some(root) = tree_root(doc) else { return Vec::new() };
+    headings_with_truncation(doc).0
+}
+
+/// [`headings`], and whether headings may be missing from it: there were more than
+/// [`MAX_HEADINGS`], the structure tree nests or branches past the walk's limits, or a heading's
+/// only title source was past the title allowance.
+pub fn headings_with_truncation(doc: &Document) -> (Vec<Heading>, bool) {
+    let Some(root) = tree_root(doc) else { return (Vec::new(), false) };
     let pages = pdfcraft_model::pages(doc);
     let mut w = Walker {
         doc,
@@ -60,19 +74,27 @@ pub fn headings(doc: &Document) -> Vec<Heading> {
         visits: 0,
         texts: HashMap::new(),
         title_left: MAX_TITLE_SOURCE_BYTES,
+        declined: false,
         out: Vec::new(),
+        cut: false,
+        full: false,
     };
     if let Some(k) = root.get(b"K") {
         w.walk(k, None, 0, 0);
     }
-    w.out
+    (w.out, w.cut)
 }
 
 impl Walker<'_> {
-    /// Whether `k` may be visited (bounded depth and size, each object once).
+    /// Whether `k` may be visited (bounded depth and size, each object once). A depth or size
+    /// limit only skips `k`, and is reported in `cut`.
     fn enter(&mut self, k: &Object, depth: usize) -> bool {
         self.visits += 1;
-        depth <= MAX_DEPTH && self.visits <= MAX_VISITS && self.out.len() < MAX_HEADINGS && !matches!(k, Object::Ref(r) if !self.seen.insert(*r))
+        if depth > MAX_DEPTH || self.visits > MAX_VISITS {
+            self.cut = true;
+            return false;
+        }
+        !self.full && !matches!(k, Object::Ref(r) if !self.seen.insert(*r))
     }
 
     fn element_of(&self, k: &Object) -> Option<(Option<ObjRef>, Dict)> {
@@ -101,6 +123,11 @@ impl Walker<'_> {
             _ => None,
         };
         if let Some(level) = level {
+            if self.out.len() >= MAX_HEADINGS {
+                self.cut = true;
+                self.full = true;
+                return;
+            }
             self.heading(obj, &d, pg, level, depth);
             return;
         }
@@ -139,6 +166,7 @@ impl Walker<'_> {
             self.marks(kids, pg, depth + 1, &mut marks);
         }
         let Some(page) = pg.or_else(|| marks.iter().find_map(|m| m.0)).and_then(|p| self.page_index.get(&p).copied()) else { return };
+        self.declined = false;
         let title = match self.attr(d, b"ActualText") {
             Some(t) => Some(t),
             None => match self.marked_text(&marks, page) {
@@ -146,7 +174,11 @@ impl Walker<'_> {
                 None => self.attr(d, b"Alt").or_else(|| self.attr(d, b"T")),
             },
         };
-        let Some(title) = title else { return };
+        let Some(title) = title else {
+            // A title the allowance turned away is a heading left out, not one without text.
+            self.cut |= self.declined;
+            return;
+        };
         let title: String = title.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_TITLE).collect();
         self.out.push(Heading { obj, level, title, page });
     }
@@ -160,6 +192,7 @@ impl Walker<'_> {
         // not fit the remaining allowance is never decoded: the raw check alone let a string at
         // the raw limit decode to three times it before the allowance was reduced.
         if s.bytes.len().saturating_mul(3) > self.title_left {
+            self.declined = true;
             return None;
         }
         let text = s.to_text();
