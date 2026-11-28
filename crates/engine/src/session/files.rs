@@ -341,6 +341,11 @@ impl Session {
         pdfcraft_print::impose(&cos, settings).map_err(|e| EditError::Print(e.to_string()))
     }
 
+    /// A clone of the live editor COS document, if the document has unsaved edits.
+    pub fn print_editor_cos(&self, id: DocId) -> Option<pdfcraft_cos::Document> {
+        self.get(id)?.editor.as_ref().map(|e| e.cos.clone())
+    }
+
     /// For each page, whether its text mostly runs bottom-to-top ([`pdfcraft_print::text_reads_up`]);
     /// only `pages` are read, the others are `false`.
     pub fn print_text_up(&self, id: DocId, pages: &[usize]) -> Vec<bool> {
