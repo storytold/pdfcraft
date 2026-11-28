@@ -69,7 +69,7 @@ pinned in `release.yml` and builds with `CRAFT_FONTS_DIR` and `CRAFT_FONTS_REQUI
 embed its Japanese fonts and fail rather than ship without them (docs/development.md "Fonts and attribution"). Bump the pin
 deliberately.
 
-**OCR models:** desktop packaging stages the Scan & OCR models (#103).
+**OCR models:** desktop and web packaging stage the Scan & OCR models (#103).
 The packaging scripts call `stage_models` (`packaging/env.sh`; `package.ps1` on Windows), which runs `cargo xtask models` to fetch every `kind = "model"` file in `ATTRIBUTION.toml` and verify its SHA-256.
 The current detection and recognition files are `text-detection.onnx` and `text-recognition.onnx`.
 Each model ships with its licence text and the directory's `ATTRIBUTION.txt`, so packaging needs the network.
@@ -82,7 +82,10 @@ Directory precedence stays the same: `$PDFCRAFT_MODELS`, the release-package loc
 The first directory with a complete supported pair wins, even if an earlier legacy pair precedes a later ONNX pair.
 
 The release-package locations are `models\` beside `pdfcraft.exe` (MSI, portable zip), `PdfCraft.app/Contents/Resources/models` (macOS), and `share/pdfcraft/models` beside `bin/` (deb, rpm, tar.gz, AppImage, Flatpak, FreeBSD).
-The web build does not include these models, and OCR remains limited to the Latin alphabet without accents.
+The web package includes these models in `models/` beside `index.html`; the browser downloads them
+the first time Recognize Text is opened in a visit (see
+[Text recognition (OCR)](../packaging/web/README.md#text-recognition-ocr)).
+These models remain limited to the Latin alphabet without accents.
 
 ### macOS
 
