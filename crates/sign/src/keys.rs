@@ -525,6 +525,8 @@ enum Inner {
     Rsa,
     P256(p256::ecdsa::SigningKey),
     P384(p384::ecdsa::SigningKey),
+    /// Signs the message itself (RFC 8032 PureEdDSA), not a digest of it.
+    Ed25519(ed25519_dalek::SigningKey),
     /// A key held elsewhere (the macOS Keychain, a token) that signs on request.
     External(std::sync::Arc<dyn ExternalKey>),
 }
@@ -612,6 +614,14 @@ impl PrivateKey {
                     other => Err(SignError::Unsupported(format!("elliptic curve {other}"))),
                 }
             }
+            oid::ED25519 => {
+                // RFC 8410: the private key is a `CurvePrivateKey`, an OCTET STRING of the 32-byte seed.
+                let seed = Tlv::parse_all(key.value)?.expect(tag::OCTET_STRING, "Ed25519 private key")?.value;
+                let seed: &[u8; 32] = seed.try_into().map_err(|_| SignError::Malformed("Ed25519 private key length".into()))?;
+                let k = ed25519_dalek::SigningKey::from_bytes(seed);
+                let public = PublicKey::Ed25519(k.verifying_key().to_bytes().to_vec());
+                Ok(PrivateKey { inner: Inner::Ed25519(k), public, pkcs8: Zeroizing::new(info.to_vec()) })
+            }
             other => Err(SignError::Unsupported(format!("private key algorithm {other}"))),
         }
     }
@@ -665,6 +675,10 @@ impl PrivateKey {
 
     /// The signature `AlgorithmIdentifier` this key writes with `alg`.
     pub fn signature_algorithm(&self, alg: DigestAlg) -> Vec<u8> {
+        // id-Ed25519 names the whole scheme, with no parameters (RFC 8410, RFC 8419).
+        if matches!(self.public, PublicKey::Ed25519(_)) {
+            return der::algorithm(oid::ED25519, None);
+        }
         let rsa = matches!(self.public, PublicKey::Rsa { .. });
         let scheme = if rsa { Scheme::RsaPkcs1 } else { Scheme::Ecdsa };
         // `sign` only writes SHA-256/384/512, which the table has for both schemes.
@@ -675,10 +689,13 @@ impl PrivateKey {
         der::algorithm(oid, rsa.then(der::null).as_deref())
     }
 
-    /// The digest a signature with this key should use: SHA-256, or SHA-384 for P-384.
+    /// The digest a signature with this key should use: SHA-256, SHA-384 for P-384, or SHA-512
+    /// for Ed25519.
     pub fn preferred_digest(&self) -> DigestAlg {
         match self.public {
             PublicKey::P384(_) => DigestAlg::Sha384,
+            // RFC 8419 §3: the message digest in an Ed25519 signer's signed attributes is SHA-512.
+            PublicKey::Ed25519(_) => DigestAlg::Sha512,
             _ => DigestAlg::Sha256,
         }
     }
@@ -709,6 +726,11 @@ impl PrivateKey {
                 Ok(s.to_der().as_bytes().to_vec())
             }
             Inner::External(k) => k.sign(alg, msg),
+            // PureEdDSA signs `msg` itself; `alg` is the digest of the content in the signed attributes.
+            Inner::Ed25519(k) => {
+                use ed25519_dalek::Signer;
+                Ok(k.sign(msg).to_bytes().to_vec())
+            }
             Inner::P384(k) => {
                 use p384::ecdsa::signature::hazmat::PrehashSigner;
                 let s: p384::ecdsa::Signature = k.sign_prehash(&alg.digest(&[msg])).map_err(|e| SignError::Crypto(e.to_string()))?;
