@@ -79,6 +79,21 @@ fn unicode_destinations_are_cut_to_the_cmap_limit() {
     }
 }
 
+/// A simple font's map written again without some codes keeps every other code's text, ranges
+/// included, and is left as it is when it maps none of them or builds on another map.
+#[test]
+fn dropped_codes_leave_the_map_and_the_rest_keep_their_text() {
+    let cmap = b"1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <41> <0041> <42> <0042> endbfchar 1 beginbfrange <61> <63> <0061> endbfrange";
+    let out = to_unicode_without(cmap, &HashSet::from([0x42, 0x62])).unwrap();
+    let text = String::from_utf8(out.clone()).unwrap();
+    assert!(text.contains("<41> <0041>") && text.contains("<61> <0061>") && text.contains("<63> <0063>"), "{text}");
+    assert!(!text.contains("<42>") && !text.contains("<62>"), "{text}");
+    assert!(text.contains("/CIDSystemInfo") && text.contains("/CMapName /"), "{text}");
+    assert_eq!(to_unicode_without(&out, &HashSet::from([0x10])), None, "nothing to drop");
+    let built_on = b"/Base usecmap 1 beginbfchar <41> <0041> endbfchar";
+    assert_eq!(to_unicode_without(built_on, &HashSet::from([0x41])), None, "a map built on another");
+}
+
 /// A font whose ranges cover a few low codes keeps tables that size, not a fixed 64k-entry one.
 #[test]
 fn low_code_tables_end_with_the_last_covered_code() {
