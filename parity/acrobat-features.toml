@@ -7724,7 +7724,7 @@ milestone = "M11"
 status = "shipped"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/automation/tests/it/automation.rs::optimizing_through_tools"]
+evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/engine/src/tests.rs::discarding_comments_forms_and_multimedia_takes_all_three"]
 notes = ""
 
 [[feature]]

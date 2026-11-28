@@ -937,6 +937,61 @@ fn drop_page_annotations(doc: &mut Document, which: &[Hidden], fields: bool) -> 
     Ok(())
 }
 
+/// Multimedia annotations: Screen, Movie and Sound (ISO 32000-2 12.5.6), RichMedia (13.7) and 3D (13.6).
+const MULTIMEDIA: [&[u8]; 5] = [b"Screen", b"Movie", b"Sound", b"RichMedia", b"3D"];
+
+/// The rest of the PDF Optimizer's "Discard all comments, forms and multimedia" ([`remove_hidden`]
+/// takes the comments): every form field widget and multimedia annotation leaves the pages and the
+/// structure tree, and the catalog's form (`/AcroForm`, XFA included) and named renditions go.
+/// Fields are discarded, not flattened: nothing of them stays on the page. Returns how many
+/// annotations went, at least 1 when only a form or renditions did; then the next save is a full
+/// rewrite with a new identifier.
+pub fn discard_forms_and_multimedia(doc: &mut Document) -> Result<usize, RedactError> {
+    let goes = |doc: &Document, a: &Object| {
+        doc.resolve(a).as_dict().and_then(|d| crate::subtype(doc, d)).is_some_and(|s| s == b"Widget" || MULTIMEDIA.contains(&s.as_slice()))
+    };
+    let listed_before = listed_annotations(doc);
+    // What a full save keeps before anything goes: an image that leaves with a widget's appearance
+    // takes a `/JBIG2Globals` dictionary it shares with one that stays with it, as in `remove_counted`.
+    let kept_before = crate::globals::kept(doc)?;
+    let mut removed = 0usize;
+    for p in pdfcraft_model::pages(doc) {
+        let list = annots_of(doc, &p.dict);
+        let kept: Vec<Object> = list.iter().filter(|a| !goes(doc, a)).cloned().collect();
+        if kept.len() == list.len() {
+            continue;
+        }
+        removed = removed.saturating_add(list.len().saturating_sub(kept.len()));
+        doc.update_dict(p.obj, |d| {
+            if kept.is_empty() {
+                d.remove(b"Annots");
+            } else {
+                d.set(b"Annots".to_vec(), Object::Array(kept));
+            }
+        })?;
+    }
+    // A tagged PDF's structure tree still points at them (#2447): the full rewrite would keep them.
+    let gone: std::collections::HashSet<ObjRef> = listed_before.difference(&listed_annotations(doc)).copied().collect();
+    crate::tags::drop_object_refs(doc, &gone)?;
+    let Some((root, mut cat)) = catalog(doc) else { return Ok(removed) };
+    let mut names = sub(doc, &cat, b"Names");
+    let renditions = names.as_mut().is_some_and(|n| n.remove(b"Renditions").is_some());
+    let form = cat.remove(b"AcroForm").is_some();
+    if form || renditions {
+        cat.remove(b"NeedsRendering");
+        if let Some(n) = names.filter(|_| renditions) {
+            cat.set(b"Names".to_vec(), Object::Dict(n));
+        }
+        doc.set(root, Object::Dict(cat));
+    }
+    if removed == 0 && !form && !renditions {
+        return Ok(0);
+    }
+    unshare_unmarked(doc, &kept_before, &mut pdfcraft_cos::ImageBudget::new(doc))?;
+    doc.require_full_save_with_new_id();
+    Ok(removed.max(1))
+}
+
 /// [`remove_hidden`] with `counts` from a scan of at least the categories in `which`. With
 /// `every_page`, every page's annotation list is rewritten even when no chosen category changes
 /// it, as removal did before it skipped that work; tests compare the two.

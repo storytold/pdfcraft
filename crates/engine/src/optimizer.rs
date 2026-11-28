@@ -103,20 +103,30 @@ impl OptimizeJob {
             Vec::new()
         } else {
             step(OptimizeStage::Discarding)?;
+            // The comments category is "Discard all comments, forms and multimedia" here, and takes
+            // the form and multimedia first: discarded, not flattened, as the PDF Optimizer does.
+            let media = if discard.contains(&Hidden::Comments) { pdfcraft_redact::sanitize::discard_forms_and_multimedia(&mut cos)? } else { 0 };
             // Every ticked category, as `remove_hidden` decides between them: with form fields
             // ticked, discarding hidden text also takes the hidden text the flattened appearances
             // bring onto the page, which no scan before flattening counts. It refuses when its scan
             // counts every one as 0, which would end the whole optimization, and may have changed
             // the copy by then (an empty outline root goes with bookmarks), so the copy from before
-            // is kept instead: nothing is discarded.
+            // it is kept instead.
             let before = cos.clone();
-            match pdfcraft_redact::sanitize::remove_hidden(&mut cos, &discard) {
+            let mut done = match pdfcraft_redact::sanitize::remove_hidden(&mut cos, &discard) {
                 Err(pdfcraft_redact::RedactError::NothingToApply) => {
                     cos = before;
                     Vec::new()
                 }
                 r => r?,
+            };
+            if media > 0 {
+                match done.iter_mut().find(|(h, _)| *h == Hidden::Comments) {
+                    Some((_, n)) => *n = n.saturating_add(media),
+                    None => done.push((Hidden::Comments, media)),
+                }
             }
+            done
         };
         let report = optimize::optimize_with_progress(&mut cos, &settings, &mut |s| {
             step(match s {
