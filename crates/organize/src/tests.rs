@@ -730,14 +730,112 @@ fn document_info_edits_leave_files_without_usable_xmp_alone() {
     set_info(&mut doc, "Title", "New").unwrap();
     set_info(&mut doc, "Project", "Apollo").unwrap();
     assert_eq!(xmp_text(&save_and_reopen(&doc)), None);
-    // A packet that isn't UTF-8 is not rewritten.
+    // A packet that isn't UTF-8 is not rewritten (a Title or Author change drops it, see below).
+    // Nor is it when Title is set to what it is.
     let mut latin1 = LIBREOFFICE_XMP.as_bytes().to_vec();
     latin1.extend_from_slice(b"<!-- \xE9 -->");
     let mut doc = doc_with_xmp(&latin1);
+    set_info(&mut doc, "Keywords", "New").unwrap();
+    set_info(&mut doc, "Title", " Untitled 1 ").unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(info(&doc, "Keywords").as_deref(), Some("New"));
+    assert_eq!(xmp_stream(&doc).unwrap().decoded().unwrap(), latin1);
+}
+
+/// A Title or Author change drops a packet that would go on stating the old value: one that can't
+/// be read, one stating it in an attribute with no `rdf:RDF` end tag to add an element before, and
+/// one with Dublin Core under another prefix than `dc`, where the new value would go beside the old
+/// one. Viewers that read XMP first showed the old one.
+#[test]
+fn a_title_or_author_change_drops_a_packet_that_cant_be_edited() {
+    let mut latin1 = LIBREOFFICE_XMP.as_bytes().to_vec();
+    latin1.extend_from_slice(b"<!-- \xE9 -->");
+    let attrs = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description \
+                 rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" dc:title=\"Untitled 1\" dc:creator=\"Old Author\"/></rdf:RDF ></x:xmpmeta>";
+    let purl = LIBREOFFICE_XMP.replace("dc:", "purl:").replace("xmlns:dc=", "xmlns:purl=");
+    let default_ns = LIBREOFFICE_XMP.replace("dc:", "").replace("xmlns:dc=", "xmlns=");
+    let unknown_filter = || {
+        let mut doc = doc_with_xmp(LIBREOFFICE_XMP.as_bytes());
+        let mut dict = xmp_stream(&doc).unwrap().dict;
+        dict.set(b"Filter".to_vec(), Object::name("NoSuchDecode"));
+        let r = catalog(&doc).reference(b"Metadata").unwrap();
+        doc.set(r, Object::Stream(pdfcraft_cos::Stream::from_raw(dict, LIBREOFFICE_XMP.as_bytes().to_vec())));
+        doc
+    };
+    for key in ["Title", "Author"] {
+        for (what, mut doc) in [
+            ("not UTF-8", doc_with_xmp(&latin1)),
+            ("a filter that can't be decoded", unknown_filter()),
+            ("attributes and no rdf:RDF end tag", doc_with_xmp(attrs.as_bytes())),
+            ("Dublin Core as purl:", doc_with_xmp(purl.as_bytes())),
+            ("Dublin Core as the default namespace", doc_with_xmp(default_ns.as_bytes())),
+        ] {
+            set_info(&mut doc, key, "New").unwrap();
+            let doc = save_and_reopen(&doc);
+            assert_eq!(info(&doc, key).as_deref(), Some("New"), "{what}");
+            assert!(xmp_stream(&doc).is_none(), "{what}, {key}: the packet with the old value is still there");
+        }
+    }
+}
+
+/// A packet whose title can be rewritten where it stands stays; one that must go first hands
+/// `/Info` what only it stated, so Document Properties still shows it.
+#[test]
+fn a_title_change_keeps_what_the_packet_holds() {
+    // XML allows a space before `>`: the title is still replaced in place.
+    let mut doc = doc_with_xmp(LIBREOFFICE_XMP.replace("</rdf:RDF>", "</rdf:RDF >").as_bytes());
+    set_info(&mut doc, "Title", "New").unwrap();
+    assert_eq!(xmp_text(&save_and_reopen(&doc)).map(|x| xmp_values(&x, "dc:title")), Some(vec!["New".to_string()]));
+    // So is space before the `>` of the title's end tag.
+    let mut doc = doc_with_xmp(LIBREOFFICE_XMP.replace("</dc:title>", "</dc:title >").as_bytes());
+    set_info(&mut doc, "Title", "New").unwrap();
+    let xmp = xmp_text(&save_and_reopen(&doc)).unwrap();
+    assert!(xmp.matches("<dc:title").count() == 1 && xmp.contains(">New<") && !xmp.contains("Untitled 1"), "{xmp}");
+    // Dublin Core declared as the default namespace and as `dc:` on one description, as older Adobe
+    // tools write it, with every property under `dc:`.
+    let twice = LIBREOFFICE_XMP.replace(" xmlns:dc=", " xmlns='http://purl.org/dc/elements/1.1/' xmlns:dc=");
+    let mut doc = doc_with_xmp(twice.as_bytes());
+    set_info(&mut doc, "Title", "New").unwrap();
+    let titles = xmp_text(&save_and_reopen(&doc)).map(|x| (x.matches("<dc:title").count(), xmp_values(&x, "dc:title")));
+    assert_eq!(titles, Some((1, vec!["New".to_string()])), "the packet stays, with one new title");
+    // The title under purl:, the author under dc: and only there, the subject's end tag with a space.
+    let both = LIBREOFFICE_XMP
+        .replace("dc:title", "purl:title")
+        .replace(" xmlns:dc=", " xmlns:purl=\"http://purl.org/dc/elements/1.1/\" xmlns:dc=")
+        .replace("</dc:description>", "</dc:description >");
+    let mut doc = doc_with_xmp(both.as_bytes());
+    let r = doc.trailer().get(b"Info").and_then(Object::as_ref).unwrap();
+    let producer = doc.add(Object::String(PdfString::text("Writer 1.0")));
+    doc.update_dict(r, |d| {
+        d.remove(b"Author");
+        d.set(b"Producer".to_vec(), Object::Ref(producer));
+    })
+    .unwrap();
+    set_info(&mut doc, "Title", "New").unwrap();
+    let doc = save_and_reopen(&doc);
+    let kept = ["Author", "Subject", "Producer"].map(|k| info(&doc, k));
+    assert_eq!(kept, [Some("Old Author".into()), Some("Old subject".into()), Some("Writer 1.0".into())]);
+    assert!(xmp_stream(&doc).is_none());
+    let own = doc.resolve(doc.trailer().get(b"Info").unwrap()).as_dict().and_then(|d| d.get(b"Producer").cloned());
+    assert_eq!(own, Some(Object::Ref(producer)), "a value /Info has of its own stays as it is");
+}
+
+/// A packet that binds `dc` to another schema on one description can hold Dublin Core's title on
+/// the next. The first `dc:title` is not the one viewers show, so the packet goes rather than keep
+/// the old title.
+#[test]
+fn a_title_change_drops_a_packet_that_binds_dc_to_another_schema() {
+    let other = LIBREOFFICE_XMP.replace(
+        "<rdf:Description rdf:about=\"\" xmlns:dc=",
+        "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://ns.example.org/shelf/\"><dc:title>Shelf 4</dc:title></rdf:Description>\n<rdf:Description rdf:about=\"\" xmlns:dc=",
+    );
+    assert_ne!(other, LIBREOFFICE_XMP);
+    let mut doc = doc_with_xmp(other.as_bytes());
     set_info(&mut doc, "Title", "New").unwrap();
     let doc = save_and_reopen(&doc);
     assert_eq!(info(&doc, "Title").as_deref(), Some("New"));
-    assert_eq!(xmp_stream(&doc).unwrap().decoded().unwrap(), latin1);
+    let xmp = xmp_text(&doc);
+    assert!(xmp.as_deref().is_none_or(|x| !x.contains("Untitled 1")), "the packet still shows the old title: {xmp:?}");
 }
 
 /// Acrobat keeps each custom property in the XMP packet too, as `pdfx:<name>` (the
