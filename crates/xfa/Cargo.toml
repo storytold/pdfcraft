@@ -11,7 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-craft-xfa = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft-xfa = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "97b8352ba3921e1658936db1dcc15370b590fecb" }
 pdfcraft-cos = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 craft-xml = { workspace = true }
