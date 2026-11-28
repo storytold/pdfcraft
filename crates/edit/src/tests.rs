@@ -9396,6 +9396,22 @@ fn multi_glyph_rtl_actual_text_keeps_its_own_reading_order() {
     }
 }
 
+/// A subset's codes for an Arabic letter are its contextual forms, all mapped to one character.
+/// Reusing them character by character draws one form wherever the letter falls, so the letters
+/// come apart: an edit never does that silently. It is refused, leaving the page as it was, or
+/// says which font it used instead.
+#[test]
+fn arabic_is_not_redrawn_from_subset_codes_without_shaping() {
+    // "سم": meem, then seen in the form this subset holds.
+    let mut doc = arabic_ligature_page("BT /F1 12 Tf 300 700 Td (BA) Tj ET", false);
+    let before = page_content_bytes(&doc, 0);
+    // Every letter is on the page, but the seen now ends its word.
+    match text::replace_line(&mut doc, 0, 0, "مس") {
+        Ok(edit) => assert!(edit.substituted.is_some(), "drawn from the subset's codes without shaping"),
+        Err(_) => assert_eq!(page_content_bytes(&doc, 0), before),
+    }
+}
+
 #[test]
 fn replacing_word_with_actual_text_ligature_removes_all_its_source_operators() {
     let mut doc = arabic_ligature_page(
