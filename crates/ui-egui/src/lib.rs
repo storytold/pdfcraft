@@ -56,6 +56,7 @@ mod editing;
 mod home;
 mod hotbar;
 mod panels;
+mod rotation_ui;
 pub mod panes;
 pub mod tab_group;
 pub use print_ui::{

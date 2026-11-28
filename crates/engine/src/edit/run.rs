@@ -120,6 +120,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddImage { .. }
         | Edit::UpdateContent { .. }
         | Edit::MoveObjects { .. }
+        | Edit::ScaleObject { .. }
+        | Edit::RotateObject { .. }
         | Edit::DeleteObjects { .. }
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
@@ -936,6 +938,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
         Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
+        Edit::ScaleObject { page, object, factor, pivot } => pdfcraft_edit::scale_object(doc, *page, *object, *factor, *pivot)?,
+        Edit::RotateObject { page, object, degrees } => pdfcraft_edit::rotate_object(doc, *page, *object, *degrees)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
         Edit::DeleteObjects { page, objects } => crate::object_clip::delete(doc, *page, objects, |doc, edit| run_edit(doc, edit, cx))?,
         Edit::PasteObjects { page, clip, offset } => crate::object_clip::paste(doc, *page, clip, *offset)?,

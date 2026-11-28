@@ -4,6 +4,8 @@ use super::{Edit, FillMark, ImageEdit, Label, LineEnding, MarkKind, Markup, Page
 /// here: its wording is only the hole, because a batch carries its name as text (see
 /// [`BATCH_LABELS`]).
 pub const EDIT_LABELS: &[&str] = &[
+    "Scale object",
+    "Rotate object",
     "Rotate page",
     "Change tag properties",
     "Rotate pages",
@@ -297,6 +299,8 @@ impl Edit {
             Edit::EditTextLine { .. } | Edit::EditTextBlock { .. } => Label::of("Edit text"),
             Edit::PrepareText { .. } => Label::of("Prepare grouped text"),
             Edit::RegisterTextFont { .. } => Label::of("Load document font"),
+            Edit::ScaleObject { .. } => Label::of("Scale object"),
+            Edit::RotateObject { .. } => Label::of("Rotate object"),
             Edit::MoveObjects { objects, .. } => plural("Move object", "Move objects", objects.len()),
             Edit::EditPageImage { change, .. } => Label::of(match change {
                 ImageEdit::Move(_) => "Move image",

@@ -258,6 +258,11 @@ impl ContentView {
         }
         blocked
     }
+
+    /// Whether an added-item move or resize preview is in progress on `page`.
+    pub(crate) fn dragging(&self, page: usize) -> bool {
+        self.preview.as_ref().is_some_and(|p| p.page == page)
+    }
 }
 
 /// While an added item is moved, or a picture resized by a corner, the page without it, rendered
@@ -303,7 +308,7 @@ impl MoveBackground {
             if let Some((_, page, index)) = key {
                 self.renderer = doc.added_content_preview(page, index).ok().map(|p| p.renderer());
                 self.item_renderer = doc.added_content_alone(page, index).ok().map(|p| p.renderer());
-                self.from = on_page(doc.added(), page).into_iter().find(|(i, _)| *i == index).map(|(_, a)| a.content.rect());
+                self.from = on_page(doc.added(), page).into_iter().find(|(i, _)| *i == index).map(|(_, a)| a.display_rect());
                 self.picture = picture(page, index);
             }
         }
@@ -459,7 +464,7 @@ pub(crate) fn page_parts(session: &PageSession, doc: &Document, page: usize, pla
         .into_iter()
         .filter(|(i, a)| matches!(a.content, AddedContent::Text(_)) && draft != Some(*i))
         .map(|(index, a)| {
-            let shape = HitShape::Rect(frame.screen_rect(a.content.rect()).expand(2.0));
+            let shape = HitShape::Rect(frame.screen_rect(a.display_rect()).expand(2.0));
             PagePart::new(Owner::Added { index }, page, shape, PageLayer::Placed).cursor(CursorIcon::Move)
         })
         .collect()
@@ -695,6 +700,9 @@ pub(crate) fn content_controls(
     }
     let mut edit = None;
     for placed in body.pages {
+        if session.object_rotation.dragging(placed.page) {
+            continue;
+        }
         let Some(frame) = PageFrame::of(placed, &doc.info) else { continue };
         let hover = hovered.filter(|(page, _)| *page == placed.page).map(|(_, index)| index);
         let resized = item_controls(ui, body, session, doc, &frame, hover);
@@ -734,7 +742,7 @@ fn item_controls(
     if let Some(i) = hovered.filter(|i| draft != Some(*i) && selected.map(|s| s.0) != Some(*i))
         && let Some(a) = text_at(i)
     {
-        let outline = HoverShape::Rect(doc_rect(&body.view, frame, a.content.rect()));
+        let outline = HoverShape::Rect(doc_rect(&body.view, frame, a.display_rect()));
         let _ = HoverOutline::new(tl!("Added text"), Some(outline)).show(ui);
     }
     let (index, item) = selected?;

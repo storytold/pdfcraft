@@ -364,6 +364,8 @@ pub struct PageSession {
     pub(crate) text_background: crate::edit_text_ui::TextBackground,
     pub(crate) move_background: crate::content_ui::MoveBackground,
     pub(crate) objects: crate::object_ui::ObjectSelection,
+    /// Corner rotation, proportional scale and drag-to-move for a single selected object (#3544).
+    pub(crate) object_rotation: crate::rotation_ui::Rotation,
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
     /// Tells each picture preview cut for a gesture from the one before it under the same name.
     pub(crate) image_serials: craft::ui::primitives::Serials,
@@ -456,6 +458,7 @@ impl PageSession {
             text_background: Default::default(),
             move_background: Default::default(),
             objects: Default::default(),
+            object_rotation: Default::default(),
             image_selection: None,
             image_serials: Default::default(),
             picked_image: None,
@@ -587,6 +590,7 @@ impl DocView {
     /// that were already completed before cancellation.
     pub(crate) fn cancel_pointer_gestures(&mut self, ctx: &egui::Context) {
         self.session.comments.tool.cancel_drawing();
+        self.session.object_rotation.cancel();
         self.cancel_page_drags(ctx);
         craft::ui::primitives::cancel_press_of(ctx, page_parts::control_id(self.view_key()));
     }
@@ -1468,6 +1472,21 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
             out.back_to_select |= session.content.take_done();
         }
     }
+    if cx.can_modify && !cx.preparing && (cx.editing_content || cx.tool == QuickTool::Select) {
+        let id = page_parts::control_id(cx.view_key);
+        for (page, xf, _) in &tabs {
+            crate::rotation_ui::page_input(
+                ui,
+                id,
+                xf,
+                *page,
+                cx.doc,
+                session,
+                cx.tool == QuickTool::Select,
+                cx.editing_content,
+            );
+        }
+    }
     // The focused field's editor, and the Fill & Sign text being typed, over their pages.
     if let Some(editor) = crate::forms_ui::editor::show(ui, body, session, cx.doc, cx.form, cx.info, cx.today, cx.geometry(body))
         && *field_arrived
@@ -1725,6 +1744,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         view.session.prepare.selected = None;
     }
     view.session.objects.prepare(doc, tool == QuickTool::EditText && can_modify);
+    let rotating_content = (editing_content || tool == QuickTool::Select) && can_modify && !preparing;
+    view.session.object_rotation.prepare(doc, rotating_content, ui.ctx());
     let scale = view.render_scale(ui.ctx().pixels_per_point());
     let session = &mut view.session;
     session.text_background.prepare(ui.ctx(), doc, session.line_editor.as_ref(), session.content.draft.as_ref(), scale);
