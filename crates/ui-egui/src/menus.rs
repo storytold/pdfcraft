@@ -288,7 +288,7 @@ fn name_in_english(nodes: &mut [Node]) {
     }
 }
 
-fn translate(english: &'static str) -> String {
+pub(crate) fn translate(english: &'static str) -> String {
     tl!(english).to_owned()
 }
 

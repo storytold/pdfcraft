@@ -92,4 +92,38 @@ impl PdfCraftApp {
     pub(crate) fn picks_pending(&self) -> bool {
         !self.picks.waiting.is_empty() || self.host.files().pick_pending()
     }
+
+    /// Give the file panel the file service is showing its Edit menu, whichever feature asked for
+    /// it, or put the usual menu bar back (macOS). Called every pass, so a menu bar craft-menu
+    /// rebuilt under an open panel is replaced too.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn sync_panel_menu(&mut self) {
+        let open = self.host.files().pick_pending();
+        self.panel_menu.sync(open, &crate::menus::translate);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use std::sync::Arc;
+
+    use craft::host::{Host, PickRequest, Picked, ScriptedFiles};
+
+    use crate::PdfCraftApp;
+
+    /// The panel's menu bar is asked for while the file service has a panel open and given back
+    /// once that panel is answered.
+    #[test]
+    fn the_panel_menu_bar_follows_the_file_service() {
+        let files = Arc::new(ScriptedFiles::held());
+        let mut app = PdfCraftApp::for_unit_tests_on(Arc::new(Host::builder(crate::APP_INFO).files(files.clone()).build()));
+        app.sync_panel_menu();
+        assert!(!app.panel_menu.wanted(), "no panel, no panel menu bar");
+        let id = app.host.files().pick(PickRequest::open("test"));
+        app.sync_panel_menu();
+        assert!(app.panel_menu.wanted(), "asked for while the panel shows");
+        assert!(files.answer_to(id, Picked::Cancelled));
+        app.sync_panel_menu();
+        assert!(!app.panel_menu.wanted(), "given back once the panel is answered");
+    }
 }

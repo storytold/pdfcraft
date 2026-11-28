@@ -223,6 +223,9 @@ pub struct PdfCraftApp {
     /// The native file panels the host's file service asks through; pumped every pass.
     #[cfg(not(target_arch = "wasm32"))]
     file_panels: Option<craft::dialogs::service::FilePanels>,
+    /// The Edit menu a system file panel's text boxes need for ⌘V and the like, while one shows.
+    #[cfg(target_os = "macos")]
+    panel_menu: platform::panel_menu::PanelMenu,
     /// The settings store the preferences are read from and written to.
     pub(crate) settings: Option<settings::Store>,
     /// The dialogs, prompts and notices the app has open, and their results.

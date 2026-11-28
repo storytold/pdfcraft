@@ -272,6 +272,8 @@ impl PdfCraftApp {
             intake,
             #[cfg(not(target_arch = "wasm32"))]
             file_panels: None,
+            #[cfg(target_os = "macos")]
+            panel_menu: Default::default(),
             settings: None,
             dialogs: craft::ui::dialog::DialogHost::new(),
             prompts: Default::default(),
@@ -735,6 +737,10 @@ impl eframe::App for PdfCraftApp {
         }
         let ctx = ui.ctx().clone();
         self.guarded_frame(&ctx, |app| app.ui_unguarded(ui));
+        // After the pump, which shows and answers the panels, and after `menus::frame`: a native bar it
+        // rebuilds replaces the panel's, which this puts back in the same pass.
+        #[cfg(target_os = "macos")]
+        self.sync_panel_menu();
         self.end_ui();
     }
 }
