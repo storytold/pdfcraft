@@ -357,7 +357,12 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let button_set_caption = NativeFunction::from_copy_closure_with_captures(button_set_caption, n.clone());
     let button_get_icon = NativeFunction::from_copy_closure_with_captures(crate::icons::get, n.clone());
     let button_set_icon = NativeFunction::from_copy_closure_with_captures(crate::icons::set, n.clone());
+    // The owning Doc is the realm itself, not a snapshot of its current metadata.
+    // Keep this back-reference non-enumerable so JSON.stringify(field) does not
+    // recurse through its document. See the Acrobat API Reference, Field.doc.
+    let document = ctx.global_object();
     ObjectInitializer::new(ctx)
+        .property(js_string!("doc"), document, Attribute::READONLY)
         .accessor(js_string!("value"), Some(value_get), Some(value_set), rw)
         .accessor(js_string!("valueAsString"), Some(as_string), None, rw)
         .accessor(js_string!("defaultValue"), Some(default), None, rw)
@@ -579,3 +584,7 @@ pub(crate) fn spawn_page_from_template(_: &JsValue, args: &[JsValue], ctx: &mut 
     host(ctx)?.borrow_mut().request(request);
     Ok(JsValue::null())
 }
+
+#[cfg(test)]
+#[path = "field_document_tests.rs"]
+mod field_document_tests;

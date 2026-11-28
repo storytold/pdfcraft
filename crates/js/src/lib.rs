@@ -11,7 +11,7 @@
 //!   `calculateNow`, `getPageBox`, `print`, `submitForm`, `mailDoc`, `exportDataObject`, `templates`,
 //!   `getTemplate`, `spawnPageFromTemplate`.
 //! - Template objects: `name`, `hidden` (setting it shows or hides the template's page), `spawn`.
-//! - Field objects: `name`, `type`, `value`, `valueAsString`, `defaultValue`, `readonly`,
+//! - Field objects: `name`, `type`, `doc`, `value`, `valueAsString`, `defaultValue`, `readonly`,
 //!   `required`, `display`, `hidden`, `numItems`, `getItemAt`, `currentValueIndices`,
 //!   `isBoxChecked`, `checkThisBox`, `exportValues`, `charLimit`, `textColor`, `fillColor`,
 //!   `setFocus`, `rect`, appearance properties, and normal button caption/icon methods.
