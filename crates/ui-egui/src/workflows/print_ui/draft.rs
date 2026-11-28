@@ -254,21 +254,17 @@ impl PrintDraft {
             }
         }
         self.papers = papers;
-        if let Some(c_idx) = custom_paper_idx {
-            if c_idx < self.custom_papers.len() {
-                self.paper = self.papers.len() + c_idx;
-            } else {
-                self.paper = 0;
-            }
-        } else if let Some(pos) =
-            self.papers.iter().position(|(n, s)| n == &current_name && (s.0 - current_size.0).abs() <= 0.5 && (s.1 - current_size.1).abs() <= 0.5)
-        {
-            self.paper = pos;
-        } else if let Some(pos) = self.papers.iter().position(|(_, s)| (s.0 - current_size.0).abs() <= 0.5 && (s.1 - current_size.1).abs() <= 0.5) {
-            self.paper = pos;
-        } else {
-            self.papers.push((current_name, current_size));
-            self.paper = self.papers.len() - 1;
+        if custom_paper_idx.is_none() {
+            let same_size = |s: (f64, f64)| (s.0 - current_size.0).abs() <= 0.5 && (s.1 - current_size.1).abs() <= 0.5;
+            self.paper = self
+                .papers
+                .iter()
+                .position(|(n, s)| n == &current_name && same_size(*s))
+                .or_else(|| self.papers.iter().position(|(_, s)| same_size(*s)))
+                .unwrap_or_else(|| {
+                    self.papers.push((current_name, current_size));
+                    self.papers.len() - 1
+                });
         }
         if let Some(c_idx) = before_label_custom {
             if c_idx < self.custom_papers.len() {
@@ -287,6 +283,11 @@ impl PrintDraft {
                     self.papers.len() - 1
                 }
             });
+        }
+        // Restoring the paper used before Label can append a driver size. Saved custom sizes
+        // follow it, so use the final length for their indices.
+        if let Some(c_idx) = custom_paper_idx {
+            self.paper = if c_idx < self.custom_papers.len() { self.papers.len() + c_idx } else { 0 };
         }
     }
 

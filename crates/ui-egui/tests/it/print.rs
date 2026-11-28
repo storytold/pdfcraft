@@ -1125,6 +1125,20 @@ fn auto_select_default_paper_leaves_label_stock_unchanged() {
 }
 
 #[test]
+fn printer_refresh_keeps_custom_stock_selected_in_label_mode() {
+    let mut draft = pdfcraft_ui_egui::PrintDraft::default();
+    draft.apply_printer_papers(vec![("Driver stock".into(), (401.0, 601.0))]);
+    draft.paper = draft.paper_index("Driver stock").unwrap();
+    draft.set_handling(pdfcraft_ui_egui::PrintHandling::Label);
+    draft.add_custom_paper(serde_json::from_value(serde_json::json!({"name": "Custom label", "width": 300.0, "height": 510.0})).unwrap());
+
+    draft.apply_printer_papers(Vec::new());
+    assert_eq!(draft.paper_name(), "Custom label");
+    assert_eq!(draft.paper_size(), (300.0, 510.0));
+    assert_eq!(draft.paper_name_at(draft.paper_before_label.unwrap()), "Driver stock");
+}
+
+#[test]
 fn auto_select_default_paper_preserves_user_orientation() {
     let mut draft = pdfcraft_ui_egui::PrintDraft {
         printer: Some("Office Printer".into()),
