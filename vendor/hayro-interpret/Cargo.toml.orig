@@ -1,0 +1,38 @@
+[package]
+name = "hayro-interpret"
+version = "0.7.0"
+description = "A crate for interpreting PDF files."
+edition = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+readme = "README.md"
+
+[dependencies]
+hayro-cmap = { workspace = true }
+hayro-syntax = { workspace = true, features = ["std", "images", "unsafe"] }
+kurbo = { workspace = true }
+smallvec = { workspace = true }
+log = { workspace = true, optional = true }
+moxcms = { workspace = true }
+phf = { workspace = true, features = ["macros"] }
+skrifa = { workspace = true }
+yoke = { workspace = true, features = ["derive"]}
+siphasher = { workspace = true }
+bitflags = { workspace = true }
+rustc-hash = { workspace = true }
+
+[dev-dependencies]
+image = { workspace = true, features = ["png"] }
+
+[features]
+default = ["embed-fonts", "embed-cmaps"]
+# Embed a light-weight set of fonts (around 240KB) that can be used as a substitute for the 14 PDF standard fonts.
+embed-fonts = []
+# Embed the 61 predefined cmaps into the binary. Adds about ~250KB of brotli-encoded data.
+embed-cmaps = ["hayro-cmap/embed-cmaps"]
+logging = ["dep:log", "hayro-syntax/logging"]
+
+[lints]
+workspace = true

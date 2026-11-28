@@ -70,9 +70,12 @@ update the numbers.
 
 - **Missing:** our own renderer (M2: `model` crate, font engine, DisplayList devices, ADR-0004), or
   an owner decision to adopt another engine; and any measurement of rendering against Acrobat.
-- **Evidence:** pages are drawn by vendored `hayro` 0.7 with 26 local patches to `hayro-interpret`,
-  15 to `hayro`, 3 to `hayro-jbig2` and 17 to `hayro-syntax` (`vendor/README.md`); `lopdf` still
-  backs document inspection. All 7 rendering P0 features are `partial`. User reports: TikZ pattern
+- **Progress:** non-embedded Type 0 fonts in Adobe CJK collections use ranked bundled faces, with
+  further faces tried by Unicode for missing glyphs. Coverage remains limited by the available
+  fonts and by collection-specific glyph forms.
+- **Evidence:** pages are drawn by `craft-pdf` from the pinned `craft-libs` revision; the CJK
+  fallback hook is patched in `vendor/hayro-interpret`. `lopdf` still backs document inspection.
+  All 7 rendering P0 features are `partial`. User reports: TikZ pattern
   fills drawn wrong ([#794](https://github.com/storytold/pdfcraft/issues/794)), blurry text at
   1080p/1440p ([#730](https://github.com/storytold/pdfcraft/issues/730)), fixed zoom sizes differ
   from Acrobat ([#739](https://github.com/storytold/pdfcraft/issues/739)). An outside author
@@ -132,7 +135,11 @@ update the numbers.
 
 ### 5. Chinese UI lacks a web glyph face
 
-- **Missing:** a Simplified Chinese (`Hans`) UI face in the web build and a working fallback. Native release builds embed LXGW WenKai Lite from the pinned craft-fonts native Simplified Chinese manifest.
+- **Missing:** a Simplified Chinese (`Hans`) UI face in the web build and a working fallback. Native
+  release builds embed LXGW WenKai Lite from the pinned craft-fonts native Simplified Chinese
+  manifest.
+- **Scope:** this gap concerns UI text. PDF font substitution does not add a Simplified Chinese UI
+  face to the web build.
 - **Evidence:** [#826](https://github.com/storytold/pdfcraft/issues/826),
   [#688](https://github.com/storytold/pdfcraft/issues/688),
   [#728](https://github.com/storytold/pdfcraft/issues/728),
@@ -434,6 +441,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-28 | minor | Gap 2 (#5329): unembedded Adobe CJK Type 0 fonts use ranked bundled stand-ins and per-character fallback. Rendering remains partial; Gap 5 remains open because document-font fallback does not add a web UI face. Estimates unchanged. |
 | 2026-11-11 | minor | Gap 8: known residual risk for the LibreOffice sidecar (Impress has no link-update setting; the soffice process isn't network-sandboxed). Sandboxing tracked in #6953. Estimates unchanged. |
 | 2026-10-26 | minor | Gap 8: the LibreOffice profile never updates Writer or Calc linked content on load; Impress has no such setting and the process's network access isn't sandboxed. Estimates unchanged. |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |

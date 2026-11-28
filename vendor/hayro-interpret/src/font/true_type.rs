@@ -1,0 +1,823 @@
+use crate::font::blob::{CffFontBlob, OpenTypeFontBlob};
+use crate::font::generated::{glyph_names, mac_os_roman, mac_roman, standard, win_ansi};
+use crate::font::standard_font::StandardKind;
+use crate::font::{
+    Encoding, FallbackFontQuery, FontFlags, glyph_name_to_text, glyph_name_to_unicode,
+    normalized_glyph_name, read_to_unicode, strip_subset_prefix, unicode_from_name,
+};
+use crate::util::OptionLog;
+use crate::{CMapResolverFn, CacheKey, FontResolverFn};
+use hayro_cmap::{BfString, CMap};
+use hayro_syntax::object::Array;
+use hayro_syntax::object::Dict;
+use hayro_syntax::object::Name;
+use hayro_syntax::object::Object;
+use hayro_syntax::object::Stream;
+use hayro_syntax::object::dict::keys::*;
+use kurbo::BezPath;
+use skrifa::attribute::Style;
+use skrifa::raw::TableProvider;
+use skrifa::raw::tables::cmap::PlatformId;
+use skrifa::raw::tables::post::DEFAULT_GLYPH_NAMES;
+use skrifa::{GlyphId, MetadataProvider};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::sync::Arc;
+
+#[derive(Debug)]
+pub(crate) struct TrueTypeFont {
+    cache_key: u128,
+    kind: Kind,
+    to_unicode: Option<CMap>,
+}
+
+#[derive(Debug)]
+enum Kind {
+    Embedded(EmbeddedKind),
+    Standard(StandardKind),
+}
+
+impl TrueTypeFont {
+    pub(crate) fn new(
+        dict: &Dict<'_>,
+        font_resolver: &FontResolverFn,
+        cmap_resolver: &CMapResolverFn,
+    ) -> Option<Self> {
+        let cache_key = dict.cache_key();
+        let to_unicode = read_to_unicode(dict, cmap_resolver);
+
+        if let Some(embedded) = EmbeddedKind::new(dict) {
+            return Some(Self {
+                cache_key,
+                kind: Kind::Embedded(embedded),
+                to_unicode,
+            });
+        }
+
+        let fallback = || {
+            let fallback_query = FallbackFontQuery::new(dict);
+            let standard_font = fallback_query.pick_standard_font();
+
+            warn!(
+                "unable to load TrueType font {}, falling back to {}",
+                fallback_query
+                    .post_script_name
+                    .unwrap_or("(no name)".to_string()),
+                standard_font.as_str()
+            );
+
+            Some(Self {
+                cache_key,
+                kind: Kind::Standard(StandardKind::new_with_standard(
+                    dict,
+                    standard_font,
+                    true,
+                    font_resolver,
+                )?),
+                to_unicode: to_unicode.clone(),
+            })
+        };
+
+        if let Some(standard) = StandardKind::new(dict, font_resolver) {
+            Some(Self {
+                cache_key,
+                kind: Kind::Standard(standard),
+                to_unicode,
+            })
+        } else {
+            fallback()
+        }
+    }
+
+    pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
+        match &self.kind {
+            Kind::Embedded(e) => e.outline_glyph(glyph),
+            Kind::Standard(s) => s.outline_glyph(glyph),
+        }
+    }
+
+    pub(crate) fn font_data(&self) -> Option<crate::font::FontData> {
+        match &self.kind {
+            Kind::Embedded(e) => Some(e.base_font.font_data()),
+            Kind::Standard(_) => None,
+        }
+    }
+
+    pub(crate) fn postscript_name(&self) -> Option<&str> {
+        match &self.kind {
+            Kind::Embedded(e) => e.postscript_name.as_deref(),
+            Kind::Standard(_) => None,
+        }
+    }
+
+    pub(crate) fn weight(&self) -> Option<u32> {
+        match &self.kind {
+            Kind::Embedded(e) => {
+                let weight = e.base_font.font_ref().attributes().weight.value().round() as u32;
+                if weight > 0 { Some(weight) } else { None }
+            }
+            Kind::Standard(s) => Some(if s.is_bold() { 700 } else { 400 }),
+        }
+    }
+
+    pub(crate) fn is_italic(&self) -> bool {
+        match &self.kind {
+            Kind::Embedded(e) => {
+                // Check PDF font flags first
+                if let Some(flags) = &e.font_flags
+                    && flags.contains(FontFlags::ITALIC)
+                {
+                    return true;
+                }
+                // Check skrifa font attributes
+                e.base_font.font_ref().attributes().style != Style::Normal
+            }
+            Kind::Standard(s) => s.is_italic(),
+        }
+    }
+
+    pub(crate) fn is_serif(&self) -> bool {
+        match &self.kind {
+            Kind::Embedded(e) => e
+                .font_flags
+                .as_ref()
+                .is_some_and(|f| f.contains(FontFlags::SERIF)),
+            Kind::Standard(s) => s.is_serif(),
+        }
+    }
+
+    pub(crate) fn is_monospace(&self) -> bool {
+        match &self.kind {
+            Kind::Embedded(e) => {
+                // Check PDF font flags first
+                if let Some(flags) = &e.font_flags
+                    && flags.contains(FontFlags::FIXED_PITCH)
+                {
+                    return true;
+                }
+                // Check skrifa font metrics
+                e.base_font
+                    .font_ref()
+                    .metrics(
+                        skrifa::instance::Size::unscaled(),
+                        skrifa::instance::LocationRef::default(),
+                    )
+                    .is_monospace
+            }
+            Kind::Standard(s) => s.is_monospace(),
+        }
+    }
+
+    pub(crate) fn map_code(&self, code: u8) -> GlyphId {
+        match &self.kind {
+            Kind::Embedded(e) => e.map_code(code),
+            Kind::Standard(s) => s.map_code(code),
+        }
+    }
+
+    pub(crate) fn glyph_width(&self, code: u8) -> f32 {
+        match &self.kind {
+            Kind::Embedded(e) => e.glyph_width(code),
+            Kind::Standard(s) => s.glyph_width(code).unwrap_or(0.0),
+        }
+    }
+
+    pub(crate) fn char_code_to_unicode(&self, code: u32) -> Option<BfString> {
+        if let Some(to_unicode) = &self.to_unicode
+            && let Some(c) = to_unicode.lookup_bf_string(code)
+        {
+            return Some(c);
+        }
+
+        match &self.kind {
+            Kind::Embedded(e) => {
+                // PdfCraft patch (79): see `EmbeddedKind::symbolic_text`.
+                if let Some(text) = e.symbolic_text(code as u8) {
+                    let mut chars = text.chars();
+                    return Some(match (chars.next(), chars.next()) {
+                        (Some(c), None) => BfString::Char(c),
+                        _ => BfString::String(text.to_string()),
+                    });
+                }
+                // PdfCraft patch (#3169): a name outside the glyph list reads by the glyph list
+                // specification's full mapping (`f_i`, `hyphen.case`).
+                e.code_to_unicode_name(code as u8).and_then(|name| {
+                    glyph_name_to_unicode(name)
+                        .map(BfString::Char)
+                        .or_else(|| glyph_name_to_text(name))
+                })
+            }
+            Kind::Standard(s) => s.char_code_to_unicode(code as u8).map(BfString::Char),
+        }
+
+        // TODO: The test PDFs below fail (but mutool can render them correctly).
+        // There is likely some other strategy that requires processing the font tables
+        // hayro-tests/pdfs/custom/font_truetype_7.pdf
+        // hayro-tests/pdfs/custom/font_truetype_6.pdf
+    }
+}
+
+#[derive(Debug)]
+struct EmbeddedKind {
+    base_font: OpenTypeFontBlob,
+    widths: Vec<Width>,
+    missing_width: f32,
+    font_flags: Option<FontFlags>,
+    glyph_names: HashMap<String, GlyphId>,
+    encoding: Encoding,
+    // Only used for PDFs that mistakenly embed a
+    // CFF font.
+    cff_blob: Option<CffFontBlob>,
+    differences: HashMap<u8, String>,
+    cached_mappings: RefCell<HashMap<u8, GlyphId>>,
+    /// PostScript name from the PDF.
+    postscript_name: Option<String>,
+    /// PdfCraft patch (79): the text each glyph's `post` table name stands for, for the names
+    /// that stand for any (`glyph_name_text`).
+    text_names: HashMap<GlyphId, String>,
+    /// PdfCraft patch (101): whether the font may take the Mac OS Roman reading at all, worked out
+    /// once when it is loaded (`EmbeddedKind::mac_roman_name`).
+    mac_roman_eligible: bool,
+}
+
+impl EmbeddedKind {
+    fn new(dict: &Dict<'_>) -> Option<Self> {
+        let descriptor = dict.get::<Dict<'_>>(FONT_DESC).unwrap_or_default();
+
+        let font_flags = descriptor.get::<u32>(FLAGS).map(FontFlags::from_bits_truncate);
+
+        let (widths, missing_width) = read_widths(dict, &descriptor)?;
+        let (encoding, differences) = read_encoding(dict);
+        let base_font = descriptor
+            .get::<Stream<'_>>(FONT_FILE2)
+            .and_then(|s| s.decoded().ok())
+            .and_then(|d| OpenTypeFontBlob::new(Arc::new(d.to_vec()), 0))?;
+
+        let glyph_names = base_font.glyph_names();
+        let text_names = glyph_names
+            .iter()
+            .filter_map(|(name, glyph)| Some((*glyph, glyph_name_text(name)?)))
+            .collect();
+
+        let cff_font_blob = base_font
+            .font_ref()
+            .cff()
+            .ok()
+            .and_then(|cff| CffFontBlob::new(Arc::new(cff.offset_data().as_ref().to_vec())));
+
+        let postscript_name = dict
+            .get::<Name<'_>>(BASE_FONT)
+            .map(|n| strip_subset_prefix(n.as_str()).to_string());
+
+        // PdfCraft patch (101): the font names no base encoding, not even one this reader doesn't
+        // know (which `read_encoding` reads as the built-in one), and isn't Symbol or ZapfDingbats,
+        // whose built-in encodings aren't Latin (ISO 32000-2 §9.6.6.1). Both as the editor's
+        // `unicode_map` decides them, Symbol and ZapfDingbats recognised by name as there.
+        let names_base_encoding = dict.get::<Name<'_>>(ENCODING).is_some()
+            || dict
+                .get::<Dict<'_>>(ENCODING)
+                .is_some_and(|d| d.get::<Name<'_>>(BASE_ENCODING).is_some());
+        let symbolic_builtin = dict.get::<Name<'_>>(BASE_FONT).is_some_and(|n| {
+            let name = n.as_str();
+            let flat: String = name
+                .rsplit('+')
+                .next()
+                .unwrap_or(name)
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .map(|c| c.to_ascii_lowercase())
+                .collect();
+            flat.contains("symbol") || flat.contains("zapf") || flat.contains("dingbat")
+        });
+
+        Some(Self {
+            base_font,
+            differences,
+            cff_blob: cff_font_blob,
+            widths,
+            missing_width,
+            glyph_names,
+            font_flags,
+            encoding,
+            cached_mappings: RefCell::new(HashMap::new()),
+            postscript_name,
+            text_names,
+            mac_roman_eligible: !names_base_encoding && !symbolic_builtin,
+        })
+    }
+
+    fn is_non_symbolic(&self) -> bool {
+        self.font_flags
+            .as_ref()
+            .map(|f| f.contains(FontFlags::NON_SYMBOLIC))
+            .unwrap_or(false)
+    }
+
+    fn code_to_name(&self, code: u8) -> Option<&str> {
+        self.differences
+            .get(&code)
+            .map(|s| s.as_str())
+            .or_else(|| self.encoding.map_code(code))
+            // See PDFJS-6410 - PDF has no base encoding, so let's fallback to
+            // standard here.
+            .or_else(|| standard::get(code))
+    }
+
+    /// PdfCraft patch: the glyph name text extraction reads a code as. Without a base encoding
+    /// a TrueType font's codes are read as WinAnsi, matching pdftotext's output, not as
+    /// Standard: OCR engines write the text layer of a scan with WinAnsi codes and no
+    /// `/Encoding`, and Standard has no name for ü, ö or ß and gives é (0xE9) as Ø. Glyph
+    /// selection (`code_to_name`) is unchanged.
+    fn code_to_unicode_name(&self, code: u8) -> Option<&str> {
+        self.differences
+            .get(&code)
+            .map(|s| s.as_str())
+            // PdfCraft patch: an Annex D.2 alias code reads as the ordinary character; see
+            // `Encoding::text_alias`.
+            .or_else(|| self.encoding.text_alias(code))
+            .or_else(|| self.encoding.map_code(code))
+            // PdfCraft patch (101): see `EmbeddedKind::mac_roman_name`.
+            .or_else(|| self.mac_roman_name(code))
+            // The last resort reads the code as WinAnsi whatever the font said, so it takes the
+            // same aliasing.
+            .or_else(|| Encoding::WinAnsi.text_alias(code))
+            .or_else(|| win_ansi::get(code))
+    }
+
+    /// PdfCraft patch (79): a symbolic font without an encoding selects its glyphs through its
+    /// own `cmap`, so its codes need not mean anything in WinAnsi. FrameMaker files distilled
+    /// with Distiller 3 number them in the Macintosh glyph order, 29 below ASCII, and read as
+    /// WinAnsi `Solid` came out as `6ROLG` (#3962). The name the `post` table gives the glyph the
+    /// code selects says what it is, as MuPDF reads it, and as pdfcraft-fonts reads it for the
+    /// editor. `None` when the font is non-symbolic, has an encoding or a `/Differences` entry
+    /// for the code, selects no glyph for it, or names it with no text: the code is then read as
+    /// before.
+    fn symbolic_text(&self, code: u8) -> Option<&str> {
+        if self.is_non_symbolic()
+            || !matches!(self.encoding, Encoding::BuiltIn)
+            || self.differences.contains_key(&code)
+            || self.cff_blob.is_some()
+        {
+            return None;
+        }
+        let glyph = self.map_code(code);
+        if glyph == GlyphId::NOTDEF {
+            return None;
+        }
+        self.text_names.get(&glyph).map(String::as_str)
+    }
+
+    fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
+        self.base_font.outline_glyph(glyph)
+    }
+
+    fn map_unicode_in_cmap(&self, c: char) -> Option<GlyphId> {
+        let cmap = self.base_font.font_ref().cmap().ok()?;
+        let mut glyph = None;
+
+        for record in cmap.encoding_records() {
+            if record.platform_id() == PlatformId::Windows
+                && matches!(record.encoding_id(), 1 | 10)
+                && let Ok(subtable) = record.subtable(cmap.offset_data())
+            {
+                glyph = glyph
+                    .or_else(|| subtable.map_codepoint(c))
+                    .filter(|g| *g != GlyphId::NOTDEF);
+            }
+        }
+
+        if glyph.is_none() {
+            for record in cmap.encoding_records() {
+                if record.platform_id() == PlatformId::Unicode
+                    && let Ok(subtable) = record.subtable(cmap.offset_data())
+                {
+                    glyph = glyph
+                        .or_else(|| subtable.map_codepoint(c))
+                        .filter(|g| *g != GlyphId::NOTDEF);
+                }
+            }
+        }
+
+        glyph
+    }
+
+    fn map_macintosh_cmap(&self, name: &str, unicode_char: Option<char>) -> Option<GlyphId> {
+        let cmap = self.base_font.font_ref().cmap().ok()?;
+        let mut glyph = None;
+        for record in cmap.encoding_records() {
+            if record.platform_id() == PlatformId::Macintosh
+                && record.encoding_id() == 0
+                && let Ok(subtable) = record.subtable(cmap.offset_data())
+            {
+                glyph = glyph.or_else(|| {
+                    mac_os_roman::get_inverse(name)
+                        .or_else(|| mac_roman::get_inverse(name))
+                        .or_else(|| {
+                            unicode_char
+                                .and_then(glyph_names::get_reverse)
+                                .and_then(|agl| {
+                                    mac_os_roman::get_inverse(agl)
+                                        .or_else(|| mac_roman::get_inverse(agl))
+                                })
+                        })
+                        .and_then(|c| subtable.map_codepoint(c))
+                        .filter(|g| *g != GlyphId::NOTDEF)
+                });
+            }
+        }
+        glyph
+    }
+
+    fn map_name(&self, lookup: &str) -> Option<GlyphId> {
+        let exact_name = self
+            .glyph_names
+            .get(lookup)
+            .copied()
+            .filter(|g| *g != GlyphId::NOTDEF);
+        let exact_unicode = glyph_names::get(lookup)
+            .and_then(|n| n.chars().next())
+            .or_else(|| unicode_from_name(lookup));
+
+        let mut glyph =
+            if glyph_names::get(lookup).is_some_and(|name| name.chars().nth(1).is_some()) {
+                exact_name
+                    .or_else(|| exact_unicode.and_then(|c| self.map_unicode_in_cmap(c)))
+                    .or_else(|| self.map_macintosh_cmap(lookup, exact_unicode))
+            } else {
+                exact_unicode
+                    .and_then(|c| self.map_unicode_in_cmap(c))
+                    .or_else(|| self.map_macintosh_cmap(lookup, exact_unicode))
+                    .or_else(|| exact_name)
+            };
+
+        if glyph.is_none() {
+            let base_lookup = if !lookup.starts_with('.') {
+                lookup.split('.').next().unwrap_or(lookup)
+            } else {
+                lookup
+            };
+            let unicode_char = exact_unicode.or_else(|| {
+                glyph_names::get(base_lookup)
+                    .and_then(|n| n.chars().next())
+                    .or_else(|| unicode_from_name(base_lookup))
+            });
+            if base_lookup != lookup {
+                glyph = unicode_char
+                    .and_then(|c| self.map_unicode_in_cmap(c))
+                    .or_else(|| self.map_macintosh_cmap(base_lookup, unicode_char));
+            }
+            if glyph.is_none() {
+                glyph = self
+                    .glyph_names
+                    .get(base_lookup)
+                    .copied()
+                    .or_else(|| {
+                        self.glyph_names
+                            .get(normalized_glyph_name(base_lookup))
+                            .copied()
+                    })
+                    .or_else(|| {
+                        unicode_char
+                            .and_then(glyph_names::get_reverse)
+                            .and_then(|agl| self.glyph_names.get(agl).copied())
+                    })
+                    .or_else(|| {
+                        unicode_char.and_then(|c| {
+                            let cp = c as u32;
+                            self.glyph_names
+                                .get(&format!("uni{cp:04X}"))
+                                .or_else(|| self.glyph_names.get(&format!("u{cp:04X}")))
+                                .copied()
+                        })
+                    })
+                    .or_else(|| glyph_num_string(base_lookup).map(GlyphId::new))
+                    .filter(|g| *g != GlyphId::NOTDEF);
+            }
+        }
+
+        glyph
+    }
+
+    fn map_code(&self, code: u8) -> GlyphId {
+        if let Some(glyph) = self.cached_mappings.borrow().get(&code) {
+            return *glyph;
+        }
+
+        if let Some(blob) = self.cff_blob.as_ref() {
+            return self
+                .code_to_name(code)
+                .and_then(|name| blob.glyph_index_by_name(name))
+                .unwrap_or(GlyphId::NOTDEF);
+        }
+
+        // PdfCraft patch: keep glyph selection separate from text extraction. Symbolic
+        // TrueType fonts ignore Encoding (ISO 32000-1 9.6.6.4); ToUnicode supplies text
+        // semantics (9.10), not an alternate glyph. Extend only the existing name lookup
+        // with Unicode cmap records and post-name aliases. Keep the raw symbolic fallback
+        // and the CFF path unchanged until affected source files justify a different policy.
+        let mut glyph = None;
+        if self.is_non_symbolic() {
+            let Some(lookup) = self.code_to_name(code) else {
+                return GlyphId::NOTDEF;
+            };
+            // An explicit .notdef is a mapping, not permission to draw the raw code.
+            if lookup != ".notdef" {
+                glyph = self.map_name(lookup);
+            }
+        } else if let Ok(cmap) = self.base_font.font_ref().cmap() {
+            // PdfCraft patch (#4156): the Windows (3, 0) subtable comes first, and the (1, 0) one
+            // only for codes it doesn't map (ISO 32000-2 §9.6.5.4: "If the font contains a (3, 0)
+            // subtable" it is used; "Otherwise, if the font contains a (1, 0) subtable"). The
+            // records are listed by platform ID, so Macintosh came before Windows and a wrong
+            // (1, 0) table, as SAS writes for its AMT fonts, drew "8" as "p" and "+" as "V".
+            for windows_pass in [true, false] {
+                for record in cmap.encoding_records() {
+                    let windows = record.platform_id() == PlatformId::Windows
+                        && matches!(record.encoding_id(), 0 | 1);
+                    if windows != windows_pass {
+                        continue;
+                    }
+                    if windows {
+                        if let Ok(subtable) = record.subtable(cmap.offset_data()) {
+                            for offset in [0x0000_u32, 0xF000, 0xF100, 0xF200] {
+                                glyph = glyph
+                                    .or_else(|| subtable.map_codepoint(code as u32 + offset))
+                                    .filter(|g| *g != GlyphId::NOTDEF);
+                            }
+                        }
+                    } else if matches!(
+                        record.platform_id(),
+                        PlatformId::Macintosh | PlatformId::Unicode
+                    ) && record.encoding_id() == 0
+                        && let Ok(subtable) = record.subtable(cmap.offset_data())
+                    {
+                        glyph = glyph
+                            .or_else(|| subtable.map_codepoint(code))
+                            .filter(|g| *g != GlyphId::NOTDEF);
+                    }
+                }
+            }
+        }
+
+        let glyph = glyph.unwrap_or(GlyphId::NOTDEF);
+        self.cached_mappings.borrow_mut().insert(code, glyph);
+
+        glyph
+    }
+
+    /// PdfCraft patch (101): the Mac OS Roman glyph name a code of a symbolic font without an
+    /// encoding or glyph names reads as, when two things say the code is Mac OS Roman:
+    ///
+    /// - its Macintosh Roman (1, 0) `cmap` subtable selects the glyph the code draws. ISO
+    ///   32000-2 §9.6.5.4 has single bytes "look up the associated glyph descriptions" there, and
+    ///   has a (3, 0) subtable map "the single-byte codes in the (1, 0) subtable" prepended with
+    ///   0xF0;
+    /// - the glyph sits where the standard Macintosh glyph order (the 258 names of a version 1.0
+    ///   `post` table) puts that character. Fonts distilled from Macintosh originals keep that
+    ///   order and drop the names (`post` version 3.0): pdf.js's issue2017r.pdf draws code 0x88
+    ///   with glyph 106, `agrave`, Mac OS Roman 0x88.
+    ///
+    /// The second test is needed: Windows subsets in the same order carry a (1, 0) subtable too,
+    /// but their codes are WinAnsi (code 0x92 draws glyph 183, `quoteright`, not Mac OS Roman's
+    /// `iacute`), and reading every such code as Mac OS Roman turned "USDA’s" into "USDAís".
+    /// A font that names its glyphs in its `post` table needn't keep the order (a Wingdings subset
+    /// draws code 0x83 with glyph 101, `Eacute` in the order, which it names `threesans`).
+    /// `None` when the font is non-symbolic, names a base encoding (one this reader doesn't know
+    /// too), is Symbol or ZapfDingbats (whose
+    /// built-in encodings aren't Latin, ISO 32000-2 §9.6.6.1; recognised by name as the editor's
+    /// `unicode_map` recognises them), is a CFF program, names its glyphs, or either test fails
+    /// (SAS's AMT fonts carry a wrong (1, 0) table, #4156): the code then reads as before. Glyph
+    /// selection is unchanged.
+    fn mac_roman_name(&self, code: u8) -> Option<&'static str> {
+        if self.is_non_symbolic()
+            || !self.mac_roman_eligible
+            || !matches!(self.encoding, Encoding::BuiltIn)
+            || self.cff_blob.is_some()
+            || !self.glyph_names.is_empty()
+        {
+            return None;
+        }
+        let glyph = self.map_code(code);
+        if glyph == GlyphId::NOTDEF {
+            return None;
+        }
+        let cmap = self.base_font.font_ref().cmap().ok()?;
+        let mac = cmap.encoding_records().iter().find_map(|record| {
+            if record.platform_id() == PlatformId::Macintosh && record.encoding_id() == 0 {
+                record
+                    .subtable(cmap.offset_data())
+                    .ok()?
+                    .map_codepoint(code)
+            } else {
+                None
+            }
+        })?;
+        if mac != glyph {
+            return None;
+        }
+        let standard = match *DEFAULT_GLYPH_NAMES.get(usize::try_from(glyph.to_u32()).ok()?)? {
+            // The order's name for Mac OS Roman 0xCA; the tables here call it `nbspace`.
+            "nonbreakingspace" => "nbspace",
+            name => name,
+        };
+        let name = mac_os_roman::get(code).or_else(|| mac_roman::get(code))?;
+        if name != standard {
+            return None;
+        }
+        Encoding::MacRoman.text_alias(code).or(Some(name))
+    }
+
+    fn glyph_width(&self, code: u8) -> f32 {
+        match self.widths.get(code as usize).copied() {
+            Some(Width::Value(w)) => w,
+            Some(Width::Missing) => self.missing_width,
+            _ => self
+                .base_font
+                .glyph_metrics()
+                .advance_width(self.map_code(code))
+                .warn_none(&format!("failed to find advance width for code {code}"))
+                .unwrap_or(0.0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Width {
+    Value(f32),
+    Missing,
+}
+
+/// PdfCraft patch (79): the text a glyph name stands for, by the rules of the Adobe Glyph List
+/// specification (ISO 32000-2 §9.10.2): drop any suffix from the first `.` (`a.ss01` is `a`),
+/// then each `_`-separated component is a list name, `uni` and groups of exactly four
+/// uppercase hex digits, or `u` and four to six. A value in the surrogate range or past
+/// U+10FFFF is no character. `None` when any component is none of these (`uni20ac`, `uni65`,
+/// `u65`). Each component gives at least one character, so the text is never empty.
+fn glyph_name_text(name: &str) -> Option<String> {
+    // An empty stem (`.notdef`) is no list name and no number, so it gives `None` below.
+    let stem = name.split('.').next()?;
+    // `from_str_radix` alone would also take a sign (`uni+041`) and lowercase digits, which the
+    // specification's forms don't have.
+    let hex = |h: &str| !h.is_empty() && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F'));
+    let mut out = String::new();
+    for part in stem.split('_') {
+        if let Some(text) = glyph_names::get(part) {
+            out.push_str(text);
+        } else if let Some(digits) = part.strip_prefix("uni").filter(|h| hex(h)) {
+            // A group short of four digits isn't there to take, so `uni041` gives `None`.
+            for i in (0..digits.len()).step_by(4) {
+                let unit = digits.get(i..i.saturating_add(4))?;
+                out.push(char::from_u32(u32::from_str_radix(unit, 16).ok()?)?);
+            }
+        } else {
+            let digits = part
+                .strip_prefix('u')
+                .filter(|h| (4..=6).contains(&h.len()) && hex(h))?;
+            out.push(char::from_u32(u32::from_str_radix(digits, 16).ok()?)?);
+        }
+    }
+    Some(out)
+}
+
+pub(crate) fn read_widths(dict: &Dict<'_>, descriptor: &Dict<'_>) -> Option<(Vec<Width>, f32)> {
+    let mut widths = Vec::new();
+
+    let first_char = dict.get::<usize>(FIRST_CHAR);
+    let last_char = dict.get::<usize>(LAST_CHAR);
+    let widths_arr = dict.get::<Array<'_>>(WIDTHS);
+    let missing_width = descriptor.get::<f32>(MISSING_WIDTH).unwrap_or(0.0);
+
+    if let (Some(fc), Some(lc), Some(w)) = (first_char, last_char, widths_arr) {
+        // PdfCraft patch: simple-font codes are single bytes, so only codes up to 255 get an
+        // entry (one per code below /FirstChar was pushed: 4294967295 asked for 34 GB). An
+        // entry that isn't a number leaves its code missing instead of ending the array, and a
+        // /LastChar below /FirstChar means no widths rather than no font.
+        widths = vec![Width::Missing; u8::MAX as usize + 1];
+        for (code, entry) in (fc..=lc.min(u8::MAX as usize)).zip(w.iter::<Object<'_>>()) {
+            if let (Some(slot), Object::Number(n)) = (widths.get_mut(code), entry) {
+                *slot = Width::Value(n.as_f32());
+            }
+        }
+    }
+
+    Some((widths, missing_width))
+}
+
+fn glyph_num_string(s: &str) -> Option<u32> {
+    if !s.starts_with('g') || s.len() < 2 {
+        return None;
+    }
+
+    s[1..].parse::<u32>().ok()
+}
+
+impl CacheKey for TrueTypeFont {
+    fn cache_key(&self) -> u128 {
+        self.cache_key
+    }
+}
+
+pub(crate) fn read_encoding(dict: &Dict<'_>) -> (Encoding, HashMap<u8, String>) {
+    fn get_encoding_base(dict: &Dict<'_>, name: Name<'_>) -> Encoding {
+        match dict.get::<Name<'_>>(name.as_ref()) {
+            Some(n) => match n.deref() {
+                WIN_ANSI_ENCODING => Encoding::WinAnsi,
+                MAC_ROMAN_ENCODING => Encoding::MacRoman,
+                MAC_EXPERT_ENCODING => Encoding::MacExpert,
+                STANDARD_ENCODING => Encoding::Standard,
+                _ => {
+                    warn!("Unknown font encoding {}", name.as_str());
+
+                    Encoding::BuiltIn
+                }
+            },
+            None => Encoding::BuiltIn,
+        }
+    }
+
+    let mut map = HashMap::new();
+
+    if let Some(encoding_dict) = dict.get::<Dict<'_>>(ENCODING) {
+        if let Some(differences) = encoding_dict.get::<Array<'_>>(DIFFERENCES) {
+            let entries = differences.iter::<Object<'_>>();
+
+            let mut code = 0_i64;
+
+            for obj in entries {
+                match obj {
+                    Object::Number(num) => {
+                        code = num.as_i64();
+                    }
+                    Object::Name(name) => {
+                        if let Ok(code) = code.try_into() {
+                            map.insert(code, name.as_str().to_string());
+                        }
+                        code = code.saturating_add(1);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        (
+            get_encoding_base(&encoding_dict, Name::new_unescaped(BASE_ENCODING)),
+            map,
+        )
+    } else {
+        (
+            get_encoding_base(dict, Name::new_unescaped(ENCODING)),
+            HashMap::new(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::glyph_name_text;
+
+    /// PdfCraft patch (79): glyph names read by the glyph list specification's rules.
+    #[test]
+    fn glyph_names_read_by_the_adobe_glyph_list_rules() {
+        for (name, expected) in [
+            ("a", "a"),
+            ("a.ss01", "a"),
+            ("less_equal.liga", "<="),
+            ("uni0041", "A"),
+            ("uni00410042", "AB"),
+            ("u0041", "A"),
+            ("u1F600", "\u{1F600}"),
+        ] {
+            assert_eq!(glyph_name_text(name).as_deref(), Some(expected), "{name}");
+        }
+        for name in [
+            "",
+            ".notdef",
+            ".alt",
+            "EMquad",
+            "uni041",
+            "uni00410",
+            "uni004G",
+            "uni+041",
+            "u+041",
+            "uniD800",
+            "u041",
+            "u0000041",
+            "u004G",
+            "a_EMquad",
+            // PdfCraft patch (79): the glyph list specification's hex digits are uppercase only.
+            "uni20ac",
+            "uni004100e9",
+            "u1f600",
+            "u20ac",
+            "a_uni20ac",
+            "uni65",
+            "u65",
+            "uni+065",
+            "uDFFF",
+            "u110000",
+        ] {
+            assert_eq!(glyph_name_text(name), None, "{name}");
+        }
+    }
+}

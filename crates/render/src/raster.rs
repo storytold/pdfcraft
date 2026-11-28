@@ -24,7 +24,6 @@ use std::thread::JoinHandle;
 use work_queue::{ResultReceiver, WorkQueue};
 
 use craft_pdf::interpret::font::{FontData, FontQuery};
-use craft_pdf::interpret::hayro_cmap::CidFamily;
 use craft_pdf::interpret::{ExtendedWarning, InterpreterSettings, InterpreterWarning};
 use craft_pdf::raster::{self as shared_raster, Options as RasterOptions, RenderCache};
 use craft_pdf::syntax::Pdf;
@@ -36,6 +35,7 @@ use hayro::{RenderSettings, render_into};
 use crate::{Pixels, ReadingColors};
 
 mod pool;
+mod substitute;
 
 use pool::lock;
 #[cfg(test)]
@@ -118,7 +118,7 @@ impl RenderConfig {
     }
 
     /// Build interpreter settings with layer and comment preferences and a font resolver that
-    /// tries bundled Japanese faces, then opt-in installed CJK faces, then standard substitutes.
+    /// tries bundled substitution faces, then opt-in installed CJK faces, then standard substitutes.
     /// Passwords belong to parser construction; request-specific preview overrides are applied
     /// by `render_page`, which also preserves the caller's warning and cancellation hooks.
     fn settings(&self) -> InterpreterSettings {
@@ -131,68 +131,20 @@ impl RenderConfig {
             hide_comments: self.hide_comments,
             annotation_overrides: self.annotations.clone(),
             appearance_overrides: self.appearances.clone(),
+            // Missing characters in the bundled substitute use the next face that has a glyph.
             font_resolver: Arc::new(move |query| {
-                japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
+                substitute::resolve(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
             }),
+            further_faces: Arc::new(substitute::further_faces),
             jbig2_work: self.jbig2_work.unwrap_or(defaults.jbig2_work),
             ..defaults
         }
     }
 }
 
-/// A Japanese face from craft-fonts for a CID font of the Adobe-Japan1 collection that the PDF
-/// doesn't embed (`HeiseiMin-W3`, `KozGoPro-Medium`, …). hayro's own substitutes for fonts that
-/// aren't embedded are the Latin standard 14, so such text drew nothing. `None` for every other
-/// font, and when PdfCraft was built without craft-fonts. Only Japanese: no other CJK face is
-/// embedded whole.
-fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
-    let FontQuery::Fallback(f) = query else { return None };
-    if f.character_collection.as_ref()?.family != CidFamily::AdobeJapan1 {
-        return None;
-    }
-    let face = match japanese_face(f.post_script_name.as_deref().unwrap_or_default(), f.is_serif, f.is_bold || f.font_weight >= 600) {
-        // BIZ UDMincho before the document face (Shippori Mincho): it covers half-width katakana
-        // (U+FF61–U+FF9F), which Shippori Mincho lacks, and a character the substitute lacks is
-        // drawn as .notdef.
-        JapaneseFace::Mincho => pdfcraft_fonts::ui_japanese_fonts()
-            .into_iter()
-            .find(|c| c.family == "BIZ UDMincho" && c.style == "Regular")
-            .or_else(pdfcraft_fonts::document_japanese_font),
-        JapaneseFace::Gothic { bold } => {
-            let faces = pdfcraft_fonts::ui_japanese_fonts();
-            let style = if bold { "Bold" } else { "Regular" };
-            faces.iter().find(|c| c.family == "BIZ UDPGothic" && c.style == style).or(faces.first()).copied()
-        }
-    }?;
-    Some((Arc::new(face.bytes), 0))
-}
-
-/// An installed face for a CID font of an Adobe CJK collection that the PDF doesn't embed and
-/// craft-fonts has no face for (Traditional and Simplified Chinese, Korean, and Japanese in a
-/// build without craft-fonts). `None` for every other font.
 fn system_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
-    let FontQuery::Fallback(f) = query else { return None };
-    crate::system_font::fallback(f)
-}
-
-#[derive(Debug, PartialEq)]
-enum JapaneseFace {
-    Mincho,
-    Gothic { bold: bool },
-}
-
-/// Which kind of Japanese face stands in for the font named `name`: Mincho names (`HeiseiMin`,
-/// `KozMin`, `Ryumin`, `MS-Mincho`) a serif Mincho; Gothic names (`…Gothic…`, `HeiseiKakuGo`,
-/// `KozGo`, `…Maru…`) a sans Gothic; any other name by the font descriptor's serif flag.
-fn japanese_face(name: &str, serif: bool, bold: bool) -> JapaneseFace {
-    let name = name.to_ascii_lowercase();
-    if name.contains("min") {
-        JapaneseFace::Mincho
-    } else if ["goth", "kakugo", "kozgo", "kaku", "maru"].iter().any(|k| name.contains(k)) || !serif {
-        JapaneseFace::Gothic { bold }
-    } else {
-        JapaneseFace::Mincho
-    }
+    let FontQuery::Fallback(query) = query else { return None };
+    crate::system_font::fallback(query)
 }
 
 /// Hard cap on a rendered side, to bound memory at extreme zoom levels (tiling arrives in M3.3).

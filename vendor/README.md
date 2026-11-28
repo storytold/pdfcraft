@@ -145,8 +145,9 @@ and ActualText filtered extraction), and
 `text::tests::clipping_mode_text_is_extracted_and_searchable_like_other_rendering_modes`
 (extraction, search, glyph geometry, clip-through pixels and no-paint pixels).
 
-Missing spacing glyphs (#3601): in `hayro-interpret` `Type0Font::map_via_unicode`,
-an OpenType substitute uses its ordinary-space glyph only when its own charmap
+Missing spacing glyphs (#3601): in `hayro-interpret` `cid::open_type_glyph` (the lookup a
+Type 0 font's substitute and its further faces share), an OpenType substitute uses its
+ordinary-space glyph only when its own charmap
 lacks a spacing character (including Adobe-Japan1 U+2002). Native glyphs and
 variation forms retain priority; embedded fonts, PDF advances and Unicode decoding
 are unchanged. Renderer regressions `japanese_substitute_missing_spaces_draw_no_ink`
@@ -163,7 +164,28 @@ order the font lists them, platform ID first, so a wrong (1, 0) table (SAS 9.4's
 drew "8" as "p" and "+" as "V". Covered by `raster::tests::symbolic_truetype_cmap`, whose font
 is built in memory.
 
-JPX decode-size hint on rotated pages (#3884): in `hayro` `Renderer::image_draw_size`, the
+## Missing glyphs in unembedded Type 0 fonts (#5329)
+
+`InterpreterSettings::further_faces` supplies ordered fallback faces. `Type0Font` tries them by
+Unicode only when the selected substitute lacks a glyph. Face-tagged glyph IDs keep glyph caches
+separate, and fallback outlines use the PDF `/W` advance. Faces are parsed on demand; embedded
+fonts are unchanged.
+
+Coverage: `further_faces` tests for fallback selection, cache separation, and lazy loading, plus
+`raster::tests` for PdfCraft's ranked CJK faces.
+
+## CJK font names that hint at a standard family (#5329)
+
+For CJK collection fonts, a name that only hints at a standard family becomes a fallback query.
+PdfCraft can then select a CJK stand-in; when no resolver supplies one, the hinted standard font
+remains the substitute. Exact standard-font names keep their existing behavior.
+
+Coverage: `cid_fallback_query` tests for hinted names and Adobe-KR CIDs without Unicode, plus
+`raster::tests::a_cjk_font_hinting_at_a_standard_family_draws_with_its_stand_in`.
+
+## JPX decode-size hint on rotated pages (#3884)
+
+In in `hayro` `Renderer::image_draw_size`, the
 size an image is decoded at is the length of each image axis on the device, taken from the
 transform's linear part, and each side is at least 1. It mapped the corners `(w, 0)` and
 `(0, h)` as points, which took in the translation, so on a `/Rotate 90` page (Acrobat Paper

@@ -9,7 +9,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError, mpsc};
 
-use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
+use pdfcraft_render::{PRINT_TAG, PageRenderer, RenderRequest, RequestKind};
 
 use crate::Document;
 
@@ -22,7 +22,7 @@ const IMAGE_MEMORY: f64 = 1024.0 * 1024.0 * 1024.0;
 
 /// Page `page` drawn at `dpi` and encoded as `format`, saying it was drawn at `used` dpi.
 fn draw_image(renderer: &mut PageRenderer, page: usize, dpi: f64, format: ImageFormat, used: f64) -> Result<Vec<u8>, String> {
-    let r = renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
+    let r = renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, tag: PRINT_TAG, ..Default::default() });
     if let Some(e) = r.error {
         return Err(format!("page {}: {e}", page + 1));
     }
@@ -139,7 +139,7 @@ impl Exporter {
     /// [`Exporter::dpi_used`]); refused instead when the source asked for `reject_oversize`.
     pub fn png(&mut self, page: usize, dpi: f64) -> Result<Vec<u8>, String> {
         self.check(page)?;
-        let r = self.renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
+        let r = self.renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, tag: PRINT_TAG, ..Default::default() });
         if let Some(e) = r.error {
             return Err(format!("page {}: {e}", page + 1));
         }
