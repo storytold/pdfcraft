@@ -5,7 +5,7 @@ use std::process::{Command, Output, Stdio};
 
 const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
 
-fn closed_stdout(args: &[&str]) -> Output {
+pub(super) fn closed_stdout(args: &[&str]) -> Output {
     let (reader, writer) = pipe().unwrap();
     drop(reader);
     Command::new(BIN).args(args).stdout(writer).stderr(Stdio::piped()).spawn().unwrap().wait_with_output().unwrap()
@@ -31,6 +31,7 @@ fn output_commands_exit_cleanly_when_the_reader_has_closed() {
         vec!["--version"],
         vec!["info", path],
         vec!["text", path],
+        vec!["audit", path],
         vec!["check-one", path],
         vec!["run", "command_list"],
         vec!["run", "--script", script.to_str().unwrap()],
