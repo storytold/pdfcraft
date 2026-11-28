@@ -16,6 +16,7 @@ use pdfcraft_engine::print::{self, Binding, BookletSubset, Content, Orientation,
 use super::draft::{CUSTOM_SCALE, Handling, IMAGE_DPI, PrintDraft, Which};
 use crate::print_paper::CustomPaper;
 use crate::units::Unit;
+use spool::Route;
 
 const WHICH: [(Which, &str); 5] =
     [(Which::All, "all"), (Which::Current, "current"), (Which::Range, "range"), (Which::Area, "area"), (Which::Selected, "selected")];
@@ -27,6 +28,7 @@ const HANDLING: [(Handling, &str); 5] = [
     (Handling::Label, "label"),
 ];
 const SUBSET: [(Subset, &str); 3] = [(Subset::All, "all"), (Subset::Odd, "odd"), (Subset::Even, "even")];
+const ROUTE: [(Route, &str); 3] = [(Route::Standard, "standard"), (Route::Vector, "vector"), (Route::Image, "image")];
 const ORIENTATION: [(Orientation, &str); 3] =
     [(Orientation::Auto, "auto"), (Orientation::Portrait, "portrait"), (Orientation::Landscape, "landscape")];
 const ORDER: [(PageOrder, &str); 5] = [
@@ -425,18 +427,32 @@ fn sizing_section(d: &PrintDraft) -> PrintSection {
 
 fn advanced_section(d: &PrintDraft) -> PrintSection {
     let dpi: Vec<(String, Label)> = IMAGE_DPI.iter().map(|v| ((*v as u32).to_string(), lbl(format!("{} dpi", *v as u32)))).collect();
-    PrintSection::new(
-        lbl(tl!("Advanced")),
-        vec![
-            check("as_image", lbl(tl!("Print as image")), d.as_image),
-            choice("dpi", row_label(tl!("Resolution:")), dpi, &(d.dpi.round() as u32).to_string()).enabled_when("as_image", true),
-            note(
-                "note.image",
-                tl!("Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey."),
+    let mut params = vec![
+        check("as_image", lbl(tl!("Print as image")), d.as_image),
+        choice("dpi", row_label(tl!("Resolution:")), dpi, &(d.dpi.round() as u32).to_string()).enabled_when("as_image", true),
+        note(
+            "note.image",
+            tl!(
+                "Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey."
             ),
-        ],
-    )
-    .folded(d.as_image)
+        ),
+    ];
+    if cfg!(windows) {
+        let routes = options(
+            &ROUTE,
+            vec![
+                (Route::Standard, lbl(tl!("Standard"))),
+                (Route::Vector, lbl(tl!("Drawn by PdfCraft as shapes"))),
+                (Route::Image, lbl(tl!("Drawn by PdfCraft as pixels"))),
+            ],
+        );
+        params.push(choice("route", row_label(tl!("Sending to the printer:")), routes, d.route.id()));
+        params.push(note(
+            "note.route",
+            tl!("Use a drawn method when the system's own drawing prints blurred. Shapes keep text and lines sharp; pages they cannot draw, such as ones with transparency, are sent as pixels. Pixels are drawn at the printer's resolution, up to 600 dpi."),
+        ));
+    }
+    PrintSection::new(lbl(tl!("Advanced")), params).folded(d.as_image || d.route != Route::Standard)
 }
 
 /// The values of every row the draft decides.
@@ -465,6 +481,7 @@ pub(super) fn fields_from_draft(d: &PrintDraft) -> DialogFields {
     f.set("orientation", id_of(&ORIENTATION, d.orientation));
     f.set("content", id_of(&CONTENT, d.content));
     f.set("as_image", d.as_image);
+    f.set("route", d.route.id());
     f.set("dpi", (d.dpi.round() as u32).to_string());
     f.set("paper", d.paper_name());
     f.set("custom_open", d.custom_new.is_some());
@@ -631,6 +648,11 @@ pub(super) fn draft_from_fields(d: &mut PrintDraft, f: &DialogFields, edited: &[
         && let Some(v) = f.bool("as_image")
     {
         d.as_image = v;
+    }
+    if on("route")
+        && let Some(v) = text("route").and_then(|t| value_of(&ROUTE, t))
+    {
+        d.route = v;
     }
     if on("dpi")
         && let Some(v) = text("dpi").and_then(|t| t.parse::<f64>().ok()).filter(|v| IMAGE_DPI.contains(v))

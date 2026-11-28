@@ -8416,6 +8416,18 @@ evidence = ["crates/engine/src/tests.rs::printing_as_image_sends_pictures_instea
 notes = "The Print dialog's Advanced section (folded unless on): Print as image at 150, 300 or 600 dpi; doc_print as_image and dpi (72–600). The pages used are rendered once each the way the viewer shows them (comments left out when the print leaves them out), composed over white, made into an image-only document and imposed on the paper like the pages themselves. The print is no longer searchable text. Still missing against Acrobat: per-printer defaults for it."
 
 [[feature]]
+id = "print.windows-print-route"
+title = "Choose how Windows printers get the job"
+area = "L"
+tier = "P2"
+milestone = "M10"
+status = "partial"
+commands = ["print.dialog"]
+tools = ["doc_print"]
+evidence = ["crates/engine/src/drawn_print/tests.rs::the_vector_route_draws_opaque_sheets_as_vectors_and_translucent_ones_as_pixels", "crates/automation/tests/it/automation.rs::doc_print_route_is_for_printers_only"]
+notes = "For systems whose own PDF drawing prints blurred (#8529). The Print dialog's Advanced section on Windows (Sending to the printer) and doc_print route: standard (default) hands the print-ready PDF to the system; vector has PdfCraft draw each sheet as an EMF of shapes, glyph outlines and pictures played into one GDI job, and sheets with transparency, blending, soft masks, overprint or patterns as pixels; image has PdfCraft draw every sheet as pixels at the printer's resolution, up to 600 dpi, in bands. Copies, collation and two-sided pairs are drawn by PdfCraft in one job. Missing: text is sent as outlines, not fonts; patterns and shadings on the vector route go as pixels; no drawn route on macOS or Linux (an error says so)."
+
+[[feature]]
 id = "print.page-setup"
 title = "Page setup"
 area = "L"

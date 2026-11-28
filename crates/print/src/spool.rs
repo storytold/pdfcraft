@@ -9,6 +9,9 @@ pub use craft_print::{
 #[cfg(any(windows, test))]
 mod windows_duplex;
 
+mod drawn;
+pub use drawn::{DrawError, DrawnSheet, Route, SheetPainter, rgb, submit_drawn};
+
 /// Windows: the in-box DLLs printing draws and describes jobs with. The executables delay-load
 /// them (`apps/pdfcraft{,-cli}/build.rs`, and `build.rs` for this crate's tests: the same list)
 /// so a Windows installation without them still starts (#2630); a call into a missing

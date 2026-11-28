@@ -27,6 +27,7 @@ mod copy_image;
 pub use copy_image::{PagePicture, picture_at};
 pub mod dates;
 mod document;
+pub mod drawn_print;
 mod edit;
 mod error;
 pub mod export;

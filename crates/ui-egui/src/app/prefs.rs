@@ -173,6 +173,7 @@ impl PdfCraftApp {
             binding: Some(print_names::binding(d.binding).to_string()),
             as_image: Some(d.as_image),
             dpi: Some(d.dpi),
+            route: Some(d.route.id().to_string()),
         };
         let behavior = settings::Behavior {
             default_page_gaps: Some(self.view_defaults.page_gaps),
@@ -458,6 +459,12 @@ impl PdfCraftApp {
         }
         if let Some(dpi) = p.dpi.filter(|d| print_ui::IMAGE_DPI.contains(d)) {
             draft.dpi = dpi;
+        }
+        // The way jobs reach a Windows printer (#8529), so a system that prints blurred keeps the
+        // drawn route it was given. Elsewhere the dialog has no route row, so settings brought from
+        // Windows keep the standard route there.
+        if let Some(route) = p.route.as_deref().and_then(pdfcraft_engine::print::spool::Route::parse).filter(|_| cfg!(windows)) {
+            draft.route = route;
         }
     }
 

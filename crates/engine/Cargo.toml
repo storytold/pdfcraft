@@ -25,6 +25,8 @@ pdfcraft-content = { workspace = true }
 pdfcraft-audit = { workspace = true }
 pdfcraft-redact = { workspace = true }
 pdfcraft-print = { workspace = true }
+# Sheets as EMF vector calls for the drawn Windows print route.
+craft-pdf = { workspace = true, features = ["emf"] }
 pdfcraft-xfdf = { workspace = true }
 pdfcraft-sign = { workspace = true }
 pdfcraft-optimize = { workspace = true }

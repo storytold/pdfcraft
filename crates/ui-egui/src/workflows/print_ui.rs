@@ -590,21 +590,22 @@ impl PdfCraftApp {
         let progress = count.clone();
         let wake = self.print_tasks.wake.clone();
         let spooler = self.spooler.clone();
+        let route = self.print_draft.route;
         self.print_tasks.jobs.submit(ticket, Priority::VISIBLE, move |_| {
             pdfcraft_engine::guard(|| {
                 // On Windows grayscale makes the pages grey (#5806) and large pictures become tiles
                 // (#5131): work on the whole file, kept off the UI thread with the rest.
                 // A GDI (v3) driver gets transparent sheets flattened (#6155, #5838, #5940); XPS (v4)
-                // drivers print them as they are.
-                let flatten = job.printer.as_deref().is_some_and(spool::gdi_driver);
+                // drivers print them as they are. The drawn routes draw transparency themselves.
+                let flatten = route == spool::Route::Standard && job.printer.as_deref().is_some_and(spool::gdi_driver);
                 let bytes = pdfcraft_engine::spooler::spooler_copy(bytes, &mut job, flatten);
                 match &spooler {
+                    // A spooler set in place of the system's (tests) takes the bytes, not a route.
                     Some(submit) => submit(&bytes, &job),
-                    None => spool::submit_with_progress(&bytes, &job, &mut |sent, sheets| {
+                    None => pdfcraft_engine::drawn_print::submit(&bytes, &job, route, None, &mut |sent, sheets| {
                         progress.set(sent, sheets);
                         wake.wake();
-                    })
-                    .map_err(|e| e.to_string()),
+                    }),
                 }
             })
             .unwrap_or_else(|_| Err("the print job stopped unexpectedly".into()))
