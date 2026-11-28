@@ -8,7 +8,8 @@
 //!   `TJ` displacement of the same width so the remaining text stays exactly where it was;
 //! - images: fully covered → the `Do` is removed; partly covered → the covered pixels are
 //!   cleared in a copy of the image (or the image is removed when its codec can't be re-encoded);
-//!   inline images under a region are removed;
+//!   inline images under a region are cleared in an image XObject copy drawn with `Do`, or
+//!   removed when they can't be;
 //! - vectors: fully covered paths are removed; partly covered ones are clipped so nothing shows
 //!   inside the regions; shadings are clipped the same way;
 //! - form XObjects under a region are rewritten recursively into new objects (copy-on-write, so
@@ -585,7 +586,7 @@ impl Walk {
                 Some(op)
             }
             b"Tj" | b"TJ" | b"'" | b"\"" => self.show_text(scope, op, piece),
-            b"BI" => Self::inline_image(&self.gs, scope, &mut self.out, op, piece),
+            b"BI" => self.inline_image(doc, scope, resources, op, piece),
             b"sh" if scope.mode == Mode::Apply => Self::shading(&self.gs, scope, &mut self.clipped, op, piece),
             b"Do" => self.draw_xobject(doc, scope, resources, op, piece),
             // `/Name scn` selects a pattern as the fill colour; numbers select a plain colour
@@ -881,19 +882,45 @@ impl Walk {
         None
     }
 
-    /// An inline image under a region is removed (or counted, when verifying).
-    fn inline_image(gs: &Gs, scope: &mut Scope<'_>, out: &mut Output, op: Op, piece: &mut Piece) -> Option<Op> {
+    /// An inline image under a region (or counted, when verifying) has the pixels the regions
+    /// cover cleared in a copy drawn as an image XObject, as one drawn with `Do` would; one that
+    /// can't be cleared, or that a region covers whole, is removed.
+    fn inline_image(&mut self, doc: &mut Document, scope: &mut Scope<'_>, resources: &Dict, op: Op, piece: &mut Piece) -> Option<Op> {
         // An image mask paints with the fill colour, pattern included.
-        uses_patterns(out, gs, true, false);
-        if !scope.hits(gs.ctm.bbox([0.0, 0.0, 1.0, 1.0])) {
+        uses_patterns(&mut self.out, &self.gs, true, false);
+        let b = self.gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
+        if !scope.hits(b) {
             return Some(op);
         }
         if scope.mode == Mode::Verify {
-            out.residue += 1;
+            self.out.residue += 1;
             return Some(op);
         }
-        scope.report.images_removed += 1;
         piece.changed = true;
+        // Removing hidden content has no regions to clear.
+        if !scope.everywhere() && !scope.covered(b) {
+            let colour_spaces = res_dict(doc, resources, b"ColorSpace");
+            let image = op.inline.as_ref().and_then(|(dict, data)| image::inline_as_xobject(&colour_spaces, dict, data));
+            // As an XObject the image is the same samples drawn at the same place: the unit square
+            // under the current matrix (ISO 32000-2 §8.9.7).
+            let cleared = image.and_then(|image| match image::clear(doc, &image, &self.gs.ctm, scope.rects, &mut *scope.images) {
+                Ok(Some(new)) => Some((new, true)),
+                // No pixel is under a region though its box is: the samples stay, drawn the
+                // same way, so verification reads no inline image there.
+                Ok(None) => Some((image, false)),
+                Err(()) => None,
+            });
+            if let Some((new, cleared)) = cleared {
+                let nr = doc.add(Object::Stream(new));
+                let n = fresh_name(scope, &self.xobjects);
+                self.xobjects.set(n.clone(), Object::Ref(nr));
+                self.out.xobjects.push((n.clone(), nr));
+                scope.report.images_cleared += usize::from(cleared);
+                piece.ops.push(Op::new("Do", vec![Object::Name(n)]));
+                return None;
+            }
+        }
+        scope.report.images_removed += 1;
         None
     }
 
