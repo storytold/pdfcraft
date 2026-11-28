@@ -295,6 +295,34 @@ fn retained_annotations(doc: &Document, list: &[Object], usable_properties: bool
     retained
 }
 
+/// The stream a flattened annotation's appearance draws as a page XObject: `ap` itself when it
+/// already is one (`/Type /XObject` and `/Subtype /Form`, ISO 32000-2 Table 93), else a copy
+/// that adds the keys a `Do` operand needs — appearance streams written without them are
+/// skipped by strict readers once the annotation is gone (#7612). The stored stream is never
+/// edited: it may be another annotation's appearance. `conformed` reuses the copy when the
+/// same stream is placed again (the state appearances of a group of check boxes, say).
+fn form_xobject(doc: &mut Document, ap: ObjRef, conformed: &mut HashMap<ObjRef, ObjRef>) -> ObjRef {
+    if let Some(&r) = conformed.get(&ap) {
+        return r;
+    }
+    let conformant = doc.get(ap).as_dict().is_some_and(|d| d.name(b"Type") == Some(b"XObject") && d.name(b"Subtype") == Some(b"Form"));
+    let placed = if conformant {
+        ap
+    } else {
+        let mut object = (*doc.get(ap)).clone();
+        if let Some(d) = object.as_dict_mut() {
+            d.set(b"Type".to_vec(), Object::Name(b"XObject".to_vec()));
+            d.set(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()));
+            if d.get(b"FormType").is_none() {
+                d.set(b"FormType".to_vec(), Object::Int(1));
+            }
+        }
+        doc.add(object)
+    };
+    conformed.insert(ap, placed);
+    placed
+}
+
 /// A Properties resource name that is not already on the page or in `pending`.
 fn property_name(existing: &Dict, pending: &Dict, n: &mut u64) -> Option<String> {
     loop {
@@ -455,6 +483,7 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
     }
     let mut drawn = 0;
     let mut removed_widgets: HashSet<ObjRef> = HashSet::new();
+    let mut conformed: HashMap<ObjRef, ObjRef> = HashMap::new();
     for &i in pages {
         let page = all[i].clone();
         let annots_obj = page.dict.get(b"Annots").cloned();
@@ -519,7 +548,7 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
                     if d.contains(b"OC") {
                         content.push_str("EMC\n");
                     }
-                    xobjects.set(name.into_bytes(), Object::Ref(ap));
+                    xobjects.set(name.into_bytes(), Object::Ref(form_xobject(doc, ap, &mut conformed)));
                     drawn += 1;
                     drew = true;
                 }
