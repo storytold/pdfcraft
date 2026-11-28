@@ -6405,6 +6405,7 @@ mod limits;
 mod metadata_fail_closed;
 mod metadata_matching;
 mod operands_from_the_end;
+mod pattern_names;
 mod property_retirement;
 mod refusal_pages;
 mod surviving_references;
