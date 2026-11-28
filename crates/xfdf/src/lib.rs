@@ -37,7 +37,7 @@ use fdf::{MAX_FDF_BYTES, MAX_FDF_OBJECTS};
 #[cfg(test)]
 use xfdf::{LOCKED, find_by_name};
 pub use xfdf::{Outline, comment_count, comment_outlines, comments_bounds, export_xfdf, export_xfdf_comments, import_comments};
-use xfdf::{apply_values, import_xfdf};
+use xfdf::{Values, apply_values, import_xfdf};
 
 #[cfg(test)]
 mod tests;
@@ -284,8 +284,9 @@ fn has_tab_delimiter(text: &str) -> bool {
     quoted && text.lines().next().is_some_and(|line| line.contains('\t'))
 }
 
-/// Form data from XML, CSV or tab-delimited text.
-fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
+/// Form data from XML, CSV or tab-delimited text; with `calculate`, the built-in calculations
+/// run after each value.
+fn import_table(doc: &mut Document, text: &str, calculate: bool) -> Result<Report, DataError> {
     let mut report = Report::default();
     let t = text.trim_start_matches('\u{feff}');
     let values: Vec<(String, Vec<String>)> = if t.trim_start().starts_with('<') {
@@ -342,7 +343,7 @@ fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
             head.into_iter().zip(row).map(|(k, v)| (csv_text(k), vec![csv_text(v)])).collect()
         }
     };
-    apply_values(doc, &values, &mut report);
+    apply_values(doc, &values, &mut report, calculate);
     Ok(report)
 }
 
@@ -355,26 +356,39 @@ fn tab_delimited(t: &str) -> Result<Vec<(String, Vec<String>)>, DataError> {
 
 /// Import comments and/or field values from XFDF, FDF, XML, CSV or tab-delimited text
 /// (detected from the content). All or nothing: on an error `doc` is left as it was.
+/// The form's built-in calculations run after each value.
 pub fn import(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
+    import_with(doc, bytes, true)
+}
+
+/// [`import`], writing the field values without running any calculation between or after them:
+/// for a caller that then runs the calculated fields once, in the calculation order and with
+/// their scripts (`pdfcraft_forms::recalculate_with`), as after one value typed in.
+pub fn import_without_calculation(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
+    import_with(doc, bytes, false)
+}
+
+fn import_with(doc: &mut Document, bytes: &[u8], calculate: bool) -> Result<Report, DataError> {
     let mut work = doc.clone();
-    let report = import_into(&mut work, bytes)?;
+    let report = import_into(&mut work, bytes, calculate)?;
     *doc = work;
     Ok(report)
 }
 
-fn import_into(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
+fn import_into(doc: &mut Document, bytes: &[u8], calculate: bool) -> Result<Report, DataError> {
+    let values = if calculate { Values::Calculate } else { Values::Write };
     let report = if bytes.starts_with(b"%FDF") {
-        import_fdf(doc, bytes)?
+        import_fdf(doc, bytes, calculate)?
     } else {
         let text = String::from_utf8_lossy(bytes);
         let t = text.trim_start_matches('\u{feff}').trim_start();
         if t.starts_with("<?xml") || t.starts_with("<xfdf") || t.starts_with('<') {
-            match import_xfdf(doc, t) {
-                Err(DataError::UnknownFormat) => import_table(doc, t)?,
+            match import_xfdf(doc, t, values) {
+                Err(DataError::UnknownFormat) => import_table(doc, t, calculate)?,
                 other => other?,
             }
         } else {
-            import_table(doc, &text)?
+            import_table(doc, &text, calculate)?
         }
     };
     if report.comments == 0 && report.fields == 0 && report.rejected.is_empty() {

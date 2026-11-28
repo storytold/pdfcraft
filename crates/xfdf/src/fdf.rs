@@ -524,7 +524,8 @@ pub(crate) fn fdf_body(fdf: &Document) -> Result<Dict, DataError> {
         .ok_or(DataError::UnknownFormat)
 }
 
-pub(crate) fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
+/// With `calculate`, the built-in calculations run after each value (see [`apply_values`]).
+pub(crate) fn import_fdf(doc: &mut Document, bytes: &[u8], calculate: bool) -> Result<Report, DataError> {
     let fdf = Document::open(std::sync::Arc::new(bytes.to_vec())).map_err(|e| DataError::Malformed(e.to_string()))?;
     let body = fdf_body(&fdf)?;
     let mut report = Report::default();
@@ -600,6 +601,6 @@ pub(crate) fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, Dat
             doc.update_dict(r, |d| d.set(b"IRT".to_vec(), Object::Ref(parent)))?;
         }
     }
-    apply_values(doc, &values, &mut report);
+    apply_values(doc, &values, &mut report, calculate);
     Ok(report)
 }

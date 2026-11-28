@@ -1050,7 +1050,7 @@ fn the_import_budget_is_shared_by_every_comment() {
         .collect();
     let xml = format!(r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots>{stamps}</annots></xfdf>"#);
     let mut dst = pages(1);
-    let report = xfdf::import_xfdf_with(&mut dst, &xml, None, None, None, size * 5 / 2, false).unwrap();
+    let report = xfdf::import_xfdf_with(&mut dst, &xml, None, None, None, size * 5 / 2, xfdf::Values::Calculate).unwrap();
     assert_eq!(report.comments, 3);
     assert_eq!(report.skipped.len(), 1, "{:?}", report.skipped);
     assert!(report.skipped[0].starts_with("c: "), "{:?}", report.skipped);
@@ -1105,7 +1105,7 @@ fn the_export_loop_writes_no_more_appearance_than_import_reads() {
     let xml = export_xfdf(&src, true, false, "src.pdf");
     assert_eq!(xml.matches("<appearance>").count(), 4);
     let mut dst = pages(1);
-    let report = xfdf::import_xfdf(&mut dst, &xml).unwrap();
+    let report = xfdf::import_xfdf(&mut dst, &xml, xfdf::Values::Calculate).unwrap();
     assert_eq!(report.comments, 5);
     assert!(report.skipped.is_empty(), "{:?}", report.skipped);
 }
