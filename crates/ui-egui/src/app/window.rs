@@ -58,11 +58,18 @@ impl PdfCraftApp {
     /// alone (Acrobat's Full Screen Mode, #379, #1459), and gets its display back afterwards.
     pub(crate) fn follow_screen_mode(&mut self) {
         let on = self.full_screen();
-        // A click turns the page only with the Select tool, and full screen hides the tools:
-        // select it there, and give the tool back on leaving (review on #2070).
-        if on && self.full_screen_tool.is_none() {
-            self.full_screen_tool = Some(self.quick_tool);
-            self.quick_tool = QuickTool::Select;
+        let entered = on && !self.full_screen_followed;
+        self.full_screen_followed = on;
+        // With Fill screen on, a click turns the page only with the Select tool, and full screen
+        // hides the tools: select it there, and give the tool back on leaving (review on #2070).
+        // With Fill screen off, full screen keeps the reader's display (#4273) and navigation
+        // tool (Select or Hand, #8074); other hidden tools still switch to Select until leaving.
+        if entered {
+            let keep_tool = !self.full_screen_fill && matches!(self.quick_tool, QuickTool::Select | QuickTool::Hand);
+            if !keep_tool {
+                self.full_screen_tool = Some(self.quick_tool);
+                self.quick_tool = QuickTool::Select;
+            }
         } else if !on && let Some(tool) = self.full_screen_tool.take() {
             self.quick_tool = tool;
         }
