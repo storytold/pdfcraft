@@ -360,9 +360,35 @@ pub(super) fn own_inherited(doc: &mut Document, field: ObjRef, add: &Dict) -> Re
     Ok(())
 }
 
+/// A field that lists `field` in `/Kids` but is not named by `field`'s `/Parent`.
+/// The reader still walks that `/Kids` (ISO 32000-2 §12.7.4 asks for `/Parent`; some files omit it).
+fn kids_holder(doc: &Document, field: ObjRef) -> Option<ObjRef> {
+    let root = doc.root()?;
+    let af = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned())?;
+    let fields = match &af {
+        Object::Ref(r) => list_of(doc, *r, b"Fields"),
+        Object::Dict(d) => d.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default(),
+        _ => return None,
+    };
+    let mut stack = fields.into_iter().filter_map(|o| o.as_ref()).collect::<Vec<_>>();
+    let mut seen = std::collections::HashSet::new();
+    while let Some(holder) = stack.pop() {
+        if !seen.insert(holder.num) || seen.len() > 4096 {
+            continue;
+        }
+        let kids = list_of(doc, holder, b"Kids");
+        if kids.iter().any(|o| o.as_ref() == Some(field)) {
+            return Some(holder);
+        }
+        stack.extend(kids.into_iter().filter_map(|o| o.as_ref()));
+    }
+    None
+}
+
 /// Take `field` out of the field tree: from its parent's `/Kids`, or from `/Fields`.
+/// A kid with no `/Parent` is removed from the `/Kids` that lists it (#8027).
 pub(super) fn detach(doc: &mut Document, field: ObjRef) -> Result<(), FormError> {
-    let parent = doc.get(field).as_dict().and_then(|d| d.reference(b"Parent"));
+    let parent = doc.get(field).as_dict().and_then(|d| d.reference(b"Parent")).or_else(|| kids_holder(doc, field));
     let remove_from = |doc: &mut Document, holder: ObjRef, key: &[u8]| -> Result<(), FormError> {
         let mut d = doc.get(holder).as_dict().cloned().unwrap_or_default();
         let list = d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
@@ -517,6 +543,33 @@ mod tests {
                 assert_eq!(after.state_for("exported"), Some(state.as_str()));
             }
         }
+    }
+
+    /// A kid listed in `/Kids` with no `/Parent` of its own is still a field. Delete removes it (#8027).
+    #[test]
+    fn deleting_a_kid_without_parent_removes_it() {
+        let mut doc = one_page();
+        let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        let page = doc.get(pages).as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap()[0].as_ref().unwrap();
+        let mut kid = Dict::new();
+        kid.set(b"Type".to_vec(), Object::name("Annot"));
+        kid.set(b"Subtype".to_vec(), Object::name("Widget"));
+        kid.set(b"T".to_vec(), PdfString::text("kid"));
+        kid.set(b"Rect".to_vec(), Object::Array(vec![20.into(), 20.into(), 180.into(), 50.into()]));
+        kid.set(b"P".to_vec(), Object::Ref(page));
+        let kid_ref = doc.add(Object::Dict(kid));
+        let mut parent = Dict::new();
+        parent.set(b"FT".to_vec(), Object::name("Tx"));
+        parent.set(b"T".to_vec(), PdfString::text("pw"));
+        parent.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(kid_ref)]));
+        let parent_ref = doc.add(Object::Dict(parent));
+        let mut form = Dict::new();
+        form.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(parent_ref)]));
+        doc.update_dict(doc.root().unwrap(), |d| d.set(b"AcroForm".to_vec(), Object::Dict(form))).unwrap();
+        doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(kid_ref)]))).unwrap();
+        assert!(crate::fields(&doc).iter().any(|f| f.name == "kid"));
+        crate::delete_field(&mut doc, "kid").unwrap();
+        assert!(!crate::fields(&doc).iter().any(|f| f.name == "kid"), "{:?}", crate::fields(&doc).iter().map(|f| f.name.clone()).collect::<Vec<_>>());
     }
 
     #[test]
