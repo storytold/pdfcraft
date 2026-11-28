@@ -27,6 +27,7 @@ mod gstate;
 mod header;
 pub mod icc;
 mod limits;
+mod overprint;
 mod spot;
 mod trailer;
 mod transparency;
@@ -218,6 +219,7 @@ pub const WORDINGS: &[&str] = &[
     "A stream uses LZW compression",
     "A stream refers to an external file",
     "An image asks to be interpolated",
+    "An ICCBased CMYK colour space is painted with overprinting on and overprint mode 1",
     "An image has alternates or OPI information",
     "PostScript XObjects aren't allowed",
     "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)",
@@ -696,6 +698,10 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     let drawing = drawing_fonts(doc, &objs);
     check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
     check_limits(doc, &objs, &pages, &mut issue);
+    if overprint::icc_cmyk_overprinted(doc, &objs) {
+        // Turning overprinting off would change how the page prints, so `convert` leaves it.
+        issue("6.2.4.2", "An ICCBased CMYK colour space is painted with overprinting on and overprint mode 1", None, None, false);
+    }
     check_spots(doc, &objs, &mut issue);
     check_graphics_states(doc, &mut issue);
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
