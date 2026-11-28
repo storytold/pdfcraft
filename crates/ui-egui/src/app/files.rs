@@ -167,6 +167,7 @@ impl PdfCraftApp {
             display_override: None,
             ready: None,
             reopen: false,
+            target_group: request.target_group,
         });
         token
     }
@@ -245,6 +246,9 @@ impl PdfCraftApp {
             }
             open_worker::ResultKind::Conversion(bytes) => match self.open_converted(&pending.name, &bytes) {
                 Some(Ok(())) => {
+                    if let Some(idx) = self.active {
+                        self.attach_tab_to_target_group(idx, pending.target_group);
+                    }
                     if let Some(command) = pending.then {
                         self.execute(ctx, command);
                     }
@@ -254,6 +258,9 @@ impl PdfCraftApp {
             },
             open_worker::ResultKind::Converted(created) => match self.open_converted_pdf(&pending.name, created) {
                 Ok(()) => {
+                    if let Some(idx) = self.active {
+                        self.attach_tab_to_target_group(idx, pending.target_group);
+                    }
                     if let Some(command) = pending.then {
                         self.execute(ctx, command);
                     }
@@ -263,6 +270,9 @@ impl PdfCraftApp {
             open_worker::ResultKind::Prepared { bytes, result, named } => match *result {
                 Ok(prepared) => match self.finish_open(ctx, &pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
                     Ok(id) => {
+                        if let Some(idx) = self.views.iter().position(|v| v.id == id) {
+                            self.attach_tab_to_target_group(idx, pending.target_group);
+                        }
                         if let Some(path) = pending.path.as_deref() {
                             self.watch.known_as(id, std::path::Path::new(path), pending.stamp);
                             if pending.reopen {
@@ -307,6 +317,7 @@ impl PdfCraftApp {
                         then: pending.then,
                         after_open: pending.after_open,
                         display_override: pending.display_override,
+                        target_group: pending.target_group,
                     });
                 }
                 Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error.to_string())]),
@@ -347,6 +358,7 @@ impl PdfCraftApp {
                     then: None,
                     after_open: None,
                     display_override: None,
+                    target_group: None,
                 });
                 return Ok(());
             }
@@ -737,6 +749,7 @@ impl PdfCraftApp {
                 recovered: p.recovered.clone(),
                 then: p.then,
                 priority: Priority::VISIBLE,
+                target_group: p.target_group,
             });
             if let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == token) {
                 pending.display_override = p.display_override;
@@ -752,12 +765,17 @@ impl PdfCraftApp {
     #[cfg(target_arch = "wasm32")]
     fn retry_inline(&mut self, ctx: &egui::Context, mut p: PasswordPrompt, pw: zeroize::Zeroizing<String>) {
         let after_open = p.after_open.clone();
+        let before = self.views.len();
+        let target_group = p.target_group;
         let opened = self.try_open(ctx, &p.name, p.path.take(), p.bytes.clone(), Some(&pw), p.activate);
         drop(pw);
         match opened {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
             // A recovered encrypted document is open once its prompt is gone.
             Ok(()) if self.password_prompt.is_none() => {
+                if self.views.len() > before {
+                    self.attach_tab_to_target_group(self.views.len() - 1, target_group);
+                }
                 if let Some(destination) = after_open {
                     self.apply_remote_destination(destination);
                 }
@@ -778,6 +796,7 @@ impl PdfCraftApp {
                     prompt.then = p.then;
                     prompt.after_open = after_open;
                     prompt.display_override = p.display_override;
+                    prompt.target_group = target_group;
                 }
             }
         }
@@ -832,7 +851,16 @@ impl PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path(&mut self, path: &str) -> OpenOutcome {
-        self.open_path_request(path, None, None)
+        self.open_path_request(path, None, None, None)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn open_path_in_group(
+        &mut self,
+        path: &str,
+        group_target: Option<(crate::tab_group::TabGroupId, crate::panes::Place)>,
+    ) -> OpenOutcome {
+        self.open_path_request(path, None, None, group_target)
     }
 
     /// Keep a chosen tool with its file until preparation and any password entry finish. The
@@ -840,7 +868,7 @@ impl PdfCraftApp {
     /// the file opened, focused its tab, was handed to the background worker, or failed.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_path_then(&mut self, ctx: &egui::Context, path: &str, then: Option<&'static str>) -> OpenOutcome {
-        let outcome = self.open_path_request(path, then, None);
+        let outcome = self.open_path_request(path, then, None, None);
         // A file that was open already is focused at once, and the tool it was opened for runs on it.
         if let (OpenOutcome::Focused, Some(command)) = (&outcome, then) {
             self.execute(ctx, command);
@@ -849,12 +877,18 @@ impl PdfCraftApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn open_path_request(&mut self, path: &str, then: Option<&'static str>, display_override: Option<(canvas::PageDisplay, bool)>) -> OpenOutcome {
+    fn open_path_request(
+        &mut self,
+        path: &str,
+        then: Option<&'static str>,
+        display_override: Option<(canvas::PageDisplay, bool)>,
+        target_group: Option<(crate::tab_group::TabGroupId, crate::panes::Place)>,
+    ) -> OpenOutcome {
         // `manual.pdf#nameddest=Intro`, as a help system starts a PDF reader (#3425): the file,
         // shown at that destination once open. A path that names a file is never split.
         match pdfcraft_engine::open_parameters::split(path, |p| std::path::Path::new(p).is_file()) {
-            Some((file, destination)) => self.open_file_request(&file, Some(destination), then, display_override),
-            None => self.open_file_request(path, None, then, display_override),
+            Some((file, destination)) => self.open_file_request(&file, Some(destination), then, display_override, target_group),
+            None => self.open_file_request(path, None, then, display_override, target_group),
         }
     }
 
@@ -867,6 +901,7 @@ impl PdfCraftApp {
         after_open: Option<pdfcraft_render::RemoteDestination>,
         then: Option<&'static str>,
         display_override: Option<(canvas::PageDisplay, bool)>,
+        target_group: Option<(crate::tab_group::TabGroupId, crate::panes::Place)>,
     ) -> OpenOutcome {
         // One file, one tab (#2166): a file that is open already comes to the front instead,
         // and the tool it was opened for runs on it. One still being opened is left to that.
@@ -882,6 +917,7 @@ impl PdfCraftApp {
             if let Some(destination) = after_open {
                 self.apply_destination_at(i, destination);
             }
+            self.attach_tab_to_target_group(i, target_group);
             return OpenOutcome::Focused;
         }
         if let Some(pending) = self.pending_opens.iter_mut().find(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
@@ -891,6 +927,9 @@ impl PdfCraftApp {
             // Asked for another place before it finished opening: it opens at the latest one.
             if after_open.is_some() {
                 pending.after_open = after_open;
+            }
+            if target_group.is_some() {
+                pending.target_group = target_group;
             }
             return OpenOutcome::Pending;
         }
@@ -906,6 +945,9 @@ impl PdfCraftApp {
             }
             if then.is_some() {
                 prompt.then = then;
+            }
+            if target_group.is_some() {
+                prompt.target_group = target_group;
             }
             return OpenOutcome::Pending;
         }
@@ -924,6 +966,7 @@ impl PdfCraftApp {
             recovered: None,
             then,
             priority: Priority::NEAR,
+            target_group,
         });
         if let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == token) {
             pending.display_override = display_override;
@@ -934,7 +977,7 @@ impl PdfCraftApp {
     /// Reopen `path` from the last session: shown at `place` once open, and brought to the front only when `front`.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn reopen_path(&mut self, path: &str, place: pdfcraft_render::RemoteDestination, front: bool) {
-        if !matches!(self.open_file_request(path, Some(place), None, None), OpenOutcome::Pending) {
+        if !matches!(self.open_file_request(path, Some(place), None, None, None), OpenOutcome::Pending) {
             return;
         }
         if let Some(pending) = self.pending_opens.iter_mut().find(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
@@ -974,7 +1017,22 @@ impl PdfCraftApp {
     /// Open one native file with a transient display override, including after a password prompt.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path_with_display(&mut self, path: &str, layout: canvas::PageDisplay, continuous: bool) {
-        self.open_path_request(path, None, Some((layout, continuous)));
+        self.open_path_request(path, None, Some((layout, continuous)), None);
+    }
+
+    /// Attach newly opened tab `index` to `target_group` (setting its originating pane before grouping) if the group still exists.
+    pub(crate) fn attach_tab_to_target_group(&mut self, index: usize, target_group: Option<(crate::tab_group::TabGroupId, crate::panes::Place)>) {
+        if let Some((gid, target_place)) = target_group
+            && self.group(gid).is_some()
+        {
+            if let Some(view) = self.views.get_mut(index)
+                && !view.pane.placed
+            {
+                view.pane.place = if self.panes.split.is_some() { target_place } else { crate::panes::Place::Main };
+                view.pane.placed = true;
+            }
+            self.add_tab_to_group(index, gid);
+        }
     }
 
     /// The File ▸ Open picker's file types, in order; the first, PDF, is the default. Images, text
@@ -1000,19 +1058,32 @@ impl PdfCraftApp {
     }
 
     pub fn open_dialog(&mut self) {
+        self.open_dialog_in_group(None);
+    }
+
+    /// Show the Open file picker and add opened tabs to `target_group` when given.
+    pub fn open_dialog_in_group(&mut self, target_group: Option<(crate::tab_group::TabGroupId, crate::panes::Place)>) {
         self.startup_superseded = true;
         // The web answers `Picked::Contents`, the desktop `Picked::Paths`.
-        self.pick_file(Self::open_request(), None, |app, ctx, picked| match picked {
+        self.pick_file(Self::open_request(), None, move |app, ctx, picked| match picked {
             #[cfg(not(target_arch = "wasm32"))]
             Picked::Paths(paths) => {
                 for path in paths {
-                    app.open_path(&path.to_string_lossy());
+                    app.open_path_in_group(&path.to_string_lossy(), target_group);
                 }
             }
             Picked::Contents(files) => {
                 for (name, bytes) in files {
-                    if let Err(error) = app.open_bytes(ctx, &name, None, bytes) {
-                        app.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
+                    let before = app.views.len();
+                    match app.open_bytes(ctx, &name, None, bytes) {
+                        Ok(()) => {
+                            if app.views.len() > before {
+                                app.attach_tab_to_target_group(app.views.len() - 1, target_group);
+                            } else if let Some(prompt) = app.password_prompt.as_mut() {
+                                prompt.target_group = target_group;
+                            }
+                        }
+                        Err(error) => app.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]),
                     }
                 }
             }
@@ -1051,7 +1122,10 @@ impl PdfCraftApp {
         }
         self.remember_view(index);
         let view = self.views.remove(index);
-        let (id, place) = (view.id, view.place());
+        let (id, place, group) = (view.id, view.place(), view.group);
+        if let Some(gid) = group {
+            self.cleanup_empty_group(gid);
+        }
         // Another tab showing the same document (split view) keeps it open.
         if !self.views.iter().any(|v| v.id == id) {
             #[cfg(not(target_arch = "wasm32"))]

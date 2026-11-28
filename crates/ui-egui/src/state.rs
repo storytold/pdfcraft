@@ -97,6 +97,15 @@ pub enum QuickTool {
     ColumnSelect,
 }
 
+/// Delete pages: the document and pages (0-based) the confirmation would delete, and the
+/// document's edit generation when the dialog opened.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeletePagesDraft {
+    pub doc: DocId,
+    pub generation: u64,
+    pub pages: Vec<usize>,
+}
+
 /// Page Properties: the document and pages it applies to (0-based), the document's edit
 /// generation when the dialog opened, and the pages' tab order as they have it (`None` when they
 /// differ). The order chosen is the hosted dialog's value.
@@ -238,6 +247,8 @@ pub struct PasswordPrompt {
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
     /// A launch-time display override, applied only after this PDF is unlocked.
     pub(crate) display_override: Option<(craft::pages::PageDisplay, bool)>,
+    /// Optional tab group and originating pane to join once unlocked ("New tab in group").
+    pub(crate) target_group: Option<(crate::tab_group::TabGroupId, crate::panes::Place)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -254,6 +265,8 @@ pub(crate) struct OpenRequest {
     /// Where the open waits in the worker's queue: a file the user named goes before files
     /// reopened from the last session.
     pub(crate) priority: craft::host::queue::Priority,
+    /// Optional tab group and originating pane to join once opened ("New tab in group").
+    pub(crate) target_group: Option<(crate::tab_group::TabGroupId, crate::panes::Place)>,
 }
 
 /// Asks for the permissions password of an open document whose security restricts it, which

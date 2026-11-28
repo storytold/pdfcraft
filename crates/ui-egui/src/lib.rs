@@ -57,11 +57,13 @@ mod home;
 mod hotbar;
 mod panels;
 pub mod panes;
+pub mod tab_group;
 pub use print_ui::{
     DefaultPaperSource, Handling as PrintHandling, OptionsSource, PrintDraft, PrinterPapersSource, PrinterSetup, PrinterSource, Spooler,
     TwoSidedSource, Which as PrintWhich, system_printers, system_two_sided,
 };
 pub use redact_ui::{HiddenDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
+pub use tab_group::{TabGroup, TabGroupColor, TabGroupId};
 pub mod i18n;
 pub mod viewer_prefs;
 // PLAN: the lead adds `mod notices; mod icons; mod brand; mod colour_picker; pub mod fonts;` here, and `pub mod settings;` in app.rs, at combine (L-212).
@@ -142,8 +144,8 @@ pub use platform::ui_scale;
 #[cfg(not(target_arch = "wasm32"))]
 use state::OpenRequest;
 pub use state::{
-    CommentClip, LeftPanel, LinkOrigin, Mode, OpenOutcome, PageClip, PagePropsDraft, PasswordPrompt, PendingLink, PendingRemoteLink, QuickTool,
-    RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel, UnlockPrompt,
+    CommentClip, DeletePagesDraft, LeftPanel, LinkOrigin, Mode, OpenOutcome, PageClip, PagePropsDraft, PasswordPrompt, PendingLink,
+    PendingRemoteLink, QuickTool, RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel, UnlockPrompt,
 };
 pub use tools::bulk_fields;
 use tools::calc_order_ui;
@@ -205,6 +207,8 @@ struct PendingOpen {
     ready: Option<open_worker::ResultKind>,
     /// Reopen Closed Tab asked for it: its closed-tab entry goes once it has opened, and stays when it fails.
     reopen: bool,
+    /// Optional tab group and originating pane to join once the opened tab is created ("New tab in group").
+    target_group: Option<(tab_group::TabGroupId, panes::Place)>,
 }
 
 /// A named destination being looked up in a document.
@@ -217,6 +221,7 @@ struct PendingDestination {
 pub struct PdfCraftApp {
     /// The app's services: jobs, files, settings sections, commands. Every queue is built from it.
     pub(crate) host: std::sync::Arc<craft::host::Host>,
+    host_date_language: Option<String>,
     /// Asks for a frame from any thread; every queue calls it when a job finishes.
     pub(crate) wake: craft::host::Wake,
     /// Files the operating system, another launch, a drop or the embedding page asked to open.
@@ -252,6 +257,11 @@ pub struct PdfCraftApp {
     pub(crate) status_captions_lang: Option<i18n::Lang>,
     pub views: Vec<DocView>,
     pub(crate) closed_tabs: Vec<String>,
+    /// Browser-styled tab groups for document tabs.
+    pub tab_groups: Vec<tab_group::TabGroup>,
+    pub next_group_id: u64,
+    pub editing_group: Option<tab_group::TabGroupId>,
+    pub group_title_draft: String,
     /// The Rename dialog's name being typed.
     pub(crate) rename_draft: Option<rename_ui::RenameDraft>,
     /// A name typed in Rename whose "Save and Rename" save did not go through; the dialog opens
@@ -645,6 +655,8 @@ pub struct PdfCraftApp {
     pub(crate) clipboard: craft::platform::clipboard::Clipboard,
     /// Page Properties: which pages, and the tab order they have.
     pub page_props_draft: Option<PagePropsDraft>,
+    /// Delete pages: the document and pages the confirmation dialog would delete.
+    pub delete_pages_draft: Option<DeletePagesDraft>,
     /// Prepare a form ▸ Preview: fill the form instead of editing its fields.
     pub form_preview: bool,
     /// Where autosaves go (`None`: autosave off, e.g. on the web and in tests).

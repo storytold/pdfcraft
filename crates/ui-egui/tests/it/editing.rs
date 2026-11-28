@@ -1220,8 +1220,8 @@ fn a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone() {
         }
     });
     h.run_steps(4);
-    for name in ["Client name", "Project ", "Dept\u{FFFD}"] {
-        h.get_by_label(name).click();
+    for (name, value) in [("Client name", "Acme"), ("Project ", "Padded"), ("Dept\u{FFFD}", "Sales")] {
+        h.get_by_label(&format!("{name}, {value}")).click();
         h.run_steps(3);
         for button in ["Update", "Delete"] {
             assert!(h.get_by_role_and_label(Role::Button, button).accesskit_node().is_disabled(), "{button} is off for {name:?}");
@@ -1231,7 +1231,7 @@ fn a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone() {
     type_into(&mut h, "Name:", "Revision");
     assert!(h.get_by_role_and_label(Role::Button, "Add").accesskit_node().is_disabled(), "Add would overwrite the number");
     assert_eq!(h.get_by_role_and_label(Role::TextInput, "Value:").value().as_deref(), Some("Sales"));
-    h.get_by_label_contains("Project").click();
+    h.get_by_label("Project, Apollo").click();
     h.run_steps(3);
     clear(&mut h, "Value:");
     type_into(&mut h, "Value:", "Gemini");
@@ -6274,6 +6274,9 @@ fn pages_panel_escape_clears_and_deleted_pages_leave_the_selection() {
     h.state_mut().views[0].select_pages(&[3, 4]);
     assert!(h.execute("page.delete"));
     h.run_steps(3);
+    // The command's ask opens the dialog; Delete confirms the deletion.
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
     assert_eq!(page_texts(h.state()).len(), 3);
     assert!(picked(&h).iter().all(|p| *p < 3), "{:?}", picked(&h));
 }
@@ -6396,6 +6399,9 @@ fn deleting_pages_from_the_pages_panel_menu() {
     let at = panel_thumb(&h, "Page 2");
     right_click_at(&mut h, at);
     h.get_by_label("Delete pages").click();
+    h.run_steps(3);
+    // The ask opens the dialog; Delete confirms the deletion.
+    h.get_by_label("Delete").click();
     h.run_steps(4);
     assert_eq!(page_texts(h.state()), ["Page 1", "Page 3", "Page 4"]);
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Delete page"));
@@ -6431,6 +6437,9 @@ fn the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page()
     h.run_steps(1);
     h.key_press(Key::Delete);
     h.run_steps(4);
+    // The ask opens the dialog; Delete confirms the deletion of pages 2 and 3.
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
     assert_eq!(page_texts(h.state()), ["Page 1"]);
     assert_eq!(h.state().views[0].current(), 0);
 }
@@ -6459,7 +6468,7 @@ fn host_dirty_hears_when_unsaved_work_appears_and_goes() {
 fn one_editor_contains_mixed_styles_and_visual_rows() {
     let _gpu = gpu();
     let bytes = source_font_fixture_with_text(
-        "BT 0 0.2 0.5 rg /F1 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
+        "BT 0 0.2 0.5 rg /F2 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
          BT 0 g /F2 12 Tf 20 215 Td (Plain ) Tj /F1 12 Tf 0 0.2 0.5 rg (bold) Tj /F2 12 Tf 0 g ( words) Tj ET \
          BT /F2 10 Tf 20 195 Td (Last row) Tj ET",
     );
@@ -6546,7 +6555,7 @@ fn one_editor_contains_mixed_styles_and_visual_rows() {
 fn the_caret_on_a_small_row_is_as_tall_as_that_row() {
     // It was one row of the region's first (18 pt) size tall, reaching into the row below.
     let bytes = source_font_fixture_with_text(
-        "BT 0 0.2 0.5 rg /F1 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
+        "BT 0 0.2 0.5 rg /F2 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
          BT 0 g /F2 12 Tf 20 215 Td (Plain ) Tj /F1 12 Tf 0 0.2 0.5 rg (bold) Tj /F2 12 Tf 0 g ( words) Tj ET \
          BT /F2 10 Tf 20 195 Td (Last row) Tj ET",
     );
@@ -8220,7 +8229,151 @@ fn delete_with_the_pointer_on_the_pages_panel_deletes_a_page() {
     h.run_steps(2);
     h.key_press(egui::Key::Delete);
     h.run_steps(4);
+    // The ask opens the dialog; Delete confirms the page goes.
+    h.get_by_label("Delete").click();
+    h.run_steps(4);
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), pages - 1, "a page goes");
+}
+
+/// An edit that runs between the Pages panel capturing the pages and the ask being processed
+/// makes those indices stale: the ask is dropped, so it never names the newer document.
+#[test]
+fn an_edit_before_the_pages_delete_ask_is_processed_drops_the_ask() {
+    let mut h = pages_panel(5);
+    let id = h.state().views[0].id;
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    // A queued move runs before the ask is processed, and the move succeeds: the captured pages
+    // no longer name the moved-to document.
+    h.state_mut().views[0].session.pending_edit = Some(pdfcraft_engine::Edit::MovePages { pages: vec![0], to: 5 });
+    h.state_mut().views[0].pending_action = Some(pdfcraft_ui_egui::canvas::ViewAction::ConfirmDeletePages { pages: vec![0], generation });
+    h.run_steps(4);
+    assert_eq!(page_texts(h.state()), ["Page 2", "Page 3", "Page 4", "Page 5", "Page 1"], "the move ran");
+    assert!(!crate::support::dialog_open(&h), "the stale ask is dropped");
+    assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 5);
+}
+
+/// Cancel in the pages delete ask deletes nothing: the ask closes, the pages stay, and the ask
+/// carries nothing after it — confirming again queues no deletion either.
+#[test]
+fn cancel_in_the_pages_delete_ask_deletes_nothing() {
+    let mut h = pages_panel(5);
+    let ctx = h.ctx.clone();
+    h.state_mut().views[0].select_pages(&[0]);
+    h.run_steps(2);
+    assert!(h.execute("page.delete"));
+    h.run_steps(3);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(!crate::support::dialog_open(&h), "the ask is closed");
+    assert_eq!(page_texts(h.state()).len(), 5, "cancel deletes nothing");
+    // The draft went with it: a confirm after the cancel queues nothing.
+    h.state_mut().confirm_delete_pages(&ctx);
+    h.run_steps(2);
+    assert_eq!(page_texts(h.state()).len(), 5);
+}
+
+/// Dismissing the pages delete ask (Escape) deletes nothing and drops the ask with it.
+#[test]
+fn dismissing_the_pages_delete_ask_deletes_nothing() {
+    let mut h = pages_panel(5);
+    let ctx = h.ctx.clone();
+    h.state_mut().views[0].select_pages(&[0]);
+    h.run_steps(2);
+    assert!(h.execute("page.delete"));
+    h.run_steps(3);
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(!crate::support::dialog_open(&h), "the ask is dismissed");
+    assert_eq!(page_texts(h.state()).len(), 5, "dismissing deletes nothing");
+    h.state_mut().confirm_delete_pages(&ctx);
+    h.run_steps(2);
+    assert_eq!(page_texts(h.state()).len(), 5);
+}
+
+/// A document that changed while the pages delete ask was open deletes nothing: those indices
+/// would name the newer document's pages.
+#[test]
+fn a_document_changed_behind_the_open_pages_delete_ask_deletes_nothing() {
+    let mut h = pages_panel(5);
+    let ctx = h.ctx.clone();
+    h.state_mut().views[0].select_pages(&[0]);
+    h.run_steps(2);
+    assert!(h.execute("page.delete"));
+    h.run_steps(3);
+    // An edit runs behind the open ask: confirming must not apply the captured pages to it.
+    h.state_mut().apply_edit(&ctx, pdfcraft_engine::Edit::RotatePages { pages: vec![1], degrees: 90 });
+    h.run_steps(2);
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()).len(), 5, "the changed document deletes nothing");
+    // The draft went with it: a second confirm queues nothing either.
+    h.state_mut().confirm_delete_pages(&ctx);
+    h.run_steps(2);
+    assert_eq!(page_texts(h.state()).len(), 5);
+}
+
+/// After deleting pages through the confirmation, the selection and Shift-click anchor are
+/// cleared, so a subsequent Shift-click ranges from the new current page.
+#[test]
+fn shift_click_anchor_resets_after_page_deletion() {
+    let mut h = harness(6, |_| {});
+    let ctx = h.ctx.clone();
+
+    // Click Page 2 (idx 1).
+    h.state_mut().views[0].view.current = 1;
+    h.state_mut().views[0].clear_page_selection(Some(1));
+    // Select Page 2 and Page 3.
+    h.state_mut().views[0].selected = craft::behavior::Selection::new(vec![1, 2], Some(2), Some(1));
+    assert_eq!(h.state().views[0].selected.items, vec![1, 2]);
+
+    // Request deletion of pages 1 and 2, then confirm.
+    h.state_mut().request_delete_pages(0, vec![1, 2]);
+    h.state_mut().confirm_delete_pages(&ctx);
+    h.run_steps(3);
+
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.pages.len(), 4);
+    assert_eq!(h.state().views[0].current(), 1);
+    assert!(h.state().views[0].selected.items.is_empty(), "selection is cleared");
+
+    // Shift-click original Page 6 (now index 3 in the 4-page doc):
+    // In craft framework Selection, extend_to extends from anchor (which clear_page_selection(None) reset)
+    // or falls back to current.
+    let anchor = h.state().views[0].selected.anchor.unwrap_or(h.state().views[0].current());
+    let low = anchor.min(3);
+    let high = anchor.max(3);
+    h.state_mut().views[0].selected = craft::behavior::Selection::new((low..=high).collect(), Some(3), Some(anchor));
+    // Range must be from current (1) to 3: [1, 2, 3] (original Pages 4, 5, 6), not [2, 3].
+    assert_eq!(h.state().views[0].selected.items, vec![1, 2, 3]);
+}
+
+/// When page deletion fails (e.g. disallowed by permissions or signed rewrite guard), the
+/// current page is preserved instead of remapping as if pages were removed.
+#[test]
+fn preserve_current_page_when_deletion_fails() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = scripted_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, protected("", "owner", 0b0100)).expect("fixture opens");
+            app
+        }
+    });
+    h.run_steps(4);
+    let ctx = h.ctx.clone();
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.pages.len(), 2);
+
+    // Navigate to Page 2 (idx 1).
+    h.state_mut().views[0].view.current = 1;
+
+    // Request deleting Page 2 and confirm.
+    h.state_mut().request_delete_pages(0, vec![1]);
+    h.state_mut().confirm_delete_pages(&ctx);
+    h.run_steps(3);
+
+    // Deletion was rejected: both pages remain, and view stays on Page 2.
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.pages.len(), 2);
+    assert_eq!(h.state().views[0].current(), 1);
 }
 
 /// In crop mode, a right-click on another picture selects it for its menu, as without crop mode. It
@@ -10368,7 +10521,10 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
         "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>".into(),
     ];
-    let body = "BT /F1 24 Tf 20 200 Td (Heading) Tj /F1 12 Tf 0 -25 Td (Paragraph) Tj ET";
+    // The heading is close enough in size to stay in the paragraph (a much larger one is a block
+    // of its own), and Times goes on one word of the second row: a row set wholly in another
+    // family is a paragraph of its own.
+    let body = "BT /F1 16 Tf 20 200 Td (Heading) Tj /F1 12 Tf 0 -25 Td (Body text in a Paragraph) Tj ET";
     objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
     let mut pdf = Vec::from(b"%PDF-1.7\n");
     let mut xref = Vec::new();

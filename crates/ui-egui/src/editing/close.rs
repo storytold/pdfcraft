@@ -142,7 +142,7 @@ impl PdfCraftApp {
 
     /// Starts the unsaved-changes question for `docs` under `scope`. A newer operation replaces
     /// one still asking; a quit it replaces is called off.
-    fn begin_close(&mut self, ctx: &egui::Context, scope: CloseScope, docs: Vec<DocId>) {
+    pub(crate) fn begin_close(&mut self, ctx: &egui::Context, scope: CloseScope, docs: Vec<DocId>) {
         let Some(first) = docs.first().copied() else { return };
         if self.close_guard.as_ref().is_some_and(|g| g.scope() == CloseScope::Quit) {
             self.session_keeper.quit_cancelled();

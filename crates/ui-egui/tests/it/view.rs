@@ -2237,6 +2237,9 @@ fn the_pages_panel_tools_act_on_the_selected_pages() {
     h.state_mut().views[0].select_pages(&[0]);
     h.run_steps(2);
     tool(&mut h, "page.delete");
+    // The panel's ask opens the dialog; Delete confirms the deletion.
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 2, "page 1 deleted");
     tool(&mut h, "page.insert_blank");
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 3);
