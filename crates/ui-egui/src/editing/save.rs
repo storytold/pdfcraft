@@ -36,6 +36,8 @@ pub enum SaveTarget {
 struct BrowserSave {
     ticket: PickId,
     bytes: Arc<Vec<u8>>,
+    /// What baking Fill & Sign said for these bytes, shown once they are saved.
+    baked: Option<String>,
 }
 
 /// What runs once a save has ended one way or the other, given the context of the pass it ends on.
@@ -239,7 +241,7 @@ impl PdfCraftApp {
             }
             return saved;
         }
-        let Some((_, bytes)) = self.document_bytes(ctx, id, target, None) else {
+        let Some((_, bytes, baked)) = self.document_bytes(ctx, id, target, None) else {
             if let Some(failed) = pending.failed.take() {
                 failed(self, ctx);
             }
@@ -249,7 +251,7 @@ impl PdfCraftApp {
         let mut request = PickRequest::save("document").file_name(file_name).suggested_extension("pdf");
         request.filters = vec![FileFilter::new("PDF", &["pdf"])];
         let ticket = self.host.files().save(request, bytes.to_vec());
-        pending.browser = Some(BrowserSave { ticket, bytes });
+        pending.browser = Some(BrowserSave { ticket, bytes, baked });
         self.pending_save = Some(pending);
         false
     }
@@ -289,6 +291,11 @@ impl PdfCraftApp {
             }
             Picked::Cancelled | Picked::Unavailable(_) | Picked::Contents(_) => false,
         };
+        // What baking said follows the save's notice, or waits for the next save.
+        match browser.baked {
+            Some(said) if saved => self.notify(said),
+            said => self.keep_bake_notice(id, said),
+        }
         let then = if saved { pending.after.take() } else { pending.failed.take() };
         if let Some(then) = then {
             then(self, ctx);
@@ -407,9 +414,13 @@ impl PdfCraftApp {
     /// succeeds, so a save that fails or is cancelled asks again too.
     pub(crate) fn answer_lock_signatures(&mut self, ctx: &egui::Context, lock: bool, remember: bool) {
         let Some(p) = self.pending_lock.take() else { return };
-        if lock && !self.flatten_fill_sign_on_save && !self.flatten_fill_sign_in(ctx, p.id) {
-            (p.failed)(self, ctx);
-            return;
+        if lock && !self.flatten_fill_sign_on_save {
+            // What the bake said is shown with the save that follows (`save_doc_to`).
+            let Some(said) = self.flatten_fill_sign_in(ctx, p.id) else {
+                (p.failed)(self, ctx);
+                return;
+            };
+            self.keep_bake_notice(p.id, said);
         }
         self.lock_answered = Some(p.id);
         if remember {
@@ -435,29 +446,57 @@ impl PdfCraftApp {
         if self.session.get(id).is_none_or(|d| d.is_signed()) {
             return;
         }
-        if self.flatten_fill_sign_in(ctx, id) {
+        if let Some(said) = self.flatten_fill_sign_in(ctx, id) {
             self.notify_tr("Signature locked into the page.");
+            if let Some(said) = said {
+                self.notify(said);
+            }
         }
     }
 
-    /// Lock document `id`'s Fill & Sign marks into its pages (an undoable edit). Returns false,
-    /// having told the user why, when that fails.
-    fn flatten_fill_sign_in(&mut self, ctx: &egui::Context, id: DocId) -> bool {
+    /// Lock document `id`'s Fill & Sign marks into its pages (an undoable edit). Returns what the
+    /// edit said (content-list entries it left out), or `None`, having told the user why, when
+    /// it fails.
+    fn flatten_fill_sign_in(&mut self, ctx: &egui::Context, id: DocId) -> Option<Option<String>> {
         let before = self.session.get(id).map(|d| d.edit_generation());
         if let Err(e) = self.session.apply(id, pdfcraft_engine::Edit::FlattenFillSign) {
             self.notify_error(e);
-            return false;
+            return None;
         }
+        let mut said = None;
         if before != self.session.get(id).map(|d| d.edit_generation())
             && let Some(doc) = self.session.get(id)
-            && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
         {
-            view.document_changed(ctx, &doc.info);
-            // The marks left the comments: a selected one is gone, and its (page, index) could
-            // now name another comment.
-            view.session.comments.clear_selection();
+            said = super::edit_notices_message(&doc.edit_notices);
+            if let Some(view) = self.views.iter_mut().find(|v| v.id == id) {
+                view.document_changed(ctx, &doc.info);
+                // The marks left the comments: a selected one is gone, and its (page, index)
+                // could now name another comment.
+                view.session.comments.clear_selection();
+            }
         }
-        true
+        Some(said)
+    }
+
+    /// Keep `said` (what baking Fill & Sign into document `id` said) for its next save, as true
+    /// for the document's edit generation now. `None` keeps nothing.
+    pub(crate) fn keep_bake_notice(&mut self, id: DocId, said: Option<String>) {
+        let Some(said) = said else { return };
+        if let Some(generation) = self.session.get(id).map(|d| d.edit_generation()) {
+            self.bake_notice = Some((id, generation, said));
+        }
+    }
+
+    /// What [`Self::keep_bake_notice`] kept for document `id`, while the document is still at the
+    /// edit generation it was kept for: after an undo or another edit it is no longer said.
+    /// Another document's stays kept.
+    pub(crate) fn take_bake_notice(&mut self, id: DocId) -> Option<String> {
+        let (doc, generation, said) = self.bake_notice.take()?;
+        if doc != id {
+            self.bake_notice = Some((doc, generation, said));
+            return None;
+        }
+        (self.session.get(id).map(|d| d.edit_generation()) == Some(generation)).then_some(said)
     }
 
     /// Write document `id` to `dest` through the host's file service and, unless the target is
@@ -466,12 +505,14 @@ impl PdfCraftApp {
     /// the browser's downloads on the web.
     fn save_doc_to(&mut self, ctx: &egui::Context, id: DocId, dest: &Path, target: SaveTarget) -> bool {
         let dest_text = dest.to_string_lossy().into_owned();
-        let Some((_, bytes)) = self.document_bytes(ctx, id, target, Some(&dest_text)) else { return false };
+        let Some((_, bytes, baked)) = self.document_bytes(ctx, id, target, Some(&dest_text)) else { return false };
         let intent = if target == SaveTarget::InPlace { WriteIntent::Save } else { WriteIntent::SaveAs };
         let to_page = match self.host.files().write(dest, &bytes, intent) {
             Ok(to_page) => to_page,
             Err(e) => {
                 self.notify_fmt("Couldn't save {name}: {e}", &[("name", &dest_text), ("e", &e.to_string())]);
+                // The document stays baked: the next save says it.
+                self.keep_bake_notice(id, baked);
                 return false;
             }
         };
@@ -479,6 +520,7 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.save_flow.written(&mut self.watch, id, dest);
         if !self.finish_save(ctx, id, bytes, Some(dest_text)) {
+            self.keep_bake_notice(id, baked);
             return false;
         }
         // A page that took the bytes reports where they went itself; the browser's downloads say
@@ -491,20 +533,40 @@ impl PdfCraftApp {
                 self.notify_fmt("Saved {name}", &[("name", &short)]);
             }
         }
+        // What baking Fill & Sign said (now, or kept from the Lock answer or a failed save)
+        // follows the save's own notice.
+        if let Some(said) = baked {
+            self.notify(said);
+        }
         #[cfg(target_os = "macos")]
         crate::macos_association::repair(dest);
         true
     }
 
-    /// The bytes a save of document `id` writes, with the document's name; `None` (with a notice
-    /// when something failed) when nothing should be written. Commits what is typed and runs the
-    /// document's Will Save actions first. `dest` is the file being written, when known.
-    fn document_bytes(&mut self, ctx: &egui::Context, id: DocId, target: SaveTarget, dest: Option<&str>) -> Option<(String, Arc<Vec<u8>>)> {
+    /// The bytes a save of document `id` writes, with the document's name and what baking Fill &
+    /// Sign said for it (now, or kept from the Lock answer or a failed save); `None` (with a notice
+    /// when something failed) when nothing should be written, the bake's notice then kept for the
+    /// next save. Commits what is typed and runs the document's Will Save actions first. `dest` is
+    /// the file being written, when known.
+    fn document_bytes(
+        &mut self,
+        ctx: &egui::Context,
+        id: DocId,
+        target: SaveTarget,
+        dest: Option<&str>,
+    ) -> Option<(String, Arc<Vec<u8>>, Option<String>)> {
         // Save As answers on a later pass: commit what was typed meanwhile, too (#166), even if
         // another tab is active by then.
-        if !self.commit_typing_in(ctx, id) || !self.flatten_fill_sign_for_save(ctx, id) {
+        if !self.commit_typing_in(ctx, id) {
             return None;
         }
+        // Taken before the bake, which changes the document it is true for.
+        let carried = self.take_bake_notice(id);
+        let Some(baked) = self.flatten_fill_sign_for_save(ctx, id) else {
+            self.keep_bake_notice(id, carried);
+            return None;
+        };
+        let baked = join_notices(carried, baked);
         let recovered = self.recovered_paths.contains(&id);
         let Some((name, full)) = self.session.get(id).map(|d| {
             // Save As to another file and a recovered document are clean copies, without earlier
@@ -522,9 +584,10 @@ impl PdfCraftApp {
         self.run_document_actions(ctx, id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
         let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) };
         match bytes.and_then(|b| self.session.check_save(id, &b).map(|()| b)) {
-            Ok(b) => Some((name, b)),
+            Ok(b) => Some((name, b, baked)),
             Err(e) => {
                 self.notify_fmt("Couldn't save {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
+                self.keep_bake_notice(id, baked);
                 None
             }
         }
@@ -560,6 +623,14 @@ impl PdfCraftApp {
     }
 }
 
+/// Two things baking said, one per line.
+pub(crate) fn join_notices(first: Option<String>, second: Option<String>) -> Option<String> {
+    match (first, second) {
+        (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+        (a, b) => a.or(b),
+    }
+}
+
 /// Whether `view` holds content that a saved or delivered Apply redactions removed: a saved step
 /// is undone, cannot be redone, or fewer steps are in effect than were delivered.
 fn restores_saved_redactions(view: &crate::DocView) -> bool {
@@ -583,4 +654,109 @@ pub(crate) fn unredacted_file_name(name: &str) -> String {
 /// The file name of `path`, for the notice after a save.
 fn short_name(path: &Path) -> String {
     path.file_name().map_or_else(|| path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod bake_notice_tests {
+    use std::sync::Arc;
+
+    use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles};
+    use craft::ui::notices::PostedNotice;
+    use pdfcraft_engine::{Edit, FillMark, NewAnnotation, Shape, Style};
+
+    use super::SaveTarget;
+    use crate::PdfCraftApp;
+
+    /// One page whose content list names object 90, which the file (read from its object
+    /// headers, as it has no cross-reference table) doesn't contain: baking Fill & Sign rewrites
+    /// the list and leaves that entry out.
+    const DAMAGED: &[u8] = b"%PDF-1.7
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents [4 0 R 90 0 R] >>
+endobj
+4 0 obj
+<< /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream
+endobj
+trailer << /Root 1 0 R >>
+%%EOF
+";
+    const LEFT_OUT: &str = "1 entry in the content list of page 1 was left out. It named an object missing from the file, one that is not a stream, or one that could not be read.";
+
+    /// The damaged file opened from `path`, with a Fill & Sign check mark on it, in an app whose
+    /// files are `files`.
+    fn marked(files: ScriptedFiles, path: &str) -> (PdfCraftApp, pdfcraft_engine::DocId) {
+        let info = AppInfo { id: "pdfcraft", name: "PdfCraft", version: env!("CARGO_PKG_VERSION") };
+        let host = Host::builder(info).jobs(Arc::new(ManualJobs::new())).files(Arc::new(files)).build();
+        let mut app = PdfCraftApp::for_unit_tests_on(Arc::new(host));
+        app.open_bytes(&egui::Context::default(), "damaged.pdf", Some(path.into()), DAMAGED.to_vec()).unwrap();
+        let id = app.views[0].id;
+        let shape = Shape::Mark { rect: [100.0, 100.0, 116.0, 116.0], mark: FillMark::Check };
+        let style = Style::default_for(&shape);
+        app.session.apply(id, Edit::AddAnnotation(NewAnnotation { page: 0, shape, style, contents: String::new(), author: "Ada".into() })).unwrap();
+        (app, id)
+    }
+
+    /// Where `text` is among the notices posted so far.
+    fn notice(app: &PdfCraftApp, text: &str) -> Option<usize> {
+        app.posted_notices.iter().position(|n| *n == PostedNotice::new(text))
+    }
+
+    /// Lock in the save-time question bakes before the save, with automatic baking off: what
+    /// the bake left out is said after the save's own notice.
+    #[test]
+    fn the_lock_answer_says_what_baking_left_out() {
+        let ctx = egui::Context::default();
+        let (mut app, id) = marked(ScriptedFiles::new(), "/bake/lock.pdf");
+        app.placed_signatures.insert(id);
+        assert!(!app.save_active(&ctx, SaveTarget::InPlace), "the lock question is asked");
+        assert!(app.pending_lock.is_some());
+        app.answer_lock_signatures(&ctx, true, false);
+        let saved = notice(&app, "Saved lock.pdf").expect("saved");
+        assert!(notice(&app, LEFT_OUT).is_some_and(|at| at > saved), "{:?}", app.posted_notices);
+    }
+
+    /// Saving with automatic baking on says what the bake left out after the save's own notice.
+    #[test]
+    fn saving_with_fill_and_sign_baked_says_what_the_content_list_left_out() {
+        let ctx = egui::Context::default();
+        let (mut app, _) = marked(ScriptedFiles::new(), "/bake/on.pdf");
+        app.flatten_fill_sign_on_save = true;
+        assert!(app.save_active(&ctx, SaveTarget::InPlace));
+        let saved = notice(&app, "Saved on.pdf").expect("saved");
+        assert!(notice(&app, LEFT_OUT).is_some_and(|at| at > saved), "{:?}", app.posted_notices);
+    }
+
+    /// A save that fails after baking leaves the document baked: the retry, which has nothing
+    /// left to bake, still says what the bake left out.
+    #[test]
+    fn a_save_that_fails_after_baking_says_it_on_the_retry() {
+        let ctx = egui::Context::default();
+        let files = ScriptedFiles::answering([Picked::Paths(vec!["/bake/retry.pdf".into()])]).failing_writes("/bake/denied.pdf");
+        let (mut app, _) = marked(files, "/bake/denied.pdf");
+        app.flatten_fill_sign_on_save = true;
+        assert!(!app.save_active(&ctx, SaveTarget::InPlace), "the write fails");
+        assert!(notice(&app, LEFT_OUT).is_none(), "not said with the failure: {:?}", app.posted_notices);
+        app.save_active(&ctx, SaveTarget::As);
+        app.save_flow_pass(&ctx);
+        let saved = notice(&app, "Saved retry.pdf").expect("the retry saves");
+        assert!(notice(&app, LEFT_OUT).is_some_and(|at| at > saved), "{:?}", app.posted_notices);
+    }
+
+    /// What baking said is kept only for the document state it describes: after an undo it is
+    /// not said.
+    #[test]
+    fn a_kept_bake_notice_is_dropped_after_an_undo() {
+        let (mut app, id) = marked(ScriptedFiles::new(), "/bake/undo.pdf");
+        app.keep_bake_notice(id, Some("said".into()));
+        app.session.undo(id).unwrap();
+        assert_eq!(app.take_bake_notice(id), None);
+    }
 }

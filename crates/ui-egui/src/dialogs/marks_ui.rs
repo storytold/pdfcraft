@@ -141,6 +141,33 @@ pub(crate) fn backdrops_left_off_message(pages: &[usize]) -> String {
     )
 }
 
+/// After an edit that rewrote the content lists of `pages` (0-based, ascending): the `entries`
+/// entries in them that named no content stream it could keep were left out
+/// (`pdfcraft_engine::EditNotice::ContentsLeftOut`).
+pub(crate) fn contents_left_out_message(pages: &[usize], entries: usize) -> String {
+    let (one, many) = if entries == 1 {
+        (
+            tl!(
+                "1 entry in the content list of page {pages} was left out. It named an object missing from the file, one that is not a stream, or one that could not be read."
+            ),
+            tl!(
+                "1 entry in the content lists of pages {pages} was left out. It named an object missing from the file, one that is not a stream, or one that could not be read."
+            ),
+        )
+    } else {
+        (
+            tl!(
+                "{entries} entries in the content list of page {pages} were left out. They named objects missing from the file, objects that are not streams, or objects that could not be read."
+            ),
+            tl!(
+                "{entries} entries in the content lists of pages {pages} were left out. They named objects missing from the file, objects that are not streams, or objects that could not be read."
+            ),
+        )
+    };
+    let entries = entries.to_string();
+    pages_phrase(pages, &crate::i18n::fmt(one, &[("entries", &entries)]), &crate::i18n::fmt(many, &[("entries", &entries)]))
+}
+
 /// `one` or `many` with `{pages}` replaced by `pages` (0-based, ascending) as 1-based runs
 /// ("1-3, 6"), so the message says which pages it means.
 fn pages_phrase(pages: &[usize], one: &str, many: &str) -> String {
