@@ -10998,7 +10998,8 @@ fn xfa_date_fields_show_two_digit_years_with_the_century_split_of_30() {
 }
 
 /// A dynamic XFA form opens laid out from its template through the tools, renders, takes values
-/// and saves them.#[test]
+/// and saves them.
+#[test]
 fn dynamic_xfa_forms_open_render_fill_and_save_through_tools() {
     let dir = workdir("xfa");
     std::fs::write(dir.join("xfa.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(2))).unwrap();
