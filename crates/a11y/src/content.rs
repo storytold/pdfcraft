@@ -4,11 +4,12 @@
 //! Every sentence a rule here can say is listed in [`crate::WORDINGS`], so interfaces can say it in
 //! their own language; a test in this crate keeps that list complete.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
 use pdfcraft_model::Page;
 
+use crate::parent_tree::{Holdings, ParentTree, Place, both};
 use crate::{Finding, Rule};
 
 /// What the page content holds, per checked page.
@@ -22,13 +23,20 @@ pub(crate) struct Scan {
     pub fonts: BTreeMap<usize, BTreeSet<ObjRef>>,
     /// Pages read only in part: content or forms past the page's decode budget are missing.
     pub incomplete: BTreeSet<usize>,
+    /// Some marked content was counted neither as tagged nor as untagged: the parent tree can't
+    /// tell whether an element owns it ([`ParentTree::owns`]).
+    pub undecided: bool,
+    /// The structure parent tree: which element owns each tagged item.
+    pub tree: ParentTree,
+    /// What the elements the parent tree names hold, read once each.
+    holdings: Holdings,
 }
 
 const MAX_FORM_DEPTH: usize = 12;
 
 impl Scan {
     pub fn run(doc: &Document, pages: &[Page], list: &[usize]) -> Scan {
-        let mut s = Scan::default();
+        let mut s = Scan { tree: ParentTree::read(doc), ..Scan::default() };
         for &p in list {
             let Some(page) = pages.get(p) else { continue };
             let res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
@@ -37,7 +45,9 @@ impl Scan {
             if budget.remaining() == 0 {
                 s.incomplete.insert(p);
             }
-            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget };
+            let key = struct_parents(doc, &page.dict);
+            let place = Place { page: page.obj, stm: None };
+            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget, key, place };
             w.content(&data, &res, false, 0);
         }
         s
@@ -51,15 +61,44 @@ struct Walk<'a> {
     forms: HashSet<ObjRef>,
     /// Decoded bytes and form entries left for this page.
     budget: DecodeBudget,
+    /// The parent-tree key (/StructParents) of the content stream being walked: the page's, or a
+    /// form XObject's own.
+    key: Option<i64>,
+    /// Where the content stream being walked is: the page's own, or a form XObject's.
+    place: Place,
 }
 
-fn bdc_marks(doc: &Document, op: &pdfcraft_content::Op, props: &Dict) -> bool {
-    op.name(0) == Some(b"Artifact")
-        || match op.operands.get(1) {
-            Some(Object::Dict(d)) => d.contains(b"MCID"),
-            Some(Object::Name(n)) => props.get(n).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().map(|d| d.contains(b"MCID"))).unwrap_or(false),
+/// The /StructParents of a page or form XObject: the key of its entry in the parent tree.
+fn struct_parents(doc: &Document, d: &Dict) -> Option<i64> {
+    d.get(b"StructParents").and_then(|k| doc.resolve(k).as_int())
+}
+
+impl Walk<'_> {
+    /// Whether a BDC opens an artifact, or tagged content: marked content whose MCID belongs to a
+    /// structure element through the parent tree entry `self.key` names, an element that holds it
+    /// among its kids (ISO 32000-2 §14.7.5.4, [`ParentTree::owns`]). An MCID that no element owns
+    /// is not tagged: no tag in the tree answers it. One the parent tree can't decide for (its
+    /// entry may be in the part of a truncated tree not read, its element's kids were read only in
+    /// part, or its parents run past the ancestor limit) is not counted either way, and noted in
+    /// [`Scan::undecided`]: the rule is then left to a manual check.
+    fn bdc_marks(&mut self, op: &pdfcraft_content::Op, props: &Dict) -> bool {
+        if op.name(0) == Some(b"Artifact") {
+            return true;
+        }
+        let mcid_of = |d: &Dict| d.get(b"MCID").and_then(|m| self.doc.resolve(m).as_int());
+        let mcid = match op.operands.get(1) {
+            Some(Object::Dict(d)) => mcid_of(d),
+            Some(Object::Name(n)) => props.get(n).map(|x| self.doc.resolve(x)).and_then(|x| x.as_dict().and_then(mcid_of)),
+            _ => None,
+        };
+        match (mcid, self.key) {
+            (Some(mcid), Some(key)) => self.scan.tree.owns(self.doc, &mut self.scan.holdings, key, mcid, self.place).unwrap_or_else(|| {
+                self.scan.undecided = true;
+                true
+            }),
             _ => false,
         }
+    }
 }
 
 impl Walk<'_> {
@@ -78,7 +117,7 @@ impl Walk<'_> {
             let inside = covered || stack.last().copied().unwrap_or(false);
             match op.op.as_slice() {
                 b"BMC" => stack.push(inside || op.name(0) == Some(b"Artifact")),
-                b"BDC" => stack.push(inside || bdc_marks(self.doc, &op, &props)),
+                b"BDC" => stack.push(inside || self.bdc_marks(&op, &props)),
                 b"EMC" => {
                     stack.pop();
                 }
@@ -120,6 +159,10 @@ impl Walk<'_> {
                                 }
                             };
                             self.forms.insert(r);
+                            // The form's marked content is keyed by its own /StructParents.
+                            let key = std::mem::replace(&mut self.key, struct_parents(self.doc, &x.dict));
+                            let page = self.place.page;
+                            let place = std::mem::replace(&mut self.place, Place { page, stm: Some(r) });
                             let inner = x
                                 .dict
                                 .get(b"Resources")
@@ -127,6 +170,8 @@ impl Walk<'_> {
                                 .and_then(|o| o.as_dict().cloned())
                                 .unwrap_or_else(|| res.clone());
                             self.content(&data, &inner, inside, depth + 1);
+                            self.key = key;
+                            self.place = place;
                             self.forms.remove(&r);
                         }
                         _ => {}
@@ -260,8 +305,86 @@ fn annotation_rect(doc: &Document, annot: &Dict) -> Option<[f64; 4]> {
     Some([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
 }
 
-pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usize], scan: &Scan, tagged: bool) -> Vec<Finding> {
+/// Whether annotation `r` (`a`, of subtype `st`) is tagged: its /StructParent names, in the parent
+/// tree, the structure element that holds it through an object reference (/OBJR) among its kids
+/// (ISO 32000-2 §14.7.5.3, §14.7.5.4), and that element is of the type that holds annotations of
+/// its kind (§14.8.2.5.2, §14.8.4.7.2 Table 368): Form for a widget, Link for a link, Annot for any
+/// other. An element of another type can't hold it, wherever its parents lead. `None` when the
+/// parent tree can't tell ([`ParentTree::entry`], [`Holdings::holds_object`],
+/// [`ParentTree::in_hierarchy`]): the annotation is then not counted against the rule, which is
+/// left to a manual check.
+fn annotation_tagged(doc: &Document, tree: &ParentTree, owners: &mut Owners, r: ObjRef, a: &Dict, st: &[u8]) -> Option<bool> {
+    let Some(key) = a.get(b"StructParent").and_then(|k| doc.resolve(k).as_int()) else { return Some(false) };
+    let Some((at, element)) = tree.entry(doc, key)? else { return Some(false) };
+    let want: &[u8] = match st {
+        b"Widget" => b"Form",
+        b"Link" => b"Link",
+        _ => b"Annot",
+    };
+    // The type may be given by reference (ISO 32000-2 §7.3.10).
+    let role = element.as_dict().and_then(|e| e.get(b"S")).and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec));
+    if !role.is_some_and(|s| owners.roles.standard(doc, &s).is_some_and(|t| t == want)) {
+        return Some(false);
+    }
+    both(owners.holdings.holds_object(doc, at, &element, r), || tree.in_hierarchy(doc, &element))
+}
+
+/// What one rule's annotations look up in their elements, each read once: the standard type each
+/// element type reaches, and what each element holds.
+struct Owners<'a> {
+    roles: Roles<'a>,
+    holdings: Holdings,
+}
+
+/// The standard type each structure type reaches through the tree root's /RoleMap, kept for one
+/// rule's annotations: the elements of many annotations share types, and a type on a chain
+/// reaches what the whole chain reaches, so each mapping is followed once.
+struct Roles<'a> {
+    role_map: &'a Dict,
+    /// Type → the standard type it reaches, or `None` for none.
+    known: HashMap<Vec<u8>, Option<Vec<u8>>>,
+}
+
+impl<'a> Roles<'a> {
+    fn new(role_map: &'a Dict) -> Self {
+        Roles { role_map, known: HashMap::new() }
+    }
+
+    /// The standard type `s` is, or maps to through the role map. Every mapping is followed until
+    /// a standard type, a type the map doesn't hold, or one already passed (a cycle, ISO 32000-2
+    /// §14.7.3): a long chain that ends in a standard type still reaches it.
+    fn standard(&mut self, doc: &Document, s: &[u8]) -> Option<Vec<u8>> {
+        let mut path: Vec<Vec<u8>> = Vec::new();
+        let mut seen: HashSet<Vec<u8>> = HashSet::new();
+        let mut t = s.to_vec();
+        let end = loop {
+            if crate::structure::is_standard(&t) {
+                break Some(t);
+            }
+            if let Some(known) = self.known.get(&t) {
+                break known.clone();
+            }
+            let next = self.role_map.get(&t).map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(<[u8]>::to_vec));
+            if !seen.insert(t.clone()) {
+                break None;
+            }
+            path.push(t);
+            let Some(next) = next else { break None };
+            t = next;
+        };
+        // Every type passed reaches the same end: the role map gives each type one mapping.
+        for t in path {
+            self.known.insert(t, end.clone());
+        }
+        end
+    }
+}
+
+/// The findings of page rule `rule` on the pages in `list`, and whether an item it applies to was
+/// counted neither way because the parent tree can't tell whether it is tagged.
+pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usize], scan: &Scan, tagged: bool) -> (Vec<Finding>, bool) {
     let mut out = Vec::new();
+    let mut undecided = false;
     // The annotation objects are shared, never deep-copied: a reference repeated across a page's
     // Annots array (or its pages) must not copy the dictionary each time.
     let annots = |p: &Page| -> Vec<(ObjRef, std::sync::Arc<Object>)> {
@@ -274,7 +397,7 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
     match rule {
         Rule::TaggedContent => {
             if !tagged && !scan.untagged.is_empty() {
-                return doc_finding("The document isn't tagged, so none of its content is");
+                return (doc_finding("The document isn't tagged, so none of its content is"), false);
             }
             for (p, n) in &scan.untagged {
                 // One item and several items are separate wordings, so a language can agree the
@@ -284,9 +407,14 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
             }
         }
         Rule::TaggedAnnotations | Rule::TaggedMultimedia | Rule::TaggedFormFields => {
+            let role_map = crate::alt::tree_root(doc)
+                .and_then(|r| r.get(b"RoleMap").map(|o| doc.resolve(o)))
+                .and_then(|o| o.as_dict().cloned())
+                .unwrap_or_default();
+            let mut owners = Owners { roles: Roles::new(&role_map), holdings: Holdings::default() };
             for &p in list {
                 let Some(page) = pages.get(p) else { continue };
-                for (_, obj) in annots(page) {
+                for (r, obj) in annots(page) {
                     let Some(a) = obj.as_dict() else { continue };
                     let st = a.name(b"Subtype").unwrap_or(b"");
                     let applies = match rule {
@@ -294,7 +422,13 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                         Rule::TaggedMultimedia => MULTIMEDIA.contains(&st),
                         _ => st != b"Widget" && !MULTIMEDIA.contains(&st) && st != b"PrinterMark",
                     };
-                    if applies && !(tagged && a.contains(b"StructParent")) {
+                    let held = applies
+                        && tagged
+                        && annotation_tagged(doc, &scan.tree, &mut owners, r, a, st).unwrap_or_else(|| {
+                            undecided = true;
+                            true
+                        });
+                    if applies && !held {
                         // A whole sentence each way, rather than a noun put in front of one: a form
                         // field and an annotation of some subtype read differently in other
                         // languages. The subtype itself is the PDF's own name and goes in as it is.
@@ -374,7 +508,7 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
         }
         _ => {}
     }
-    out
+    (out, undecided)
 }
 
 fn full_name(doc: &Document, field: ObjRef) -> String {
@@ -467,5 +601,33 @@ fn maps_to_unicode(doc: &Document, f: &Dict) -> bool {
                 flags & 4 == 0 || matches!(base, b"Symbol" | b"ZapfDingbats")
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_role_mapping_is_followed_once_for_a_rule() {
+        // A chain of 10,000 mappings to Link, as many links' elements might share: the first
+        // lookup follows it once and keeps every type on it, so later ones, from any point on the
+        // chain, look up one type. A chain that goes round reaches nothing, from any point on it.
+        let n = 10_000;
+        let mut map = Dict::new();
+        for i in 0..n {
+            let to = if i + 1 == n { b"Link".to_vec() } else { format!("R{}", i + 1).into_bytes() };
+            map.set(format!("R{i}").into_bytes(), Object::Name(to));
+        }
+        map.set(b"C0".to_vec(), Object::Name(b"C1".to_vec()));
+        map.set(b"C1".to_vec(), Object::Name(b"C0".to_vec()));
+        let doc = Document::new_empty();
+        let mut roles = Roles::new(&map);
+        assert_eq!(roles.standard(&doc, b"R0"), Some(b"Link".to_vec()));
+        assert_eq!(roles.known.len(), n);
+        assert_eq!(roles.standard(&doc, b"R5000"), Some(b"Link".to_vec()));
+        assert_eq!(roles.standard(&doc, b"C1"), None);
+        assert_eq!(roles.known.len(), n + 2);
+        assert_eq!(roles.standard(&doc, b"Span"), Some(b"Span".to_vec()));
     }
 }
