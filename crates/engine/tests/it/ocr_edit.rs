@@ -818,3 +818,30 @@ fn a_soft_mask_selected_before_a_cm_stays_put_when_the_edit_is_lifted() {
         assert_eq!(ink(&s, id), ink(&plain, plain_id), "{edit:?}: the mask does not hide the new text");
     }
 }
+
+#[test]
+fn hungarian_ocr_text_survives_save_reopen_and_undo() {
+    let text = "Árvíztűrő tükörfúrógép őűŐŰ ÁÉÍÓÖŐÚÜŰ";
+    let (mut s, id) = scanned_with(vec![PlacedWord {
+        text: text.into(),
+        origin: [10.0, 20.0],
+        across: [180.0, 0.0],
+        up: [0.0, 15.0],
+        confidence: None,
+        source: "tesseract".into(),
+    }]);
+    let extract = |s: &Session, id| {
+        let mut renderer = PageRenderer::new(s.get(id).unwrap().bytes.clone(), Default::default());
+        renderer.render(RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Text, ..Default::default() }).text.unwrap().plain_text()
+    };
+    assert_eq!(extract(&s, id).trim(), text);
+    assert!(s.get(id).unwrap().text_blocks(0).iter().all(|b| b.invisible));
+    assert!(word_pixels(&s, id).iter().all(|p| near(*p, INK)), "OCR must not change the scan pixels");
+    let bytes = s.save_bytes(id).unwrap();
+    let reopened = s.open("saved.pdf", None, bytes, None).unwrap();
+    assert_eq!(extract(&s, reopened).trim(), text);
+    s.undo(id).unwrap();
+    assert!(extract(&s, id).trim().is_empty());
+    s.redo(id).unwrap();
+    assert_eq!(extract(&s, id).trim(), text);
+}

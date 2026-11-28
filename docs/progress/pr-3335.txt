@@ -1,0 +1,14 @@
+PR #3335: Hungarian OCR through the shared Tesseract adapter
+Date: 2026-11-22
+
+The desktop language table includes Hungarian (hu -> hun). Missing Hungarian
+models identify tesseract-ocr-hun. Automatic OCR retries an unchanged scan after
+the selected language or engine changes. The browser keeps the built-in language
+choices. Shared catalogs remain in craft-i18n.
+
+Recognition quality remains unqualified beyond the existing tested English set.
+The language parity entry stays partial; roadmap scores and estimates are unchanged.
+Feature details and evidence remain in crates/ocr/README.md, docs/gaps.md,
+docs/target-app-parity.md and parity/acrobat-features.toml.
+
+This fragment replaces this PR's competing shared-roadmap log and milestone edits.
