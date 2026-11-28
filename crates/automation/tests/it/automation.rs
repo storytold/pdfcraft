@@ -535,6 +535,89 @@ fn autotag_apply_writes_reviewable_tags_and_survives_save_reopen() {
     assert!(pages.iter().all(|page| page.dict.contains(b"StructParents")));
 }
 
+/// #7416: the text state a PDFCraft text edit writes after its text object (`0 Tc`, `0 Tw`,
+/// `100 Tz`, `0 TL`, `0 Ts`) is legal outside BT/ET and must not stop Auto-tag.
+#[test]
+fn autotag_apply_accepts_text_state_written_by_a_text_edit() {
+    let dir = workdir("autotag-after-edit");
+    let page = |text: &str| format!("BT /FR 12 Tf 1 0 0 1 40 180 Tm ({text}) Tj ET");
+    std::fs::write(dir.join("moss.pdf"), bold_and_regular_pdf(&page("Moss stays green."), &page("Quiet control page."))).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "moss.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "Fern stays green." }));
+    let applied = ok(&mut a, "accessibility_autotag_apply", json!({ "doc": doc }));
+    assert_eq!(applied["count"], 3, "Document plus one paragraph per page");
+    assert_eq!(applied["tags"][1]["type"], "P");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// #7416: a wrapped edit in the repo font (Helvetica, no /Encoding) writes `/PCSoft BDC EMC` between
+/// its lines inside the text object; Auto-tag takes it, keeps it in the stream inside the
+/// paragraph's mark. (The `/Span` + `/ActualText` form is covered in the a11y tests.)
+#[test]
+fn autotag_apply_accepts_line_markers_written_by_a_text_edit() {
+    let dir = workdir("autotag-after-edit-span");
+    std::fs::write(dir.join("one.pdf"), fixture(1)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "one.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "Fern stays green." }));
+    let applied = ok(&mut a, "accessibility_autotag_apply", json!({ "doc": doc }));
+    assert_eq!(applied["count"], 2, "Document plus the edited paragraph");
+    assert_eq!(applied["tags"][1]["type"], "P");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "tagged.pdf" }));
+    let re = ok(&mut a, "doc_open", json!({ "path": "tagged.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, re), ["Fern stays\ngreen."]);
+    let content = page_content(&dir.join("tagged.pdf"));
+    assert!(content.find("/MCID").unwrap() < content.find("/PCSoft").unwrap(), "the line marker stays inside the paragraph's mark: {content}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// #7416: a typed newline, mixed styles and text the font cannot show take the editor's rich path, which writes `/P BMC`,
+/// `/PCHard BMC` and `/Span` marks between and around its text objects; Auto-tag takes them too.
+#[test]
+fn autotag_apply_accepts_a_newline_and_mixed_style_edit() {
+    for (name, edit) in [
+        ("newline", json!({ "text": "a\nb" })),
+        ("fallback", json!({ "text": "Fern \u{3a9} stays" })),
+        ("ranges", json!({ "text": "Fern stays", "ranges": [{ "range": [0, 4], "size": 16, "color": "#cc0000" }] })),
+    ] {
+        let dir = workdir(&format!("autotag-rich-{name}"));
+        std::fs::write(dir.join("one.pdf"), fixture(1)).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({ "path": "one.pdf" }))["doc"].as_u64().unwrap();
+        let mut args = json!({ "doc": doc, "page": 1, "paragraph": 1 });
+        args.as_object_mut().unwrap().extend(edit.as_object().unwrap().clone());
+        ok(&mut a, "text_edit", args);
+        let applied = ok(&mut a, "accessibility_autotag_apply", json!({ "doc": doc }));
+        assert_eq!(applied["tags"][1]["type"], "P", "{name}");
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": "tagged.pdf" }));
+        let content = page_content(&dir.join("tagged.pdf"));
+        assert!(content.contains("/MCID"), "{name}: {content}");
+        let (begins, ends) = (content.matches("BDC").count() + content.matches("BMC").count(), content.matches("EMC").count());
+        assert_eq!(begins, ends, "{name}: marks stay balanced: {content}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// The decoded content stream of the first page of the PDF at `path`.
+fn page_content(path: &Path) -> String {
+    let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(path).unwrap())).unwrap();
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let contents = doc.resolve(page.dict.get(b"Contents").unwrap());
+    let streams = match &*contents {
+        pdfcraft_cos::Object::Array(items) => items.iter().map(|i| doc.resolve(i)).collect(),
+        _ => vec![contents.clone()],
+    };
+    streams
+        .iter()
+        .filter_map(|s| match &**s {
+            pdfcraft_cos::Object::Stream(s) => Some(String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// #7062: Apply tags short text larger than the body as headings, ranked across the pages, and
 /// the body text as paragraphs.
 #[test]

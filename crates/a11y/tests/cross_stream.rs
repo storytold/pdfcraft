@@ -258,3 +258,65 @@ fn mark_decorative_and_mark_artifact_keep_cross_stream_comment_hidden() {
     let report_after = check(&comment_only, &Options { rules: [Rule::TaggedContent].into(), pages: None });
     assert_eq!(report_after.result(Rule::TaggedContent).expect("rule result").status, Status::Passed);
 }
+
+fn one_stream(content: &str) -> Document {
+    build_pdf(&[
+        (1, "<< /Type /Catalog /Pages 2 0 R >>".into()),
+        (2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into()),
+        (3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>".into()),
+        (4, FONT.into()),
+        (5, stream(content)),
+    ])
+}
+
+/// #7416: the text editor's own balanced marked content, in and between text objects, does not
+/// stop Auto-tag and stays in the stream.
+#[test]
+fn autotag_accepts_the_text_editors_balanced_marked_content() {
+    let content = "/P BMC /Span <</ActualText (ab)>> BDC BT /F1 12 Tf 72 700 Td (a) Tj /PCSoft <</N 1>> BDC EMC (b) Tj /PCHard BMC EMC ET EMC EMC\n\
+                   /P BMC BT /F1 12 Tf 72 680 Td /Span <</ActualText (cd)>> BDC (c) Tj EMC ET EMC";
+    let mut doc = one_stream(content);
+    let result = autotag_text(&mut doc).expect("autotag succeeds");
+    assert_eq!(result.paragraphs, 2);
+    let (ops, skipped) = joined_ops(&doc);
+    assert_eq!(skipped, 0);
+    let count = |name: &str| ops.iter().filter(|op| op.is(name)).count();
+    assert_eq!(count("BDC"), count("EMC") - count("BMC"), "every mark is closed");
+    let mut open = Vec::new();
+    for op in &ops {
+        if op.is("BDC") || op.is("BMC") {
+            open.push(op.name(0).unwrap().to_vec());
+        } else if op.is("EMC") {
+            open.pop().expect("no stray EMC");
+        } else if op.is("Tj") {
+            assert!(open.iter().any(|t| t == b"P"), "text sits inside a paragraph mark");
+        }
+    }
+    assert!(open.is_empty());
+    assert!(
+        ops.iter()
+            .any(|op| op.is("BDC") && op.name(0) == Some(b"Span".as_slice()) && op.operands[1].as_dict().is_some_and(|d| d.contains(b"ActualText")))
+    );
+}
+
+/// What stays refused: marks that are not the editor's, or that are not balanced.
+#[test]
+fn autotag_refuses_marked_content_it_cannot_nest() {
+    for (why, content) in [
+        ("an optional-content layer in a text object", "BT /F1 12 Tf 72 700 Td /OC /L BDC (a) Tj EMC ET"),
+        ("a stray EMC", "BT /F1 12 Tf 72 700 Td (a) Tj ET EMC"),
+        ("an EMC in a text object closing a mark opened before it", "/P BMC BT /F1 12 Tf 72 700 Td (a) Tj EMC ET"),
+        ("a span open at ET", "BT /F1 12 Tf 72 700 Td /Span <</ActualText (a)>> BDC (a) Tj ET EMC"),
+        ("a span never closed", "/Span <</ActualText (a)>> BDC BT /F1 12 Tf 72 700 Td (a) Tj ET"),
+        ("a span opened inside a path", "0 0 m /Span BMC 10 10 l S BT /F1 12 Tf 72 700 Td (a) Tj ET EMC"),
+        ("a span closed inside a path", "/Span BMC 0 0 m EMC 10 10 l S BT /F1 12 Tf 72 700 Td (a) Tj ET"),
+        ("a mark closed and another opened inside a path", "/P BMC 0 0 m EMC /Span BMC 10 10 l S BT /F1 12 Tf 72 700 Td (a) Tj ET EMC"),
+        ("surplus operands before BMC", "/P /OC BMC BT /F1 12 Tf 72 700 Td (a) Tj ET EMC"),
+        ("surplus operands before BDC", "/P <<>> /Span <</MCID 0>> BDC BT /F1 12 Tf 72 700 Td (a) Tj ET EMC"),
+        ("another writer's span with an MCID", "/Span <</MCID 0>> BDC BT /F1 12 Tf 72 700 Td (a) Tj ET EMC"),
+    ] {
+        let mut doc = one_stream(content);
+        let err = autotag_text(&mut doc).expect_err(why);
+        assert!(err.to_string().contains("unsupported") || err.to_string().contains("page 1"), "{why}: {err}");
+    }
+}

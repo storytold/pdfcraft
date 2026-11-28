@@ -138,6 +138,24 @@ fn page_fonts(doc: &Document, page: &Dict) -> Dict {
         .unwrap_or_default()
 }
 
+/// Marked-content tags the text editor writes inside a text object.
+const EDITOR_MARKS: [&[u8]; 4] = [b"Span", b"PCSoft", b"PCHard", b"P"];
+
+/// Whether `op` opens one of the text editor's marked-content sequences. One that carries an
+/// `/MCID` is another writer's structure content and would collide with the new MCIDs; `/OC`
+/// layers and the like are not the editor's. An imported PDF can carry surplus operands, which the
+/// renderer reads from the end, so the operand count (one for BMC, two for BDC) is checked first.
+fn editor_mark(op: &Op) -> bool {
+    match (op.op.as_slice(), op.operands.len()) {
+        (b"BMC", 1) => op.name(0).is_some_and(|tag| EDITOR_MARKS.contains(&tag)),
+        (b"BDC", 2) => {
+            op.name(0).is_some_and(|tag| EDITOR_MARKS.contains(&tag))
+                && op.operands.get(1).and_then(Object::as_dict).is_some_and(|d| !d.contains(b"MCID"))
+        }
+        _ => false,
+    }
+}
+
 fn harmless_outside(op: &[u8]) -> bool {
     matches!(
         op,
@@ -151,6 +169,15 @@ fn harmless_outside(op: &[u8]) -> bool {
             | b"ri"
             | b"i"
             | b"gs"
+            // Text state is legal outside BT/ET and carries into the next text object; a text edit
+            // writes it there after its own text object.
+            | b"Tf"
+            | b"Tc"
+            | b"Tw"
+            | b"Tz"
+            | b"TL"
+            | b"Tr"
+            | b"Ts"
             | b"G"
             | b"g"
             | b"RG"
@@ -251,14 +278,23 @@ fn plan_page(
     }
     let xobjects = page_xobjects(doc, &page.dict);
     let (mut start, mut has_text, mut spans, mut artifacts) = (None, false, Vec::new(), HashMap::new());
-    // Marked-content boundaries must enclose the whole path, not just its paint operator.
-    let mut path = None;
+    // The text editor's own marked content (`/Span` keeps an /ActualText, `/PCSoft` and `/PCHard`
+    // mark wrapped lines, `/P` a paragraph), in or between text objects. It stays in the stream,
+    // around or inside the paragraph's own marked content, and must be balanced: `open` counts the
+    // sequences now open, `base` those open at the current BT, which an EMC inside it may not close.
+    let (mut open, mut base) = (0usize, 0usize);
+    // Marked-content boundaries must enclose the whole path, not just its paint operator. `events`
+    // counts every mark opened or closed so far and the path keeps its value at the first operator:
+    // any mark opened or closed inside the path (even one that leaves `open` as it was, such as a
+    // close followed by another open) would cross the artifact wrapper added around it.
+    let (mut events, mut path): (usize, Option<(usize, usize)>) = (0, None);
     for (at, op) in parsed.ops.iter().enumerate() {
         if path.is_some() && matches!(op.op.as_slice(), b"BT" | b"Do" | b"BI" | b"sh") {
             return Err(unsupported(index, "painted content interrupts an unfinished path"));
         }
         match op.op.as_slice() {
-            b"BT" if start.is_none() => (start, has_text) = (Some(at), false),
+            b"BT" if start.is_none() => (start, has_text, base) = (Some(at), false, open),
+            b"ET" if start.is_some() && open != base => return Err(unsupported(index, "unterminated marked content in a text object")),
             b"ET" => {
                 let Some(first) = start.take() else { return Err(unsupported(index, "unmatched ET operator")) };
                 if has_text {
@@ -270,16 +306,22 @@ fn plan_page(
             }
             b"Tj" | b"TJ" | b"'" | b"\"" if start.is_some() => has_text = true,
             name if start.is_some() && harmless_inside(name) => {}
+            b"BDC" | b"BMC" if editor_mark(op) => (open, events) = (open + 1, events + 1),
+            b"EMC" if open > if start.is_some() { base } else { 0 } => (open, events) = (open - 1, events + 1),
             name if start.is_none() && harmless_outside(name) => match name {
                 b"m" | b"re" => {
-                    path.get_or_insert(at);
+                    path.get_or_insert((at, events));
                 }
                 b"n" => path = None,
                 _ => {}
             },
             _ if start.is_none() && painted_outside(doc, &xobjects, op) => {
                 let first = if matches!(op.op.as_slice(), b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s") {
-                    path.take().unwrap_or(at)
+                    match path.take() {
+                        Some((_, seen)) if seen != events => return Err(unsupported(index, "marked content opens or closes inside a path")),
+                        Some((first, _)) => first,
+                        None => at,
+                    }
                 } else {
                     at
                 };
@@ -287,6 +329,9 @@ fn plan_page(
             }
             _ => return Err(unsupported(index, format!("unsupported or painted operator {}", String::from_utf8_lossy(&op.op)))),
         }
+    }
+    if open > 0 {
+        return Err(unsupported(index, "unterminated marked content"));
     }
     if start.is_some() {
         return Err(unsupported(index, "unterminated BT text object"));
