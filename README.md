@@ -467,7 +467,9 @@ The summary is in **[ROADMAP.md](ROADMAP.md)**; the full assessment by dimension
 |---|---|---|
 | x64 (64-bit Intel/AMD) | `pdfcraft-<ver>-windows-x64.msi` | `pdfcraft-<ver>-windows-x64-portable.zip` |
 | arm64 (Snapdragon and other ARM PCs) | `pdfcraft-<ver>-windows-arm64.msi` | `pdfcraft-<ver>-windows-arm64-portable.zip` |
-| x86 (32-bit) | `pdfcraft-<ver>-windows-x86.msi` | `pdfcraft-<ver>-windows-x86-portable.zip` |
+
+For 32-bit Windows, [PdfCraft v0.19.0](https://github.com/storytold/pdfcraft/releases/tag/v0.19.0)
+was the last release with both an x86 MSI and portable ZIP.
 
 Installers and executables are code-signed.
 
@@ -537,10 +539,13 @@ notarized. The MSI's manufacturer, shown as the publisher in Installed apps, is
 | Flatpak | `pdfcraft-<ver>-linux-x86_64.flatpak` | `pdfcraft-<ver>-linux-aarch64.flatpak` | Sandboxed; `flatpak install --user <file>` |
 | Debian/Ubuntu | `pdfcraft-<ver>-linux-x86_64.deb` | `pdfcraft-<ver>-linux-aarch64.deb` | |
 | Fedora/RHEL/openSUSE | `pdfcraft-<ver>-linux-x86_64.rpm` | `pdfcraft-<ver>-linux-aarch64.rpm` | |
+| Arch Linux | `pdfcraft-<ver>-linux-x86_64.pkg.tar.zst` | `pdfcraft-<ver>-linux-aarch64.pkg.tar.zst` | |
 | Tarball | `pdfcraft-<ver>-linux-x86_64.tar.gz` | `pdfcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
 | Command-line tool | `pdfcraft-cli-<ver>-linux-x86_64.tar.gz` | `pdfcraft-cli-<ver>-linux-aarch64.tar.gz` | `pdfcraft-cli` alone (and its opt-in MCP server), for servers, CI and agents |
 
-RISC-V (riscv64) builds come as tarballs only: `pdfcraft-<ver>-linux-riscv64.tar.gz` and `pdfcraft-cli-<ver>-linux-riscv64.tar.gz`. They are cross-compiled and need glibc 2.39 or newer (Ubuntu 24.04+, Debian 13+).
+RISC-V (riscv64) packages are `pdfcraft-<ver>-linux-riscv64.deb`,
+`pdfcraft-<ver>-linux-riscv64.rpm`, and `pdfcraft-<ver>-linux-riscv64.tar.gz`. They are
+cross-compiled and need glibc 2.39 or newer (Ubuntu 24.04+, Debian 13+).
 
 Every other Linux build needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 10).
 
