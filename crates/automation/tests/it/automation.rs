@@ -15379,3 +15379,60 @@ fn pdf_watermark_uses_visible_source_crop_through_tools() {
         assert_eq!(rendered[0], rendered[1], "same displayed source gives identical saved watermark at target rotation {rotation}");
     }
 }
+
+#[test]
+fn page_insert_clipboard_inserts_text_image_and_doc_pages() {
+    let dir = workdir("insert-clipboard");
+    let img = craft_image_codecs::Image::from_u8(40, 20, craft_image_codecs::ChannelLayout::Rgb, vec![90u8; 40 * 20 * 3]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
+    std::fs::write(dir.join("clip.png"), png).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let other = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, doc), ["Page 1", "Page 2", "Page 3"]);
+
+    // 1. Empty / missing clipboard source is refused without changing the document.
+    for bad in [json!({ "doc": doc }), json!({ "doc": doc, "text": "" }), json!({ "doc": doc, "text": "   \n\t " })] {
+        let err = a.call("page_insert_clipboard", &bad).unwrap_err().to_string();
+        assert!(err.contains(pdfcraft_engine::EMPTY_CLIPBOARD_NOTICE), "{bad}: {err}");
+    }
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"].as_array().unwrap().len(), 3);
+
+    // 2. Size cap refuses oversized clipboard text.
+    let huge = "a".repeat(pdfcraft_engine::MAX_CLIPBOARD_TEXT_BYTES + 1);
+    let err = a.call("page_insert_clipboard", &json!({ "doc": doc, "text": huge })).unwrap_err().to_string();
+    assert!(err.contains("size limit"), "{err}");
+
+    // 3. Insert text at position 2 (between Page 1 and Page 2).
+    let res = ok(&mut a, "page_insert_clipboard", json!({ "doc": doc, "at": 2, "text": "Inserted from clipboard" }));
+    assert_eq!(res["pages"], 4);
+    assert_eq!(res["inserted"], 1);
+    assert_eq!(res["undo"], "Insert pages from clipboard");
+    assert_eq!(page_text(&mut a, doc), ["Page 1", "Inserted from clipboard", "Page 2", "Page 3"]);
+
+    // 4. Insert an image at position 1 (before Page 1).
+    let res = ok(&mut a, "page_insert_clipboard", json!({ "doc": doc, "at": 1, "image": "clip.png" }));
+    assert_eq!(res["pages"], 5);
+    assert_eq!(res["inserted"], 1);
+    assert_eq!(res["undo"], "Insert pages from clipboard");
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let first = &info["pages"][0];
+    let (w, h) = (first["width"].as_f64().unwrap(), first["height"].as_f64().unwrap());
+    assert!((w / h - 2.0).abs() < 0.01, "{w} × {h}");
+
+    // 5. Insert a page slice from another open document at the end (omitting `at`).
+    let res = ok(&mut a, "page_insert_clipboard", json!({ "doc": doc, "from_doc": other, "pages": [2] }));
+    assert_eq!(res["pages"], 6);
+    assert_eq!(res["inserted"], 1);
+    assert_eq!(res["undo"], "Insert pages from clipboard");
+    assert_eq!(page_text(&mut a, doc)[5], "Page 2");
+
+    // 6. Each insertion is one undo step.
+    for expected in [5, 4, 3] {
+        let u = ok(&mut a, "edit_undo", json!({ "doc": doc }));
+        assert_eq!(u["undone"], "Insert pages from clipboard");
+        assert_eq!(u["document"]["pages"], expected);
+    }
+    assert_eq!(page_text(&mut a, doc), ["Page 1", "Page 2", "Page 3"]);
+}

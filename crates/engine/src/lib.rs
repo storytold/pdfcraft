@@ -20,6 +20,7 @@ pub mod camera;
 pub mod camera_clean;
 pub mod camera_edges;
 pub mod catalog;
+mod clipboard_insert;
 pub mod commands;
 mod comments;
 pub mod compare;
@@ -154,6 +155,9 @@ pub use pdfcraft_xfdf::{Outline as CommentOutline, comment_count, comment_outlin
 
 use bookmarks::outline_rows;
 pub use bookmarks::{BookmarkPage, BookmarkRow};
+pub use clipboard_insert::{
+    ClipboardPages, EMPTY_CLIPBOARD_NOTICE, MAX_CLIPBOARD_IMAGE_BYTES, MAX_CLIPBOARD_IMAGE_SIDE, MAX_CLIPBOARD_TEXT_BYTES, png_from_rgba,
+};
 use comments::comment_list;
 pub use comments::{SummarySort, comment_kind, comment_summary, comment_type_name};
 #[cfg(test)]

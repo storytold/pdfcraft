@@ -169,6 +169,7 @@ const PAGES: &[&str] = &[
     SEP,
     "page.insert_blank",
     "page.insert",
+    "page.insert_clipboard",
     "page.replace",
     "page.extract",
     "page.split",

@@ -540,6 +540,7 @@ impl PdfCraftApp {
             Some(crate::canvas::ViewAction::SplitBeforeSelected) => self.open_split(ctx, true),
             Some(crate::canvas::ViewAction::CopyPages { cut }) => self.copy_pages(ctx, cut),
             Some(crate::canvas::ViewAction::PastePages) => self.paste_pages(ctx),
+            Some(crate::canvas::ViewAction::InsertFromClipboard) => self.insert_from_clipboard(ctx),
             Some(crate::canvas::ViewAction::EnhanceCamera) => self.enhance_camera(ctx, i),
             Some(crate::canvas::ViewAction::CancelCamera) => self.leave_camera(i),
             Some(crate::canvas::ViewAction::CameraRotate { clockwise }) => {

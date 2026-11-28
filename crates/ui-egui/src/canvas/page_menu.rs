@@ -31,6 +31,7 @@ pub(crate) enum PageMenuAction {
     EditPdf,
     AddText,
     AddImage,
+    InsertFromClipboard,
     DeletePage(usize),
     ExportPdf,
     Find,
@@ -164,6 +165,7 @@ pub(crate) fn default_rows(perms: &PageMenuPerms, page: usize, at: [f64; 2], pic
     rows.push(item(tl!("Edit this PDF").to_string(), perms.can_modify, A::EditPdf));
     rows.push(item(tl!("Add text").to_string(), perms.can_modify, A::AddText));
     rows.push(item(tl!("Add image").to_string(), perms.can_modify, A::AddImage));
+    rows.push(item(tl!("Insert pages from clipboard").to_string(), perms.can_assemble, A::InsertFromClipboard));
     rows.push(item(tl!("Delete page").to_string(), perms.can_assemble, A::DeletePage(page)));
     rows.push(item(tl!("Export this PDF").to_string(), perms.can_copy, A::ExportPdf));
     rows.push(PageMenuRow::Separator);
