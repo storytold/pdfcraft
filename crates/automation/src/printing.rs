@@ -89,6 +89,30 @@ fn bad(m: impl Into<String>) -> ToolError {
     ToolError::InvalidArgs(m.into())
 }
 
+/// `doc_print`'s `paper`, by its name or a short form ("Letter", "ARCH D"), as its `PAPERS`
+/// index and size; US Letter when none is given.
+///
+/// `pub(crate)` so Create answers the same names as Print: `doc_create` takes a `page_size` that
+/// may be a paper name, and a second copy of this table would drift from this one.
+pub(crate) fn paper_named(name: Option<&str>) -> Result<(usize, (f64, f64))> {
+    let mut papers = PAPERS.iter().enumerate();
+    let found = match name {
+        None => papers.next(),
+        Some(p) => papers.find(|(_, (n, _))| {
+            n.eq_ignore_ascii_case(p)
+                || n.replace("US ", "").eq_ignore_ascii_case(p)
+                || n.split(" (").next().is_some_and(|name| name.eq_ignore_ascii_case(p))
+        }),
+    };
+    found.map(|(index, (_, size))| (index, *size)).ok_or_else(|| {
+        bad(format!(
+            "unknown paper {:?}; choose one of {}",
+            name.unwrap_or_default(),
+            PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
+        ))
+    })
+}
+
 /// Parse explicit custom dimensions like "300x500", "300 x 500", "300x500 pt", "300pt x 500pt", "Custom.300x500".
 fn parse_custom_dimensions(s: &str) -> Option<(f64, f64)> {
     let s = s.trim().trim_start_matches("Custom.").trim_start_matches("custom.").trim();
