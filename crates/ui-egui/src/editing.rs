@@ -166,7 +166,14 @@ fn form_edit_pages(
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, ctx: &egui::Context, edit: Edit) -> bool {
-        let Some((i, id)) = self.active_ids() else { return false };
+        let Some((i, _)) = self.active_ids() else { return false };
+        self.apply_edit_at(ctx, i, edit)
+    }
+
+    /// Apply an edit to the document of tab `i`, which need not be the active one (the old half
+    /// of a side-by-side comparison). Returns `true` on success; failures are shown.
+    fn apply_edit_at(&mut self, ctx: &egui::Context, i: usize, edit: Edit) -> bool {
+        let Some(id) = self.views.get(i).map(|v| v.id) else { return false };
         // Taken whatever happens to this edit, so it never carries over to another.
         let across_pages = std::mem::take(&mut self.views[i].session.marks_across_pages).filter(|_| annotated_pages(&edit).is_some());
         let label = edit.label();
@@ -504,6 +511,14 @@ impl PdfCraftApp {
     /// Returns false when a field refused the typing queued for it (its editor is open again).
     pub(crate) fn process_pending_edits(&mut self, ctx: &egui::Context) -> bool {
         let Some(i) = self.active else { return true };
+        // The old half of a side-by-side comparison is drawn and clicked as well (a link's
+        // reset or hide, a comment) without being the active tab: its edit applies now, to its
+        // own document, rather than waiting for that tab to come to the front.
+        // Its field refusing the typing holds this frame's shortcuts as the active tab's does.
+        let old_applied = match crate::compare_ui::side_by_side(self, i) {
+            Some((old, _)) => self.apply_queued_edit(ctx, old),
+            None => true,
+        };
         // Split view: the other pane's tab can hold an edit too (its field committed when the
         // click that brought this pane forward took the focus). It goes in first, as it came first.
         let (other_applied, stay) = self.apply_other_pane_edit(ctx, i);
@@ -511,7 +526,7 @@ impl PdfCraftApp {
         let generation = |app: &Self| app.views.get(i).and_then(|v| app.session.get(v.id)).map(|d| d.edit_generation());
         let before = generation(self);
         let queued = self.views.get(i).is_some_and(|v| v.session.pending_edit.is_some());
-        let applied = self.apply_queued_edit(ctx, i) && other_applied;
+        let applied = self.apply_queued_edit(ctx, i) && old_applied && other_applied;
         // A click's Mouse Up waits on the edit it queued (a check box's toggle, a list's pick):
         // when that was refused, the click did nothing and its Mouse Up doesn't run either.
         if queued
@@ -941,7 +956,7 @@ impl PdfCraftApp {
     /// Apply the edit queued on tab `i` (the active one). Returns false only when it was a
     /// field's typing and the field refused it (#166): the editor reopens with the text, and the
     /// user has been told why, so the typing isn't lost and the caller can stop.
-    fn apply_queued_edit(&mut self, ctx: &egui::Context, i: usize) -> bool {
+    pub(crate) fn apply_queued_edit(&mut self, ctx: &egui::Context, i: usize) -> bool {
         let Some(edit) = self.views.get_mut(i).and_then(|v| v.session.pending_edit.take()) else { return true };
         let signature_page = self.views.get_mut(i).and_then(|v| v.session.fill_signature.take());
         let doc_id = self.views.get(i).map(|v| v.id);
@@ -950,7 +965,7 @@ impl PdfCraftApp {
             (Edit::SetFieldValue { name, .. }, Some(draft)) => *name == draft.name,
             _ => false,
         };
-        if self.apply_edit(ctx, edit) {
+        if self.apply_edit_at(ctx, i, edit) {
             if signature_page.is_some()
                 && let Some(id) = doc_id
             {
@@ -992,6 +1007,7 @@ impl PdfCraftApp {
         }
         if let (Some(draft), Some(view)) = (committed, self.views.get_mut(i)) {
             view.session.forms.focus = Some(draft);
+            view.typing_refused_at = Some(ctx.input(|input| input.time));
         }
         false
     }
@@ -1798,6 +1814,36 @@ mod revert_draft_tests {
         );
         assert_eq!(app.active_ids(), Some((0, source)));
         assert_eq!(posted(&mut app), pdfcraft_engine::EditError::NoDocument.to_string());
+    }
+
+    /// The old half of a side-by-side comparison applies its queued edit in the active tab's
+    /// frame. When its field refuses the typing, the pass reports it, as for the active tab's own
+    /// field, and the old half's editor reopens with the typing.
+    #[test]
+    fn a_refusal_in_the_old_half_of_a_comparison_is_reported() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.open_bytes(&ctx, "new.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+        let (old, new) = (app.views[0].id, app.views[1].id);
+        assert_eq!(app.active, Some(1));
+        app.compare = Some(crate::compare_ui::CompareState {
+            old,
+            new,
+            result: Default::default(),
+            pages: Vec::new(),
+            visual: Vec::new(),
+            selected: None,
+            side_by_side: true,
+            views: Default::default(),
+            show_text: true,
+            show_visual: true,
+        });
+        assert_eq!(crate::compare_ui::side_by_side(&app, 1), Some((0, 1)));
+        queue_draft(&mut app, 0, "Refused typing");
+        // The old document's edit fails (NoDocument), as a field refusing its value does.
+        app.session.close(old);
+        assert!(!app.process_pending_edits(&ctx), "the old half's refusal is reported");
+        assert_eq!(app.views[0].session.forms.focus.as_ref().map(|f| f.text.as_str()), Some("Refused typing"), "the editor reopens");
     }
 }
 

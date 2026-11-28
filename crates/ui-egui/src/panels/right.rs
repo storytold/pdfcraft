@@ -135,7 +135,7 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, cx: &mut BodyCx<'_>,
             None => app.views[index].go_to_page(p),
         },
         Some(Nav::Action(target)) => {
-            if let Some((source, file, destination)) = crate::canvas::follow_link(app, index, Some(target)) {
+            if let Some((source, file, destination)) = crate::canvas::follow_action(app, ui.ctx(), index, target) {
                 app.open_remote_link(source, file, destination);
             }
         }

@@ -289,6 +289,11 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     for event in out.events {
         match event {
             CollectionEvent::Activate(path) => {
+                // A double-click's second click doesn't run the action again (NextPage would move
+                // two pages).
+                if ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary)) {
+                    continue;
+                }
                 if let Some(item) = item_at(outline, &path) {
                     result.nav = match (item.page, &item.action) {
                         (Some(p), _) => Some(Nav::Dest(p, item.view)),

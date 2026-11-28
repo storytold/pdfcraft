@@ -49,6 +49,8 @@ pub(crate) enum LinkEvent {
     Follow {
         /// Where the link goes.
         target: LinkTarget,
+        /// The actions its `/Next` entries chain after it (ISO 32000-2 §12.6.2), in order.
+        next: Vec<LinkTarget>,
         /// The page and index of a link whose action is JavaScript.
         javascript: Option<(usize, usize)>,
     },
@@ -252,14 +254,15 @@ impl LinksOnPage<'_> {
             (LinkMode::Follow, Owner::Link { index }) if primary && self.follows() => {
                 let link = self.info.links.iter().find(|l| l.page == self.page && l.index == index)?;
                 let javascript = matches!(link.target, LinkTarget::JavaScript(_)).then_some((link.page, link.index));
-                Some(LinkEvent::Follow { target: link.target.clone(), javascript })
+                Some(LinkEvent::Follow { target: link.target.clone(), next: link.next.clone(), javascript })
             }
             // A web or email address written as page text (#4207): the same click, the same check and
             // confirmation on opening.
             (LinkMode::Follow, Owner::TextLink { index }) if primary && self.follows() => {
                 let (_, found) = self.session.text_links.get(&self.page)?;
                 let uri = found.get(index)?.uri.clone();
-                Some(LinkEvent::Follow { target: LinkTarget::Uri(uri), javascript: None })
+                // No annotation and no `/Next` chain: only its address is followed.
+                Some(LinkEvent::Follow { target: LinkTarget::Uri(uri), next: Vec::new(), javascript: None })
             }
             (LinkMode::Edit, Owner::Link { index }) if primary => Some(LinkEvent::Select { page: self.page, index, clicks: start.clicks }),
             (LinkMode::Follow | LinkMode::Edit, Owner::Link { index }) if start.button == PointerButton::Secondary => {

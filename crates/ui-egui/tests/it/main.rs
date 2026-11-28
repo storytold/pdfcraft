@@ -52,6 +52,7 @@ mod identity;
 mod javascript;
 mod layer_actions;
 mod legacy_settings;
+mod link_actions;
 mod links;
 mod marks;
 mod min_window;

@@ -205,6 +205,9 @@ pub struct DocView {
     /// Previous view / Next view: pages visited before (and after, once going back).
     pub back: Vec<usize>,
     pub forward: Vec<usize>,
+    /// When (pass time) a field last refused the typing committed in this tab: a link clicked by
+    /// a press that began before then is not followed, as the click went to the field (#166).
+    pub(crate) typing_refused_at: Option<f64>,
     /// The interface the document hid in this tab, and what is hidden now (ISO 32000-2 Table 147
     /// `HideToolbar`, `HideMenubar`, `HideWindowUI`). Never saved.
     pub interface: crate::viewer_prefs::TabInterface,
@@ -616,6 +619,7 @@ impl DocView {
             snapshot: None,
             back: Vec::new(),
             forward: Vec::new(),
+            typing_refused_at: None,
             interface: Default::default(),
             presentation: None,
             full_screen_fill: true,
@@ -799,29 +803,113 @@ fn close_requested_tab(ctx: &egui::Context, app: &mut PdfCraftApp, index: usize)
     true
 }
 
-/// Follows the link, or the bookmark's action, that was clicked. A link to another file comes
-/// back, to be opened once the document is no longer borrowed.
-pub(crate) fn follow_link(
-    app: &mut PdfCraftApp,
-    index: usize,
-    target: Option<LinkTarget>,
-) -> Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> {
-    let view_id = app.views[index].id;
-    match target? {
+/// A link clicked: its action, the actions its `/Next` entries chain, the page and index of a link
+/// whose action is JavaScript, and the pass time its press began.
+type ClickedLink = (LinkTarget, Vec<LinkTarget>, Option<(usize, usize)>, f64);
+
+/// A local PDF a link opens: the source document, the file it names, and where to go in it.
+type RemoteOpen = (DocId, String, pdfcraft_render::RemoteDestination);
+
+/// Follows the link that was clicked: its action, then each one its `/Next` entries chain after
+/// it (ISO 32000-2 §12.6.2), in order. A link to another file comes back, to be opened once the
+/// document is no longer borrowed. A click whose press committed typing the field refused is the
+/// field's: its editor is open again with the typing (#166), and the link is not followed.
+fn follow_link(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, link: Option<(LinkTarget, Vec<LinkTarget>, f64)>) -> Option<RemoteOpen> {
+    let (target, next, pressed_at) = link?;
+    if app.views.get(index)?.typing_refused_at.is_some_and(|refused| refused >= pressed_at) {
+        return None;
+    }
+    follow_actions(app, ctx, index, std::iter::once(target).chain(next))
+}
+
+/// Runs the action of the bookmark that was clicked, as a link runs it ([`follow_link`]).
+pub(crate) fn follow_action(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, target: LinkTarget) -> Option<RemoteOpen> {
+    follow_actions(app, ctx, index, std::iter::once(target))
+}
+
+/// Runs `targets` in order. The document edits among them (a hide, a form reset) are applied
+/// together as one undoable step.
+fn follow_actions(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, targets: impl IntoIterator<Item = LinkTarget>) -> Option<RemoteOpen> {
+    // A field's typed value, committed by this click, goes first and on its own: a value the
+    // field refuses reopens its editor with the typing (#166), and the link is not followed.
+    // Inside the link's batch its refusal would refuse the batch, and the typing would be lost.
+    if app.views.get(index)?.session.forms.committed.is_some() && !app.apply_queued_edit(ctx, index) {
+        return None;
+    }
+    let view = app.views.get_mut(index)?;
+    // Another edit already waiting is applied first, in the same step.
+    let mut edits: Vec<Edit> = view.session.pending_edit.take().into_iter().collect();
+    let mut remote_open = None;
+    for target in targets {
+        follow_link_action(app, ctx, index, target, &mut remote_open);
+        if let Some(e) = app.views.get_mut(index).and_then(|v| v.session.pending_edit.take()) {
+            edits.push(e);
+        }
+    }
+    let edit = match edits.len() {
+        0 | 1 => edits.pop(),
+        _ => Some(Edit::Batch { label: "Link actions".into(), edits }),
+    };
+    if let Some(view) = app.views.get_mut(index) {
+        view.session.pending_edit = edit;
+    }
+    remote_open
+}
+
+/// One action of a link. Hide and reset-form actions, and the named actions, run as a push
+/// button's do.
+fn follow_link_action(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, target: LinkTarget, remote_open: &mut Option<RemoteOpen>) {
+    use pdfcraft_engine::form_scripts::ButtonAction as B;
+    // A link is no widget. `run_button` reads the widget's identity only for an icon import or
+    // a script, which links never run.
+    const NO_WIDGET: u64 = 0;
+    let Some(id) = app.views.get(index).map(|v| v.id) else { return };
+    match target {
         LinkTarget::Page(p, dest) => {
-            let view = &mut app.views[index];
-            if let Some(doc) = app.session.get(view.id) {
+            if let (Some(doc), Some(view)) = (app.session.get(id), app.views.get_mut(index)) {
                 view.go_to_dest(p, dest, &doc.info);
             }
         }
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
         LinkTarget::SetLayers { changes, preserve_rb } => set_layers(app, index, &changes, preserve_rb),
-        LinkTarget::RemoteGoTo { file, destination, .. } => return Some((view_id, file, destination)),
+        // The first local PDF a click names is the one opened.
+        LinkTarget::RemoteGoTo { file, destination, .. } => {
+            if remote_open.is_none() {
+                *remote_open = Some((id, file, destination));
+            }
+        }
+        LinkTarget::Named(name) => match name.as_str() {
+            // §12.6.4.12, Table 215: the named actions every processor supports. Past either end
+            // of the document, NextPage and PrevPage stay put.
+            "NextPage" | "PrevPage" | "FirstPage" | "LastPage" => run_button(app, ctx, index, "", NO_WIDGET, B::Named(name)),
+            // Nonstandard names (the Table 215 NOTE allows them) that documents widely use:
+            // back to the previous view, as View ▸ Previous view does (nothing without one), and
+            // the Print dialog, never printing without it.
+            "GoBack" => {
+                if let Some(view) = app.views.get_mut(index) {
+                    view.view_history(false);
+                }
+            }
+            // The dialog prints the active tab, so a link in a pane that isn't active (the old
+            // file in side-by-side compare) prints nothing rather than the other document.
+            "Print" => {
+                if app.active == Some(index) {
+                    app.open_print();
+                } else {
+                    log::info!("link: Print in a tab that isn't active; no action taken");
+                }
+            }
+            // "If the PDF processor encounters a named action that is inappropriate for a
+            // viewing platform, or if the viewer does not recognise the name, it shall take no
+            // action."
+            other => log::info!("link: named action {other:?} not recognised; no action taken"),
+        },
+        LinkTarget::Hide { fields, hide } => run_button(app, ctx, index, "", NO_WIDGET, B::ShowHide { fields, hide }),
+        LinkTarget::ResetForm { fields, exclude } => run_button(app, ctx, index, "", NO_WIDGET, B::Reset { fields, exclude }),
         // Run by `PdfCraftApp::run_link_script`, which needs the link's page and index.
         LinkTarget::JavaScript(_) => {}
         LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
     }
-    None
 }
 
 /// A Snapshot area's bar choice, a signature rectangle drawn, or an empty signature field clicked.
@@ -936,8 +1024,9 @@ struct BodyOut {
     open_signature: Option<bool>,
     /// Where the canvas menu opens: a secondary press the tool did not take, or the Menu key.
     context: Option<ContextRequest>,
-    /// The link clicked, and the JavaScript link by page and annotation index (0-based).
-    link: Option<(LinkTarget, Option<(usize, usize)>)>,
+    /// The link clicked with the actions its `/Next` entries chain, and the JavaScript link by page
+    /// and annotation index (0-based).
+    link: Option<ClickedLink>,
     /// The running tool finished and the app goes back to the Select tool (a stamp placed, a crop committed, Add
     /// text done, a field placed).
     back_to_select: bool,
@@ -1174,7 +1263,10 @@ fn route_press(
             let event = links_of(session, cx, body).read(press);
             if let Some(event) = event {
                 match event {
-                    LinkEvent::Follow { target, javascript } => out.link = Some((target, javascript)),
+                    LinkEvent::Follow { target, next, javascript } => {
+                        let pressed_at = if let PressPhase::Release { start, .. } = &press.phase { start.time } else { f64::INFINITY };
+                        out.link = Some((target, next, javascript, pressed_at));
+                    }
                     LinkEvent::Select { .. } | LinkEvent::Context { .. } => crate::link_ui::link_edit_press(&mut session.links, &event),
                 }
             }
@@ -1969,7 +2061,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     }
     let prepare = body_out.prepare.take().unwrap_or_default();
     let field_props = prepare.properties.then(|| view.session.prepare.selected.clone()).flatten();
-    let (clicked_link, javascript_link) = body_out.link.take().map_or((None, None), |(target, js)| (Some(target), js));
+    let (clicked_link, javascript_link) =
+        body_out.link.take().map_or((None, None), |(target, next, js, pressed_at)| (Some((target, next, pressed_at)), js));
     // In full screen a secondary click turns the page, so the page menu must not open on it.
     let menu_for = view.session.menu_for.as_ref().map(|(_, owner)| *owner);
     let pick = if presenting {
@@ -2032,7 +2125,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     if let Some((page, area)) = body_out.snapshot {
         app.finish_marquee(ui.ctx(), index, (page, area));
     }
-    let remote_open = follow_link(app, index, clicked_link);
+    let remote_open = follow_link(app, ui.ctx(), index, clicked_link);
     if let Some((page, link)) = javascript_link {
         app.run_link_script(ui.ctx(), doc_id, page, link);
     }
