@@ -38,24 +38,45 @@ const OK: usize = 0;
 /// The footer index of the first extra button: OK and Cancel come first.
 const FIRST_EXTRA: usize = 2;
 
-/// The digital IDs as the rows of a list keyed by position; an unusable ID cannot take the lead.
-struct IdRows<'a>(&'a [DigitalIdEntry]);
+/// Linux has no OS key store, so there is nothing for Refresh to list again.
+const HAS_OS_KEY_STORE: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+
+/// The digital IDs as the rows of a list, in alphabetical order and keyed by their position in
+/// the app's list; an unusable ID cannot take the lead. Type-ahead matches the names.
+struct IdRows<'a> {
+    ids: &'a [DigitalIdEntry],
+    order: Vec<usize>,
+}
+
+impl<'a> IdRows<'a> {
+    fn new(ids: &'a [DigitalIdEntry]) -> Self {
+        IdRows { ids, order: super::picker_order(ids) }
+    }
+
+    fn entry(&self, at: usize) -> Option<&'a DigitalIdEntry> {
+        self.order.get(at).and_then(|&i| self.ids.get(i))
+    }
+}
 
 impl DisplayOrder<usize> for IdRows<'_> {
     fn len(&self) -> usize {
-        self.0.len()
+        self.order.len()
     }
 
     fn key(&self, at: usize) -> usize {
-        at
+        self.order[at]
+    }
+
+    fn index_of(&self, key: &usize) -> Option<usize> {
+        self.order.iter().position(|i| i == key)
     }
 
     fn enabled(&self, at: usize) -> bool {
-        self.0.get(at).is_some_and(|e| e.unusable.is_none())
+        self.entry(at).is_some_and(|e| e.unusable.is_none())
     }
 
     fn text(&self, at: usize) -> Option<Cow<'_, str>> {
-        self.0.get(at).map(|e| Cow::Borrowed(e.name.as_str()))
+        self.entry(at).map(|e| Cow::Borrowed(e.name.as_str()))
     }
 }
 
@@ -99,11 +120,12 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
     let mut asked = Asked::default();
     let mut open = true;
+    let os_key_store = HAS_OS_KEY_STORE && app.os_key_store_ids;
     let out = {
         let PdfCraftApp { sign_draft, digital_ids, signature, .. } = &mut *app;
         let Some(draft) = sign_draft.as_mut() else { return };
         let ids: &[DigitalIdEntry] = digital_ids;
-        let extras = extra_buttons(draft, ids);
+        let extras = extra_buttons(draft, ids, os_key_store);
         let ok_enabled = step != SignStep::Choose || draft.selected.is_some();
         let english_note = tl!("The labels are in English: the signature's font can't draw them in this language.");
         FormDialog::new(title, Bind::bound(draft))
@@ -126,20 +148,27 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         app.sign_draft = None;
         return;
     }
-    run(ui.ctx(), app, step, out.picked, asked);
+    run(ui.ctx(), app, step, out.picked, asked, os_key_store);
 }
 
-/// The footer buttons that follow OK and Cancel at this step.
-fn extra_buttons(d: &SignDraft, ids: &[DigitalIdEntry]) -> Vec<FooterButton> {
+/// The footer buttons that follow OK and Cancel at this step. Refresh lists the OS key store
+/// again: last on the picker, and alone on an empty Configure step, where an ID installed after
+/// the dialog opened has no picker to appear in.
+fn extra_buttons(d: &SignDraft, ids: &[DigitalIdEntry], os_key_store: bool) -> Vec<FooterButton> {
+    let refresh = || FooterButton::new(tl!("Refresh"), DialogRole::Other);
     match d.step {
         SignStep::Choose => {
             let can_remove = removable(d, ids).is_some() && d.confirm_remove.is_none();
-            vec![
+            let mut buttons = vec![
                 FooterButton::new(tl!("Configure New Digital ID"), DialogRole::Other),
                 FooterButton::new(tl!("Remove"), DialogRole::Other).enabled(can_remove),
-            ]
+            ];
+            if os_key_store {
+                buttons.push(refresh());
+            }
+            buttons
         }
-        SignStep::Configure if ids.is_empty() => Vec::new(),
+        SignStep::Configure if ids.is_empty() => if os_key_store { vec![refresh()] } else { Vec::new() },
         SignStep::Configure | SignStep::SignAs => vec![FooterButton::new(tl!("Back"), DialogRole::Other)],
     }
 }
@@ -150,7 +179,17 @@ fn removable(d: &SignDraft, ids: &[DigitalIdEntry]) -> Option<usize> {
 }
 
 /// Carries out the footer button picked this pass and what the body asked.
-fn run(ctx: &egui::Context, app: &mut PdfCraftApp, step: SignStep, picked: Option<usize>, asked: Asked) {
+fn run(ctx: &egui::Context, app: &mut PdfCraftApp, step: SignStep, picked: Option<usize>, asked: Asked, os_key_store: bool) {
+    let refresh = os_key_store
+        && match (step, picked) {
+            (SignStep::Choose, Some(n)) => n == FIRST_EXTRA + 2,
+            (SignStep::Configure, Some(n)) => n == FIRST_EXTRA && app.digital_ids.is_empty(),
+            _ => false,
+        };
+    if refresh {
+        app.refresh_digital_ids();
+        return;
+    }
     if let Some(i) = asked.remove {
         app.remove_digital_id(i);
     }
@@ -257,13 +296,16 @@ fn choose(ui: &mut egui::Ui, d: &mut SignDraft, ids: &[DigitalIdEntry], asked: &
     if ids.is_empty() {
         caption(tl!("No digital IDs yet.")).show(ui);
     } else {
-        let source = IdRows(ids);
+        let source = IdRows::new(ids);
         let mut selection = d.selected.map_or_else(Selection::default, Selection::single);
         let out = List::<usize>::new(tl!("Digital IDs"))
             .select(SelectMode::Single)
             .natural_height(true)
+            // A letter selects the next ID that starts with it; while a removal waits for its
+            // answer, letters do nothing, so they can't cancel it unseen.
+            .type_ahead(d.confirm_remove.is_none())
             .selection(Bind::bound(&mut selection))
-            .show_items(ui, &source, &mut |_, icx| match ids.get(icx.at) {
+            .show_items(ui, &source, &mut |_, icx| match source.entry(icx.at) {
                 Some(e) => {
                     let sub = details(e);
                     // Names are as long as their owners made them: the row cuts them and the tip says them whole.
