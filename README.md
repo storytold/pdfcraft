@@ -1,3 +1,5 @@
+[English](README.md) · [Bahasa Indonesia](README.id.md)
+
 <p align="center">
   <a href="https://getartcraft.com/">
     <picture>
@@ -79,7 +81,7 @@ PdfCraft is part of [ArtCraft](https://getartcraft.com). Come say hello, get hel
 - **Web page:** [getartcraft.com/apps/pdfcraft](https://getartcraft.com/apps/pdfcraft)
 - **Source:** [github.com/storytold/pdfcraft](https://github.com/storytold/pdfcraft)
 
-The ArtCraft name and logos in `docs/brand/` are trademarks of the ArtCraft Team and are not open source. They may be used only unmodified, and only as part of PdfCraft (see `docs/brand/LICENSE-brand.txt`). Forks and modified versions must remove them.
+The ArtCraft name and logos in `docs/brand/` are trademarks of the ArtCraft Team and are not open source. They may be used only unmodified, and only as part of PdfCraft (see `docs/brand/LICENSE-brand.txt`). See [License and credits](#license-and-credits) for the fork rules.
 
 ## Highlights
 
@@ -622,7 +624,8 @@ the Japanese fonts of [craft-fonts](https://github.com/storytold/craft-fonts/blo
 The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
 ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
 part of this repository and PdfCraft, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
-Forks and modified versions must remove them.
+If you publish or distribute a modified version, remove the marks or replace them with your own.
+A fork kept only to propose changes back to this repository may keep the marks unchanged.
 
 <p align="center">
   <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
