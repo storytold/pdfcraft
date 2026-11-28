@@ -12,9 +12,9 @@ workspace = true
 
 [dependencies]
 pdfcraft-fonts = { workspace = true }
-ocrs = { version = "0.13.1", default-features = false, features = ["rten"] }
-rten = { version = "0.26.0", default-features = false, features = ["onnx_format", "rten_format"] }
-rten-imageproc = "0.26.0"
+ocrs = { version = "0.14.0", default-features = false, features = ["rten"] }
+rten = { version = "0.28.0", default-features = false, features = ["onnx_format", "rten_format"] }
+rten-imageproc = "0.28.0"
 serde_json.workspace = true
 sha2 = "0.11"
 thiserror.workspace = true
