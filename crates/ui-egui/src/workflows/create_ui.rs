@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use craft::docpath::names::natural_cmp;
 use craft::host::{PickRequest, Picked, WriteIntent};
 use craft::platform::clipboard::TEXT;
 use craft::ui::contract::Bind;
@@ -177,10 +178,17 @@ impl PdfCraftApp {
             .title(tl!("Choose images"))
             .filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"]);
         self.pick_file(request, None, move |app, ctx, picked| {
+            // A picker hands back its selection in an order of its own, not the order the files
+            // were clicked in, and it had reversed the pages (#6327). The pages follow the file
+            // names, as Combine files lists a folder.
             let images = match picked {
                 // The browser hands over the bytes with the names.
-                Picked::Contents(files) => files,
-                Picked::Paths(paths) => {
+                Picked::Contents(mut files) => {
+                    files.sort_by(|(a, _), (b, _)| natural_cmp(a, b));
+                    files
+                }
+                Picked::Paths(mut paths) => {
+                    paths.sort_by(|a, b| image_order(a, b));
                     let mut images = Vec::new();
                     for f in paths {
                         match app.host.files().read(&f) {
@@ -372,6 +380,13 @@ impl PdfCraftApp {
 /// The suggested name of an optimized copy of `document` ("notes (reduced).pdf").
 fn optimized_name(document: &str, kind: crate::optimize_ui::OptimizeKind) -> String {
     format!("{} ({}).pdf", stem(document), kind.suffix())
+}
+
+/// The order of picked images' pages: by file name in natural order ("scan2" before "scan10"),
+/// then by the whole path, so equal names in different folders keep one order.
+fn image_order(a: &Path, b: &Path) -> std::cmp::Ordering {
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    natural_cmp(&name(a), &name(b)).then_with(|| a.cmp(b))
 }
 
 #[cfg(test)]

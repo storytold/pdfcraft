@@ -11,7 +11,12 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
 
 fn png() -> Vec<u8> {
-    let img = craft_image_codecs::Image::from_u8(8, 4, craft_image_codecs::ChannelLayout::Rgb, vec![120u8; 8 * 4 * 3]).unwrap();
+    png_of_shade(120)
+}
+
+/// An 8 × 4 grey PNG of `shade`, so that images of different shades have different bytes.
+fn png_of_shade(shade: u8) -> Vec<u8> {
+    let img = craft_image_codecs::Image::from_u8(8, 4, craft_image_codecs::ChannelLayout::Rgb, vec![shade; 8 * 4 * 3]).unwrap();
     craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
 }
 
@@ -80,6 +85,37 @@ fn image_import_dialog_chooses_dpi_and_cancels() {
     h.run_steps(2);
     assert!(h.state().image_import.is_none());
     assert_eq!(h.state().session.docs().len(), 2);
+}
+
+/// #6327: Create PDF from images puts the picked images in file-name order, numbers by value,
+/// whatever order the picker hands them back in, which had reversed the pages. Each image keeps
+/// its own file's bytes. `scan02` and `Scan2` are the same name to the natural order, so the
+/// exact name decides between them (`S` before `s`), whichever the picker gave first. Files the
+/// browser reads (the web build) follow the same order.
+#[test]
+fn create_from_images_orders_the_picked_images_by_name() {
+    let picked = ["scan10.png", "scan02.png", "Scan2.png", "cover.png", "scan1.png"];
+    let bytes = |name: &str| {
+        let shade = picked.iter().position(|n| *n == name).unwrap();
+        png_of_shade(40 * shade as u8)
+    };
+    let dir = PathBuf::from("/scans");
+    let mut on_disk = ScriptedFiles::answering([Picked::Paths(picked.iter().map(|n| dir.join(n)).collect())]);
+    for name in picked {
+        on_disk = on_disk.with_file(dir.join(name), bytes(name));
+    }
+    let in_browser = ScriptedFiles::answering([Picked::Contents(picked.iter().map(|n| (n.to_string(), bytes(n))).collect())]);
+    for files in [on_disk, in_browser] {
+        let mut h = scripted(Arc::new(files), Arc::new(ManualJobs::new()), egui::vec2(1000.0, 720.0), |_| {});
+        assert!(h.execute("create.images"));
+        h.run_steps(2);
+        let import = h.state().image_import.as_ref().expect("the images wait for the DPI chooser");
+        let names: Vec<&str> = import.images.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["cover.png", "scan1.png", "Scan2.png", "scan02.png", "scan10.png"]);
+        for (name, staged) in &import.images {
+            assert!(*staged == bytes(name), "{name} is staged with its own file's bytes");
+        }
+    }
 }
 
 #[test]
