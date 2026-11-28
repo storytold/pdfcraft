@@ -175,6 +175,7 @@ impl PdfCraftApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    /// Updates the notice for the first pending native document, including its current language.
     fn refresh_opening_notice(&mut self) {
         let Some(pending) = self.pending_opens.first() else {
             self.opening_notice = None;

@@ -35,6 +35,7 @@ fn type_into(h: &mut Harness<'static, PdfCraftApp>, label: &str, text: &str) {
     h.run_steps(2);
 }
 
+/// Sets the password pair through the Protect dialog's Advanced Options.
 fn open_password_pair(h: &mut Harness<'static, PdfCraftApp>, password: &str) {
     type_into(h, "Type Password", password);
     type_into(h, "Re-type Password", password);
