@@ -416,6 +416,13 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
     // interface can say both in its own language.
     match &info.modification {
         Modification::None => info.details.push(Detail::plain("This document has not been modified since this signature was applied.")),
+        // Bytes after the signed revision that change no object (a comment after `%%EOF`, a
+        // revision that only restates what was signed) name no change to put in brackets. The
+        // sentence says what the check found, not that nothing changed: an object added where a
+        // signed reference read null before (ISO 32000-2 §7.3.10) changes no signed object.
+        Modification::Allowed(kinds) if kinds.is_empty() => {
+            info.details.push(Detail::plain("Data was added to the file since this signature was applied, but no change to the document was found."))
+        }
         Modification::Allowed(kinds) => info.details.push(Detail::of(
             "The document has been modified since this signature was applied, but the changes are permitted ({}).",
             Fill::Changes(kinds.clone()),
@@ -725,6 +732,9 @@ pub(super) fn validate_doc_timestamp(context: SignatureValidation<'_>, v: &Dict)
     };
     match &info.modification {
         Modification::None => info.details.push(Detail::plain("This document has not been modified since this timestamp was applied.")),
+        Modification::Allowed(kinds) if kinds.is_empty() => {
+            info.details.push(Detail::plain("Data was added to the file since this timestamp was applied, but no change to the document was found."))
+        }
         Modification::Allowed(kinds) => info.details.push(Detail::of(
             "The document has been modified since this timestamp was applied, but the changes are permitted ({}).",
             Fill::Changes(kinds.clone()),

@@ -7,6 +7,7 @@ mod cms;
 mod crypto;
 mod encrypted_signing;
 mod field_locks;
+mod malformed_contents;
 mod pdf;
 mod revision_classification;
 mod signed_structure;
