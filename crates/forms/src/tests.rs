@@ -1773,6 +1773,83 @@ fn deleting_the_last_kid_removes_the_emptied_ancestors_and_their_values() {
     assert!(fields(&doc).iter().any(|f| f.name == "outer.inner.b"));
 }
 
+/// A field a parent lists in `/Kids` but that carries no `/Parent` of its own is not conforming
+/// (ISO 32000-2 §12.7.4), yet the reader accepts it and lists it under its own `/T`. Delete Field
+/// used to report success while the listing `/Kids` kept it in the form (#8027).
+#[test]
+fn delete_field_removes_a_kid_that_has_no_parent_from_the_kids_that_list_it() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>".into(),                          // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),          // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),                            // 3
+        "<< /Type /Annot /Subtype /Widget /T (kid) /Rect [20 20 180 50] /P 3 0 R >>".into(), // 4
+        "<< /Fields [6 0 R] >>".into(),                                                      // 5
+        "<< /FT /Tx /T (pw) /Kids [4 0 R] >>".into(),                                        // 6
+    ]);
+    assert!(fields(&doc).iter().any(|f| f.name == "kid"), "the reader lists the parentless kid");
+    delete_field(&mut doc, "kid").unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    assert!(!all.iter().any(|f| f.name == "kid"), "the kid is gone from the form");
+}
+
+/// The listing owner need not be in `/Fields` itself: a nameless widget in `/Fields` can name it
+/// as its `/Parent`, and the reader follows that pointer up and lists the owner's parentless kid
+/// (`unlisted_root`, ISO 32000-2 §12.7.4.2). Delete Field used to clean only the `/Kids` of
+/// owners the `/Fields` tree reaches, so this owner kept the kid and it stayed in the form (#8027).
+#[test]
+fn delete_field_reaches_owners_only_a_widgets_parent_names() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>".into(),                 // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 7 0 R] >>".into(),             // 3
+        "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /Rect [20 20 180 50] /P 3 0 R >>".into(), // 4 the widget W
+        "<< /Fields [4 0 R] >>".into(),                                             // 5
+        "<< /FT /Tx /T (pw) /Kids [4 0 R 7 0 R] >>".into(),                         // 6 the owner P, not in /Fields
+        "<< /Type /Annot /Subtype /Widget /T (kid) /Rect [20 60 180 90] /P 3 0 R >>".into(), // 7 the parentless kid K
+    ]);
+    assert!(fields(&doc).iter().any(|f| f.name == "kid"), "the reader lists the kid through the widget's parent");
+    delete_field(&mut doc, "kid").unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    assert!(!all.iter().any(|f| f.name == "kid"), "the kid is gone from the form");
+    assert!(all.iter().any(|f| f.name == "pw"), "the owner the widget names stays");
+}
+
+/// The cleanup walk used to visit at most 4096 owners, and its LIFO order visits the fields
+/// `/Fields` names after the first entry first: an owner named before 4096 others was the one
+/// node past the cap, its parentless kid stayed listed and Delete Field still reported success
+/// (#8027). The cap guarded against loops, which the seen set already does, so the cleanup walk
+/// now runs to the end of the tree.
+#[test]
+fn delete_field_cleans_the_owner_the_visit_cap_used_to_skip() {
+    // 1 catalog, 2 pages, 3 page, 4 AcroForm, 5 the owner, 6..=4101 the 4096 fields after it,
+    // 4102 the parentless kid its `/Kids` list.
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4102 0 R] >>".into(),
+        {
+            let mut af = String::from("<< /Fields [5 0 R");
+            for n in 6..=4101 {
+                af.push_str(&format!(" {n} 0 R"));
+            }
+            af.push_str("] >>");
+            af
+        },
+        "<< /FT /Tx /T (owner) /Kids [4102 0 R] >>".into(),                                  // 5
+        "<< /Type /Annot /Subtype /Widget /T (kid) /Rect [20 20 180 50] /P 3 0 R >>".into(), // 4102
+    ];
+    objs.splice(5..5, (6..=4101).map(|n| format!("<< /FT /Tx /T (f{n}) >>")));
+    let mut doc = document(&objs);
+    assert!(fields(&doc).iter().any(|f| f.name == "kid"), "the reader lists the parentless kid");
+    delete_field(&mut doc, "kid").unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    assert!(!all.iter().any(|f| f.name == "kid"), "the kid is gone from the form");
+    assert_eq!(all.len(), 4097, "the owner, emptied by the deletion, and the 4096 fields after it stay");
+}
+
 /// A parent `MASTER` with kids `a` and `b` (each a field merged with its widget) and `e` (a field
 /// with two widget kids), and the top-level fields `c` and `d`.
 fn dotted_form() -> Document {
