@@ -3,3 +3,4 @@
 mod convert_colours_cmyk_initial;
 mod convert_colours_shared;
 mod convert_colours_streams;
+mod image_opacity;

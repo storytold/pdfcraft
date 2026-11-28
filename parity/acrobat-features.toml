@@ -2271,11 +2271,17 @@ title = "Object properties (colour space, font, convert colour)"
 area = "C"
 tier = "P2"
 milestone = "M11"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["image_edit", "page_images"]
+evidence = [
+  "crates/edit/tests/it/image_opacity.rs::a_picture_set_to_half_opacity_lets_the_paper_show_through_and_reads_back",
+  "crates/edit/tests/it/image_opacity.rs::setting_opacity_again_replaces_it_instead_of_stacking",
+  "crates/edit/tests/it/image_opacity.rs::placed_artwork_takes_the_opacity",
+  "crates/automation/tests/it/image_opacity.rs::image_edit_sets_opacity_that_renders_undoes_and_saves",
+  "crates/ui-egui/tests/it/image_opacity.rs::the_picture_menu_sets_the_image_opacity",
+]
+notes = "Edit mode: right-click an image or placed artwork ▸ Opacity (100, 75, 50 or 25%); image_edit action opacity takes any value from 0 to 1, and page_images reports the opacity each is drawn at. Setting it again replaces the value; Form artwork without a transparency group fades each shape it draws separately. Text colour is in Edit text. Still missing: text opacity, recolouring vector paths (edit.vector-edit), a properties panel showing colour space and font, and Convert colour on a selection."
 
 [[feature]]
 id = "edit.link-create"
