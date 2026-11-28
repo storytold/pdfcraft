@@ -155,7 +155,7 @@ pub(crate) fn text(args: &[String]) -> Result<(), CliError> {
     }
 }
 
-/// The most pages one `A-B` range may name: a bound on what a typed range can allocate.
+/// The most entries a page list may name: a bound on its total expansion, including duplicates.
 const MAX_RANGE: usize = 1_000_000;
 
 /// 1-based pages ("1,3,5-8": single pages and inclusive ranges, in the order given) → 0-based
@@ -170,12 +170,18 @@ fn page_list(s: &str) -> Result<Vec<usize>, String> {
                 if to < from {
                     return Err(format!("bad page range {item:?}: it ends before it starts"));
                 }
-                if to - from >= MAX_RANGE {
-                    return Err(format!("bad page range {item:?}: more than {MAX_RANGE} pages"));
+                if to - from >= MAX_RANGE.saturating_sub(out.len()) {
+                    return Err(format!("bad page range {item:?}: page list would contain more than {MAX_RANGE} pages"));
                 }
                 out.extend(from - 1..to);
             }
-            None => out.push(number(item, item)? - 1),
+            None => {
+                let page = number(item, item)? - 1;
+                if out.len() >= MAX_RANGE {
+                    return Err(format!("bad page number {item:?}: page list would contain more than {MAX_RANGE} pages"));
+                }
+                out.push(page);
+            }
         }
     }
     Ok(out)
@@ -457,4 +463,42 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod page_list_tests {
+    use super::{MAX_RANGE, page_list};
+
+    #[test]
+    fn all_ranges_and_single_pages_share_one_expansion_budget() {
+        for input in ["1-1000000,1-1000000", "1-1000000,1", "1,1-1000000"] {
+            let error = match page_list(input) {
+                Err(error) => error,
+                Ok(pages) => panic!("{input} expanded to {} entries", pages.len()),
+            };
+            assert!(error.contains("page list would contain more than 1000000 pages"), "{input}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_list_at_the_budget_keeps_its_order_and_duplicates() {
+        assert_eq!(page_list("1-1000000").unwrap().len(), MAX_RANGE);
+        assert_eq!(page_list("1-500000,1-500000").unwrap().len(), MAX_RANGE);
+        assert_eq!(page_list(" 4 - 5 , 1, 4-4 ").unwrap(), [3, 4, 0, 3]);
+    }
+
+    #[test]
+    fn invalid_page_lists_still_fail() {
+        for input in ["", "0", "3-1", "1-x", "2-", "1-1000001"] {
+            assert!(page_list(input).is_err(), "{input}");
+        }
+    }
+
+    #[test]
+    fn maximum_page_numbers_do_not_overflow_range_accounting() {
+        let maximum = usize::MAX;
+        assert_eq!(page_list(&maximum.to_string()).unwrap(), [maximum - 1]);
+        assert_eq!(page_list(&format!("{maximum}-{maximum}")).unwrap(), [maximum - 1]);
+        assert!(page_list(&format!("1-{maximum}")).is_err());
+    }
 }
