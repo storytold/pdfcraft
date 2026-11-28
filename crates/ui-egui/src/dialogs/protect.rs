@@ -1,15 +1,17 @@
 //! Protect Using Password (Acrobat's simplified dialog, screenshot 13b), with the classic
-//! Password Security settings behind "Advanced Options" (compatibility, what to encrypt,
-//! printing, changes, copying, screen readers). Execution plan M8.1.
+//! Password Security settings behind "Advanced Options" (compatibility, what to encrypt, the other
+//! password, printing, changes, copying, screen readers). Execution plan M8.1.
 //!
 //! Advanced Options can also set the other password so an open password and a permissions
-//! password can be configured together.
+//! password can be configured together. With 40-bit RC4 the restrictions revision 2 has no bits
+//! for are unavailable (ISO 32000-2 Table 22), and a document that already has security asks
+//! first whether to change it.
 
 use craft::theme::variant::Tone;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::controls::disclosure::Disclosure;
-use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft::ui::dialog::{DialogId, DialogResult, DialogStack, PromptChoice, StackDialog, StandardPrompt, dialog_id};
 use craft::ui::display::{Shade, Text};
 use craft::ui::form::{Field, Help};
 use craft::ui::layout_components::Row;
@@ -123,6 +125,24 @@ impl ProtectDraft {
         p.permissions_password = permissions;
         Edit::Protect(p)
     }
+
+    /// Keep the restrictions to what 40-bit RC4 can express: the guide offers low-resolution
+    /// printing, page changes, filling in forms and screen-reader access only with 128-bit
+    /// encryption (revision 2 has no bits for them, ISO 32000-2 Table 22), and there screen
+    /// readers follow copying. A choice it can't keep falls back to the stricter "None".
+    pub fn keep_to_compatibility(&mut self) {
+        let p = &mut self.protection;
+        if p.algorithm != Algorithm::Rc4_40 {
+            return;
+        }
+        if p.printing == Printing::Low {
+            p.printing = Printing::None;
+        }
+        if matches!(p.changes, Changes::Pages | Changes::FillSign) {
+            p.changes = Changes::None;
+        }
+        p.accessibility = p.copy;
+    }
 }
 
 /// Protect Using Password, owned by the dialog host. The draft, passwords included, dies with the dialog.
@@ -227,13 +247,17 @@ fn advanced_rows(ui: &mut Ui, d: &mut ProtectDraft) {
             TextField::new(second_label.clone(), Bind::bound(&mut d.second_confirm)).masked().show(ui);
         });
     }
+    d.keep_to_compatibility();
     if !restricts {
         return;
     }
     let p = &mut d.protection;
+    // Only high (128-bit RC4 or AES) encryption has low-resolution printing, page changes, form
+    // filling and screen-reader access on their own.
+    let high = p.algorithm != A::Rc4_40;
     let printing = [
         Entry::new(Printing::None, text("None")),
-        Entry::new(Printing::Low, text("Low Resolution (150 dpi)")),
+        Entry::new(Printing::Low, text("Low Resolution (150 dpi)")).enabled(high),
         Entry::new(Printing::High, text("High Resolution")),
     ];
     let label = text("Printing allowed");
@@ -244,8 +268,8 @@ fn advanced_rows(ui: &mut Ui, d: &mut ProtectDraft) {
     });
     let changes = [
         Entry::new(Changes::None, text("None")),
-        Entry::new(Changes::Pages, text("Inserting, deleting, and rotating pages")),
-        Entry::new(Changes::FillSign, text("Filling in form fields and signing existing signature fields")),
+        Entry::new(Changes::Pages, text("Inserting, deleting, and rotating pages")).enabled(high),
+        Entry::new(Changes::FillSign, text("Filling in form fields and signing existing signature fields")).enabled(high),
         Entry::new(Changes::CommentFillSign, text("Commenting, filling in form fields, and signing existing signature fields")),
         Entry::new(Changes::AnyExceptExtract, text("Any except extracting pages")),
     ];
@@ -256,10 +280,10 @@ fn advanced_rows(ui: &mut Ui, d: &mut ProtectDraft) {
         }
     });
     Checkbox::new(Bind::bound(&mut p.copy)).label(text("Enable copying of text, images, and other content")).show(ui);
-    Checkbox::new(Bind::bound(&mut p.accessibility)).label(text("Enable text access for screen reader devices for the visually impaired")).show(ui);
-    if p.algorithm == A::Rc4_40 && p.printing == Printing::Low {
-        p.printing = Printing::None;
-    }
+    Checkbox::new(Bind::bound(&mut p.accessibility))
+        .label(text("Enable text access for screen reader devices for the visually impaired"))
+        .enabled(high)
+        .show(ui);
 }
 
 impl StackDialog for ProtectDialog {
@@ -285,6 +309,23 @@ impl StackDialog for ProtectDialog {
 }
 
 impl PdfCraftApp {
+    /// Protect Using Password from the menu: a document that already has security asks first
+    /// whether to change it ("If you receive a prompt, click Yes to change the security"); one
+    /// without goes straight to the settings.
+    pub(crate) fn request_protect(&mut self) {
+        let secured = self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.security_summary().is_some());
+        if !secured {
+            self.open_protect();
+            return;
+        }
+        let prompt = StandardPrompt::custom(text("This document already has security settings. Do you want to change them?"))
+            .title(text("Protect Using Password"))
+            .button(PromptChoice::Proceed, text("Yes"))
+            .button(PromptChoice::Cancel, text("No"))
+            .instance("change-security");
+        self.prompts.change_security = Some(self.dialogs.open(prompt));
+    }
+
     /// Opens Protect Using Password with an empty draft.
     pub(crate) fn open_protect(&mut self) {
         // PLAN: assumed `fn open<D: StackDialog>(app: &mut PdfCraftApp, dialog: D)` (pdf-hub-w2)
@@ -293,6 +334,15 @@ impl PdfCraftApp {
 
     /// Applies the draft of a Protect dialog that finished with Apply.
     pub(crate) fn protect_pass(&mut self, ctx: &egui::Context) {
+        // The question before changing existing security: Yes goes on to the settings.
+        if let Some(dialog) = self.prompts.change_security
+            && let Some(answer) = self.dialogs.take_by_id::<StandardPrompt>(dialog)
+        {
+            self.prompts.change_security = None;
+            if matches!(answer, DialogResult::Ok(a) if a.choice == PromptChoice::Proceed) {
+                self.open_protect();
+            }
+        }
         // PLAN: assumed `self.dialogs: DialogHost` with `fn take<D: StackDialog>(&mut self) -> Option<DialogResult<D::Result>>` (pdf-hub-w1 field, pdf-hub-w2 host)
         if let Some(DialogResult::Ok(draft)) = self.dialogs.take::<ProtectDialog>()
             && self.apply_edit(ctx, draft.edit())

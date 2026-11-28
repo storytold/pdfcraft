@@ -23,6 +23,8 @@ pub(crate) struct OpenPrompts {
     pub(crate) sanitize: Option<DialogId>,
     /// The question about locking placed signatures into the page before a save (`pending_lock`).
     pub(crate) lock_signatures: Option<DialogId>,
+    /// Protect Using Password's question before changing a document's existing security.
+    pub(crate) change_security: Option<DialogId>,
     /// The confirmation question before deleting pages.
     pub(crate) delete_pages: Option<DialogId>,
 }
