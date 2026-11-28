@@ -415,43 +415,43 @@ fn resources_with_ancestors(src: &Document, page: &Dict) -> Option<Object> {
     merged.filter(|_| added).map(Object::Dict)
 }
 
-/// Look up a named destination in the source (`/Dests` dictionary or `/Names /Dests` tree).
-fn named_dest(src: &Document, name: &[u8]) -> Option<Object> {
-    let catalog = src.get(src.root()?).as_dict().cloned()?;
+/// The named destinations of `src`, each name with its value as `src` stores it: the entries of the
+/// catalog's `/Dests` dictionary (PDF 1.1), then those of the `/Names /Dests` tree that the
+/// dictionary does not list (ISO 32000-2 §12.3.2.4). A name listed twice keeps its first value, the
+/// one a lookup reaching it first would return. Read once per copy and then looked up by name,
+/// rather than walking the tree for every link and bookmark that names a destination: a document
+/// with thousands of both made a combine quadratic in its pages. The walk is the one a lookup of a
+/// missing name made, and a name shared by many entries is stored once.
+pub(super) fn named_dests(src: &Document) -> HashMap<Vec<u8>, Object> {
+    let mut found = HashMap::new();
+    let Some(catalog) = src.root().map(|r| src.get(r)) else { return found };
+    let Some(catalog) = catalog.as_dict() else { return found };
     if let Some(dests) = catalog.get(b"Dests").map(|d| src.resolve(d))
-        && let Some(v) = dests.as_dict().and_then(|d| d.get(name))
+        && let Some(dests) = dests.as_dict()
     {
-        return Some(src.resolve(v).as_ref().clone());
-    }
-    let names = src.resolve(catalog.get(b"Names")?);
-    let tree = names.as_dict()?.get(b"Dests")?.clone();
-    name_tree_lookup(src, &tree, name, 0, &mut HashSet::new())
-}
-
-/// Name trees are read once per node: a node listed twice (or a cycle) is skipped.
-fn name_tree_lookup(src: &Document, node: &Object, key: &[u8], depth: u8, seen: &mut HashSet<ObjRef>) -> Option<Object> {
-    if depth > 32 || node.as_ref().is_some_and(|r| !seen.insert(r)) {
-        return None;
-    }
-    #[cfg(test)]
-    crate::work(1);
-    let node = src.resolve(node);
-    let d = node.as_dict()?;
-    if let Some(names) = d.get(b"Names").map(|n| src.resolve(n)).and_then(|n| n.as_array().cloned()) {
-        for pair in names.chunks(2) {
-            if let [k, v] = pair
-                && src.resolve(k).as_string().is_some_and(|s| s.bytes == key)
-            {
-                return Some(src.resolve(v).as_ref().clone());
-            }
+        for (k, v) in dests.iter() {
+            found.entry(k.clone()).or_insert_with(|| v.clone());
         }
     }
-    let kids = d.get(b"Kids").map(|k| src.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-    kids.iter().find_map(|k| name_tree_lookup(src, k, key, depth + 1, seen))
+    let names = catalog.get(b"Names").map(|n| src.resolve(n));
+    if let Some(tree) = names.as_deref().and_then(Object::as_dict).and_then(|n| n.get(b"Dests")) {
+        name_tree_each(src, tree, 0, &mut HashSet::new(), &mut |k, v| {
+            if !found.contains_key(k) {
+                found.insert(k.to_vec(), v.clone());
+            }
+        });
+    }
+    found
 }
 
 /// All (key, value) pairs of a name tree, in order, each node read once.
 pub(crate) fn name_tree_entries(src: &Document, node: &Object, depth: u8, seen: &mut HashSet<ObjRef>, out: &mut Vec<(Vec<u8>, Object)>) {
+    name_tree_each(src, node, depth, seen, &mut |k, v| out.push((k.to_vec(), v.clone())));
+}
+
+/// Each (key, value) pair of a name tree, in order, each node read once: a node listed twice (or a
+/// cycle) is skipped, and nesting stops past 32 levels.
+fn name_tree_each(src: &Document, node: &Object, depth: u8, seen: &mut HashSet<ObjRef>, each: &mut dyn FnMut(&[u8], &Object)) {
     if depth > 32 || node.as_ref().is_some_and(|r| !seen.insert(r)) {
         return;
     }
@@ -459,17 +459,20 @@ pub(crate) fn name_tree_entries(src: &Document, node: &Object, depth: u8, seen: 
     crate::work(1);
     let node = src.resolve(node);
     let Some(d) = node.as_dict() else { return };
-    if let Some(names) = d.get(b"Names").map(|n| src.resolve(n)).and_then(|n| n.as_array().cloned()) {
+    if let Some(names) = d.get(b"Names").map(|n| src.resolve(n))
+        && let Some(names) = names.as_array()
+    {
         for pair in names.chunks(2) {
             if let [k, v] = pair
                 && let Some(k) = src.resolve(k).as_string()
             {
-                out.push((k.bytes.clone(), v.clone()));
+                each(&k.bytes, v);
             }
         }
     }
-    for k in d.get(b"Kids").map(|k| src.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default() {
-        name_tree_entries(src, &k, depth + 1, seen, out);
+    let kids = d.get(b"Kids").map(|k| src.resolve(k));
+    for k in kids.as_deref().and_then(Object::as_array).into_iter().flatten() {
+        name_tree_each(src, k, depth + 1, seen, each);
     }
 }
 

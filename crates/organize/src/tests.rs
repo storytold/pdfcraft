@@ -4431,6 +4431,57 @@ fn name_trees_with_shared_kids_are_walked_once_per_node() {
 }
 
 #[test]
+fn named_destinations_are_read_once_per_combined_file() {
+    // Every page links to a named destination and has a bookmark naming one, and the `/Dests` tree
+    // keeps one name per leaf: looking each name up in the tree read up to `n` leaves per link and
+    // per bookmark, so a combine was quadratic in the pages (5,082 pages took 33 minutes).
+    let n = 300;
+    let page = |i: usize| 3 + i;
+    let contents = page(n);
+    let link = |i: usize| contents + 1 + i;
+    let tree = link(n);
+    let leaf = |i: usize| tree + 1 + i;
+    let outlines = leaf(n);
+    let item = |i: usize| outlines + 1 + i;
+    let mut b: Vec<String> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /Names << /Dests {tree} 0 R >> /Outlines {outlines} 0 R >>"),
+        format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 300 400] >>", (0..n).map(|i| format!("{} 0 R ", page(i))).collect::<String>()),
+    ];
+    b.extend((0..n).map(|i| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R /Annots [{} 0 R] >>", link(i))));
+    b.push(body("page"));
+    // Page i links (by name) to the destination on the page counted from the end.
+    b.extend((0..n).map(|i| format!("<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest /d{} >>", n - 1 - i)));
+    b.push(format!("<< /Kids [{}] >>", (0..n).map(|i| format!("{} 0 R ", leaf(i))).collect::<String>()));
+    b.extend((0..n).map(|i| format!("<< /Names [(d{i}) [{} 0 R /Fit]] >>", page(i))));
+    b.push(format!("<< /Type /Outlines /First {} 0 R /Last {} 0 R /Count {n} >>", item(0), item(n - 1)));
+    b.extend((0..n).map(|i| {
+        let prev = if i > 0 { format!("/Prev {} 0 R", item(i - 1)) } else { String::new() };
+        let next = if i + 1 < n { format!("/Next {} 0 R", item(i + 1)) } else { String::new() };
+        format!("<< /Title (b{i}) /Parent {outlines} 0 R {prev} {next} /A << /S /GoTo /D (d{i}) >> >>")
+    }));
+    let src = open(build(&b, "/Root 1 0 R"));
+    take_work();
+    let out = combine(&[("a", &src), ("b", &src)]).unwrap();
+    let work = take_work();
+    assert!(work <= 8 * (n + 1), "{work} name-tree nodes visited for {n} pages");
+    // Still every link and bookmark goes to its page, in both copies.
+    let copied = pages(&out).unwrap();
+    assert_eq!(copied.len(), 2 * n);
+    for (at, p) in copied.iter().enumerate() {
+        let d = out.get(p.obj).as_dict().cloned().unwrap();
+        let annot = out.resolve(&d.get(b"Annots").and_then(|a| a.as_array()).and_then(|a| a.first()).cloned().unwrap()).as_dict().cloned().unwrap();
+        let target = annot.get(b"Dest").and_then(|d| d.as_array()).and_then(|a| a.first()).and_then(Object::as_ref);
+        let file = at / n * n;
+        assert_eq!(target, Some(copied[file + n - 1 - (at - file)].obj), "link on page {at}");
+    }
+    let marks = crate::outline::bookmarks(&out);
+    let pages_of = |file: usize| marks.iter().filter(|m| m.path.len() == 2 && m.path[0] == file).map(|m| m.page).collect::<Vec<_>>();
+    for file in 0..2 {
+        assert_eq!(pages_of(file), (0..n).map(|i| Some(file * n + i)).collect::<Vec<_>>(), "bookmarks of file {file}");
+    }
+}
+
+#[test]
 fn a_form_drawing_itself_repeatedly_is_analysed_once() {
     let form = "/F Do /F Do /F Do /F Do";
     let b: Vec<String> = vec![
