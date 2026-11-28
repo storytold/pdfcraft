@@ -106,7 +106,7 @@ pub fn tiled(bytes: Arc<Vec<u8>>) -> Option<Vec<u8>> {
     .flatten()
 }
 
-/// `bytes` with each page that uses transparency ([`pdfcraft_preflight::page_uses_transparency`])
+/// `bytes` with each page that draws transparency ([`pdfcraft_preflight::page_draws_transparency`])
 /// replaced by an opaque picture of itself, or `None` when no page needs it, none could be
 /// rendered, or the copy can't be read or written. Pages without transparency stay as they are.
 ///
@@ -125,7 +125,7 @@ pub fn flattened(bytes: Arc<Vec<u8>>, dpi: f64) -> Option<Vec<u8>> {
         let mut doc = pdfcraft_cos::Document::open(bytes.clone()).ok()?;
         let pages = pdfcraft_model::pages(&doc);
         let transparent: Vec<usize> =
-            pages.iter().enumerate().filter(|(_, p)| pdfcraft_preflight::page_uses_transparency(&doc, &p.dict)).map(|(i, _)| i).collect();
+            pages.iter().enumerate().filter(|(_, p)| pdfcraft_preflight::page_draws_transparency(&doc, &p.dict)).map(|(i, _)| i).collect();
         if transparent.is_empty() {
             return None;
         }
@@ -553,6 +553,36 @@ mod tests {
         // US Letter at 150 dpi is 1275 × 1650 pixels: one tile.
         assert_eq!(page_images(&doc, 1), [(1275, 1650, false)]);
         assert_eq!(page_of(&doc, 1).1.matches(" Do").count(), 1);
+    }
+
+    /// Seven pages share one resource dictionary holding a soft-masked image only the first page
+    /// draws. Imposed as a print imposes them, each sheet draws its page as a form that keeps that
+    /// dictionary: only the first sheet is flattened.
+    #[test]
+    fn pages_sharing_a_transparent_resource_they_dont_draw_are_not_flattened() {
+        let source = pdf_of(|doc| {
+            let first = soft_masked_page(doc);
+            let Some(Object::Dict(resources)) = first.get(b"Resources").cloned() else { panic!("resources") };
+            let shared = doc.add(Object::Dict(resources));
+            (0..7)
+                .map(|n| {
+                    let mut p = if n == 0 { first.clone() } else { vector_page(doc) };
+                    p.set("Resources", Object::Ref(shared));
+                    p
+                })
+                .collect()
+        });
+        let settings = pdfcraft_print::Settings { pages: (0..7).collect(), ..Default::default() };
+        let sheets = pdfcraft_print::impose(&Document::open(Arc::new(source)).unwrap(), &settings).unwrap();
+        let imposed = Document::open(Arc::new(sheets.clone())).unwrap();
+        let flat = flattened(Arc::new(sheets), 150.0).expect("flattened");
+        let doc = Document::open(Arc::new(flat)).unwrap();
+        assert_eq!(page_images(&doc, 0), [(1275, 1650, false)]);
+        for n in 1..7 {
+            let content = page_of(&doc, n).1;
+            assert!(content.contains("/P0 Do"), "sheet {}: {content}", n + 1);
+            assert_eq!(content, page_of(&imposed, n).1, "sheet {}", n + 1);
+        }
     }
 
     /// The picture lands where the page showed what it pictures, on a page turned a quarter
