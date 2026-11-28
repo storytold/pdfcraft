@@ -7,6 +7,7 @@ use craft::ui::buttons::Button;
 use craft::ui::canvas_controls::TaskBar;
 use craft::ui::contract::{Props as _, Show as _};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::Ordering;
 
 /// The text layer of a page that could not be read: a page with nothing to select, which a selection across
 /// pages passes over.
@@ -509,6 +510,10 @@ pub(super) fn selection_bar(
     can_comment: bool,
     can_copy: bool,
 ) -> bool {
+    // Switched by the `view.selection_bar` command (a hotbar button or the command palette).
+    if !crate::commands::SELECTION_BAR_ON.load(Ordering::Relaxed) {
+        return false;
+    }
     if body.pass.is_some_and(|p| p.press.phase.button_down()) {
         return false;
     }
