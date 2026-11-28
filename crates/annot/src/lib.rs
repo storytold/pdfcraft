@@ -24,6 +24,7 @@ mod info;
 mod lookup;
 mod model3d;
 mod modify;
+pub(crate) mod structure;
 mod threed;
 mod types;
 
