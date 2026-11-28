@@ -39,7 +39,7 @@ pub use combine::{
 };
 pub(crate) use copy::{Copier, copy_object};
 use copy::{MAX_COPY_DEPTH, SKIP_ON_PAGE};
-use fields::{add_kid, field_and_widget, register_fields, resolve_field_conflicts, split_own_field};
+use fields::{add_kid, field_and_widget, import_dr_fonts, register_fields, resolve_field_conflicts, split_own_field};
 pub use fields::{combine_field_conflicts, field_name_conflicts};
 pub(crate) use fields::{listed_fields, share_fields_with_originals};
 
@@ -356,6 +356,12 @@ fn import_pages_mapped(
         FieldConflicts::Rename => resolve_field_conflicts(dst, &copier.fields)?,
         FieldConflicts::Merge => Vec::new(),
     };
+    // The imported fields' `/DA` names fonts of the source form: bring them along (renamed where
+    // the destination uses the name for another face) so an edit does not change the typeface.
+    // This runs before `register_fields` so a refusal here (a source too deep to follow) leaves
+    // the destination's `/Fields` — an existing object, not one the rollback can free — alone.
+    let fields = copier.fields.clone();
+    import_dr_fonts(dst, src, &mut copier, &fields)?;
     register_fields(dst, &copier.fields)?;
     register_layers(dst, src, &copier.ocgs)?;
     let at = at.min(existing.len());
