@@ -524,12 +524,12 @@ fn inline_tool_open_keeps_its_command_for_pdf_conversion_and_password_retry() {
 #[test]
 fn startup_files_wait_for_absolute_link_consent_and_preparation() {
     let target = TempFile::new("link-target", "pdf", &fixture(2));
+    let escaped_target = target.path().replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)");
     let source = format!(
         "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
          3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R] >> endobj\n\
-         4 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 200 300] /Border [0 0 0] /A << /S /GoToR /F ({}) /D [0 /Fit] >> >> endobj\n\
+         4 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 200 300] /Border [0 0 0] /A << /S /GoToR /F ({escaped_target}) /D [0 /Fit] >> >> endobj\n\
          trailer << /Root 1 0 R >>\n%%EOF",
-        target.path()
     );
     let mut rig = Rig::empty();
     let ctx_h = rig.h.ctx.clone();
