@@ -392,7 +392,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             let list = contours.iter().filter(|c| c.len() > 2).map(|c| num_array(&c.iter().flat_map(|p| [p[0], p[1]]).collect::<Vec<_>>())).collect();
             d.set(b"PCOutline".to_vec(), Object::Array(list));
         }
-        Shape::CustomStamp { name, picture, image, size, line, .. } => {
+        Shape::CustomStamp { name, picture, image, size, line, line_over_picture, line_position, line_font_percent, .. } => {
             let clean: String = name.chars().filter(char::is_ascii_alphanumeric).collect();
             d.set(b"Name".to_vec(), Object::name(&format!("PCCustom{clean}")));
             d.set(b"PCPicture".to_vec(), Object::Ref(*picture));
@@ -400,7 +400,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"PCPictureSize".to_vec(), num_array(&[size.0, size.1]));
             let lined = line.as_deref().map(str::trim).filter(|l| !l.is_empty());
             if let Some(l) = lined {
-                d.set(b"PCByLine".to_vec(), PdfString::text(l));
+                set_custom_stamp_line(&mut d, l, *line_over_picture, line_position, *line_font_percent);
             }
             // An image signature's rectangle is in user space; on a turned page its appearance is
             // turned back (see `appearance::build`), so it reads upright as displayed. A stamp
@@ -601,19 +601,38 @@ fn add_popup(doc: &mut Document, parent: ObjRef, rect: Option<[f64; 4]>, annots:
     Ok(())
 }
 
+fn set_custom_stamp_line(d: &mut Dict, line: &str, overlay: bool, position: &[f64; 2], font_percent: Option<u16>) {
+    d.set(b"PCByLine".to_vec(), PdfString::text(line));
+    if overlay {
+        d.set(b"PCLineOverPicture".to_vec(), Object::Bool(true));
+    }
+    d.set(b"PCLinePosition".to_vec(), num_array(position));
+    if let Some(percent) = font_percent {
+        d.set(b"PCLineFontPercent".to_vec(), Object::Int(i64::from(percent)));
+    }
+}
+
 /// The share of a custom stamp's height its text line takes (the rest is the picture).
 pub const CUSTOM_LINE_BAND: f64 = 0.22;
 
 /// A custom stamp line's text height as a share of its band.
 pub const CUSTOM_LINE_TEXT: f64 = 0.62;
 
+/// The accepted range for a custom stamp line's font size, as a percentage of its usual size.
+pub const CUSTOM_STAMP_FONT_PERCENT: std::ops::RangeInclusive<u16> = 25..=150;
+
+/// An absent or out of range font size uses the usual stamp line size.
+pub fn custom_stamp_font_scale(percent: Option<u16>) -> f64 {
+    f64::from(percent.filter(|p| CUSTOM_STAMP_FONT_PERCENT.contains(p)).unwrap_or(100)) / 100.0
+}
+
 /// The natural size of a custom stamp whose picture is `picture` points (#1741): with `line`,
 /// the band under the picture is added, and the stamp is as wide as the line at its usual size
 /// when that is wider than the picture.
-pub fn custom_stamp_size(picture: (f64, f64), line: Option<&str>) -> (f64, f64) {
+pub fn custom_stamp_size(picture: (f64, f64), line: Option<&str>, line_font_percent: Option<u16>) -> (f64, f64) {
     let Some(line) = line else { return picture };
     let h = picture.1 / (1.0 - CUSTOM_LINE_BAND);
-    let text = appearance::text_width(line, h * CUSTOM_LINE_BAND * CUSTOM_LINE_TEXT) + 8.0;
+    let text = appearance::text_width(line, h * CUSTOM_LINE_BAND * CUSTOM_LINE_TEXT * custom_stamp_font_scale(line_font_percent)) + 8.0;
     (picture.0.max(text), h)
 }
 

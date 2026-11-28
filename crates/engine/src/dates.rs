@@ -654,6 +654,44 @@ pub fn check_date_format(fmt: &str) -> Result<&str, String> {
     Ok(fmt)
 }
 
+/// Validate a custom stamp pattern, also accepting uppercase date tokens such as `DD-MMM-YYYY`.
+/// Leave other words and escaped literals as entered.
+pub fn custom_stamp_date_format(fmt: &str) -> Result<std::borrow::Cow<'_, str>, String> {
+    use std::borrow::Cow;
+
+    let fmt = fmt.trim();
+    if fmt.chars().count() > MAX_DATE_FORMAT_CHARS {
+        return check_date_format(fmt).map(Cow::Borrowed);
+    }
+    let append_word = |out: &mut String, word: &str| {
+        if word.bytes().all(|b| matches!(b, b'd' | b'm' | b'y' | b'D' | b'M' | b'Y')) {
+            out.extend(word.chars().map(|c| c.to_ascii_lowercase()));
+        } else {
+            out.push_str(word);
+        }
+    };
+    let mut normalized = String::new();
+    let mut word = String::new();
+    let mut chars = fmt.chars();
+    while let Some(c) = chars.next() {
+        if c.is_ascii_alphabetic() {
+            word.push(c);
+            continue;
+        }
+        append_word(&mut normalized, &word);
+        word.clear();
+        normalized.push(c);
+        if c == '\\'
+            && let Some(escaped) = chars.next()
+        {
+            normalized.push(escaped);
+        }
+    }
+    append_word(&mut normalized, &word);
+    check_date_format(&normalized)?;
+    Ok(if normalized == fmt { Cow::Borrowed(fmt) } else { Cow::Owned(normalized) })
+}
+
 /// `fmt` as runs of the same character with whether it's escaped: `dd.\mm` → (`d`, 2, no),
 /// (`.`, 1, no), (`m`, 1, yes), (`m`, 1, no). Escaped characters are never grouped.
 fn runs(fmt: &str) -> Vec<(char, usize, bool)> {
@@ -820,6 +858,18 @@ mod tests {
         assert_eq!(format_day("d \\de mmmm \\de yyyy", DAY, EN), "7 de March de 2026");
         assert_eq!(format_day("yyyy\\", DAY, EN), "2026\\");
         assert_eq!(check_date_format("d \\de mmmm"), Ok("d \\de mmmm"));
+    }
+
+    #[test]
+    fn custom_stamp_patterns_accept_uppercase_date_tokens_and_keep_literals() {
+        let upper = custom_stamp_date_format("DD-MMM-YYYY").unwrap();
+        assert_eq!(format_day(&upper, DAY, EN), format_day("dd-mmm-yyyy", DAY, EN));
+        let mixed = custom_stamp_date_format("USD DD-mmm-yyyy").unwrap();
+        assert_eq!(format_day(&mixed, DAY, EN), format_day("USD dd-mmm-yyyy", DAY, EN));
+
+        let escaped = custom_stamp_date_format(r"\D DD/MM/YYYY").unwrap();
+        assert!(format_day(&escaped, DAY, EN).starts_with("D "));
+        assert!(custom_stamp_date_format("YYYY-MM-DD HH:MM").is_err());
     }
 
     #[test]

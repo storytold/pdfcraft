@@ -109,6 +109,9 @@ fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
                     file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
                     line: None,
+                    line_over_picture: false,
+                    line_position: [0.5, 0.9],
+                    line_font_percent: None,
                 },
             )
             .unwrap();
@@ -445,6 +448,9 @@ fn explicit_image_stamps_keep_displayed_orientation_on_rotated_pages() {
                     file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
                     line: None,
+                    line_over_picture: false,
+                    line_position: [0.5, 0.9],
+                    line_font_percent: None,
                 },
             )
             .unwrap();
@@ -498,6 +504,9 @@ fn pdf_page_stamps_keep_displayed_orientation_on_rotated_pages() {
                     file: MarkFile { name: "half.pdf".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
                     line: None,
+                    line_over_picture: false,
+                    line_position: [0.5, 0.9],
+                    line_font_percent: None,
                 },
             )
             .unwrap();
@@ -528,6 +537,9 @@ fn pdf_page_stamps_fit_inside_an_explicit_box() {
         file: MarkFile { name: "diagram.pdf".into(), bytes: bytes.clone(), page: 0 },
         author: "Test".into(),
         line: None,
+        line_over_picture: false,
+        line_position: [0.5, 0.9],
+        line_font_percent: None,
     };
     session.apply(id, stamp([56.0, 400.0, 539.0, 700.0])).unwrap();
     assert_eq!(session.get(id).unwrap().info.annotations[0].rect, [56.0, 429.25, 539.0, 670.75]);
@@ -12196,8 +12208,17 @@ fn a_phone_photo_used_as_a_custom_stamp_is_embedded_upright() {
     // A click places the stamp at its natural size: 30 x 20 pt as stored, 20 x 30 pt upright.
     // Named "Signature" so `signature_image` finds its picture.
     let file = MarkFile { name: "photo.jpg".into(), bytes: Arc::new(phone_jpeg()), page: 0 };
-    let stamp =
-        Edit::AddCustomStamp { page: 0, rect: [100.0, 100.0, 100.0, 100.0], name: "Signature".into(), file, author: "Ada".into(), line: None };
+    let stamp = Edit::AddCustomStamp {
+        page: 0,
+        rect: [100.0, 100.0, 100.0, 100.0],
+        name: "Signature".into(),
+        file,
+        author: "Ada".into(),
+        line: None,
+        line_over_picture: false,
+        line_position: [0.5, 0.9],
+        line_font_percent: None,
+    };
     session.apply(id, stamp).unwrap();
     let cos = &session.get(id).unwrap().editor.as_ref().unwrap().cos;
     let picture = pdfcraft_annot::signature_image(cos, 0, 0).unwrap().unwrap();
@@ -14378,6 +14399,9 @@ fn a_custom_stamp_line_keeps_accented_letters() {
         file: MarkFile { name: "logo.png".into(), bytes: Arc::new(png.into_inner()), page: 0 },
         author: "Zoë".into(),
         line: Some(session.stamp_line("Reçu à Zürich par {name}", "Zoë")),
+        line_over_picture: false,
+        line_position: [0.5, 0.9],
+        line_font_percent: None,
     };
     session.apply(id, edit).unwrap();
     let saved = session.save_bytes(id).unwrap();
@@ -14401,7 +14425,7 @@ fn a_lined_custom_stamp_keeps_its_layout_on_turned_pages() {
     image.write_to(&mut png, image::ImageFormat::Png).unwrap();
     let bytes = Arc::new(png.into_inner());
     // A short line: the stamp is the picture's 80 pt wide, 40 / 0.78 pt tall with its band.
-    let (w, h) = pdfcraft_annot::custom_stamp_size((80.0, 40.0), Some("OK"));
+    let (w, h) = pdfcraft_annot::custom_stamp_size((80.0, 40.0), Some("OK"), None);
     assert_eq!(w, 80.0);
     let top = 100.0 - h / 2.0;
     for degrees in [0, 90, 180, 270] {
@@ -14415,6 +14439,9 @@ fn a_lined_custom_stamp_keeps_its_layout_on_turned_pages() {
             file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
             author: "Test".into(),
             line: Some("OK".into()),
+            line_over_picture: false,
+            line_position: [0.5, 0.9],
+            line_font_percent: None,
         };
         session.apply(id, edit).unwrap();
         let doc = session.get(id).unwrap();
@@ -14433,6 +14460,145 @@ fn a_lined_custom_stamp_keeps_its_layout_on_turned_pages() {
         // The band under it holds no picture.
         assert_eq!(pixel(64.0, top + h - 3.0), [255, 255, 255, 255], "page rotation {degrees}: the band");
     }
+}
+
+/// A resolved date is drawn above the PNG pixels, and saving fixes that date in the annotation.
+#[test]
+fn a_png_background_keeps_its_date_overlay_after_save() {
+    let image = image::RgbaImage::from_pixel(80, 40, image::Rgba([20, 120, 220, 255]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let blank = session.create_blank(300.0, 400.0, 1).unwrap();
+    let id = session.open_new("date.pdf", blank).unwrap();
+    let date = session.stamp_line("{date}", "");
+    session
+        .apply(
+            id,
+            Edit::AddCustomStamp {
+                page: 0,
+                rect: [100.0, 100.0, 100.0, 100.0],
+                name: "Dated logo".into(),
+                file: MarkFile { name: "logo.png".into(), bytes: Arc::new(png.into_inner()), page: 0 },
+                author: "Ada".into(),
+                line: Some(date.clone()),
+                line_over_picture: true,
+                line_position: [0.0, 0.5],
+                line_font_percent: Some(50),
+            },
+        )
+        .unwrap();
+    let rect = session.get(id).unwrap().info.annotations[0].rect;
+    assert!(((rect[2] - rect[0]) / (rect[3] - rect[1]) - 2.0).abs() < 0.01, "the date adds no band: {rect:?}");
+    let saved = session.save_bytes(id).unwrap();
+    let doc = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    let stamp = doc
+        .scan_objects()
+        .find_map(|(_, object)| match object.as_ref() {
+            pdfcraft_cos::Object::Dict(dict) if dict.contains(b"PCByLine") => Some(dict.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(matches!(stamp.get(b"PCLineOverPicture"), Some(pdfcraft_cos::Object::Bool(true))));
+    assert!(
+        matches!(stamp.get(b"PCLinePosition"), Some(pdfcraft_cos::Object::Array(p)) if p == &[pdfcraft_cos::Object::Real(0.0), pdfcraft_cos::Object::Real(0.5)])
+    );
+    assert_eq!(stamp.get(b"PCByLine").and_then(pdfcraft_cos::Object::as_string).map(pdfcraft_cos::PdfString::to_text), Some(date.clone()));
+    let ap = doc.resolve(stamp.get(b"AP").unwrap());
+    let normal = doc.get(ap.as_dict().unwrap().reference(b"N").unwrap());
+    let pdfcraft_cos::Object::Stream(normal) = normal.as_ref() else { panic!("an appearance stream") };
+    let content = String::from_utf8(normal.decoded().unwrap().to_vec()).unwrap();
+    let font_size: f64 = content.lines().find_map(|l| l.strip_prefix("/Helv ")?.strip_suffix(" Tf")?.parse().ok()).unwrap();
+    let [tx, ty]: [f64; 2] = content
+        .lines()
+        .find_map(|l| {
+            let mut values = l.strip_prefix("1 0 0 1 ")?.split_whitespace();
+            Some([values.next()?.parse::<f64>().ok()?, values.next()?.parse::<f64>().ok()?])
+        })
+        .unwrap();
+    let text_width = pdfcraft_annot::appearance::text_width(&date, font_size);
+    assert!(
+        tx >= f64::from(rect[0]) && tx + text_width <= f64::from(rect[2]),
+        "the edge-anchored date stays within the appearance: {tx}..{} vs {rect:?}",
+        tx + text_width
+    );
+    assert!(
+        ty - 0.207 * font_size >= f64::from(rect[1]) && ty + 0.718 * font_size <= f64::from(rect[3]),
+        "the date ink stays within the appearance: baseline {ty}, size {font_size}, rect {rect:?}"
+    );
+    let usual_size = f64::from(rect[3] - rect[1]) * crate::CUSTOM_LINE_BAND * crate::CUSTOM_LINE_TEXT;
+    assert!(font_size > 0.0 && font_size < usual_size, "the appearance uses the smaller font size: {font_size}");
+    let id2 = session.open("dated.pdf", None, saved, None).unwrap();
+    let reopened = session.get(id2).unwrap();
+    let mut renderer = pdfcraft_render::PageRenderer::new(reopened.bytes.clone(), reopened.config.clone());
+    let rendered = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(rendered.error.is_none(), "{:?}", rendered.error);
+    let x = (rect[0] + 5.0) as usize;
+    let y = (400.0 - rect[1] - 5.0) as usize;
+    let pixel = (y * rendered.width as usize + x) * 4;
+    assert_eq!(&rendered.rgba[pixel..pixel + 4], &[20, 120, 220, 255], "the PNG still reaches behind the date");
+    let (left, right) = (tx.floor() as usize, (tx + text_width).ceil() as usize);
+    let (top, bottom) = ((400.0 - (ty + 0.718 * font_size)).floor() as usize, (400.0 - (ty - 0.207 * font_size)).ceil() as usize);
+    let date_is_visible = (top..bottom).any(|y| {
+        (left..right).any(|x| {
+            let pixel = (y * rendered.width as usize + x) * 4;
+            rendered.rgba[pixel..pixel + 4] != [20, 120, 220, 255]
+        })
+    });
+    assert!(date_is_visible, "the date produces visible pixels over the opaque PNG");
+}
+
+/// A 150% separate line keeps Helvetica's descender inside the form appearance.
+#[test]
+fn a_large_custom_stamp_line_keeps_its_descender_inside_the_appearance() {
+    let image = image::RgbaImage::from_pixel(80, 40, image::Rgba([20, 120, 220, 255]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let mut session = Session::new();
+    let blank = session.create_blank(300.0, 400.0, 1).unwrap();
+    let id = session.open_new("large-line.pdf", blank).unwrap();
+    session
+        .apply(
+            id,
+            Edit::AddCustomStamp {
+                page: 0,
+                rect: [100.0, 100.0, 100.0, 100.0],
+                name: "Dated logo".into(),
+                file: MarkFile { name: "logo.png".into(), bytes: Arc::new(png.into_inner()), page: 0 },
+                author: "Ada".into(),
+                line: Some("Aug".into()),
+                line_over_picture: false,
+                line_position: [0.5, 0.9],
+                line_font_percent: Some(150),
+            },
+        )
+        .unwrap();
+    let saved = session.save_bytes(id).unwrap();
+    let doc = pdfcraft_cos::Document::open(saved).unwrap();
+    let stamp = doc
+        .scan_objects()
+        .find_map(|(_, object)| match object.as_ref() {
+            pdfcraft_cos::Object::Dict(dict) if dict.contains(b"PCByLine") => Some(dict.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let ap = doc.resolve(stamp.get(b"AP").unwrap());
+    let normal = doc.get(ap.as_dict().unwrap().reference(b"N").unwrap());
+    let pdfcraft_cos::Object::Stream(normal) = normal.as_ref() else { panic!("an appearance stream") };
+    let content = String::from_utf8(normal.decoded().unwrap().to_vec()).unwrap();
+    let font_size: f64 = content.lines().find_map(|l| l.strip_prefix("/Helv ")?.strip_suffix(" Tf")?.parse().ok()).unwrap();
+    let baseline: f64 = content
+        .lines()
+        .find_map(|l| {
+            let mut values = l.strip_prefix("1 0 0 1 ")?.split_whitespace();
+            values.next()?;
+            values.next()?.parse().ok()
+        })
+        .unwrap();
+    let band = 100.0 * crate::CUSTOM_LINE_BAND;
+    assert!(font_size > band * 0.9 && font_size < band, "the selected 150% size is kept when its ink fits: {font_size}");
+    assert!(baseline - 0.207 * font_size >= 100.0, "the descender stays in the line band: baseline {baseline}, size {font_size}");
+    assert!(baseline + 0.718 * font_size <= 100.0 + band, "the ascender stays in the line band: baseline {baseline}, size {font_size}");
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {

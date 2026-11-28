@@ -1749,12 +1749,16 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     // The dynamic stamps' lines, filled in for now: the built-in ones write the default line, a custom stamp its own.
     let by_line = app.session.stamp_line(crate::stamps_ui::DEFAULT_LINE, &app.comment_prefs.author);
     let custom_line = match tool {
-        QuickTool::CustomStamp(i) => app
-            .custom_stamps
-            .get(i)
-            .and_then(|stamp| stamp.line.as_deref())
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| app.session.stamp_line(line, &app.comment_prefs.author)),
+        QuickTool::CustomStamp(i) => app.custom_stamps.get(i).and_then(|stamp| {
+            let line = stamp.line.as_deref().filter(|line| !line.trim().is_empty())?;
+            Some(if let Some(format) = stamp.date_format.as_deref() {
+                let date = crate::app::date_text(&app.session, Some(format)).unwrap_or_else(|_| app.session.stamp_line("{date}", ""));
+                let time = app.session.stamp_line("{time}", "");
+                pdfcraft_engine::Session::stamp_line_with_date_time(line, &app.comment_prefs.author, &date, &time)
+            } else {
+                app.session.stamp_line(line, &app.comment_prefs.author)
+            })
+        }),
         _ => None,
     };
     let custom_stamp = match tool {

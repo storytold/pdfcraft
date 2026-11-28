@@ -1264,7 +1264,7 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
         return Some(form(rect, c.as_bytes(), res));
     }
     // A custom stamp: its picture (an image, or a form mapped to /PCPictureSize) fills
-    // the rectangle. An image signature or a stamp with a line added to a turned page
+    // the rectangle, or the space above a separate line. An image signature or a stamp with a line added to a turned page
     // (`/PCPictureRotate`) gets
     // the standard counter-rotation as its form `/Matrix`: viewers fit the turned
     // bounding box to `/Rect` (ISO 32000-2 §12.5.5), so it reads upright as displayed.
@@ -1274,9 +1274,16 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
             [w, h] if *w > 0.0 && *h > 0.0 => Some((*w, *h)),
             _ => None,
         });
-        // A text line (#1741) takes the bottom of the rectangle, and the picture keeps its
-        // shape, centred above it. Without one the picture fills the rectangle.
+        // A text line (#1741) takes the bottom of the rectangle. With the overlay option the
+        // picture fills the whole rectangle, so it forms the line's background.
         let line = d.get(b"PCByLine").and_then(Object::as_string).map(PdfString::to_text).filter(|l| !l.trim().is_empty());
+        let line_over_picture = line.is_some() && matches!(d.get(b"PCLineOverPicture"), Some(Object::Bool(true)));
+        let line_position = nums(d, b"PCLinePosition")
+            .and_then(|p| match p.as_slice() {
+                [x, y] if x.is_finite() && y.is_finite() => Some([x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)]),
+                _ => None,
+            })
+            .unwrap_or([0.5, 0.9]);
         let turn = picture_turn(d);
         // A lined stamp on a quarter-turned page is laid out in its displayed box (the
         // rectangle with its sides swapped) and turned into `/Rect` by the `/Matrix` below.
@@ -1285,12 +1292,13 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
         let bbox = if line.is_some() && matches!(turn, 90 | 270) { [0.0, 0.0, rect[3] - rect[1], rect[2] - rect[0]] } else { rect };
         let [x0, y0, x1, y1] = bbox;
         let band = if line.is_some() { (y1 - y0) * crate::CUSTOM_LINE_BAND } else { 0.0 };
-        let (w, h) = (x1 - x0, y1 - y0 - band);
+        let picture_band = if line_over_picture { 0.0 } else { band };
+        let (w, h) = (x1 - x0, y1 - y0 - picture_band);
         let place = match (&line, size) {
-            (Some(_), Some((sw, sh))) => {
+            (Some(_), Some((sw, sh))) if !line_over_picture => {
                 let k = (w / sw).min(h / sh).max(0.0);
                 let (pw, ph) = (sw * k, sh * k);
-                let (px, py) = (x0 + (w - pw) / 2.0, y0 + band + (h - ph) / 2.0);
+                let (px, py) = (x0 + (w - pw) / 2.0, y0 + picture_band + (h - ph) / 2.0);
                 if image {
                     format!("{} 0 0 {} {} {} cm", n(pw), n(ph), n(px), n(py))
                 } else {
@@ -1298,21 +1306,44 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
                 }
             }
             // Without a line the band is empty and this is the rectangle itself.
-            _ => picture_place([x0, y0 + band, x1, y1], image, size)?,
+            _ => picture_place([x0, y0 + picture_band, x1, y1], image, size)?,
         };
         c.push_str(&format!("q {place} /Pic Do Q\n"));
         // Bytes from here: the line is WinAnsi, not UTF-8.
         let mut content = std::mem::take(c).into_bytes();
         if let Some(l) = &line {
             // Centred in the band, at its usual size unless the stamp was made narrower.
-            let mut size = band * crate::CUSTOM_LINE_TEXT;
+            let percent = match d.get(b"PCLineFontPercent") {
+                Some(Object::Int(percent)) => u16::try_from(*percent).ok(),
+                _ => None,
+            };
+            let mut size = band * crate::CUSTOM_LINE_TEXT * crate::custom_stamp_font_scale(percent);
             let tw = text_width(l, size);
             if tw > w - 4.0 && tw > 0.0 {
                 size *= ((w - 4.0) / tw).max(0.0);
             }
+            // Helvetica's ink reaches 0.718 em above and 0.207 em below its baseline. Keep
+            // the complete line inside its appearance box, including at edge anchors and at
+            // the largest separate-line font size.
+            const ASCENT: f64 = 0.718;
+            const DESCENT: f64 = 0.207;
+            let line_room = if line_over_picture { h } else { band };
+            let line_height = size * (ASCENT + DESCENT);
+            if line_height > line_room && line_height > 0.0 {
+                size *= line_room / line_height;
+            }
             let tw = text_width(l, size);
-            let ty = y0 + (band - size * 0.72) / 2.0;
-            content.extend(format!("BT\n0.2 0.2 0.2 rg\n/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(size), n(x0 + (w - tw) / 2.0), n(ty)).bytes());
+            let (tx, ty) = if line_over_picture {
+                let center_x = x0 + w * line_position[0];
+                let center_y = y0 + h * (1.0 - line_position[1]);
+                let tx = (center_x - tw / 2.0).clamp(x0, (x1 - tw).max(x0));
+                let ty = (center_y - size * (ASCENT - DESCENT) / 2.0).clamp(y0 + size * DESCENT, (y1 - size * ASCENT).max(y0 + size * DESCENT));
+                (tx, ty)
+            } else {
+                let baseline = y0 + size * DESCENT + (band - size * (ASCENT + DESCENT)) / 2.0;
+                (x0 + (w - tw) / 2.0, baseline)
+            };
+            content.extend(format!("BT\n0.2 0.2 0.2 rg\n/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(size), n(tx), n(ty)).bytes());
             content.extend(literal(&win_ansi(l)));
             content.extend_from_slice(b" Tj\nET\n");
             let mut f = Dict::new();

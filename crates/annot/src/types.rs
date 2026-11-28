@@ -418,9 +418,8 @@ pub enum Shape {
     },
     /// A custom stamp: a picture already in the document (an image XObject, or a form XObject
     /// whose `/Matrix` maps it to `size` points) filling `rect`, named `name`. With `line`, a
-    /// line of text under the picture (#1741): a dynamic stamp's name, date and time, filled in
-    /// when it was placed; the picture then fills the rectangle above it
-    /// ([`CUSTOM_LINE_BAND`](crate::CUSTOM_LINE_BAND)).
+    /// A line of text filled in when the stamp was placed (#1741). It uses a band under the
+    /// picture unless `line_over_picture` draws it over the picture's lower edge.
     CustomStamp {
         rect: [f64; 4],
         name: String,
@@ -428,6 +427,12 @@ pub enum Shape {
         image: bool,
         size: (f64, f64),
         line: Option<String>,
+        /// Draw the resolved line over the picture's lower edge instead of adding a band.
+        line_over_picture: bool,
+        /// Text anchor as fractions of the displayed picture bounds from its top-left.
+        line_position: [f64; 2],
+        /// Font size as a percentage of the usual stamp line size.
+        line_font_percent: Option<u16>,
     },
     /// A redaction mark (§12.5.6.23) over quadrilaterals (text) or one rectangle as a quad
     /// (areas, pages). `overlay` is the text shown on the box once applied, drawn with `look`.

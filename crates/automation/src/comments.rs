@@ -903,6 +903,42 @@ impl Automation {
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let name = a.opt_str("name")?.map(str::to_owned).unwrap_or_else(|| file.rsplit_once('.').map_or(file.clone(), |(s, _)| s.to_owned()));
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
+        let template = a.opt_str("line")?;
+        let line_over_picture = a.opt_bool("line_over_picture")?.unwrap_or(false);
+        let line_position = [a.opt_num("line_x")?.unwrap_or(0.5), a.opt_num("line_y")?.unwrap_or(0.9)];
+        if line_position.iter().any(|v| !(0.0..=1.0).contains(v)) {
+            return Err(ToolError::InvalidArgs("line_x and line_y must be from 0 to 1".into()));
+        }
+        if line_over_picture && template.is_none_or(|s| s.trim().is_empty()) {
+            return Err(ToolError::InvalidArgs("line_over_picture requires a non-empty line".into()));
+        }
+        let range = pdfcraft_engine::CUSTOM_STAMP_FONT_PERCENT;
+        let line_font_percent = a
+            .opt_int("line_font_percent")?
+            .map(|percent| {
+                u16::try_from(percent)
+                    .ok()
+                    .filter(|p| range.contains(p))
+                    .ok_or_else(|| ToolError::InvalidArgs(format!("line_font_percent must be from {} to {}", range.start(), range.end())))
+            })
+            .transpose()?;
+        let session = self.session();
+        let date = a
+            .opt_str("date_format")?
+            .map(|format| {
+                let format = pdfcraft_engine::dates::custom_stamp_date_format(format)?;
+                session.today_text(Some(&format), session.date_language())
+            })
+            .transpose()
+            .map_err(ToolError::InvalidArgs)?;
+        let line = template.filter(|s| !s.trim().is_empty()).map(|s| {
+            if let Some(date) = date.as_deref() {
+                let time = session.stamp_line("{time}", &author);
+                pdfcraft_engine::Session::stamp_line_with_date_time(s, &author, date, &time)
+            } else {
+                session.stamp_line(s, &author)
+            }
+        });
         let edit = Edit::AddCustomStamp {
             page,
             rect,
@@ -912,16 +948,11 @@ impl Automation {
                 bytes: std::sync::Arc::new(bytes),
                 page: a.opt_int("file_page")?.unwrap_or(1).max(1) as usize - 1,
             },
-            line: None,
+            line,
+            line_over_picture,
+            line_position,
+            line_font_percent,
             author: author.clone(),
-        };
-        // A dynamic line (#1741): `{name}`, `{date}` and `{time}` filled in now.
-        let edit = match (edit, a.opt_str("line")?) {
-            (Edit::AddCustomStamp { page, rect, name, file, author, .. }, Some(t)) if !t.trim().is_empty() => {
-                let line = Some(self.session().stamp_line(t, &author));
-                Edit::AddCustomStamp { page, rect, name, file, author, line }
-            }
-            (edit, _) => edit,
         };
         self.apply(a, edit)
     }

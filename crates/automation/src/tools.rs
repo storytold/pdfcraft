@@ -614,7 +614,7 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "page", "rect", "rows"],
         )),
-        t("stamp_custom", "Add a custom stamp", "Stamp a picture: a PDF page (file_page, default 1, kept as vector content in a form XObject) or an image file. Either centred at at [x, y] (points from the top-left of the displayed page) at its natural size, at most 200 pt, or fitted inside rect [x0, y0, x1, y1] (the same coordinates; each side 1–14400 pt), scaled to keep its shape and centred in the box. Like at, rect is not clipped to the page. Pass at or rect, not both. name labels it (default: the file name). line adds a text line under the picture with {name} (the author), {date} and {time} filled in now, as a dynamic stamp. Undoable.")
+        t("stamp_custom", "Add a custom stamp", "Stamp a picture: a PDF page (file_page, default 1, kept as vector content in a form XObject) or an image file. Either centred at at [x, y] (points from the top-left of the displayed page) at its natural size, at most 200 pt, or fitted inside rect [x0, y0, x1, y1] (the same coordinates; each side 1–14400 pt), scaled to keep its shape and centred in the box. Like at, rect is not clipped to the page. Pass at or rect, not both. name labels it (default: the file name). line adds a text line with {name} (the author), {date} and {time} filled in now, as a dynamic stamp. date_format optionally sets the date pattern for {date}; line_x and line_y (0–1, default 0.5 and 0.9) set the overlay text anchor from the picture's top-left. Set line_over_picture to draw that line over a PNG background. Undoable.")
             .cmd("comment.stamp")
             .with(schema(
                 json!({
@@ -627,6 +627,11 @@ pub fn tools() -> Vec<ToolDef> {
                     "name": { "type": "string" },
                     "author": { "type": "string" },
                     "line": { "type": "string", "maxLength": 200 },
+                    "line_over_picture": { "type": "boolean" },
+                    "date_format": { "type": "string", "maxLength": 64, "description": "Date pattern for {date}, such as dd-mmm-yyyy or DD-MMM-YYYY." },
+                    "line_font_percent": { "type": "integer", "minimum": *pdfcraft_engine::CUSTOM_STAMP_FONT_PERCENT.start(), "maximum": *pdfcraft_engine::CUSTOM_STAMP_FONT_PERCENT.end(), "default": 100, "description": "Font size as a percentage of the usual stamp line size." },
+                    "line_x": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "line_y": { "type": "number", "minimum": 0, "maximum": 1 },
                 }),
                 &["doc", "page", "path"],
             )),
