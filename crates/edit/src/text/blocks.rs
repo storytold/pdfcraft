@@ -548,6 +548,10 @@ pub struct BlockStyle {
     /// How far across [`BlockStyle::cover`] may reach, whatever its padding: the edges of the words
     /// on either side that stay (user space).
     pub cover_between: Option<[f64; 2]>,
+    /// Boxes [`BlockStyle::cover`] leaves unpainted (user space): the ruled lines of a table that
+    /// cross the paragraph's surroundings, which the session finds on the scan. The cover is drawn
+    /// around them, so a word in a table cell keeps the cell.
+    pub cover_keeps: Vec<[f64; 4]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

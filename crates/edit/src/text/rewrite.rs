@@ -1295,6 +1295,38 @@ pub(crate) fn cover_box(rect: [f64; 4], between: Option<[f64; 2]>) -> [f64; 4] {
     [(rect[0] - pad).max(left.min(rect[0])), rect[1] - pad, (rect[2] + pad).min(right.max(rect[2])), rect[3] + pad]
 }
 
+/// The cover `rect` paints when the boxes `keeps` ([`BlockStyle::cover_keeps`], the table rules
+/// crossing it) are left out: the rectangle less each of them, as rectangles. A box that misses
+/// it leaves it whole.
+pub(crate) fn cover_pieces(rect: [f64; 4], keeps: &[[f64; 4]]) -> Vec<[f64; 4]> {
+    keeps.iter().fold(vec![rect], |pieces, keep| pieces.into_iter().flat_map(|piece| less(piece, *keep)).collect())
+}
+
+/// `rect` less `cut`, both with their low corner first: up to four rectangles around the cut,
+/// or `rect` itself when they don't overlap.
+fn less(rect: [f64; 4], cut: [f64; 4]) -> Vec<[f64; 4]> {
+    let [x0, y0, x1, y1] = rect;
+    let [cx0, cy0, cx1, cy1] = cut;
+    if !(cx0 < x1 && cx1 > x0 && cy0 < y1 && cy1 > y0) {
+        return vec![rect];
+    }
+    let mut out = Vec::new();
+    if cx0 > x0 {
+        out.push([x0, y0, cx0, y1]);
+    }
+    if cx1 < x1 {
+        out.push([cx1, y0, x1, y1]);
+    }
+    let (mx0, mx1) = (cx0.max(x0), cx1.min(x1));
+    if cy0 > y0 {
+        out.push([mx0, y0, mx1, cy0]);
+    }
+    if cy1 < y1 {
+        out.push([mx0, cy1, mx1, y1]);
+    }
+    out
+}
+
 pub(crate) fn reveal_ops(block: &TextBlock, lines: &[TextLine], style: &BlockStyle, ctm: [f64; 6]) -> Result<Vec<Op>, EditError> {
     if !block.invisible {
         return Ok(Vec::new());
@@ -1308,7 +1340,8 @@ pub(crate) fn reveal_ops(block: &TextBlock, lines: &[TextLine], style: &BlockSty
         let back = Matrix(ctm).invert().ok_or_else(|| EditError::Invalid("the paragraph is drawn in a space it can't be covered in".into()))?;
         ops.push(Op::new("q", vec![]));
         ops.push(Op::new("rg", colour.map(n).to_vec()));
-        for rect in block.lines.iter().filter_map(|i| lines.get(*i)).map(|l| cover_box(l.rect, style.cover_between)) {
+        let covers = block.lines.iter().filter_map(|i| lines.get(*i)).map(|l| cover_box(l.rect, style.cover_between));
+        for rect in covers.flat_map(|rect| cover_pieces(rect, &style.cover_keeps)) {
             let corners = [[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]];
             for (i, [x, y]) in corners.into_iter().enumerate() {
                 let (x, y) = back.apply(x, y);
@@ -1530,4 +1563,25 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     let contents = rewritten_contents(doc, &streams, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod cover_tests {
+    use super::cover_pieces;
+
+    #[test]
+    fn a_cover_goes_around_the_rules_that_cross_it() {
+        let cover = [10.0, 10.0, 50.0, 30.0];
+        assert_eq!(cover_pieces(cover, &[]), [cover]);
+        assert_eq!(cover_pieces(cover, &[[0.0, 40.0, 100.0, 42.0]]), [cover], "a rule past it leaves it whole");
+        // A rule across the top: the cover stops under it.
+        assert_eq!(cover_pieces(cover, &[[0.0, 28.0, 100.0, 32.0]]), [[10.0, 10.0, 50.0, 28.0]]);
+        // One through the middle: a piece either side.
+        assert_eq!(cover_pieces(cover, &[[0.0, 18.0, 100.0, 20.0]]), [[10.0, 10.0, 50.0, 18.0], [10.0, 20.0, 50.0, 30.0]]);
+        // A divider down it and a rule across it: four pieces around the cross.
+        let pieces = cover_pieces(cover, &[[20.0, 0.0, 22.0, 100.0], [0.0, 18.0, 100.0, 20.0]]);
+        assert_eq!(pieces, [[10.0, 10.0, 20.0, 18.0], [10.0, 20.0, 20.0, 30.0], [22.0, 10.0, 50.0, 18.0], [22.0, 20.0, 50.0, 30.0]]);
+        let area: f64 = pieces.iter().map(|[x0, y0, x1, y1]| (x1 - x0) * (y1 - y0)).sum();
+        assert!((area - (40.0 * 20.0 - 2.0 * 20.0 - 2.0 * 40.0 + 4.0)).abs() < 1e-9, "what the rules cross is all that is left out");
+    }
 }

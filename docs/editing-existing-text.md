@@ -165,7 +165,10 @@ All file inputs respect CLI root confinement; importing a font and applying text
 On a scanned page, recognised text (Scan & OCR) is an invisible layer over the picture. Edit
 text groups it into phrases: words joined by a word space, with a table cell, a tab stop and each
 scanned line kept apart. Applying an edit draws the new text visibly in the scan's ink colour (or
-the one chosen) and first covers the old words with the paper colour sampled around them. Each
+the one chosen) and first covers the old words with the paper colour sampled around them. The
+ruled lines of a table that cross the words' surroundings are read off the scan with the colours,
+and the cover goes around them: a title-block cell keeps its borders when a word in it is changed.
+A rule read into the word as a letter is still a recognition error, and that letter is redrawn. Each
 word keeps its position and width, and a longer phrase grows rightwards rather than wrapping.
 OCR sizes each word from its own box, so a phrase's words can come out several points apart: the
 editor and the rewrite set the whole phrase in one size, the median of its words' sizes.

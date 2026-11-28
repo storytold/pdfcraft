@@ -12,22 +12,25 @@ const WORD: [u32; 4] = [40, 40, 100, 60];
 
 /// A 200 × 100 pt "scan" on tinted paper, with OCR text over its word.
 fn scanned() -> (Session, pdfcraft_engine::DocId) {
-    scanned_with(vec![PlacedWord {
-        text: "John".into(),
-        origin: [40.0, 40.0],
-        across: [60.0, 0.0],
-        up: [0.0, 20.0],
-        confidence: None,
-        source: "ocrs".into(),
-    }])
+    scanned_with(vec![word_john()])
+}
+
+/// The OCR word over [`WORD`].
+fn word_john() -> PlacedWord {
+    PlacedWord { text: "John".into(), origin: [40.0, 40.0], across: [60.0, 0.0], up: [0.0, 20.0], confidence: None, source: "ocrs".into() }
 }
 
 fn scanned_with(words: Vec<PlacedWord>) -> (Session, pdfcraft_engine::DocId) {
+    scanned_drawn(words, |_, _| false)
+}
+
+/// [`scanned_with`], the scan also inked where `more` says (image pixels, y down).
+fn scanned_drawn(words: Vec<PlacedWord>, more: impl Fn(u32, u32) -> bool) -> (Session, pdfcraft_engine::DocId) {
     let (w, h) = (200u32, 100u32);
     let mut rgba = Vec::new();
     for y in 0..h {
         for x in 0..w {
-            let ink = (WORD[0]..WORD[2]).contains(&x) && (WORD[1]..WORD[3]).contains(&y);
+            let ink = (WORD[0]..WORD[2]).contains(&x) && (WORD[1]..WORD[3]).contains(&y) || more(x, y);
             rgba.extend(if ink { INK } else { PAPER });
             rgba.push(255);
         }
@@ -77,6 +80,34 @@ fn editing_an_ocr_word_covers_the_scan_and_shows_the_new_text() {
     // The scanned word is covered in the paper's colour; the new letters are in the ink's.
     assert!(paper * 10 > px.len() * 4, "mostly paper now: {paper} of {}", px.len());
     assert!(ink * 100 > px.len() * 3, "the new text shows in the scan's ink colour: {ink} of {}", px.len());
+}
+
+/// A word in a table cell has the cell's rules a point or two from it, within the cover's reach:
+/// the cover goes around them, so the cell is still drawn after the edit.
+#[test]
+fn editing_a_word_in_a_table_cell_keeps_the_cells_rules() {
+    // A rule a point above the word's box and a divider a point left of it, each a point thick.
+    let rule = |x: u32, y: u32| y == WORD[1] - 2 || x == WORD[0] - 2;
+    let (mut s, id) = scanned_drawn(vec![word_john()], rule);
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "Jane".into(), style: Default::default() }).unwrap();
+
+    let doc = s.get(id).unwrap();
+    let out = PageRenderer::new(doc.bytes.clone(), Default::default()).render(RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(out.error.is_none(), "{:?}", out.error);
+    let px = |x: u32, y: u32| {
+        let i = ((y * out.width + x) * 4) as usize;
+        [out.rgba[i], out.rgba[i + 1], out.rgba[i + 2]]
+    };
+    let above: Vec<_> = (WORD[0] + 4..WORD[2] - 4).map(|x| px(x, WORD[1] - 2)).collect();
+    assert!(above.iter().all(|p| near(*p, INK)), "the rule above the word is still drawn across it: {above:?}");
+    let beside: Vec<_> = (WORD[1] + 4..WORD[3] - 4).map(|y| px(WORD[0] - 2, y)).collect();
+    assert!(beside.iter().all(|p| near(*p, INK)), "the divider beside the word is still drawn: {beside:?}");
+    // And the scanned word is still covered and the new one drawn.
+    let px = word_pixels(&s, id);
+    let paper = px.iter().filter(|p| near(**p, PAPER)).count();
+    let ink = px.iter().filter(|p| near(**p, INK)).count();
+    assert!(paper * 10 > px.len() * 4, "mostly paper now: {paper} of {}", px.len());
+    assert!(ink * 100 > px.len() * 3, "the new text shows: {ink} of {}", px.len());
 }
 
 #[test]
