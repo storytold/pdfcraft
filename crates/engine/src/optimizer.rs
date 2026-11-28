@@ -118,6 +118,14 @@ impl OptimizeJob {
                 r => r?,
             }
         };
+        // After discarding (which may already have removed the hidden layers), before optimizing,
+        // so the merged content is what gets optimized.
+        let flattened = if settings.flatten_layers {
+            step(OptimizeStage::Discarding)?;
+            pdfcraft_redact::flatten_layers::flatten_layers(&mut cos)?
+        } else {
+            Default::default()
+        };
         let report = optimize::optimize_with_progress(&mut cos, &settings, &mut |s| {
             step(match s {
                 optimize::Stage::Reading { done, total } => OptimizeStage::Reading { done, total },
@@ -136,6 +144,6 @@ impl OptimizeJob {
         let merged = pdfcraft_organize::dedupe_resources(&mut cos, &all, false);
         step(OptimizeStage::Writing)?;
         let bytes = write_full(&cos, &opts).map_err(|e| EditError::Write(e.to_string()))?;
-        Ok((Arc::new(bytes), OptimizeReport { optimize: report, merged, discarded }))
+        Ok((Arc::new(bytes), OptimizeReport { optimize: report, merged, discarded, flattened }))
     }
 }

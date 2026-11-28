@@ -7784,8 +7784,8 @@ milestone = "M11"
 status = "partial"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/automation/tests/it/automation.rs::optimizing_through_tools"]
-notes = "hidden layer content removed; visible layers not flattened"
+evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/redact/src/flatten_layers/tests.rs::the_visible_layer_merges_and_the_hidden_one_goes", "crates/automation/tests/it/optimize_flatten_layers.rs::optimizing_flattens_visible_layers_and_drops_hidden_ones"]
+notes = "doc_optimize flatten_layers bakes the layers visible in the default configuration into plain content and removes hidden ones; layers combined by membership dictionaries or visibility expressions are refused, print and export usage is not read, and the Optimize dialog has no toggle for it yet"
 
 [[feature]]
 id = "optimize.merge-image-fragments"

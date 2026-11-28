@@ -6892,6 +6892,36 @@ fn assert_layer_secret_removed(mut doc: Document) {
     assert!(!pdfcraft_edit::text_lines(&saved, 0).unwrap().iter().any(|line| line.text.contains("SECRET")));
 }
 
+/// Remove Hidden Information removes a hidden layer's block whole: the state it sets (a colour, a
+/// matrix, an ExtGState, a clip) and the move its text makes go with what it draws, so nothing of
+/// the layer's shape, length or resources is left. Flatten Layers alone keeps that state.
+#[test]
+fn remove_hidden_information_removes_a_hidden_block_whole() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = one_page(
+        b"/OC /L BDC 0 0 1 rg 2 0 0 2 0 0 cm /GS1 gs 10 20 30 40 re W n BT /F1 10 Tf 10 100 Td (SECRET) Tj ET EMC BT /F1 10 Tf 20 20 Td (PUBLIC) Tj ET",
+        "/Properties << /L 7 0 R >> /ExtGState << /GS1 8 0 R >>",
+        vec![b"<< /Type /OCG /Name (Hidden) >>".to_vec(), b"<< /Type /ExtGState /CA 0.5 >>".to_vec()],
+    );
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| {
+        d.set(
+            b"OCProperties".to_vec(),
+            Object::Dict(Dict::from_iter([
+                (b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0))])),
+                (b"D".to_vec(), Object::Dict(Dict::from_iter([(b"OFF".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0))]))]))),
+            ])),
+        );
+    })
+    .unwrap();
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let c = content(&doc, 0);
+    for gone in ["SECRET", " rg", " cm", "/GS1", " re", " W", "TJ", "10 100 Td"] {
+        assert!(!c.contains(gone), "{gone:?} is left: {c}");
+    }
+    assert!(c.contains("PUBLIC") && c.matches("BT").count() == 1, "{c}");
+}
+
 #[test]
 fn an_indirect_base_state_off_hides_the_layer() {
     assert_layer_secret_removed(layer_state_page(vec![("BaseState", Object::Ref(ObjRef::new(8, 0)))], "7 0 R", vec![b"/OFF".to_vec()]));

@@ -139,4 +139,6 @@ pub struct OptimizeReport {
     pub merged: usize,
     /// Remove Hidden Information categories discarded, with counts.
     pub discarded: Vec<(Hidden, usize)>,
+    /// Layers flattened, when the settings asked for it.
+    pub flattened: pdfcraft_redact::flatten_layers::Flattened,
 }

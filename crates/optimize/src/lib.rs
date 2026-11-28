@@ -27,9 +27,9 @@
 //!
 //! Metadata, attachments, comments, scripts, private data, hidden layers, bookmarks and form
 //! fields are discarded by `pdfcraft-redact`'s Remove Hidden Information, which the engine
-//! runs alongside. Links that open another document, and bookmark actions that do, are discarded
-//! here (Discard User Data ▸ Discard external cross-references, see
-//! [`Settings::discard_external_refs`]).
+//! runs alongside; so are layers flattened ([`Settings::flatten_layers`]). Links that open
+//! another document, and bookmark actions that do, are discarded here (Discard User Data ▸
+//! Discard external cross-references, see [`Settings::discard_external_refs`]).
 //!
 //! Apart from optimizing, [`tile_large_images`] redraws large pictures as tiles in the copy of a
 //! document printed on Windows, whose PDF renderer shrinks any image over 2²² pixels.
@@ -237,6 +237,11 @@ pub struct Settings {
     /// actions with an `/F`, out of links and bookmarks; a link left with nothing to do is
     /// removed. Links within the document and web links stay.
     pub discard_external_refs: bool,
+    /// Flatten layers (off by default): what each layer shows when the document opens becomes
+    /// plain content, hidden layers' content is removed, and the layers themselves go. The engine
+    /// does it through `pdfcraft-redact`'s `flatten_layers` before optimizing, as it discards
+    /// hidden information; [`optimize`] alone leaves layers as they are.
+    pub flatten_layers: bool,
 }
 
 impl Settings {
@@ -269,6 +274,7 @@ impl Default for Settings {
             remove_invalid_links: true,
             remove_unreferenced_dests: true,
             discard_external_refs: false,
+            flatten_layers: false,
         }
     }
 }

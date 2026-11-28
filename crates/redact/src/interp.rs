@@ -174,6 +174,14 @@ pub(crate) struct Scope<'a> {
     /// Whether this pass is evaluating optional-content rules. An empty off set is meaningful:
     /// policies such as `/AllOff` can still hide content when every group is on.
     pub layers_enabled: bool,
+    /// Apply: a form XObject that can't be read (it doesn't decode, or it is nested too deep) is
+    /// left drawn rather than removed. Flatten Layers sets it: it reads every form again on its
+    /// own and refuses one that could name a layer, so the forms that stay hold none.
+    pub keep_unreadable_forms: bool,
+    /// A hidden layer's block keeps what outlives it ([`crate::hidden_block`]) rather than going
+    /// whole. Flatten Layers sets it: it keeps what the document shows; Remove Hidden Information
+    /// removes.
+    pub keep_hidden_state: bool,
     /// Off groups referenced by optional content that remains visible and therefore still needs
     /// its original default state after sanitization.
     pub retained_off_layers: HashSet<ObjRef>,
@@ -224,6 +232,8 @@ impl<'a> Scope<'a> {
             hidden_text: None,
             hidden_layers: HashSet::new(),
             layers_enabled: false,
+            keep_unreadable_forms: false,
+            keep_hidden_state: false,
             retained_off_layers: HashSet::new(),
             ocmd_cache: HashMap::new(),
             xobject_oc_cache: HashMap::new(),
@@ -339,7 +349,7 @@ fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
 }
 
 /// Does this font write vertically? Only a Type0 (composite) font can: its `/Encoding` is a
-/// predefined CMap name ending in `-V` (Identity-V and the like), or an embedded CMap stream
+/// predefined vertical CMap name (`V`, or one ending in `-V` such as Identity-V), or an embedded CMap stream
 /// whose `/WMode` is 1 (ISO 32000-2 §9.7.5).
 fn is_vertical(doc: &Document, font: &Dict) -> bool {
     // `/Subtype` may be written by reference (#6750).
@@ -348,7 +358,8 @@ fn is_vertical(doc: &Document, font: &Dict) -> bool {
         return false;
     }
     match font.get(b"Encoding").map(|e| doc.resolve(e)).as_deref() {
-        Some(Object::Name(n)) => n.ends_with(b"-V"),
+        // `/V` is a predefined CMap as well (ISO 32000-1 §9.7.5.2).
+        Some(Object::Name(n)) => n == b"V" || n.ends_with(b"-V"),
         Some(Object::Stream(s)) => s.dict.int(b"WMode") == Some(1),
         _ => false,
     }
@@ -437,10 +448,11 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
     let mut forced_change = false;
     if scope.layers_enabled {
         let props = res_dict(doc, resources, b"Properties");
-        let (kept, removed) = strip_hidden_layers(doc, scope, parsed.ops, &props);
-        parsed.ops = kept;
-        if removed > 0 {
-            scope.layer_blocks += removed;
+        let stripped = strip_hidden_layers(doc, scope, parsed.ops, &props);
+        parsed.ops = stripped.ops;
+        walk.hidden_shows = stripped.shows;
+        if stripped.removed > 0 {
+            scope.layer_blocks += stripped.removed;
             forced_change = true;
         }
     }
@@ -528,6 +540,8 @@ struct Walk {
     /// Painting operators written again under a clip that cuts the regions out: unchanged as
     /// operators, but what they paint is no longer all there.
     clipped: HashSet<usize>,
+    /// Text-showing operators of hidden layers, by where they start ([`strip_hidden_layers`]).
+    hidden_shows: HashSet<usize>,
     out: Output,
 }
 
@@ -548,6 +562,7 @@ impl Walk {
             clip: false,
             pending: Vec::new(),
             clipped: HashSet::new(),
+            hidden_shows: HashSet::new(),
             out: Output::default(),
         }
     }
@@ -810,6 +825,10 @@ impl Walk {
 
     /// `Tj`, `TJ`, `'` and `"`: glyphs under a region are cut out (or counted, when verifying).
     fn show_text(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) -> Option<Op> {
+        if self.hidden_shows.contains(&op.span.start) {
+            self.hidden_show(&op, piece);
+            return None;
+        }
         // Text paints with the fill pattern, and with the stroke pattern in the stroking render
         // modes. Mode 3 paints nothing and mode 7 only clips.
         let mode = self.gs.render_mode;
@@ -820,24 +839,8 @@ impl Walk {
             self.out.patterns_painted.extend(self.patterns.iter().cloned());
             self.out.keeps_all_patterns = true;
         }
-        let o = op.op.as_slice();
-        if o == b"\"" {
-            // `aw ac string "`: the two numbers before the string, whatever surplus precedes them.
-            let at = |back: usize| op.operands.len().checked_sub(back).and_then(|i| op.num(i));
-            self.gs.word_spacing = at(3).unwrap_or(self.gs.word_spacing);
-            self.gs.char_spacing = at(2).unwrap_or(self.gs.char_spacing);
-        }
-        if matches!(o, b"'" | b"\"") {
-            self.tlm = Matrix::translate(0.0, -self.gs.leading).then(&self.tlm);
-            self.tm = self.tlm;
-        }
-        let items: Vec<Object> = match o {
-            // A surplus array (`[(A)] [(B)] TJ`) is malformed, but the operator still
-            // takes the one immediately before it, as the renderer and every other
-            // reader here do (#3569), so a redaction search matches what is drawn.
-            b"TJ" => op.operands.last().and_then(Object::as_array).cloned().unwrap_or_default(),
-            _ => op.operands.last().cloned().into_iter().collect(),
-        };
+        self.line_move(&op);
+        let items = shown_items(&op);
         // Vertical-writing text is laid out horizontally by `show`, so its glyphs are
         // never matched against a region. Rather than ship a document whose vertical
         // text was silently left under a mark, record it so apply can fail closed.
@@ -868,17 +871,84 @@ impl Walk {
         }
         piece.changed = true;
         scope.report.glyphs += removed;
-        match op.op.as_slice() {
-            b"\"" => {
-                piece.ops.push(Op::new("Tw", vec![num(self.gs.word_spacing)]));
-                piece.ops.push(Op::new("Tc", vec![num(self.gs.char_spacing)]));
-                piece.ops.push(Op::new("T*", vec![]));
-            }
-            b"'" => piece.ops.push(Op::new("T*", vec![])),
-            _ => {}
-        }
+        self.line_ops(&op, piece);
         piece.ops.push(Op::new("TJ", vec![Object::Array(new_items)]));
         None
+    }
+
+    /// What `'` and `"` do before they show: `"` sets word and character spacing, and both move
+    /// to the next line.
+    fn line_move(&mut self, op: &Op) {
+        if op.is("\"") {
+            // `aw ac string "`: the two numbers before the string, whatever surplus precedes them.
+            let at = |back: usize| op.operands.len().checked_sub(back).and_then(|i| op.num(i));
+            self.gs.word_spacing = at(3).unwrap_or(self.gs.word_spacing);
+            self.gs.char_spacing = at(2).unwrap_or(self.gs.char_spacing);
+        }
+        if op.is("'") || op.is("\"") {
+            self.tlm = Matrix::translate(0.0, -self.gs.leading).then(&self.tlm);
+            self.tm = self.tlm;
+        }
+    }
+
+    /// [`Walk::line_move`] written out, for a showing operator replaced by a `TJ`.
+    fn line_ops(&self, op: &Op, piece: &mut Piece) {
+        if op.is("\"") {
+            piece.ops.push(Op::new("Tw", vec![num(self.gs.word_spacing)]));
+            piece.ops.push(Op::new("Tc", vec![num(self.gs.char_spacing)]));
+        }
+        if op.is("'") || op.is("\"") {
+            piece.ops.push(Op::new("T*", vec![]));
+        }
+    }
+
+    /// A text-showing operator of a hidden layer: its glyphs aren't drawn, but the text position
+    /// moves as they would have moved it (ISO 32000-1 §8.11.3.1), written as a `TJ` of a number
+    /// alone. At font size 0 a `TJ` number moves nothing, while such glyphs still move by their
+    /// character and word spacing (§9.4.4): that move can't be written, so it is refused. So is
+    /// a string in a font that writes vertically: its glyphs move by vertical metrics (§9.7.4.3)
+    /// that [`show`], laying text out horizontally, doesn't read.
+    fn hidden_show(&mut self, op: &Op, piece: &mut Piece) {
+        piece.changed = true;
+        self.line_move(op);
+        self.line_ops(op, piece);
+        let (gs, f) = (&self.gs, &self.gs.font);
+        // In thousandths of a text space unit, as a `TJ` number moves: -n/1000 × size.
+        let mut moved = 0.0;
+        let mut lost = false;
+        for item in shown_items(op) {
+            match item {
+                Object::String(s) if gs.vertical && !s.bytes.is_empty() => {
+                    if self.out.error.is_none() {
+                        self.out.error = Some(RedactError::Refused(
+                            "hidden text in a font that writes vertically moves the text after it by vertical metrics that aren't read".into(),
+                        ));
+                    }
+                    return;
+                }
+                Object::String(s) => {
+                    for (code, len) in f.codes(&s.bytes) {
+                        let spacing = gs.char_spacing + if f.is_space(code, len) { gs.word_spacing } else { 0.0 };
+                        if gs.size != 0.0 {
+                            moved -= (f.width(code) * gs.size + spacing) * 1000.0 / gs.size;
+                        } else {
+                            lost |= spacing != 0.0;
+                        }
+                    }
+                }
+                other => moved += other.as_f64().unwrap_or(0.0),
+            }
+        }
+        if lost && self.out.error.is_none() {
+            self.out.error = Some(RedactError::Refused(
+                "hidden text at font size 0 moves the text after it by its character or word spacing, a move that can't be written without its glyphs"
+                    .into(),
+            ));
+        }
+        if moved != 0.0 && moved.is_finite() {
+            self.tm = Matrix::translate(-moved / 1000.0 * gs.size * gs.scale, 0.0).then(&self.tm);
+            piece.ops.push(Op::new("TJ", vec![Object::Array(vec![num(moved)])]));
+        }
     }
 
     /// An inline image under a region is removed (or counted, when verifying).
@@ -919,6 +989,17 @@ impl Walk {
         piece.ops.extend(new);
         None
     }
+}
+
+/// What a text-showing operator shows: its string, or a `TJ`'s array. A surplus array
+/// (`[(A)] [(B)] TJ`) is malformed, but the operator still takes the one immediately before it,
+/// as the renderer and every other reader here do (#3569), so a redaction search matches what is
+/// drawn.
+fn shown_items(op: &Op) -> Vec<Object> {
+    if op.is("TJ") {
+        return op.operands.last().and_then(Object::as_array).cloned().unwrap_or_default();
+    }
+    op.operands.last().cloned().into_iter().collect()
 }
 
 /// Strip `/ActualText` (and `/Alt`, `/E`, `/T`) from the marked content around anything redaction
@@ -1141,6 +1222,7 @@ fn form_data(doc: &Document, scope: &mut Scope<'_>, s: &Stream, name: &[u8], r: 
             }
             Err(None)
         }
+        Err(_) if scope.mode == Mode::Apply && scope.keep_unreadable_forms => Err(None),
         Err(_) if scope.mode == Mode::Apply => {
             scope.report.forms_removed += 1;
             scope.removed_cut = true;
@@ -1259,6 +1341,9 @@ fn xobject(
             // (Verify), as a form that will not decode does. The page's decode budget, which
             // `form_data` reads within, is what keeps a fan-out or a cycle from costing 2^50 walks.
             if scope.depth >= MAX_DEPTH {
+                if scope.mode == Mode::Apply && scope.keep_unreadable_forms {
+                    return None;
+                }
                 if scope.mode == Mode::Verify {
                     // Sanitization removes a Form it cannot enter, so the verification scan
                     // must count that conservative removal or it may decide to skip the pass.
