@@ -8,8 +8,9 @@
 //!
 //! Thai is also written without spaces between words, but a row may not end between any two of its
 //! characters: its words need a dictionary to find. They come from ICU4X's dictionary line
-//! segmenter (UAX #14 with dictionary breaking for class SA), kept only where a Thai character is on
-//! either side. A row never begins with a following vowel, a tone or other mark, Mai Yamok (ๆ) or
+//! segmenter (UAX #14 with dictionary breaking for class SA), or from its LSTM model with the
+//! `lstm-line-break` feature (a fraction of the data, for size-bound builds), kept only where a Thai
+//! character is on either side. A row never begins with a following vowel, a tone or other mark, Mai Yamok (ๆ) or
 //! Paiyannoi (ฯ), nor ends with a leading vowel (เ แ โ ใ ไ), whatever the dictionary says.
 //!
 //! Korean is written with spaces between words and keeps breaking only there.
@@ -19,8 +20,11 @@ use std::sync::LazyLock;
 use icu_segmenter::options::LineBreakOptions;
 use icu_segmenter::{LineSegmenter, LineSegmenterBorrowed};
 
-/// The dictionary segmenter, built once: its data is compiled in, so building it cannot fail.
+/// The segmenter, built once: its data is compiled in, so building it cannot fail.
+#[cfg(not(feature = "lstm-line-break"))]
 static SEGMENTER: LazyLock<LineSegmenterBorrowed<'static>> = LazyLock::new(|| LineSegmenter::new_dictionary(LineBreakOptions::default()));
+#[cfg(feature = "lstm-line-break")]
+static SEGMENTER: LazyLock<LineSegmenterBorrowed<'static>> = LazyLock::new(|| LineSegmenter::new_lstm(LineBreakOptions::default()));
 
 /// Letters, vowels, marks, digits and signs of the Thai block.
 fn thai(c: char) -> bool {
@@ -190,6 +194,8 @@ mod tests {
         assert!(!between('a', 'b') && between('字', 'a') && !between('字', '。') && !between('「', '字'));
     }
 
+    // The dictionary's own word splits; the LSTM model finds others (`thai_breaks_with_the_lstm_model`).
+    #[cfg(not(feature = "lstm-line-break"))]
     #[test]
     fn thai_breaks_between_dictionary_words() {
         assert_eq!(pieces("ภาษาไทยไม่มีช่องว่างระหว่างคำ"), ["ภาษา", "ไทย", "ไม่มี", "ช่อง", "ว่าง", "ระหว่าง", "คำ"]);
@@ -197,6 +203,8 @@ mod tests {
         assert_eq!(pieces("การประปาส่วนภูมิภาค"), ["การ", "ประปา", "ส่วน", "ภูมิภาค"]);
     }
 
+    // The dictionary's own word splits; the LSTM model finds others (`thai_breaks_with_the_lstm_model`).
+    #[cfg(not(feature = "lstm-line-break"))]
     #[test]
     fn thai_vowels_marks_and_repetition_stay_with_the_word_before_them() {
         // The dictionary alone would start a row with Mai Yamok, with the Sara Aa of a decomposed
@@ -205,6 +213,24 @@ mod tests {
         assert_eq!(pieces("ท\u{0e4d}\u{0e32}งาน"), ["ท\u{0e4d}\u{0e32}", "งาน"]);
         assert_eq!(pieces("กรุงเทพฯเป็นเมืองหลวง"), ["กรุงเทพฯ", "เป็น", "เมือง", "หลวง"]);
         assert_eq!(pieces("สวัสดีครับ(ทดสอบ)"), ["สวัสดี", "ครับ", "(ทดสอบ)"]);
+    }
+
+    /// The model's words differ from the dictionary's, but the rows it allows keep the same rules:
+    /// pieces rejoin to the text, a long run gets places to break, and no row starts with a
+    /// following vowel, a mark or Mai Yamok, nor ends with a leading vowel.
+    #[cfg(feature = "lstm-line-break")]
+    #[test]
+    fn thai_breaks_with_the_lstm_model() {
+        for text in ["ภาษาไทยไม่มีช่องว่างระหว่างคำ", "เด็กๆชอบกินขนม", "ท\u{0e4d}\u{0e32}งาน", "กรุงเทพฯเป็นเมืองหลวง", "การประปาส่วนภูมิภาค"]
+        {
+            let p = pieces(text);
+            assert_eq!(p.concat(), text);
+            for piece in &p {
+                assert!(!piece.chars().next().is_some_and(thai_no_start), "{text}: a row would start with {piece}");
+                assert!(!piece.chars().last().is_some_and(thai_no_end), "{text}: a row would end with {piece}");
+            }
+        }
+        assert!(pieces("ภาษาไทยไม่มีช่องว่างระหว่างคำ").len() >= 4);
     }
 
     #[test]

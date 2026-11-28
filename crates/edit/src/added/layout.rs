@@ -426,6 +426,7 @@ mod thai_wrap_tests {
         words.iter().map(|w| w.iter().map(|(s, _)| s.as_str()).collect()).collect()
     }
 
+    #[cfg(not(feature = "lstm-line-break"))] // the dictionary's own words
     #[test]
     fn thai_atoms_group_into_dictionary_words_with_their_spaces() {
         assert_eq!(texts(&thai_words(atoms("น้ำประปาสะอาด", 1.0))), ["น้ำ", "ประปา", "สะอาด"]);
