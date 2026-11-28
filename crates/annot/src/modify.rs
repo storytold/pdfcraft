@@ -7,11 +7,10 @@ use super::info::{is_comment_subtype, is_group_subordinate, line_endings_of, own
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, change_annots, is_fill_sign, page_ref, set_annots};
 use super::text_style::{self, TextStyle};
 use super::types::{
-    BorderShape, FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb,
-    Shape, Style, StyleChange, TextReplacement,
+    AnnotFont, BorderShape, FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState,
+    Rgb, Shape, Style, StyleChange, TextReplacement,
 };
 use super::{AnnotError, Dict, Document, HashMap, HashSet, ObjRef, Object, PdfString, appearance};
-use pdfcraft_fonts::Std14;
 
 /// A comment another program drew, whose text the standard fonts can't draw. Redrawing it would
 /// replace those characters with `?`, so the edit is refused before the dictionary changes.
@@ -48,8 +47,14 @@ pub(crate) fn n(v: f64) -> String {
 
 /// [`rich_text_in`] for a text box whose `/DA` was just written (in Helvetica, as PdfCraft writes it).
 pub(crate) fn rich_text(d: &mut Dict) {
-    let (color, size) = appearance::parse_da(d);
-    rich_text_in(d, TextStyle { face: Std14::Helvetica, size, color });
+    let (color, size, font) = appearance::parse_da(d);
+    let face = match font {
+        AnnotFont::Helvetica => pdfcraft_fonts::Std14::Helvetica,
+        AnnotFont::Times => pdfcraft_fonts::Std14::TimesRoman,
+        AnnotFont::Courier => pdfcraft_fonts::Std14::Courier,
+        AnnotFont::Inter => pdfcraft_fonts::Std14::Helvetica,
+    };
+    rich_text_in(d, TextStyle { face, size, color });
 }
 
 /// Give a text box the text `style`: `/DA` keeps the font resource it names (`/Helv` when it names
@@ -75,7 +80,15 @@ fn restyle_text_bordered(d: &mut Dict, style: TextStyle, border: Option<crate::R
 fn rich_text_in(d: &mut Dict, style: TextStyle) {
     let text = d.get(b"Contents").and_then(|c| c.as_string()).map(PdfString::to_text).unwrap_or_default();
     let TextStyle { face, size, color: col } = style;
+    let (_, _, font) = appearance::parse_da(d);
     let (family, weight, slant) = text_style::css(face);
+    let font_name = if font == AnnotFont::Inter {
+        "Inter"
+    } else if font == AnnotFont::Times {
+        "Times-Roman"
+    } else {
+        family
+    };
     let hex = format!(
         "#{:02X}{:02X}{:02X}",
         (col[0].clamp(0.0, 1.0) * 255.0).round() as u8,
@@ -90,7 +103,7 @@ fn rich_text_in(d: &mut Dict, style: TextStyle) {
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
     let body: String = text.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect();
     let style = format!(
-        "font-size:{}pt;text-align:{align};color:{hex};font-weight:{weight};font-style:{slant};font-family:{family};font-stretch:normal",
+        "font-size:{}pt;text-align:{align};color:{hex};font-weight:{weight};font-style:{slant};font-family:{font_name};font-stretch:normal",
         n(size)
     );
     let rc = format!(
@@ -98,7 +111,7 @@ fn rich_text_in(d: &mut Dict, style: TextStyle) {
     );
     // "font: Helvetica 12pt" for PdfCraft's own boxes; other faces add their slant and weight.
     let keywords = format!("{}{}", if slant == "normal" { "" } else { "italic " }, if weight == "normal" { "" } else { "bold " });
-    d.set(b"DS".to_vec(), PdfString::text(&format!("font: {keywords}{family} {}pt; text-align:{align}; color:{hex}", n(size))));
+    d.set(b"DS".to_vec(), PdfString::text(&format!("font: {keywords}{font_name} {}pt; text-align:{align}; color:{hex}", n(size))));
     d.set(b"RC".to_vec(), PdfString::text(&rc));
 }
 
@@ -303,8 +316,23 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
     let free_text = before.name(b"Subtype") == Some(b"FreeText");
     refuse_undrawable_thai(free_text, text)?;
     let snug = free_text && is_snug(&before);
+    if free_text {
+        let needs_fallback =
+            text.chars().any(|c| !pdfcraft_fonts::win_ansi_encodable(c) && !matches!(c, '\n' | '\r') && pdfcraft_fonts::fallback_has_char(c));
+        let (col, size, font) = appearance::parse_da(&before);
+        if font == AnnotFont::Helvetica && needs_fallback {
+            if pdfcraft_fonts::embedding::ensure_fallback_font(doc).is_ok() {
+                doc.update_dict(r, |d| {
+                    d.set(b"DA".to_vec(), free_text_da(col, appearance::da_border(d), size, AnnotFont::Inter));
+                })?;
+            }
+        } else if font == AnnotFont::Inter {
+            pdfcraft_fonts::embedding::ensure_fallback_font(doc).map_err(AnnotError::Invalid)?;
+        }
+    }
+    let before_updated = annot_dict(doc, r);
     // The text keeps the look it is drawn with (`/DA`, or `/DS` where it sets one).
-    let style = text_style::text_style(&before, text_style::dr_face(doc, &before));
+    let style = text_style::text_style(&before_updated, text_style::dr_face(doc, &before_updated));
     doc.update_dict(r, |d| {
         d.set(b"Contents".to_vec(), PdfString::text(text));
         // The rich-text version follows the new plain text (text boxes), or would contradict it.
@@ -342,9 +370,8 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
 fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
     let d = annot_dict(doc, r);
     let nums = |key: &[u8]| -> Option<Vec<f64>> { d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect() };
-    // Measured in the face and size the text is drawn in (`/DA`, or `/DS` where it sets one).
     let TextStyle { face, size, .. } = text_style::text_style(&d, text_style::dr_face(doc, &d));
-    let measure = |s: &str, size: f64| appearance::text_width_in(face, s, size);
+    let (_, _, font) = appearance::parse_da(&d);
     let pad = 2.0 + border_width_of(&d);
     let rect = nums(b"Rect").filter(|v| v.len() == 4 && v.iter().all(|x| x.is_finite()))?;
     let rect = [rect[0], rect[1], rect[2], rect[3]];
@@ -357,6 +384,14 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         text_box_of(&d).unwrap_or(rect)
     };
     let (x0, top) = (tb[0].min(tb[2]), tb[1].max(tb[3]));
+    let fallback_info = appearance::fallback_font_info(Some(doc), font);
+    let measure = |s: &str, sz: f64| {
+        if font == AnnotFont::Inter {
+            appearance::measure_text(font, fallback_info.as_ref().map(|(_, m)| m), s, sz)
+        } else {
+            appearance::text_width_in(face, s, sz)
+        }
+    };
     let w = tb[2] - tb[0];
     let w = if w.is_finite() && w >= 1.0 {
         w
@@ -365,7 +400,8 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         let longest = text.lines().map(|l| measure(l, size)).fold(0.0, f64::max);
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
-    let height = appearance::text_lines_height(&pdfcraft_fonts::wrap_with(text, size, (w - 2.0 * pad).max(1.0), measure), size);
+    let lines = pdfcraft_fonts::wrap_with(text, size, (w - 2.0 * pad).max(1.0), measure);
+    let height = appearance::text_lines_height(&lines, size);
     Some([x0, top - height - 2.0 * pad - 2.0, x0 + w, top])
 }
 
@@ -731,9 +767,12 @@ pub(crate) fn shape_text_box(d: &mut Dict, tb: [f64; 4], shape: BorderShape, wid
 /// appearance lays the text out `wrap` wide.
 fn text_extent(d: &Dict, wrap: f64) -> [f64; 2] {
     let text = d.get(b"Contents").and_then(|o| o.as_string()).map(PdfString::to_text).unwrap_or_default();
-    let (_, size) = appearance::parse_da(d);
+    let (_, size, font) = appearance::parse_da(d);
     let lines = appearance::wrap(&text, size, wrap.max(1.0));
-    let widest = lines.iter().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
+    let widest = lines
+        .iter()
+        .map(|l| if font == AnnotFont::Helvetica { appearance::text_width(l, size) } else { font.text_width(l, size) })
+        .fold(0.0, f64::max);
     [widest, appearance::text_lines_height(&lines, size)]
 }
 
@@ -1226,11 +1265,11 @@ fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) ->
 }
 
 /// A FreeText's `/DA`: the text colour, the border's own colour when it has one (the stroking
-/// colour, `RG`), Helvetica at `size`.
-pub(crate) fn free_text_da(text: Rgb, border: Option<Rgb>, size: f64) -> PdfString {
+/// colour, `RG`), `font` at `size`.
+pub(crate) fn free_text_da(text: Rgb, border: Option<Rgb>, size: f64, font: AnnotFont) -> PdfString {
     let [r, g, b] = text.map(|x| x.clamp(0.0, 1.0));
     let stroke = border.map(|c| c.map(|x| x.clamp(0.0, 1.0))).map(|[r, g, b]| format!("{} {} {} RG ", n(r), n(g), n(b))).unwrap_or_default();
-    PdfString::literal(format!("{} {} {} rg {stroke}/Helv {} Tf", n(r), n(g), n(b), n(size)).into_bytes())
+    PdfString::literal(format!("{} {} {} rg {stroke}/{} {} Tf", n(r), n(g), n(b), font.resource(), n(size)).into_bytes())
 }
 
 /// Give a text box, typewriter text or callout a border colour of its own (`None`: the text's
@@ -1270,7 +1309,6 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
         return Err(AnnotError::Invalid("font size must be 1\u{2013}400 pt".into()));
     }
     refuse_foreign_text(doc, &d)?;
-    let snug = is_snug(&d);
     // The face and colour the text is drawn in, which the new size keeps.
     let drawn = text_style::text_style(&d, text_style::dr_face(doc, &d));
     let before = d;
@@ -1278,19 +1316,55 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
         restyle_text(d, TextStyle { size, ..drawn });
         touch(d, meta);
     })?;
-    let text = text_value(doc, &annot_dict(doc, r), b"Contents").unwrap_or_default();
+    refit_box(doc, r, meta, before, false)
+}
+
+/// Change the font of a text box, typewriter text or callout (`/DA` keeps its colour and size;
+/// rich-text strings follow) and redraw it. The box grows to hold the wrapped text at the new
+/// size and never shrinks.
+pub fn set_font(doc: &mut Document, page: usize, index: usize, font: AnnotFont, meta: &Meta) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    unlocked(doc, r)?;
+    let d = annot_dict(doc, r);
+    if d.name(b"Subtype") != Some(b"FreeText") {
+        return Err(AnnotError::Invalid("only text boxes, typewriter text and callouts have a font".into()));
+    }
+    refuse_foreign_text(doc, &d)?;
+    let before = d;
+    if font == AnnotFont::Inter {
+        pdfcraft_fonts::embedding::ensure_fallback_font(doc).map_err(AnnotError::Invalid)?;
+    }
+    doc.update_dict(r, |d| {
+        let (col, size, _) = appearance::parse_da(d);
+        d.set(b"DA".to_vec(), free_text_da(col, appearance::da_border(d), size, font));
+        rich_text(d);
+        touch(d, meta);
+    })?;
+    refit_box(doc, r, meta, before, true)
+}
+
+fn refit_box(doc: &mut Document, r: ObjRef, meta: &Meta, before: Dict, new_text: bool) -> Result<(), AnnotError> {
+    let d = annot_dict(doc, r);
+    let snug = is_snug(&before);
+    let text = text_value(doc, &d, b"Contents").unwrap_or_default();
     let result = match (snug, if snug { snug_refit(doc, r) } else { fitted_box(doc, r, &text) }) {
         // A circle snug around its text stays snug around it at the new size.
-        (true, Some(fit)) => apply_text_box(doc, r, fit, meta, false),
+        (true, Some(fit)) => apply_text_box(doc, r, fit, meta, new_text),
         (false, Some(fit)) => {
             let cur = annot_dict(doc, r);
             // Keep the top and sides; only the bottom edge moves, and only downwards.
             match text_box_of(&cur) {
-                Some(old) if !cur.contains(b"CL") => apply_text_box(doc, r, [fit[0], fit[1].min(old[1]), fit[2], fit[3]], meta, false),
-                _ => apply_text_box(doc, r, fit, meta, false),
+                Some(old) if !cur.contains(b"CL") => apply_text_box(doc, r, [fit[0], fit[1].min(old[1]), fit[2], fit[3]], meta, new_text),
+                _ => apply_text_box(doc, r, fit, meta, new_text),
             }
         }
-        (_, None) => redraw_or_restore(doc, r, before.clone()),
+        (_, None) => {
+            if new_text {
+                draw_appearance(doc, r)
+            } else {
+                redraw_or_restore(doc, r, before.clone())
+            }
+        }
     };
     if result.is_err() {
         doc.set(r, Object::Dict(before));

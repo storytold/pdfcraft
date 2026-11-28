@@ -14,7 +14,7 @@ use craft::ui::patterns::form_dialogs::{
 };
 use craft::ui::runtime::env::UnitKind;
 use craft::ui::value_drag::SliderScale;
-use pdfcraft_engine::{BorderShape, CommentProps, Edit, LineEnding, NoteIcon};
+use pdfcraft_engine::{AnnotFont, BorderShape, CommentProps, Edit, LineEnding, NoteIcon};
 
 use crate::PdfCraftApp;
 use crate::colour_picker::PickerHost;
@@ -97,6 +97,9 @@ fn opening(o: &CommentProps) -> DialogFields {
     if let Some(shape) = o.border_shape {
         f.set("border_shape", shape.name());
     }
+    if let Some(font) = o.font {
+        f.set("font", font.name());
+    }
     if let Some(size) = o.font_size {
         f.set("font_size", FieldValue::Number(size));
     }
@@ -141,6 +144,9 @@ pub fn edited(original: &CommentProps, fields: &DialogFields) -> CommentProps {
     }
     if let Some(name) = text("border_shape").filter(|_| e.border_shape.is_some()) {
         e.border_shape = BorderShape::ALL.into_iter().find(|s| s.name() == name).or(e.border_shape);
+    }
+    if let Some(name) = text("font").filter(|_| e.font.is_some()) {
+        e.font = AnnotFont::ALL.into_iter().find(|f| f.name() == name).or(e.font);
     }
     if e.fillable {
         e.fill = fields.color(FILL).map(rgb);
@@ -259,6 +265,10 @@ fn comment_props_dialog<'b>(
     }
     if o.fillable {
         rows.push(PropertyRow::field(colour_row(FILL, tl!("Fill colour"), Optional::Fill, recent.clone())));
+    }
+    if o.font.is_some() {
+        let options = AnnotFont::ALL.into_iter().map(|f| (f.name().to_string(), f.name().into())).collect();
+        rows.push(PropertyRow::field(Param::new("font", tl!("Font:"), ParamKind::choice(options, None))));
     }
     if o.font_size.is_some() {
         rows.push(PropertyRow::field(
@@ -615,6 +625,12 @@ fn changes(o: &CommentProps, e: &CommentProps, page: usize, index: usize, t: &Co
         && (opacity.is_some() || fill && moved(e.fill_opacity, o.fill_opacity) || text && moved(e.text_opacity, o.text_opacity))
     {
         out.push(Edit::PartOpacity { page, index, fill: e.fill_opacity.filter(|_| fill), text: e.text_opacity.filter(|_| text) });
+    }
+    if t.restylable
+        && t.font.is_some()
+        && let Some(font) = e.font.filter(|f| Some(*f) != o.font)
+    {
+        out.push(Edit::SetAnnotationFont { page, index, font });
     }
     if t.restylable
         && t.font_size.is_some()

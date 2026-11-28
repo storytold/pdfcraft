@@ -347,6 +347,7 @@ impl FontText {
         }
     }
 
+    /// The text width in points for string `s` in this font at size `size`.
     fn width(&self, s: &str, size: f64) -> f64 {
         match self {
             Self::WinAnsi => helvetica_width(s, size),
@@ -371,9 +372,15 @@ fn dr_font(doc: &Document, name: &str) -> Option<(Object, FontText)> {
     match fd.name(b"Subtype") {
         Some(b"Type1" | b"TrueType" | b"MMType1") => {}
         // Japanese, Chinese and Korean forms: a CID font addressed by Unicode (a non-embedded
-        // `/HeiseiMin-W3` with `/UniJIS-UCS2-H`, say). Embedded CMap streams and Identity-H need
-        // the font's own mapping, so those still fall back to Helvetica.
-        Some(b"Type0") => return Some((entry, FontText::Unicode(UnicodeCMap::from_name(fd.name(b"Encoding")?)?))),
+        // `/HeiseiMin-W3` with `/UniJIS-UCS2-H`, say). Predefined CMaps take precedence; other
+        // Type0 fonts (e.g. Identity-H with ToUnicode) fall through to Metrics::from_dict.
+        Some(b"Type0") => {
+            if let Some(cmap_name) = fd.name(b"Encoding")
+                && let Some(cmap) = UnicodeCMap::from_name(cmap_name)
+            {
+                return Some((entry, FontText::Unicode(cmap)));
+            }
+        }
         _ => return None,
     }
     // Symbolic fonts (ZapfDingbats, Symbol) can't show WinAnsi text.
@@ -770,7 +777,7 @@ pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow>
 /// Whether `text` draws in widget `wd` of `f` with no `?`, as [`field_appearance_fit`] picks: in
 /// the field's `/DR` font when that holds it, or else in that font or the Helvetica (WinAnsi)
 /// stand-in with the bundled Inter face drawing the Latin, Greek and Cyrillic they lack.
-fn draws(doc: &Document, f: &Field, wd: &Dict, text: &str) -> bool {
+pub(crate) fn draws(doc: &Document, f: &Field, wd: &Dict, text: &str) -> bool {
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
     let dr = dr_font(doc, &da.font).map(|(_, enc)| enc);
     if let Some(enc) = dr.as_ref().filter(|enc| enc.can_encode(text)) {
@@ -796,13 +803,8 @@ pub(crate) fn thai_refusal(doc: &Document, f: &Field, text: &str) -> Option<Stri
     if f.widgets.iter().all(held) { None } else { shaped_text::thai_refusal(text) }
 }
 
-/// [`field_appearance_drawn`], and whether the text drawn is cut off by the box.
-fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>, Option<Overflow>) {
-    let wobj = doc.get(w.obj);
-    let wd = wobj.as_dict().cloned().unwrap_or_default();
-    // The Format event: what is shown, not what is stored.
-    let formatted: Vec<String>;
-    let values = if format
+fn format_action_values(doc: &Document, f: &Field, wd: &Dict, values: &[String], format: bool) -> Option<Vec<String>> {
+    if format
         && matches!(f.kind, crate::FieldKind::Text | crate::FieldKind::Combo)
         && values.len() == 1
         && f.actions.format != crate::af::Format::None
@@ -812,11 +814,19 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         // Helvetica) are drawn in English rather than as `?` (#5303).
         let english = || f.actions.format_value_in(&values[0], &crate::af::ENGLISH_DATE_NAMES);
         let dated = matches!(f.actions.format, crate::af::Format::Date(_) | crate::af::Format::Time(_));
-        formatted = vec![if !dated || draws(doc, f, &wd, &shown) { shown } else { english() }];
-        &formatted[..]
+        Some(vec![if !dated || draws(doc, f, wd, &shown) { shown } else { english() }])
     } else {
-        values
-    };
+        None
+    }
+}
+
+/// [`field_appearance_drawn`], and whether the text drawn is cut off by the box.
+fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>, Option<Overflow>) {
+    let wobj = doc.get(w.obj);
+    let wd = wobj.as_dict().cloned().unwrap_or_default();
+    // The Format event: what is shown, not what is stored.
+    let formatted = format_action_values(doc, f, &wd, values, format);
+    let values = formatted.as_deref().unwrap_or(values);
     let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
     let place = placement(mk_rotation(doc, &wd), page_w, page_h);
     let (width, height) = (place.layout_w, place.layout_h);
@@ -856,7 +866,13 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     let latin = !dr.as_ref().is_some_and(|(_, enc)| can_show(enc, &latin_text, false));
     let (font_name, font_obj, enc) = match dr.filter(|(_, enc)| can_show(enc, &latin_text, latin)) {
         Some((o, enc)) => (da.font.clone(), o, enc),
-        None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
+        None => {
+            if let Some((o, enc)) = dr_font(doc, crate::author::FALLBACK_FONT_NAME).filter(|(_, enc)| can_show(enc, &latin_text, false)) {
+                (crate::author::FALLBACK_FONT_NAME.to_string(), o, enc)
+            } else {
+                ("Helv".to_string(), helvetica(), FontText::WinAnsi)
+            }
+        }
     };
     let width_of = |text: &str, size: f64| {
         if thai || latin { shaped_text::fallback_width(text, size, thai, latin, |s, size| enc.width(s, size)) } else { enc.width(text, size) }

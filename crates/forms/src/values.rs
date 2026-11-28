@@ -656,30 +656,33 @@ pub(crate) fn merged_appearance(doc: &Document, widget: ObjRef, fresh: &Dict) ->
 
 /// Regenerate the normal appearance of every widget of a text or choice field.
 fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    let shown = match values {
+    let mut shown = match values {
         [one] if matches!(f.kind, FieldKind::Text | FieldKind::Combo) => scripting::formatted(doc, f, one, scripts),
         _ => None,
     };
-    let in_place = f.kind == FieldKind::Text && f.has(flags::PASSWORD);
-    let mut undrawn = false;
     // The Format script again with English month and weekday names, once, for widgets whose
     // fonts can't draw the date language's (#5303).
     let mut english: Option<Option<String>> = None;
+    if let (Some(s), [one]) = (&shown, values) {
+        let wd = f.widgets.first().and_then(|w| doc.get(w.obj).as_dict().cloned()).unwrap_or_default();
+        if !appearance::draws(doc, f, &wd, s)
+            && let Some(e) = english.get_or_insert_with(|| scripting::formatted_in_english(doc, f, one, scripts)).as_ref()
+            && appearance::draws(doc, f, &wd, e)
+        {
+            shown = Some(e.clone());
+        }
+    }
+    let test_values = shown.as_ref().map(std::slice::from_ref).unwrap_or(values);
+    let can_fallback = |s: &str| pdfcraft_fonts::first_undrawable(s).is_some() && pdfcraft_fonts::first_undrawable_with_fallback(s).is_none();
+    let needs_fallback = test_values.iter().any(|v| can_fallback(v)) || f.options.iter().any(|(_, d)| can_fallback(d));
+    if needs_fallback {
+        crate::author::ensure_fallback_font(doc)?;
+    }
+    let in_place = f.kind == FieldKind::Text && f.has(flags::PASSWORD);
+    let mut undrawn = false;
     for w in &f.widgets {
         let (mut stream, missing) = match &shown {
-            Some(s) => {
-                let drawn = appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(s), false);
-                // Taken when the English run happened and draws whole, even where it is the
-                // stored value ("18-Oct-26" printed again from itself).
-                let again = match (&drawn.1, values) {
-                    (Some(_), [one]) => english.get_or_insert_with(|| scripting::formatted_in_english(doc, f, one, scripts)).as_ref(),
-                    _ => None,
-                };
-                match again.map(|e| appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(e), false)) {
-                    Some(english) if english.1.is_none() => english,
-                    _ => drawn,
-                }
-            }
+            Some(s) => appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(s), false),
             None => appearance::field_appearance_drawn(doc, f, w, values, true),
         };
         undrawn |= missing.is_some();

@@ -31,7 +31,7 @@ pub struct TextStyle {
 /// the `/DA` font resource names in the form's `/DR` ([`dr_face`]); `None` when it isn't there,
 /// and the common resource names (`/Helv`, `/Cour`, `/TiRo`, …) are read instead.
 pub fn text_style(d: &Dict, dr_face: Option<Std14>) -> TextStyle {
-    let (da_color, da_size) = parse_da(d);
+    let (da_color, da_size, _) = parse_da(d);
     let da_face = dr_face.or_else(|| da_font_name(d).as_deref().and_then(resource_face)).unwrap_or(Std14::Helvetica);
     let mut style = TextStyle { face: da_face, size: da_size, color: da_color };
     let Some(ds) = d.get(b"DS").and_then(Object::as_string).map(|s| s.to_text()) else { return style };
