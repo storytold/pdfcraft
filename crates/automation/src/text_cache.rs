@@ -1,10 +1,11 @@
-//! Bounded, session-wide page-text reuse. Active tool results own their Arcs independently.
+//! Bounded, session-wide page-text reuse. Active tool results own their Arcs independently. A
+//! page read for HTML also keeps its recovered layer (Copy with formatting's), in the same budget.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Weak};
 
 use pdfcraft_engine::DocId;
-use pdfcraft_render::{PageText, TextGlyph};
+use pdfcraft_render::{GlyphStyle, PageText, RecoveredText, Recovery, TextGlyph};
 
 const BYTE_BUDGET: usize = 64 * 1024 * 1024;
 // Also bound bookkeeping for documents with thousands of empty pages.
@@ -14,6 +15,9 @@ type Key = (DocId, usize);
 struct Cached {
     version: Weak<Vec<u8>>,
     text: Arc<PageText>,
+    /// The page's recovered layer when it was read (`Some(None)`: read, nothing recovered);
+    /// `None` when only the strict text was.
+    recovered: Option<Option<Arc<RecoveredText>>>,
     bytes: usize,
     stamp: u64,
 }
@@ -81,8 +85,27 @@ impl TextCache {
         Some(entry.text.clone())
     }
 
+    /// The page's strict text and recovered layer, when both were read for it.
+    pub(super) fn get_layers(&mut self, id: DocId, page: usize) -> Option<(Arc<PageText>, Option<Arc<RecoveredText>>)> {
+        let recovered = self.pages.get(&(id, page))?.recovered.clone()?;
+        Some((self.get(id, page)?, recovered))
+    }
+
     pub(super) fn insert(&mut self, id: DocId, page: usize, version: &Arc<Vec<u8>>, text: Arc<PageText>) {
-        let bytes = retained_bytes(&text);
+        self.insert_layers(id, page, version, text, None);
+    }
+
+    /// [`Self::insert`] with the page's recovered layer as read (`Some(None)`: nothing recovered),
+    /// counted in the same budget.
+    pub(super) fn insert_layers(
+        &mut self,
+        id: DocId,
+        page: usize,
+        version: &Arc<Vec<u8>>,
+        text: Arc<PageText>,
+        recovered: Option<Option<Arc<RecoveredText>>>,
+    ) {
+        let bytes = retained_bytes(&text).saturating_add(recovered.as_ref().and_then(Option::as_deref).map_or(0, recovered_bytes));
         self.remove_page((id, page));
         // An oversized page is usable by this call, but never retained by the cache.
         if bytes > self.budget {
@@ -93,7 +116,7 @@ impl TextCache {
             self.remove_page(*key);
         }
         let stamp = self.stamp();
-        self.pages.insert((id, page), Cached { version: Arc::downgrade(version), text, bytes, stamp });
+        self.pages.insert((id, page), Cached { version: Arc::downgrade(version), text, recovered, bytes, stamp });
         self.order.insert(stamp, (id, page));
         self.bytes += bytes;
     }
@@ -117,6 +140,15 @@ fn retained_bytes(text: &PageText) -> usize {
         .saturating_add(text.line_of.capacity().saturating_mul(std::mem::size_of::<u32>()))
         .saturating_add(text.space_before.capacity().saturating_mul(std::mem::size_of::<bool>()));
     text.glyphs.iter().fold(arrays, |sum, glyph| sum.saturating_add(glyph.text.capacity()))
+}
+
+/// [`retained_bytes`] for a recovered layer: its own text layer, and per glyph a reading, a style
+/// and its two index maps.
+fn recovered_bytes(layer: &RecoveredText) -> usize {
+    let per_glyph = std::mem::size_of::<Option<Recovery>>()
+        .saturating_add(std::mem::size_of::<Option<GlyphStyle>>())
+        .saturating_add(2 * std::mem::size_of::<Option<usize>>());
+    retained_bytes(&layer.text).saturating_add(layer.recovery.capacity().max(layer.style.capacity()).saturating_mul(per_glyph))
 }
 
 #[cfg(test)]
@@ -173,5 +205,21 @@ mod tests {
         cache.clock = u64::MAX;
         cache.insert(DocId(2), 0, &version, text);
         assert_eq!((cache.bytes, cache.len()), (cost, 1), "recency counter rollover safely clears old state");
+    }
+
+    /// Review on #6733: a page's layers read for HTML are reused until the document changes; a
+    /// page whose strict text alone was read has no layers to give.
+    #[test]
+    fn layers_are_reused_until_the_document_changes() {
+        let text = Arc::new(PageText::default());
+        let version = Arc::new(vec![1]);
+        let mut cache = TextCache::default();
+        cache.insert(DocId(1), 0, &version, text.clone());
+        assert!(cache.get_layers(DocId(1), 0).is_none(), "strict text alone");
+        cache.insert_layers(DocId(1), 1, &version, text.clone(), Some(None));
+        assert!(cache.get_layers(DocId(1), 1).is_some_and(|(t, r)| Arc::ptr_eq(&t, &text) && r.is_none()));
+        assert!(cache.get(DocId(1), 1).is_some(), "the strict text serves text requests too");
+        cache.prepare(DocId(1), &Arc::new(vec![1]));
+        assert!(cache.get_layers(DocId(1), 1).is_none(), "a new version reads again");
     }
 }

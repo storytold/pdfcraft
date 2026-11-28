@@ -43,5 +43,7 @@ hayro-syntax = { workspace = true }
 # `tests/content_differential.rs` (L3 may depend on L2).
 pdfcraft-content = { workspace = true }
 pdfcraft-testkit = { workspace = true }
+# Random texts for the recovery rules' property tests.
+proptest = { workspace = true }
 # Builds the decompression-bomb streams in the raster tests.
 flate2 = { workspace = true }

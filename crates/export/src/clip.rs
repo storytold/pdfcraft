@@ -26,6 +26,8 @@ pub struct ClipStyle {
     pub size: f64,
     pub bold: bool,
     pub italic: bool,
+    /// Lowercase letters shown as small capitals (`font-variant: small-caps`).
+    pub small_caps: bool,
     /// Fill colour as RGB in 0..=1.
     pub color: [f64; 3],
 }
@@ -182,7 +184,7 @@ fn safe_family(family: &str) -> Option<String> {
 }
 
 /// The copied text as an HTML fragment, and whether [`MAX_CLIP_HTML_BYTES`] cut it: one `<p>`
-/// per paragraph, a `<span>` per run with its families, size and colour inline, bold as
+/// per paragraph, a `<span>` per run with its families, size, colour and small capitals inline, bold as
 /// `<strong>` and italic as `<em>` (so a target that drops style attributes still keeps them).
 /// Text is escaped; a line break is `<br>`, and a space HTML would collapse (after another
 /// space, at a paragraph's start or after a break, across runs too) is `&nbsp;`. Never longer
@@ -231,6 +233,9 @@ fn span_html(span: &ClipSpan, space_before: &mut bool) -> String {
     if let Some(h) = hex(st.color) {
         css.push(format!("color:#{h}"));
     }
+    if st.small_caps {
+        css.push("font-variant:small-caps".to_owned());
+    }
     let mut body = text_html(&span.text, space_before);
     if st.italic {
         body = format!("<em>{body}</em>");
@@ -277,8 +282,21 @@ fn num(v: f64) -> String {
 mod tests {
     use super::*;
 
+    /// Small capitals are written as `font-variant:small-caps`, and only then.
+    #[test]
+    fn small_capitals_are_a_font_variant() {
+        let span = |small_caps| ClipText {
+            paragraphs: vec![vec![ClipSpan { text: "intro".into(), style: ClipStyle { small_caps, ..ClipStyle::default() } }]],
+            ..ClipText::default()
+        };
+        let (html, _) = clip_html(&span(true));
+        assert!(html.contains("font-variant:small-caps") && html.contains("intro"), "{html}");
+        let (html, _) = clip_html(&span(false));
+        assert!(!html.contains("small-caps"), "{html}");
+    }
+
     fn style(size: f64, bold: bool, italic: bool, color: [f64; 3]) -> ClipStyle {
-        ClipStyle { families: font_family("ABCDEF+Helvetica-Bold"), size, bold, italic, color }
+        ClipStyle { families: font_family("ABCDEF+Helvetica-Bold"), size, bold, italic, small_caps: false, color }
     }
 
     #[test]
