@@ -76,6 +76,8 @@ pub struct Document {
     /// applied redactions left that still hold the removed text. The interface shows it; tools
     /// return it.
     pub edit_notices: Vec<EditNotice>,
+    /// Whether it declares PDF/A, and what its changes break ([`Session::pdfa_check`](crate::Session::pdfa_check)).
+    pub(crate) pdfa_gate: crate::pdfa_gate::Gate,
 }
 
 /// Something the last successful edit did that the user should hear about, never left silent

@@ -140,11 +140,13 @@ impl Session {
         // A dynamic XFA form is a shell around an XML template; lay the template out into real
         // pages and fields so the rest of the engine works on it. The original bytes stay: the
         // laid-out form is one appended revision.
-        let opts = SaveOptions { mod_date: context.now.map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
         // Write `work` as one more revision and reopen it: what the document then is. The notes
         // about damage repaired while reading the file stay with it (Document Properties), once.
         let rebase = |work: &pdfcraft_cos::Document| -> Result<(Arc<Vec<u8>>, DocInfo, pdfcraft_cos::Document), String> {
-            let new_bytes = write_incremental(work, &opts).map(Arc::new).map_err(|e| e.to_string())?;
+            let stamped = context.now.map(pdfcraft_cos::pdf_date);
+            let (written, mod_date) = crate::metadata::prepare_save(std::borrow::Cow::Borrowed(work), stamped).map_err(|e| e.to_string())?;
+            let opts = SaveOptions { mod_date, ..SaveOptions::default() };
+            let new_bytes = write_incremental(&written, &opts).map(Arc::new).map_err(|e| e.to_string())?;
             let new_info = inspect(new_bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
             let mut new_cos = pdfcraft_cos::Document::open_with_password(new_bytes.clone(), password).map_err(|e| e.to_string())?;
             for line in work.repair_log() {
@@ -375,6 +377,7 @@ impl Session {
             };
             e.cos.note_repair(line);
         }
+        let pdfa_gate = crate::pdfa_gate::Gate::opened(editor.as_ref().map(|e| &e.cos));
         Document {
             id: DocId(0),
             name,
@@ -408,6 +411,7 @@ impl Session {
             fonts_stale: false,
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
+            pdfa_gate,
         }
     }
 }

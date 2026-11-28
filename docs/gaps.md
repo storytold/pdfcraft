@@ -1,5 +1,7 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-11-17 | **Last updated:** 2026-11-17 | **Change:** minor (gap 9: changes to a PDF/A-2, -3 or -4 file are checked against the rules `pdfa_verify` has for its part and reported by the tools; estimates unchanged)
+> **Last reviewed:** 2026-11-15 | **Last updated:** 2026-11-15 | **Change:** minor (gap 9: PDF/A-4, 4e and 4f are verified, not converted; estimates unchanged)
 > **Last reviewed:** 2026-11-11 | **Last updated:** 2026-11-11 | **Change:** minor (gap 8: known residual risk for the LibreOffice sidecar, sandbox tracked in #6953; estimates unchanged)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
@@ -218,10 +220,14 @@ update the numbers.
 ### 9. No Preflight; PDF/A partial; PDF/X and PDF/UA absent
 
 - **Missing:** Preflight (profiles, single checks and fixups, results tree, reports, droplets);
-  PDF/A-1, PDF/A-4 and conformance levels a/u; PDF/X verify and convert; PDF/UA-1/2 verify; PDF/E,
+  PDF/A-1, conversion to PDF/A-4 and conformance levels a/u; PDF/X verify and convert; PDF/UA-1/2 verify; PDF/E,
   PDF/VT; output-intent choice; transparency flattening.
 - **Evidence:** 12 Preflight features and 9 standards features planned; `optimize.pdfa-validate`,
-  `optimize.pdfa-convert` partial (2b/3b structural rules; CMYK documents get no output intent).
+  `optimize.pdfa-convert` partial (2b/3b structural rules, PDF/A-4/4e/4f verification only; CMYK
+  documents get no output intent); `optimize.pdfa-change-check` partial (the engine and the
+  tools report what changes to a PDF/A-2, -3 or -4 file break of the rules `pdfa_verify` checks,
+  so a break of a rule it doesn't check gets no warning; a PDF/A-1 file is only said to be
+  unchecked; the desktop app doesn't show it yet).
   Acrobat ships hundreds of built-in Preflight profiles.
 - **Impact:** blocks print shops, archives and accessibility compliance work.
 - **Estimate:** 65–115 h. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
@@ -434,6 +440,8 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Gap 9: changes to a PDF/A-2, -3 or -4 file are checked against the rules `pdfa_verify` has for its part (PDF/A-1 is not checked), and the tools say what they break. Estimates unchanged |
+| 2026-11-15 | minor | Gap 9: PDF/A-4, 4e and 4f verification (no conversion). Estimates unchanged |
 | 2026-11-11 | minor | Gap 8: known residual risk for the LibreOffice sidecar (Impress has no link-update setting; the soffice process isn't network-sandboxed). Sandboxing tracked in #6953. Estimates unchanged. |
 | 2026-10-26 | minor | Gap 8: the LibreOffice profile never updates Writer or Calc linked content on load; Impress has no such setting and the process's network access isn't sandboxed. Estimates unchanged. |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |

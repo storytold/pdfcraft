@@ -30,6 +30,7 @@ pub mod mcp;
 mod measure;
 mod model3d;
 mod model_render;
+mod pdfa_gate;
 mod print_colour;
 mod printing;
 mod reading;
@@ -101,6 +102,11 @@ pub struct Automation {
     next_ocr_review: u64,
     /// What object_copy copied, for object_paste into any open document.
     objects_clipboard: Option<pdfcraft_engine::ObjectClipboard>,
+    /// A tool call is running: one it makes itself reports nothing of its own to the PDF/A
+    /// gate ([`pdfa_gate`]), the outermost call does.
+    calling: bool,
+    /// What the PDF/A gate's results have already said, by document.
+    reported: pdfa_gate::Reported,
 }
 
 impl Default for Automation {
@@ -122,6 +128,8 @@ impl Automation {
             ocr_reviews: HashMap::new(),
             next_ocr_review: 0,
             objects_clipboard: None,
+            calling: false,
+            reported: pdfa_gate::Reported::default(),
         }
     }
 
