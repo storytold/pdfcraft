@@ -86,6 +86,17 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     None => strip,
                 };
                 let out = strip.show_items(ui, &ModeTabs, &mut |key, _| Tab::new(tl!(MODES[*key % MODES.len()].1)));
+                // A click on the workspace's own tab changes no selection, so the strip reports none. With the
+                // Tools panel closed by its ×, that click opens the panel again, as choosing the workspace does
+                // (#8526); with the panel open it changes nothing, as before.
+                let clicked_shown = shown.is_some_and(|at| {
+                    ui.input(|i| i.pointer.primary_clicked().then(|| i.pointer.interact_pos()).flatten()).is_some_and(|pos| {
+                        ui.ctx().layer_id_at(pos) == Some(ui.layer_id()) && out.tab_rects.iter().any(|(key, rect)| *key == at && rect.contains(pos))
+                    })
+                });
+                if clicked_shown && !app.left_open() {
+                    app.switch_mode(ui.ctx(), app.mode, true);
+                }
                 for event in out.response.events {
                     if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
                         && let Some((mode, _)) = keys.last().and_then(|at| MODES.get(*at))
