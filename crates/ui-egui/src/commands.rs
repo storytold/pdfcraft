@@ -453,6 +453,7 @@ impl PdfCraftApp {
             "app.preferences" => self.open_preferences(),
             "protect.remove_hidden" => self.open_remove_hidden(),
             "print.dialog" => self.open_print(),
+            "print.batch" => self.open_batch_print(ctx),
             "optimize.advanced" => crate::optimize_ui::open_optimizer(self, ctx),
             "doc.compare" => crate::compare_ui::open_compare_dialog(self, ctx),
             "standards.pdfa" => self.open_pdfa(),

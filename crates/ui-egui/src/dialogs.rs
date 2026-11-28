@@ -5,6 +5,7 @@ use crate::PdfCraftApp;
 
 mod about;
 pub(crate) mod attachment_description;
+pub(crate) mod batch_print;
 pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
 pub(super) mod convert_colours_ui;

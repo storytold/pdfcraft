@@ -375,6 +375,7 @@ pub struct PdfCraftApp {
     /// The border new Fill & Sign text starts each launch with, kept across launches: what Make
     /// Current Properties Default last took from typed text (none at first).
     pub fill_text_default: fill_sign::TextBorder,
+    pub batch_print: dialogs::batch_print::BatchPrintDraft,
     /// The update check, its prompt and the self-update.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) updater: craft::update::updater::Updater,

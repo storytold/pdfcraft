@@ -116,6 +116,7 @@ const FILE: &[&str] = &[
     "file.word_count",
     SEP,
     "print.dialog",
+    "print.batch",
     QUIT,
 ];
 const CREATE: &[&str] = &["create.file", "create.multiple", "create.multiple_separate", "create.images", "create.clipboard"];

@@ -44,6 +44,7 @@ fn windows(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     crate::redact_ui::dialogs::show_search(app, ui);
     crate::redact_ui::dialogs::show_hidden(app, ui);
     crate::sign_ui::dialog::show(app, ui);
+    crate::dialogs::batch_print::show(app, ui);
 
     crate::sign_ui::cert_viewer::show(app, ui);
 }
