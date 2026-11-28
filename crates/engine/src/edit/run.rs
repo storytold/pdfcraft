@@ -178,6 +178,107 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
     }
 }
 
+/// Whether a certification with DocMDP permissions `level` allows an edit (ISO 32000-2
+/// §12.8.2.2.1, Table 257). A certification the catalog's `/Perms /DocMDP` names prevents the
+/// changes it does not permit, as well as detecting them: 1 permits none, 2 filling in forms and
+/// instantiating page templates (and signing, which is not an edit), 3 comments as well. Document information is metadata at every
+/// level, as signature validation judges it (every save rewrites `/ModDate`). An import is
+/// judged by what it brings in, once it has been read ([`check_import`]); with no changes
+/// allowed it is refused here. Anything not named here is refused, so an edit added later fails
+/// closed.
+pub(crate) fn check_certification(edit: &Edit, level: u8) -> Result<(), EditError> {
+    let refuse = |what: &'static str| Err(EditError::Certified { level, what });
+    match edit {
+        Edit::Batch { edits, .. } => edits.iter().try_for_each(|e| check_certification(e, level)),
+        Edit::SetInfo { .. } => Ok(()),
+        Edit::SetFieldValue { .. }
+        | Edit::ResetForm { .. }
+        | Edit::SetFieldImage { .. }
+        | Edit::SetFieldImageTarget { .. }
+        | Edit::ApplyScriptChanges { .. }
+        | Edit::XfaEvent { .. } => {
+            if level >= 2 {
+                Ok(())
+            } else {
+                refuse("filling in form fields")
+            }
+        }
+        // Table 257 names instantiating page templates among the changes 2 and 3 permit.
+        // Showing or hiding a template (`SetTemplateHidden`) moves the template's own page in or
+        // out of the document rather than instantiating it, and falls through to the refusal.
+        Edit::SpawnTemplate { .. } => {
+            if level >= 2 {
+                Ok(())
+            } else {
+                refuse("instantiating page templates")
+            }
+        }
+        Edit::AddMeasurement(_)
+        | Edit::AddAnnotation(_)
+        | Edit::PasteComments { .. }
+        | Edit::AddCustomStamp { .. }
+        | Edit::AddModel3d { .. }
+        | Edit::DeleteAnnotation { .. }
+        | Edit::SetAnnotationContents { .. }
+        | Edit::ReplyToAnnotation { .. }
+        | Edit::SetAnnotationStatus { .. }
+        | Edit::MarkAnnotation { .. }
+        | Edit::ReplaceText { .. }
+        | Edit::EraseInk { .. }
+        | Edit::LockAnnotation { .. }
+        | Edit::MoveAnnotation { .. }
+        | Edit::ReshapeAnnotation { .. }
+        | Edit::SetAnnotationPopup { .. }
+        | Edit::ResizeAnnotation { .. }
+        | Edit::StyleAnnotation { .. }
+        | Edit::FillAnnotation { .. }
+        | Edit::PartOpacity { .. }
+        | Edit::FontSizeAnnotation { .. }
+        | Edit::BorderColorAnnotation { .. }
+        | Edit::BorderShapeAnnotation { .. }
+        | Edit::SetAnnotationInfo { .. } => {
+            if level >= 3 {
+                Ok(())
+            } else {
+                refuse("comments")
+            }
+        }
+        Edit::RotatePages { .. }
+        | Edit::DeletePages { .. }
+        | Edit::MovePages { .. }
+        | Edit::ReversePages { .. }
+        | Edit::InsertBlankPage { .. }
+        | Edit::DuplicatePages { .. }
+        | Edit::ReplacePages { .. }
+        | Edit::SetPageBox { .. }
+        | Edit::InsertPagesFrom { .. }
+        | Edit::NumberPages { .. }
+        // A scale is a viewport in the page dictionary's `/VP`, not a comment.
+        | Edit::SetMeasurementScale { .. } => refuse("page changes"),
+        // Field values, comments or both, depending on the file: [`check_import`] decides on
+        // what the import read from it.
+        Edit::ImportData { .. } => {
+            if level >= 2 {
+                Ok(())
+            } else {
+                refuse("importing data")
+            }
+        }
+        _ => refuse("changes to the document"),
+    }
+}
+
+/// Whether the certification (`None`: none) allows what an import brought in: field values are
+/// filling in forms (2 and 3), comments need 3 (ISO 32000-2 Table 257). A file holding both is
+/// refused as a whole where its comments are.
+fn check_import(certification: Option<u8>, comments: bool, fields: bool) -> Result<(), EditError> {
+    match certification {
+        Some(level) if comments && level < 3 => Err(EditError::Certified { level, what: "comments" }),
+        Some(level) if fields && level < 2 => Err(EditError::Certified { level, what: "filling in form fields" }),
+        _ => Ok(()),
+    }
+}
+
 /// What a comment import left out of comments it did import (an appearance it could not read),
 /// in the repair log as one line: said, not slipped in. The first five are named, each in at
 /// most [`SKIPPED_CHARS`] characters with control characters escaped (a name from the file
@@ -294,6 +395,9 @@ pub(crate) struct EditCtx {
     /// What [`Edit::PrepareText`] prepared, repaired and left grouped, for
     /// [`Session::prepare_text`](crate::Session::prepare_text).
     pub(crate) prepared: Option<pdfcraft_edit::text::forms::Preparation>,
+    /// The document's certification level (DocMDP `/P`, `None`: not certified): an import is
+    /// checked against it by what it brought in.
+    pub(crate) certification: Option<u8>,
 }
 
 impl EditCtx {
@@ -348,6 +452,7 @@ impl EditCtx {
             redaction_elsewhere: None,
             redaction_identification: pdfcraft_redact::Identification::default(),
             prepared: None,
+            certification: None,
         }
     }
 
@@ -794,6 +899,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 ran_away: false,
                 highlight,
                 time_scale: cx.xfa_time_scale,
+                keep_layout: cx.certification.is_some(),
                 relaid: false,
             };
             let ran = if matches!(activity.as_str(), "enter" | "exit") {
@@ -1072,6 +1178,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
         }
         Edit::ImportData { name, bytes } if bytes.starts_with(b"%PDF-") => {
+            check_import(cx.certification, true, false)?;
             let src = comment_source(bytes).map_err(|p| EditError::Source(format!("{name}: {p}")))?;
             import_pdf_comments(doc, &src)?;
         }
@@ -1082,6 +1189,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             match text {
                 Some(Ok(text)) if is_xfa_data_file(&text) => {
                     let expect_root = cx.xfa.as_ref().and_then(|t| t.root.common.name.clone());
+                    check_import(cx.certification, false, true)?;
                     let r = pdfcraft_xfa::import_data(doc, &text, expect_root.as_deref(), cx.xfa_datasets)
                         .map_err(|e| EditError::Write(e.to_string()))?;
                     cx.xfa_datasets = r.stream.or(cx.xfa_datasets);
@@ -1103,12 +1211,16 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                             if report.fields == 0 && report.comments == 0 && !report.rejected.is_empty() {
                                 return Err(pdfcraft_xfdf::DataError::Refused(listed_names(&report.rejected)).into());
                             }
+                            check_import(cx.certification, report.comments > 0, report.fields > 0)?;
                             note_skipped(&mut data, &report);
                             note_rejected(&mut data, &report);
                             *doc = data;
                         }
                         Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {
-                            Ok(src) => import_pdf_comments(doc, &src)?,
+                            Ok(src) => {
+                                check_import(cx.certification, true, false)?;
+                                import_pdf_comments(doc, &src)?
+                            }
                             Err(SourceProblem::Unreadable(_)) => return Err(e.into()),
                             Err(p) => return Err(EditError::Source(format!("{name}: {p}"))),
                         },

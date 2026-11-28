@@ -313,15 +313,13 @@ fn arabic_caption_keeps_logical_word_order_on_page_and_in_extracted_text() {
 #[test]
 fn an_edit_on_another_page_that_changes_the_verdict_redraws_the_signature() {
     let _gpu = gpu();
-    // A certification that allows no changes, on page 1. A comment on page 2 invalidates it, so
-    // page 1 has to redraw although the edit was elsewhere.
+    // An approval signature on page 1. Text added to page 2 changes page content it signed, which
+    // invalidates it, so page 1 has to redraw although the edit was elsewhere. (A certification
+    // refuses such an edit instead: `an_edit_a_no_changes_certification_forbids_is_refused`.)
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
     let id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
     let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
-    let bytes = sign(&id, fixture_with(2), |v| {
-        let reference = b"[<< /Type /SigRef /TransformMethod /DocMDP /TransformParams << /Type /TransformParams /P 1 /V /1.2 >> >>]";
-        v.set(b"Reference".to_vec(), pdfcraft_cos::Lexer::new(reference, 0).object().unwrap());
-    });
+    let bytes = sign(&id, fixture_with(2), |_| {});
     let mut h = harness(bytes, "en");
     h.state_mut().apply_trusted_certificates(vec![anchor]);
     settle(&mut h);
@@ -331,16 +329,9 @@ fn an_edit_on_another_page_that_changes_the_verdict_redraws_the_signature() {
     let valid = in_n1_square(&mut h, green);
     assert!(valid > 100, "page 1 draws the valid state: {valid} green pixels");
 
-    let shape = pdfcraft_engine::Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] };
-    let note = pdfcraft_engine::NewAnnotation {
-        page: 1,
-        style: pdfcraft_engine::Style::default_for(&shape),
-        shape,
-        contents: String::new(),
-        author: "Tester".into(),
-    };
+    let text = pdfcraft_engine::AddedText { rect: [10.0, 10.0, 110.0, 25.0], text: "Added".into(), ..Default::default() };
     let ctx_h = h.ctx.clone();
-    assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::AddAnnotation(note)));
+    assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::AddText { page: 1, text }));
     settle(&mut h);
     assert_eq!(h.state().session.get(doc_id).unwrap().signatures[0].status, SignatureStatus::Invalid);
     let (invalid, valid) = (in_n1_square(&mut h, red), in_n1_square(&mut h, green));
@@ -369,9 +360,10 @@ fn with_fields(file: Vec<u8>, fields: &[&[u8]]) -> Vec<u8> {
 }
 
 #[test]
-fn a_value_typed_against_a_certification_shows_while_every_page_redraws() {
-    // A certification that allows no changes: filling a field breaks it, so every page redraws,
-    // the field's own included. Until that page's raster arrives, the value typed is drawn over it.
+fn a_value_typed_against_a_no_changes_certification_is_refused() {
+    // A certification that allows no changes prevents filling a field (ISO 32000-2 §12.8.2.2.1):
+    // the fill is refused and said, the document stays as signed, the certification valid, and no
+    // value waits to be drawn over a page.
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
     let id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
     let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
@@ -387,29 +379,33 @@ fn a_value_typed_against_a_certification_shows_while_every_page_redraws() {
 
     let value = pdfcraft_engine::FieldValue::Text("Ada".into());
     let ctx_h = h.ctx.clone();
-    assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::SetFieldValue { name: "name".into(), value }));
-    assert_eq!(h.state().session.get(doc_id).unwrap().signatures[0].status, SignatureStatus::Invalid);
-    assert!(h.state().views[0].session.forms.unbaked.contains(&("name".to_string(), 0)), "the value typed is pending until page 1 redraws");
+    assert!(!h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::SetFieldValue { name: "name".into(), value }));
+    let doc = h.state().session.get(doc_id).unwrap();
+    assert_eq!(doc.signatures[0].status, SignatureStatus::Valid);
+    assert!(!doc.dirty, "nothing to save");
+    assert!(h.state().views[0].session.forms.unbaked.is_empty(), "no value waits to be drawn");
+    h.run_steps(2);
+    let notice = crate::support::shown_notice(&h).unwrap_or_default();
+    assert!(
+        notice
+            .contains("certified with no changes allowed but to its document information: filling in form fields would invalidate the certification"),
+        "{notice}"
+    );
 }
 
 #[test]
 fn values_still_waiting_on_their_page_stay_pending_when_a_later_edit_redraws_every_page() {
-    // A certification that allows filling in fields: the fill leaves every state as it was. Each
-    // second edit changes the list, deleting the unsigned signature field or breaking the
-    // certification with a comment, so every page redraws; neither moves a page, so the value typed
-    // first stays pending, drawn over page 1's old raster until the new one arrives.
+    // An approval signature: the fill leaves every state as it was. Each second edit changes the
+    // list, deleting the unsigned signature field or invalidating the signature with text added to
+    // its page, so every page redraws; neither moves a page, so the value typed first stays
+    // pending, drawn over page 1's old raster until the new one arrives.
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
     let id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
     let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
     let unsigned: &[u8] = b"<< /FT /Sig /T (Signature2) /Type /Annot /Subtype /Widget /Rect [100 230 300 280] /P 3 0 R >>";
-    let shape = pdfcraft_engine::Shape::Rectangle { rect: [320.0, 20.0, 380.0, 80.0] };
-    let style = pdfcraft_engine::Style::default_for(&shape);
-    let comment = pdfcraft_engine::NewAnnotation { page: 0, style, shape, contents: String::new(), author: "Tester".into() };
-    for second in [pdfcraft_engine::Edit::DeleteField { name: "Signature2".into() }, pdfcraft_engine::Edit::AddAnnotation(comment)] {
-        let bytes = sign(&id, with_fields(fixture(), &[NAME_FIELD, unsigned]), |v| {
-            let reference = b"[<< /Type /SigRef /TransformMethod /DocMDP /TransformParams << /Type /TransformParams /P 2 /V /1.2 >> >>]";
-            v.set(b"Reference".to_vec(), pdfcraft_cos::Lexer::new(reference, 0).object().unwrap());
-        });
+    let text = pdfcraft_engine::AddedText { rect: [320.0, 20.0, 380.0, 35.0], text: "Added".into(), ..Default::default() };
+    for second in [pdfcraft_engine::Edit::DeleteField { name: "Signature2".into() }, pdfcraft_engine::Edit::AddText { page: 0, text }] {
+        let bytes = sign(&id, with_fields(fixture(), &[NAME_FIELD, unsigned]), |_| {});
         let mut h = harness(bytes, "en");
         h.state_mut().apply_trusted_certificates(vec![anchor.clone()]);
         settle(&mut h);
@@ -421,7 +417,7 @@ fn values_still_waiting_on_their_page_stay_pending_when_a_later_edit_redraws_eve
         let value = pdfcraft_engine::FieldValue::Text("Ada".into());
         let ctx_h = h.ctx.clone();
         assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::SetFieldValue { name: "name".into(), value }));
-        assert_eq!(states(&h), before, "the certification allows filling in a field");
+        assert_eq!(states(&h), before, "the signature allows filling in a field");
         assert!(h.state().views[0].session.forms.unbaked.contains(&("name".to_string(), 0)));
 
         let label = second.label();
@@ -430,6 +426,59 @@ fn values_still_waiting_on_their_page_stay_pending_when_a_later_edit_redraws_eve
         assert_ne!(states(&h), before, "{label} changes the list");
         assert!(h.state().views[0].session.forms.unbaked.contains(&("name".to_string(), 0)), "{label}: the value typed first is still pending");
     }
+}
+
+/// A certification that allows no changes prevents them on the desktop too (ISO 32000-2
+/// §12.8.2.2.1): a comment and a page rotation are refused with a message saying why, and the
+/// document stays as signed (nothing to undo or save, the certification valid).
+#[test]
+fn an_edit_a_no_changes_certification_forbids_is_refused() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+    let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
+    let bytes = sign(&id, fixture_with(2), |v| {
+        let reference = b"[<< /Type /SigRef /TransformMethod /DocMDP /TransformParams << /Type /TransformParams /P 1 /V /1.2 >> >>]";
+        v.set(b"Reference".to_vec(), pdfcraft_cos::Lexer::new(reference, 0).object().unwrap());
+    });
+    let mut h = harness(bytes, "en");
+    h.state_mut().apply_trusted_certificates(vec![anchor]);
+    settle(&mut h);
+    let doc_id = h.state().views[0].id;
+    let saved = h.state().session.save_bytes(doc_id).unwrap();
+    let shape = pdfcraft_engine::Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] };
+    let note = pdfcraft_engine::NewAnnotation {
+        page: 1,
+        style: pdfcraft_engine::Style::default_for(&shape),
+        shape,
+        contents: String::new(),
+        author: "Tester".into(),
+    };
+    let edits = [
+        (pdfcraft_engine::Edit::AddAnnotation(note), "comments"),
+        (pdfcraft_engine::Edit::RotatePages { pages: vec![1], degrees: 90 }, "page changes"),
+    ];
+    for (edit, what) in edits {
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx_h, edit);
+        h.run_steps(2);
+        // Where the app asks before the first change to a signed document (#2187), go ahead.
+        if let Some(go) = h.query_by_label("Change anyway") {
+            go.click();
+            h.run_steps(3);
+        }
+        // Each refusal names what it refused, so the newest notice is this edit's.
+        let notice = crate::support::shown_notice(&h).unwrap_or_default();
+        let said = format!(
+            "certified with no changes allowed but to its document information: {what} would invalidate the certification, so the document was not changed"
+        );
+        assert!(notice.contains(&said), "{notice}");
+        let doc = h.state().session.get(doc_id).unwrap();
+        assert!(doc.info.annotations.iter().all(|a| a.page != 1), "{what}: no comment added");
+        assert_eq!(doc.info.pages[1].rotation, 0, "{what}: page 2 as it was");
+        assert!(!doc.dirty && doc.can_undo().is_none(), "{what}: nothing to save or undo");
+        assert_eq!(doc.signatures[0].status, SignatureStatus::Valid, "{what}: the certification stays valid");
+    }
+    assert!(h.state().session.save_bytes(doc_id).unwrap() == saved, "a save writes the signed file as it was");
 }
 
 #[test]

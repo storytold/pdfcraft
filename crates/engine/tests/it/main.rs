@@ -4,6 +4,7 @@ mod support {
     pub mod font_fixture;
 }
 
+mod certified_edits;
 mod dingbat_check_box;
 mod document_fonts;
 mod form_rotation;

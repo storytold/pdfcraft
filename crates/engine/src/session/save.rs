@@ -1,6 +1,6 @@
 use super::{
     Arc, DocId, Document, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, StatusCaptions, TrustStore,
-    display_bytes, display_config, editor_signatures, guard, render_threads, writable, write_full, write_incremental, xfa_sync_datasets,
+    display_bytes, display_config, guard, render_threads, shown_signatures, writable, write_full, write_incremental, xfa_sync_datasets,
 };
 
 impl Session {
@@ -11,8 +11,14 @@ impl Session {
     /// was edited: its bytes as opened are the damaged file, and this save is how the repair the
     /// user was told about reaches the disk (#1937). Not a signed one: a full rewrite would
     /// break its signatures, so with no edits it keeps its bytes, damage and all.
+    ///
+    /// A form certified with no changes allowed that opening laid out or filled in from its XFA
+    /// packets for display only is refused ([`Document::check_saving`]), as is signing it; a
+    /// document timestamp and revocation evidence go onto its signed file
+    /// ([`Self::timestamp_document`], [`Self::embed_ltv`]).
     pub fn save_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        doc.check_saving()?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(doc.bytes.clone()) };
         let on_saved = Arc::ptr_eq(editor.cos.bytes(), &editor.saved);
         if !editor.cos.is_modified() && on_saved && (!editor.cos.reconstructed() || doc.is_signed()) {
@@ -42,6 +48,7 @@ impl Session {
     /// A compact, garbage-collected rewrite (Save As ▸ "Optimized" / Reduce File Size groundwork).
     pub fn save_full_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        doc.check_saving()?;
         if doc.is_signed() {
             return Err(EditError::Signed);
         }
@@ -63,8 +70,16 @@ impl Session {
 
     /// Record a successful save of `bytes` (to `path`, if any): rebase editing on the saved file
     /// so the next save appends only newer edits. Undo history is kept.
+    ///
+    /// A form shown for display only under a no-changes certification ([`Document::shown_not_saved`])
+    /// is only ever written as its signed file with a document timestamp or revocation evidence
+    /// appended: those bytes become its signed file, its signatures are validated on them again,
+    /// and what is shown stays as it is. Bytes that don't append to the signed file are refused.
     pub fn mark_saved(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<(), EditError> {
         let doc = self.doc_mut(id)?;
+        if doc.shown_not_saved.is_some() {
+            return Self::mark_validation_data(doc, bytes, path);
+        }
         let mut renumbered = false;
         if let Some(editor) = doc.editor.as_mut() {
             // An encrypted file needs the password it is protected with now (the owner
@@ -101,6 +116,26 @@ impl Session {
         doc.generation += 1;
         let refreshed = if renumbered { Self::refresh_renumbered(doc) } else { Self::refresh(doc) };
         refreshed.inspect_err(|_| Self::show_released(doc))
+    }
+
+    /// [`Self::mark_saved`] for a form shown for display only: `bytes`, its signed file with a
+    /// document timestamp or revocation evidence appended, become its signed file.
+    fn mark_validation_data(doc: &mut Document, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<(), EditError> {
+        let reopen = doc.editor.as_ref().and_then(|e| e.keys.reopen.clone());
+        let Some(shown) = doc.shown_not_saved.as_mut() else { return Err(EditError::NoDocument) };
+        if !bytes.starts_with(shown.signed.bytes()) {
+            return Err(EditError::Certified { level: 1, what: shown.kind.saved() });
+        }
+        shown.signed = pdfcraft_cos::Document::open_with_password(bytes, reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
+        if let Some(p) = path {
+            doc.name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
+            doc.path = Some(p);
+        }
+        doc.dirty = false;
+        doc.generation += 1;
+        let trust = doc.trust.clone();
+        Self::revalidate(doc, trust);
+        Ok(())
     }
 
     /// Enter the permissions (owner) password of a document opened with its user password,
@@ -271,7 +306,7 @@ impl Session {
             return;
         }
         let Some(editor) = doc.editor.as_mut() else { return };
-        let mut signatures = editor_signatures(editor, &doc.bytes, &doc.trust, &doc.sig_cache);
+        let mut signatures = shown_signatures(doc.shown_not_saved.as_ref(), editor, &doc.bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &doc.bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
@@ -324,6 +359,7 @@ impl Session {
     /// `opts.date` takes the session clock.
     pub fn sign(&self, doc: DocId, id: &pdfcraft_sign::DigitalId, mut opts: SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        d.check_saving()?;
         // Encrypted documents are signed under their permissions (the signer checks them).
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
@@ -344,6 +380,7 @@ impl Session {
         tsa: &dyn pdfcraft_sign::TimestampAuthority,
     ) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        d.check_saving()?;
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
             opts.date = self.signing_date();
@@ -357,25 +394,47 @@ impl Session {
 
     /// Append a standalone document timestamp (RFC 3161, `/ETSI.RFC3161`) covering the file's
     /// current state. An empty `date` takes the session clock; the transport is the caller's.
+    ///
+    /// A form certified with no changes allowed that opening reconciled with its XFA packets for
+    /// display only ([`Document::shown_not_saved`]) is timestamped as signed: the timestamp is
+    /// appended to the signed file, an update that certification permits (ISO 32000-2
+    /// §12.8.2.2.1, Table 257), and the form stays shown as it is.
     pub fn timestamp_document(&self, doc: DocId, tsa: &dyn pdfcraft_sign::TimestampAuthority, date: String) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
-        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         let date = if date.is_empty() { self.signing_date() } else { date };
-        let cos = writable(&editor.cos)?;
+        let cos = validation_base(d)?;
         let stamped = Arc::new(pdfcraft_sign::timestamp_document(&cos, tsa, &date)?);
-        self.check_save(doc, &stamped)?;
+        self.check_validation_data(doc, &stamped)?;
         Ok(stamped)
     }
 
     /// Embed revocation evidence into the catalog's `/DSS` with `/VRI` entries per signature
-    /// (PAdES B-LT): an incremental update that never rewrites signed bytes.
+    /// (PAdES B-LT): an incremental update that never rewrites signed bytes. A form shown for
+    /// display only under a no-changes certification gets it on its signed file, as with
+    /// [`Self::timestamp_document`].
     pub fn embed_ltv(&self, doc: DocId, evidence: &pdfcraft_sign::dss::Evidence) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
-        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
-        let cos = writable(&editor.cos)?;
+        let cos = validation_base(d)?;
         let embedded = Arc::new(pdfcraft_sign::dss::embed(&cos, evidence)?);
-        self.check_save(doc, &embedded)?;
+        self.check_validation_data(doc, &embedded)?;
         Ok(embedded)
+    }
+
+    /// [`Self::check_save`] for a document timestamp or revocation evidence. On a form shown for
+    /// display only ([`Document::shown_not_saved`]) `bytes` must append to the signed file and
+    /// keep its pages, counted on the signed file rather than on the pages shown.
+    fn check_validation_data(&self, id: DocId, bytes: &Arc<Vec<u8>>) -> Result<(), EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let (Some(shown), Some(editor)) = (doc.shown_not_saved.as_ref(), doc.editor.as_ref()) else { return self.check_save(id, bytes) };
+        if !bytes.starts_with(shown.signed.bytes()) {
+            return Err(EditError::Certified { level: 1, what: shown.kind.saved() });
+        }
+        pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
+        let signed_pages = pdfcraft_render::inspect(shown.signed.bytes().clone(), doc.password.as_deref())
+            .map_err(|e| EditError::Reopen(e.to_string()))?
+            .pages
+            .len();
+        pdfcraft_render::check_pages(bytes.clone(), doc.password.as_deref(), signed_pages).map_err(|e| EditError::Reopen(e.to_string()))
     }
 
     /// Record that the signed file `bytes` was saved (to `path`): like [`Session::mark_saved`],
@@ -464,4 +523,20 @@ fn stream_draws_text(cos: &pdfcraft_cos::Document, s: &pdfcraft_cos::Stream, bud
         }
     }
     false
+}
+
+/// The file a document timestamp or revocation evidence is appended to: the document as it is,
+/// or, for a form shown for display only under a no-changes certification
+/// ([`Document::shown_not_saved`]), its signed file. That certification permits an incremental
+/// update holding only a document security store or a document timestamp (ISO 32000-2
+/// §12.8.2.2.1, Table 257); the reconciled form it shows is never written. Nor are password
+/// values cleared from that signed file, as a save clears them ([`writable`]): that would rewrite
+/// fields or the XFA datasets in the same update, which the certification forbids, and the
+/// values would stay in the signed revision anyway.
+fn validation_base(d: &Document) -> Result<std::borrow::Cow<'_, pdfcraft_cos::Document>, EditError> {
+    let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+    match d.shown_not_saved.as_ref() {
+        Some(shown) => Ok(std::borrow::Cow::Borrowed(&shown.signed)),
+        None => writable(&editor.cos),
+    }
 }
