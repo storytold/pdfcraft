@@ -54,8 +54,9 @@ struct Shown {
     /// The label of the button that removes the PDF/A identification, when one is declared.
     remove: Option<String>,
     intents: Vec<String>,
-    /// The last verification; `None` until Verify runs and after the level changes.
-    issues: Option<Vec<Issue>>,
+    /// The last verification; `None` until Verify runs and after the level changes, `Err` when it
+    /// could not check the document.
+    issues: Option<Result<Vec<Issue>, String>>,
 }
 
 /// Standards ▸ PDF/A, owned by the dialog host. Save as PDF/A and Verify keep it open.
@@ -89,20 +90,25 @@ impl PdfCraftApp {
         crate::dialogs::host::open(self, dialog);
     }
 
-    /// What PdfCraft's checks find in the active document at the chosen level.
-    fn pdfa_verify(&self) -> Option<Vec<Issue>> {
+    /// What PdfCraft's checks find in the active document at the chosen level; `Err` when the
+    /// document's objects could not be read, so it was not checked.
+    fn pdfa_verify(&self) -> Option<Result<Vec<Issue>, String>> {
         let (_, id) = self.active_ids()?;
         let level = self.pdfa.level;
-        self.session.get(id).map(|d| d.pdfa_verify(level))
+        self.session.get(id).map(|d| d.pdfa_verify(level).map_err(|e| e.to_string()))
     }
 
     /// Converts, then what is left to fix; `None` when the conversion did not apply.
-    fn pdfa_convert(&mut self, ctx: &egui::Context) -> Option<Vec<Issue>> {
+    fn pdfa_convert(&mut self, ctx: &egui::Context) -> Option<Result<Vec<Issue>, String>> {
         let level = self.pdfa.level;
         if !self.apply_edit(ctx, pdfcraft_engine::Edit::ConvertPdfA { level }) {
             return None;
         }
-        let issues = self.pdfa_verify().unwrap_or_default();
+        let issues = match self.pdfa_verify().unwrap_or(Ok(Vec::new())) {
+            Ok(issues) => issues,
+            // Not checked: say nothing about what is left.
+            Err(why) => return Some(Err(why)),
+        };
         let left = issues.len();
         self.notify(if left == 0 {
             crate::i18n::fmt(
@@ -114,7 +120,7 @@ impl PdfCraftApp {
         } else {
             crate::i18n::fmt(tl!("Fixed what could be fixed; {n} problems remain"), &[("n", &left.to_string())])
         });
-        Some(issues)
+        Some(Ok(issues))
     }
 
     /// Runs what the open PDF/A dialog asked for and refreshes what it shows of the document.
@@ -175,14 +181,17 @@ impl StackDialog for PdfaDialog {
                     None => {
                         Text::new(tl!("Verify to see what the document needs.").to_string()).shade(Shade::Muted).show(ui);
                     }
-                    Some(v) if v.is_empty() => {
+                    Some(Err(why)) => {
+                        Text::new(crate::i18n::fmt(tl!("Could not verify: {why}"), &[("why", why)])).show(ui);
+                    }
+                    Some(Ok(v)) if v.is_empty() => {
                         Text::new(crate::i18n::fmt(
                             tl!("PdfCraft's checks found no problems for {level}. This is not a validator result."),
                             &[("level", f.level.label())],
                         ))
                         .show(ui);
                     }
-                    Some(v) => {
+                    Some(Ok(v)) => {
                         let findings: Vec<Finding> = v.iter().enumerate().map(|(n, i)| finding(n as u64, i)).collect();
                         FindingsSummary::new(&findings).show(ui);
                         // The dialog's body scrolls: the list takes its full height and owns no scroll of its own.
