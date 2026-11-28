@@ -125,7 +125,7 @@ pub fn is_uncertain(page: &OcrPage, key: (usize, usize), review: &Review) -> boo
 }
 
 /// Candidate corrections for `text`: dictionary words and the page's own words within edit
-/// distance 2, nearest first, at most 5, never the word itself.
+/// distance 2, nearest first, at most 5 distinct spellings, never the word itself.
 pub fn suggestions(text: &str, dictionary: &BTreeSet<String>, page_words: &[PlacedWord]) -> Vec<String> {
     let lower = text.to_lowercase();
     let mut out: Vec<(usize, String)> = Vec::new();
@@ -146,6 +146,7 @@ pub fn suggestions(text: &str, dictionary: &BTreeSet<String>, page_words: &[Plac
     }
     // Nearest first; ties break alphabetically; at most five.
     out.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    out.dedup();
     out.truncate(5);
     out.into_iter().map(|(_, s)| s).collect()
 }
@@ -2081,6 +2082,13 @@ mod tests {
         assert!(suggestions("xyzzyx", &dictionary, &page_words).is_empty(), "nothing within distance 2");
         assert!(edit_distance_within_2("kitten", "sitting", 2).is_none(), "distance 3 is out");
         assert_eq!(edit_distance_within_2("kitten", "mitten", 2), Some(1));
+    }
+
+    #[test]
+    fn suggestions_keep_distinct_spellings_before_applying_the_limit() {
+        let dictionary = BTreeSet::from(["cat".into(), "cot".into()]);
+        let page_words = ["cat", "cat", "cat", "cat", "Cat", "Cut"].map(|text| word(text, None));
+        assert_eq!(suggestions("cut", &dictionary, &page_words), ["Cat", "cat", "cot"]);
     }
 
     /// The page list's data: a page marked verified, a skipped page, and the verified
