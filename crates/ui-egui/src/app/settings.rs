@@ -97,6 +97,7 @@ pub struct Behavior {
     pub fill_text_size: Option<f64>,
     pub fill_text_color: Option<[f64; 3]>,
     pub show_page_edge_shadows: Option<bool>,
+    pub show_rulers: Option<bool>,
     pub fill_text_border: Option<f64>,
     pub fill_text_border_shape: Option<String>,
     /// Absent is "the text's colour": TOML has no null.
@@ -593,6 +594,7 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
             fill_text_size: r.f64("fill_text_size"),
             fill_text_color: r.typed("fill_text_color"),
             show_page_edge_shadows: r.bool("show_page_edge_shadows"),
+            show_rulers: r.bool("show_rulers"),
             fill_text_border: r.f64("fill_text_border"),
             fill_text_border_shape: r.string("fill_text_border_shape"),
             fill_text_border_color: r.typed("fill_text_border_color"),

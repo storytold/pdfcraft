@@ -1630,11 +1630,18 @@ title = "Rulers"
 area = "B"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["view.rulers"]
 tools = []
-evidence = []
-notes = ""
+evidence = [
+    "crates/ui-egui/src/canvas/rulers.rs::nice_interval_picks_1_2_5_multiples_across_zooms_and_units",
+    "crates/ui-egui/src/canvas/rulers.rs::tick_positions_anchor_to_page_offset",
+    "crates/ui-egui/src/canvas/rulers.rs::label_formatting_is_clean_and_has_no_negative_zero",
+    "crates/ui-egui/src/canvas/rulers.rs::tick_cap_bounds_output_on_dense_ranges",
+    "crates/ui-egui/src/canvas/rulers.rs::degenerate_inputs_do_not_panic_or_loop",
+    "crates/ui-egui/tests/it/viewer.rs::rulers_toggle_reserves_space_and_reports_state",
+]
+notes = "View ▸ Show/Hide ▸ Rulers (Ctrl+R / ⌘R): horizontal and vertical rulers reserved along the top and left of the page area in the configured measurement units, anchored to the page under the pointer (or current page) in its displayed orientation, with zoom-adaptive 1/2/5 intervals, capped ticks, cursor marks while hovering a page, persistence, and control channel support"
 
 [[feature]]
 id = "view.grid"
