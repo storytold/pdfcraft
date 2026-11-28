@@ -140,9 +140,10 @@ fn layer_options_reset_to_initial_visibility() {
     assert_eq!(doc.can_undo(), None, "nor is it an edit to undo");
 }
 
-/// ISO 32000-2 Table 99 `/Order`: the Layers panel shows the tree it gives, a leading text
-/// string as a label, and not the groups it leaves out, which still draw in their state. Without
-/// `/Order` it presents none.
+/// ISO 32000-2 Table 99 `/Order`: when `/Order` is present, the Layers panel shows only the tree
+/// it gives (a leading text string as a label; unlisted groups stay in `layers` in their state, and
+/// an explicit empty `/Order []` presents none). Without `/Order`, every layer in `/OCGs` is listed
+/// at top level (#8126).
 #[test]
 fn the_layers_panel_shows_the_order_tree() {
     let mut h = harness_with(fixture_with("/Order [[(Colours) 5 0 R]]"), |app| app.set_option(&egui::Context::default(), "panel", "layers").unwrap());
@@ -160,7 +161,51 @@ fn the_layers_panel_shows_the_order_tree() {
     h.run_steps(3);
     assert_eq!(shown(&h), layers(false, false));
 
-    let h = harness(|app| app.set_option(&egui::Context::default(), "panel", "layers").unwrap());
-    assert!(h.query_by_label("Red").is_none() && h.query_by_label("Green").is_none(), "no /Order: none presented");
+    // Explicit empty /Order [] presents no layers.
+    let h = harness_with(fixture_with("/Order []"), |app| app.set_option(&egui::Context::default(), "panel", "layers").unwrap());
+    assert!(h.query_by_label("Red").is_none() && h.query_by_label("Green").is_none(), "empty /Order: none presented");
     h.get_by_label("This document lists no layers to show.");
+
+    // Without /Order, every layer in /OCGs is listed and toggleable (#8126).
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "panel", "layers").unwrap());
+    h.run_steps(2);
+    let red = h.get_by_role_and_label(Role::TreeItem, "Red").rect();
+    let green = h.get_by_role_and_label(Role::TreeItem, "Green").rect();
+    assert!(green.min.y > red.max.y - 1.0, "Red and Green are both listed without /Order");
+    h.get_by_role_and_label(Role::TreeItem, "Green").click();
+    h.run_steps(3);
+    assert_eq!(shown(&h), layers(true, true));
+}
+
+/// #8126: a layered PDF with no `/D` dictionary at all still lists its layers in the Layers panel.
+#[test]
+fn layers_panel_lists_layers_without_default_config() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R 5 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] >>",
+        "<< /Type /OCG /Name (Red) >>",
+        "<< /Type /OCG /Name (Green) >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+
+    let mut h = harness_with(out, |app| app.set_option(&egui::Context::default(), "panel", "layers").unwrap());
+    h.run_steps(2);
+    let red = h.get_by_role_and_label(Role::TreeItem, "Red").rect();
+    let green = h.get_by_role_and_label(Role::TreeItem, "Green").rect();
+    assert!(green.min.y > red.max.y - 1.0, "layers without /D are listed in /OCGs order");
+    h.get_by_role_and_label(Role::TreeItem, "Red").click();
+    h.run_steps(3);
+    assert_eq!(shown(&h), layers(false, true));
 }

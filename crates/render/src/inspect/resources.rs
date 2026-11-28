@@ -31,6 +31,15 @@ thread_local! {
     pub(super) static LABEL_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// State carried through [`Inspector::layer_order_rows`]: `seen` breaks cycles in indirect arrays,
+/// and `labels` caches each indirect label string so a shared label is decoded once.
+struct LayerOrderWalk<'a> {
+    index: &'a HashMap<ObjectId, usize>,
+    seen: HashSet<ObjectId>,
+    labels: HashMap<ObjectId, String>,
+    out: Vec<LayerRow>,
+}
+
 impl<'a> Inspector<'a> {
     // ── object helpers ──────────────────────────────────────────────────────────────────────
 
@@ -111,32 +120,34 @@ impl<'a> Inspector<'a> {
         let off: HashSet<ObjectId> = config
             .and_then(|c| c.get(b"OFF").ok())
             .and_then(|o| self.resolve(o).as_array().ok())
-            .map(|a| a.iter().filter_map(|x| x.as_reference().ok()).collect())
+            .map(|a| a.iter().filter_map(|x| self.resolved_id(x)).collect())
             .unwrap_or_default();
         let base_off = config.and_then(|c| self.name(c, b"BaseState")).as_deref() == Some("OFF");
         let on: HashSet<ObjectId> = config
             .and_then(|c| c.get(b"ON").ok())
             .and_then(|o| self.resolve(o).as_array().ok())
-            .map(|a| a.iter().filter_map(|x| x.as_reference().ok()).collect())
+            .map(|a| a.iter().filter_map(|x| self.resolved_id(x)).collect())
             .unwrap_or_default();
         let auto = config.map(|c| self.view_auto_state(c)).unwrap_or_default();
         let Ok(Object::Array(ocgs)) = props.get(b"OCGs").map(|o| self.resolve(o)) else { return };
         let mut seen = HashSet::new();
         for g in ocgs {
             let Some(d) = self.dict(g) else { continue };
-            let id = g.as_reference().ok();
+            let Some(id) = self.resolved_id(g) else { continue };
             // A group listed twice is one layer (and its name is read once).
-            if id.is_some_and(|id| !seen.insert(id)) {
+            if !seen.insert(id) {
                 continue;
             }
             // The View auto state, when it manages the group, then the configuration.
-            let visible = match id {
-                Some(id) if let Some(&state) = auto.get(&id) => state,
-                Some(id) if off.contains(&id) => false,
-                Some(id) if on.contains(&id) => true,
-                _ => !base_off,
+            let visible = if let Some(&state) = auto.get(&id) {
+                state
+            } else if off.contains(&id) {
+                false
+            } else if on.contains(&id) {
+                true
+            } else {
+                !base_off
             };
-            let Some(id) = id else { continue };
             out.push(Layer { id, name: self.field_text(d, b"Name").unwrap_or_else(|| "Layer".into()), visible, initial: visible });
         }
     }
@@ -169,7 +180,7 @@ impl<'a> Inspector<'a> {
                     return out;
                 }
                 groups_left -= 1;
-                let Ok(id) = g.as_reference() else { continue };
+                let Some(id) = self.resolved_id(g) else { continue };
                 let state = self
                     .dict(g)
                     .and_then(|d| d.get(b"Usage").ok())
@@ -189,57 +200,55 @@ impl<'a> Inspector<'a> {
         out
     }
 
-    /// The Layers panel's rows: the default configuration's `/Order` (ISO 32000-2 Table 99). Its
-    /// entries are groups, shown by name, and nested arrays, shown as a tree one level deeper;
-    /// a nested array may start with a text string, a label that is not a group. Groups not
-    /// listed aren't presented, and `/Order` defaults to the empty array in the default
-    /// configuration, so a document without one presents no layers. An entry that is neither a
-    /// group in `/OCGs` nor an array is skipped. Bounded by `MAX_LAYER_ORDER_*`, an indirect
-    /// array is read once, so a cycle ends, and an indirect label is decoded once, however many
-    /// arrays it heads.
+    /// The Layers panel's rows: when the default configuration has an `/Order` array (ISO 32000-2
+    /// Table 99), only the entries `/Order` lists (groups shown by name, nested arrays one level
+    /// deeper, a leading text string as a non-toggleable label; unlisted groups are not presented,
+    /// and an explicit empty `/Order []` presents none). When `/D` or `/Order` is missing (or
+    /// `/Order` does not resolve to an array), every group of `layers` is listed at top level in
+    /// `/OCGs` order. An entry in `/Order` that is neither a group in `/OCGs` nor an array is
+    /// skipped. Bounded by `MAX_LAYER_ORDER_*`, an indirect array is read once, so a cycle ends,
+    /// and an indirect label is decoded once, however many arrays it heads.
     pub(super) fn layer_order(&self, catalog: &Dictionary, layers: &[Layer]) -> Vec<LayerRow> {
-        let mut out = Vec::new();
-        let Some(config) = catalog.get(b"OCProperties").ok().and_then(|o| self.dict(o)).and_then(|p| p.get(b"D").ok()).and_then(|o| self.dict(o))
+        if layers.is_empty() {
+            return Vec::new();
+        }
+        let Some(order) = catalog
+            .get(b"OCProperties")
+            .ok()
+            .and_then(|o| self.dict(o))
+            .and_then(|p| p.get(b"D").ok())
+            .and_then(|o| self.dict(o))
+            .and_then(|c| c.get(b"Order").ok())
         else {
-            return out;
+            return (0..layers.len().min(MAX_LAYER_ORDER_ROWS)).map(|layer| LayerRow { depth: 0, item: LayerItem::Layer(layer) }).collect();
         };
-        let Some(order) = config.get(b"Order").ok() else { return out };
+        let Ok(items) = self.resolve(order).as_array() else {
+            return (0..layers.len().min(MAX_LAYER_ORDER_ROWS)).map(|layer| LayerRow { depth: 0, item: LayerItem::Layer(layer) }).collect();
+        };
         let index: HashMap<ObjectId, usize> = layers.iter().enumerate().map(|(i, l)| ((l.id.0, l.id.1), i)).collect();
-        let mut seen = HashSet::new();
-        if let Object::Reference(id) = order {
-            seen.insert(*id);
+        let mut walk = LayerOrderWalk { index: &index, seen: HashSet::new(), labels: HashMap::new(), out: Vec::new() };
+        if let Some(id) = self.resolved_id(order) {
+            walk.seen.insert(id);
         }
-        if let Ok(items) = self.resolve(order).as_array() {
-            self.layer_order_rows(items, 0, &index, &mut seen, &mut HashMap::new(), &mut out);
-        }
-        out
+        self.layer_order_rows(items, 0, &mut walk);
+        walk.out
     }
 
-    /// `labels` holds each indirect label already decoded: one string object can head any
-    /// number of direct arrays, and each decode costs its full length before the cut.
-    fn layer_order_rows(
-        &self,
-        items: &'a [Object],
-        depth: usize,
-        index: &HashMap<ObjectId, usize>,
-        seen: &mut HashSet<ObjectId>,
-        labels: &mut HashMap<ObjectId, String>,
-        out: &mut Vec<LayerRow>,
-    ) {
+    fn layer_order_rows(&self, items: &'a [Object], depth: usize, walk: &mut LayerOrderWalk<'_>) {
         if depth > MAX_LAYER_ORDER_DEPTH {
             return;
         }
         for item in items {
-            if out.len() >= MAX_LAYER_ORDER_ROWS {
+            if walk.out.len() >= MAX_LAYER_ORDER_ROWS {
                 return;
             }
-            if let Object::Reference(id) = item {
-                if let Some(&layer) = index.get(id) {
-                    out.push(LayerRow { depth, item: LayerItem::Layer(layer) });
+            if let Some(id) = self.resolved_id(item) {
+                if let Some(&layer) = walk.index.get(&id) {
+                    walk.out.push(LayerRow { depth, item: LayerItem::Layer(layer) });
                     continue;
                 }
                 // An indirect nested array, read once.
-                if !seen.insert(*id) {
+                if !walk.seen.insert(id) {
                     continue;
                 }
             }
@@ -251,16 +260,16 @@ impl<'a> Inspector<'a> {
                         LABEL_DECODES.with(|n| n.set(n.get().saturating_add(1)));
                         text_string(bytes).chars().take(MAX_LAYER_LABEL_CHARS).collect::<String>()
                     };
-                    let label = match first {
-                        Object::Reference(id) => labels.entry(*id).or_insert_with(decode).clone(),
-                        _ => decode(),
+                    let label = match self.resolved_id(first) {
+                        Some(id) => walk.labels.entry(id).or_insert_with(decode).clone(),
+                        None => decode(),
                     };
-                    out.push(LayerRow { depth, item: LayerItem::Label(label) });
+                    walk.out.push(LayerRow { depth, item: LayerItem::Label(label) });
                     rest
                 }
                 _ => nested.as_slice(),
             };
-            self.layer_order_rows(rest, depth.saturating_add(1), index, seen, labels, out);
+            self.layer_order_rows(rest, depth.saturating_add(1), walk);
         }
     }
 
@@ -278,7 +287,7 @@ impl<'a> Inspector<'a> {
         let mut out = Vec::new();
         for g in groups.into_iter().flatten() {
             let Ok(members) = self.resolve(g).as_array() else { continue };
-            let group: Vec<ObjectId> = members.iter().filter_map(|x| x.as_reference().ok()).take(left).collect();
+            let group: Vec<ObjectId> = members.iter().filter_map(|x| self.resolved_id(x)).take(left).collect();
             left = left.saturating_sub(group.len());
             if group.len() > 1 {
                 out.push(group);
