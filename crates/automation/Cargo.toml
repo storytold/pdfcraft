@@ -39,6 +39,8 @@ craft-image-codecs = { workspace = true }
 craft-docx = { workspace = true }
 craft-wordmodel = { workspace = true }
 pdfcraft-fonts = { workspace = true }
+# Synthetic TrueType programs for the Copy with formatting recovery tests.
+pdfcraft-testkit = { workspace = true }
 flate2.workspace = true
 pdfcraft-model = { workspace = true }
 pdfcraft-xfa = { workspace = true }
