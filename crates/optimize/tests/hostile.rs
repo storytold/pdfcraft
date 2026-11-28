@@ -127,3 +127,25 @@ fn a_normal_target_downsamples_and_an_equal_target_changes_nothing() {
     assert_eq!(dims, (300, 300));
     assert_eq!(raw, original, "a target equal to the image's own resolution must not resize or re-encode it");
 }
+
+/// Content compaction on hostile content streams: deep nesting, absurd numbers, stray
+/// delimiters and binary bytes.
+#[test]
+fn hostile_content_streams_never_panic() {
+    let deep = format!("{}0 0 m S{}", "q ".repeat(5000), " Q".repeat(5000));
+    let nested = format!("{}1{} 0 d", "[".repeat(300), "]".repeat(300));
+    let cases = [
+        deep,
+        nested,
+        "99999999999999999999999 99999999999999999999.5 -0.0000000000000000000001 0 0 0 cm 1 1 m S".to_string(),
+        "1e400 w 1.#INF w .  w -. w +- w 0 0 m S".to_string(),
+        r"<< /A [ 1 2 ] /B << /C (x) >> >> BDC (\(\)\\) Tj <> Tj EMC % end".to_string(),
+        "\u{0}\u{1}\u{ff} ]]] >> )) q Q 0 0 m S".to_string(),
+        "BT 5 TL 0 -12 TD 5 TL T* ET ' \" 1 2 (a) \"".to_string(),
+    ];
+    let settings = Settings { optimize_content: true, flate_unencoded: false, ..Settings::default() };
+    for content in cases {
+        let mut doc = doc_with(Stream::flate(image_dict(1, 1, 8, "DeviceGray"), &[0]), &content);
+        let _ = optimize(&mut doc, &settings);
+    }
+}

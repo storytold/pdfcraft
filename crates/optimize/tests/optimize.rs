@@ -5840,3 +5840,205 @@ fn the_fewest_strips_that_make_a_picture_are_merged() {
     let r = optimize(&mut doc, &keep).unwrap();
     assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
 }
+
+/// Operators and operands of a content stream, numbers as numbers: what a reader draws from.
+fn content_ops(data: &[u8]) -> Vec<(Vec<u8>, Vec<String>)> {
+    fn text(o: &Object) -> String {
+        match o {
+            Object::Int(i) => format!("{}", *i as f64),
+            Object::Real(r) => format!("{r}"),
+            Object::Array(items) => format!("[{}]", items.iter().map(text).collect::<Vec<_>>().join(" ")),
+            _ => format!("{o:?}"),
+        }
+    }
+    pdfcraft_content::parse(data).ops.into_iter().map(|op| (op.op, op.operands.iter().map(text).collect())).collect()
+}
+
+const DRAWING: &str = "% a comment\n0.50000 0.250 0.0 rg\nq   Q\n1.0 0 0 1.000 0 0 cm\n  q 1 0 0 1 72.0 72.000 cm\n    0.0 0.0 200.00 100.00 re f\n    [ 3.0 1.50 ] 0 d 2.0 w 2.0 w\n    0 0 m 200 100 l S\n  Q\nBT /F1 12.0 Tf 10.0 20.0 Td [ (Hi) -250.0 <4869> ] TJ ET\n/Fm Do\n";
+
+/// A page and a form drawn on it are written smaller, read back as the same operators (with
+/// those that draw nothing gone), and the page looks the same; the option is off by default.
+#[test]
+fn content_streams_are_compacted_losslessly() {
+    let mut doc = Document::new_empty();
+    let mut form = Dict::new();
+    form.set(b"Type".to_vec(), Object::name("XObject"));
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 300.into(), 300.into()]));
+    let fm = doc.add(Object::Stream(Stream::flate(form, "q   Q   10.0 10.0 50.0 50.0 re   f\n".repeat(20).as_bytes())));
+    let pg = page(&mut doc, &[("Fm", fm)], DRAWING);
+    let contents = doc.get(pg).as_dict().and_then(|d| d.reference(b"Contents")).unwrap();
+    let before = render(&doc);
+    let (page_before, form_before) = (stream(&doc, contents), stream(&doc, fm));
+    let mut off = doc.clone();
+    assert_eq!(optimize(&mut off, &Settings::default()).unwrap().content_streams, 0);
+    assert_eq!(stream(&off, fm), form_before, "off by default");
+    let r = optimize(&mut doc, &Settings { optimize_content: true, flate_unencoded: false, ..Settings::default() }).unwrap();
+    assert_eq!(r.content_streams, 2, "{r:?}");
+    assert!(r.content_bytes_after < r.content_bytes_before);
+    for (old, new) in [(page_before, stream(&doc, contents)), (form_before, stream(&doc, fm))] {
+        assert!(new.raw.len() < old.raw.len());
+        let (old, new) = (content_ops(&old.decoded_strict().unwrap()), content_ops(&new.decoded_strict().unwrap()));
+        let drawn = |ops: &[(Vec<u8>, Vec<String>)]| {
+            ops.iter().filter(|(op, _)| !matches!(op.as_slice(), b"q" | b"Q" | b"cm" | b"w")).cloned().collect::<Vec<_>>()
+        };
+        assert!(new.len() < old.len(), "operators that draw nothing went");
+        assert_eq!(drawn(&new), drawn(&old), "every other operator reads back the same");
+    }
+    let ops = content_ops(&stream(&doc, contents).decoded_strict().unwrap());
+    assert!(ops.iter().any(|(op, args)| op == b"cm" && args[4] == "72"), "the matrix that moves stays");
+    assert_eq!(ops.iter().filter(|(op, _)| op == b"w").count(), 1, "the repeated width went");
+    assert!(render(&doc) == before, "the page looks the same");
+}
+
+/// Streams the compaction can't be sure of keep every byte: an unknown operator, an inline
+/// image, unreadable bytes, a sign read as a number, a reference operand, an image filter, a
+/// crypt filter, external data. The same stream without the problem is compacted, so each is
+/// left alone for its reason.
+#[test]
+fn content_streams_it_cannot_be_sure_of_are_left_as_they_are() {
+    let pad = "0 0 m   10 10 l   S   ".repeat(10);
+    let raw = |text: String| Stream::from_raw(Dict::new(), text.into_bytes());
+    let with = |key: &str, v: Object, s: Stream| {
+        let mut s = s;
+        s.dict.set(key.as_bytes().to_vec(), v);
+        s
+    };
+    let external = pdfcraft_cos::PdfString::literal(b"data.bin".to_vec());
+    let cases = [
+        ("unknown operator", raw(format!("{pad} 1 xyz"))),
+        ("inline image", raw(format!("{pad} BI /W 1 /H 1 /BPC 8 /CS /G ID \x00 EI"))),
+        ("unreadable bytes", raw(format!("{pad} ) 1 w"))),
+        ("lone sign", raw(format!("{pad} 0 - m"))),
+        ("two periods", raw(format!("{pad} 1.2.3 w"))),
+        ("an exponent", raw(format!("{pad} 1e5 w"))),
+        ("a sign inside", raw(format!("{pad} 1.5-3 w"))),
+        ("a stray EI", raw(format!("{pad} EI"))),
+        ("reference operand", raw(format!("{pad} 4 0 R w"))),
+        ("image filter", with("Filter", Object::name("DCTDecode"), raw(pad.clone()))),
+        ("crypt filter", with("Filter", Object::Array(vec![Object::name("Crypt")]), raw(pad.clone()))),
+        ("external data", with("F", Object::String(external), raw(pad.clone()))),
+    ];
+    let settings = Settings { optimize_content: true, flate_unencoded: false, ..Settings::default() };
+    for (label, s) in cases {
+        let (mut doc, c) = with_content(s.clone());
+        assert_eq!(optimize(&mut doc, &settings).unwrap().content_streams, 0, "{label}");
+        assert_eq!(stream(&doc, c), s, "{label}");
+    }
+    let (mut doc, c) = with_content(raw(pad.clone()));
+    assert_eq!(optimize(&mut doc, &settings).unwrap().content_streams, 1);
+    assert!(stream(&doc, c).raw.len() < pad.len());
+}
+
+/// A stream under a chain of general filters, or Flate with a predictor, is compacted and stored
+/// with Flate alone, and decodes to what it drew.
+#[test]
+fn content_under_other_general_filters_is_compacted_to_flate() {
+    let pad = "0.50 g   0 0 m   10 10 l   S   ".repeat(10);
+    let hex: Vec<u8> = pad.bytes().flat_map(|b| format!("{b:02X}").into_bytes()).chain(*b">").collect();
+    let mut chain = Dict::new();
+    chain.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode")]));
+    let mut predicted = Dict::new();
+    predicted.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    let mut parms = Dict::new();
+    parms.set(b"Predictor".to_vec(), Object::Int(12));
+    parms.set(b"Columns".to_vec(), Object::Int(1));
+    predicted.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+    // PNG Up rows of one byte: each row is the filter byte 2 and the difference from the row above.
+    let mut rows = Vec::new();
+    let mut above = 0u8;
+    for b in pad.bytes() {
+        rows.extend([2, b.wrapping_sub(above)]);
+        above = b;
+    }
+    let settings = Settings { optimize_content: true, flate_unencoded: false, ..Settings::default() };
+    for (label, s) in [
+        ("ASCIIHex", Stream::from_raw(chain, hex)),
+        ("Flate with a predictor", Stream::from_raw(predicted, pdfcraft_filters::encode_flate(&rows).to_vec())),
+    ] {
+        assert_eq!(content_ops(&s.decoded_strict().unwrap()), content_ops(pad.as_bytes()), "{label}: the fixture decodes");
+        let (mut doc, c) = with_content(s);
+        assert_eq!(optimize(&mut doc, &settings).unwrap().content_streams, 1, "{label}");
+        let new = stream(&doc, c);
+        assert_eq!(new.dict.name(b"Filter"), Some(&b"FlateDecode"[..]), "{label}");
+        assert!(new.dict.get(b"DecodeParms").is_none(), "{label}");
+        let ops = content_ops(&new.decoded_strict().unwrap());
+        assert_eq!(ops.iter().filter(|(op, _)| op == b"g").count(), 1, "{label}: the repeated grey went");
+        assert_eq!(ops.iter().filter(|(op, _)| op == b"S").count(), 10, "{label}");
+    }
+}
+
+/// Text whose compacted form is smaller unencoded but compresses larger: fixed-width numbers
+/// repeat in a way their shortest forms don't. Both are long enough for the pass that compresses
+/// unencoded streams.
+const COMPRESSES_WORSE: &str = "2.50 0.50 l\n0.50 1.50 2.50 0.00 re\n1.50 1.50 m\n2.50 1.00 m\n0.00 1.50 l\n0.50 1.00 l\n0.00 0.00 l\nS\n";
+
+/// With `flate_unencoded`, an unfiltered stream is compared as that pass stores it: the
+/// compacted text, though shorter, compresses larger, so the original stays and is compressed
+/// as it would be without compaction. Without that pass the shorter text is kept.
+#[test]
+fn an_unfiltered_stream_is_compared_as_it_is_compressed() {
+    let s = Stream::from_raw(Dict::new(), COMPRESSES_WORSE.as_bytes().to_vec());
+    let (mut doc, c) = with_content(s.clone());
+    let r = optimize(&mut doc, &Settings { optimize_content: true, flate_unencoded: false, ..Settings::default() }).unwrap();
+    assert_eq!(r.content_streams, 1);
+    let compacted = stream(&doc, c).raw;
+    assert!(compacted.len() >= 64 && compacted.len() < s.raw.len());
+    let packed = |data: &[u8]| Stream::flate(Dict::new(), data).raw.len();
+    assert!(packed(&compacted) > packed(&s.raw), "the fixture compresses worse once compacted");
+    let (mut doc, c) = with_content(s.clone());
+    let r = optimize(&mut doc, &Settings { optimize_content: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.content_streams, 0, "{r:?}");
+    assert_eq!(stream(&doc, c), Stream::flate(Dict::new(), &s.raw), "the original, compressed by the later pass");
+}
+
+/// Whatever the later passes do to a stream (compress it, take off its ASCII layer, store its
+/// LZW as Flate), the copy with compaction on is never larger than with it off.
+#[test]
+fn compacting_content_never_makes_the_copy_larger() {
+    let short = "0.0 0.0 l\n0.0 0.0 l\n0.0 0.0 0.0 0.0 re\n0.0 0.0 0.0 0.0 re\n0.0 0.0 m\n0.0 0.0 m\n0.0 0.0 0.0 0.0 re\nS\n";
+    let padded = "0.50 g   0 0 m   10.000 10.000 l   S   ".repeat(10);
+    let mut cases = Vec::new();
+    for text in [COMPRESSES_WORSE, short, padded.as_str()] {
+        let data = text.as_bytes();
+        cases.push(Stream::from_raw(Dict::new(), data.to_vec()));
+        let hex: Vec<u8> = pdfcraft_filters::encode_flate(data).iter().flat_map(|b| format!("{b:02X}").into_bytes()).chain(*b">").collect();
+        let mut wrapped = Dict::new();
+        wrapped.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("FlateDecode")]));
+        cases.push(Stream::from_raw(wrapped, hex));
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::name("LZWDecode"));
+        cases.push(Stream::from_raw(d, lzw(data, &Params::default())));
+    }
+    for (lzw_to_flate, flate_unencoded) in [(true, true), (true, false), (false, true), (false, false)] {
+        let written = |s: &Stream, on: bool| {
+            let (mut doc, _) = with_content(s.clone());
+            let settings = Settings { optimize_content: on, lzw_to_flate, flate_unencoded, ..Settings::default() };
+            optimize(&mut doc, &settings).unwrap();
+            write_full(&doc, &SaveOptions::default()).unwrap().len()
+        };
+        for s in &cases {
+            let (off, on) = (written(s, false), written(s, true));
+            assert!(on <= off, "{:?} lzw_to_flate {lzw_to_flate} flate_unencoded {flate_unencoded}: {on} > {off}", s.dict);
+        }
+    }
+}
+
+/// Page contents split into pieces are read as one stream: when one piece can't be read (here
+/// it ends in operands its operator follows in the next piece), no piece is rewritten, since a
+/// piece read alone may then start inside an operator.
+#[test]
+fn page_content_pieces_are_left_whole_when_one_cannot_be_read() {
+    let mut doc = Document::new_empty();
+    let pg = page(&mut doc, &[], "");
+    let first = Stream::from_raw(Dict::new(), b"0 0 m 9 9 l S 2".to_vec());
+    let second = Stream::from_raw(Dict::new(), b"  1 0 0 1 0 0 cm   0 0 m   5 5 l   S  ".to_vec());
+    let (a, b) = (doc.add(Object::Stream(first.clone())), doc.add(Object::Stream(second.clone())));
+    doc.update_dict(pg, |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(a), Object::Ref(b)]))).unwrap();
+    let settings = Settings { optimize_content: true, flate_unencoded: false, ..Settings::default() };
+    let mut alone = doc.clone();
+    alone.set(a, Object::Stream(Stream::from_raw(Dict::new(), b"0 0 m 9 9 l S".to_vec())));
+    assert_eq!(optimize(&mut alone, &settings).unwrap().content_streams, 1, "the second piece compacts beside a readable one");
+    assert_eq!(optimize(&mut doc, &settings).unwrap().content_streams, 0);
+    assert_eq!((stream(&doc, a), stream(&doc, b)), (first, second));
+}
