@@ -841,6 +841,7 @@ impl Automation {
             "measure_list" => self.measurement_list(&a)?,
             "measure_scale" => self.measurement_scale(&a)?,
             "measure_snap" => self.measurement_snap(&a)?,
+            "page_geometry" => self.page_geometry(&a)?,
             "measure_export" => self.measurement_export(&a)?,
             "comment_list" => self.comment_list(&a)?,
             "comment_add" => self.comment_add(&a)?,

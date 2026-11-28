@@ -4507,9 +4507,9 @@ tier = "P2"
 milestone = "M12"
 status = "shipped"
 commands = ["measure.snap"]
-tools = ["measure_snap"]
-evidence = ["crates/automation/tests/it/automation.rs::measurement_snap_tool_covers_all_targets", "crates/measure/src/tests.rs::nested_forms_transforms_curves_and_cycles_are_bounded", "crates/measure/src/tests.rs::snap_paths_endpoints_midpoints_and_intersections"]
-notes = "Paths, endpoints, midpoints and intersections of painted vector geometry, including transformed Form XObjects. Cubics flattened to 0.2 user units. Bounded extraction and dense-intersection limits are reported. Raster/text outlines, clipping and optional-content visibility are not interpreted."
+tools = ["measure_snap", "page_geometry"]
+evidence = ["crates/automation/tests/it/automation.rs::measurement_snap_tool_covers_all_targets", "crates/measure/src/tests.rs::nested_forms_transforms_curves_and_cycles_are_bounded", "crates/measure/src/tests.rs::snap_paths_endpoints_midpoints_and_intersections", "crates/automation/tests/it/page_geometry.rs::page_geometry_lists_what_snapping_reads"]
+notes = "Paths, endpoints, midpoints and intersections of painted vector geometry, including transformed Form XObjects. Cubics flattened to 0.2 user units. Bounded extraction and dense-intersection limits are reported. Raster/text outlines, clipping and optional-content visibility are not interpreted. Headlessly, page_geometry (pdfcraft-cli geometry) lists the segments snapping reads for whole pages."
 
 [[feature]]
 id = "comment.measure-info-panel"

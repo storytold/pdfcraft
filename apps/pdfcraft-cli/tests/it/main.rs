@@ -8,6 +8,7 @@ mod check;
 mod cpu_override;
 mod edit;
 mod extract;
+mod geometry;
 mod help;
 mod info_repairs;
 mod info_standards;
