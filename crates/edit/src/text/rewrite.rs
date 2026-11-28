@@ -452,6 +452,18 @@ fn paragraph_gaps(
         .collect())
 }
 
+/// Whether `block` grows without end when its text is longer. A recognised phrase over a scan sits
+/// where the scan put it, a title-block cell at the page's corner as often as not, and is never
+/// wrapped: it grows along its line, past the page's edge if it must, as the last changed word of
+/// an upright one already does (#8475). A page's own text grows to its margin and wraps there
+/// (#2578). A phrase set flush right or centred keeps its box, whether that alignment was asked for
+/// or is the one its text takes on its own (a lone row on the page's centre, right-to-left text):
+/// such a line is placed from the far end of its width, and an endless one would move it off the
+/// page. `align` is the alignment the paragraph is laid out with.
+fn grows_unbounded(block: &TextBlock, align: Option<crate::added::Align>) -> bool {
+    block.invisible && matches!(align, None | Some(crate::added::Align::Left))
+}
+
 /// Where a paragraph sits on its page, for choosing the width it is laid out in.
 struct ParaGeometry {
     rect: [f64; 4],
@@ -467,6 +479,8 @@ struct ParaGeometry {
     single_line: bool,
     anchored_right: bool,
     centred: bool,
+    /// Never wrapped ([`grows_unbounded`]).
+    unbounded: bool,
 }
 
 impl ParaGeometry {
@@ -483,6 +497,7 @@ impl ParaGeometry {
             // Turned text: the page's margins are along another axis. A single line grows (below).
             None if !self.upright => (self.frame[2] - self.frame[0]).max(self.size * self.k),
             None if self.anchored_right => own.max(right + self.dx - (self.crop[0] + 36.0)),
+            None if self.unbounded => 14_400.0,
             // A centred line is not stretched to the margin: its own box is the frame it is centred in.
             None if self.single_line && !self.centred => own.max(self.crop[2] - 36.0 - (left + self.dx)),
             None => own,
@@ -503,13 +518,14 @@ fn margin_reach(origin: f64, direction: f64, low: f64, high: f64) -> f64 {
     }
 }
 
-/// A turned single line grows to fit, up to where its baseline reaches the page's margin.
-fn turned_line_width(first: &TextLine, crop: [f64; 4], offset: [f64; 2], width: f64, text: &str, advance: &Advance<'_>) -> f64 {
+/// A turned single line grows to fit, up to where its baseline reaches the page's margin, or
+/// without end when `unbounded` ([`grows_unbounded`]).
+fn turned_line_width(first: &TextLine, crop: [f64; 4], offset: [f64; 2], width: f64, text: &str, advance: &Advance<'_>, unbounded: bool) -> f64 {
     let (x0, y0) = (first.origin.x + offset[0], first.origin.baseline + offset[1]);
     let (ux, uy) = first.direction();
     let tx = margin_reach(x0, ux, crop[0], crop[2]);
     let ty = margin_reach(y0, uy, crop[1], crop[3]);
-    let cap = width.max(tx.min(ty)).min(14_400.0);
+    let cap = if unbounded { 14_400.0 } else { width.max(tx.min(ty)).min(14_400.0) };
     text.split('\n').map(|line| advance.of(line)).fold(width, f64::max).min(cap)
 }
 
@@ -1152,9 +1168,11 @@ pub(crate) fn rewrite_block_from(
     // Turned text is left alone: its centre lives along its own baseline, not in page space.
     let crop = p.crop(doc);
     let centred = upright && !rtl && style.width.is_none() && style.align.is_none() && is_centred(&b, &lines, (crop[0] + crop[2]) / 2.0, first.size);
-    let geometry = ParaGeometry { rect: b.rect, frame, crop, upright, k, size, dx, single_line: members.len() == 1, anchored_right, centred };
-    let width = geometry.width(style.width)?;
     let align = if centred { Some(crate::added::Align::Center) } else { style.align.or(rtl.then_some(crate::added::Align::Right)) };
+    let unbounded = grows_unbounded(&b, align);
+    let geometry =
+        ParaGeometry { rect: b.rect, frame, crop, upright, k, size, dx, single_line: members.len() == 1, anchored_right, centred, unbounded };
+    let width = geometry.width(style.width)?;
     // Where a right-aligned line ends, from the paragraph's left edge (user space).
     let right_edge = if anchored_right { (b.rect[2] - b.rect[0]).max(0.0) } else { width };
     let movement = drawn_movement(emit.ctm, dx, dy)?;
@@ -1180,8 +1198,10 @@ pub(crate) fn rewrite_block_from(
         scale: o_state.scale,
         k,
     };
-    let width = if !upright && style.width.is_none() && members.len() == 1 {
-        turned_line_width(first, crop, [dx, dy], width, &text, &advance)
+    // A turned single line grows along its baseline; so does a recognised phrase that is one row,
+    // whatever its words were read as, like an upright one (#8475), unless it keeps its box.
+    let width = if !upright && style.width.is_none() && (members.len() == 1 || (unbounded && b.rows.len() == 1)) {
+        turned_line_width(first, crop, [dx, dy], width, &text, &advance, unbounded)
     } else {
         width
     };

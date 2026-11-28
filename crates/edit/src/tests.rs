@@ -10199,6 +10199,121 @@ fn default_width_subset_paragraph_keeps_its_rows_when_a_word_is_added() {
     }
 }
 
+/// #8475: a recognised phrase (invisible text over a scan) on a turned page sits where the scan put
+/// it, in a title-block cell at the page's corner as often as not, so it grows along its baseline
+/// without end, past the 36 pt margin that a page's own text wraps at (#2578) and past the page's
+/// edge if it must, as the changed words of an upright phrase do.
+#[test]
+fn a_turned_invisible_row_grows_along_its_baseline_instead_of_wrapping() {
+    // Reading upwards from y = 680 on the 600 × 800 page: 120 pt to the edge, 84 to the margin.
+    // "SHEET 2 OF TEST" in Helvetica 12 is about 103 pt: past the margin, within the edge.
+    let mut doc = text_page("BT /F1 12 Tf 3 Tr 0 1 -1 0 300 680 Tm (SHEET 2 OF 2) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("SHEET 2 OF TEST"), &text::BlockStyle::default()).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!(lines.len(), 1, "one row, grown along the baseline: {lines:?}");
+    assert_eq!(lines[0].text.trim(), "SHEET 2 OF TEST");
+    assert!(lines[0].rect[3] > 800.0 - 36.0, "past the margin: {:?}", lines[0].rect);
+    assert!(lines[0].rect[3] <= 800.0 + 0.5, "within the page: {:?}", lines[0].rect);
+
+    // From y = 740, 60 pt from the edge: the row runs past the edge rather than onto a second row.
+    let mut doc = text_page("BT /F1 12 Tf 3 Tr 0 1 -1 0 300 740 Tm (SHEET 2 OF 2) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("SHEET 2 OF TEST"), &text::BlockStyle::default()).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!(lines.len(), 1, "one row past the page's edge: {lines:?}");
+    assert!(lines[0].rect[3] > 800.0, "{:?}", lines[0].rect);
+
+    // A recognised phrase set flush right keeps its box and wraps, as a page's own text does.
+    let mut doc = text_page("BT /F1 12 Tf 3 Tr 0 1 -1 0 300 740 Tm (SHEET 2 OF 2) Tj ET");
+    let right = text::BlockStyle { align: Some(added::Align::Right), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("SHEET 2 OF TEST"), &right).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.len() > 1, "{lines:?}");
+}
+
+/// #8475: the endless width is for a phrase that grows from its left edge. One that is centred, or
+/// right-aligned, without being asked (a lone row on the page's centre; right-to-left text) is placed
+/// from the far end of its width, and an endless one would put it thousands of points off the page.
+/// It keeps its box and wraps, as a page's own text does.
+#[test]
+fn a_recognised_phrase_centred_or_right_to_left_on_its_own_keeps_its_box() {
+    // "TITLE" in Helvetica 12 is 32.7 pt wide: from x = 284 it sits on the page's centre, 300.
+    let mut doc = text_page("BT /F1 12 Tf 3 Tr 284 700 Td (TITLE) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("TITLE OF THE DRAWING"), &text::BlockStyle::default()).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.len() > 1, "wrapped in its box: {lines:?}");
+    for l in &lines {
+        assert!(l.rect[0] >= 0.0 && l.rect[2] <= 600.0, "on the page: {:?}", l.rect);
+        // Centred in its box, or from its left edge when wider than the box, never moved right.
+        assert!(l.rect[0] >= 283.5 && l.rect[0] <= 300.0, "in its box: {:?}", l.rect);
+    }
+
+    // Hebrew recognised as two runs on one row (OCR sizes each word from its own box, so a size
+    // apart): right-aligned, but not anchored at its right edge as a lone run is.
+    let mut doc = hebrew_page("BT /F1 12 Tf 3 Tr 300 700 Td (EDCBA) Tj ET BT /F1 11 Tf 3 Tr 333 700 Td (HDGF) Tj ET");
+    let block = text::text_blocks(&doc, 0).unwrap().swap_remove(0);
+    assert_eq!(block.lines.len(), 2, "{block:?}");
+    text::rewrite_block(&mut doc, 0, 0, Some("שלום בדיוק שלום בדיוק שלום"), &text::BlockStyle::default()).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.len() > 1, "wrapped in its box: {lines:?}");
+    for l in &lines {
+        assert!(l.rect[2] <= block.rect[2] + 0.5, "ends at its old right edge, on the page: {:?} vs {:?}", l.rect, block.rect);
+    }
+}
+
+/// #8475: on a turned page too, a recognised phrase of several runs grows along its baseline only
+/// when it would grow from its left edge; right-to-left text is right-aligned and keeps its box.
+#[test]
+fn a_turned_right_to_left_phrase_of_several_runs_keeps_its_box() {
+    // Reading upwards from y = 600: 164 pt to the margin, room for the longer text on one row.
+    let mut doc = hebrew_page("BT /F1 12 Tf 3 Tr 0 1 -1 0 300 600 Tm (EDCBA) Tj ET BT /F1 11 Tf 3 Tr 0 1 -1 0 300 633 Tm (HDGF) Tj ET");
+    let block = text::text_blocks(&doc, 0).unwrap().swap_remove(0);
+    assert_eq!(block.lines.len(), 2, "{block:?}");
+    text::rewrite_block(&mut doc, 0, 0, Some("שלום בדיוק שלום בדיוק שלום"), &text::BlockStyle::default()).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.len() > 1, "wrapped in its box: {lines:?}");
+    for l in &lines {
+        assert!(l.rect[3] <= block.rect[3] + 0.5, "within its old extent along the baseline: {:?} vs {:?}", l.rect, block.rect);
+    }
+}
+
+/// #8475: the styled rewrite (a formatting range) follows the same rule: a recognised phrase that
+/// is centred on the page without being asked wraps at the margin instead of growing without end.
+#[test]
+fn a_styled_phrase_centred_on_its_own_keeps_its_box() {
+    // "TITLE" (12 pt) and "BLOCK" (11 pt) from x = 262 span to 335: on the page's centre, 300.
+    let mut doc = text_page("BT /F1 12 Tf 3 Tr 262 700 Td (TITLE) Tj ET BT /F1 11 Tf 3 Tr 298 700 Td (BLOCK) Tj ET");
+    let block = text::text_blocks(&doc, 0).unwrap().swap_remove(0);
+    assert_eq!(block.lines.len(), 2, "{block:?}");
+    let red = text::RangeStyle {
+        range: 0..5,
+        family: None,
+        resource: None,
+        size: None,
+        color: Some([1.0, 0.0, 0.0]),
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let styled = text::BlockStyle { ranges: vec![red], ..Default::default() };
+    let long = "TITLE BLOCK OF THE DRAWING AS RECOGNISED ON THE SCANNED SHEET, WITH A GREAT MANY MORE WORDS THAN FIT ACROSS THE PAGE, SO THAT ONE ROW OF THEM WOULD RUN OFF BOTH EDGES";
+    text::rewrite_block(&mut doc, 0, 0, Some(long), &styled).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.len() > 1, "wrapped at the margin: {lines:?}");
+    for l in &lines {
+        assert!(l.rect[0] >= 0.0 && l.rect[2] <= 600.0, "on the page: {:?}", l.rect);
+    }
+
+    // Set flush left, the same title is no longer centred: it grows from its left edge without
+    // end, one row past the margin (the colour range splits that row into two lines).
+    let mut doc = text_page("BT /F1 12 Tf 3 Tr 262 700 Td (TITLE) Tj ET BT /F1 11 Tf 3 Tr 298 700 Td (BLOCK) Tj ET");
+    let left = text::BlockStyle { align: Some(added::Align::Left), ..styled.clone() };
+    text::rewrite_block(&mut doc, 0, 0, Some(long), &left).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    let first = lines[0].rect;
+    assert!(lines.iter().all(|l| (l.rect[1] - first[1]).abs() < 1.0), "one row: {lines:?}");
+    assert!(lines.iter().any(|l| l.rect[2] > 600.0 - 36.0), "past the margin: {lines:?}");
+}
+
 /// #2578: a single turned row grows along its baseline only up to the page's 36 pt margin and wraps
 /// onto further rows from there, instead of running off the page.
 #[test]
