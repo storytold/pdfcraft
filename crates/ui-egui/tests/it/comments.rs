@@ -280,6 +280,59 @@ fn the_quick_bar_colour_changes_the_selected_comment() {
 }
 
 #[test]
+fn quick_text_markup_colours_fit_and_activate_at_minimum_window_size() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+
+    let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(480.0, 520.0));
+    let mut h = harness_with_size(TEXT_FIXTURE.to_vec(), screen.size(), |app| {
+        app.set_option(&egui::Context::default(), "quick", "highlight").unwrap();
+    });
+    let swatches = ["Yellow", "Orange", "Red", "Pink", "Purple", "Blue"]
+        .map(|name| (name, h.get_by_role_and_label(Role::ColorWell, &format!("{name} quick colour")).rect()));
+    for (name, swatch) in swatches {
+        assert!(
+            screen.contains_rect(swatch),
+            "{name} at {swatch:?} must be visible in {screen:?}; all swatches: {swatches:?}, colour: {:?}, opacity: {:?}, content: {:?}",
+            h.get_by_label("Colour").rect(),
+            h.get_by_label("Opacity").rect(),
+            h.ctx.content_rect(),
+        );
+    }
+    assert!(screen.contains_rect(h.get_by_label("Opacity").rect()));
+
+    h.get_by_label("Colour").focus();
+    h.run_steps(2);
+    for _ in 0..6 {
+        if h.get_by_label("Purple quick colour").is_focused() {
+            break;
+        }
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
+    assert!(h.get_by_label("Purple quick colour").is_focused());
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Highlight).color, [0.54, 0.25, 0.82]);
+    let purple = h.get_by_label("Purple quick colour");
+    assert_eq!(purple.accesskit_node().is_selected(), Some(true));
+    assert_eq!(h.get_by_label("Colour").value().unwrap(), purple.value().unwrap());
+
+    let blue = h.get_by_label("Blue quick colour").rect().center();
+    click(&mut h, blue);
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Highlight).color, [0.0, 0.47, 0.84]);
+    let blue = h.get_by_label("Blue quick colour");
+    assert_eq!(blue.accesskit_node().is_selected(), Some(true));
+    assert_eq!(h.get_by_label("Colour").value().unwrap(), blue.value().unwrap());
+    assert_ne!(h.get_by_label("Purple quick colour").accesskit_node().is_selected(), Some(true));
+    for tool in [CommentTool::Underline, CommentTool::StrikeOut, CommentTool::Squiggly] {
+        h.state_mut().quick_tool = QuickTool::Comment(tool);
+        h.run_steps(3);
+        assert_eq!(h.query_by_label("Blue quick colour").is_some(), tool == CommentTool::Underline, "{tool:?}");
+        h.get_by_label("Colour");
+    }
+}
+
+#[test]
 fn the_quick_bar_colour_changes_the_selected_arrow() {
     use pdfcraft_ui_egui::comments::CommentTool;
 
