@@ -24,5 +24,6 @@ mod symbol_dingbats_width;
 mod symbol_mt_builtin_encoding;
 mod tiling_cell_placement;
 mod type3_text_clip;
+mod type4_outputs;
 mod widgets_above_annotations;
 mod zero_area_fill_clip;
