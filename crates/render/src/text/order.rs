@@ -950,6 +950,25 @@ pub(super) fn reverse_rtl(glyphs: &[&TextGlyph], anchor: &[usize], idx: &mut [us
 /// a baseline (a single-line paragraph in each column), whose gap spans most of a column.
 pub(super) const SAME_LINE_GAP: f32 = 8.0;
 
+/// The fewest segments on one baseline, each within [`SAME_LINE_GAP`] of the next, that are the
+/// cells of a table row (#8534). Two are a label and its value, or the lines of two columns that
+/// happen to share a baseline, which keep reading as columns (#3658, #4468).
+pub(super) const ROW_CELLS: usize = 3;
+
+/// A table cell is narrower than this many heights of its line; a wider segment is a line of text.
+/// More than half the segments of a row must be cells.
+pub(super) const CELL_WIDTH: f32 = 16.0;
+
+/// A block of two or more lines is a column of prose, none of them a cell however narrow, when its
+/// widest line is at least this many heights and its lines but the last mostly fill the column:
+/// at least [`FULL_LINE`] of the widest. Three-column body text runs 13 to 16 heights a line
+/// (review on #8548), narrower than a cell may be; a table column's cells are ragged or narrower
+/// than this.
+pub(super) const PROSE_WIDTH: f32 = 10.0;
+
+/// The share of a prose block's widest line that a line fills (see [`PROSE_WIDTH`]).
+pub(super) const FULL_LINE: f32 = 0.8;
+
 /// Whether segment `s` continues the line of segment `p` to its right: their baselines (a fifth of
 /// the em box above its bottom, as `draw_glyph` builds it) lie within a fifth of the smaller
 /// height, whatever their sizes, and `s` starts no earlier than `p` ends and less than

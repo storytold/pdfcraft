@@ -2463,6 +2463,168 @@ fn page_text(ops: &str) -> String {
     extract_page(&text_page(ops), 0, &InterpreterSettings::default()).unwrap().plain_text()
 }
 
+/// The reporter's table (#8534): reportlab draws each cell as its own text object, row by row, in
+/// Helvetica 10 pt, 18 pt between rows and a 6 pt pad each side of the widest cell of a column.
+fn reportlab_table() -> String {
+    let cells = [
+        ["Item", "Description", "Qty", "Price"],
+        ["R1C1 Bolts", "R1C2 Stainless bolts M8", "R1C3 250", "R1C4 12.50"],
+        ["R2C1 Nuts", "R2C2 Hex nuts M8", "R2C3 400", "R2C4 8.00"],
+        ["R3C1 Washers", "R3C2 Flat washers 8 mm", "R3C3 600", "R3C4 3.20"],
+    ];
+    let xs = [26.0, 105.79, 230.59, 287.61];
+    let mut ops = String::from("BT /F1 10 Tf 12 TL ET\n");
+    for (r, row) in cells.iter().enumerate() {
+        let y = 300.0 - 18.0 * r as f32;
+        for (c, cell) in row.iter().enumerate() {
+            ops.push_str(&format!("BT 1 0 0 1 {} {y} Tm ({cell}) Tj T* ET\n", xs[c]));
+        }
+    }
+    ops
+}
+
+#[test]
+fn table_rows_of_cells_drawn_one_by_one_read_across() {
+    assert_eq!(
+        page_text(&reportlab_table()),
+        "Item Description Qty Price\nR1C1 Bolts R1C2 Stainless bolts M8 R1C3 250 R1C4 12.50\nR2C1 Nuts R2C2 Hex nuts M8 R2C3 400 R2C4 8.00\nR3C1 Washers R3C2 Flat washers 8 mm R3C3 600 R3C4 3.20"
+    );
+    // The same cells spread wide enough that no two of a row touch: every cell is a segment of its own.
+    let mut v = Vec::new();
+    for (r, row) in [["Item", "Description", "Qty", "Price"], ["R1C1", "R1C2", "R1C3", "R1C4"], ["R2C1", "R2C2", "R2C3", "R2C4"]].iter().enumerate() {
+        for (c, cell) in row.iter().enumerate() {
+            word(&mut v, cell, 20.0 + 90.0 * c as f32, 100.0 + 18.0 * r as f32, 6.0);
+        }
+    }
+    assert_eq!(layout(v).plain_text(), "Item Description Qty Price\nR1C1 R1C2 R1C3 R1C4\nR2C1 R2C2 R2C3 R2C4");
+    // A description column wider than a cell (up to 28 letters, 16.8 heights) is one wide segment
+    // per row among narrow ones: still a table, its descriptions ragged (28, 21 and 25 letters) as
+    // a table's are, not a column of prose. The cells are 3 to 7 heights apart, so no two are one
+    // run and each is within the same-line gap of the next.
+    let mut v = Vec::new();
+    for (r, (row, letters)) in
+        [(["Item", "Description", "Qty"], 28), (["R1C1", "R1C2", "R1C3"], 21), (["R2C1", "R2C2", "R2C3"], 25)].iter().enumerate()
+    {
+        let y = 100.0 + 18.0 * r as f32;
+        word(&mut v, row[0], 20.0, y, 6.0);
+        word(&mut v, &format!("{}{}", row[1], "x".repeat(letters - row[1].len())), 80.0, y, 6.0);
+        word(&mut v, row[2], 280.0, y, 6.0);
+    }
+    let t = layout(v).plain_text();
+    assert_eq!(t.lines().count(), 3, "{t}");
+    assert!(t.starts_with("Item Description") && t.lines().nth(1).is_some_and(|l| l.starts_with("R1C1 R1C2") && l.ends_with("R1C3")), "{t}");
+}
+
+/// What is no table row: columns of prose whose lines share baselines (#8548 review), a column of
+/// prose with short segments beside each line, an accounting report's heading column, a barcode's
+/// rows, and the line number of a quote under a full-width rule, which is a cell all the same.
+#[test]
+fn columns_of_prose_are_no_table_rows() {
+    // Three columns of prose (28 letters a line, 16.8 heights) 2.2 heights apart whose lines share
+    // baselines keep reading as columns, also where one paragraph's last line is short.
+    let mut v = Vec::new();
+    for (c, (x, name)) in [(10.0, "left"), (200.0, "mid"), (390.0, "right")].iter().enumerate() {
+        for l in 0..3 {
+            let text = if c == 1 && l == 1 { "end.".to_string() } else { format!("{name}{l}{}", "x".repeat(27 - name.len())) };
+            word(&mut v, &text, *x, 100.0 + 12.0 * l as f32, 6.0);
+        }
+    }
+    let t = layout(v).plain_text();
+    assert_eq!(t.lines().count(), 9, "{t}");
+    assert!(t.starts_with("left0xxxxxxxxxxxxxxxxxxxxxxx\nleft1xxxxxxxxxxxxxxxxxxxxxxx\nleft2xxxxxxxxxxxxxxxxxxxxxxx\nmid0"), "{t}");
+    // A column of prose (20 letters a line, 12 heights) with two short segments beside each line,
+    // such as line numbers or margin notes: the lines stay together, and the two short columns
+    // read after them as the two columns they are (review on #8548: the pairs made a row of each
+    // baseline and the lines were interleaved with them).
+    let mut v = Vec::new();
+    for l in 0..3 {
+        let y = 100.0 + 12.0 * l as f32;
+        word(&mut v, &format!("prose{l}{}", "x".repeat(14)), 10.0, y, 6.0);
+        word(&mut v, &format!("ab{l}"), 170.0, y, 6.0);
+        word(&mut v, &format!("cd{l}"), 250.0, y, 6.0);
+    }
+    assert_eq!(layout(v).plain_text(), "prose0xxxxxxxxxxxxxx\nprose1xxxxxxxxxxxxxx\nprose2xxxxxxxxxxxxxx\nab0\nab1\nab2\ncd0\ncd1\ncd2");
+    // An accounting report's first column: account headings and totals (28 to 34 letters) with the
+    // dates of their entries (10 letters) indented under them, one block. Four of its seven lines
+    // but the last are as wide as the widest, yet it is no column of prose: the dates are cells,
+    // and each reads across with its name and status (a corpus report lost these rows).
+    let mut v = Vec::new();
+    let column = [
+        ("818 - Tear Down and Clean Up", 145.0),
+        ("07/02/2026", 151.0),
+        ("Total 818 - Tear Down and Clean", 145.0),
+        ("Unbillable:903 Shipping/Receivin", 145.0),
+        ("06/30/2026", 151.0),
+        ("07/02/2026", 151.0),
+        ("Total Unbillable:903 Shipping/Rece", 145.0),
+        ("Total W.F. Wells, Inc.:26-9949", 145.0),
+    ];
+    for (l, (text, x)) in column.iter().enumerate() {
+        let y = 100.0 + 10.0 * l as f32;
+        word(&mut v, text, *x, y, 6.0);
+        if text.starts_with('0') {
+            word(&mut v, "Aaron R Eichholz", 245.0, y, 6.0);
+            word(&mut v, "Not Billable", 380.0, y, 6.0);
+        }
+        // Every entry and total has its hours in the last column, a line's width away.
+        if text.starts_with('0') || text.starts_with("Total") {
+            word(&mut v, "1:00", 480.0, y, 6.0);
+        }
+    }
+    let t = layout(v).plain_text();
+    let entries: Vec<&str> = t.lines().filter(|l| l.contains("Aaron R Eichholz Not Billable")).map(|l| l.split(' ').next().unwrap_or("")).collect();
+    assert_eq!(entries, ["07/02/2026", "06/30/2026", "07/02/2026"], "{t}");
+    assert!(t.lines().any(|l| l == "818 - Tear Down and Clean Up"), "{t}");
+    // Narrow columns of prose: 26 letters a line, 15.6 heights, narrower than a cell may be. Their
+    // lines fill their column, so they are no cells and the page keeps its columns (review on #8548,
+    // seven public pages whose lines run 13.3 to 15.7 heights read across).
+    let mut v = Vec::new();
+    for (x, name) in [(10.0, "left"), (200.0, "mid"), (390.0, "right")] {
+        for l in 0..3 {
+            word(&mut v, &format!("{name}{l}{}", "x".repeat(25 - name.len())), x, 100.0 + 12.0 * l as f32, 6.0);
+        }
+    }
+    let t = layout(v).plain_text();
+    assert_eq!(t.lines().count(), 9, "{t}");
+    assert!(t.starts_with("left0xxxxxxxxxxxxxxxxxxxxx\nleft1xxxxxxxxxxxxxxxxxxxxx\nleft2xxxxxxxxxxxxxxxxxxxxx\nmid0"), "{t}");
+    // Two of the three paragraphs end on the same baseline with a short last line (22 letters,
+    // 13.2 heights, under a wide line of their own paragraph): not a table row (review on #8534).
+    let mut v = Vec::new();
+    for (c, (x, name)) in [(10.0, "left"), (200.0, "mid"), (390.0, "right")].iter().enumerate() {
+        for l in 0..3 {
+            let letters = if c < 2 && l == 2 { 21 } else { 27 };
+            word(&mut v, &format!("{name}{l}{}", "x".repeat(letters - name.len())), *x, 100.0 + 12.0 * l as f32, 6.0);
+        }
+    }
+    let t = layout(v).plain_text();
+    assert_eq!(t.lines().count(), 9, "{t}");
+    assert!(t.starts_with("left0xxxxxxxxxxxxxxxxxxxxxxx\nleft1xxxxxxxxxxxxxxxxxxxxxxx\nleft2xxxxxxxxxxxxxxxxx\nmid0"), "{t}");
+    // A barcode drawn with a font beside two columns of short words, one on each of its rows: the
+    // code's rows join no chain, so two words on a baseline are no row and the columns stay
+    // columns, read before the code (review on #8534).
+    let mut v = Vec::new();
+    for r in 0..4 {
+        let y = 100.0 + 10.0 * r as f32;
+        word(&mut v, "########", 10.0, y, 6.0);
+        word(&mut v, &format!("Ab{r}"), 100.0, y, 6.0);
+        word(&mut v, &format!("Cd{r}"), 160.0, y, 6.0);
+    }
+    assert_eq!(layout(v).plain_text(), "Ab0\nAb1\nAb2\nAb3\nCd0\nCd1\nCd2\nCd3\n########\n########\n########\n########");
+    // A quote's line number sits under a full-width rule of underscores, like a paragraph's short
+    // last line, and the second line of the description stacks under it; its row holds plain cells
+    // too (the quantity), so it is a cell all the same and leaves that block to read with its row
+    // (two corpus quotes; the prices far to the right are a chain of their own).
+    let mut v = Vec::new();
+    word(&mut v, &"_".repeat(80), 20.0, 100.0, 6.0);
+    word(&mut v, "1", 26.0, 118.0, 6.0);
+    word(&mut v, "2.00", 70.0, 118.0, 6.0);
+    word(&mut v, &format!("LNG 00205600 2-1/2 RD CF C1018{}", "x".repeat(5)), 130.0, 118.0, 6.0);
+    word(&mut v, "150.50", 440.0, 118.0, 6.0);
+    word(&mut v, "12 FT", 250.0, 128.0, 6.0);
+    let t = layout(v).plain_text();
+    assert!(t.lines().any(|l| l == "1 2.00 LNG 00205600 2-1/2 RD CF C1018xxxxx"), "{t}");
+}
+
 #[test]
 fn short_doubled_word_at_same_origin_does_not_interleave() {
     let ops = "BT /F1 12 Tf 50 Tz 1 0 0 1 100 200 Tm (world) Tj ET\n".repeat(2);
