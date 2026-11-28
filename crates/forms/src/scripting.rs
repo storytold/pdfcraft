@@ -103,6 +103,12 @@ pub trait Scripts {
     ) -> Option<ScriptResult> {
         None
     }
+
+    /// A value a script set on another field that the field does not take (`why`), such as text
+    /// longer than its `/MaxLen`: the field keeps its value, and this says so (on the console).
+    fn refused(&mut self, why: &str) {
+        let _ = why;
+    }
 }
 
 /// No script engine (or JavaScript turned off): scripts change nothing.
@@ -252,7 +258,10 @@ pub(crate) fn formatted_in_english(doc: &Document, f: &Field, value: &str, scrip
 
 /// Apply script changes to other fields (values written without re-running their scripts;
 /// read-only, required and visibility as flags; button captions). `except` is the event's own
-/// field, whose value the event sets.
+/// field, whose value the event sets. A value the field does not take (text longer than its
+/// `/MaxLen`, ISO 32000-2 §12.7.5.3 Table 232, or an option it doesn't have) is refused as typing
+/// it is: the field keeps its value, `scripts` is told why, and the script's other changes still
+/// apply.
 pub(crate) fn apply_changes(
     doc: &mut Document,
     changes: &[FieldChange],
@@ -311,9 +320,16 @@ pub(crate) fn apply_changes(
                 let mut tmp = f.clone();
                 tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
                 tmp.actions = Default::default();
-                crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
-                if c.formatted {
-                    crate::redraw_calculated_value(doc, f, v, scripts)?;
+                // `write_value` refuses a value before writing anything, so a refused one leaves
+                // the field as it was (and there is no new value to redraw).
+                match crate::write_value(doc, &tmp, &value, &mut NoScripts) {
+                    Ok(()) => {
+                        if c.formatted {
+                            crate::redraw_calculated_value(doc, f, v, scripts)?;
+                        }
+                    }
+                    Err(FormError::Invalid(why)) => scripts.refused(&why),
+                    Err(e) => return Err(e),
                 }
             }
         }

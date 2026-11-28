@@ -377,3 +377,34 @@ fn focus_on_a_field_sharing_a_name_runs_that_fields_script() {
     assert!(s.field_focus_target(id, "dup", Some(second), 0, FieldFocus::Enter).unwrap());
     assert_eq!(log(&s, id), "second;");
 }
+
+/// Document-level scripts run once when the document also has an open action: they ran as the
+/// document was prepared, and the open action then runs in that realm without running them again.
+#[test]
+fn document_scripts_run_once_before_the_open_action() {
+    let bytes = form(
+        "/OpenAction 6 0 R /Names << /JavaScript << /Names [(init) 7 0 R] >> >>",
+        &[
+            "<< /S /JavaScript /JS (getField\\('log'\\).value = String\\(inits\\);) >>",
+            "<< /S /JavaScript /JS (var inits = \\(typeof inits === 'number' ? inits : 0\\) + 1;) >>",
+        ],
+    );
+    let mut s = Session::new();
+    let id = s.open("init.pdf", None, Arc::new(bytes), None).unwrap();
+    assert!(s.take_js_output(id).errors.is_empty());
+    assert_eq!(log(&s, id), "1");
+}
+
+/// Without an open action, document-level scripts that ran as the document was prepared don't
+/// run again when it is registered.
+#[test]
+fn document_scripts_run_once_without_an_open_action() {
+    let bytes = form(
+        "/Names << /JavaScript << /Names [(init) 6 0 R] >> >>",
+        &["<< /S /JavaScript /JS (var inits = \\(typeof inits === 'number' ? inits : 0\\) + 1;) >>"],
+    );
+    let mut s = Session::new();
+    let id = s.open("init.pdf", None, Arc::new(bytes), None).unwrap();
+    assert!(s.take_js_output(id).errors.is_empty());
+    assert_eq!(s.run_javascript(id, "inits;", None).unwrap().result.as_deref(), Some("1"));
+}

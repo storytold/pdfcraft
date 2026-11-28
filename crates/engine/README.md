@@ -24,6 +24,16 @@ field actions and XFA events can still show messages; ordinary PDFs, static XFA 
 without an active layout keep their document scripts. Converting XFA to a static form and
 undoing that conversion switches the context with the document state.
 
+As a document opens, its document-level scripts run once (ISO 32000-2 §12.6.4.17), in the script
+realm the document then keeps for its field, button and console scripts, unless JavaScript
+is off (Preferences ▸ JavaScript, `Session::set_javascript`, the `js_enabled` tool). They run
+unasked from a file that may be hostile, so they and the calculations they start share a
+3-second wall-clock limit (past it the scripts are stopped and nothing they did applies), and
+what they ask for that a person should choose (a link, a submission, printing, saving, an
+attached file) is noted on the console instead of carried out. The fields they change or reset
+are a revision in memory: opening writes nothing to disk, and the document does not count as
+edited. Script memory is not bounded beyond boa's own limits.
+
 ## The editing model
 
 Each open document holds a `pdfcraft_cos::Document`: the object graph plus a copy-on-write overlay.
