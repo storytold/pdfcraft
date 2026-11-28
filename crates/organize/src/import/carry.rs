@@ -36,28 +36,28 @@ fn write_attachments(dst: &mut Document, entries: &mut [(Vec<u8>, Object)], uniq
     if entries.is_empty() {
         return Ok(());
     }
-    // Names are compared and numbered as text: a key written as UTF-16 (a name with an accent
-    // or Chinese letters) must not get ASCII bytes appended to it.
+    // Names are compared and numbered as text, and a renamed key keeps the encoding it came in:
+    // " (2)" is appended as UTF-16 to a UTF-16 key (either byte order) and as bytes to a
+    // PDFDocEncoding one, so a name with an accent or Chinese letters never gets ASCII bytes
+    // appended to it and the rest of the key stays byte for byte as the file wrote it.
     if uniquify {
-        let reserved: std::collections::HashSet<String> =
-            entries.iter().map(|(k, _)| pdfcraft_cos::PdfString::literal(k.clone()).to_text()).collect();
+        let reserved: std::collections::HashSet<String> = entries.iter().map(|(k, _)| key_text(k)).collect();
         let mut seen = std::collections::HashSet::new();
         for (k, _) in entries.iter_mut() {
-            let base = pdfcraft_cos::PdfString::literal(k.clone()).to_text();
-            let mut text = base.clone();
+            let base = key_text(k);
+            if seen.insert(base.clone()) {
+                continue;
+            }
             let mut n = 2;
-            if !seen.insert(text.clone()) {
-                loop {
-                    text = format!("{base} ({n})");
-                    n += 1;
-                    if !reserved.contains(&text) && seen.insert(text.clone()) {
-                        break;
-                    }
+            let suffix = loop {
+                let suffix = format!(" ({n})");
+                n += 1;
+                let text = format!("{base}{suffix}");
+                if !reserved.contains(&text) && seen.insert(text) {
+                    break suffix;
                 }
-            }
-            if text != base {
-                *k = pdfcraft_cos::PdfString::text(&text).bytes;
-            }
+            };
+            append_in_encoding(k, &suffix);
         }
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -256,6 +256,36 @@ pub(super) fn add_outline(doc: &mut Document, marks: &[Mark]) -> Result<(), Orga
     Ok(())
 }
 
+/// A name-tree key as text: UTF-16 with either byte-order mark, else PDFDocEncoding.
+fn key_text(key: &[u8]) -> String {
+    match key {
+        [0xff, 0xfe, rest @ ..] => {
+            let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+            String::from_utf16_lossy(&units)
+        }
+        _ => pdfcraft_cos::PdfString::literal(key.to_vec()).to_text(),
+    }
+}
+
+/// Appends `suffix` (ASCII) to `key` in the key's own encoding.
+fn append_in_encoding(key: &mut Vec<u8>, suffix: &str) {
+    match key.get(..2) {
+        Some([0xfe, 0xff]) | Some([0xff, 0xfe]) => {
+            // A leftover last byte is not a unit (readers leave it out when decoding). Drop it
+            // so the suffix stays aligned, then append in the key's byte order.
+            if key.len() % 2 == 1 {
+                key.pop();
+            }
+            if key[0] == 0xfe {
+                key.extend(suffix.encode_utf16().flat_map(u16::to_be_bytes));
+            } else {
+                key.extend(suffix.encode_utf16().flat_map(u16::to_le_bytes));
+            }
+        }
+        _ => key.extend_from_slice(suffix.as_bytes()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -277,6 +307,26 @@ mod tests {
         }
         out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
         Document::open(Arc::new(out)).expect("opens")
+    }
+
+    #[test]
+    fn set_attachments_renames_a_truncated_utf16_key_without_misaligning_the_suffix() {
+        // A UTF-16 "A" with a leftover trailing byte: to_text ignores that byte, and a
+        // byte-preserving append of " (2)" would pair it with the suffix and store the wrong name.
+        let bodies = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+        ];
+        for (order, truncated) in [("BE", [0xfe, 0xff, 0x00, 0x41, 0x00].as_slice()), ("LE", [0xff, 0xfe, 0x41, 0x00, 0x00].as_slice())] {
+            let mut doc = build(&bodies);
+            set_attachments(&mut doc, vec![(truncated.to_vec(), Object::Null), (truncated.to_vec(), Object::Null)]).unwrap();
+            let entries = crate::attachments::entries(&doc);
+            let names: Vec<String> = entries.iter().map(|(k, _)| key_text(k)).collect();
+            assert_eq!(names, ["A", "A (2)"], "{order}");
+            let renamed = entries.iter().map(|(k, _)| k).find(|k| key_text(k) == "A (2)").expect("{order}: renamed key");
+            assert_eq!(renamed.len() % 2, 0, "{order}: the renamed key is a complete UTF-16 string");
+        }
     }
 
     #[test]
