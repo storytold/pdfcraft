@@ -613,39 +613,88 @@ pub fn move_annotation(doc: &mut Document, page: usize, index: usize, dx: f64, d
     }
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
-    let shift = |o: &Object, every: bool| -> Option<Object> {
-        let a = o.as_array()?;
-        Some(Object::Array(
-            a.iter()
-                .enumerate()
-                .map(|(i, v)| match v.as_f64() {
-                    Some(x) if every || i < 4 => Object::Real(x + if i % 2 == 0 { dx } else { dy }),
-                    _ => v.clone(),
-                })
-                .collect(),
-        ))
-    };
-    let popup = annot_dict(doc, r).reference(b"Popup");
-    doc.update_dict(r, |d| {
-        for (k, every) in [(&b"Rect"[..], false), (b"QuadPoints", true), (b"L", false), (b"CL", true), (b"Vertices", true)] {
-            if let Some(v) = d.get(k).and_then(|o| shift(o, every)) {
-                d.set(k.to_vec(), v);
+    // Geometry may be indirect (`/Rect 5 0 R` is valid): resolve it first and write back a direct
+    // array, so a source object shared with other annotations is left as it was. `every` moves
+    // every number; otherwise only the four rectangle numbers move and anything after them stays.
+    let shift = |doc: &Document, a: &[Object], every: bool| -> Option<Object> {
+        let mut out = Vec::with_capacity(a.len());
+        for (i, v) in a.iter().enumerate() {
+            if every || i < 4 {
+                let x = doc.resolve(v).as_f64()?;
+                out.push(Object::Real(x + if i % 2 == 0 { dx } else { dy }));
+            } else {
+                out.push(v.clone());
             }
         }
-        if let Some(Object::Array(list)) = d.get(b"InkList").cloned() {
-            let moved = list.iter().map(|s| shift(s, true).unwrap_or_else(|| s.clone())).collect();
-            d.set(b"InkList".to_vec(), Object::Array(moved));
+        Some(Object::Array(out))
+    };
+    // Geometry that is there but cannot be read as a list of numbers refuses the move before
+    // anything is written: shifting the rest and reporting success would leave the comment behind.
+    // A null entry is absent (ISO 32000-2 §7.3.9); a reference to no object is not, so a dangling
+    // `/Rect 5 0 R` is reported rather than skipped.
+    let broken = |what: &str| AnnotError::Invalid(format!("{what} is not a list of numbers"));
+    let annot = annot_dict(doc, r);
+    let popup = annot.reference(b"Popup");
+    let mut moved: Vec<(&[u8], Object)> = Vec::new();
+    for (k, name, every) in [
+        (&b"Rect"[..], "the comment's /Rect", false),
+        (b"QuadPoints", "the comment's /QuadPoints", true),
+        (b"L", "the comment's /L", false),
+        (b"CL", "the comment's /CL", true),
+        (b"Vertices", "the comment's /Vertices", true),
+    ] {
+        let Some(o) = annot.get(k) else { continue };
+        if matches!(o, Object::Null) {
+            continue;
+        }
+        let resolved = doc.resolve(o);
+        let Some(a) = resolved.as_array() else { return Err(broken(name)) };
+        let Some(v) = shift(doc, a, every) else { return Err(broken(name)) };
+        moved.push((k, v));
+    }
+    if let Some(list) = annot.get(b"InkList")
+        && !matches!(list, Object::Null)
+    {
+        let resolved = doc.resolve(list);
+        let Some(list) = resolved.as_array() else { return Err(broken("the comment's /InkList")) };
+        // Each stroke is copied into the comment's own array, so a file that lists one large
+        // stroke again and again must stay inside the point budget the rest of the crate uses for
+        // stored drawings: a shared array is charged every time it is listed, before it is read.
+        let too_many = || AnnotError::Invalid(format!("the drawing has more than {MAX_STORED_INK_POINTS} points"));
+        let mut points = 0usize;
+        let mut strokes = Vec::with_capacity(list.len());
+        for s in list {
+            let stroke = doc.resolve(s);
+            let Some(a) = stroke.as_array() else { return Err(broken("a stroke of the comment's /InkList")) };
+            points = points.saturating_add(a.len() / 2);
+            if points > MAX_STORED_INK_POINTS {
+                return Err(too_many());
+            }
+            let Some(v) = shift(doc, a, true) else { return Err(broken("a stroke of the comment's /InkList")) };
+            strokes.push(v);
+        }
+        moved.push((b"InkList", Object::Array(strokes)));
+    }
+    // The pop-up's `/Rect` moves with the comment. Read and check it before either dictionary is
+    // updated, so a broken one refuses the whole move.
+    let mut popup_rect = None;
+    if let Some(p) = popup
+        && let Some(rect) = doc.get(p).as_dict().and_then(|pd| pd.get(b"Rect").cloned())
+        && !matches!(rect, Object::Null)
+    {
+        let resolved = doc.resolve(&rect);
+        let Some(a) = resolved.as_array() else { return Err(broken("the comment's pop-up /Rect")) };
+        let Some(v) = shift(doc, a, false) else { return Err(broken("the comment's pop-up /Rect")) };
+        popup_rect = Some((p, v));
+    }
+    doc.update_dict(r, |d| {
+        for (k, v) in moved {
+            d.set(k.to_vec(), v);
         }
         touch(d, meta);
     })?;
-    if let Some(p) = popup
-        && doc.get(p).as_dict().is_some()
-    {
-        doc.update_dict(p, |d| {
-            if let Some(v) = d.get(b"Rect").and_then(|o| shift(o, false)) {
-                d.set(b"Rect".to_vec(), v);
-            }
-        })?;
+    if let Some((p, v)) = popup_rect {
+        doc.update_dict(p, |d| d.set(b"Rect".to_vec(), v))?;
     }
     Ok(())
 }
