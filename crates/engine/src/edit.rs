@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::{
     AddedContent, AddedText, Background, BorderShape, BoxSpec, EditError, FieldProps, FieldValue, FillMark, Hairlines, HeaderFooter, Hidden,
     ImageEdit, InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget,
-    PageBox, PrinterMarks, Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image,
+    PageBox, PrinterMarks, Protection, ReviewState, Rgb, ScaleRequest, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image,
     decode_data_file, embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, strip_xfa,
     unrestricted, xfa, xfa_after_data_change,
 };
@@ -72,6 +72,11 @@ pub enum Edit {
         pages: Vec<usize>,
         which: PageBox,
         spec: BoxSpec,
+    },
+    /// Scale the content of `pages` to a new page size, to fit inside it or to fill it.
+    ScalePages {
+        pages: Vec<usize>,
+        request: ScaleRequest,
     },
     /// Set or remove the page transition and display time of pages (ISO 32000-2 §12.4.4),
     /// Organize ▸ Page Transitions.

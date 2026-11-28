@@ -1244,6 +1244,22 @@ pub fn tools() -> Vec<ToolDef> {
             &["doc"],
         )),
         t(
+            "page_scale",
+            "Scale pages to a size",
+            "Scale page contents to a new page size in points: fit (default) shrinks or enlarges the visible page to fit inside the size, centred; fill covers the size, and what overflows is clipped from view but stays in the PDF: it is not deleted or redacted. orientation match (default) turns the size to the page's own orientation as displayed; exact uses it as given. Comments, links, destinations and measuring scales move with the content; geospatial measures are left as they were and listed in repairs. Undoable.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "pages": pages("to scale (default: all)"),
+                "width": { "type": "number", "minimum": 1, "maximum": 14400 },
+                "height": { "type": "number", "minimum": 1, "maximum": 14400 },
+                "mode": { "type": "string", "enum": ["fit", "fill"] },
+                "orientation": { "type": "string", "enum": ["match", "exact"] },
+            }),
+            &["doc", "width", "height"],
+        )),
+        t(
             "doc_header_footer",
             "Add header and footer",
             "Add a header and/or footer to pages. Text boxes: header_left/center/right, footer_left/center/right. Tokens: <<1>> page number, <<n>> page count, <<1 of n>>, <<Page 1 of n>>, <<1/n>>, dates <<m/d/yyyy>> <<yyyy-mm-dd>> <<mmmm d, yyyy>> <<dd.mm.yyyy>> (and more), Bates <<Bates Number#6#1#PREFIX#SUFFIX>>. shrink: true scales the page content down evenly into the room the header and footer leave free, so they don't cover it. font: Helvetica (default), Times or Courier; Thai is drawn from PdfCraft's built-in Thai face beside it (a build without one refuses it). replace: true swaps out existing ones (Update). Undoable.",

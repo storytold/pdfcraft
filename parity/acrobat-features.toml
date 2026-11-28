@@ -3260,6 +3260,18 @@ evidence = []
 notes = ""
 
 [[feature]]
+id = "organize.scale-pages"
+title = "Scale page contents to a new size (fit or fill)"
+area = "D"
+tier = "P2"
+milestone = "M11"
+status = "partial"
+commands = []
+tools = ["page_scale"]
+evidence = ["crates/organize/src/scale_tests.rs::fit_shrinks_the_whole_page_inside_the_new_size_and_centres_it", "crates/organize/src/scale_tests.rs::destinations_to_a_scaled_page_move_wherever_they_are", "crates/automation/tests/it/automation.rs::scaling_pages_to_a_size_through_tools"]
+notes = "Headless only: the page_scale tool; no panel or command yet. Sizes are in points (no paper names). Content, fill patterns, comments, links, destinations and measuring scales move together; comment border widths and text sizes keep their size; geospatial measures are left as they were and reported in repairs. Content that pops more graphics states than it pushes can escape the scaling. Thumbnails are not rescaled."
+
+[[feature]]
 id = "organize.page-transitions"
 title = "Page transitions"
 area = "D"

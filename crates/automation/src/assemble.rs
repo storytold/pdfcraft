@@ -143,6 +143,33 @@ impl Automation {
         Ok(out)
     }
 
+    pub(crate) fn page_scale(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::{ScaleMode, ScaleOrientation, ScaleRequest};
+        let n = self.doc(a)?.info.pages.len();
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let width = a.opt_num("width")?.ok_or_else(|| Args::missing("width"))?;
+        let height = a.opt_num("height")?.ok_or_else(|| Args::missing("height"))?;
+        if !(1.0..=14400.0).contains(&width) || !(1.0..=14400.0).contains(&height) {
+            return Err(ToolError::InvalidArgs("width and height must be between 1 and 14400 points".into()));
+        }
+        let mode = match a.opt_str("mode")? {
+            None | Some("fit") => ScaleMode::Fit,
+            Some("fill") => ScaleMode::Fill,
+            Some(m) => return Err(ToolError::InvalidArgs(format!("unknown mode {m:?}"))),
+        };
+        let orientation = match a.opt_str("orientation")? {
+            None | Some("match") => ScaleOrientation::Match,
+            Some("exact") => ScaleOrientation::Exact,
+            Some(o) => return Err(ToolError::InvalidArgs(format!("unknown orientation {o:?}"))),
+        };
+        let mut out = self.apply(a, Edit::ScalePages { pages, request: ScaleRequest { width, height, mode, orientation } })?;
+        out["page_sizes"] = json!(self.doc(a)?.info.pages.iter().map(|p| [p.width, p.height]).collect::<Vec<_>>());
+        Ok(out)
+    }
+
     pub(crate) fn insert_blank(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let at = self.position(a, "at")?;

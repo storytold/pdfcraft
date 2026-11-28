@@ -3894,6 +3894,37 @@ fn page_duplicate_at_inserts_the_copies_there() {
 }
 
 #[test]
+fn scaling_pages_to_a_size_through_tools() {
+    let dir = workdir("scale");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let width = |a: &mut Automation, page: u64| {
+        let found = ok(a, "text_find", json!({ "doc": doc, "query": format!("Page {page}") }));
+        let r = found["matches"][0]["rects"][0].as_array().unwrap().clone();
+        r[2].as_f64().unwrap() - r[0].as_f64().unwrap()
+    };
+    let before = width(&mut a, 1);
+    let r = ok(&mut a, "page_scale", json!({ "doc": doc, "pages": [1], "width": 400, "height": 600 }));
+    assert_eq!(r["page_sizes"][0], json!([400.0, 600.0]), "the page takes the size asked for");
+    assert_eq!(r["page_sizes"][1], json!([200.0, 300.0]), "other pages are untouched");
+    assert!(width(&mut a, 1) > before * 1.5, "the text grows with the page");
+    assert_eq!(page_text(&mut a, doc)[0], "Page 1");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert!((width(&mut a, 1) - before).abs() < 0.5, "undo puts it back");
+    let r = ok(&mut a, "page_scale", json!({ "doc": doc, "width": 600, "height": 400 }));
+    assert_eq!(r["page_sizes"][2], json!([400.0, 600.0]), "the size turns to the page's own orientation");
+    let r = ok(&mut a, "page_scale", json!({ "doc": doc, "pages": [2], "width": 300, "height": 200, "orientation": "exact", "mode": "fill" }));
+    assert_eq!(r["page_sizes"][1], json!([300.0, 200.0]));
+    for bad in [
+        json!({ "doc": doc, "width": 0, "height": 100 }),
+        json!({ "doc": doc, "width": 100 }),
+        json!({ "doc": doc, "width": 100, "height": 100, "mode": "stretch" }),
+    ] {
+        assert!(matches!(a.call("page_scale", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+}
+
+#[test]
 fn duplicating_and_cropping_through_tools() {
     let dir = workdir("boxes");
     let mut a = auto(&dir);
