@@ -576,6 +576,9 @@ pub struct PdfCraftApp {
     pub js_console: js_ui::JsConsole,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) script_pending: Option<script_dialog::Pending>,
+    /// What is left of a push button's action chain while its script step runs (#8104).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) button_chain: Option<canvas::ButtonChain>,
     /// The JavaScript dialog open (the console, the document's scripts), if any.
     pub js_dialog: Option<js_dialogs::JsDialog>,
     pub a11y: a11y_ui::A11yState,

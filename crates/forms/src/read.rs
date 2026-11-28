@@ -21,13 +21,16 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
     // The action and those its `/Next` names, in the order they run (ISO 32000-2 §12.6.2): each
     // action, then its `/Next` (one dictionary or an array), depth first. A button that hides
     // itself and shows its next state is two Hide actions chained this way (#8104).
+    // At most MAX_CHAINED_ACTIONS entries are taken from `pending`, whatever they turn out to
+    // be (an action PdfCraft doesn't run, a repeat): what more it holds is never reached.
     let mut steps = Vec::new();
     let mut pending = vec![action];
     let mut seen = std::collections::HashSet::new();
-    while let Some(next) = pending.pop() {
-        if steps.len() >= MAX_CHAINED_ACTIONS {
-            break;
-        }
+    let mut budget = MAX_CHAINED_ACTIONS;
+    while budget > 0
+        && let Some(next) = pending.pop()
+    {
+        budget -= 1;
         // An action reached twice (a /Next cycle) runs once.
         if let Object::Ref(r) = &next
             && !seen.insert(*r)
@@ -40,9 +43,13 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
             steps.push(step);
         }
         match a.get(b"Next").map(|n| doc.resolve(n)).as_deref() {
-            Some(Object::Array(items)) => pending.extend(items.iter().rev().take(MAX_CHAINED_ACTIONS).cloned()),
+            Some(Object::Array(items)) => pending.extend(items.iter().take(budget).rev().cloned()),
             Some(_) => pending.extend(a.get(b"Next").cloned()),
             None => {}
+        }
+        // The bottom of the stack runs last: past the budget, it never runs.
+        if pending.len() > budget {
+            pending.drain(..pending.len() - budget);
         }
     }
     match steps.len() {

@@ -3409,6 +3409,27 @@ fn push_buttons_read_chained_actions_in_order() {
     doc.set(first, Object::Dict(hide("x", true, Some(Object::Ref(second)))));
     doc.update_dict(go, |d| d.set(b"A".to_vec(), Object::Ref(first))).unwrap();
     assert_eq!(field(&fields(&doc), "go").button, Some(af::ButtonAction::Chain(vec![step("x", true), step("y", false)])));
+    // A /Next array longer than the bound keeps its first actions, in their order.
+    let long: Vec<Object> = (0..300).map(|i| Object::Dict(hide(&format!("f{i}"), true, None))).collect();
+    let mut root = Dict::new();
+    root.set(b"S".to_vec(), Object::name("NoSuchAction"));
+    root.set(b"Next".to_vec(), Object::Array(long));
+    doc.update_dict(go, |d| d.set(b"A".to_vec(), Object::Dict(root))).unwrap();
+    let button = field(&fields(&doc), "go").button.clone();
+    let Some(af::ButtonAction::Chain(read)) = button else { panic!("a chain") };
+    assert_eq!(read.first(), Some(&step("f0", true)));
+    assert_eq!(read.last(), Some(&step("f254", true)), "the unsupported root counts against the bound");
+    // Actions PdfCraft doesn't run count against the bound too: a long run of them, then a Hide
+    // past it, reads nothing.
+    let mut tail = hide("late", true, None);
+    for _ in 0..300 {
+        let mut a = Dict::new();
+        a.set(b"S".to_vec(), Object::name("NoSuchAction"));
+        a.set(b"Next".to_vec(), Object::Dict(tail));
+        tail = a;
+    }
+    doc.update_dict(go, |d| d.set(b"A".to_vec(), Object::Dict(tail))).unwrap();
+    assert_eq!(field(&fields(&doc), "go").button, None);
 }
 
 #[test]

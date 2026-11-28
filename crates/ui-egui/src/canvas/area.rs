@@ -263,17 +263,65 @@ pub(super) fn run_button(
             app.run_button_script_target(ctx, id, name, Some(identity), &js);
         }
         // Each action runs in turn (#8104); what they change is one undo step, in their order.
+        // A script reads the document, so the steps before it go in first: it runs on what they
+        // made, and its own changes and the steps after it are undone apart from them.
         B::Chain(actions) => {
             let mut edits: Vec<pdfcraft_engine::Edit> = app.views[index].session.pending_edit.take().into_iter().collect();
-            for action in actions {
+            let mut actions = actions.into_iter();
+            while let Some(action) = actions.next() {
+                if !matches!(action, B::Script(_)) {
+                    run_button(app, ctx, index, name, identity, action);
+                    edits.extend(app.views[index].session.pending_edit.take());
+                    continue;
+                }
+                // The script commits what is queued before it reads the fields.
+                app.views[index].session.pending_edit = joined_edits(std::mem::take(&mut edits));
+                #[cfg(not(target_arch = "wasm32"))]
+                let idle = app.script_pending.is_none();
                 run_button(app, ctx, index, name, identity, action);
                 edits.extend(app.views[index].session.pending_edit.take());
+                // On a worker, the script finishes in a later frame; the rest of the chain runs
+                // then, on its result (an edit before that would make the result stale).
+                #[cfg(not(target_arch = "wasm32"))]
+                if idle && app.script_pending.is_some() {
+                    app.button_chain = Some(ButtonChain { id: app.views[index].id, name: name.to_owned(), identity, rest: actions.collect() });
+                    break;
+                }
             }
-            app.views[index].session.pending_edit = match edits.len() {
-                0 | 1 => edits.pop(),
-                _ => Some(pdfcraft_engine::Edit::Batch { label: "Button actions".into(), edits }),
-            };
+            app.views[index].session.pending_edit = joined_edits(edits);
         }
+    }
+}
+
+/// `edits` as one undo step: none, the one, or a batch of them in their order.
+fn joined_edits(mut edits: Vec<pdfcraft_engine::Edit>) -> Option<pdfcraft_engine::Edit> {
+    match edits.len() {
+        0 | 1 => edits.pop(),
+        _ => Some(pdfcraft_engine::Edit::Batch { label: "Button actions".into(), edits }),
+    }
+}
+
+/// The actions of a push button's chain after a script step that runs on a worker: they run when
+/// it has finished (#8104).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct ButtonChain {
+    id: pdfcraft_engine::DocId,
+    name: String,
+    identity: u64,
+    rest: Vec<pdfcraft_engine::form_scripts::ButtonAction>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PdfCraftApp {
+    /// Run the rest of the button chain that waited on the script that just finished in document
+    /// `id`. A chain waiting on another document's script, or one whose tab isn't active, is dropped.
+    pub(crate) fn continue_button_chain(&mut self, ctx: &egui::Context, id: pdfcraft_engine::DocId) {
+        let Some(chain) = self.button_chain.take() else { return };
+        if chain.id != id || chain.rest.is_empty() {
+            return;
+        }
+        let Some((index, _)) = self.active_ids().filter(|(_, active)| *active == id) else { return };
+        run_button(self, ctx, index, &chain.name, chain.identity, pdfcraft_engine::form_scripts::ButtonAction::Chain(chain.rest));
     }
 }
 

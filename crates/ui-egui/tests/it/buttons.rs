@@ -220,3 +220,66 @@ fn a_button_runs_its_chained_actions_in_order() {
     h.state_mut().session.undo(id).unwrap();
     assert!(hidden(&h, 4) && !hidden(&h, 5), "one undo takes back both actions of a click");
 }
+
+/// One page: text fields "name" (Ada) and "notes", and a push button "go" whose action resets
+/// "name", then runs a script copying it into "notes", then hides "name" (#8104).
+fn script_chain_fixture() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada) /Rect [20 340 280 360] /P 3 0 R >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (notes) /Rect [20 300 280 320] /P 3 0 R >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (go) /Rect [20 260 100 280] /P 3 0 R \
+         /A << /S /ResetForm /Fields [(name)] /Next << /S /JavaScript \
+         /JS (this.getField\\(\"notes\"\\).value = \"after:\" + this.getField\\(\"name\"\\).value;) \
+         /Next << /S /Hide /T (name) >> >> >> >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// Field `name`'s value.
+fn value_of(h: &Harness<'static, PdfCraftApp>, name: &str) -> Vec<String> {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone()
+}
+
+/// #8104: a script in a button's chain runs on what the actions before it changed, and the
+/// actions after it run once it has finished.
+#[test]
+fn a_script_in_a_button_chain_sees_the_steps_before_it() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "chain.pdf", None, script_chain_fixture()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app
+        }
+    });
+    h.run_steps(6);
+    assert!(!hidden(&h, 4));
+    click_field(&mut h, "go");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    while std::time::Instant::now() < deadline && !hidden(&h, 4) {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+    assert_eq!(value_of(&h, "notes"), ["after:"], "the script read the field the reset before it had emptied");
+    assert!(value_of(&h, "name").iter().all(String::is_empty));
+    assert!(hidden(&h, 4), "the Hide after the script ran");
+}

@@ -52,6 +52,8 @@ mod xform;
 mod zoom;
 pub(super) mod zoom_snap;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use area::ButtonChain;
 pub(crate) use area::signature_badges;
 pub(crate) use area::signature_states_changed;
 use area::{run_button, set_layers};
