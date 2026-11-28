@@ -168,7 +168,10 @@ impl Automation {
         let (Some(page), Some(index)) = (a.opt_int("page")?, a.opt_int("index")?) else {
             return Err(ToolError::InvalidArgs("pass the comment's id, or page and index".into()));
         };
-        let (page, index) = ((page.max(1) - 1) as usize, (index.max(1) - 1) as usize);
+        let page =
+            usize::try_from(page).ok().and_then(|n| n.checked_sub(1)).ok_or_else(|| ToolError::InvalidArgs("page must be 1 or more".into()))?;
+        let index =
+            usize::try_from(index).ok().and_then(|n| n.checked_sub(1)).ok_or_else(|| ToolError::InvalidArgs("index must be 1 or more".into()))?;
         if !all.iter().any(|c| c.page == page && c.index == index) {
             return Err(failed(format!("there is no comment {} on page {} (see comment_list)", index + 1, page + 1)));
         }
