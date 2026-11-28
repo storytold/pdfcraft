@@ -501,12 +501,16 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             let gap = last.map_or(0.0, |(_, pen)| pen.continues(&s, 0.0).1);
             let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ');
             if spaced {
+                if l.characters.len() < 131_072 {
+                    l.characters.push(super::caret::CharacterPosition { ch: ' ', left: l.rect[2], right: s.start_x });
+                }
                 l.text.push(' ');
             }
             l.text.push_str(&s.text);
             l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
             l.frame = union(l.frame, s.frame);
             l.ink.extend(s.ink.iter().copied());
+            l.characters.extend(s.characters.iter().take(131_072usize.saturating_sub(l.characters.len())).cloned());
             l.runs.push((s.text.clone(), l.ink.len(), spaced));
             l.ops.push(s.op);
             l.ops.extend(s.extra_ops.iter().copied());
@@ -525,6 +529,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 rect: s.rect,
                 frame: s.frame,
                 ink: s.ink.clone(),
+                characters: s.characters.clone(),
                 font: String::from_utf8_lossy(&s.font).into_owned(),
                 base_font: s.base_font.clone(),
                 size: s.size,
@@ -574,6 +579,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
         // The runs hold the text in drawing order, which no longer reads as the line does.
         if l.text != shown {
             l.runs.clear();
+            l.characters.clear();
         }
     }
     // Lines of only spaces aren't editable text.
@@ -622,12 +628,16 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
         let gap = last.map_or(0.0, |pen| pen.continues(&s, 0.0).1);
         let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ');
         if spaced {
+            if l.characters.len() < 131_072 {
+                l.characters.push(super::caret::CharacterPosition { ch: ' ', left: l.rect[2], right: s.start_x });
+            }
             l.text.push(' ');
         }
         l.text.push_str(&s.text);
         l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
         l.frame = union(l.frame, s.frame);
         l.ink.extend(s.ink.iter().copied());
+        l.characters.extend(s.characters.iter().take(131_072usize.saturating_sub(l.characters.len())).cloned());
         l.runs.push((s.text.clone(), l.ink.len(), spaced));
         l.ops.push(s.op);
         l.ops.extend(s.extra_ops.iter().copied());
@@ -645,6 +655,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             rect: s.rect,
             frame: s.frame,
             ink: s.ink.clone(),
+            characters: s.characters.clone(),
             font: String::from_utf8_lossy(&s.font).into_owned(),
             base_font: s.base_font.clone(),
             size: s.size,
@@ -838,7 +849,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         let mut forms = invoked.into_iter().peekable();
         for s in shown {
             while let Some((i, name, ts)) = forms.next_if(|f| f.0 < s.op) {
-                enter(w, resources, &name, ts, &mut carry.text_left, carry.containers.clone(), [carry.at.as_slice(), &[i]].concat())?;
+                enter(w, resources, &name, ts, carry, i)?;
                 // Text after a form starts a new line.
                 last = None;
             }
@@ -856,20 +867,14 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             add_shown(&mut w.lines, &mut last, s, si);
         }
         for (i, name, ts) in forms {
-            enter(w, resources, &name, ts, &mut carry.text_left, carry.containers.clone(), [carry.at.as_slice(), &[i]].concat())?;
+            enter(w, resources, &name, ts, carry, i)?;
         }
         Ok(())
     }
-    /// `text_left`: the page's text budget, shared with the forms the page draws.
-    fn enter(
-        w: &mut Walk,
-        resources: &Dict,
-        name: &[u8],
-        ts: Ts,
-        text_left: &mut usize,
-        containers: std::rc::Rc<super::containers::Containers>,
-        at: Vec<usize>,
-    ) -> Result<(), EditError> {
+    /// `parent`: the state of the stream whose `Do` at operator `at` draws the form. The form
+    /// shares its text and character budgets, shared with every form the page draws, and its
+    /// containers, and adds `at` to the path of `Do`s that leads to it.
+    fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts, parent: &mut Carry, at: usize) -> Result<(), EditError> {
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
         let ops = parse(&form.data).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
@@ -884,10 +889,11 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             stack: Vec::new(),
             marked: Vec::new(),
             layers: Vec::new(),
-            text_left: *text_left,
+            text_left: parent.text_left,
+            characters_left: parent.characters_left,
             gap_space: false,
-            containers,
-            at,
+            containers: parent.containers.clone(),
+            at: [parent.at.as_slice(), &[at]].concat(),
         };
         let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);
@@ -895,7 +901,8 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             w.path.push(r);
         }
         walk(w, &ops, form.resources(resources), &mut carry, &|_| stream)?;
-        *text_left = carry.text_left;
+        parent.text_left = carry.text_left;
+        parent.characters_left = carry.characters_left;
         if form.obj.is_some() {
             w.path.pop();
         }
@@ -923,6 +930,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         l.text = crate::indic::to_logical(&l.text);
         if l.text != shown {
             l.runs.clear();
+            l.characters.clear();
         }
     }
     lines.retain(|l| !l.text.trim().is_empty());

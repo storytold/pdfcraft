@@ -102,6 +102,7 @@ pub struct TextEditLayout {
     pub source_rect: [f64; 4],
     pub draft_rect: Option<[f64; 4]>,
     pub overflow: bool,
+    pub rows: Vec<super::caret::DraftRow>,
 }
 
 pub fn text_edit_layout(doc: &Document, page: usize, block: usize, text: &str, style: &BlockStyle) -> Result<TextEditLayout, EditError> {
@@ -120,27 +121,56 @@ pub(crate) fn layout_draft(
     style: &BlockStyle,
 ) -> Result<TextEditLayout, EditError> {
     if text == source.editor_text && *style == BlockStyle::default() {
-        return Ok(TextEditLayout { source_rect: source.rect, draft_rect: Some(source.rect), overflow: false });
+        let selected: Vec<_> = source.lines.iter().filter_map(|i| lines.get(*i).cloned()).collect();
+        let rows = super::caret::draft_rows(text, &selected, source.rect, source.size * 1.5);
+        return Ok(TextEditLayout { source_rect: source.rect, draft_rect: Some(source.rect), overflow: false, rows });
     }
     // Subtract the untouched runs by value, rather than by operator offsets: a rewrite may
     // split BT/ET or add font resources. A multiset also handles coincident repeated text.
-    let key =
-        |line: &TextLine| (line.text.clone(), line.font.clone(), line.rect.map(f64::to_bits), line.size.to_bits(), line.color.map(f64::to_bits));
-    let mut untouched = std::collections::BTreeMap::new();
+    let key = |line: &TextLine| (line.text.clone(), line.font.clone(), line.size.to_bits(), line.color.map(f64::to_bits));
+    // Each key keeps its rectangles in page order, with a cursor past the ones already matched:
+    // the rewrite draws untouched runs in the same order, so matching usually costs one comparison.
+    let mut untouched: std::collections::BTreeMap<_, (usize, Vec<Option<[f64; 4]>>)> = std::collections::BTreeMap::new();
     for (index, line) in lines.iter().enumerate() {
         if !source.lines.contains(&index) {
-            *untouched.entry(key(line)).or_insert(0_usize) += 1;
+            untouched.entry(key(line)).or_default().1.push(Some(line.rect));
         }
     }
     let mut draft = doc.clone();
     rewrite_block_from(&mut draft, page, lines.to_vec(), block, Some(text), style, MAX_TYPE3_GLYPHS)?;
     let mut rect: Option<[f64; 4]> = None;
+    let mut written = Vec::new();
+    // Repeated identical strings at many different positions must not make matching quadratic
+    // without a bound. Once the bound is spent, an unmatched run may be untouched page text, so
+    // the draft's bounds are unknown: report none, rather than unrelated text as the draft.
+    let mut comparisons = 1_000_000_usize;
     for line in text_lines(&draft, page)? {
-        if let Some(count) = untouched.get_mut(&key(&line))
-            && *count > 0
-        {
-            *count -= 1;
-            continue;
+        if let Some((start, rects)) = untouched.get_mut(&key(&line)) {
+            let mut found = None;
+            for (index, slot) in rects.iter().enumerate().skip(*start) {
+                let Some(left) = comparisons.checked_sub(1) else { break };
+                comparisons = left;
+                let Some(r) = slot else { continue };
+                // Restoring a text matrix during rewriting rounds its operands. Bitwise
+                // comparison mistakes unaffected paragraphs for draft text, invalidating all
+                // caret rows. This tolerance is far below a visible displacement in PDF points.
+                if r.iter().zip(line.rect).all(|(a, b)| (a - b).abs() <= 0.001) {
+                    found = Some(index);
+                    break;
+                }
+            }
+            if let Some(index) = found {
+                if let Some(slot) = rects.get_mut(index) {
+                    *slot = None;
+                }
+                while rects.get(*start).is_some_and(Option::is_none) {
+                    *start += 1;
+                }
+                continue;
+            }
+            if comparisons == 0 {
+                return Ok(TextEditLayout { source_rect: source.rect, draft_rect: None, overflow: false, rows: Vec::new() });
+            }
         }
         // Spaces typed after a row's last word are drawn but show nothing, so an upright row is
         // measured to the end of its last word: they don't make a draft overflow (#4199).
@@ -153,8 +183,11 @@ pub(crate) fn layout_draft(
             }
         }
         rect = Some(rect.map_or(r, |a| [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])]));
+        written.push(line);
     }
     let overflow = rect
         .is_some_and(|r| r[0] < source.rect[0] - 0.5 || r[1] < source.rect[1] - 0.5 || r[2] > source.rect[2] + 0.5 || r[3] > source.rect[3] + 0.5);
-    Ok(TextEditLayout { source_rect: source.rect, draft_rect: rect, overflow })
+    let leading = style.line_spacing.unwrap_or(1.5) * style.size.unwrap_or(source.size);
+    let rows = super::caret::draft_rows(text, &written, source.rect, leading);
+    Ok(TextEditLayout { source_rect: source.rect, draft_rect: rect, overflow, rows })
 }

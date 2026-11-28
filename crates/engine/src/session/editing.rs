@@ -9,7 +9,8 @@ use super::{
 use crate::{EditNotice, MarkKind, print_preview_layers};
 
 /// Add scan cover and ink to edits of invisible OCR text, returning no edit for an unchanged draft.
-fn prepare_ocr_text_edit(editor: &mut crate::history::Editor, info: &pdfcraft_render::DocInfo, edit: Edit) -> Option<Edit> {
+/// The inline editor's draft preview runs it too, so it shows what Apply writes.
+pub(crate) fn prepare_ocr_text_edit(editor: &crate::history::Editor, info: &pdfcraft_render::DocInfo, edit: Edit) -> Option<Edit> {
     // Rewriting an OCR word (invisible text over a scan) also hides the scanned word: cover it
     // in the paper's colour and draw the new text in the ink's.
     Some(match edit {

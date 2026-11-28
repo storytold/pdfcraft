@@ -16979,6 +16979,79 @@ fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
     }
 }
 
+#[test]
+fn draft_caret_geometry_keeps_pdf_widths_spacing_and_kerning() {
+    let doc = text_page("BT /F2 20 Tf 1 Tc 2 Tw 80 Tz 72 700 Td [(ab) 100 ( a)] TJ ET");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let layout = text::text_edit_layout(&doc, 0, 0, &blocks[0].editor_text, &BlockStyle::default()).unwrap();
+    assert_eq!(layout.rows.len(), 1);
+    let chars = &layout.rows[0].characters;
+    assert_eq!(chars.len(), blocks[0].editor_text.chars().count());
+    assert!((chars[0][0] - 72.0).abs() < 1e-6);
+    assert!((chars[0][1] - (72.0 + (10.0 + 1.0) * 0.8)).abs() < 1e-6);
+    assert!((chars[1][1] - (chars[1][0] + (10.4 + 1.0 - 2.0) * 0.8)).abs() < 1e-6);
+    assert!((layout.rows[0].baseline - lines[0].baseline()[1]).abs() < 1e-6);
+}
+
+#[test]
+fn draft_caret_ranges_use_utf8_and_refuse_reordered_or_rotated_text() {
+    let doc = text_page("BT /F1 12 Tf 72 700 Td (caf\\351) Tj ET");
+    let layout = text::text_edit_layout(&doc, 0, 0, "café", &BlockStyle::default()).unwrap();
+    assert_eq!(layout.rows[0].range, 0..5);
+    assert_eq!(layout.rows[0].characters.len(), 4);
+    for content in ["BT /F1 12 Tf 0 1 -1 0 72 700 Tm (abc) Tj ET", "/Span << /ActualText (xyz) >> BDC BT /F1 12 Tf 72 700 Td (abc) Tj ET EMC"] {
+        let doc = text_page(content);
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        let layout = text::text_edit_layout(&doc, 0, 0, &block.editor_text, &BlockStyle::default()).unwrap();
+        assert!(layout.rows.is_empty(), "ambiguous mapping must use the UI fallback");
+    }
+}
+
+#[test]
+fn draft_caret_geometry_excludes_untouched_fractional_text() {
+    let doc = text_page(
+        "BT /F1 12 Tf 72.123456789 780.123456789 Td (Caption) Tj 0 -80 Td (Edit this) Tj 0 -14 Td (text) Tj 0 -100 Td (Untouched paragraph) Tj ET",
+    );
+    let layout = text::text_edit_layout(&doc, 0, 1, "Edited this\ntext now", &BlockStyle::default()).unwrap();
+    assert!(!layout.rows.is_empty(), "untouched text must not invalidate draft caret positions");
+    assert!(layout.draft_rect.unwrap()[1] > 650.0);
+}
+
+#[test]
+fn draft_caret_geometry_refuses_actual_text_across_baselines() {
+    let doc = text_page("/Span << /ActualText (AB) >> BDC BT /F1 12 Tf 72 700 Td (A) Tj 0 -20 Td (B) Tj ET EMC");
+    let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+    let layout = text::text_edit_layout(&doc, 0, 0, &block.editor_text, &BlockStyle::default()).unwrap();
+    assert!(layout.rows.is_empty(), "one row can't hold glyphs from two baselines: {:?}", layout.rows);
+    // A same-baseline span (a ligature) keeps its geometry.
+    let doc = text_page("/Span << /ActualText (AB) >> BDC BT /F1 12 Tf 72 700 Td (A) Tj (B) Tj ET EMC");
+    let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+    let layout = text::text_edit_layout(&doc, 0, 0, &block.editor_text, &BlockStyle::default()).unwrap();
+    assert_eq!(layout.rows.len(), 1);
+    assert_eq!(layout.rows[0].characters.len(), 2);
+}
+
+#[test]
+fn many_repeated_untouched_lines_never_count_as_draft_text() {
+    // 2,000 identical untouched runs, drawn in the same order before and after the rewrite. Their
+    // matching must stay within its bound and never measure them as part of the draft.
+    let mut content = String::from("BT /F1 12 Tf 72 780 Td (Edit this heading) Tj ET\n");
+    for i in 0..2000 {
+        content.push_str(&format!("BT /F1 2 Tf {} {} Td (x) Tj ET\n", 72 + (i % 20) * 24, 700 - (i / 20) * 6));
+    }
+    let doc = text_page(&content);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().filter(|l| l.text == "x").count() >= 2000, "the scenario needs the repeated runs as lines");
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let index = blocks.iter().position(|b| b.editor_text == "Edit this heading").unwrap();
+    let layout = text::text_edit_layout(&doc, 0, index, "Edited", &BlockStyle::default()).unwrap();
+    assert!(!layout.overflow, "untouched text made a fitting edit overflow");
+    let draft = layout.draft_rect.unwrap();
+    assert!(draft[1] > 770.0, "draft bounds include untouched text: {draft:?}");
+    assert!(!layout.rows.is_empty());
+}
+
 /// The deleted image's payload survived a full save: the census could not prove it unused.
 fn payload_after_delete(doc: &mut Document, private: &[u8]) -> bool {
     images::change_image(doc, 0, 0, &images::ImageChange::Delete).unwrap();

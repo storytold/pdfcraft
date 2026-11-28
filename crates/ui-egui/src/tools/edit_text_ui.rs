@@ -17,9 +17,11 @@ use craft::behavior::{CanvasView, CursorIcon, PressPhase};
 use craft::draw::ui::transform::TransformBox;
 use craft::pages::ui::{PageBody, PlacedPage};
 use craft::text::ui::editor::{CaretLine, EditKind, EditorEnd, HostLine, HostRun, TextEditor, TextEditorHost, TextSelection};
+use craft::theme::variant::Tone;
 use craft::ui::canvas_controls::SelectionOutline;
 use craft::ui::contract::{Bind, Props as _, Show as _};
 use craft::ui::fonts::FontRef;
+use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::runtime::focus::FocusRequest;
 use egui::epaint::text::CharIndex;
 use egui::{Pos2, Rect, Vec2, pos2, vec2};
@@ -43,7 +45,7 @@ pub(crate) use image::{PictureMenu, delete_picture, picture_context, picture_con
 pub(crate) use layout::editor_font;
 #[cfg(test)]
 use layout::{DARK_EDITOR_FILL, contrast, editor_fill, editor_job};
-use layout::{color32, editor_galley, look_of, source_look};
+use layout::{color32, draft_galley, look_of, source_look, unseen};
 
 /// What an edit box shows text for: a page paragraph, or text added in this session.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -1065,12 +1067,18 @@ fn width_frame(
     Some(Edit::EditTextBlock { page, block, text: l.reflow_text.clone(), style })
 }
 
-/// The open paragraph's text for [`TextEditor`]: the editor's text, laid out as the page lays it out
-/// (source runs, faces, OCR size) at the page's scale, mapped to document units through the canvas
-/// view. Every edit goes into the box's own history.
+/// The open paragraph's text for [`TextEditor`]: the editor's text, laid out as Apply writes it (the
+/// PDF draft's row breaks and character advances) at the page's scale, mapped to document units
+/// through the canvas view. Every edit goes into the box's own history.
 struct ParagraphHost<'a> {
     ctx: &'a egui::Context,
+    doc: &'a pdfcraft_engine::Document,
     ed: &'a mut LineEditor,
+    /// Measures each draft as Apply writes it, for the caret and selection geometry.
+    background: &'a mut TextBackground,
+    /// A PDF draft raster shows the text: a changed draft follows its PDF geometry. Without one the
+    /// editor draws the changed draft itself, so the caret follows the faces it is drawn in.
+    raster: bool,
     faces: &'a BTreeMap<String, FontRef>,
     view: CanvasView,
     /// Screen pixels per page point.
@@ -1113,8 +1121,14 @@ fn cursor_at(offset: usize) -> egui::text::CCursor {
 impl ParagraphHost<'_> {
     /// The laid-out text, laid out again once an edit has changed it.
     fn galley(&mut self) -> Arc<egui::Galley> {
+        if let Some(galley) = &self.galley {
+            return Arc::clone(galley);
+        }
         let (ctx, ed, faces, scale, width) = (self.ctx, &*self.ed, self.faces, self.scale, self.width);
-        Arc::clone(self.galley.get_or_insert_with(|| editor_galley(ctx, ed, faces, &ed.text, scale, width)))
+        let layout = if self.raster || !ed.has_changes() { self.background.layout_for(self.doc, ed, &ed.text) } else { None };
+        let galley = draft_galley(ctx, ed, faces, &ed.text, scale, width, layout);
+        self.galley = Some(Arc::clone(&galley));
+        galley
     }
 
     /// A point of the laid-out text (screen pixels from its top left) in document units.
@@ -1257,13 +1271,10 @@ fn editor_session(
     let page = session.line_editor.as_ref()?.page;
     let xf = session.page_xform(page, geo)?;
     info.pages.get(page)?;
-    let (block, invisible) = {
-        let ed = session.line_editor.as_ref()?;
-        (ed.block, ed.source.as_ref().is_some_and(|(b, _)| b.invisible))
-    };
-    // An OCR word is invisible text over a scan: the textless background still shows the scanned
-    // word, so the editor covers it, as the applied edit will.
-    let background_ready = session.text_background.ready(page, block) && !invisible;
+    let block = session.line_editor.as_ref()?.block;
+    // The PDF draft raster shows the paragraph as Apply writes it, an OCR word's scan cover included.
+    let background_ready = session.text_background.ready(page, block);
+    let preview_error = session.text_background.error_for(page, block).map(str::to_owned);
     // The measured extent of this paragraph's draft: a click straight from another paragraph
     // opens this one after the frame's measuring, which was the other one's.
     let draft_rect = session.text_background.draft_rect_for(page, block).map(|r| xf.user_rect(info, page, r.map(|v| v as f32)));
@@ -1273,6 +1284,7 @@ fn editor_session(
     let page_clip = xf.rect.intersect(geo.viewport);
     let ctx = ui.ctx().clone();
     let ed = session.line_editor.as_mut()?;
+    let background = &mut session.text_background;
     // Reproject the source box every frame. The page may have been zoomed, scrolled or rotated
     // while the format panel was open.
     ed.rect = xf.user_rect(info, ed.page, ed.source_rect);
@@ -1282,10 +1294,11 @@ fn editor_session(
     let text_color = color32(ed.look.color);
     // A one-row draft grows toward the page's right edge.
     let room = (xf.rect.right() - ed.rect.left() - 36.0 * scale).max(ed.rect.width());
-    // The layout in the paragraph's source faces, and the cover under the editor until the textless
-    // page is ready.
+    // The layout in the paragraph's source faces, and the cover under the editor while no PDF draft
+    // raster shows the changed text: the editor then draws the draft itself.
     let cover = ed.has_changes() && !background_ready;
-    let laid = ParagraphCover::new(doc, ed, scale, room, draft_rect, cover).show_at(ui, page_clip);
+    let layout = if cover { None } else { background.layout_for(doc, ed, &ed.text) };
+    let laid = ParagraphCover::new(doc, ed, scale, room, draft_rect, layout, cover).show_at(ui, page_clip);
     let (faces, width, live) = (laid.faces, laid.width, laid.live);
     let frame = [rect_path(doc_rect(&body.view, live.expand(2.0)))];
     let _ = SelectionOutline::solid(tl!("Text editing line").to_string(), &frame).show_at(ui, page_clip);
@@ -1302,7 +1315,19 @@ fn editor_session(
     // paragraph's reach outside the editor, where the editor sees a click away: it doesn't apply it.
     let fresh = std::mem::replace(&mut ed.focus, false);
     let (output, galley) = {
-        let mut host = ParagraphHost { ctx: &ctx, ed: &mut *ed, faces: &faces, view: body.view, scale, width, origin, galley: None };
+        let mut host = ParagraphHost {
+            ctx: &ctx,
+            doc,
+            ed: &mut *ed,
+            background: &mut *background,
+            raster: background_ready,
+            faces: &faces,
+            view: body.view,
+            scale,
+            width,
+            origin,
+            galley: None,
+        };
         // Escape cancels and selects the paragraph's box (Acrobat); ⌘Enter and a press on the page
         // background apply.
         let editor = TextEditor::new(tl!("Text editing line").to_string(), &mut host, Bind::bound(&mut selection)).esc_commits(false);
@@ -1311,11 +1336,17 @@ fn editor_session(
         (output, host.galley())
     };
     ed.selection = Some(selection);
-    if ed.has_changes() {
-        ParagraphText::new(origin, Arc::clone(&galley), text_color).show_at(ui, page_clip);
+    // PDF rasters supply the visible glyphs, including while typing: the draft's layout is drawn
+    // unseen, keeping only its geometry. Without a raster of the changed text the editor draws it.
+    let drawn = if ed.has_changes() && !background_ready { galley } else { unseen(galley) };
+    ParagraphText::new(origin, drawn, text_color).show_at(ui, page_clip);
+    if let Some(error) = preview_error {
+        // Under the frame, on the page: the draft's preview failed, and the raster shown is an older one.
+        let at = Rect::from_min_size(pos2(live.left(), live.bottom() + 4.0), vec2(live.width().max(160.0), 1.0));
+        let _ = Notice::new(Tone::Bad, error).layout(NoticeLayout::Inline).show_at(ui, at);
     }
     let ended = output.ended.filter(|end| !(fresh && *end == EditorEnd::Commit));
-    session.text_background.remember(&xf, page, block, galley, origin, text_color);
+    session.text_background.remember(&xf, page, block);
     match ended {
         None => None,
         Some(EditorEnd::Cancel) => {
@@ -1551,6 +1582,84 @@ mod tests {
             history: TypingHistory::new(Typed::of(block.text.clone(), None, vec![None, None])),
         };
         (app, ed)
+    }
+
+    #[test]
+    fn draft_carets_follow_pdf_characters_and_row_breaks() {
+        let (app, ed) = preview_app();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let ctx = egui::Context::default();
+        for text in ["WiWi ilW", "Wide words that wrap into several PDF rows with narrow letters iii", "WiWi\n\nill\n"] {
+            let style = pdfcraft_engine::BlockStyle { width: Some(70.0), ..Default::default() };
+            let layout = doc.text_edit_layout(0, 0, text, &style).unwrap();
+            assert!(!layout.rows.is_empty(), "geometry for {text:?}");
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                ui.scope(|ui| {
+                    let mut galley = draft_galley(ui.ctx(), &ed, &BTreeMap::new(), text, 2.0, 140.0, Some(&layout));
+                    assert_eq!(galley.rows.len(), layout.rows.len(), "PDF wrap points");
+                    let mut index = 0;
+                    for (row, expected) in galley.rows.iter().zip(&layout.rows) {
+                        assert_eq!(row.glyphs.len(), expected.characters.len());
+                        for (glyph, span) in row.glyphs.iter().zip(&expected.characters) {
+                            let x = ((span[0] - layout.source_rect[0]) * 2.0) as f32;
+                            assert!((row.pos.x + glyph.pos.x - x).abs() < 0.001, "glyph {index}");
+                            let caret = egui::text::CCursor { index: index.into(), prefer_next_row: true };
+                            assert!((galley.pos_from_cursor(caret).left() - x).abs() < 0.001, "caret {index}");
+                            if glyph.advance_width > 0.1 {
+                                let hit = galley.cursor_from_pos(egui::vec2(x + glyph.advance_width * 0.1, row.pos.y + row.size.y * 0.5));
+                                assert_eq!(usize::from(hit.index), index, "click before glyph midpoint");
+                            }
+                            index += 1;
+                        }
+                        index += usize::from(row.ends_with_newline);
+                    }
+                    assert_eq!(index, text.chars().count());
+                    let selection = egui::text::CCursorRange::two(egui::text::CCursor::new(1), egui::text::CCursor::new(2));
+                    egui::text_selection::visuals::paint_text_selection(&mut galley, ui.visuals(), &selection, None);
+                    assert!(!galley.rows[0].visuals.mesh.vertices.is_empty(), "selection background remains visible");
+                    assert!(
+                        galley.mesh_bounds.intersects(galley.rows[0].visuals.mesh_bounds.translate(galley.rows[0].pos.to_vec2())),
+                        "selection is not culled"
+                    );
+                });
+            });
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn editing_preview_draws_the_same_fonts_as_the_applied_paragraph() {
+        let (mut app, mut ed) = preview_app();
+        ed.text = "Changed preview text".into();
+        let id = app.views[0].id;
+        let ctx = egui::Context::default();
+        let mut background = TextBackground::default();
+        let doc = app.session.get(id).unwrap();
+        let bytes = doc.bytes.clone();
+        ctx.begin_pass(egui::RawInput::default());
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        ctx.end_pass().textures_delta.clear();
+        let pool = background.renderer.as_ref().unwrap();
+        pool.set_queue(vec![pdfcraft_render::RenderRequest { page: 0, scale: 1.0, tag: 999, ..Default::default() }]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let preview = loop {
+            if let Some(out) = pool.try_recv()
+                && out.request.tag == 999
+            {
+                break out;
+            }
+            assert!(std::time::Instant::now() < deadline, "draft render timed out");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert!(preview.error.is_none(), "{:?}", preview.error);
+        assert_eq!(doc.bytes, bytes);
+        assert!(!doc.dirty && doc.can_undo().is_none());
+        app.session.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: ed.text.clone(), style: ed.style() }).unwrap();
+        let doc = app.session.get(id).unwrap();
+        let mut renderer = pdfcraft_render::PageRenderer::new(doc.display.clone(), Default::default());
+        let applied = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(applied.error.is_none());
+        assert!(preview.rgba == applied.rgba, "typing must draw the PDF's glyphs, just as Apply does");
     }
 
     #[test]

@@ -222,6 +222,9 @@ pub fn tools() -> Vec<ToolDef> {
         t("page_render", "Render a page", "Render one page to a PNG image (default 96 dpi, at most 600). When the picture is incomplete or approximate (content cut at the page's safety budget, a picture left out because its JBIG2 mask is past a decoder limit, a colour painted in a fallback colour), a JSON part follows the image: { page, warnings: [sentence, ...] }.")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "dpi": { "type": "number", "minimum": 1, "maximum": 600 },
+                "draft_paragraph": { "type": "integer", "minimum": 1, "description": "Render a live paragraph draft with the PDF renderer, without modifying the document. Number from text_paragraphs; mutually exclusive with hide_text_block and hide_added_text. Optional text, size, width, font_resource and ranges have the same meaning as text_edit_layout." },
+                "text": { "type": "string" }, "size": { "type": "number" }, "width": { "type": "number" },
+                "font_resource": { "type": "string" }, "ranges": { "type": "array", "maxItems": 1024, "items": { "type": "object" } },
                 "hide_text_block": { "type": "integer", "minimum": 1, "description": "Render an inline editor background without this paragraph (number from text_paragraphs, resolved as text_edit does: refused once an edit merged that paragraph into a neighbour). Does not modify the document." },
                 "hide_added_text": { "type": "integer", "minimum": 1, "description": "Render a retyping background without this added text item (added index from object_list). Mutually exclusive with hide_text_block. Does not modify the document." }
             }), &["doc", "page"])),

@@ -1,3 +1,4 @@
+use super::caret::CharacterPosition;
 use super::fallback::is_type3_fallback;
 use super::rewrite::vertical_advance;
 use super::{Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Rc};
@@ -464,6 +465,7 @@ pub(super) struct Shown {
     pub(super) frame: [f64; 4],
     /// The boxes of its words (see [`TextLine::ink`]).
     pub(super) ink: Vec<[f64; 4]>,
+    pub(super) characters: Vec<CharacterPosition>,
     pub(super) baseline: f64,
     pub(super) start_x: f64,
     end_x: f64,
@@ -624,6 +626,8 @@ pub(super) struct Carry {
     pub(super) layers: Vec<Option<Vec<u8>>>,
     /// Bytes of glyph text the rest of the page may still produce (see [`MAX_PAGE_TEXT`]).
     pub(super) text_left: usize,
+    // Caret geometry is optional; bound its allocation separately from extracted text.
+    pub(super) characters_left: usize,
     pub(super) containers: Rc<super::containers::Containers>,
     /// The operator indices of the `Do`s, from the page down, that draw these operators.
     pub(super) at: Vec<usize>,
@@ -667,6 +671,7 @@ impl Carry {
             marked: Vec::new(),
             layers: Vec::new(),
             text_left: MAX_PAGE_TEXT,
+            characters_left: 131_072,
             containers: Rc::default(),
             at: Vec::new(),
             gap_space: false,
@@ -729,7 +734,17 @@ impl MarkedContent {
             if tail.iter().any(|s| s.glyph_count > 0) {
                 let mut items = tail.into_iter();
                 if let Some(mut first) = items.next() {
+                    // Caret geometry keeps one baseline per run: glyphs of one ActualText span on
+                    // another baseline or direction can't be placed on it, so the run keeps none
+                    // and the editor uses its fallback.
+                    let (dir, _, _, across) = first.span();
+                    let mut one_baseline = true;
                     for item in items {
+                        let (item_dir, _, _, item_across) = item.span();
+                        one_baseline &= (dir.0 - item_dir.0).abs() < 1e-3
+                            && (dir.1 - item_dir.1).abs() < 1e-3
+                            && (across - item_across).abs() < 0.1
+                            && first.state.vertical.is_some() == item.state.vertical.is_some();
                         first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
                         first.extra_ops.push(item.op);
                         first.extra_ops.extend(item.extra_ops);
@@ -741,6 +756,10 @@ impl MarkedContent {
                         ];
                         first.frame = union(first.frame, item.frame);
                         first.ink.extend(item.ink);
+                        first.characters.extend(item.characters);
+                    }
+                    if !one_baseline {
+                        first.characters.clear();
                     }
                     first.extra_ops.extend([open, index]);
                     // Only right-to-left ActualText is already in typing order and must stay out of
@@ -771,6 +790,23 @@ struct TextRunState<'a> {
     soft_break: bool,
     hard_break: bool,
     soft_gap: usize,
+}
+
+/// Preserve the advances already used by the PDF interpreter. Optional geometry stops
+/// at its budget while ordinary text extraction keeps its existing byte limit.
+fn caret_characters(text: &str, advance: f64, origin: (f64, f64), matrix: &Matrix, left: &mut usize, out: &mut Vec<CharacterPosition>) {
+    let count = text.chars().count();
+    if count > *left {
+        return;
+    }
+    *left -= count;
+    for (index, ch) in text.chars().enumerate() {
+        out.push(CharacterPosition {
+            ch,
+            left: matrix.apply(origin.0 + advance * index as f64 / count as f64, origin.1).0,
+            right: matrix.apply(origin.0 + advance * (index + 1) as f64 / count as f64, origin.1).0,
+        });
+    }
 }
 
 fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), EditError> {
@@ -819,6 +855,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     // before may have ended in one: a justified line can be split over `TJ` and `Tj`.
     let mut gap_space = std::mem::take(&mut carry.gap_space);
     let mut glyph_count = 0_usize;
+    let mut characters = Vec::new();
     for p in &pieces {
         match p {
             Object::String(s) => {
@@ -837,6 +874,11 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                                 .checked_sub(t.len())
                                 .ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
                             text.push_str(t);
+                            if vertical.is_none() {
+                                let advance = (m.width(code) * ts.size + ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 })
+                                    * ts.scale;
+                                caret_characters(t, advance, (x_text, ts.rise), &trm0, &mut carry.characters_left, &mut characters);
+                            }
                         }
                         None => decodable = false,
                     }
@@ -888,6 +930,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                     let dx = -n / 1000.0 * ts.size * ts.scale;
                     // A large gap inside TJ reads as a space.
                     if dx - tracking > (ts.size * ts.scale).abs() * 0.2 && !text.ends_with(' ') {
+                        caret_characters(" ", dx, (x_text, ts.rise), &trm0, &mut carry.characters_left, &mut characters);
                         text.push(' ');
                         gap_space = true;
                     }
@@ -962,6 +1005,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         rect,
         frame,
         ink,
+        characters,
         baseline: start.1,
         start_x: start.0,
         end_x: end.0,
