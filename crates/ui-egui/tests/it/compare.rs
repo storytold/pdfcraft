@@ -283,3 +283,28 @@ fn export_to_word_html_and_rtf() {
         }
     }
 }
+
+/// #1595: File ▸ Export ▸ Markdown… writes the document as Markdown. The file is named without an
+/// extension, so only the command can make it Markdown: the asterisks are escaped, not emphasis,
+/// and no other format's markup is there.
+#[test]
+fn export_to_markdown_writes_markdown() {
+    let doc = Session::new().create_from_text("t", "Exported *words*").unwrap().to_vec();
+    let out = std::path::PathBuf::from("/out/exported");
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::answering([craft::host::Picked::Paths(vec![out.clone()])]));
+    let app_files = files.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::app_with_files(app_files);
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_bytes(&egui::Context::default(), "e.pdf", None, doc).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.execute("export.markdown"));
+    // The picker's answer is taken on a later frame.
+    h.run_steps(3);
+    let md = String::from_utf8(files.file(&out).expect("the Markdown was written")).unwrap();
+    assert!(md.contains(r"Exported \*words\*"), "{md:?}");
+    assert!(!md.contains('<') && !md.starts_with("{\\rtf"), "{md:?}");
+}

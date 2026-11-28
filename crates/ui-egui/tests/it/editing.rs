@@ -3064,7 +3064,17 @@ fn copying_out_of_a_document_honours_its_security() {
     let (mut h, copies) = open("pw");
     assert!(!copy(&mut h, &copies), "⌘C copies nothing");
     assert_eq!(support::shown_notice(&h).as_deref(), refused);
-    for command in ["edit.snapshot", "export.image", "export.text", "export.docx", "export.pptx", "export.html", "export.rtf", "export.all_images"] {
+    for command in [
+        "edit.snapshot",
+        "export.image",
+        "export.text",
+        "export.docx",
+        "export.pptx",
+        "export.html",
+        "export.rtf",
+        "export.markdown",
+        "export.all_images",
+    ] {
         // A fresh window per command: the notice of the one before would still be showing.
         let (mut h, _) = open("pw");
         assert!(!h.execute(command), "{command} is refused");
