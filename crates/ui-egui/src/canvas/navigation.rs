@@ -244,9 +244,9 @@ impl DocView {
     }
 
     /// Retain the current page when `typed` exactly matches its displayed label, even if
-    /// another page has that label. Otherwise resolve a trimmed label (case-insensitive),
-    /// then a position in parentheses ("(3)", as print ranges take it), then a physical page
-    /// number. `false` when it names no page.
+    /// another page has that label. Otherwise look up the label as entered, then trimmed
+    /// (both case-insensitive), then a position in parentheses ("(3)", as print ranges take
+    /// it), then a physical page number. `false` when it names no page.
     pub fn go_to_typed(&mut self, typed: &str, labels: &[String]) -> bool {
         // Compare the displayed value before trimming: a label may itself contain spaces.
         // Repeated labels occur in restarted sections and prefix-only ranges.
@@ -255,9 +255,9 @@ impl DocView {
             return true;
         }
         let t = typed.trim();
-        let page = labels
-            .iter()
-            .position(|l| !l.is_empty() && l.eq_ignore_ascii_case(t))
+        let find_label = |query: &str| labels.iter().position(|l| !l.is_empty() && l.eq_ignore_ascii_case(query));
+        let page = find_label(typed)
+            .or_else(|| (typed != t).then_some(t).and_then(find_label))
             .or_else(|| pdfcraft_engine::print::position(t).or_else(|| t.parse::<usize>().ok()).filter(|n| *n >= 1).map(|n| n - 1));
         match page {
             Some(p) if p < self.page_count => {

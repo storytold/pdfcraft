@@ -710,13 +710,20 @@ fn page_label_input_resolves_labels_numbers_and_restores_invalid_input() {
     let ctx_h = h.ctx.clone();
     h.state_mut().apply_edit(&ctx_h, Edit::NumberPages { from: 4, to: 4, style: LabelStyle::Decimal, prefix: "A-".into(), first: 8 });
     h.run_steps(3);
-    for (typed, page, displayed) in [("ii", 1, "ii"), ("2", 3, "2"), ("A-8", 4, "A-8"), ("3", 2, "1"), ("missing", 2, "1")] {
+    for (typed, page, displayed) in [("ii", 1, "ii"), ("2", 3, "2"), (" A-8 ", 4, "A-8"), ("3", 2, "1"), ("missing", 2, "1")] {
         type_page_input(&mut h, typed);
         h.key_press(egui::Key::Enter);
         h.run_steps(3);
         assert_eq!(h.state().views[0].current(), page, "{typed}");
         assert_eq!(h.state().views[0].page_input, displayed, "{typed}");
     }
+    assert!(h.state_mut().apply_edit(Edit::NumberPages { from: 4, to: 4, style: LabelStyle::None, prefix: " Annex ".into(), first: 1 }));
+    h.run_steps(3);
+    type_page_input(&mut h, " Annex ");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!((h.state().views[0].current, h.state().views[0].page_input.as_str()), (4, " Annex "));
+
     // Scripted page selection remains physical and one-based even when a numeric label differs.
     h.set_option("page", "2").unwrap();
     h.run_steps(3);
