@@ -8111,6 +8111,82 @@ fn exporting_office_files_keeps_images() {
     assert!(String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap().contains("data:image/png;base64,"));
 }
 
+/// #7196: a detailed export also lists each page's text runs, each pointing at its exported
+/// paragraph, and the paths it paints, on the displayed page (y up, inside the crop box).
+#[test]
+fn a_detailed_export_lists_text_runs_and_drawings_on_the_displayed_page() {
+    let content = "BT /F1 10 Tf 172 700 Td (E = mc) Tj 4 Ts /F1 6 Tf (2) Tj ET\n\
+                   BT 0 Ts /F1 10 Tf 172 650 Td (Body text) Tj ET\n\
+                   150 300 m 160 340 190 280 200 300 c S 150 200 40 20 re f";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [100 100 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"
+            .to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+    ];
+    let mut s = Session::new();
+    let id = s.open("runs.pdf", None, Arc::new(pdf_of(&objs)), None).unwrap();
+    let d = s.get(id).unwrap();
+
+    let plain = &d.export_pages()[0];
+    assert!(plain.runs.is_empty() && plain.drawings.is_empty(), "other exports don't pay for them");
+
+    let (pages, truncated) = d.export_pages_detailed();
+    assert!(truncated.is_empty());
+    let page = &pages[0];
+    assert_eq!(plain.blocks, page.blocks, "the paragraphs are the same");
+    let runs: Vec<_> = page.runs.iter().map(|r| (r.text.as_str(), r.size, r.baseline[1], r.block)).collect();
+    let block = |text: &str| page.blocks.iter().position(|b| b.text == text);
+    assert_eq!(runs, [("E = mc", 10.0, 600.0, block("E = mc")), ("2", 6.0, 604.0, block("2")), ("Body text", 10.0, 550.0, block("Body text"))]);
+    assert_eq!(page.runs[0].baseline[0], 72.0, "x from the crop box's left edge");
+    assert!(page.runs[2].words.len() == 2 && page.runs[2].words[0][0] == 72.0, "{:?}", page.runs[2].words);
+    assert_eq!(
+        page.drawings,
+        [
+            pdfcraft_export::Drawing { rect: [50.0, 180.0, 100.0, 240.0], stroked: true, filled: false },
+            pdfcraft_export::Drawing { rect: [50.0, 100.0, 90.0, 120.0], stroked: false, filled: true },
+        ]
+    );
+}
+
+#[test]
+fn the_export_outline_says_where_each_bookmark_goes_on_the_displayed_page() {
+    let content = "BT /F1 18 Tf 172 700 Td (1 Introduction) Tj ET BT /F1 10 Tf 172 600 Td (Body text under it.) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [100 100 600 800] /Contents 8 0 R /Resources << /Font << /F1 9 0 R >> >> >>"
+            .to_string(),
+        "<< /Type /Outlines /First 5 0 R /Last 7 0 R /Count 3 >>".to_string(),
+        "<< /Title (Introduction) /Parent 4 0 R /Next 7 0 R /First 6 0 R /Last 6 0 R /Count 1 /Dest [3 0 R /XYZ 100 720 0] >>".to_string(),
+        "<< /Title (Scope) /Parent 5 0 R /Dest [3 0 R /FitH 650] >>".to_string(),
+        "<< /Title (Whole page) /Parent 4 0 R /Prev 5 0 R /Dest [3 0 R /Fit] >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+    ];
+    let mut s = Session::new();
+    let id = s.open("outline.pdf", None, Arc::new(pdf_of(&objs)), None).unwrap();
+    let d = s.get(id).unwrap();
+    let outline = d.export_outline();
+    let entry = |title: &str, level, top| pdfcraft_export::OutlineEntry { title: title.into(), level, page: 0, top };
+    assert_eq!(
+        outline,
+        [entry("Introduction", 0, Some(620.0)), entry("Scope", 1, Some(550.0)), entry("Whole page", 0, None)],
+        "heights from the crop box's bottom"
+    );
+    let (pages, _) = d.export_pages_detailed();
+    let headings = &pdfcraft_export::structure_with_outline(&pages, &outline)[0].headings;
+    let title = pages[0].blocks.iter().position(|b| b.text == "1 Introduction");
+    assert_eq!(headings.iter().map(|h| (h.entry, h.block)).collect::<Vec<_>>(), [(0, title), (1, None), (2, None)]);
+
+    let turned = objs.map(|o| o.replace("/MediaBox", "/Rotate 90 /MediaBox"));
+    let id = s.open("turned.pdf", None, Arc::new(pdf_of(&turned)), None).unwrap();
+    let tops: Vec<_> = s.get(id).unwrap().export_outline().into_iter().map(|e| e.top).collect();
+    assert_eq!(tops, [None, None, None], "a turned page's heights are not heights on the displayed page");
+}
+
 /// #314: a page whose content is drawn through a form XObject exports its text (the file from
 /// the report: no xref table, wrong stream lengths).
 #[test]

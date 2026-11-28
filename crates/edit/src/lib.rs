@@ -44,7 +44,7 @@ pub use text::strip_subset_tag;
 mod background;
 pub use background::page_background;
 mod rules;
-pub use rules::page_rules;
+pub use rules::{Drawing, page_drawings, page_rules};
 pub mod objects;
 pub use objects::{
     CopiedObjects, EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, copy_objects, editable_objects, move_objects, paste_objects,

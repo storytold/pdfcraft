@@ -405,6 +405,9 @@ pub fn reading_blocks(doc: &Document, page: usize) -> Result<Vec<TextBlock>, Edi
 pub struct ReadingBlocks {
     /// The paragraphs, as [`reading_blocks`] returns them.
     pub blocks: Vec<TextBlock>,
+    /// The lines the paragraphs are made of: [`TextBlock::lines`] indexes into it. Each is a run
+    /// of one font, size and colour, so a subscript or a bold word is a line of its own.
+    pub lines: Vec<TextLine>,
     /// The page draws forms nested deeper than [`MAX_FORM_DEPTH`], more of them than
     /// [`MAX_FORM_VISITS`], or forms that run past what the page's content left of its decode
     /// budget. Reading leaves those forms out to stay bounded on hostile files, so their text
@@ -418,7 +421,7 @@ pub struct ReadingBlocks {
 /// truncated result.
 pub fn reading_blocks_checked(doc: &Document, page: usize) -> Result<ReadingBlocks, EditError> {
     let (lines, truncated) = reading_lines(doc, page)?;
-    Ok(ReadingBlocks { blocks: regions::group_reading_blocks(&lines), truncated })
+    Ok(ReadingBlocks { blocks: regions::group_reading_blocks(&lines), lines, truncated })
 }
 
 // An ideographic space carries intentional Japanese spacing, including paragraph indentation.

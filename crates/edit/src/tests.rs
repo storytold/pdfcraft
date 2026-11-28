@@ -12528,6 +12528,62 @@ fn page_rules_join_decoded_streams_before_parsing_operators() {
 }
 
 #[test]
+fn page_drawings_box_every_painted_path_with_its_curves() {
+    let doc = image_page_with(
+        "q 2 0 0 2 0 0 cm 10 10 m 20 40 30 -5 40 10 c S Q\n\
+         50 50 20 10 re f\n\
+         60 60 m 70 70 l 80 60 l h B\n\
+         0 0 m 500 500 l W n\n\
+         100 100 m 110 120 l S",
+    );
+    let drawings = page_drawings(&doc, 0).unwrap();
+    assert_eq!(
+        drawings,
+        [
+            // The curve's control points bound it: it bulges past its ends.
+            Drawing { rect: [20.0, -10.0, 80.0, 80.0], stroked: true, filled: false },
+            Drawing { rect: [50.0, 50.0, 70.0, 60.0], stroked: false, filled: true },
+            Drawing { rect: [60.0, 60.0, 80.0, 70.0], stroked: true, filled: true },
+            // The clipping path paints nothing.
+            Drawing { rect: [100.0, 100.0, 110.0, 120.0], stroked: true, filled: false },
+        ]
+    );
+    // The same walk still finds only the ruled lines: the triangle's closing edge.
+    assert_eq!(page_rules(&doc, 0).unwrap(), [[60.0, 60.0, 80.0, 60.0]]);
+    assert_eq!(page_drawings(&doc, 1), Err(EditError::NoSuchPage(1)));
+}
+
+#[test]
+fn page_drawings_and_rules_each_stop_at_their_limit() {
+    let doc = image_page_with(&"0 0 m 0 100 l S\n".repeat(crate::rules::MAX_DRAWINGS + 10));
+    assert_eq!(page_drawings(&doc, 0).unwrap().len(), crate::rules::MAX_DRAWINGS);
+    assert_eq!(page_rules(&doc, 0).unwrap().len(), crate::rules::MAX_RULES);
+}
+
+#[test]
+fn page_drawings_refuse_unread_graphics_state() {
+    let mut doc = image_page_with("10 10 m 100 10 l S");
+    let damaged = doc.add(Object::Stream(damaged_flate(b"0 g\n", b"2 0 0 2 0 0 cm")));
+    doc.update_dict(ObjRef::new(3, 0), |page| {
+        page.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(damaged), Object::Ref(ObjRef::new(4, 0))]));
+    })
+    .unwrap();
+    let refused = page_drawings(&doc, 0).unwrap_err().to_string();
+    assert!(refused.contains("cannot extract its drawings"), "{refused}");
+}
+
+#[test]
+fn reading_lines_say_where_a_raised_run_sits_on_its_line() {
+    let doc = text_page("BT /F1 10 Tf 72 700 Td (E = mc) Tj 4 Ts /F1 6 Tf (2) Tj ET");
+    let read = reading_blocks_checked(&doc, 0).unwrap();
+    let lines: Vec<_> = read.lines.iter().map(|l| (l.text.as_str(), l.size, l.baseline_start()[1], l.rotation())).collect();
+    assert_eq!(lines, [("E = mc", 10.0, 700.0, 0.0), ("2", 6.0, 704.0, 0.0)]);
+    // The paragraphs point into those lines (the raised run reads as a paragraph of its own).
+    let blocks: Vec<_> = read.blocks.iter().map(|b| (b.text.as_str(), b.lines.clone())).collect();
+    assert_eq!(blocks, [("E = mc", vec![0]), ("2", vec![1])]);
+}
+
+#[test]
 fn repeated_content_references_share_one_decode_budget() {
     // One 1 MiB stream (a kilobyte on disk) named 300 times by the page's /Contents.
     let doc = page_with(|doc| {

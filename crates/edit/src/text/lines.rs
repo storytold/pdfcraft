@@ -33,7 +33,8 @@ impl TextLine {
         })
     }
 
-    pub(crate) fn rotation(&self) -> f64 {
+    /// Counterclockwise angle of its baseline in user space, in degrees.
+    pub fn rotation(&self) -> f64 {
         let m = Matrix(self.origin.tm).then(&Matrix(self.origin.ctm)).0;
         m[1].atan2(m[0]).to_degrees()
     }
@@ -48,6 +49,12 @@ impl TextLine {
     pub(crate) fn upright(&self) -> bool {
         let (x, y) = self.direction();
         (x - 1.0).abs() < 1e-3 && y.abs() < 1e-3
+    }
+
+    /// Where its baseline starts in user space, text rise (`Ts`) included: a superscript drawn
+    /// with a rise starts above the line it sits on.
+    pub fn baseline_start(&self) -> [f64; 2] {
+        [self.origin.x, self.origin.baseline]
     }
 
     /// Where it starts as `(along, across)` its baseline: user space turned to the text's direction.

@@ -24,6 +24,7 @@ mod as_word;
 mod clip;
 mod flow;
 mod layout;
+mod structure;
 
 #[cfg(test)]
 use as_docx::MAX_MEDIA;
@@ -40,10 +41,13 @@ pub(crate) use craft_html::standalone::esc;
 use craft_html::standalone::{allowed, base64};
 #[cfg(test)]
 use flow::list_item;
-pub use layout::{Block, Cell, Image, Page, Table};
+pub use layout::{Block, Cell, Drawing, Image, Page, Table, TextRun};
 #[cfg(test)]
 use layout::{LOOKUP_STEPS, MAX_COLS, body_size};
 pub(crate) use layout::{Run, flowing_paragraphs, reading_order, tables};
+pub use structure::{
+    Caption, CaptionKind, Figure, Heading, OutlineEntry, PageStructure, Reference, Script, TableStructure, structure, structure_with_outline,
+};
 
 #[cfg(test)]
 mod tests;

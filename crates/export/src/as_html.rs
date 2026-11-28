@@ -156,6 +156,8 @@ mod tests {
             images: Vec::new(),
             background: None,
             rules: Vec::new(),
+            runs: Vec::new(),
+            drawings: Vec::new(),
         };
         let out = html(&[page], "Clean");
         assert!(out.contains("<p style=\"color:#008000\">Hello</p>"), "{out}");

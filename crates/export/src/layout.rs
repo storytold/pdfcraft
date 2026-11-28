@@ -34,6 +34,40 @@ pub struct Image {
     pub rotation: f64,
 }
 
+/// A run of text in one font, size and colour, as the page draws it: a word set as a subscript
+/// or in bold is a run of its own inside its paragraph's [`Block`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextRun {
+    pub text: String,
+    /// [x0, y0, x1, y1] on the displayed page in points (y up).
+    pub rect: [f64; 4],
+    /// The box of each word it draws, as `rect`.
+    pub words: Vec<[f64; 4]>,
+    /// Where its baseline starts on the displayed page (y up), raised or lowered by the text rise.
+    pub baseline: [f64; 2],
+    /// Font size in points.
+    pub size: f64,
+    pub bold: bool,
+    pub italic: bool,
+    /// Text fill colour as sRGB components in 0..=1.
+    pub color: [f64; 3],
+    /// Counterclockwise baseline angle in user space (degrees).
+    pub rotation: f64,
+    /// The index in [`Page::blocks`] of the paragraph it belongs to; `None` for a run no
+    /// exported paragraph holds.
+    pub block: Option<usize>,
+}
+
+/// A path the page paints, stroked or filled: a line, a curve, a shape.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Drawing {
+    /// The box of the path [x0, y0, x1, y1] on the displayed page in points (y up), curve
+    /// control points included and the stroke's width left out.
+    pub rect: [f64; 4],
+    pub stroked: bool,
+    pub filled: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Page {
     pub width: f64,
@@ -46,6 +80,11 @@ pub struct Page {
     /// The ruled lines the page draws (horizontal and vertical strokes, thin filled bars), each
     /// as its box [x0, y0, x1, y1] on the displayed page in points (y up).
     pub rules: Vec<[f64; 4]>,
+    /// The page's text as runs, in content order: finer than `blocks`, for exports that look at
+    /// how a paragraph is set. Empty unless the export asked for it.
+    pub runs: Vec<TextRun>,
+    /// Every path the page paints, in content order. Empty unless the export asked for it.
+    pub drawings: Vec<Drawing>,
 }
 
 /// One cell of a detected table. `span` is how many grid columns the cell covers (a header
@@ -139,7 +178,7 @@ pub(crate) const MAX_COLS: usize = 63;
 
 /// Two blocks in a row this close (as a fraction of their font size) are one line of running
 /// text that changed font or colour, such as a link inside a sentence, not two table cells.
-const INLINE_GAP: f64 = 0.5;
+pub(crate) const INLINE_GAP: f64 = 0.5;
 
 /// How many blocks ending near a block's start are looked at to find the one it continues; a
 /// page laid out so that many end at the same place stays quick.
@@ -151,7 +190,7 @@ const CONTINUATION_PROBE: usize = 64;
 const OVERHANG: f64 = 0.3;
 
 /// [`OVERHANG`] in points for a block of `size`: at least a point (rounding), at most six.
-fn overhang(size: f64) -> f64 {
+pub(crate) fn overhang(size: f64) -> f64 {
     if size.is_finite() { (OVERHANG * size).clamp(1.0, 6.0) } else { 1.0 }
 }
 
