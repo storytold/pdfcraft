@@ -1129,6 +1129,109 @@ fn pdfs_dropped_on_the_combine_tab_join_its_list() {
     assert!(app.combine_draft[0].modified.is_some() && app.combine_draft[1].modified.is_none());
 }
 
+/// A temporary folder removed when the test ends, even when an assertion fails first.
+struct TempDir(std::path::PathBuf);
+
+impl TempDir {
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// An app on Home over `clipboard`, in a harness.
+fn pasting_harness(clipboard: &support::RecordingClipboard) -> Harness<'static, PdfCraftApp> {
+    let clipboard = clipboard.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = support::app_with_clipboard(clipboard.clone());
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app
+    });
+    h.run_steps(3);
+    h
+}
+
+/// ⌘V / Ctrl+V as the window delivers it: Finder puts a copied file's name next to the file list.
+fn paste(h: &mut Harness<'static, PdfCraftApp>) {
+    h.event(egui::Event::Paste("copied.pdf".into()));
+    h.run_steps(3);
+}
+
+/// #1289: a PDF copied in a file manager opens from Home when pasted, as dropping it does.
+#[test]
+fn pasting_a_copied_pdf_file_on_home_opens_it() {
+    let dir = TempDir::new("pdfcraft-paste-open");
+    let path = dir.0.join("copied.pdf");
+    std::fs::write(&path, FIXTURE).unwrap();
+    let clipboard = support::RecordingClipboard::default();
+    let mut h = pasting_harness(&clipboard);
+    // Text on the clipboard opens nothing, and says so.
+    paste(&mut h);
+    assert!(h.state().views.is_empty(), "text is not a file");
+    assert!(support::shown_notice(&h).is_some_and(|n| n.contains("no files")), "{:?}", support::shown_notice(&h));
+    clipboard.hold_files(vec![path.clone()]);
+    paste(&mut h);
+    support::wait_until(&mut h, "pasted document", |app| app.views.len() == 1 && app.password_prompt.is_none());
+    let (_, id) = h.state().active_ids().unwrap();
+    assert_eq!(h.state().session.get(id).unwrap().bytes.as_slice(), FIXTURE);
+    // With the document showing, Paste is its own: another copied file doesn't open.
+    let other = dir.0.join("other.pdf");
+    std::fs::write(&other, FIXTURE).unwrap();
+    clipboard.hold_files(vec![other.clone()]);
+    paste(&mut h);
+    assert_eq!(h.state().views.len(), 1, "a document showing keeps Paste");
+    // Back on Home, the other file opens beside it.
+    h.set_option("home", "").unwrap();
+    h.run_steps(2);
+    paste(&mut h);
+    support::wait_until(&mut h, "second pasted document", |app| app.views.len() == 2);
+    // A copied folder opens nothing from Home, and says why.
+    h.set_option("home", "").unwrap();
+    h.run_steps(2);
+    clipboard.hold_files(vec![dir.0.clone()]);
+    paste(&mut h);
+    assert_eq!(h.state().views.len(), 2, "a folder doesn't open");
+    // Edit ▸ Paste reads the copied files itself: Windows Explorer's copy holds only them, and the
+    // window delivers no paste for it.
+    h.set_option("home", "").unwrap();
+    h.run_steps(2);
+    let third = dir.0.join("third.pdf");
+    std::fs::write(&third, FIXTURE).unwrap();
+    clipboard.hold_files(vec![third]);
+    support::fire_menu(&mut h, "edit.paste");
+    support::wait_until(&mut h, "document pasted from the menu", |app| app.views.len() == 3);
+    let name = dir.0.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(support::shown_notice(&h).is_some_and(|n| n.contains(&name) && n.contains("folder")), "{:?}", support::shown_notice(&h));
+}
+
+/// #1289: files and folders pasted on the Combine files tab join its list, as dropped ones do.
+#[test]
+fn pasting_copied_files_on_the_combine_tab_adds_them() {
+    let dir = TempDir::new("pdfcraft-paste-combine");
+    std::fs::create_dir_all(dir.0.join("folder")).unwrap();
+    std::fs::write(dir.0.join("one.pdf"), FIXTURE).unwrap();
+    std::fs::write(dir.0.join("folder").join("two.pdf"), FIXTURE).unwrap();
+    let clipboard = support::RecordingClipboard::default();
+    let mut h = pasting_harness(&clipboard);
+    h.set_option("combine-view", "list").unwrap();
+    h.execute("page.combine");
+    h.run_steps(2);
+    clipboard.hold_files(vec![dir.0.join("one.pdf"), dir.0.join("folder")]);
+    paste(&mut h);
+    let app = h.state();
+    assert!(app.views.is_empty(), "nothing opens");
+    assert_eq!(app.combine_draft.len(), 2, "the file and the PDF in the folder");
+}
+
 #[test]
 fn a_folder_dropped_on_the_combine_tab_adds_its_pdfs() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-combine-drop-dir-{}", std::process::id()));
