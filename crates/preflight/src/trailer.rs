@@ -1,5 +1,6 @@
 //! PDF/A-2 6.1.3, the file trailer: it has an `/ID`, a file identifier as ISO 32000-1 14.4
-//! defines it, an array of two byte strings.
+//! defines it, an array of two byte strings; and nothing follows the last end-of-file marker but
+//! a single optional end-of-line marker (ISO 32000-1 7.5.5).
 //!
 //! The trailer read is the one the file's last `startxref` points to: the latest update's, or a
 //! linearized file's first-page trailer (ISO 32000-1 F.3.4). Trailers earlier in the chain don't
@@ -52,4 +53,35 @@ pub(crate) fn fix(doc: &mut Document) -> Option<String> {
     };
     doc.trailer_mut().set(b"ID".to_vec(), Object::Array(id));
     Some(if kept { "Completed the file identifier (ID)" } else { "Added a file identifier (ID)" }.into())
+}
+
+/// Whether data follows the last end-of-file marker of `doc`, as it will be saved, other than a
+/// single end-of-line marker (CR, LF or CR LF, ISO 32000-1 7.2.2 and 7.5.5). A document its next
+/// save rewrites is judged by that save, which ends the file itself. A file without `%%EOF` is
+/// left to the reader that opened it.
+pub(crate) fn data_after_end(doc: &Document) -> bool {
+    if doc.full_save_required() || doc.encryption_changed() {
+        return false;
+    }
+    let data = doc.bytes();
+    // The marker is a line of its own (ISO 32000-1 7.5.5): `%%EOF` written inside other data after
+    // it is that data, not the marker.
+    let at_line_start = |p: usize| p == 0 || matches!(data.get(p.saturating_sub(1)), Some(b'\r' | b'\n'));
+    let Some(end) = data.windows(5).enumerate().rev().find(|&(p, w)| w == b"%%EOF" && at_line_start(p)).map(|(p, _)| p) else { return false };
+    let after = data.get(end.saturating_add(5)..).unwrap_or_default();
+    let rest = match after {
+        [b'\r', b'\n', rest @ ..] | [b'\r' | b'\n', rest @ ..] => rest,
+        rest => rest,
+    };
+    !rest.is_empty()
+}
+
+/// Has the next save of `doc` write the file afresh, ending at its end-of-file marker, when data
+/// follows the last one; what it fixed, if anything.
+pub(crate) fn rewrite_end(doc: &mut Document) -> Option<String> {
+    if !data_after_end(doc) {
+        return None;
+    }
+    doc.require_full_save();
+    Some("Removed the data after the end-of-file marker".into())
 }
