@@ -2,7 +2,9 @@ use craft::behavior::IconId;
 use craft::pages::ui::PageBody;
 use craft::theme::variant::Tone;
 use craft::ui::contract::Show as _;
+use craft::ui::display::Badge;
 use craft::ui::notices::{Notice as Bar, NoticeAction, NoticeIcon, NoticeLayout};
+use craft::ui::runtime::env::Env;
 
 use super::{DocView, Pos2, Rect, SnapshotKind};
 
@@ -32,6 +34,37 @@ pub(super) fn page_size_hint(ui: &mut egui::Ui, body: &PageBody<'_>, page: &pdfc
     let builder = egui::UiBuilder::new().max_rect(corner).layout(egui::Layout::bottom_up(egui::Align::Min)).sense(egui::Sense::hover());
     ui.scope_builder(builder, |ui| {
         Bar::new(Tone::Neutral, text).layout(NoticeLayout::Card).icon(NoticeIcon::None).show(ui);
+    });
+}
+
+/// Format `{current + 1} / {total}` with clamped, saturating arithmetic; `None` when the document has no pages.
+pub(super) fn page_indicator_text(current: usize, total: usize) -> Option<String> {
+    if total == 0 {
+        return None;
+    }
+    let page = current.min(total.saturating_sub(1)).saturating_add(1);
+    Some(format!("{page} / {total}"))
+}
+
+/// Persistent `current / total` page indicator pill at the bottom-center of the document area (#4810).
+/// Display-only: never modifies the PDF or captures pointer events.
+pub(super) fn page_indicator(ui: &mut egui::Ui, body: &PageBody<'_>, current: usize, total: usize) {
+    let Some(text) = page_indicator_text(current, total) else {
+        return;
+    };
+    if !body.rect.is_positive() {
+        return;
+    }
+    let inset = Env::of(ui).tokens.space.pad.regular;
+    let bottom = (body.rect.max.y - inset).max(body.rect.min.y);
+    let band = Rect::from_min_max(egui::pos2(body.rect.min.x, body.rect.min.y), egui::pos2(body.rect.max.x, bottom));
+    let builder = egui::UiBuilder::new()
+        .id_salt("page-indicator")
+        .max_rect(band)
+        .layout(egui::Layout::bottom_up(egui::Align::Center))
+        .sense(egui::Sense::empty());
+    ui.scope_builder(builder, |ui| {
+        Badge::new(text).show(ui);
     });
 }
 
@@ -276,5 +309,20 @@ fn cut_pages_bar(view: &mut DocView, ui: &mut egui::Ui) {
     };
     if bar(Tone::Warn, "triangle-alert", text).dismiss().show(ui).dismissed {
         view.cut_notice_dismissed.extend(cut);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::page_indicator_text;
+
+    #[test]
+    fn page_indicator_text_formats_clamps_and_hides_empty_documents() {
+        assert_eq!(page_indicator_text(0, 0), None);
+        assert_eq!(page_indicator_text(0, 1), Some("1 / 1".to_string()));
+        assert_eq!(page_indicator_text(0, 42), Some("1 / 42".to_string()));
+        assert_eq!(page_indicator_text(2, 42), Some("3 / 42".to_string()));
+        assert_eq!(page_indicator_text(99, 3), Some("3 / 3".to_string()));
+        assert_eq!(page_indicator_text(usize::MAX, 3), Some("3 / 3".to_string()));
     }
 }

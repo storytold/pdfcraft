@@ -160,6 +160,7 @@ impl crate::PdfCraftApp {
             "theme": format!("{:?}", self.root_env(ctx).resolved(ctx).mode),
             "theme_preference": format!("{:?}", self.theme_preference),
             "show_page_edge_shadows": self.show_page_edge_shadows,
+            "show_page_indicator": self.show_page_indicator,
             "language": self.language,
             "notice": notice,
             "progress": progress,

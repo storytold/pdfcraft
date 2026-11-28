@@ -36,6 +36,7 @@
 //!   `theme=light|dark|system` changes the saved theme preference; `ui.state.theme_preference`
 //!   reports the choice and `ui.state.theme` reports the resolved light/dark colours.
 //!   `show_page_edge_shadows=true|false` controls page decoration app-wide.
+//!   `page_indicator=true|false|on|off` shows a persistent `1 / N` indicator pill over the document.
 //!   `comment-tool-pinned=true|false` remembers the annotation quick bar's pin across restarts.
 //!   `folder-collapsed=<folder>=on|off` folds a pinned folder on Home down to its heading or
 //!   opens it again; `ui.state.pinned_folders` lists each pinned folder and whether it is.

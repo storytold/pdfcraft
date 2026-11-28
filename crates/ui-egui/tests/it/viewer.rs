@@ -2874,3 +2874,107 @@ fn the_accessible_window_has_the_window_title_as_its_name() {
     assert_eq!(name(&h).as_deref(), Some("Quarterly report • — PdfCraft"));
     assert_eq!(name(&h), Some(h.state().window_title.clone()));
 }
+
+/// #4810: an optional persistent `1 / N` page indicator pill can be enabled in Preferences or via
+/// `set_option`, updates as the current page changes, hides when no document is open, is reported
+/// in `ui.state`, survives settings persistence, and never modifies the PDF bytes.
+#[test]
+fn persistent_page_indicator_shows_updates_and_leaves_document_bytes_untouched() {
+    use craft::automation::ControlChannel;
+    use pdfcraft_ui_egui::settings::{PdfCraftSettings, import_json};
+
+    let initial_bytes = fixture(3);
+    let expected_bytes = initial_bytes.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut rx = Some(rx);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        if let Some(rx) = rx.take() {
+            app.attach_control(ControlChannel::new(rx), None);
+        }
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+        app.open_bytes(&cc.egui_ctx, "three.pdf", None, initial_bytes.clone()).unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+
+    assert!(!h.state().show_page_indicator, "off by default");
+    for key in ["page_indicator", "page-indicator", "show_page_indicator"] {
+        assert_eq!(h.state().get_option(key).as_deref(), Some("false"), "default get_option({key})");
+    }
+    assert!(h.query_by_label("1 / 3").is_none());
+
+    // Control host's ui.state reports show_page_indicator as false initially.
+    let req = crate::control::send(&tx, "ui.state", json!({}));
+    h.run_steps(2);
+    assert_eq!(crate::control::answer(&req).unwrap()["show_page_indicator"], json!(false));
+
+    // Toggle on via Preferences -> Appearance -> "Always show page number indicator".
+    h.set_option("dialog", "preferences").unwrap();
+    h.run_steps(3);
+    h.get_by_label("Always show page number indicator").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("Always show page number indicator").click();
+    h.run_steps(2);
+    assert!(h.state().show_page_indicator);
+    assert_eq!(h.state().get_option("page_indicator").as_deref(), Some("true"));
+    h.set_option("dialog", "none").unwrap();
+    h.set_option("panel", "none").unwrap();
+    h.run_steps(3);
+
+    // Control host's ui.state now reports show_page_indicator as true.
+    let req = crate::control::send(&tx, "ui.state", json!({}));
+    h.run_steps(2);
+    assert_eq!(crate::control::answer(&req).unwrap()["show_page_indicator"], json!(true));
+
+    // Draws "1 / 3" on page 1.
+    h.get_by_label("1 / 3");
+
+    // Changing to page 2 updates the indicator to "2 / 3".
+    h.set_option("page", "2").unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label("1 / 3").is_none());
+    h.get_by_label("2 / 3");
+
+    // Hidden when no document is open (Home tab), and shown again when returning.
+    h.set_option("home", "true").unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label("2 / 3").is_none(), "hidden on Home");
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+    h.get_by_label("2 / 3");
+
+    // Persists across settings snapshot / apply and legacy JSON import, ignoring invalid values.
+    let saved = h.state().settings_snapshot();
+    assert_eq!(saved.behavior.show_page_indicator, Some(true));
+    let mut restored = crate::control::new_app();
+    restored.apply_settings(&saved);
+    assert!(restored.show_page_indicator);
+    assert_eq!(restored.get_option("page_indicator").as_deref(), Some("true"));
+    restored.apply_settings(&PdfCraftSettings::default());
+    assert!(restored.show_page_indicator, "settings without the key keep the current value");
+    let (legacy_on, legacy_errors) = import_json(r#"{"show_page_indicator": true}"#);
+    assert!(legacy_errors.is_empty());
+    assert_eq!(legacy_on.behavior.show_page_indicator, Some(true));
+    let (legacy_bad, legacy_bad_errors) = import_json(r#"{"show_page_indicator": "yes"}"#);
+    assert_eq!(legacy_bad.behavior.show_page_indicator, None);
+    assert!(!legacy_bad_errors.is_empty());
+
+    // set_option / get_option support aliases, true/on/false/off, and reject invalid values.
+    let ctx = egui::Context::default();
+    for (key, value, expected) in
+        [("page_indicator", "false", false), ("page-indicator", "on", true), ("show_page_indicator", "off", false), ("page_indicator", "true", true)]
+    {
+        restored.set_option(&ctx, key, value).unwrap();
+        assert_eq!(restored.show_page_indicator, expected);
+        assert_eq!(restored.get_option(key).as_deref(), Some(if expected { "true" } else { "false" }));
+    }
+    assert_eq!(restored.set_option(&ctx, "page_indicator", "invalid"), Err("page_indicator must be true or false".into()));
+
+    // Display-only: document is clean and bytes are untouched.
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert!(!doc.dirty, "showing the page indicator must not dirty the document");
+    assert_eq!(doc.bytes.as_slice(), expected_bytes.as_slice(), "document bytes must remain untouched");
+}
