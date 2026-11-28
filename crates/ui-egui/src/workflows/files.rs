@@ -355,15 +355,52 @@ impl PdfCraftApp {
                     return;
                 }
                 let Some((index, id)) = self.active_ids() else { return };
-                let Some(mut ed) = self.views.get(index).and_then(|v| v.session.line_editor.clone()).filter(|ed| ed.page == page) else { return };
-                // The font just loaded is the one the user wants: apply it to the paragraph, as
-                // choosing it from the document-font menu does, instead of only registering it (#2591).
                 let resource = self.session.get(id).and_then(|doc| {
-                    doc.text_editor_fonts(page).into_iter().find(|f| f.bytes == *bytes && !f.resource.starts_with("PCApproved")).map(|f| f.resource)
+                    doc.text_editor_fonts(page)
+                        .into_iter()
+                        .find(|f| f.bytes == *bytes && !f.resource.starts_with("PCApproved") && !f.choice_only)
+                        .map(|f| f.resource)
                 });
-                if resource.is_some() {
-                    ed.font_resource = resource;
-                    self.apply_line_format(ctx, index, ed);
+                if let Some(mut ed) = self.views.get(index).and_then(|v| v.session.line_editor.clone()).filter(|ed| ed.page == page) {
+                    // The font just loaded is the one the user wants: apply it to the paragraph, as
+                    // choosing it from the document-font menu does, instead of only registering it (#2591).
+                    if resource.is_some() {
+                        ed.font_resource = resource;
+                        self.apply_line_format(ctx, index, ed);
+                    }
+                } else if let Some(resource) = resource {
+                    if let Some(mut style) =
+                        self.views.get(index).and_then(|v| v.session.content.draft.as_ref()).filter(|d| d.page == page).map(|d| d.style.clone())
+                    {
+                        style.font_resource = Some(resource);
+                        style.bold = false;
+                        style.italic = false;
+                        self.restyle_draft(ctx, index, style);
+                    } else if let Some((sel_page, sel_idx)) = self.views.get(index).and_then(|v| v.session.content.selected)
+                        && sel_page == page
+                        && let Some(doc) = self.session.get(id)
+                        && let Some(a) = doc.added().iter().filter(|a| a.page == sel_page).nth(sel_idx)
+                        && let pdfcraft_engine::AddedContent::Text(text) = &a.content
+                    {
+                        let mut style = text.clone();
+                        style.font_resource = Some(resource);
+                        style.bold = false;
+                        style.italic = false;
+                        if self.apply_edit(
+                            ctx,
+                            pdfcraft_engine::Edit::UpdateContent {
+                                page: sel_page,
+                                index: sel_idx,
+                                content: pdfcraft_engine::AddedContent::Text(style.clone()),
+                            },
+                        ) {
+                            self.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], aligns: Vec::new(), ..style };
+                        }
+                    } else {
+                        self.text_style.font_resource = Some(resource);
+                        self.text_style.bold = false;
+                        self.text_style.italic = false;
+                    }
                 }
             }
             FilePurpose::Combine => self.stage_combine(files),
