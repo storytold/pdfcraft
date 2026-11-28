@@ -30,6 +30,107 @@ pub(crate) fn validate_words<'a>(words: impl IntoIterator<Item = &'a PlacedWord>
     Ok(count)
 }
 
+/// How a character takes part in the order a word is drawn in. The classes follow the ones the
+/// text extractor puts a line back into reading order by (`reverse_rtl` in `pdfcraft-render`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// A letter, mark or punctuation of a right-to-left script (Hebrew, Arabic and the others).
+    Rtl,
+    /// A numeric character (the Arabic-Indic digits included), and what belongs to its number.
+    Number,
+    /// A letter of a left-to-right script, and what reads on with it.
+    Letter,
+    /// Everything else: punctuation, symbols, marks.
+    Other,
+}
+
+fn kind(c: char) -> Kind {
+    let rtl_block = matches!(c as u32, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF);
+    if c.is_numeric() {
+        Kind::Number
+    } else if rtl_block {
+        Kind::Rtl
+    } else if c.is_alphabetic() {
+        Kind::Letter
+    } else {
+        Kind::Other
+    }
+}
+
+/// The word's characters in the order they are drawn, left to right. A recognized word holds
+/// its text in logical order (the order it is read and typed in), but a PDF shows text in
+/// visual order, and that is what the text extractor expects: for a right-to-left word the
+/// first letter is the rightmost. So a word with a right-to-left character (a letter, or
+/// punctuation of a right-to-left script such as the Arabic comma) is drawn back to front,
+/// except that a number or a left-to-right word inside it keeps its own order, by the rules
+/// the extractor reads them back with in a right-to-left line. Without this an Arabic or
+/// Hebrew word read back, searched or copied comes out reversed. A word with no
+/// right-to-left character is drawn as it is.
+///
+/// A word is ordered on its own, as part of a right-to-left line; the caller leaves a page
+/// with no right-to-left letter alone. Where the extractor goes by the rest of the line (a
+/// left-to-right line on a page that also has right-to-left text, or a left-to-right word
+/// next to this one), a right-to-left word's letters still read back in order, but what is
+/// attached to them (punctuation, a number) can come back on its other side.
+fn visual_order(text: &str) -> Vec<char> {
+    let mut chars: Vec<char> = text.chars().collect();
+    let mut kinds: Vec<Kind> = chars.iter().copied().map(kind).collect();
+    if !kinds.contains(&Kind::Rtl) {
+        return chars;
+    }
+    let n = chars.len();
+    // A single separator between two digits is part of the number: 12.5, 16/11/2026.
+    for i in 1..n.saturating_sub(1) {
+        let separator = matches!(chars[i], '.' | ',' | ':' | '/' | '+' | '-' | '\u{066B}' | '\u{066C}');
+        if separator && kinds[i - 1] == Kind::Number && kinds[i + 1] == Kind::Number {
+            kinds[i] = Kind::Number;
+        }
+    }
+    // So is a percent or currency sign next to it, on either side: 15%, $20. (Not the Arabic
+    // percent sign: it is a right-to-left character and reads on with the letters.)
+    let sign = |c: char| matches!(c, '%' | '‰' | '#' | '$' | '¢'..='¥' | '°' | '\u{20A0}'..='\u{20CF}');
+    for i in 1..n {
+        if kinds[i] == Kind::Other && sign(chars[i]) && kinds[i - 1] == Kind::Number {
+            kinds[i] = Kind::Number;
+        }
+    }
+    for i in (0..n.saturating_sub(1)).rev() {
+        if kinds[i] == Kind::Other && sign(chars[i]) && kinds[i + 1] == Kind::Number {
+            kinds[i] = Kind::Number;
+        }
+    }
+    // A number after a left-to-right letter reads on with it (A4, v2)...
+    let mut after_letter = false;
+    for kind in &mut kinds {
+        match *kind {
+            Kind::Letter => after_letter = true,
+            Kind::Rtl => after_letter = false,
+            Kind::Number if after_letter => *kind = Kind::Letter,
+            Kind::Number | Kind::Other => {}
+        }
+    }
+    // ...and so does what stands between two of them (a hyphen, a bracket).
+    let mut from = 0;
+    while let Some(first) = (from..n).find(|&i| kinds[i] == Kind::Other) {
+        let end = (first..n).find(|&i| kinds[i] != Kind::Other).unwrap_or(n);
+        if first > 0 && end < n && kinds[first - 1] == Kind::Letter && kinds[end] == Kind::Letter {
+            kinds[first..end].fill(Kind::Letter);
+        }
+        from = end;
+    }
+    // Back to front, each left-to-right stretch then put back in its own order.
+    chars.reverse();
+    kinds.reverse();
+    let keeps_order = |kind: Kind| matches!(kind, Kind::Number | Kind::Letter);
+    let mut from = 0;
+    while let Some(first) = (from..n).find(|&i| keeps_order(kinds[i])) {
+        let end = (first..n).find(|&i| !keeps_order(kinds[i])).unwrap_or(n);
+        chars[first..end].reverse();
+        from = end;
+    }
+    chars
+}
+
 pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) -> Result<(), EditError> {
     validate_words(words)?;
     // Keep the existing Latin layout, including Helvetica's proportional advance widths.
@@ -100,8 +201,13 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
     // `pdfcraft_ocr::text_layer` (#3029), the text is drawn inside `q … Q` so the invisible
     // rendering mode cannot leak into later content streams on the page.
     let mut content = String::from("/OCR BMC\nq\nBT\n3 Tr\n");
+    // Only a page that has a right-to-left letter is reordered. On any other page the extractor
+    // reads every line left to right, so each word is drawn as it was recognized, a stray
+    // right-to-left punctuation mark included.
+    let right_to_left = words.iter().any(|w| w.text.chars().any(|c| kind(c) == Kind::Rtl && c.is_alphabetic()));
     for w in words {
-        let count = w.text.chars().count();
+        let glyphs: Vec<char> = if right_to_left { visual_order(&w.text) } else { w.text.chars().collect() };
+        let count = glyphs.len();
         if count == 0 || w.up[0].hypot(w.up[1]) <= 0.0 || w.across[0].hypot(w.across[1]) <= 0.0 {
             continue;
         }
@@ -123,8 +229,8 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
                 w.origin[1] + at * w.across[1] + 0.2 * w.up[1]
             ));
         };
-        for (i, ch) in w.text.chars().enumerate() {
-            let Some(&(font, code)) = codes.get(&ch) else { continue };
+        for (i, ch) in glyphs.iter().enumerate() {
+            let Some(&(font, code)) = codes.get(ch) else { continue };
             if let Some(previous) = font_index
                 && previous != font
             {
