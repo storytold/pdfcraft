@@ -1,193 +1,174 @@
-//! Vector icons: embedded Lucide SVGs, recoloured to white, rasterized by egui_extras at the exact
-//! on-screen pixel size, and tinted per use (PhotoCraft lesson: never use Unicode glyphs as icons).
+//! The app's own icon set: the Lucide documents (ISC licence, see assets/icons/LICENSE-lucide.txt) that the
+//! built-in catalogue has no icon for. Names the catalogue serves are drawn by the catalogue, so none of them is
+//! listed here (`register_app_icons` refuses a clashing name and only logs it).
 
-use std::sync::OnceLock;
+use craft::ui::primitives::{AppIcons, register_app_icons};
 
-use craft_ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
-use craft_ui::icons::{SvgIconSet, SvgStyle};
+// PLAN: the writer round's file deletion removed every assets/icons/*.svg; the 83 files listed in `ICONS` and
+// circle-check, triangle-alert and circle-x (the source of crates/sign/src/status_layers.rs's path data, entries kept
+// in ATTRIBUTION.toml) must be restored from the base (`git checkout <base> -- assets/icons/<name>.svg`), byte for
+// byte, so `include_bytes!` and the SHA-256 entries hold. The other 105 stay deleted.
 
-use egui::{Color32, Rect, Response, Stroke, Vec2};
-
-use crate::icon_data::ICONS;
-use crate::theme::{self, Tokens};
-
-fn white_icons() -> &'static SvgIconSet {
-    static MAP: OnceLock<SvgIconSet> = OnceLock::new();
-    MAP.get_or_init(|| SvgIconSet::new(ICONS, SvgStyle { current_color: "#ffffff", stroke_width: Some("1.75") }, "bytes://icons/", "square"))
-}
-
-pub fn exists(name: &str) -> bool {
-    white_icons().contains(name)
-}
-
-fn source(name: &str) -> egui::ImageSource<'static> {
-    // PdfCraft caches an unknown name under the resolved fallback name.
-    white_icons().source(white_icons().canonical_name(name).unwrap_or("square"))
-}
-
-pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
-    egui::Image::new(source(name)).fit_to_exact_size(Vec2::splat(size)).tint(tint)
-}
-
-pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
-    image(name, size, tint).paint_at(ui, Rect::from_center_size(rect.center(), Vec2::splat(size)));
-}
-
-/// Square icon button: transparent until hovered; `selected` gets the accent treatment.
-pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tooltip: &str) -> Response {
-    let t = Tokens::get(ui.ctx());
-    // The shared button paints no fill of its own: the eased press wash below replaces it.
-    let clear = |icon| ButtonVisuals { fill: Color32::TRANSPARENT, stroke: Stroke::NONE, icon };
-    let style = IconButtonStyle {
-        normal: clear(t.icon),
-        hovered: clear(t.icon),
-        pressed: Some(clear(t.icon)),
-        selected: clear(t.accent_text),
-        corner_radius: t.radius.into(),
-        focus_stroke: Stroke::new(1.0, t.accent),
+/// One icon document of `assets/icons/`, named as its file.
+macro_rules! icon {
+    ($name:literal) => {
+        ($name, include_bytes!(concat!("../../../assets/icons/", $name, ".svg")) as &[u8])
     };
-    let label = if tooltip.is_empty() { name } else { tooltip };
-    // The wash eases from the response, so reserve its place under the icon and focus ring.
-    let wash = ui.painter().add(egui::Shape::Noop);
-    let mut painted = None;
-    let resp = IconButton::new(label, Vec2::splat(box_size), &style).selected(selected).show(ui, |_, rect, tint| painted = Some((rect, tint)));
-    if let Some((rect, tint)) = painted {
-        let press = theme::Press::track(ui, &resp);
-        let mut shapes = Vec::with_capacity(2);
-        let fill = press.wash_color(&t, selected);
-        if fill.a() > 0 {
-            shapes.push(egui::Shape::rect_filled(rect, t.radius, fill));
-        }
-        if selected {
-            shapes.push(egui::Shape::rect_stroke(
-                rect.shrink(0.5),
-                t.radius,
-                Stroke::new(1.0, t.accent.gamma_multiply(0.45)),
-                egui::StrokeKind::Inside,
-            ));
-        }
-        ui.painter().set(wash, egui::Shape::Vec(shapes));
-        // The glyph shrinks a little and drops a pixel while the pointer is down.
-        let size = (box_size * 0.5).round() * (1.0 - 0.08 * press.down);
-        paint(ui, rect.translate(press.offset()), name, size, tint);
-    }
-    let resp = theme::hand(resp);
-    if tooltip.is_empty() { resp } else { resp.on_hover_text(tooltip) }
+}
+
+/// The documents, named as the engine's icon strings and `CommentTool::icon` name them.
+const ICONS: &[(&str, &[u8])] = &[
+    icon!("a-large-small"),
+    icon!("accessibility"),
+    icon!("arrow-up-right"),
+    icon!("badge-check"),
+    icon!("bell"),
+    icon!("book-open"),
+    icon!("bookmark-plus"),
+    icon!("braces"),
+    icon!("camera"),
+    icon!("check-circle-2"),
+    icon!("circle-check"),
+    icon!("circle-help"),
+    icon!("circle-x"),
+    icon!("clipboard-paste"),
+    icon!("clock-3"),
+    icon!("cloud-upload"),
+    icon!("code-xml"),
+    icon!("columns-2"),
+    icon!("columns-3"),
+    icon!("copy-plus"),
+    icon!("ellipsis-vertical"),
+    icon!("file-check"),
+    icon!("file-code"),
+    icon!("file-down"),
+    icon!("file-input"),
+    icon!("file-lock-2"),
+    icon!("file-minus"),
+    icon!("file-output"),
+    icon!("file-pen-line"),
+    icon!("file-plus-2"),
+    icon!("file-scan"),
+    icon!("file-search"),
+    icon!("file-spreadsheet"),
+    icon!("file-symlink"),
+    icon!("file-text"),
+    icon!("file-x"),
+    icon!("files"),
+    icon!("film"),
+    icon!("filter"),
+    icon!("flip-horizontal-2"),
+    icon!("flip-vertical-2"),
+    icon!("folder-plus"),
+    icon!("freehand-highlighter"),
+    icon!("git-compare"),
+    icon!("hash"),
+    icon!("heading"),
+    icon!("highlighter"),
+    icon!("image-plus"),
+    icon!("languages"),
+    icon!("list-checks"),
+    icon!("maximize"),
+    icon!("message-circle-reply"),
+    icon!("message-square-plus"),
+    icon!("message-square-quote"),
+    icon!("message-square-text"),
+    icon!("messages-square"),
+    icon!("mic"),
+    icon!("minimize"),
+    icon!("minimize-2"),
+    icon!("move-horizontal"),
+    icon!("move-right"),
+    icon!("panel-left"),
+    icon!("panel-right"),
+    icon!("paperclip"),
+    icon!("pen-line"),
+    icon!("presentation"),
+    icon!("printer"),
+    icon!("replace"),
+    icon!("reply"),
+    icon!("rows-3"),
+    icon!("scan-text"),
+    icon!("send"),
+    icon!("settings-2"),
+    icon!("share-2"),
+    icon!("shield-check"),
+    icon!("signature"),
+    icon!("square-dashed-mouse-pointer"),
+    icon!("square-terminal"),
+    icon!("squares-subtract"),
+    icon!("sticky-note"),
+    icon!("tag"),
+    icon!("text-cursor-input"),
+    icon!("text-select"),
+    icon!("trash-2"),
+    icon!("triangle-alert"),
+    icon!("type"),
+    icon!("user-round"),
+    icon!("wrench"),
+];
+
+/// The app's set, registered beside the catalogue by [`register`]. Its documents are drawn as drawn: they carry
+/// Lucide's own stroke width.
+pub(crate) static PDFCRAFT: AppIcons = AppIcons::new("pdfcraft", None, ICONS);
+
+/// Makes the app's icons known to every icon lookup; runs before the first pass.
+pub(crate) fn register() {
+    register_app_icons(&PDFCRAFT);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn every_catalog_icon_exists() {
-        for g in pdfcraft_engine::catalog::TOOL_GROUPS {
-            assert!(super::exists(g.icon), "missing icon {}", g.icon);
-            for s in g.sections {
-                for i in s.items {
-                    assert!(super::exists(i.icon), "missing icon {}", i.icon);
+    use craft::behavior::IconId;
+    use craft::ui::primitives::{has_icon, icon_names};
+    use pdfcraft_engine::{catalog, commands, links};
+
+    /// Every icon string the engine carries: groups, items, commands and links.
+    fn engine_icons() -> Vec<(String, &'static str)> {
+        let mut names = Vec::new();
+        for group in catalog::TOOL_GROUPS {
+            names.push((format!("group {}", group.id), group.icon));
+            for section in group.sections {
+                for item in section.items {
+                    names.push((format!("item {}", item.label), item.icon));
                 }
             }
         }
+        for command in commands::COMMANDS {
+            names.push((format!("command {}", command.id), command.icon));
+        }
+        for link in links::LINKS {
+            names.push((format!("link {}", link.command), link.icon));
+        }
+        names
     }
 
+    /// A name neither the catalogue nor the app set has draws nothing, silently.
     #[test]
-    fn every_command_icon_exists() {
-        for c in pdfcraft_engine::commands::COMMANDS {
-            assert!(super::exists(c.icon), "missing icon {} ({})", c.icon, c.id);
+    fn every_icon_the_app_names_resolves() {
+        register();
+        let missing: Vec<String> =
+            engine_icons().into_iter().filter(|(_, name)| !has_icon(&IconId::new(name))).map(|(owner, name)| format!("{owner}: {name}")).collect();
+        assert!(missing.is_empty(), "icons nobody has: {missing:?}");
+        assert!(has_icon(&IconId::new(crate::chrome::HOME_ICON)), "the title bar Home icon resolves");
+        for name in ["circle-check", "circle-x", "triangle-alert"] {
+            assert!(has_icon(&IconId::new(name)), "signature notice icon {name}");
+        }
+        // The eight documents the comment tools name stay served.
+        for name in
+            ["message-square-plus", "type", "highlighter", "move-right", "message-square-quote", "message-square-text", "replace", "paperclip"]
+        {
+            assert!(has_icon(&IconId::new(name)), "comment tool icon {name}");
         }
     }
 
+    /// `register_app_icons` keeps the catalogue's glyph and only logs a clash, so a shadowing name would draw the
+    /// wrong icon without a failure.
     #[test]
-    fn shared_catalog_preserves_existing_icons_and_fallback_uri() {
-        assert_eq!(ICONS.len(), 186);
-        assert!(exists("minimize-2"));
-        for (name, original) in ICONS {
-            let expected =
-                String::from_utf8_lossy(original).replace("currentColor", "#ffffff").replace("stroke-width=\"2\"", "stroke-width=\"1.75\"");
-            let egui::ImageSource::Bytes { uri, bytes } = source(name) else { panic!("expected SVG bytes") };
-            assert_eq!(uri.as_ref(), format!("bytes://icons/{name}.svg"));
-            assert_eq!(bytes.as_ref(), expected.as_bytes(), "{name}");
-        }
-        let egui::ImageSource::Bytes { uri, bytes } = source("missing-icon") else { panic!("expected SVG bytes") };
-        let egui::ImageSource::Bytes { bytes: fallback, .. } = source("square") else { panic!("expected SVG bytes") };
-        assert_eq!(uri.as_ref(), "bytes://icons/square.svg");
-        assert_eq!(bytes.as_ref(), fallback.as_ref());
-        assert!(!exists("missing-icon"));
-    }
-
-    #[test]
-    fn shared_button_preserves_pointer_responses() {
-        // The shared button must respond like the original allocate-and-paint path in both
-        // themes. Its painting differs on purpose (the eased press wash, the selected outline
-        // and the sinking glyph); the keyboard-focus outline is covered in craft-ui.
-        fn frame(
-            ctx: &egui::Context,
-            events: Vec<egui::Event>,
-            selected: bool,
-            enabled: bool,
-            legacy: bool,
-        ) -> (egui::Response, Vec<egui::epaint::ClippedShape>) {
-            let mut response = None;
-            let mut output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
-                response = Some(
-                    ui.add_enabled_ui(enabled, |ui| {
-                        if legacy {
-                            let t = Tokens::get(ui.ctx());
-                            let (rect, response) = ui.allocate_exact_size(Vec2::splat(28.0), egui::Sense::click());
-                            if selected {
-                                ui.painter().rect_filled(rect, t.radius, t.accent_soft);
-                            } else if response.is_pointer_button_down_on() {
-                                ui.painter().rect_filled(rect, t.radius, t.pressed);
-                            } else if response.hovered() {
-                                ui.painter().rect_filled(rect, t.radius, t.hover);
-                            }
-                            let tint = if selected { t.accent_text } else { t.icon };
-                            paint(ui, rect, "square", (28.0_f32 * 0.5).round(), tint);
-                            response
-                        } else {
-                            button(ui, "square", 28.0, selected, "")
-                        }
-                    })
-                    .inner,
-                );
-            });
-            output.textures_delta.clear();
-            (response.unwrap(), output.shapes)
-        }
-        for theme in [crate::theme::ThemeKind::Dark, crate::theme::ThemeKind::Light] {
-            for selected in [false, true] {
-                for enabled in [false, true] {
-                    let old = egui::Context::default();
-                    let new = egui::Context::default();
-                    for ctx in [&old, &new] {
-                        crate::theme::apply(ctx, theme);
-                        egui_extras::install_image_loaders(ctx);
-                    }
-                    let mut center = egui::Pos2::ZERO;
-                    for step in 0..7 {
-                        let events = match step {
-                            2 => vec![egui::Event::PointerMoved(center)],
-                            3 | 4 => vec![egui::Event::PointerButton {
-                                pos: center,
-                                button: egui::PointerButton::Primary,
-                                pressed: step == 3,
-                                modifiers: egui::Modifiers::NONE,
-                            }],
-                            5 => vec![egui::Event::PointerMoved(egui::pos2(300.0, 200.0))],
-                            _ => vec![],
-                        };
-                        let (a, _) = frame(&old, events.clone(), selected, enabled, true);
-                        let (b, after) = frame(&new, events, selected, enabled, false);
-                        center = a.rect.center();
-                        assert_eq!(a.rect, b.rect);
-                        assert_eq!(
-                            (a.clicked(), a.hovered(), a.is_pointer_button_down_on()),
-                            (b.clicked(), b.hovered(), b.is_pointer_button_down_on())
-                        );
-                        assert!(!after.is_empty(), "{theme:?}, selected={selected}, enabled={enabled}, step={step}");
-                    }
-                }
-            }
-        }
+    fn the_app_set_never_shadows_a_catalogue_icon() {
+        let catalogue = icon_names();
+        let shadowing: Vec<&str> = PDFCRAFT.icons.iter().map(|(name, _)| *name).filter(|name| catalogue.contains(name)).collect();
+        assert!(shadowing.is_empty(), "the catalogue already has {shadowing:?}");
     }
 }

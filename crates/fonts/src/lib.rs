@@ -1,47 +1,47 @@
 //! pdfcraft-fonts — font metrics and encodings for generated appearances (L2).
 //!
-//! See the README: the metrics are approximations by character class (no vendor metrics files
-//! are bundled). The full font subsystem lands in M2.2/M7.
+//! Standard-14 advance widths are exact (`Std14`, ISO 32000-2 Annex D). What remains approximate
+//! is everything that needs a font *program*: this crate reads font dictionaries, never embedded
+//! programs, so it has no glyph outlines for document fonts and cannot subset or re-embed. That
+//! is phase F 4.2 in docs/plan/execution-plan.md.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(test)]
+mod cjk_scripts;
 mod craft;
 pub mod embedding;
-mod encodings;
+pub mod fallback;
 pub mod pdf;
+pub mod plan;
 mod script;
+pub mod shaped_text;
 mod shaping;
 pub mod source_shaping;
 pub use craft::{
-    CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_arabic_font, document_hebrew_font, document_japanese_font, document_japanese_font_for_style,
-    document_japanese_fonts_for_style, document_thai_font, ui_arabic_fonts, ui_chinese_fonts, ui_cjk_fonts, ui_hebrew_fonts, ui_japanese_fonts,
-    ui_telugu_fonts, ui_thai_fonts,
+    CRAFT_FONTS, EmbeddedFace, SHIPPORI_MINCHO, document_arabic_font, document_devanagari_font, document_hebrew_font, document_japanese_font,
+    document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_fonts, document_thai_font, ui_arabic_fonts, ui_chinese_fonts,
+    ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
 };
+pub use craft_pdf::fonts::{
+    Std14, Std14Match, UnicodeCMap, encodings, first_non_win_ansi, fits_win_ansi, win_ansi, win_ansi_byte, win_ansi_char, win_ansi_encodable,
+};
+pub use plan::{MAX_PLAN_GLYPHS, MAX_TYPE3_GLYPHS, PlannedType3, TextPlan};
 pub use script::{
-    GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_missing, script_outline,
+    GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, craft_glyph, face_has, japanese_glyph, japanese_glyph_from,
+    script_missing, script_outline,
 };
-pub use shaping::{ShapedCluster, ShapedScript, arabic_glyph, arabic_has, shape_arabic, shape_thai, shaped_glyph, thai_has};
+pub use shaping::{
+    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, face_glyph, hebrew_has, latin_has, shape_arabic, shape_hebrew, shape_latin, shape_thai,
+    shaped_glyph, thai_has,
+};
 
-/// Approximate advance of `s` in Helvetica (or Arial) at `size` points.
+/// Advance of `s` in Helvetica at `size` points, using the exact standard-14 metrics.
+///
+/// Kept as a free function because generated appearances overwhelmingly use Helvetica; reach for
+/// [`Std14`] directly for any other face, and never for a scaled approximation of this one.
 pub fn helvetica_width(s: &str, size: f64) -> f64 {
-    let units: f64 = s
-        .chars()
-        .map(|c| match c {
-            ' ' | 'i' | 'j' | 'l' | '\'' | '!' | '|' | '.' | ',' | ':' | ';' | 'I' => 260.0,
-            'f' | 't' | 'r' | '(' | ')' | '[' | ']' | '/' | '-' | '"' => 333.0,
-            'm' => 833.0,
-            'w' => 722.0,
-            'M' => 833.0,
-            'W' => 944.0,
-            'J' | 'c' | 'k' | 's' | 'v' | 'x' | 'y' | 'z' => 500.0,
-            '0'..='9' | 'a'..='z' | '$' | '#' | '?' | '_' => 556.0,
-            'A'..='Z' => 680.0,
-            '@' => 1015.0,
-            _ if c.is_whitespace() => 260.0,
-            _ => 584.0,
-        })
-        .sum();
-    units * size / 1000.0
+    Std14::Helvetica.text_width(s, size)
 }
 
 /// Approximate advance of `s` at `size` points in a CJK font: full-width characters take one
@@ -55,6 +55,18 @@ pub fn cjk_width(s: &str, size: f64) -> f64 {
             _ => helvetica_width(c.encode_utf8(&mut buf), size),
         })
         .sum()
+}
+
+/// Approximate advance of `s` in Inter Regular at `size` points.
+pub fn inter_width(s: &str, size: f64) -> f64 {
+    use skrifa::MetadataProvider as _;
+    let Ok(font) = skrifa::FontRef::new(INTER_REGULAR) else { return helvetica_width(s, size) };
+    let loc = skrifa::instance::LocationRef::default();
+    let upem = font.metrics(skrifa::instance::Size::unscaled(), loc).units_per_em.max(1) as f64;
+    let scale = size / upem;
+    let charmap = font.charmap();
+    let advances = font.glyph_metrics(skrifa::instance::Size::unscaled(), loc);
+    s.chars().map(|c| charmap.map(c).and_then(|gid| advances.advance_width(gid)).unwrap_or(0.0) as f64 * scale).sum()
 }
 
 /// East Asian wide and full-width characters (Unicode UAX #11 W and F, by block).
@@ -75,136 +87,74 @@ fn is_wide(c: char) -> bool {
     )
 }
 
-/// Greedy line breaking within `width` points (paragraphs split on newlines; words longer
+/// Greedy line breaking within `width` points (paragraphs split on line breaks, where CRLF counts as one; words longer
 /// than a line are broken by character).
 pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
     wrap_with(text, size, width, helvetica_width)
 }
 
 /// [`wrap`], measuring with `measure` (for example [`cjk_width`]).
+///
+/// A line measures as the sum of its words, the spaces between them and the characters of a broken
+/// word, each measured once, so the work stays linear in `text` however much fits on a line.
 pub fn wrap_with(text: &str, size: f64, width: f64, measure: impl Fn(&str, f64) -> f64) -> Vec<String> {
     let mut lines = Vec::new();
-    for para in text.split(['\n', '\r']) {
+    let space = measure(" ", size);
+    // A CRLF pair is one break, a lone CR or LF is one break each.
+    for para in text.replace("\r\n", "\n").split(['\n', '\r']) {
         let mut line = String::new();
+        let mut line_width = 0.0;
+        // No word is on the line yet; an empty word (a leading space) still starts it.
+        let mut fresh = true;
         for word in para.split(' ') {
-            let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            if measure(&candidate, size) <= width || line.is_empty() && measure(word, size) <= width {
-                line = candidate;
+            let word_width = measure(word, size);
+            let candidate = if fresh { word_width } else { line_width + space + word_width };
+            if candidate <= width {
+                if !fresh {
+                    line.push(' ');
+                }
+                line.push_str(word);
+                line_width = candidate;
+                fresh = false;
                 continue;
             }
-            if !line.is_empty() {
+            // Indentation alone is not a line: drop it before an over-long word.
+            if line.trim().is_empty() {
+                line.clear();
+            } else {
                 lines.push(std::mem::take(&mut line));
             }
-            for ch in word.chars() {
-                if !line.is_empty() && measure(&format!("{line}{ch}"), size) > width {
-                    lines.push(std::mem::take(&mut line));
+            line_width = 0.0;
+            // Broken between characters, but never before a Thai mark: it stays on its letter.
+            let mut start = 0;
+            let mut units = Vec::new();
+            for (i, ch) in word.char_indices().skip(1) {
+                if !shaped_text::joins_previous(ch) {
+                    units.extend(word.get(start..i));
+                    start = i;
                 }
-                line.push(ch);
             }
+            units.extend(word.get(start..).filter(|u| !u.is_empty()));
+            for unit in units {
+                let unit_width = measure(unit, size);
+                if !line.is_empty() && line_width + unit_width > width {
+                    lines.push(std::mem::take(&mut line));
+                    line_width = 0.0;
+                }
+                line.push_str(unit);
+                line_width += unit_width;
+            }
+            fresh = line.is_empty();
         }
         lines.push(line);
     }
     lines
 }
 
-/// The WinAnsiEncoding (ISO 32000-2 Annex D) code for `c`, if the encoding has one.
-///
-/// Codes 0x80–0x9F come from the same table the text extractor decodes with, so encoding and
-/// decoding agree (Š š Ž ž Œ œ Ÿ ƒ † ‡ ˆ ˜ ‰ ‹ › as well as quotes, dashes, € and ™).
-pub fn win_ansi_byte(c: char) -> Option<u8> {
-    match c {
-        '\u{20}'..='\u{7e}' | '\u{a0}'..='\u{ff}' => u8::try_from(u32::from(c)).ok(),
-        _ => {
-            let high = encodings::WIN_ANSI.get(0x80..0xa0)?;
-            let i = high.iter().position(|&u| u != 0 && u == u32::from(c))?;
-            u8::try_from(0x80 + i).ok()
-        }
-    }
-}
-
-/// Encode text in WinAnsiEncoding (ISO 32000-2 Annex D); tabs become spaces and unmappable
-/// characters become `?`.
-pub fn win_ansi(s: &str) -> Vec<u8> {
-    s.chars().map(|c| if c == '\t' { b' ' } else { win_ansi_byte(c).unwrap_or(b'?') }).collect()
-}
-
-/// The character encoding of a predefined Unicode CMap (`UniJIS-UTF16-H`, `UniGB-UCS2-H`, …;
-/// ISO 32000-2 §9.7.5.2), which maps Unicode text straight to codes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UnicodeCMap {
-    Ucs2,
-    Utf16,
-    Utf8,
-    Utf32,
-}
-
-impl UnicodeCMap {
-    /// The encoding of the predefined CMap `name`, if it is a horizontal Unicode one. Vertical
-    /// (`-V`) CMaps are refused: field appearances are laid out horizontally, so their glyphs
-    /// would be drawn stacked down the field instead of across it.
-    pub fn from_name(name: &[u8]) -> Option<Self> {
-        let name = std::str::from_utf8(name).ok()?;
-        if !name.starts_with("Uni") || !name.ends_with("-H") {
-            return None;
-        }
-        name.split('-').find_map(|part| match part {
-            "UCS2" => Some(Self::Ucs2),
-            "UTF16" => Some(Self::Utf16),
-            "UTF8" => Some(Self::Utf8),
-            "UTF32" => Some(Self::Utf32),
-            _ => None,
-        })
-    }
-
-    /// The first character of `s` this encoding can't hold, which [`Self::encode`] would write as
-    /// `?`: a character beyond U+FFFF in UCS-2 (`𠀋`). UTF-16, UTF-8 and UTF-32 hold every one.
-    pub fn first_unencodable(self, s: &str) -> Option<char> {
-        match self {
-            Self::Ucs2 => s.chars().find(|c| u16::try_from(u32::from(*c)).is_err()),
-            Self::Utf16 | Self::Utf8 | Self::Utf32 => None,
-        }
-    }
-
-    /// Encode `s`; tabs become spaces, and characters UCS-2 can't hold become `?` (check them
-    /// first with [`Self::first_unencodable`]: PdfCraft refuses such text rather than write `?`).
-    pub fn encode(self, s: &str) -> Vec<u8> {
-        let mut out = Vec::with_capacity(s.len().saturating_mul(2));
-        let mut units = [0u16; 2];
-        let mut buf = [0u8; 4];
-        for c in s.chars() {
-            let c = if c == '\t' { ' ' } else { c };
-            match self {
-                Self::Ucs2 => {
-                    let unit = u16::try_from(u32::from(c)).unwrap_or(u16::from(b'?'));
-                    out.extend_from_slice(&unit.to_be_bytes());
-                }
-                Self::Utf16 => {
-                    for unit in c.encode_utf16(&mut units) {
-                        out.extend_from_slice(&unit.to_be_bytes());
-                    }
-                }
-                Self::Utf8 => out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes()),
-                Self::Utf32 => out.extend_from_slice(&u32::from(c).to_be_bytes()),
-            }
-        }
-        out
-    }
-}
-
-/// Whether [`win_ansi`] keeps `c` rather than writing `?` (a tab becomes a space).
-pub fn win_ansi_encodable(c: char) -> bool {
-    c == '\t' || win_ansi_byte(c).is_some()
-}
-
-/// The first character of `s` that [`win_ansi`] can't encode and would write as `?`.
-pub fn first_non_win_ansi(s: &str) -> Option<char> {
-    s.chars().find(|c| !win_ansi_encodable(*c))
-}
-
 /// The first character of `s` the standard fonts (Helvetica and the rest of the standard 14, in
 /// WinAnsiEncoding) can't draw, so that a generated appearance would show it as `?`. Line breaks
 /// don't count: appearances lay lines out themselves. PdfCraft refuses such text with
-/// [`undrawable_message`] instead of writing `?` (AGENTS.md §4: never lose work silently).
+/// [`undrawable_message`] instead of writing `?` (app-agents.md rule 13: never lose work silently).
 pub fn first_undrawable(s: &str) -> Option<char> {
     s.chars().find(|c| !matches!(c, '\n' | '\r') && !win_ansi_encodable(*c))
 }
@@ -263,6 +213,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wrap_keeps_leading_spaces() {
+        assert_eq!(wrap("    indented", 11.0, 500.0), ["    indented"]);
+        assert_eq!(wrap("  a b\n c", 11.0, 500.0), ["  a b", " c"]);
+        assert_eq!(wrap("", 11.0, 500.0), [""]);
+        // A single leading space before a word that must be broken leaves no blank first line.
+        let broken = wrap(" abcdefghijklmnopqrstuvwxyz", 11.0, 40.0);
+        assert!(broken.len() > 1 && broken.iter().all(|l| !l.is_empty()), "{broken:?}");
+        // So does indentation of two or more spaces: no whitespace-only line, same as one space.
+        let broken = wrap("  abcdefghijklmnopqrstuvwxyz", 11.0, 40.0);
+        assert!(broken.len() > 1 && broken.iter().all(|l| !l.trim().is_empty()), "{broken:?}");
+        assert_eq!(broken, wrap(" abcdefghijklmnopqrstuvwxyz", 11.0, 40.0));
+    }
+
+    #[test]
+    fn a_broken_thai_word_keeps_its_marks_on_their_letters() {
+        // Every character one point wide: "น้ำ" (three characters) is one unit, never split.
+        let lines = wrap_with("น้ำปั้นบุญฤทธิ์", 1.0, 2.0, |s, _| s.chars().count() as f64);
+        assert_eq!(lines.concat(), "น้ำปั้นบุญฤทธิ์");
+        assert_eq!(lines, ["น้ำ", "ปั้", "น", "บุ", "ญฤ", "ท", "ธิ์"]);
+        assert!(lines.iter().all(|l| l.chars().next().is_some_and(|c| !shaped_text::joins_previous(c))), "{lines:?}");
+    }
+
+    #[test]
+    fn crlf_is_one_line_break() {
+        assert_eq!(wrap("a\r\nb", 12.0, 100.0), ["a", "b"]);
+        assert_eq!(wrap("a\rb", 12.0, 100.0), ["a", "b"]);
+        assert_eq!(wrap("a\nb", 12.0, 100.0), ["a", "b"]);
+        assert_eq!(wrap("a\r\n\r\nb", 12.0, 100.0), ["a", "", "b"]);
+        assert_eq!(wrap("a\n\rb", 12.0, 100.0), ["a", "", "b"]);
+    }
+
+    #[test]
     fn win_ansi_encodability_matches_the_encoder() {
         for c in ['a', 'é', 'ÿ', '€', '—', '™', '\t', '?'] {
             assert!(win_ansi_encodable(c), "{c:?}");
@@ -299,6 +281,14 @@ mod tests {
     }
 
     #[test]
+    fn inter_width_measures_latin_extended_and_ascii() {
+        assert!(inter_width("Luka Petravić", 12.0) > 0.0);
+        assert_eq!(inter_width("", 12.0), 0.0);
+        let w = inter_width("čžšć", 10.0);
+        assert!(w > 10.0 && w < 100.0);
+    }
+
+    #[test]
     fn widths_wrap_and_encode() {
         assert!(helvetica_width("MMMM", 10.0) > helvetica_width("iiii", 10.0) * 2.0);
         assert_eq!(helvetica_width("", 12.0), 0.0);
@@ -311,11 +301,53 @@ mod tests {
         assert_eq!(literal(b"a(b)\\c"), b"(a\\(b\\)\\\\c)");
     }
 
+    /// WinAnsiEncoding's 0xAD is the `hyphen` glyph and its 0xA0 is `space`, not U+00AD and
+    /// U+00A0; MacRomanEncoding's 0xCA is `space` too.
+    ///
+    /// Annex D.2 gives each of those codes the same glyph name as the ordinary one (0x2D, 0x20),
+    /// so the bytes a Windows codepage calls a soft hyphen and a non-breaking space draw ordinary
+    /// ink and must extract as it. Reading them as the formatting characters hid them: a soft
+    /// hyphen is invisible, so a search for "well-known" missed text that drew exactly that, and
+    /// `redact`'s pattern matching missed it too; a non-breaking space does not match the space a
+    /// reader types. Over the 989-file pdf.js corpus this takes the soft hyphens we extract from
+    /// 117 to 13 (104 of them in `XiaoBiaoSong.pdf` alone) and the non-breaking spaces from 30 to
+    /// 26; what remains comes from `/ToUnicode` maps, which say so explicitly and are not touched.
+    /// pdftotext reads both codes as the ordinary character.
+    #[test]
+    fn the_alias_codes_read_as_the_glyph_they_draw() {
+        assert_eq!(encodings::WIN_ANSI.get(0xAD), Some(&u32::from('-')));
+        assert_eq!(encodings::WIN_ANSI.get(0x2D), Some(&u32::from('-')));
+        assert_eq!(encodings::WIN_ANSI.get(0xA0), Some(&u32::from(' ')));
+        assert_eq!(encodings::WIN_ANSI.get(0x20), Some(&u32::from(' ')));
+        assert_eq!(encodings::MAC_ROMAN.get(0xCA), Some(&u32::from(' ')));
+        assert_eq!(encodings::MAC_ROMAN.get(0x20), Some(&u32::from(' ')));
+        // MacRoman has no soft hyphen; 0xAD there is `notequal`, and keeps it.
+        assert_eq!(encodings::MAC_ROMAN.get(0xAD), Some(&0x2260));
+        // Writing is unaffected: '-' and ' ' take the canonical low codes, and a caller holding a
+        // literal U+00AD or U+00A0 still writes the high byte, which is the one that draws them.
+        assert_eq!(win_ansi_byte('-'), Some(0x2D));
+        assert_eq!(win_ansi_byte(' '), Some(0x20));
+        assert_eq!(win_ansi_byte('\u{00ad}'), Some(0xAD));
+        assert_eq!(win_ansi_byte('\u{00a0}'), Some(0xA0));
+        assert_eq!(win_ansi("a-b c"), b"a-b c");
+    }
+
     #[test]
     fn win_ansi_covers_the_0x80_to_0x9f_glyphs() {
-        // Every character in the WinAnsiEncoding table encodes to its code and back (#347).
+        // Every character in the WinAnsiEncoding table encodes to its code and back (#347), except
+        // where two codes share one glyph: 0xAD is `hyphen`, the same glyph as 0x2D, and 0xA0 is
+        // `space`, the same glyph as 0x20, so each decodes to the ordinary character and that
+        // character encodes back to the canonical low code. Round-tripping the *code* is what
+        // cannot hold there; round-tripping the character still does.
+        const ALIASES: &[u8] = &[0xA0, 0xAD];
         for (code, &u) in encodings::WIN_ANSI.iter().enumerate() {
             let Some(c) = char::from_u32(u).filter(|_| u != 0) else { continue };
+            if ALIASES.contains(&(code as u8)) {
+                let canonical = win_ansi_byte(c).expect("an aliased glyph still encodes");
+                assert!(canonical < code as u8, "{c:?}: the canonical code is the lower one");
+                assert_eq!(encodings::WIN_ANSI.get(usize::from(canonical)), Some(&u), "both codes mean the same character");
+                continue;
+            }
             assert_eq!(win_ansi_byte(c), Some(code as u8), "{c:?} (U+{u:04X})");
             assert_eq!(win_ansi(&c.to_string()), [code as u8]);
         }
@@ -354,5 +386,21 @@ mod tests {
         assert_eq!(cjk_width("A", 10.0), helvetica_width("A", 10.0));
         let lines = wrap_with("日本語のテキストは文字単位で折り返されます", 10.0, 45.0, cjk_width);
         assert!(lines.len() > 3 && lines.iter().all(|l| cjk_width(l, 10.0) <= 45.0), "{lines:?}");
+    }
+
+    /// Wrapping measures each word and character a bounded number of times, however many fit on a line.
+    #[test]
+    fn wrapping_measures_each_word_a_few_times() {
+        let measured = std::cell::Cell::new(0usize);
+        let measure = |s: &str, size: f64| {
+            measured.set(measured.get() + s.len());
+            helvetica_width(s, size)
+        };
+        let text = format!("{} {}", "word ".repeat(5_000), "x".repeat(5_000));
+        let lines = wrap_with(&text, 1.0, 13_000.0, measure);
+        assert_eq!(lines.len(), 2, "the words fit on one line, the long word on another");
+        assert!(measured.get() <= 4 * text.len(), "{} bytes measured", measured.get());
+        let narrow = wrap_with(&text, 10.0, 100.0, helvetica_width);
+        assert!(narrow.iter().all(|l| helvetica_width(l, 10.0) <= 100.0), "{narrow:?}");
     }
 }

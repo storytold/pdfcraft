@@ -93,7 +93,7 @@ pub(crate) fn carry(dst: &mut Document, src: Option<&Document>, standard: &Print
     let root = dst.root().ok_or(OrganizeError::NoPageTree)?;
     if let Some(intents) = &standard.intents {
         let src = src.ok_or_else(|| OrganizeError::Invalid("the output intents' source document was not kept".into()))?;
-        let copied = crate::import::copy_object(dst, src, intents, map);
+        let copied = crate::import::copy_object(dst, src, intents, map)?;
         dst.update_dict(root, |c| c.set(b"OutputIntents".to_vec(), copied))?;
     }
     let Some(version) = &standard.version else { return Ok(()) };
@@ -191,7 +191,7 @@ fn unescape(s: &str) -> String {
 }
 
 /// `s` as XML text: markup escaped, and characters XML 1.0 does not allow left out.
-fn esc(s: &str) -> String {
+pub(crate) fn esc(s: &str) -> String {
     s.chars()
         .filter(|c| (!c.is_control() || matches!(c, '\t' | '\n' | '\r')) && !matches!(c, '\u{FFFE}' | '\u{FFFF}'))
         .collect::<String>()

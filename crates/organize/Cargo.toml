@@ -11,7 +11,9 @@ workspace = true
 [dependencies]
 pdfcraft-content = { workspace = true }
 pdfcraft-cos = { workspace = true }
+pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+pdfcraft-oracle = { workspace = true }
 hayro-syntax = { workspace = true }

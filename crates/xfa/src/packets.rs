@@ -6,7 +6,31 @@ use pdfcraft_cos::{Document, Object};
 use crate::XfaError;
 
 /// Most decoded packet bytes read in total.
-const MAX_XDP: usize = 64 << 20;
+pub(crate) const MAX_XDP: usize = 64 << 20;
+/// Most bytes all filter stages of all packets may decode together.
+const MAX_DECODE_WORK: usize = 4 * MAX_XDP;
+
+/// Most bytes of a template [`crate::parse`] takes, and of the text [`read_packets`] returns. A
+/// UTF-16 packet within [`MAX_XDP`] grows by at most half going over to UTF-8 (a two-byte unit
+/// becomes at most three bytes; a four-byte pair stays four), so it fits. Other text can grow
+/// more: each byte of a packet that isn't valid UTF-8 may become a three-byte replacement
+/// character, and the packets of an array are joined by newlines. `read_packets` holds what it
+/// assembles to this limit too, so a template the reader returns always parses.
+pub(crate) const MAX_TEMPLATE_TEXT: usize = MAX_XDP / 2 * 3;
+
+/// `Err` once the XDP text assembled so far, `len` bytes, is past [`MAX_TEMPLATE_TEXT`].
+fn check_text(len: usize) -> Result<(), XfaError> {
+    if len > MAX_TEMPLATE_TEXT {
+        return Err(XfaError::TooLarge(format!(
+            "the XFA packets come to {len} bytes of text, past the {MAX_TEMPLATE_TEXT} bytes the reader accepts"
+        )));
+    }
+    Ok(())
+}
+
+/// Most XML nodes read when the XDP is parsed for its configuration, as many as the template
+/// parser allows.
+const MAX_XDP_NODES: u32 = 2_000_000;
 
 /// What was found in the XFA entry.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -97,6 +121,70 @@ fn to_text(bytes: &[u8]) -> String {
     }
 }
 
+/// Whether the XDP's configuration packet asks for dynamic rendering: `required` at
+/// `config/acrobat/acrobat7/dynamicRender` (Designer writes it for a dynamic form). The packet is
+/// the `config` child of the `xdp` root (a whole-XDP stream, or an array's packets read in order
+/// between its preamble and postamble), or the document itself when it is a bare `config` packet.
+/// An element of that name anywhere else (a data node, inside the template) is not it. XML that
+/// doesn't parse, or has a DTD, asks for nothing.
+pub(crate) fn requires_dynamic_render(xdp: &str) -> bool {
+    let opts = crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_XDP_NODES };
+    let Ok(doc) = crate::xml::Document::parse_with_options(xdp, opts) else { return false };
+    let root = doc.root_element();
+    /// `n`'s first child element named `name` (any namespace).
+    fn child<'a>(n: crate::xml::Node<'a>, name: &str) -> Option<crate::xml::Node<'a>> {
+        n.children().find(|c| c.is_element() && c.tag_name().name() == name)
+    }
+    let config = match root.tag_name().name() {
+        "config" => Some(root),
+        "xdp" => child(root, "config"),
+        _ => None,
+    };
+    config
+        .and_then(|c| child(c, "acrobat"))
+        .and_then(|a| child(a, "acrobat7"))
+        .and_then(|a| child(a, "dynamicRender"))
+        .and_then(|d| d.text())
+        .is_some_and(|t| t.trim() == "required")
+}
+
+/// Whether the AcroForm holds a signed signature field (`/FT /Sig` with a value), looked for at
+/// most 32 levels deep and among at most 10 000 fields. A form whose fields go past either limit
+/// counts as signed: what wasn't looked at may be, and laying a signed form out would change
+/// what was signed.
+pub(crate) fn has_signature(doc: &Document) -> bool {
+    let Some(root) = doc.root() else { return false };
+    let catalog = doc.get(root);
+    let Some(acro) = catalog.as_dict().and_then(|c| c.get(b"AcroForm")).map(|a| doc.resolve(a)) else { return false };
+    let Some(fields) = acro.as_dict().and_then(|a| a.get(b"Fields")).map(|f| doc.resolve(f)) else { return false };
+    let Some(fields) = fields.as_array() else { return false };
+    // (field, inherited field type, depth)
+    let mut todo: Vec<(Object, bool, usize)> = fields.iter().map(|f| (f.clone(), false, 0)).collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut budget = 10_000usize;
+    while let Some((f, sig_above, depth)) = todo.pop() {
+        if budget == 0 || depth > 32 {
+            return true;
+        }
+        if f.as_ref().is_some_and(|r| !seen.insert(r)) {
+            continue;
+        }
+        budget -= 1;
+        let f = doc.resolve(&f);
+        let Some(d) = f.as_dict() else { continue };
+        let sig = d.name(b"FT").map_or(sig_above, |t| t == b"Sig");
+        if sig && d.get(b"V").is_some_and(|v| !matches!(&*doc.resolve(v), Object::Null)) {
+            return true;
+        }
+        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k))
+            && let Some(kids) = kids.as_array()
+        {
+            todo.extend(kids.iter().map(|k| (k.clone(), sig, depth + 1)));
+        }
+    }
+    false
+}
+
 /// Read the XFA packets, if the document has any.
 pub fn read_packets(doc: &Document) -> Result<Option<Packets>, XfaError> {
     let Some(root) = doc.root() else { return Ok(None) };
@@ -113,10 +201,20 @@ pub fn read_packets(doc: &Document) -> Result<Option<Packets>, XfaError> {
     let needs_rendering = bool_of(catalog.as_dict().and_then(|c| c.get(b"NeedsRendering"))).or_else(|| bool_of(acro.get(b"NeedsRendering")));
     let has_fields = acro.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().map(|a| !a.is_empty())).unwrap_or(false);
     let mut total = 0usize;
+    // A stream listed again adds nothing but another decode, which may cost far more than the
+    // bytes it yields (a Flate stream of hex whitespace).
+    let mut seen = std::collections::HashSet::new();
+    // One decoding allowance for every packet, charged for what each filter stage produced (a
+    // stage a later one shrinks included): a fresh MAX_XDP per stream let many packets of
+    // compressed bulk that decode to little cost far more than the packets kept.
+    let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_DECODE_WORK, 0);
     let mut read = |o: &Object| -> Result<Option<String>, XfaError> {
+        if o.as_ref().is_some_and(|r| !seen.insert(r)) {
+            return Ok(None);
+        }
         let s = doc.resolve(o);
         let Object::Stream(s) = &*s else { return Ok(None) };
-        let bytes = s.decoded_within(MAX_XDP)?;
+        let bytes = budget.decode_within(s, MAX_XDP)?;
         total = total.saturating_add(bytes.len());
         if total > MAX_XDP {
             return Err(XfaError::TooLarge("the XFA packets are larger than 64 MB".into()));
@@ -134,6 +232,8 @@ pub fn read_packets(doc: &Document) -> Result<Option<Packets>, XfaError> {
                 if let Some(o) = stream
                     && let Some(text) = read(o)?
                 {
+                    // The text and its newline, checked before either is kept.
+                    check_text(xdp.len().saturating_add(text.len()).saturating_add(1))?;
                     if name.as_deref() == Some("template") {
                         template = Some(text.clone());
                     }
@@ -148,6 +248,7 @@ pub fn read_packets(doc: &Document) -> Result<Option<Packets>, XfaError> {
         }
         Object::Stream(_) => {
             xdp = read(&xfa)?.unwrap_or_default();
+            check_text(xdp.len())?;
         }
         // Not a stream or an array: an XFA entry all the same, with nothing to lay out.
         _ => {}

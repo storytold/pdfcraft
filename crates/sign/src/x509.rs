@@ -151,6 +151,7 @@ pub struct Certificate {
 /// qcStatements (1.3.6.1.5.5.7.1.3) is included: RFC 3739 lets qualified (eIDAS and other national)
 /// certificates mark it critical, and it declares the certificate's status rather than limiting
 /// what the key may sign.
+#[cfg(test)]
 const PROCESSED_EXTENSIONS: [&str; 11] = [
     "2.5.29.19",
     "2.5.29.15",
@@ -165,6 +166,9 @@ const PROCESSED_EXTENSIONS: [&str; 11] = [
     "1.3.6.1.5.5.7.1.3",
 ];
 
+/// id-kp-timeStamping (RFC 5280 §4.2.1.12), required of a timestamp authority (RFC 3161 §2.3).
+const EKU_TIME_STAMPING: &str = "1.3.6.1.5.5.7.3.8";
+
 /// Extended key usages that allow signing documents: anyExtendedKeyUsage, emailProtection,
 /// codeSigning, documentSigning (RFC 9336), Adobe Authentic Documents and Microsoft document
 /// signing.
@@ -175,6 +179,7 @@ const DOCUMENT_SIGNING_EKUS: [&str; 6] =
 /// extension that does not parse leaves its field at the default instead of failing the
 /// certificate (real-world issuers use encodings with edge cases, e.g. a single-URI CRL
 /// distribution point whose `fullName [0]` is IMPLICIT over a bare GeneralName).
+#[cfg(test)]
 #[derive(Default)]
 struct Extensions {
     is_ca: bool,
@@ -188,6 +193,7 @@ struct Extensions {
     crl_urls: Vec<String>,
 }
 
+#[cfg(test)]
 impl Extensions {
     fn read(&mut self, oid: &str, value: &Tlv<'_>) {
         match oid {
@@ -231,11 +237,15 @@ impl Extensions {
                     self.authority_key_id = aki.children().ok().and_then(|c| c.into_iter().find(|t| t.tag == tag::ctx(0))).map(|t| t.value.to_vec());
                 }
             }
-            // ExtendedKeyUsage: a SEQUENCE OF OID.
+            // ExtendedKeyUsage: a SEQUENCE OF OID. Like keyUsage, one that is present restricts
+            // the key even when it doesn't parse: an unreadable one allows no purpose at all.
             "2.5.29.37" => {
-                if let Ok(eku) = Tlv::parse_all(value.value) {
-                    self.extended_key_usage = eku.children().ok().map(|c| c.into_iter().filter_map(|t| t.oid().ok()).collect::<Vec<_>>());
-                }
+                let purposes = Tlv::parse_all(value.value)
+                    .ok()
+                    .filter(|eku| eku.tag == tag::SEQUENCE)
+                    .and_then(|eku| eku.children().ok())
+                    .and_then(|c| c.iter().map(|t| t.oid().ok()).collect::<Option<Vec<_>>>());
+                self.extended_key_usage = Some(purposes.unwrap_or_default());
             }
             // Authority Information Access: OCSP and CA-issuer locations.
             "1.3.6.1.5.5.7.1.1" => {
@@ -281,6 +291,51 @@ impl Extensions {
 
 impl Certificate {
     pub fn parse(raw: &[u8]) -> Result<Certificate, SignError> {
+        craft_pkcs7::x509::Certificate::parse(raw).map(Self::from_shared).map_err(crate::der::app_error)
+    }
+
+    pub(crate) fn from_shared(cert: craft_pkcs7::x509::Certificate) -> Self {
+        let parsed = cert.into_parts();
+        use craft_pkcs7::keys::PublicKey as Shared;
+        let public_key = match parsed.public_key {
+            Shared::Rsa { n, e } => PublicKey::Rsa { n, e },
+            Shared::P256(v) => PublicKey::P256(v),
+            Shared::P384(v) => PublicKey::P384(v),
+            Shared::P521(v) => PublicKey::P521(v),
+            Shared::BrainpoolP256(v) => PublicKey::BrainpoolP256(v),
+            Shared::BrainpoolP384(v) => PublicKey::BrainpoolP384(v),
+            Shared::BrainpoolP512(v) => PublicKey::BrainpoolP512(v),
+            Shared::Ed25519(v) => PublicKey::Ed25519(v),
+            Shared::Unsupported { what, spki } => PublicKey::Unsupported { what, spki },
+        };
+        Self {
+            raw: parsed.raw,
+            tbs: parsed.tbs,
+            sig_alg: parsed.sig_alg,
+            signature: parsed.signature,
+            serial: parsed.serial,
+            issuer: Name { attrs: parsed.issuer.attrs, raw: parsed.issuer.raw },
+            subject: Name { attrs: parsed.subject.attrs, raw: parsed.subject.raw },
+            not_before: parsed.not_before,
+            not_after: parsed.not_after,
+            public_key,
+            is_ca: parsed.is_ca,
+            has_basic_constraints: parsed.has_basic_constraints,
+            path_len: parsed.path_len,
+            key_usage: parsed.key_usage,
+            subject_key_id: parsed.subject_key_id,
+            authority_key_id: parsed.authority_key_id,
+            extended_key_usage: parsed.extended_key_usage,
+            ocsp_urls: parsed.ocsp_urls,
+            crl_urls: parsed.crl_urls,
+            version: parsed.version,
+            unknown_critical: parsed.unknown_critical,
+        }
+    }
+
+    // Original certificate reader retained as an independent parity oracle; see source history.
+    #[cfg(test)]
+    pub(crate) fn parse_legacy(raw: &[u8]) -> Result<Certificate, SignError> {
         let cert = Tlv::parse_all(raw)?.expect(tag::SEQUENCE, "Certificate")?;
         let parts = cert.children()?;
         let [tbs, sig_alg, sig] = parts.as_slice() else { return Err(SignError::Malformed("Certificate".into())) };
@@ -380,6 +435,27 @@ impl Certificate {
         }
     }
 
+    /// Whether this certificate may stamp trusted time (RFC 3161 §2.3): its extended key usage
+    /// includes timeStamping, its key usage (if any) allows digital signatures or
+    /// non-repudiation, and it has no critical extension PdfCraft doesn't process. A certificate
+    /// issued for another purpose proves who signed, not when.
+    pub fn may_timestamp(&self) -> bool {
+        /// keyUsage bits 0 (digitalSignature) and 1 (nonRepudiation).
+        const SIGNING_BITS: u16 = 0b11;
+        self.extended_key_usage.as_ref().is_some_and(|e| e.iter().any(|o| o == EKU_TIME_STAMPING))
+            && self.key_usage.is_none_or(|u| u & SIGNING_BITS != 0)
+            && self.unknown_critical.is_empty()
+    }
+
+    /// [`signing_problem`](Self::signing_problem) as a clause that follows the certificate's
+    /// name ("it is not issued for signing documents (…)"), for lists of digital IDs.
+    pub fn signing_problem_clause(&self) -> Option<String> {
+        self.signing_problem().map(|d| match d.message.strip_prefix("The signer's certificate ") {
+            Some(rest) => format!("it {}", rest.strip_suffix('.').unwrap_or(rest)),
+            None => d.message,
+        })
+    }
+
     /// Issued by itself (subject = issuer and its own key verifies it).
     pub fn is_self_signed(&self) -> bool {
         self.issuer.raw == self.subject.raw && self.signed_by(&self.public_key)
@@ -387,10 +463,19 @@ impl Certificate {
 
     /// Whether `key` verifies this certificate's signature.
     pub fn signed_by(&self, key: &PublicKey) -> bool {
+        self.signed_by_cached(key, &mut None)
+    }
+
+    /// [`Self::signed_by`] keeping the digest of the signed part in `digest`, so checking one
+    /// certificate against many candidate keys hashes it once.
+    fn signed_by_cached(&self, key: &PublicKey, digest: &mut Option<Vec<u8>>) -> bool {
         let Ok(alg) = Tlv::parse_all(&self.sig_alg) else { return false };
         match keys::signature_algorithm(&alg) {
             Ok((scheme @ keys::Scheme::Ed25519, _)) => key.verify_message(scheme, &self.tbs, &self.signature).unwrap_or(false),
-            Ok((scheme, Some(digest))) => key.verify(scheme, digest, &digest.digest(&[&self.tbs]), &self.signature).unwrap_or(false),
+            Ok((scheme, Some(d))) => {
+                let hash = digest.get_or_insert_with(|| d.digest(&[&self.tbs]));
+                key.verify(scheme, d, hash, &self.signature).unwrap_or(false)
+            }
             _ => false,
         }
     }
@@ -479,7 +564,8 @@ pub fn subject_of(raw: &[u8]) -> Option<Name> {
 }
 
 /// The chain from `leaf` up through `pool`, as far as issuers can be found and may issue: each
-/// issuer's key verifies the certificate below it, it is a CA allowed to sign certificates, its
+/// issuer's key verifies the certificate below it, it is a CA allowed to sign certificates, it
+/// has no critical extension PdfCraft doesn't process (unless it is self-signed), its
 /// `pathLenConstraint` allows the CA certificates below it, and (when `at` is given) it was valid
 /// then. Stops at a self-signed certificate. Certificates embedded in a document are in `pool`
 /// too, so an ordinary end-entity certificate must never be accepted as an issuer.
@@ -504,11 +590,16 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
         // CA certificates between `last` and the leaf: what a candidate's pathLenConstraint limits.
         let below = chain.len() - 1;
         let mut found = None;
-        for c in pool.iter().filter(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by(&c.public_key)) {
+        let mut digest = None;
+        for c in pool.iter().filter(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by_cached(&c.public_key, &mut digest)) {
             // Each reason is a whole sentence, not a phrase stitched into one: a language puts the
             // two names where it needs them.
             let why = if !c.may_issue() {
                 Some("The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.")
+            } else if !c.unknown_critical.is_empty() && !c.is_self_signed() {
+                // What such an extension limits (name constraints, policy constraints) would
+                // go unchecked. A self-signed root's extensions are the trust store's business.
+                Some("The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.")
             } else if c.path_len.is_some_and(|n| below > n as usize) {
                 Some("The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.")
             } else if at.is_some_and(|t| !c.valid_at(t)) {
@@ -532,27 +623,44 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
 }
 
 /// Certificates from a file: DER, or PEM with one or more `CERTIFICATE` blocks (`.cer`, `.crt`,
-/// `.pem`, Acrobat's `.fdf`-free exports).
+/// `.pem`, Acrobat's `.fdf`-free exports), or a PKCS #7 bundle (`.p7b`, `.p7c`) in DER or as a
+/// PEM `PKCS7`/`CMS` block, as Windows, Acrobat and certificate authorities export chains.
 pub fn load_certificates(bytes: &[u8]) -> Result<Vec<Certificate>, SignError> {
     if bytes.first() == Some(&0x30) {
-        return Ok(vec![Certificate::parse(bytes)?]);
+        // One DER certificate, else a DER bundle; a file that is neither reports the
+        // certificate's error, the common case.
+        return match Certificate::parse(bytes) {
+            Ok(cert) => Ok(vec![cert]),
+            Err(e) => crate::cms::certificate_bundle(bytes).map_err(|_| e),
+        };
     }
     let text = String::from_utf8_lossy(bytes);
     let mut out = Vec::new();
-    let mut block: Option<String> = None;
+    // The block being read: its label and its base64 so far.
+    let mut block: Option<(&str, String)> = None;
     for line in text.lines().map(str::trim) {
-        if line == "-----BEGIN CERTIFICATE-----" {
-            block = Some(String::new());
-        } else if line == "-----END CERTIFICATE-----" {
-            if let Some(b) = block.take() {
-                out.push(Certificate::parse(&base64(&b).ok_or_else(|| SignError::Malformed("PEM base64".into()))?)?);
+        if let Some(label) = line.strip_prefix("-----BEGIN ").and_then(|l| l.strip_suffix("-----")) {
+            block = matches!(label, "CERTIFICATE" | "PKCS7" | "CMS").then(|| (label, String::new()));
+        } else if let Some(label) = line.strip_prefix("-----END ").and_then(|l| l.strip_suffix("-----")) {
+            // An END that doesn't close the open block ends nothing.
+            if let Some((open, b)) = block.take_if(|(open, _)| *open == label) {
+                let der = base64(&b).ok_or_else(|| SignError::Malformed("PEM base64".into()))?;
+                if open == "CERTIFICATE" {
+                    out.push(Certificate::parse(&der)?);
+                } else {
+                    out.extend(crate::cms::certificate_bundle(&der)?);
+                }
             }
-        } else if let Some(b) = block.as_mut() {
+        } else if let Some((_, b)) = block.as_mut() {
             b.push_str(line);
         }
     }
+    // Certificates before a block that never ends are not a smaller set: the file is damaged.
+    if block.is_some() {
+        return Err(SignError::Malformed("a PEM block is not closed".into()));
+    }
     if out.is_empty() {
-        return Err(SignError::Malformed("no certificate found (expected DER or PEM)".into()));
+        return Err(SignError::Malformed("no certificate found (expected DER, PEM or a PKCS #7 bundle)".into()));
     }
     Ok(out)
 }
@@ -631,6 +739,37 @@ mod xfa_ext_tests {
                 let mut ext = Extensions::default();
                 ext.read(oid, &extn); // must not panic and must leave defaults
                 assert!(ext.ocsp_urls.is_empty() && ext.crl_urls.is_empty() && !ext.is_ca);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod shared_certificate_tests {
+    use super::*;
+
+    #[test]
+    fn shared_certificate_matches_retained_parser_and_error_policy() {
+        let compare = |bytes: &[u8]| match (Certificate::parse(bytes), Certificate::parse_legacy(bytes)) {
+            (Ok(a), Ok(b)) => assert_eq!(a, b),
+            (Err(a), Err(b)) => assert_eq!(format!("{a:?}"), format!("{b:?}")),
+            _ => panic!("shared and retained certificate parsers disagree"),
+        };
+        for fixture in [
+            include_bytes!("../tests/data/ec-p256.p12").as_slice(),
+            include_bytes!("../tests/data/ec-p384.p12").as_slice(),
+            include_bytes!("../tests/data/rsa-aes.p12").as_slice(),
+        ] {
+            let id = crate::pkcs12::open(fixture, "test").unwrap();
+            let raw = &id.certificate.raw;
+            compare(raw);
+            for end in 0..raw.len() {
+                compare(&raw[..end]);
+            }
+            for i in 0..raw.len() {
+                let mut changed = raw.clone();
+                changed[i] ^= 0x80;
+                compare(&changed);
             }
         }
     }

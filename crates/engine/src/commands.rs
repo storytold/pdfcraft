@@ -18,14 +18,18 @@ pub enum Needs {
     Nothing,
     /// A document is open.
     Document,
-    /// The open document's security allows page changes (insert, delete, rotate, extract…).
+    /// The open document's security allows page changes (insert, delete, rotate…).
     Assembly,
+    /// The open document's security allows taking pages out into new files (extract, split).
+    PageExtraction,
     /// The open document's security allows content and metadata changes.
     Modification,
     /// The open document's security allows adding and changing comments.
     Annotate,
     /// The open document's security allows copying text and images out of it.
     Copying,
+    /// The open document's security allows printing (low resolution counts).
+    Printing,
     /// The document has form fields and its security allows filling them in.
     FillForms,
     /// The document has comments and allows changes.
@@ -120,12 +124,20 @@ pub struct CommandSpec {
     pub label: &'static str,
     /// Top-level menu it appears in (`File`, `Edit`, `View`, `Pages`, `Help`), if any.
     pub menu: Option<&'static str>,
-    pub shortcut: Option<Shortcut>,
+    shortcut: Option<Shortcut>,
+    shortcut_on_mac: bool,
     pub needs: Needs,
     /// The shortcut also works while a text field has focus.
     pub in_text: bool,
-    /// Lucide icon name for palettes and toolbars.
+    /// Icon name for palettes and toolbars: a name of the UI catalogue, or one of the app's own set.
     pub icon: &'static str,
+}
+
+impl CommandSpec {
+    /// The binding for this platform. A command can leave a macOS system shortcut unbound.
+    pub const fn shortcut_for(&self, mac: bool) -> Option<Shortcut> {
+        if mac && !self.shortcut_on_mac { None } else { self.shortcut }
+    }
 }
 
 const fn c(
@@ -136,7 +148,7 @@ const fn c(
     needs: Needs,
     icon: &'static str,
 ) -> CommandSpec {
-    CommandSpec { id, label, menu, shortcut, needs, in_text: true, icon }
+    CommandSpec { id, label, menu, shortcut, shortcut_on_mac: true, needs, in_text: true, icon }
 }
 
 /// Like `c`, but the shortcut is left to text fields while one has focus (⌘Z, ⌘A…).
@@ -148,7 +160,7 @@ const fn ct(
     needs: Needs,
     icon: &'static str,
 ) -> CommandSpec {
-    CommandSpec { id, label, menu, shortcut, needs, in_text: false, icon }
+    CommandSpec { id, label, menu, shortcut, shortcut_on_mac: true, needs, in_text: false, icon }
 }
 
 use Needs::*;
@@ -161,7 +173,10 @@ const HELP: Option<&str> = Some("Help");
 
 /// Every command, in menu order.
 pub const COMMANDS: &[CommandSpec] = &[
-    c("file.open", "Open…", FILE, Some(Shortcut::cmd("O")), Nothing, "folder-open"),
+    // The tools' bare-key chords: V selects, H pans.
+    c("view.select_tool", "Select", None, Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "V" }), Document, "mouse_pointer_2"),
+    c("view.hand_tool", "Hand", None, Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "H" }), Document, "hand"),
+    c("file.open", "Open…", FILE, Some(Shortcut::cmd("O")), Nothing, "folder_open"),
     c("file.open_recent", "Open Recent", FILE, None, Nothing, "clock"),
     // Shown at the foot of File ▸ Open Recent and on Home, not as its own File menu item.
     c("file.clear_recent", "Clear Recent Files", None, None, Nothing, "trash-2"),
@@ -185,14 +200,18 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.combine", "Combine files…", FILE, None, Nothing, "files"),
     c("file.save", "Save", FILE, Some(Shortcut::cmd("S")), Document, "save"),
     c("file.save_as", "Save as…", FILE, Some(Shortcut::cmd_shift("S")), Document, "save"),
-    c("file.close", "Close file", FILE, Some(Shortcut::cmd("W")), Document, "x"),
-    c("file.close_all", "Close all", FILE, Some(Shortcut::cmd_shift("W")), Document, "x"),
-    c("file.revert", "Revert", FILE, None, Undo, "rotate-ccw"),
-    c("print.dialog", "Print…", FILE, Some(Shortcut::cmd("P")), Document, "printer"),
+    c("file.close", "Close file", FILE, Some(Shortcut::cmd("W")), Document, "close"),
+    c("file.close_all", "Close all", FILE, Some(Shortcut::cmd_shift("W")), Document, "close"),
+    c("file.revert", "Revert", FILE, None, Undo, "rotate_ccw"),
+    c("print.dialog", "Print…", FILE, Some(Shortcut::cmd("P")), Printing, "printer"),
     c("file.properties", "Document properties…", FILE, Some(Shortcut::cmd("D")), Document, "info"),
-    ct("edit.undo", "Undo", EDIT, Some(Shortcut::cmd("Z")), Undo, "undo-2"),
-    ct("edit.redo", "Redo", EDIT, Some(Shortcut::cmd_shift("Z")), Redo, "redo-2"),
+    c("file.word_count", "Word count…", FILE, None, Copying, "hash"),
+    ct("edit.undo", "Undo", EDIT, Some(Shortcut::cmd("Z")), Undo, "undo"),
+    ct("edit.redo", "Redo", EDIT, Some(Shortcut::cmd_shift("Z")), Redo, "redo"),
     c("edit.find", "Find…", EDIT, Some(Shortcut::cmd("F")), Document, "search"),
+    // Find and replace, in Edit text mode (the Find box's Replace row). Not ⌘H/Ctrl+H: macOS
+    // takes ⌘H to hide the app, and Ctrl+H is Read mode on Windows and Linux (as in Acrobat).
+    c("edit.replace", "Replace…", EDIT, Some(Shortcut::cmd_shift("H")), Modification, "replace"),
     c("edit.advanced_search", "Advanced search…", EDIT, Some(Shortcut::cmd_shift("F")), Document, "search"),
     c("view.palette", "Find tools and commands…", VIEW, Some(Shortcut::cmd("K")), Nothing, "search"),
     // Page display: View ▸ Page display and the rail's button list the base layouts as radios and
@@ -200,35 +219,94 @@ pub const COMMANDS: &[CommandSpec] = &[
     // The palette still runs them.
     c("view.layout.single", "Single page", None, None, Document, "file-text"),
     c("view.layout.two_up", "Two-page view", None, None, Document, "columns-2"),
-    c("view.continuous", "Continuous scrolling", None, None, Document, "arrow-up-down"),
+    c("view.continuous", "Continuous scrolling", None, None, Document, "swap_vertical"),
+    c("view.page_gaps", "Show gaps between pages", None, None, Document, "swap_vertical"),
     c("view.layout.cover", "Show cover page in two-page view", None, None, TwoPageView, "bookmark"),
     // Acrobat's view modes, a page display and a zoom at once (the rail's Page display menu).
-    c("view.fit_width_scrolling", "Fit to width scrolling", None, None, Document, "arrow-left-right"),
-    c("view.fit_one_page", "Fit one full page", None, None, Document, "maximize-2"),
+    c("view.fit_width_scrolling", "Fit to width scrolling", None, None, Document, "swap_horizontal"),
+    c("view.fit_one_page", "Fit one full page", None, None, Document, "maximize_2"),
     // In View ▸ Zoom with the view-local zoom keys, so `menu = None` keeps it out of the generated
     // View menu (where it would show twice). The palette and ⌘3 still run it.
     c("view.fit_visible", "Fit visible", None, Some(Shortcut::cmd("3")), Document, "scan"),
-    c("view.marquee_zoom", "Marquee zoom", VIEW, None, Document, "zoom-in"),
+    c("view.marquee_zoom", "Marquee zoom", VIEW, None, Document, "zoom_in"),
+    // The view-local zoom, rotation and page-step commands: the catalogue places them in the View menu
+    // and adds their further default chords.
+    c("view.zoom.in", "Zoom in", None, Some(Shortcut::cmd("+")), Document, "zoom_in"),
+    c("view.zoom.out", "Zoom out", None, Some(Shortcut::cmd("−")), Document, "zoom_out"),
+    c("view.zoom.page_level", "Zoom to page level", None, Some(Shortcut::cmd("0")), Document, "maximize_2"),
+    c("view.zoom.actual_size", "Actual size", None, Some(Shortcut::cmd("1")), Document, "scan"),
+    c("view.zoom.fit_width", "Fit to width", None, Some(Shortcut::cmd("2")), Document, "move-horizontal"),
+    c("view.rotate.cw", "Rotate view clockwise", None, Some(Shortcut::cmd_shift("+")), Document, "rotate_cw"),
+    c("view.rotate.ccw", "Rotate view counterclockwise", None, Some(Shortcut::cmd_shift("−")), Document, "rotate_ccw"),
+    c("view.first_page", "First page", None, Some(Shortcut::cmd_shift("Up")), Document, "chevrons_left"),
+    c("view.last_page", "Last page", None, Some(Shortcut::cmd_shift("Down")), Document, "chevrons_right"),
+    c("view.next_page", "Next page", None, Some(Shortcut::cmd("Right")), Document, "chevron_down"),
+    c("view.previous_page", "Previous page", None, Some(Shortcut::cmd("Left")), Document, "chevron_up"),
     // Acrobat's column select: drag a rectangle and select only the text inside it. Alt/Option-
     // drag with the Select tool does the same; this is the way in where the desktop takes
     // Alt-drag for moving windows (several Linux window managers).
+    // Copy events stay with the frontend so focused text inputs and page clipboard routing keep ownership.
+    c("edit.copy", "Copy", EDIT, None, Copying, "copy"),
+    // Comments travel between documents as XFDF (M14): ⌘C with comments selected copies them,
+    // ⌘V pastes the copies onto the current page; the strip's Copy/Paste in the menus too.
+    c("comment.copy", "Copy comments", EDIT, None, Document, "copy"),
+    c("comment.paste", "Paste comments", EDIT, None, Annotate, "clipboard-paste"),
     c("edit.column_select", "Column select", EDIT, None, Document, "text-select"),
     c("edit.snapshot", "Take a snapshot", EDIT, None, Copying, "camera"),
     c("view.full_screen", "Full screen mode", VIEW, Some(Shortcut::cmd("L")), Document, "maximize"),
     c("view.read_mode", "Read mode", VIEW, Some(Shortcut { command: true, shift: false, mac_ctrl: true, key: "H" }), Document, "book-open"),
+    // Split view (Acrobat's Window ▸ Split): the current document in two panes, or back to one;
+    // a tab's right-click menu also splits right or down with any tab.
+    c("view.split", "Split", VIEW, Some(Shortcut::cmd("\\")), Document, "columns-2"),
+    // A document can hide the toolbars, menu and panels (ISO 32000-2 Table 147); this brings them
+    // back for its tab, and with nothing hidden hides them.
+    c(
+        "view.toggle_interface",
+        "Show or hide toolbars and panels",
+        VIEW,
+        Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "F8" }),
+        Document,
+        "panel-left",
+    ),
+    // Browsers' tab keys (#1542): Ctrl+Tab on every platform, ⌃Tab rather than ⌘Tab on macOS,
+    // where the system takes ⌘Tab. They follow the tabs' order on screen and wrap around, and
+    // also run from Combine files, which has no document open.
+    c("view.next_tab", "Next tab", VIEW, Some(Shortcut { command: false, shift: false, mac_ctrl: true, key: "Tab" }), Nothing, "chevron_right"),
+    c("view.previous_tab", "Previous tab", VIEW, Some(Shortcut { command: false, shift: true, mac_ctrl: true, key: "Tab" }), Nothing, "chevron_left"),
+    // View-local history also appears in the Page navigation section; don't duplicate its menu.
+    c("view.previous_view", "Previous view", None, Some(Shortcut::cmd("[")), Document, "chevron_left"),
+    c("view.next_view", "Next view", None, Some(Shortcut::cmd("]")), Document, "chevron_right"),
     c("view.focus_page_input", "Go to page…", VIEW, Some(Shortcut::cmd_shift("N")), Document, "text-cursor-input"),
-    c("ui.dock.reset", "Reset panel layout", VIEW, None, Nothing, "settings"),
+    c(
+        "view.side_panel",
+        "Show or hide the side panel",
+        VIEW,
+        Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "F4" }),
+        Nothing,
+        "panel-right",
+    ),
+    c(
+        "view.tools_pane",
+        "Show or hide the Tools panel",
+        VIEW,
+        Some(Shortcut { command: false, shift: true, mac_ctrl: false, key: "F4" }),
+        Nothing,
+        "panel-left",
+    ),
+    c("ui.dock.reset", "Reset side panels", VIEW, None, Nothing, "settings"),
     c("view.theme", "Switch light / dark theme", None, None, Nothing, "moon"),
     c("view.theme.system", "Use system setting", None, None, Nothing, "settings"),
     c("view.theme.light", "Light gray", None, None, Nothing, "sun"),
     c("view.theme.dark", "Dark gray", None, None, Nothing, "moon"),
-    c("comment.list", "Comments panel", VIEW, None, Document, "message-square-text"),
+    // Command+M belongs to Minimize on macOS; Ctrl+M opens Comments elsewhere (#3741).
+    CommandSpec { shortcut_on_mac: false, ..c("comment.list", "Comments panel", VIEW, Some(Shortcut::cmd("M")), Document, "message-square-text") },
     c("comment.note", "Add a sticky note", None, None, Annotate, "sticky-note"),
     c("comment.freetext", "Add a text box", None, None, Annotate, "type"),
     c("comment.highlight", "Highlight text", None, None, Annotate, "highlighter"),
-    c("comment.underline", "Underline text", None, None, Annotate, "underline"),
-    c("comment.strikeout", "Strikethrough text", None, None, Annotate, "strikethrough"),
+    c("comment.underline", "Underline text", None, None, Annotate, "text_underline"),
+    c("comment.strikeout", "Strikethrough text", None, None, Annotate, "text_strikethrough"),
     c("comment.squiggly", "Squiggly underline text", None, None, Annotate, "spline"),
+    c("comment.freehand_highlight", "Freehand-Highlight", None, None, Annotate, "freehand-highlighter"),
     c("comment.ink", "Draw freehand", None, None, Annotate, "pencil"),
     c("comment.line", "Draw a line", None, None, Annotate, "minus"),
     c("comment.arrow", "Draw an arrow", None, None, Annotate, "move-right"),
@@ -238,7 +316,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("comment.polyline", "Draw connected lines", None, None, Annotate, "spline"),
     c("comment.cloud", "Draw a cloud", None, None, Annotate, "cloud"),
     c("comment.callout", "Add a callout", None, None, Annotate, "message-square-quote"),
-    c("comment.caret", "Insert text", None, None, Annotate, "text-cursor-input"),
+    c("comment.caret", "Insert text", None, None, Annotate, "message-square-text"),
     c("comment.replace", "Replace text", None, None, Annotate, "replace"),
     c("comment.attach", "Attach a file", None, None, Annotate, "paperclip"),
     c("comment.eraser", "Erase drawings", None, None, Annotate, "eraser"),
@@ -248,7 +326,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("comment.import", "Import comments…", None, None, Modification, "file-input"),
     c("comment.stamp", "Add a stamp", None, None, Annotate, "stamp"),
     c("comment.export", "Export all comments to data file…", None, None, HasComments, "file-output"),
-    c("comment.hide_all", "Hide all comments", None, None, Document, "eye-off"),
+    c("comment.hide_all", "Hide all comments", None, None, Document, "eye_off"),
     c("comment.summarize", "Summarize comments", None, None, HasComments, "file-text"),
     c("form.import_data", "Import form data…", None, None, HasFields, "file-input"),
     c("form.export_data", "Export form data…", None, None, HasFields, "file-output"),
@@ -264,26 +342,29 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("form.tab_order.row", "Tab order: by rows", None, None, HasFields, "rows-3"),
     c("form.tab_order.column", "Tab order: by columns", None, None, HasFields, "columns-3"),
     c("form.tab_order.structure", "Tab order: by document structure", None, None, HasFields, "list"),
+    c("form.calculation_order", "Calculation order", None, None, Document, "list_numbered"),
     c("edit.text", "Add text", None, None, Modification, "type"),
     c("edit.edit_text", "Edit text & images", None, None, Modification, "text-cursor-input"),
-    c("edit.link", "Add or edit links", None, None, Modification, "link-2"),
-    c("edit.links_from_urls", "Create links from URLs", None, None, Modification, "link-2"),
+    c("edit.link", "Add or edit links", None, None, Modification, "link"),
+    c("edit.attach", "Attach a file…", EDIT, None, Modification, "paperclip"),
+    c("edit.links_from_urls", "Create links from URLs", None, None, Modification, "link"),
     c("edit.remove_links", "Remove all links", None, None, Modification, "trash-2"),
     c("edit.bates", "Add Bates numbering…", None, None, Modification, "hash"),
     c("edit.image", "Add image…", None, None, Modification, "image-plus"),
-    c("redact.mark", "Redact text and images", None, None, Modification, "rectangle-horizontal"),
+    c("redact.mark", "Redact text and images", None, None, Modification, "rectangle"),
     c("redact.pages", "Redact pages…", None, None, Modification, "file-x"),
     c("redact.search", "Find text and redact…", None, None, Modification, "file-search"),
     c("redact.properties", "Redaction properties…", None, None, Document, "settings-2"),
     c("redact.apply", "Apply redactions…", None, None, HasRedactions, "check"),
     c("redact.clear", "Clear redaction marks", None, None, HasRedactions, "eraser"),
-    c("protect.remove_hidden", "Remove hidden information…", None, None, Modification, "eye-off"),
+    c("protect.remove_hidden", "Remove hidden information…", None, None, Modification, "eye_off"),
     c("redact.sanitize", "Sanitize document…", None, None, Modification, "sparkles"),
     c("form.field.properties", "Field properties…", None, None, HasFields, "settings-2"),
     c("form.add.text", "Add a text field", None, None, Modification, "text-cursor-input"),
+    c("form.add.text_table", "Add text field table", None, None, Modification, "grid"),
     c("form.add.checkbox", "Add a checkbox", None, None, Modification, "check-circle-2"),
     c("form.add.radio", "Add a radio button", None, None, Modification, "circle"),
-    c("form.add.combo", "Add a drop-down list", None, None, Modification, "chevron-down"),
+    c("form.add.combo", "Add a drop-down list", None, None, Modification, "chevron_down"),
     c("form.add.list", "Add a list box", None, None, Modification, "list"),
     c("form.add.button", "Add a button", None, None, Modification, "square"),
     c("form.add.image", "Add an image field", None, None, Modification, "image"),
@@ -296,15 +377,15 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("sign.panel", "Signatures panel", VIEW, None, Document, "signature"),
     c("sign.fill.text", "Fill & Sign: add text", None, None, Annotate, "type"),
     c("sign.fill.check", "Fill & Sign: checkmark", None, None, Annotate, "check"),
-    c("sign.fill.cross", "Fill & Sign: cross", None, None, Annotate, "x"),
-    c("sign.fill.dot", "Fill & Sign: dot", None, None, Annotate, "circle-dot"),
+    c("sign.fill.cross", "Fill & Sign: cross", None, None, Annotate, "close"),
+    c("sign.fill.dot", "Fill & Sign: dot", None, None, Annotate, "target"),
     c("sign.fill.line", "Fill & Sign: line", None, None, Annotate, "minus"),
     c("sign.fill.date", "Fill & Sign: date", None, None, Annotate, "clock-3"),
     c("sign.fill.signature", "Fill & Sign: sign", None, None, Annotate, "signature"),
     c("sign.fill.initials", "Fill & Sign: initials", None, None, Annotate, "signature"),
     c("sign.fill.signature.change", "Fill & Sign: change signature", None, None, Nothing, "signature"),
-    c("sign.fill.signature.remove", "Fill & Sign: remove saved signature", None, None, Nothing, "x"),
-    c("sign.fill.initials.remove", "Fill & Sign: remove saved initials", None, None, Nothing, "x"),
+    c("sign.fill.signature.remove", "Fill & Sign: remove saved signature", None, None, Nothing, "close"),
+    c("sign.fill.initials.remove", "Fill & Sign: remove saved initials", None, None, Nothing, "close"),
     c("sign.fill.initials.change", "Fill & Sign: change initials", None, None, Nothing, "signature"),
     c("export.image", "Export to image…", FILE, None, Copying, "image"),
     c("optimize.reduce", "Reduce file size…", FILE, None, Document, "file-down"),
@@ -319,11 +400,16 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("tools.document_js", "Document JavaScripts…", None, None, Modification, "file-code"),
     c("ocr.recognize", "Recognize text…", None, None, Modification, "scan-text"),
     c("ocr.enhance_camera", "Enhance camera image", None, None, Modification, "camera"),
+    c("ocr.enhance", "Enhance scanned file…", None, None, Modification, "sparkles"),
     c("ocr.recognize_batch", "Recognize text in multiple files…", None, None, Nothing, "files"),
+    c("ocr.correct", "Correct recognized text…", None, None, Document, "text-select"),
     c("a11y.check", "Check for accessibility…", None, None, Document, "accessibility"),
+    c("a11y.find_untagged", "Find untagged content", None, None, Document, "search"),
+    c("a11y.autotag", "Automatically tag PDF", None, None, Document, "tag"),
     c("a11y.report", "Open accessibility report", None, None, Document, "file-text"),
     c("a11y.reading_options", "Change reading options…", None, None, Document, "book-open"),
     c("a11y.alt_text", "Add alternate text…", None, None, Modification, "image"),
+    c("a11y.autotag_fields", "Tag form fields", None, None, Modification, "tag"),
     c("a11y.tags", "Tags panel", None, None, Document, "tag"),
     c("export.all_images", "Export all images…", FILE, None, Copying, "image"),
     c("edit.header_footer", "Add header & footer…", None, None, Modification, "heading"),
@@ -336,30 +422,38 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("edit.background.update", "Update background…", None, None, Marks(crate::MarkKind::Background), "palette"),
     c("edit.background.remove", "Remove background", None, None, Marks(crate::MarkKind::Background), "palette"),
     c("protect.password", "Protect using password…", FILE, None, Security, "lock"),
-    c("protect.remove", "Remove security", FILE, None, ProtectedSecurity, "lock-open"),
-    c("protect.unlock", "Enter permissions password…", None, None, Unlock, "lock-open"),
+    c("protect.remove", "Remove security", FILE, None, ProtectedSecurity, "lock_open"),
+    c("protect.unlock", "Enter permissions password…", None, None, Unlock, "lock_open"),
     c("protect.properties", "Security properties…", FILE, None, Document, "shield-check"),
-    c("page.organize", "Organize pages", PAGES, None, Document, "layout-grid"),
+    c("page.organize", "Organize pages", PAGES, None, Document, "layout_grid"),
     c("bookmark.add", "New bookmark", PAGES, Some(Shortcut::cmd("B")), Assembly, "bookmark-plus"),
     c("bookmark.from_structure", "New bookmarks from structure", PAGES, None, Assembly, "list"),
-    c("page.rotate", "Rotate pages clockwise", PAGES, None, Assembly, "rotate-cw"),
-    c("page.rotate_ccw", "Rotate pages counterclockwise", PAGES, None, Assembly, "rotate-ccw"),
+    // Bookmarks from the lines set in chosen text styles, for headings that aren't tagged (#1693).
+    c("bookmark.from_text_styles", "New bookmarks from text styles…", PAGES, None, Assembly, "list"),
+    c("page.rotate", "Rotate pages clockwise", PAGES, None, Assembly, "rotate_cw"),
+    c("page.rotate_ccw", "Rotate pages counterclockwise", PAGES, None, Assembly, "rotate_ccw"),
     c("page.delete", "Delete pages", PAGES, None, Assembly, "trash-2"),
-    c("page.insert_blank", "Insert blank page", PAGES, None, Assembly, "file-plus"),
-    c("page.rotate_dialog", "Rotate pages…", PAGES, None, Assembly, "rotate-cw"),
+    c("page.insert_blank", "Insert blank page", PAGES, None, Assembly, "new_file"),
+    c("page.rotate_dialog", "Rotate pages…", PAGES, None, Assembly, "rotate_cw"),
     c("page.duplicate", "Duplicate pages", PAGES, None, Assembly, "copy-plus"),
+    c("page.reverse", "Reverse pages", PAGES, None, Assembly, "swap_vertical"),
     c("page.crop", "Crop pages", PAGES, None, Assembly, "crop"),
     c("page.boxes", "Set page boxes…", PAGES, None, Assembly, "square-dashed-mouse-pointer"),
     c("page.insert", "Insert pages from file…", PAGES, None, Assembly, "file-input"),
     c("page.replace", "Replace pages…", PAGES, None, Assembly, "replace"),
-    c("page.extract", "Extract pages…", PAGES, None, Assembly, "file-output"),
-    c("page.split", "Split document…", PAGES, None, Assembly, "scissors"),
+    c("page.extract", "Extract pages…", PAGES, None, PageExtraction, "file-output"),
+    c("page.split", "Split document…", PAGES, None, PageExtraction, "scissors"),
     c("page.number", "Number pages…", PAGES, None, Assembly, "hash"),
+    c("prepress.marks", "Add printer marks…", None, None, Modification, "ruler"),
+    c("prepress.marks.remove", "Remove printer marks", None, None, Marks(crate::MarkKind::PrinterMarks), "ruler"),
+    c("prepress.convert_colors", "Convert colours…", None, None, Modification, "palette"),
+    c("prepress.hairlines", "Fix hairlines…", None, None, Modification, "minus"),
+    c("page.properties", "Page properties…", PAGES, None, Modification, "info"),
     c("help.shortcuts", "Keyboard shortcuts", HELP, None, Nothing, "circle-help"),
     c("help.discord", "Join the ArtCraft Discord", HELP, None, Nothing, "messages-square"),
     c("help.app_page", "PdfCraft web page", HELP, None, Nothing, "globe"),
     c("help.github", "PdfCraft on GitHub", HELP, None, Nothing, "code-xml"),
-    c("help.website", "ArtCraft website", HELP, None, Nothing, "external-link"),
+    c("help.website", "ArtCraft website", HELP, None, Nothing, "open"),
     c("help.check_updates", "Check for updates…", HELP, None, Nothing, "cloud"),
     c("help.about", "About PdfCraft", HELP, None, Nothing, "info"),
 ];
@@ -380,11 +474,13 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
         Nothing => true,
         Document | TwoPageView => doc.is_some(),
         Assembly => doc.is_some_and(|d| d.allows_assembly()),
+        PageExtraction => doc.is_some_and(|d| d.allows_page_extraction()),
         Modification => doc.is_some_and(|d| d.allows_modification()),
         Annotate => doc.is_some_and(|d| d.allows_annotation()),
         Copying => doc.is_some_and(|d| d.allows_copying()),
+        Printing => doc.is_some_and(|d| d.allows_printing()),
         FillForms => doc.is_some_and(|d| d.allows_form_filling() && !d.form.is_empty()),
-        Marks(k) => doc.is_some_and(|d| d.allows_modification() && d.marks.contains(&k)),
+        Marks(k) => doc.is_some_and(|d| d.allows_modification() && d.marks().contains(&k)),
         HasComments => doc.is_some_and(|d| d.allows_modification() && !d.info.annotations.is_empty()),
         HasFields => doc.is_some_and(|d| d.allows_modification() && !d.form.is_empty()),
         HasRedactions => doc.is_some_and(|d| d.allows_modification() && d.redaction_marks() > 0),
@@ -422,11 +518,15 @@ mod tests {
     #[test]
     fn ids_and_shortcuts_are_unique() {
         let mut ids = std::collections::HashSet::new();
-        let mut keys = std::collections::HashSet::new();
         for c in COMMANDS {
             assert!(ids.insert(c.id), "duplicate id {}", c.id);
-            if let Some(s) = c.shortcut {
-                assert!(keys.insert(s), "duplicate shortcut {} ({})", s.label(true), c.id);
+        }
+        for mac in [false, true] {
+            let mut keys = std::collections::HashSet::new();
+            for c in COMMANDS {
+                if let Some(s) = c.shortcut_for(mac) {
+                    assert!(keys.insert(s.label(mac)), "duplicate shortcut {} ({})", s.label(mac), c.id);
+                }
             }
         }
     }
@@ -450,11 +550,20 @@ mod tests {
         assert_eq!(s.label(true), "⇧⌘S");
         assert_eq!(s.label(false), "Ctrl+Shift+S");
         assert_eq!(command("view.read_mode").unwrap().shortcut.unwrap().label(true), "⌃⌘H");
+        assert_eq!(command("comment.list").unwrap().shortcut_for(false).unwrap().label(false), "Ctrl+M");
         assert_eq!(Shortcut::cmd("+").label(false), "Ctrl++");
         assert_eq!(Shortcut::cmd_shift("−").label(true), "⇧⌘−");
         assert_eq!(Shortcut::cmd_shift("−").label(false), "Ctrl+Shift+−");
         assert_eq!(Shortcut::command_name(true), "⌘");
         assert_eq!(Shortcut::command_name(false), "Ctrl");
+    }
+
+    #[test]
+    fn comments_shortcut_preserves_macos_minimize() {
+        let comments = command("comment.list").unwrap();
+        assert_eq!(comments.shortcut_for(false), Some(Shortcut::cmd("M")));
+        assert_eq!(comments.shortcut_for(true), None, "macOS Command+M is reserved for Minimize");
+        assert_eq!(command("file.save_as").unwrap().shortcut_for(true), Some(Shortcut::cmd_shift("S")));
     }
 
     #[test]
