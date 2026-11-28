@@ -1,6 +1,7 @@
 use craft::behavior::kurbo::Point;
 use craft::behavior::{CancelReason, Cursor, CursorIcon, EditEvent, PointerButton, PressPhase};
 use craft::keymap::Mods;
+use craft::review::annotate::handles;
 use craft::review::ui::annotate::{
     AnnotateTool, AnnotateWords, DrawOptions, EmptyPress, EraseMode, FarNudge, HandlesWhileDrawing, InkStrokes, MarkupPress, OpenOn, SelectOptions,
     ToggleMods,
@@ -11,6 +12,7 @@ use craft::ui::primitives::Draw;
 use egui::Pos2;
 
 use super::bridge::{self, PageMap};
+use super::geometry::HANDLE_PAGE_MARGIN;
 use super::state::{Composer, ComposerKind, PageCx};
 use super::{CommentPrefs, CommentTool, CommentView, DocInfo, Edit, MAX_LINE_WIDTH, QuickTool};
 use crate::canvas::page_parts::{Owner, PagePress};
@@ -138,6 +140,26 @@ impl<'a> CommentsTool<'a> {
         self.map.page_at(Point::new(f64::from(at.x), f64::from(at.y)))
     }
 
+    /// When `at` is off every page, the page of the primary selected comment if `at` lies within
+    /// [`HANDLE_PAGE_MARGIN`] of that page and within the framework's handle hit tolerance (`slop`)
+    /// of one of its handles (#4825).
+    pub(super) fn handle_near(&self, at: Pos2, slop: f32) -> Option<usize> {
+        if self.hidden || !self.annotate.drawing().is_empty() {
+            return None;
+        }
+        let &primary = self.annotate.selected.last()?;
+        let (page, _) = bridge::key_of(primary);
+        let placed = self.map.pages.iter().find(|p| p.page == page)?;
+        if !placed.rect.expand(HANDLE_PAGE_MARGIN).contains(at) {
+            return None;
+        }
+        let annotations = self.annotations(page);
+        let target = annotations.iter().find(|a| a.id == primary)?;
+        let doc_at = self.map.to_page(page, Point::new(f64::from(at.x), f64::from(at.y)))?;
+        let tol = self.map.doc_len(slop);
+        handles(target).into_iter().any(|(_, p)| (p.x - doc_at.x).abs() <= tol && (p.y - doc_at.y).abs() <= tol).then_some(page)
+    }
+
     /// Whether the annotation tool holds the gesture, as it took the press or is clicking out a shape: the drag,
     /// release and cancel are its, else the tool's beneath.
     fn annotating(&self) -> bool {
@@ -194,10 +216,11 @@ fn rgb8(color: pdfcraft_engine::Rgb) -> [u8; 3] {
 
 impl CanvasTool for CommentsTool<'_> {
     fn each_pass(&mut self, cx: &mut ToolContext<'_>) {
-        // The page the tool works on follows the pointer between gestures.
+        // The page the tool works on follows the pointer between gestures, including a selected
+        // comment's handle reaching past its page's edge (#4825).
         if cx.gesture_id().is_none()
             && self.annotate.drawing().is_empty()
-            && let Some(page) = cx.pointer.and_then(|p| self.page_under(p.pos))
+            && let Some(page) = cx.pointer.and_then(|p| self.page_under(p.pos).or_else(|| self.handle_near(p.pos, cx.slop)))
         {
             self.annotate.page = page;
         }
@@ -267,14 +290,29 @@ impl CanvasTool for CommentsTool<'_> {
                 return action;
             }
         }
-        if self.annotate.drawing().is_empty()
-            && let Some(page) = self.page_under(pointer.pos)
-            && page != self.annotate.page
-        {
-            self.annotate.page = page;
-            self.annotate.annotations = if self.hidden { Vec::new() } else { self.annotations(page) };
-        }
-        let action = self.annotate.press(pointer, cx);
+        // Only a press on a page, or on a selected comment's handle reaching past its page's edge
+        // (#4825), reaches the annotation tool: a press in the grey area outside the page neither
+        // starts drawing nor selects a comment.
+        let on_page = self.page_under(pointer.pos);
+        let action = if let Some(page) = on_page.or_else(|| self.handle_near(pointer.pos, cx.slop)) {
+            if self.annotate.drawing().is_empty() && page != self.annotate.page {
+                self.annotate.page = page;
+                self.annotate.annotations = if self.hidden { Vec::new() } else { self.annotations(page) };
+            }
+            // Off-page under a drawing/eraser tool, only let the press through when the framework
+            // itself treats that spot as a handle; otherwise ignore so no drawing starts off-page.
+            let off_page_non_handle = on_page.is_none()
+                && matches!(self.annotate.tool, AnnotationTool::Draw(_) | AnnotationTool::Eraser)
+                && self.map.to_page(page, Point::new(f64::from(pointer.pos.x), f64::from(pointer.pos.y))).is_none_or(|at| {
+                    matches!(
+                        self.annotate.cursor_at(at, self.map.doc_len(cx.slop), self.map.doc_len(cx.icon_side())),
+                        Cursor::System(CursorIcon::Crosshair | CursorIcon::Text | CursorIcon::Default)
+                    )
+                });
+            if off_page_non_handle { ToolAction::Ignored } else { self.annotate.press(pointer, cx) }
+        } else {
+            ToolAction::Ignored
+        };
         *self.pressed = action != ToolAction::Ignored;
         // A press on no comment passes through to the tool beneath (`EmptyPress::PassThrough`): it leaves the comments
         // selected only while Shift or Cmd adds to the selection. A press that began off the pages is no page's and
@@ -371,6 +409,24 @@ impl CanvasTool for CommentsTool<'_> {
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
         if self.paste.is_some() && cx.pointer.is_some_and(|p| self.page_under(p.pos).is_some()) {
             return Cursor::System(CursorIcon::Grabbing);
+        }
+        // Off every page (when no gesture is active), only a selected comment's handle shows its
+        // cursor; the grey pasteboard away from handles stays Default (#4825).
+        if !self.annotating()
+            && let Some(pointer) = cx.pointer
+            && self.page_under(pointer.pos).is_none()
+        {
+            if self.handle_near(pointer.pos, cx.slop).is_none() {
+                return Cursor::System(CursorIcon::Default);
+            }
+            let own = self.annotate.cursor(cx);
+            return match self.annotate.tool {
+                AnnotationTool::Select => own,
+                AnnotationTool::Draw(_) | AnnotationTool::Eraser => match own {
+                    Cursor::System(CursorIcon::Crosshair | CursorIcon::Text) => Cursor::System(CursorIcon::Default),
+                    _ => own,
+                },
+            };
         }
         let own = self.annotate.cursor(cx);
         if self.annotating() {
