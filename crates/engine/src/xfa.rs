@@ -1573,7 +1573,34 @@ pub(crate) fn widget_som(doc: &pdfcraft_cos::Document, field: &pdfcraft_forms::F
     som_of(w.obj).or_else(|| som_of(field.obj))
 }
 
+/// The objects whose `activity` scripts (`enter` or `exit`) run as the focus reaches or leaves the
+/// field at `som`, in that order, read from one build of the live form. With `crossing`, the
+/// radio group `som` is a button of comes first on enter and last on exit. Each comes with
+/// whether the live form gives it such a script.
+pub(crate) fn focus_targets(doc: &pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str, crossing: bool) -> Vec<(String, bool)> {
+    let uses = pdfcraft_xfa::page_area_uses(doc, tpl);
+    let live = pdfcraft_xfa::form_tree_paged(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc), &uses);
+    let group = som
+        .rsplit_once('.')
+        .filter(|_| crossing)
+        .and_then(|(parent, _)| find_container(&live.root, parent, 0))
+        .filter(|n| n.kind == Some(NodeKind::ExclGroup))
+        .map(|n| n.som.clone());
+    let field = Some(som.to_string());
+    let order = if activity == "enter" { [group, field] } else { [field, group] };
+    order
+        .into_iter()
+        .flatten()
+        .map(|at| {
+            let has = live.events.iter().any(|e| e.som == at && e.activity == activity);
+            (at, has)
+        })
+        .collect()
+}
+
 /// Does the live form give SOM path `som` an `activity` script?
+/// `focus_targets` is the group-aware query the focus path uses.
+#[allow(dead_code)]
 pub(crate) fn has_event(doc: &pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str) -> bool {
     // Page-master copies have a SOM path of their own on each page (`master[1]…`).
     let uses = pdfcraft_xfa::page_area_uses(doc, tpl);

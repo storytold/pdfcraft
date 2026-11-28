@@ -11401,6 +11401,28 @@ fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
     check(&mut a, doc);
 }
 
+/// form_focus runs a radio group's own enter and exit scripts when the focus enters or leaves the
+/// group, and not when within_group says it moves between two of its buttons.
+#[test]
+fn a_radio_groups_own_focus_scripts_run_through_form_focus() {
+    let dir = workdir("xfa-group-focus");
+    std::fs::write(dir.join("group.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::group_focus_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "group.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let group = fields["fields"].as_array().unwrap().iter().find(|f| f["type"] == "radio").unwrap()["name"].clone();
+    let log = |a: &mut Automation| {
+        let fields = ok(a, "form_fields", json!({ "doc": doc }));
+        fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "log").map(|f| f["value"].clone()).unwrap_or(Value::Null)
+    };
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "event": "enter" }));
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "event": "exit", "within_group": true }));
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "widget": 2, "event": "enter", "within_group": true }));
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "widget": 2, "event": "exit" }));
+    assert_eq!(log(&mut a), json!("grp enter|r1 enter|r1 exit|r2 enter|r2 exit|grp exit"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// form_focus runs a field's XFA enter and exit scripts on every focus change; scripts that
 /// change nothing leave no edit, a radio button's own scripts run for its widget, and unknown
 /// fields, widgets and events are refused.

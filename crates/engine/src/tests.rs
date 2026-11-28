@@ -8250,6 +8250,51 @@ fn field_text(s: &Session, id: DocId, name: &str) -> String {
     s.get(id).and_then(|d| d.form.iter().find(|f| f.name == name).and_then(|f| f.value.first().cloned())).unwrap_or_default()
 }
 
+/// A radio group's own enter and exit scripts run when the focus enters or leaves the group, as
+/// another viewer ran them on a synthetic form: the group's enter before the button's, its exit
+/// after the button's. A move between two buttons of the group runs only the buttons' scripts,
+/// and a button the group doesn't have runs nothing.
+#[test]
+fn a_radio_groups_own_enter_and_exit_run_when_the_focus_crosses_the_group() {
+    use crate::js::FieldFocus::{Enter, Exit};
+    let mut s = Session::new();
+    let id =
+        s.open("group.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::group_focus_template())), None).expect("opens");
+    let group = s.get(id).unwrap().form.iter().find(|f| f.kind == pdfcraft_forms::FieldKind::Radio).map(|f| f.name.clone()).expect("the radio group");
+    let log = |s: &Session| field_text(s, id, "log");
+    assert!(!s.field_focus(id, &group, 2, Enter).unwrap(), "the group has two buttons, and no third reaches the group");
+    assert_eq!(log(&s), "");
+    assert!(s.field_focus(id, &group, 0, Enter).unwrap());
+    assert_eq!(log(&s), "grp enter|r1 enter", "into the group");
+    s.field_focus_crossing(id, &group, 0, Exit, false).unwrap();
+    s.field_focus_crossing(id, &group, 1, Enter, false).unwrap();
+    assert_eq!(log(&s), "grp enter|r1 enter|r1 exit|r2 enter", "between its buttons");
+    s.field_focus(id, &group, 1, Exit).unwrap();
+    assert_eq!(log(&s), "grp enter|r1 enter|r1 exit|r2 enter|r2 exit|grp exit", "out of the group");
+}
+
+/// A group's enter script that runs away turns the form's scripts off: its button's enter, still
+/// to run, doesn't, and entering the group is no error; the notice that the scripts are off is
+/// in the output.
+#[test]
+fn a_group_script_that_runs_away_stops_its_buttons_scripts_without_an_error() {
+    use crate::js::FieldFocus::Enter;
+    let tpl = pdfcraft_xfa::fixtures::group_focus_template();
+    // Loops in nested calls are stopped only by abandoning the script's thread, at the time limit.
+    let runaway = tpl.replacen(
+        r#"+ "grp enter";"#,
+        r#"+ "grp enter"; function f() { for (var j = 0; j &lt; 99999; j++) {} } for (var k = 0; k &lt; 5000; k++) f();"#,
+        1,
+    );
+    assert_ne!(runaway, tpl);
+    let mut s = Session::new();
+    let id = s.open("group.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&runaway)), None).expect("opens");
+    let group = s.get(id).unwrap().form.iter().find(|f| f.kind == pdfcraft_forms::FieldKind::Radio).map(|f| f.name.clone()).expect("the radio group");
+    assert!(s.field_focus(id, &group, 0, Enter).is_ok(), "no error for the button's script that didn't run");
+    assert!(!field_text(&s, id, "log").contains("r1 enter"), "{}", field_text(&s, id, "log"));
+    assert!(s.take_js_output(id).errors.iter().any(|e| e == crate::XFA_SCRIPTS_OFF), "the notice says the scripts are off");
+}
+
 /// A field's exit scripts run every time it loses focus, changed or not, and its enter scripts
 /// every time it gains it; each run that changes the form is one undo step.
 #[test]

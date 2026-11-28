@@ -1143,6 +1143,41 @@ if (this.rawValue == "1") {
     .to_string()
 }
 
+/// A form whose radio group `grp` (buttons `r1` and `r2`) has enter and exit scripts of its own,
+/// as each button has, all of them adding a line to `log` (`grp enter`, `r1 exit`, …, separated
+/// by `|`); `before` and `after` are text fields around it.
+pub fn group_focus_template() -> String {
+    let log = |what: &str| {
+        format!(
+            r#"<script contentType="application/x-javascript">var l = xfa.form.form.log; l.rawValue = (l.rawValue == null || l.rawValue == "" ? "" : l.rawValue + "|") + "{what}";</script>"#
+        )
+    };
+    let events = |who: &str| {
+        format!(r#"<event activity="enter">{}</event><event activity="exit">{}</event>"#, log(&format!("{who} enter")), log(&format!("{who} exit")))
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="before" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+ <exclGroup name="grp" layout="lr-tb">{grp}
+  <field name="r1" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>1</text></items>{r1}</field>
+  <field name="r2" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>2</text></items>{r2}</field>
+ </exclGroup>
+ <field name="after" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+ <field name="log" w="7in" h="0.3in"><ui><textEdit/></ui></field>
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        grp = events("grp"),
+        r1 = events("r1"),
+        r2 = events("r2"),
+    )
+}
+
 /// A form whose text field `probe` counts its enters in `enters` and its exits in `exits`, whose
 /// text field `quiet` only shows a message when it is left, and whose radio button `size.large`
 /// counts its enters in `picks` and its exits in `drops` (each button of a radio group is a field
