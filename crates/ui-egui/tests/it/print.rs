@@ -1746,3 +1746,39 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
     gone.settle();
     assert_eq!(setup(&gone), office);
 }
+
+/// #3377: Ctrl+P, Enter prints. The dialog opens on the default printer with its settings ready, and Enter (with
+/// nothing that takes it focused) presses Print, as the highlighted button promises, so a stack of documents goes out
+/// with Ctrl+P, Enter, Ctrl+W each.
+#[test]
+fn enter_right_after_opening_prints_to_the_default_printer() {
+    let mut h = harness();
+    let jobs = record_spooler(&mut h);
+    list_printers(&mut h, &["Office_Laser"]);
+    h.open();
+    h.settle();
+    assert_eq!(h.destination(), Destination::Printer("Office_Laser".into()));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    h.run_print();
+    assert_eq!(jobs.lock().unwrap().len(), 1, "Enter sent the job");
+    assert!(!h.is_open(), "the dialog closed once the job was sent");
+}
+
+/// #3377, from the keyboard alone: Ctrl+P (⌘P) opens the dialog, and the Enter right after it prints, rather than
+/// opening the printer list the dialog starts on.
+#[test]
+fn ctrl_p_then_enter_prints_without_the_mouse() {
+    let mut h = harness();
+    let jobs = record_spooler(&mut h);
+    list_printers(&mut h, &["Office_Laser"]);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::P);
+    h.run_steps(3);
+    assert!(h.is_open(), "Ctrl+P opened the Print dialog");
+    h.settle();
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    h.run_print();
+    assert_eq!(jobs.lock().unwrap().len(), 1, "Enter sent the job");
+    assert!(!h.is_open(), "the dialog closed once the job was sent");
+}
