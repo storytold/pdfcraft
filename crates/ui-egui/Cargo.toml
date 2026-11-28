@@ -67,11 +67,14 @@ getrandom = "0.4"
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Safe AppKit calls for drag coordinates and repairing an existing per-file PDFCraft binding.
+# Safe AppKit calls for drag coordinates, repairing an existing per-file PDFCraft binding, and
+# reading or (when the user asks) changing the app that opens PDFs.
 # The Objective-C wrappers and block support are already in the tree through arboard and rfd.
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSScreen", "NSWorkspace", "block2"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSBundle", "NSURL", "NSString", "NSError"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSScreen", "NSWorkspace", "block2", "objc2-uniform-type-identifiers"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSBundle", "NSURL", "NSString", "NSError", "NSFileManager"] }
+# The PDF content type that LaunchServices binds an app to (same objc2 family and licence).
+objc2-uniform-type-identifiers = { version = "0.3", default-features = false, features = ["std", "UTType"] }
 block2 = "0.6"
 plist = "1.10"
 # Query and read Finder association attributes without following symbolic links.

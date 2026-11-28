@@ -8,6 +8,8 @@ use craft::theme::selection::MotionChoice;
 use craft::theme::variant::Tone;
 use craft::theme_store::SelectionChange;
 use craft::theme_store::ui::AppearancePage;
+#[cfg(target_os = "macos")]
+use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Entry, SaveKey, Show as _};
 use craft::ui::dialog::DialogHost;
 use craft::ui::notices::{Notice, NoticeLayout};
@@ -175,6 +177,9 @@ impl PdfCraftApp {
     /// Opens Preferences, or leaves the open window as it is.
     pub fn open_preferences(&mut self) {
         if self.preferences.is_none() {
+            // The app that opens PDFs may have changed in the Finder since Preferences last showed it.
+            #[cfg(target_os = "macos")]
+            crate::platform::macos_default_app::reread();
             self.preferences = Some(PreferencesSession::new(self));
         }
     }
@@ -243,6 +248,43 @@ struct Texts {
     unwritable: String,
     date_help: String,
     date_custom_id: &'static str,
+    /// Which app opens PDFs, under the macOS row that makes PdfCraft that app.
+    #[cfg(target_os = "macos")]
+    default_app: DefaultAppText,
+}
+
+/// The macOS "App that opens PDFs" row: its status line, and whether its button can be pressed.
+#[cfg(target_os = "macos")]
+struct DefaultAppText {
+    status: String,
+    can_press: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl DefaultAppText {
+    fn new() -> Self {
+        use crate::platform::macos_default_app::{Opener, Request, status};
+        let s = status();
+        let opener = match &s.opener {
+            Opener::ThisApp => tl!("PdfCraft opens PDFs.").to_string(),
+            Opener::OtherCopy(folder) => i18n::fmt(tl!("PDFs open in the copy of PdfCraft in {folder}."), &[("folder", folder)]),
+            Opener::Other(app) => i18n::fmt(tl!("PDFs open in {app}."), &[("app", app)]),
+            Opener::Nothing => tl!("macOS names no app that opens PDFs.").to_string(),
+            Opener::Unknown => tl!("This macOS can't say which app opens PDFs. macOS 12 or later can make PdfCraft that app.").to_string(),
+        };
+        let status = if !s.can_set {
+            format!("{opener} {}", tl!("Only an installed PdfCraft app can be made the app that opens PDFs."))
+        } else {
+            match (s.request, &s.opener) {
+                (Request::Waiting, _) => tl!("Waiting for macOS…").to_string(),
+                (Request::Answered, Opener::Other(_) | Opener::Nothing) => format!("{opener} {}", tl!("macOS kept the app it had.")),
+                _ => opener,
+            }
+        };
+        // macOS binds PDFs to PdfCraft's identifier, not to one copy: another copy holding it can't be replaced from here.
+        let can_press = s.can_set && s.request != Request::Waiting && matches!(s.opener, Opener::Other(_) | Opener::Nothing);
+        Self { status, can_press }
+    }
 }
 
 impl Texts {
@@ -278,6 +320,8 @@ impl Texts {
                 &[("escape", "\\")],
             ),
             date_custom_id: "custom",
+            #[cfg(target_os = "macos")]
+            default_app: DefaultAppText::new(),
         }
     }
 }
@@ -495,6 +539,14 @@ impl PreferencesModel for Prefs<'_> {
     }
 
     fn custom_row(&mut self, ui: &mut Ui, key: &str) -> bool {
+        #[cfg(target_os = "macos")]
+        if key == "general.default_app" {
+            // Only on a press: macOS asks the user, and PdfCraft never changes the default on its own (#2363).
+            if Button::new(tl!("Open PDFs with PdfCraft")).show(ui).clicked() && !crate::platform::macos_default_app::make_default(self.ctx) {
+                self.app.notify_tr("macOS didn't take the request. It needs macOS 12 or later and an installed PdfCraft app.");
+            }
+            return false;
+        }
         if key != "fill.date_pattern" {
             return false;
         }
@@ -717,6 +769,13 @@ impl Prefs<'_> {
             rows.push(RowSpec::new("general.reload", tl!("Reload documents when their files change on disk"), RowKind::Bool(d.reload_changed_files)));
             rows.push(RowSpec::new("general.updates", tl!("Check for updates when PdfCraft starts"), RowKind::Bool(d.update_check_at_start)));
         }
+        #[cfg(target_os = "macos")]
+        rows.push(
+            RowSpec::new("general.default_app", tl!("App that opens PDFs"), RowKind::Custom)
+                .keywords(tl!("Default app, Finder, Open With"))
+                .help(t.default_app.status.as_str())
+                .enabled(t.default_app.can_press),
+        );
         rows.push(RowSpec::new("general.secured_notice", tl!("Show a notice when a document is secured"), RowKind::Bool(d.show_secured_notice)));
         #[cfg(not(target_arch = "wasm32"))]
         rows.push(
