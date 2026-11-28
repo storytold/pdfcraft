@@ -204,6 +204,9 @@ CLI_DIR="$WORK/pdfcraft-cli-$VERSION-macos-$ARCH"
 mkdir -p "$CLI_DIR"
 cp "$WORK/bin/pdfcraft-cli" "$CLI_DIR/"
 copy_docs "$CLI_DIR"
+# Reuse the verified app models and their licences/credits. The standalone CLI finds them beside
+# its executable, without an installed app or PDFCRAFT_MODELS override.
+cp -R "$APP/Contents/Resources/models" "$CLI_DIR/models"
 sign --options runtime "$CLI_DIR/pdfcraft-cli"
 codesign --verify --strict --verbose=2 "$CLI_DIR/pdfcraft-cli"
 rm -f "$CLI_ZIP"

@@ -82,6 +82,8 @@ Directory precedence stays the same: `$PDFCRAFT_MODELS`, the release-package loc
 The first directory with a complete supported pair wins, even if an earlier legacy pair precedes a later ONNX pair.
 
 The release-package locations are `models\` beside `pdfcraft.exe` (MSI, portable zip), `PdfCraft.app/Contents/Resources/models` (macOS), and `share/pdfcraft/models` beside `bin/` (deb, rpm, tar.gz, AppImage, Flatpak, FreeBSD).
+The standalone macOS CLI zip and Linux CLI tarball also carry a `models/` folder beside `pdfcraft-cli`, including the models' licence files and `ATTRIBUTION.txt`.
+They reuse the verified models staged for the desktop package; keep the folder beside the executable when installing the CLI.
 The web build does not include these models, and OCR remains limited to the Latin alphabet without accents.
 
 ### macOS

@@ -107,14 +107,16 @@ if has tar; then
 fi
 
 # ---- CLI-only .tar.gz ---------------------------------------------------------------------------
-# The stripped pdfcraft-cli (and its opt-in MCP server) with the licences, for machines that never
-# open a window. Like the other formats it needs glibc >= the build host's.
+# The stripped pdfcraft-cli (and its opt-in MCP server) with the OCR models and licences, for
+# machines that never open a window. Like the other formats it needs glibc >= the build host's.
 if has cli; then
   CLI_NAME="pdfcraft-cli-$VERSION$LABEL_SUFFIX-linux-$ARCH"
   CLI_DIR="$WORK/cli/$CLI_NAME"
   mkdir -p "$CLI_DIR"
   cp "$STAGE/usr/bin/pdfcraft-cli" "$CLI_DIR/"
   copy_docs "$CLI_DIR"
+  # Reuse the already verified models, including their licence files and ATTRIBUTION.txt.
+  cp -R "$STAGE/usr/share/pdfcraft/models" "$CLI_DIR/models"
   tar -C "$WORK/cli" -czf "$DIST/$CLI_NAME.tar.gz" "$CLI_NAME"
   echo "wrote $DIST/$CLI_NAME.tar.gz"
 fi

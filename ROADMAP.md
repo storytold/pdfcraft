@@ -667,6 +667,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 Newest first: the date, what moved, and the new overall estimate.
 
+- **2026-10-11 (M10):** Standalone macOS CLI ZIP and Linux CLI tarball include the verified OCR models, licences and credits beside the executable, reusing desktop staging. A synthetic harness runs the actual packaging scripts and verifies extracted payloads; signing, notarization and real OCR inference are outside that harness. Estimates unchanged.
+
 - **2026-11-10 (M4, #4594):** Reconcile current main and keep the original draft-safety entry in this progress log instead of duplicating it in the shared roadmap header. Preserve inactive password cleanup and the Properties guard; behavior and estimates unchanged.
 - **2026-11-09 (M4, #4594):** Reconcile upstream changes in the license ledger, roadmap and UI test registry; retain the vendored draft guard, local interaction replay and upstream split-view tests. Behavior and estimates unchanged; maintainer review remains pending.
 
