@@ -50,6 +50,7 @@ pub mod marks {
 pub use content_ui::TextDraft;
 pub use create_ui::Clip;
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignGraphic, SignStep};
+mod deskew_job;
 mod dialogs;
 pub use edit_text_ui::{CropMode, ImageSelection};
 mod editing;
@@ -265,6 +266,10 @@ pub struct PdfCraftApp {
     /// A name typed in Rename whose "Save and Rename" save did not go through; the dialog opens
     /// again with it on the next frame.
     pub(crate) rename_returned: rename_ui::Returned,
+    /// The straighten report's text, shared with the dialog on the host so the pass can update it.
+    pub deskew_text: std::sync::Arc<std::sync::Mutex<String>>,
+    /// The batch deskew in flight, advanced one page per frame (Dialog::DeskewReport).
+    pub deskew_job: Option<deskew_job::Job>,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
     /// The active document during the previous frame, so a deferred keyboard Save from that frame
