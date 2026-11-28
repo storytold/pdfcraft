@@ -530,6 +530,14 @@ impl PdfCraftApp {
         if still_looking(&self.print_draft, discovering) || self.print_draft.papers_loading() {
             return Err(tl!("Looking for printers…").to_string());
         }
+        if let Some((requested, _)) = self.print_draft.script_duplex {
+            let printer = self.print_draft.printer.as_deref();
+            #[cfg(target_arch = "wasm32")]
+            let printer = printer.filter(|p| *p != crate::web_print::BROWSER_PRINTER);
+            if printer.is_none() || self.print_draft.job_duplex() != Some(requested) {
+                return Err(tl!("The selected print setup cannot apply the form's requested one-sided or two-sided setting.").to_string());
+            }
+        }
         // What's typed in a form field is part of what's printed (#166).
         if !self.commit_form_typing(ctx) {
             return Err(tl!("A form field has text that can't be kept yet.").to_string());

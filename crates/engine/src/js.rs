@@ -8,7 +8,7 @@
 
 use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
 pub use pdfcraft_js::templates::Change as TemplateChange;
-pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Panel, Request};
+pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Panel, PrintDuplex, PrintSettings, Request};
 
 use crate::{DocId, Edit, EditError, Session};
 
@@ -166,7 +166,7 @@ impl JsOutput {
         let mut notes = Vec::new();
         for r in &o.requests {
             match r {
-                Request::Print => notes
+                Request::Print | Request::PrintWithSettings(_) => notes
                     .push("Print requested by an automatic field script was ignored; use a button or the JavaScript console to print".to_string()),
                 Request::ShowPanel(_) => notes.push("A field script asked to show a side panel; only a button may show a side panel".to_string()),
                 Request::SaveAs => notes.push("A field script asked to save the document as a new file; only a button may open Save As".to_string()),

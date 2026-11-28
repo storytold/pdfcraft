@@ -42,6 +42,8 @@ pub struct PrintDraft {
     pub grayscale: bool,
     /// `None` = the printer's own default (its Properties), as Acrobat does.
     pub duplex: Option<spool::Duplex>,
+    /// Requested mode and the preference to restore when this job is closed.
+    pub script_duplex: Option<(spool::Duplex, Option<spool::Duplex>)>,
     pub which: Which,
     pub range: String,
     /// The pages `Which::Selected` prints (0-based, in page order); empty when none were picked.
@@ -125,6 +127,7 @@ impl Default for PrintDraft {
             collate: true,
             grayscale: false,
             duplex: None,
+            script_duplex: None,
             which: Which::All,
             range: String::new(),
             selected: Vec::new(),
@@ -389,8 +392,12 @@ impl PrintDraft {
         // Label's stock is that job's; the printer keeps the paper Label replaced.
         let paper = if self.handling == Handling::Label { self.paper_before_label.unwrap_or(self.paper) } else { self.paper };
         // By name, so a custom paper is found again however the list changes.
-        let setup =
-            PrinterSetup { paper: self.paper_name_at(paper).to_string(), size: self.size, custom_scale: self.custom_scale, duplex: self.duplex };
+        let setup = PrinterSetup {
+            paper: self.paper_name_at(paper).to_string(),
+            size: self.size,
+            custom_scale: self.custom_scale,
+            duplex: self.preferred_duplex(),
+        };
         setups::record(&mut self.setups, &printer, setup);
     }
 
@@ -403,7 +410,11 @@ impl PrintDraft {
         let Some(setup) = self.setups.iter().find(|(name, _)| name == printer).map(|(_, s)| s.clone()) else { return };
         self.size = setup.size;
         self.custom_scale = setup.custom_scale;
-        self.duplex = setup.duplex;
+        if let Some((_, previous)) = &mut self.script_duplex {
+            *previous = setup.duplex;
+        } else {
+            self.duplex = setup.duplex;
+        }
         if let Some(paper) = self.paper_index(&setup.paper) {
             if self.handling == Handling::Label {
                 self.paper_before_label = Some(paper);
@@ -526,6 +537,21 @@ impl PrintDraft {
         }
     }
 
+    pub(crate) fn preferred_duplex(&self) -> Option<spool::Duplex> {
+        self.script_duplex.map_or(self.duplex, |(_, previous)| previous)
+    }
+
+    pub(super) fn job_duplex(&self) -> Option<spool::Duplex> {
+        // Cut and stack uses simplex. Booklet sets duplex based on the subset and driver.
+        if self.cut_and_stack() {
+            Some(spool::Duplex::Off)
+        } else if self.handling == Handling::Booklet {
+            print::booklet_job_duplex(self.booklet_subset, self.printer_two_sided())
+        } else {
+            self.chosen_duplex()
+        }
+    }
+
     /// The spooler job for this print: the dialog's copies, two-sided and colour settings, the
     /// driver options changed from the printer's defaults, and the chosen paper.
     pub fn job(&self, title: &str) -> spool::Job {
@@ -533,16 +559,7 @@ impl PrintDraft {
             printer: self.printer.clone(),
             copies: self.copies.max(1),
             collate: self.collate,
-            // Cut and stack needs single-sided sheets, whatever the printer's default; a booklet
-            // decides two-sided itself (#2707), as far as the driver takes it (#5772), leaving the
-            // Two-sided choice as it was.
-            duplex: if self.cut_and_stack() {
-                Some(spool::Duplex::Off)
-            } else if self.handling == Handling::Booklet {
-                print::booklet_job_duplex(self.booklet_subset, self.printer_two_sided())
-            } else {
-                self.chosen_duplex()
-            },
+            duplex: self.job_duplex(),
             scaling: spool::Scaling::Exact,
             grayscale: print::driver_needs_grayscale(self.grayscale, self.raster().as_ref()),
             // Set when the copy sent is made grey (`spooler_copy`, #5806).

@@ -293,8 +293,30 @@ impl Automation {
             "even" => Subset::Even,
             s => return Err(bad(format!("unknown subset {s:?}"))),
         };
-        let pages = print::select_pages(count, a.opt_str("pages")?, &labels, subset, a.opt_bool("reverse")?.unwrap_or(false))
-            .map_err(|e| bad(e.to_string()))?;
+        let range = a.opt_str("pages")?;
+        let reverse = a.opt_bool("reverse")?.unwrap_or(false);
+        let pages = if let Some(numbers) = a.0.get("page_numbers") {
+            if range.is_some() {
+                return Err(bad("give either pages or page_numbers"));
+            }
+            let numbers = numbers.as_array().ok_or_else(|| bad("page_numbers must be an array"))?;
+            if numbers.len() > 100_000 {
+                return Err(bad("page_numbers exceeds the page selection limit"));
+            }
+            let indices = numbers
+                .iter()
+                .map(|p| {
+                    p.as_u64()
+                        .and_then(|n| usize::try_from(n).ok())
+                        .and_then(|n| n.checked_sub(1))
+                        .ok_or_else(|| bad("page_numbers must contain positive integer page positions"))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            print::select_listed(count, &indices, subset, reverse)
+        } else {
+            print::select_pages(count, range, &labels, subset, reverse)
+        }
+        .map_err(|e| bad(e.to_string()))?;
         let layout = match a.opt_str("layout")?.unwrap_or("fit") {
             "custom" => Layout::Size(SizeMode::Custom(a.opt_num("scale")?.ok_or_else(|| bad("custom needs scale (percent)"))?)),
             "multiple" => {
@@ -355,7 +377,8 @@ impl Automation {
         // name, so "default" can't become another printer while the document is rendered. The
         // queues are listed without asking every driver (#2192); only this one is asked.
         let mut asked = None;
-        let duplex = job_duplex(a.opt_str("duplex")?.unwrap_or("off"), &layout, || {
+        let requested_duplex = a.opt_str("duplex")?;
+        let duplex = job_duplex(requested_duplex.unwrap_or("off"), &layout, || {
             asked = printer.and_then(|p| printer_in(spool::printer_queues(), p));
             spool::two_sided(&asked.as_ref()?.name)
         })?;
@@ -439,6 +462,12 @@ impl Automation {
             (Some(p), None) => Destination::File(self.resolve(p, true)?),
             (None, Some(printer)) => {
                 let actual_printer = resolved_printer.as_deref().unwrap_or(printer);
+                if !matches!(layout, Layout::Booklet { .. })
+                    && matches!(requested_duplex, Some("long-edge" | "short-edge"))
+                    && spool::two_sided(actual_printer) == Some(false)
+                {
+                    return Err(bad("the selected printer cannot apply the requested two-sided setting"));
+                }
                 Destination::Printer(spool_job(
                     a,
                     actual_printer,
@@ -486,7 +515,12 @@ impl Automation {
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
         }
-        Ok(out)
+        let warnings = if printer.is_none() && requested_duplex.is_some_and(|mode| mode != "printer") {
+            vec!["The print-ready PDF contains the selected pages. A file destination cannot apply the requested duplex setting.".to_string()]
+        } else {
+            Vec::new()
+        };
+        Ok(crate::a11y::with_warnings(out, warnings))
     }
 }
 

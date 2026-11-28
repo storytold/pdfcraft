@@ -789,6 +789,7 @@ pub fn tools() -> Vec<ToolDef> {
             json!({
                 "doc": doc(),
                 "pages": { "type": "string" },
+                "page_numbers": { "type": "array", "items": {"type": "integer", "minimum": 1}, "description": "One-based page positions in print order. Use instead of pages." },
                 "subset": { "type": "string", "enum": ["all", "odd", "even"] },
                 "reverse": { "type": "boolean" },
                 "layout": { "type": "string", "enum": ["fit", "actual", "shrink", "custom", "multiple", "booklet", "poster"] },

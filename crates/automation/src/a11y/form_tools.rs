@@ -9,6 +9,16 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
     match r {
         R::Reset(n) => json!({ "reset": n }),
         R::Print => json!({ "print": true }),
+        R::PrintWithSettings(settings) => {
+            let mut request = json!({ "print": true });
+            if let Some(pages) = &settings.pages {
+                request["page_numbers"] = json!(pages.iter().map(|page| page + 1).collect::<Vec<_>>());
+            }
+            if let Some(duplex) = settings.duplex {
+                request["duplex"] = json!(duplex.id());
+            }
+            request
+        }
         R::GoToPage(p) => json!({ "page": p + 1 }),
         R::LaunchUrl(u) => json!({ "url": u }),
         R::Submit(u) => json!({ "submit": u }),

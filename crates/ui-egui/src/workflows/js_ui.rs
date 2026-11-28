@@ -82,12 +82,16 @@ impl PdfCraftApp {
         }
         for r in out.requests {
             match r {
-                Request::Print => {
+                Request::Print | Request::PrintWithSettings(_) => {
                     if let Some(i) = view {
                         // The print dialog reads the active document throughout its lifetime.
                         // Keep the source selected; restoring the comparison tab would retarget it.
                         self.active = Some(i);
-                        self.open_print();
+                        let settings = match r {
+                            Request::PrintWithSettings(settings) => Some(settings),
+                            _ => None,
+                        };
+                        self.open_script_print(settings);
                     }
                 }
                 Request::GoToPage(p) => {

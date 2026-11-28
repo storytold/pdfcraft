@@ -1,7 +1,7 @@
 use super::host::{
     FieldKey, arg, charge, colour, error, function, host, kind_of, read, s, strings, text, text_bytes, text_line, value_for, value_of, write,
 };
-use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, Request};
+use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, PrintDuplex, PrintSettings, Request};
 use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
 
 macro_rules! getter {
@@ -599,8 +599,84 @@ pub(crate) fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
     Ok(JsValue::undefined())
 }
 
-pub(crate) fn print(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    host(ctx)?.borrow_mut().request(Request::Print);
+pub(crate) fn get_print_params(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let interaction = ObjectInitializer::new(ctx).property(js_string!("full"), js_string!("full"), Attribute::all()).build();
+    let duplex = ObjectInitializer::new(ctx)
+        .property(js_string!("Simplex"), js_string!("Simplex"), Attribute::all())
+        .property(js_string!("DuplexFlipLongEdge"), js_string!("DuplexFlipLongEdge"), Attribute::all())
+        .build();
+    let constants = ObjectInitializer::new(ctx)
+        .property(js_string!("interactionLevel"), interaction, Attribute::all())
+        .property(js_string!("duplexTypes"), duplex, Attribute::all())
+        .build();
+    Ok(ObjectInitializer::new(ctx)
+        .property(js_string!("constants"), constants, Attribute::all())
+        .property(js_string!("interactive"), js_string!("full"), Attribute::all())
+        .build()
+        .into())
+}
+
+fn print_pages(value: JsValue, ctx: &mut Context) -> JsResult<Option<Vec<usize>>> {
+    // Bound both the work reading the array and the expanded selection.
+    const MAX_PAGES: usize = 100_000;
+    if value.is_undefined() {
+        return Ok(None);
+    }
+    let array = JsArray::from_object(value.as_object().ok_or_else(|| error("printRange must be an array of page pairs"))?)?;
+    let len = array.length(ctx)?;
+    if len == 0 || len > MAX_PAGES as u64 {
+        return Err(error("printRange is empty or exceeds the page selection limit"));
+    }
+    let count = host(ctx)?.borrow().doc.num_pages;
+    let mut pages = Vec::new();
+    for i in 0..len {
+        let pair = array.get(i, ctx)?;
+        let pair = JsArray::from_object(pair.as_object().ok_or_else(|| error("printRange must contain page pairs"))?)?;
+        if pair.length(ctx)? != 2 {
+            return Err(error("printRange must contain page pairs"));
+        }
+        let mut endpoint = |index| {
+            let n = pair.get(index, ctx)?.as_number().ok_or_else(|| error("printRange needs integer page positions"))?;
+            if n < 0.0 || n >= count as f64 || n.fract() != 0.0 {
+                return Err(error("printRange page is outside the document or is not an integer"));
+            }
+            Ok(n as usize)
+        };
+        let (first, last) = (endpoint(0)?, endpoint(1)?);
+        if first > last || pages.len() + (last - first) + 1 > MAX_PAGES {
+            return Err(error("printRange must use ascending pairs within the page selection limit"));
+        }
+        pages.extend(first..=last);
+    }
+    Ok(Some(pages))
+}
+
+pub(crate) fn print(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let request = if let Some(params) = arg(args, 0).as_object() {
+        let interactive = params.get(js_string!("interactive"), ctx)?;
+        if !interactive.is_undefined() && interactive.as_string() != Some(js_string!("full")) {
+            return Err(error("print requires full interaction"));
+        }
+        let duplex = params.get(js_string!("DuplexType"), ctx)?;
+        let duplex = if duplex.is_undefined() {
+            None
+        } else if duplex.as_string() == Some(js_string!("Simplex")) {
+            Some(PrintDuplex::Simplex)
+        } else if duplex.as_string() == Some(js_string!("DuplexFlipLongEdge")) {
+            Some(PrintDuplex::LongEdge)
+        } else {
+            return Err(error("unsupported DuplexType"));
+        };
+        let pages = print_pages(params.get(js_string!("printRange"), ctx)?, ctx)?;
+        if !interactive.is_undefined() || pages.is_some() || duplex.is_some() {
+            Request::PrintWithSettings(PrintSettings { pages, duplex })
+        } else {
+            Request::Print
+        }
+    } else {
+        Request::Print
+    };
+    host(ctx)?.borrow_mut().request(request);
     Ok(JsValue::undefined())
 }
 

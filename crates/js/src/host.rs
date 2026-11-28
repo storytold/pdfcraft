@@ -101,6 +101,7 @@ impl Host {
             Request::Reset(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
             Request::LaunchUrl(u) | Request::Submit(u) | Request::Focus(u) | Request::OpenDoc(u) => u.len(),
             Request::OpenAttachment { name, .. } => name.len(),
+            Request::PrintWithSettings(settings) => settings.pages.as_ref().map_or(0, |p| std::mem::size_of_val(p.as_slice())),
             Request::FocusField { name, .. } => name.len(),
             _ => 0,
         };

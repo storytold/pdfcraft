@@ -65,7 +65,7 @@ use host::{arg, as_number, error, function, s, text};
 pub use model::WidgetRect;
 pub use model::{
     DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, DocInfo, Event, FieldState, FieldType, Limits, Message, MessageButtons,
-    MessageIcon, Outcome, Panel, Request,
+    MessageIcon, Outcome, Panel, PrintDuplex, PrintSettings, Request,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use run::SCRIPT_STACK;

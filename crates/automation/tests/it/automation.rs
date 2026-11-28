@@ -9949,6 +9949,58 @@ fn templates_are_live_to_scripts_and_keep_values_after_save_reopen() {
 }
 
 #[test]
+fn script_print_uses_live_template_positions_and_explicit_destination() {
+    let dir = workdir("script-print");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"b.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({"doc":doc,"page":2,"name":"note","type":"text","rect":[10,10,140,32]}));
+    let run = |a: &mut Automation, script: &str| ok(a, "js_run", json!({"doc":doc,"script":script}));
+
+    let out = run(
+        &mut a,
+        "createTemplate('Notes',1); var t=getTemplate('Notes'); t.hidden=true; t.spawn(numPages,true,false); t.spawn(numPages,true,false); var p=getPrintParams(); var n=getField('P2.Notes.note').page; p.printRange=[[n,n],[0,0]]; p.DuplexType=p.constants.duplexTypes.DuplexFlipLongEdge; print(p)",
+    );
+    assert_eq!(out["error"], Value::Null);
+    let request = &out["requests"][0];
+    assert_eq!(request, &json!({"print":true,"page_numbers":[3,1],"duplex":"long-edge"}));
+    let args = json!({"doc":doc,"page_numbers":request["page_numbers"],"duplex":request["duplex"],"path":"print.pdf"});
+    let printed = ok(&mut a, "doc_print", args.clone());
+    assert_eq!(printed["sheets"], 2);
+    assert!(printed["warnings"][0].as_str().unwrap().contains("cannot apply"));
+    let exported = ok(&mut a, "doc_open", json!({"path":"print.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, exported), ["Page 2", "Page 1"]);
+    assert!(a.call("doc_print", &json!({"doc":doc,"page_numbers":[1],"path":"../outside.pdf"})).is_err());
+    // An existing directory is not a writable PDF destination.
+    std::fs::create_dir(dir.join("blocked.pdf")).unwrap();
+    let mut blocked = args;
+    blocked["path"] = json!("blocked.pdf");
+    assert!(a.call("doc_print", &blocked).is_err());
+    assert!(dir.join("blocked.pdf").is_dir());
+
+    let out = run(
+        &mut a,
+        "deletePages(1); var p=getPrintParams(); p.DuplexType=p.constants.duplexTypes.Simplex; var n=getField('P2.Notes.note').page; p.printRange=[[n,n]]; print(p)",
+    );
+    assert_eq!(out["error"], Value::Null);
+    assert_eq!(out["requests"][0], json!({"print":true,"page_numbers":[2],"duplex":"off"}));
+    let invalid = run(&mut a, "var p=getPrintParams(); p.printRange=[[2,2]]; print(p)");
+    assert!(invalid["error"].is_string());
+    assert_eq!(invalid["requests"], json!([]));
+    let cancelled = ok(
+        &mut a,
+        "js_run",
+        json!({"doc":doc,
+            "script":"if (app.execDialog({description:{name:'Print notes',elements:[{type:'ok_cancel'}]}}) === 'ok') print(getPrintParams());","answers":[null]
+        }),
+    );
+    assert_eq!(cancelled["error"], Value::Null);
+    assert_eq!(cancelled["requests"], json!([]));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    let restored = run(&mut a, "getField('P2.Notes.note').page");
+    assert_eq!(restored["result"], "2");
+}
+
+#[test]
 fn script_calculation_switch_and_timer_resume_pending_values() {
     let dir = workdir("script-calculation-switch");
     let mut a = auto(&dir);

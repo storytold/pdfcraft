@@ -163,3 +163,30 @@ PDF copies. One undo restored the pre-import values after importing the full
 XFDF field set. A repeat import into that copy survived saving, closing, and
 reopening. The synthetic regression also covers undo, rejected writeback, and
 read and write selections outside the permitted root.
+
+## Printing selected page groups
+
+The sheet's Print dialog can pass `getPrintParams()` to `print(params)` with
+full interaction, an optional list of inclusive zero-based page pairs, and a
+simplex or long-edge duplex choice. The ranges use the current page positions,
+including changes made by template spawning and deletion. PdfCraft opens its
+Print dialog with the selected pages and duplex setting and waits for
+confirmation. Cancelling the dialog sends no job. The viewer reports an error
+if the selected destination or layout cannot apply the requested duplex mode.
+
+In automation, `js_run` and `js_tool_button` report a print request with
+`page_numbers` (one-based, in print order) when the script selects a range, and
+`duplex` (`off` or `long-edge`) when it selects a mode. Pass those settings
+to `doc_print` after explicitly choosing a printer or a root-confined output
+path. A print-ready PDF preserves the page selection and reports that the file
+destination cannot apply duplex. Other Acrobat print parameters and unattended
+script printing are outside this compatibility subset.
+
+A read-only check of the supplied Colorful A4 sheet exercised its Print
+toolbar dialog through automation. Cancelling produced no request. Confirming
+page groups produced positional selections, and both simplex and long-edge
+duplex reached the request. The selected groups rendered to a temporary
+print-ready PDF with the duplex warning. An in-memory notes-template spawn
+and deletion also updated the page positions returned by scripted print
+requests. The original bytes were unchanged. No system printer queue was
+available for a physical print.

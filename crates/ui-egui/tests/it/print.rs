@@ -490,6 +490,52 @@ fn refused_save_keeps_the_dialog(files: ScriptedFiles) {
     assert_eq!(h.state().print_draft, before);
 }
 
+#[test]
+fn script_print_requires_confirmation_and_preserves_job_settings() {
+    use pdfcraft_engine::js::{JsOutput, PrintDuplex, PrintSettings, Request};
+
+    let mut h = rig_on(ScriptedFiles::new(), |app| {
+        let bytes = app.session.create_blank(200.0, 300.0, 4).unwrap();
+        app.open_bytes(&egui::Context::default(), "print-test.pdf", None, bytes.to_vec()).unwrap();
+    });
+    let jobs = record_spooler(&mut h);
+    list_printers(&mut h, &["Duplex", "Simplex"]);
+    h.state_mut().two_sided_source = Some(Arc::new(|printer| Some(printer == "Duplex")));
+    let open = |h: &mut Rig, duplex| {
+        let ctx = h.ctx.clone();
+        let (_, id) = h.state().active_ids().unwrap();
+        let requests = vec![Request::PrintWithSettings(PrintSettings { pages: Some(vec![0, 2]), duplex: Some(duplex) })];
+        h.state_mut().handle_js(&ctx, id, JsOutput { requests, ..Default::default() });
+        h.settle();
+        assert_eq!(h.state().print_draft.settings(4, &[]).unwrap().pages, [0, 2]);
+    };
+
+    open(&mut h, PrintDuplex::LongEdge);
+    h.close();
+    h.run_print();
+    assert!(jobs.lock().unwrap().is_empty(), "Cancel must leave the spooler untouched");
+
+    open(&mut h, PrintDuplex::LongEdge);
+    h.pick(Some("Simplex"));
+    h.settle();
+    assert!(matches!(h.ok(), Some(HeldOk::Refused(_))));
+    h.pick(None);
+    h.settle();
+    assert!(matches!(h.ok(), Some(HeldOk::Refused(_))));
+    h.run_print();
+    assert!(jobs.lock().unwrap().is_empty(), "incompatible destinations must never receive a fallback job");
+    h.pick(Some("Duplex"));
+    h.settle();
+    h.ok();
+    h.run_print();
+    assert_eq!(jobs.lock().unwrap().last().unwrap().duplex, Some(spool::Duplex::LongEdge));
+
+    open(&mut h, PrintDuplex::Simplex);
+    h.ok();
+    h.run_print();
+    assert_eq!(jobs.lock().unwrap().last().unwrap().duplex, Some(spool::Duplex::Off));
+}
+
 /// Save as PDF holds OK until the pick and the write end: a write that fails after the pick refuses
 /// the held OK.
 #[test]

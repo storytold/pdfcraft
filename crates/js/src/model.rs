@@ -330,6 +330,7 @@ pub enum Request {
     /// `this.resetForm([names])` (empty: every field).
     Reset(Vec<String>),
     Print,
+    PrintWithSettings(PrintSettings),
     /// `this.pageNum = n` (0-based).
     GoToPage(usize),
     LaunchUrl(String),
@@ -358,6 +359,30 @@ pub enum Request {
     },
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
     ShowPanel(Panel),
+}
+
+/// The subset of Acrobat print parameters carried to the viewer for confirmation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrintSettings {
+    /// Zero-based page positions in print order. None selects the whole document.
+    pub pages: Option<Vec<usize>>,
+    /// None uses the viewer's usual duplex choice.
+    pub duplex: Option<PrintDuplex>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrintDuplex {
+    Simplex,
+    LongEdge,
+}
+
+impl PrintDuplex {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Simplex => "off",
+            Self::LongEdge => "long-edge",
+        }
+    }
 }
 
 /// A side panel a script can show or hide (`app.execMenuItem("ShowHideFileAttachment")`, …).
