@@ -1270,13 +1270,14 @@ fn accented_capitals_stay_inside_a_text_field() {
     let objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
-        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R 9 0 R] >>".into(),
-        "<< /Fields [6 0 R 7 0 R 8 0 R 9 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R 9 0 R 10 0 R] >>".into(),
+        "<< /Fields [6 0 R 7 0 R 8 0 R 9 0 R 10 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (auto) /DA (/Helv 0 Tf 0 g) /Rect [50 700 250 720] /P 3 0 R >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (big) /DA (/Helv 30 Tf 0 g) /Rect [50 600 350 640] /P 3 0 R >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /Ff 4096 /DA (/Helv 40 Tf 0 g) /Rect [50 400 350 500] /P 3 0 R >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (plain) /DA (/Helv 30 Tf 0 g) /Rect [50 300 350 340] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (marked) /DA (/Helv 30 Tf 0 g) /Rect [50 200 350 240] /P 3 0 R >>".into(),
     ];
     let mut doc = document(&objs);
     let (hi, lo) = {
@@ -1288,6 +1289,8 @@ fn accented_capitals_stay_inside_a_text_field() {
     set_value(&mut doc, "big", &FieldValue::Text("ÅRHUS École".into())).unwrap();
     set_value(&mut doc, "note", &FieldValue::Text("ÅRHUS École\nÉtage".into())).unwrap();
     set_value(&mut doc, "plain", &FieldValue::Text("Hello Ada".into())).unwrap();
+    // The same capitals as a letter and a combining mark, drawn together from the bundled face.
+    set_value(&mut doc, "marked", &FieldValue::Text("A\u{030A}RHUS E\u{0301}cole".into())).unwrap();
     let doc = reopen(&doc);
     assert!(undrawn_fields(&doc).is_empty() && !need_appearances(&doc));
     let appearance = |name: &str| {
@@ -1314,6 +1317,11 @@ fn accented_capitals_stay_inside_a_text_field() {
     // Text within the font's bounds is centred by them, as before.
     let (_, size, ys) = appearance("plain");
     assert!(size == 30.0 && (ys[0] - ((40.0 - 0.925 * 30.0) / 2.0 + 0.207 * 30.0)).abs() < 1e-3, "{ys:?}");
+    // A letter with a combining mark is measured with its mark, as it is drawn: the decomposed
+    // value sits where the precomposed one does (review on #8570).
+    let (_, _, big) = appearance("big");
+    let (ap, _, marked) = appearance("marked");
+    assert!(!ap.contains('?') && (marked[0] - big[0]).abs() < 1e-3, "{marked:?} against {big:?}: {ap}");
 }
 
 /// #6822: Greek typed into a field whose font (Helvetica, WinAnsi) can't hold it is stored as typed

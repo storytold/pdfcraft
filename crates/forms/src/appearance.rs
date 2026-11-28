@@ -866,9 +866,13 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     // capitals and the other characters outside ASCII (Å, É, Ğ rise nearly to the top of the em,
     // #8562), measured as a text box measures them. `None` for a line within those bounds. Its
     // ASCII isn't measured: the bundled face's ascenders differ a little from the field font's,
-    // and a value that stays within the bounds keeps its place.
+    // and a value that stays within the bounds keeps its place. A letter followed by a combining
+    // mark is measured with it, as the two are drawn together.
     let ink = |line: &str| {
-        let beyond: String = line.chars().filter(|c| !c.is_ascii() && (thai || !shaped_text::is_thai(*c))).collect();
+        let chars: Vec<char> = line.chars().collect();
+        let is_mark = |c: char| matches!(u32::from(c), 0x0300..=0x036F);
+        let measured = |i: usize, c: char| (!c.is_ascii() && (thai || !shaped_text::is_thai(c))) || chars.get(i + 1).copied().is_some_and(is_mark);
+        let beyond: String = chars.iter().enumerate().filter(|&(i, &c)| measured(i, c)).map(|(_, &c)| c).collect();
         if beyond.is_empty() {
             return None;
         }
