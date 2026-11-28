@@ -15,6 +15,7 @@ mod open_type_cff_simple_font;
 mod rotated_image_snap;
 mod search;
 mod separation_all;
+mod stray_delimiter_in_a_page_dict;
 mod stray_q_in_a_form;
 mod stroke_degenerate_cubic;
 mod stroke_geometry;
