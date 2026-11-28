@@ -378,14 +378,17 @@ fn pdfa_intent_profile(doc: &Document) -> Option<Option<i64>> {
     })
 }
 
-/// Which device colour spaces the document uses.
+/// Which device colour spaces the document uses where no default colour space covers them (see
+/// [`uses_device_colour`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct DeviceColour {
     gray: bool,
     rgb: bool,
     cmyk: bool,
-    /// Resources that define `DefaultRGB` / `DefaultCMYK`: device colour there is drawn in that
-    /// space, which PDF/A accepts whatever the output intent (ISO 19005-2 6.2.4.3).
+    /// In one resource scope, the defaults it sets (`DefaultGray`, `DefaultRGB`, `DefaultCMYK`):
+    /// device colour there is drawn in that space, which PDF/A accepts whatever the output intent
+    /// (ISO 19005-2 6.2.4.3).
+    default_gray: bool,
     default_rgb: bool,
     default_cmyk: bool,
     /// Content that could not be read (undecodable, or past [`MAX_COLOUR_DECODED`]) may use
@@ -595,48 +598,206 @@ fn mark_cs_object(doc: &Document, cs: &Object, used: &mut DeviceColour, depth: u
     }
 }
 
-/// Whether any content or object uses a device colour space.
+/// Which device colour spaces the document paints with where no default colour space stands in
+/// for them.
+///
+/// A default colour space (`DefaultGray`, `DefaultRGB`, `DefaultCMYK`) remaps the device colour
+/// painted through the resource dictionary it sits in (ISO 32000-1 8.6.5.6), so each resource scope
+/// is read on its own: a page with its contents, a form XObject or annotation appearance, a tiling
+/// pattern, and a Type 3 font with its glyph procedures. In a scope, device colour comes from the
+/// content operators and inline images, the named colour spaces of its resources, its images, and
+/// its shadings and shading patterns, each followed to the base or alternate space it draws in.
 fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> DeviceColour {
-    let mut used = DeviceColour::default();
-    let referenced = referenced_content(doc, objs);
-    let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_COLOUR_DECODED, usize::MAX);
+    let mut walk = ColourWalk {
+        out: DeviceColour::default(),
+        budget: pdfcraft_cos::DecodeBudget::new(MAX_COLOUR_DECODED, usize::MAX),
+        streams: std::collections::HashMap::new(),
+        glyphs: std::collections::HashMap::new(),
+        resources: std::collections::HashMap::new(),
+    };
+    for p in pdfcraft_model::pages(doc) {
+        let contents: Vec<Object> = match p.dict.get(b"Contents").map(|c| doc.resolve(c)).as_deref() {
+            Some(Object::Array(a)) => a.clone(),
+            Some(_) => p.dict.get(b"Contents").cloned().into_iter().collect(),
+            None => Vec::new(),
+        };
+        walk.scope(doc, p.dict.get(b"Resources"), &contents, 0);
+    }
     for (r, o) in objs {
+        if walk.out.gray && walk.out.rgb && walk.out.cmyk {
+            break;
+        }
         let Some(d) = dict_of(o) else { continue };
-        // A resource dictionary's /ColorSpace, whether it is this object or the page's inline
-        // /Resources.
-        let resources = d.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned());
-        for holder in [Some(d), resources.as_ref()].into_iter().flatten() {
-            if let Some(spaces) = holder.get(b"ColorSpace").map(|c| doc.resolve(c))
-                && let Some(spaces) = spaces.as_dict()
-            {
-                used.default_rgb |= spaces.get(b"DefaultRGB").is_some();
-                used.default_cmyk |= spaces.get(b"DefaultCMYK").is_some();
-                for (k, entry) in spaces.iter() {
-                    if !matches!(k.as_slice(), b"DefaultGray" | b"DefaultRGB" | b"DefaultCMYK") {
-                        mark_cs_object(doc, entry, &mut used, 0);
-                    }
-                }
-            }
-        }
-        if let Some(cs) = d.get(b"ColorSpace") {
-            mark_cs_object(doc, cs, &mut used, 0);
-        }
-        // Content streams only: a font program or an ICC profile is data, whatever bytes it holds.
-        // Parsing is the expensive part, so once content has used all three spaces no more is read.
-        if !(used.gray && used.rgb && used.cmyk)
-            && let Object::Stream(s) = &**o
-            && (referenced.contains(r) || is_content(&s.dict))
+        if let Object::Stream(s) = &**o
+            && (is_content(&s.dict) || s.dict.int(b"PatternType") == Some(1))
         {
-            match budget.decode(s) {
-                Ok(data) => {
-                    let _ = content_colour(&data, &mut used);
-                }
-                // Not read: it may draw in a device space nothing above saw.
-                Err(_) => used.incomplete = true,
-            }
+            walk.scope(doc, d.get(b"Resources"), &[Object::Ref(*r)], 0);
+        } else if d.name(b"Subtype") == Some(b"Type3") {
+            walk.type3(doc, d, 0);
         }
     }
-    used
+    walk.out
+}
+
+/// The state of one [`uses_device_colour`] walk.
+struct ColourWalk {
+    /// The device colour found so far that no default covers.
+    out: DeviceColour,
+    budget: pdfcraft_cos::DecodeBudget,
+    /// What each content stream sets, read once however many scopes paint it.
+    streams: std::collections::HashMap<ObjRef, DeviceColour>,
+    /// What the glyph procedures of each indirect `CharProcs` dictionary set together, read once
+    /// however many Type 3 fonts share it.
+    glyphs: std::collections::HashMap<ObjRef, DeviceColour>,
+    /// What each indirect resource dictionary names, with its defaults, read once however many
+    /// scopes share it.
+    resources: std::collections::HashMap<ObjRef, DeviceColour>,
+}
+
+impl ColourWalk {
+    /// A Type 3 font's scope: its glyph procedures painted through its own resources.
+    fn type3(&mut self, doc: &Document, font: &Dict, depth: u8) {
+        let charprocs = font.get(b"CharProcs");
+        let seen = charprocs.and_then(Object::as_ref).and_then(|r| self.glyphs.get(&r).copied());
+        let painted = match seen {
+            Some(seen) => seen,
+            None => {
+                let procs = charprocs.map(|c| doc.resolve(c));
+                let procs: Vec<Object> =
+                    procs.as_deref().and_then(Object::as_dict).map(|p| p.iter().map(|(_, v)| v.clone()).collect()).unwrap_or_default();
+                let painted = self.content(doc, &procs);
+                if let Some(r) = charprocs.and_then(Object::as_ref) {
+                    self.glyphs.insert(r, painted);
+                }
+                painted
+            }
+        };
+        self.paint(doc, font.get(b"Resources"), painted, depth);
+    }
+
+    /// One resource scope: the content `streams` painted through `resources`.
+    fn scope(&mut self, doc: &Document, resources: Option<&Object>, streams: &[Object], depth: u8) {
+        let painted = self.content(doc, streams);
+        self.paint(doc, resources, painted, depth);
+    }
+
+    /// What the content `streams` set. Parsing is the expensive part, so each stream is read once,
+    /// and once all three spaces are set no more is read.
+    fn content(&mut self, doc: &Document, streams: &[Object]) -> DeviceColour {
+        let mut used = DeviceColour::default();
+        for stream in streams {
+            if used.gray && used.rgb && used.cmyk {
+                break;
+            }
+            // Content streams are always indirect objects (ISO 32000-1 7.3.8.1).
+            let Some(r) = stream.as_ref() else { continue };
+            let set = match self.streams.get(&r) {
+                Some(seen) => *seen,
+                None => {
+                    let mut set = DeviceColour::default();
+                    if let Object::Stream(s) = &*doc.resolve(stream) {
+                        match self.budget.decode(s) {
+                            Ok(data) => {
+                                let _ = content_colour(&data, &mut set);
+                            }
+                            // Not read: it may draw in a device space nothing above saw.
+                            Err(_) => set.incomplete = true,
+                        }
+                    }
+                    self.streams.insert(r, set);
+                    set
+                }
+            };
+            used.gray |= set.gray;
+            used.rgb |= set.rgb;
+            used.cmyk |= set.cmyk;
+            used.incomplete |= set.incomplete;
+        }
+        used
+    }
+
+    /// Adds to `out` the device colour `painted` through `resources`, with what the resources use
+    /// themselves, leaving out what a default of those resources covers.
+    fn paint(&mut self, doc: &Document, resources: Option<&Object>, painted: DeviceColour, depth: u8) {
+        let named = match resources {
+            Some(Object::Ref(r)) => match self.resources.get(r) {
+                Some(seen) => *seen,
+                None => {
+                    // Marked before it is read, so resources that hold themselves end here.
+                    self.resources.insert(*r, DeviceColour::default());
+                    let named = self.resource_colour(doc, resources, depth);
+                    self.resources.insert(*r, named);
+                    named
+                }
+            },
+            _ => self.resource_colour(doc, resources, depth),
+        };
+        self.out.gray |= (painted.gray || named.gray) && !named.default_gray;
+        self.out.rgb |= (painted.rgb || named.rgb) && !named.default_rgb;
+        self.out.cmyk |= (painted.cmyk || named.cmyk) && !named.default_cmyk;
+        self.out.incomplete |= painted.incomplete || named.incomplete;
+    }
+
+    /// The defaults `resources` sets, and the device colour its named colour spaces, images,
+    /// shadings and shading patterns use. A Type 3 font written directly in the resources (not an
+    /// object of its own, which [`uses_device_colour`] reads as one) is a scope of its own, followed
+    /// within [`MAX_DIRECT_DEPTH`].
+    fn resource_colour(&mut self, doc: &Document, resources: Option<&Object>, depth: u8) -> DeviceColour {
+        let mut used = DeviceColour::default();
+        let resources = resources.map(|r| doc.resolve(r));
+        let Some(res) = resources.as_deref().and_then(Object::as_dict) else { return used };
+        let entries = |key: &[u8]| -> Vec<Object> {
+            let category = res.get(key).map(|c| doc.resolve(c));
+            category.as_deref().and_then(Object::as_dict).map(|c| c.iter().map(|(_, v)| v.clone()).collect()).unwrap_or_default()
+        };
+        if let Some(spaces) = res.get(b"ColorSpace").map(|c| doc.resolve(c))
+            && let Some(spaces) = spaces.as_dict()
+        {
+            used.default_gray = covers(doc, spaces.get(b"DefaultGray"));
+            used.default_rgb = covers(doc, spaces.get(b"DefaultRGB"));
+            used.default_cmyk = covers(doc, spaces.get(b"DefaultCMYK"));
+            // A named colour space content selects with `cs` or an inline image's `/CS`.
+            for (k, entry) in spaces.iter() {
+                if !matches!(k.as_slice(), b"DefaultGray" | b"DefaultRGB" | b"DefaultCMYK") {
+                    mark_cs_object(doc, entry, &mut used, 0);
+                }
+            }
+        }
+        if depth < MAX_DIRECT_DEPTH {
+            for f in entries(b"Font") {
+                if let Object::Dict(font) = &f
+                    && font.name(b"Subtype") == Some(b"Type3")
+                {
+                    self.type3(doc, font, depth.saturating_add(1));
+                }
+            }
+        }
+        // Images and shadings carry their own colour space; a shading pattern holds a shading.
+        for x in entries(b"XObject") {
+            if let Object::Stream(s) = &*doc.resolve(&x)
+                && s.dict.name(b"Subtype") == Some(b"Image")
+                && let Some(cs) = s.dict.get(b"ColorSpace")
+            {
+                mark_cs_object(doc, cs, &mut used, 0);
+            }
+        }
+        let patterns: Vec<Object> =
+            entries(b"Pattern").iter().filter_map(|p| dict_of(&doc.resolve(p)).and_then(|d| d.get(b"Shading")).cloned()).collect();
+        for sh in entries(b"Shading").iter().chain(&patterns) {
+            if let Some(cs) = dict_of(&doc.resolve(sh)).and_then(|d| d.get(b"ColorSpace")) {
+                mark_cs_object(doc, cs, &mut used, 0);
+            }
+        }
+        used
+    }
+}
+
+/// Whether a resource dictionary's `DefaultGray`, `DefaultRGB` or `DefaultCMYK` entry stands in
+/// for its device space: present, not null, and not a bare device space itself (ISO 32000-1
+/// 8.6.5.6).
+fn covers(doc: &Document, default: Option<&Object>) -> bool {
+    let Some(default) = default else { return false };
+    !matches!(&*doc.resolve(default), Object::Null | Object::Name(_))
 }
 
 #[cfg(test)]
@@ -868,7 +1029,7 @@ fn report_xmp_extension(
     }
 }
 
-/// 6.2.3 and 6.2.4.3: the output intent device colour needs.
+/// 6.2.4.3: the output intent device colour needs.
 fn check_output_intent(
     doc: &Document,
     objs: &[(ObjRef, std::sync::Arc<Object>)],
@@ -876,21 +1037,23 @@ fn check_output_intent(
 ) {
     let used = uses_device_colour(doc, objs);
     if used.incomplete {
-        issue("6.2.3", "Some content could not be read for device colour", None, None, false);
+        issue("6.2.4.3", "Some content could not be read for device colour", None, None, false);
     }
     match pdfa_intent_profile(doc) {
+        // 6.2.4.3: device colour needs a PDF/A output intent, unless a default colour space stands
+        // in for it. 6.2.3 is about the output intent itself, not the colour that needs one.
         None if used.any() => {
-            issue("6.2.3", "Device colour is used, but there is no PDF/A output intent", None, None, !used.cmyk);
+            issue("6.2.4.3", "Device colour is used, but there is no PDF/A output intent", None, None, !used.cmyk);
             if used.cmyk {
                 issue("6.2.4.3", "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)", None, None, false);
             }
         }
         // 6.2.4.3: DeviceRGB needs an RGB output intent and DeviceCMYK a CMYK one (#667).
         Some(n) => {
-            if used.cmyk && !used.default_cmyk && n != Some(4) {
+            if used.cmyk && n != Some(4) {
                 issue("6.2.4.3", "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile", None, None, false);
             }
-            if used.rgb && !used.default_rgb && n != Some(3) {
+            if used.rgb && n != Some(3) {
                 issue("6.2.4.3", "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile", None, None, false);
             }
         }

@@ -215,15 +215,17 @@ fn the_trailer_must_not_name_encryption_clause_6_1_3() {
 }
 
 #[test]
-fn device_colour_needs_an_output_intent_clause_6_2_3() {
+fn device_colour_needs_an_output_intent_clause_6_2_4_3() {
     let page = "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << >> >>";
     let packet = a2b_packet(None);
     let rgb = content("1 0 0 rg 10 10 20 20 re f");
     let doc = page_document(page, Some(packet.as_str()), "", &[rgb.as_str()], "");
-    assert_reported(&doc, Level::A2b, "6.2.3");
+    assert_reported(&doc, Level::A2b, "6.2.4.3");
+    // 6.2.3 is about the output intent itself: a file without one breaks nothing there.
+    assert_not_reported(&doc, Level::A2b, "6.2.3");
     let none = content("q Q");
     let doc = page_document(page, Some(packet.as_str()), "", &[none.as_str()], "");
-    assert_not_reported(&doc, Level::A2b, "6.2.3");
+    assert_not_reported(&doc, Level::A2b, "6.2.4.3");
 }
 
 #[test]

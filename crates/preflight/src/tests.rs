@@ -2367,3 +2367,172 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// A content stream object holding `content`.
+fn content_stream(content: &str) -> String {
+    format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len())
+}
+
+/// The device-colour findings `verify` makes at 2b, as (clause, message).
+fn device_colour_findings(doc: &Document) -> Vec<(&'static str, String)> {
+    verify(doc, Level::A2b)
+        .into_iter()
+        .filter(|i| i.message.starts_with("Device") || i.message.contains("for device colour"))
+        .map(|i| (i.clause, i.message))
+        .collect()
+}
+
+const NO_INTENT: &str = "Device colour is used, but there is no PDF/A output intent";
+const CAL_RGB: &str = "[/CalRGB << /WhitePoint [0.9505 1 1.089] >>]";
+const CAL_GRAY: &str = "[/CalGray << /WhitePoint [0.9505 1 1.089] >>]";
+
+/// ISO 19005-2 6.2.4.3: without a PDF/A output intent, device colour is reported under 6.2.4.3 (6.2.3
+/// is about the output intent itself), except where a default colour space of the resources it is
+/// painted through stands in for it (ISO 32000-1 8.6.5.6), including as an indexed space's base.
+#[test]
+fn device_colour_without_an_output_intent_is_6_2_4_3_unless_a_default_covers_it() {
+    let check = |resources: &str, content: &str, extra: &[&str]| {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Contents 3 0 R /Resources << {resources} >> >>");
+        let stream = content_stream(content);
+        // Object 3 is the content stream, so the page is object 4 and extra objects start at 5.
+        let mut objs: Vec<&str> =
+            vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &stream, &page];
+        objs.extend_from_slice(extra);
+        device_colour_findings(&build(&objs, ""))
+    };
+    let reported = vec![("6.2.4.3", NO_INTENT.to_owned())];
+    let red = "1 0 0 rg 0 0 10 10 re f";
+    let grey = "0.5 g 0 0 10 10 re f";
+    assert_eq!(check("", red, &[]), reported, "DeviceRGB, under 6.2.4.3");
+    assert!(check(&format!("/ColorSpace << /DefaultRGB {CAL_RGB} >>"), red, &[]).is_empty(), "DefaultRGB");
+    assert!(check(&format!("/ColorSpace << /DefaultGray {CAL_GRAY} >>"), grey, &[]).is_empty(), "DefaultGray");
+    assert!(check("/ColorSpace << /DefaultRGB 5 0 R >>", red, &[CAL_RGB]).is_empty(), "a DefaultRGB by reference");
+    assert_eq!(check("/ColorSpace << /DefaultGray null >>", grey, &[]), reported, "a null DefaultGray");
+    assert_eq!(check("/ColorSpace << /DefaultRGB /DeviceRGB >>", red, &[]), reported, "a DefaultRGB that is DeviceRGB");
+    assert_eq!(check(&format!("/ColorSpace << /DefaultRGB {CAL_RGB} >>"), "0.5 g 1 0 0 rg", &[]), reported, "DefaultRGB doesn't cover DeviceGray");
+    // The base of an indexed image is remapped too.
+    let image = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace [/Indexed /DeviceRGB 0 <FF0000>] /Length 1 >>\nstream\n\u{0}\nendstream";
+    assert_eq!(check("/XObject << /Im0 5 0 R >>", "/Im0 Do", &[image]), reported, "an indexed image");
+    let covered = format!("/XObject << /Im0 5 0 R >> /ColorSpace << /DefaultRGB {CAL_RGB} >>");
+    assert!(check(&covered, "/Im0 Do", &[image]).is_empty(), "an indexed image under DefaultRGB");
+}
+
+/// A default colour space covers only what is painted through its own resource dictionary (ISO
+/// 32000-1 8.6.5.6): another page, a form XObject, a tiling pattern or a Type 3 font with resources
+/// of its own is not covered by the page's.
+#[test]
+fn a_default_colour_space_covers_only_its_own_resources() {
+    let check = |objs: &[&str]| device_colour_findings(&build(objs, "")).iter().any(|(_, m)| m == NO_INTENT);
+    let catalog = "<< /Type /Catalog /Pages 2 0 R >>";
+    let red = content_stream("1 0 0 rg 0 0 10 10 re f");
+    let default_rgb = format!("/ColorSpace << /DefaultRGB {CAL_RGB} >>");
+    // Two pages drawing DeviceRGB, the first with DefaultRGB.
+    let page = |resources: &str| format!("<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << {resources} >> >>");
+    let pages = "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>";
+    assert!(check(&[catalog, pages, &page(&default_rgb), &page(""), &red]), "the second page has no default");
+    assert!(!check(&[catalog, pages, &page(&default_rgb), &page(&default_rgb), &red]), "both pages have one");
+
+    // One page with DefaultRGB painting `content`, and object 5 drawing DeviceRGB through
+    // resources of its own.
+    let one = "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>";
+    let with = |names: &str, content: &str, object: &str| {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << {default_rgb} {names} >> >>");
+        check(&[catalog, one, &page, &content_stream(content), object])
+    };
+    let form = |resources: &str| {
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 9 9] /Resources << {resources} >> /Length 21 >>\nstream\n1 0 0 rg 0 0 9 9 re f\nendstream"
+        )
+    };
+    assert!(with("/XObject << /Fm0 5 0 R >>", "/Fm0 Do", &form("")), "a form's own resources have no default");
+    assert!(!with("/XObject << /Fm0 5 0 R >>", "/Fm0 Do", &form(&default_rgb)), "a form's resources have one");
+    let pattern = |resources: &str| {
+        format!(
+            "<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 9 9] /XStep 9 /YStep 9 /Resources << {resources} >> /Length 21 >>\nstream\n1 0 0 rg 0 0 9 9 re f\nendstream"
+        )
+    };
+    let paint = "/Pattern cs /P0 scn 0 0 9 9 re f";
+    assert!(with("/Pattern << /P0 5 0 R >>", paint, &pattern("")), "a tiling pattern's own resources have no default");
+    assert!(!with("/Pattern << /P0 5 0 R >>", paint, &pattern(&default_rgb)), "a tiling pattern's resources have one");
+    // A Type 3 font written in the page's resources, its glyph drawing DeviceRGB.
+    let type3 = |resources: &str| {
+        format!(
+            "/Font << /T3 << /Type /Font /Subtype /Type3 /FontBBox [0 0 9 9] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 5 0 R >> /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [9] /Resources << {resources} >> >> >>"
+        )
+    };
+    let glyph = content_stream("9 0 d0 1 0 0 rg 0 0 9 9 re f");
+    let text = "BT /T3 1 Tf (a) Tj ET";
+    assert!(with(&type3(""), text, &glyph), "a Type 3 font's own resources have no default");
+    assert!(!with(&type3(&default_rgb), text, &glyph), "a Type 3 font's resources have one");
+}
+
+/// Device colour counts where a resource dictionary paints with it: an image no resource names,
+/// and the DeviceGray an image's soft mask must use (ISO 32000-1 11.6.5.2), paint nothing in a
+/// device space.
+#[test]
+fn device_colour_counts_only_where_resources_paint_with_it() {
+    let check = |objs: &[&str]| device_colour_findings(&build(objs, ""));
+    let catalog = "<< /Type /Catalog /Pages 2 0 R >>";
+    let pages = "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>";
+    let page =
+        format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ColorSpace << /DefaultRGB {CAL_RGB} >> /XObject << /Im0 5 0 R >> >> >>");
+    let content = content_stream("/Im0 Do");
+    let image = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceRGB /SMask 6 0 R /Length 3 >>\nstream\n\u{0}\u{0}\u{0}\nendstream";
+    let mask =
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /Length 1 >>\nstream\n\u{0}\nendstream";
+    let unused = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceCMYK /Length 4 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\nendstream";
+    assert!(check(&[catalog, pages, &page, &content, image, mask, unused]).is_empty());
+}
+
+/// With a PDF/A output intent, a default colour space still covers only its own resources: the
+/// page's DefaultCMYK doesn't make a form's own DeviceCMYK fit an RGB output intent.
+#[test]
+fn with_an_output_intent_a_default_covers_only_its_own_resources() {
+    let check = |form_resources: &str| {
+        let form = format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 9 9] /Resources << {form_resources} >> /Length 22 >>\nstream\n0 0 0 1 k 0 0 9 9 re f\nendstream"
+        );
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R /OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (sRGB) /DestOutputProfile 6 0 R >>] >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ColorSpace << /DefaultCMYK 7 0 R >> /XObject << /Fm0 5 0 R >> >> >>",
+            &content_stream("0 0 0 1 k 0 0 9 9 re f /Fm0 Do"),
+            &form,
+            "<< /N 3 /Length 0 >>\nstream\n\nendstream",
+            "[/ICCBased 8 0 R]",
+            "<< /N 4 /Length 0 >>\nstream\n\nendstream",
+        ];
+        device_colour_findings(&build(&objs, ""))
+    };
+    let wrong = vec![("6.2.4.3", "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile".to_owned())];
+    assert_eq!(check(""), wrong, "the form's own resources have no DefaultCMYK");
+    assert!(check("/ColorSpace << /DefaultCMYK 7 0 R >>").is_empty(), "the form's resources have one");
+}
+
+/// Type 3 fonts sharing one glyph dictionary read it once, and each still answers for its own
+/// resources: the one without a DefaultRGB is reported whichever font is read first.
+#[test]
+fn type3_fonts_sharing_glyphs_each_keep_their_own_defaults() {
+    let font = |resources: &str| {
+        format!(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 9 9] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs 7 0 R /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [9] /Resources << {resources} >> >>"
+        )
+    };
+    let covered = font(&format!("/ColorSpace << /DefaultRGB {CAL_RGB} >>"));
+    let check = |first: &str, second: &str| {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /A 5 0 R /B 6 0 R >> >> >>",
+            &content_stream("BT /A 1 Tf (a) Tj /B 1 Tf (a) Tj ET"),
+            first,
+            second,
+            "<< /a 8 0 R >>",
+            &content_stream("9 0 d0 1 0 0 rg 0 0 9 9 re f"),
+        ];
+        device_colour_findings(&build(&objs, "")).iter().any(|(_, m)| m == NO_INTENT)
+    };
+    assert!(check(&covered, &font("")), "the second font has no default");
+    assert!(check(&font(""), &covered), "the first font has no default");
+    assert!(!check(&covered, &covered), "both have one");
+}
