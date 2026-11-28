@@ -139,20 +139,34 @@ pub(crate) fn change_annots(doc: &mut Document, page: ObjRef, mut list: Vec<Obje
     Ok(set_annots(doc, page, list)?)
 }
 
-/// Replace a page's `/Annots`, writing into the shared array object when it is indirect. An empty
-/// list removes a direct `/Annots`.
+/// Whether a page other than `page` lists `array` as its `/Annots`. Stops at the first such page.
+/// A page tree that cannot be walked has no other page to share with.
+fn annots_shared_with_another_page(doc: &Document, page: ObjRef, array: ObjRef) -> bool {
+    let Some(root) = doc.root() else { return false };
+    let Some(top) = doc.get(root).as_dict().and_then(|d| d.reference(b"Pages")) else { return false };
+    PageWalk::new(doc, top).any(|other| other != page && doc.get(other).as_dict().and_then(|d| d.reference(b"Annots")) == Some(array))
+}
+
+/// Replace a page's `/Annots`. An indirect array that only this page lists is updated in place, so
+/// a reader still holding that reference sees the new list. An array another page also lists is
+/// left as it is (#8101): this page gets its own array, and the pages that were not modified keep
+/// sharing the original. An empty list removes a direct `/Annots`.
 pub fn set_annots(doc: &mut Document, page: ObjRef, list: Vec<Object>) -> Result<(), pdfcraft_cos::CosError> {
     let existing = doc.get(page).as_dict().and_then(|d| d.reference(b"Annots"));
-    match existing {
-        Some(r) if doc.get(r).as_array().is_some() => doc.set(r, Object::Array(list)),
-        _ => doc.update_dict(page, |d| {
-            if list.is_empty() {
-                d.remove(b"Annots");
-            } else {
-                d.set(b"Annots".to_vec(), Object::Array(list));
-            }
-        })?,
+    if let Some(r) = existing
+        && doc.get(r).as_array().is_some()
+        && !annots_shared_with_another_page(doc, page, r)
+    {
+        doc.set(r, Object::Array(list));
+        return Ok(());
     }
+    doc.update_dict(page, |d| {
+        if list.is_empty() {
+            d.remove(b"Annots");
+        } else {
+            d.set(b"Annots".to_vec(), Object::Array(list));
+        }
+    })?;
     Ok(())
 }
 
