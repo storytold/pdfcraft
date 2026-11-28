@@ -157,7 +157,46 @@ fn page_render_says_a_picture_was_left_out_for_its_jbig2_mask() {
     let Some(Content::Json(report)) = out.get(1) else { panic!("expected the warnings as JSON: {out:?}") };
     assert_eq!(
         report["warnings"],
-        json!(["content past the page's safety budget, or a picture whose JBIG2 mask is past a decoder limit, was skipped"])
+        json!(["content past the page's safety budget, or a JBIG2 image or mask past a decoder limit with the picture it masks, was skipped"])
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A JBIG2 image drawn on its own that one of the decoder's limits refuses isn't drawn, and
+/// `page_render` says the page is incomplete rather than returning a white page with nothing said
+/// (PDFBOX-6263's page drew white so, with no warning).
+#[test]
+fn page_render_says_a_jbig2_image_past_a_decoder_limit_was_left_out() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-render-warnings-jbig2-image-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // One JBIG2 segment (ISO 14492 §7.4.8): the information of a page 65,536 columns wide, a
+    // column past the decoder's bound on a side, as the image's dictionary says too.
+    let mut image = vec![0, 0, 0, 0, 48, 0, 1, 0, 0, 0, 19];
+    image.extend_from_slice(&65536u32.to_be_bytes());
+    image.extend_from_slice(&2u32.to_be_bytes());
+    image.extend_from_slice(&[0; 11]); // resolution, flags, striping
+    let content = "q 200 0 0 200 0 0 cm /Im Do Q";
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Im 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width 65536 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n",
+        content.len(),
+        image.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(&image);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+    std::fs::write(dir.join("image.pdf"), pdf).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let doc = open(&mut a, "image.pdf");
+    let out = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
+    let Some(Content::Json(report)) = out.get(1) else { panic!("expected the warnings as JSON: {out:?}") };
+    assert_eq!(
+        report["warnings"],
+        json!(["content past the page's safety budget, or a JBIG2 image or mask past a decoder limit with the picture it masks, was skipped"])
     );
     let _ = std::fs::remove_dir_all(dir);
 }

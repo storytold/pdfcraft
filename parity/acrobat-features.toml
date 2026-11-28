@@ -817,8 +817,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster/tests.rs::group4_fax_with_rows_zero_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_below_its_height_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_past_its_height_decodes_to_the_image_height"]
-notes = "hayro bootstrap; a CCITT fax image is decoded to its /Height whatever its /DecodeParms /Rows says (0, fewer or more rows)"
+evidence = ["crates/render/src/raster/tests.rs::group4_fax_with_rows_zero_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_below_its_height_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_past_its_height_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::a_symbol_dictionary_holds_more_than_65535_symbols", "crates/render/src/raster/tests.rs::a_collective_bitmap_is_as_wide_as_its_symbols_together", "crates/render/src/raster/tests.rs::a_symbol_dictionary_holds_as_many_pixels_as_its_work_and_words_allow", "crates/render/src/raster/tests.rs::a_jbig2_image_drawn_on_its_own_that_a_decoder_limit_refuses_is_content_left_out", "crates/render/src/raster/tests.rs::a_jbig2_text_region_places_as_many_instances_as_its_work_allows"]
+notes = "hayro bootstrap; a CCITT fax image is decoded to its /Height whatever its /DecodeParms /Rows says (0, fewer or more rows). A JBIG2 symbol dictionary may hold more than 65,535 symbols and more than 2^28 pixels, and a height class's collective bitmap may be wider than 65,535 columns, and a text region may place more than 10,000 instances, within the stream's decoding work and the words a page retains; a JBIG2 image one of the decoder's limits still refuses is left out with the page's content-left-out warning"
 
 [[feature]]
 id = "view.render-annotation-appearances"

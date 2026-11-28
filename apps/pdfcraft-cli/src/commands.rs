@@ -435,7 +435,7 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
             pdfcraft_render::RenderWarning::ContentTruncated => {
                 let _ = writeln!(
                     std::io::stderr().lock(),
-                    "warning: page {page}: content past the page's safety budget, or a picture whose JBIG2 mask is past a decoder limit, was skipped"
+                    "warning: page {page}: content past the page's safety budget, or a JBIG2 image or mask past a decoder limit with the picture it masks, was skipped"
                 );
             }
             pdfcraft_render::RenderWarning::ColourFallback => {

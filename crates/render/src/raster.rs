@@ -283,8 +283,8 @@ pub struct RenderedPage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderWarning {
     /// Content was left out at one of the renderer's limits: content past the page's
-    /// decoded-content budget or its JBIG2 allowance, or a picture whose JBIG2 mask is past a
-    /// decoder limit.
+    /// decoded-content budget or its JBIG2 allowance, a JBIG2 image past a decoder limit, or a
+    /// picture whose JBIG2 mask is past one.
     ContentTruncated,
     /// A colour could not be computed (a colour space that cannot be read, or a Separation or
     /// DeviceN tint transform that cannot be evaluated) and was painted in a fallback colour.
