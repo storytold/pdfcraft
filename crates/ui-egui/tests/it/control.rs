@@ -1154,6 +1154,7 @@ fn japanese_dialogs_errors_and_custom_action_names() {
     ok(&mut h, &c, "ui.set", json!({"key": "dialog", "value": "none"}));
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    // The refusal is queued and shown as a card in the next pass; `ui.state` reads the cards.
     // Direct test-side edits queue a notice; let the UI publish it before querying ui.state.
     settle(&mut h);
     let state = ok(&mut h, &c, "ui.state", json!({}));

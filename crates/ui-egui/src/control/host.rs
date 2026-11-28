@@ -50,6 +50,7 @@ impl crate::PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
         let cards = craft::ui::runtime::toast::cards(ctx, &craft::ui::runtime::env::WindowKey::main());
+        // A plain notice carries its text as the card's title; a notice with a body has the title above it.
         let notice = cards.last().map(|card| {
             let toast = &card.toast;
             toast
