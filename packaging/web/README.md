@@ -36,8 +36,9 @@ workspace and Save target stay selected. Click the downloaded file's tab to swit
   the server send `Content-Encoding: br`.
 - **Caching:** `Cache-Control: public, max-age=31536000, immutable` on the hashed `.wasm` and
   `.js` files, and `no-cache` on `index.html`.
-- **HTTPS:** WebGPU (and the clipboard) only work in a secure context, which means `https://`
-  or `http://localhost`. Over plain HTTP elsewhere, the app falls back to WebGL2.
+- **HTTPS:** the clipboard only works in a secure context, such as `https://` or
+  `http://localhost`. When embedded, every ancestor page must also be a secure context;
+  an HTTPS iframe inside an ordinary HTTP page cannot use the clipboard.
 - **Opener isolation:** send `Cross-Origin-Opener-Policy: same-origin` (the sample `_headers`
   and `.htaccess` do; Apache needs `mod_headers` for it). Pages opened from a document's links
   then can't reach or navigate the PdfCraft tab. The app opens links with `noopener` already;
@@ -179,20 +180,12 @@ const { data } = await pdfcraft.screenshot();           // the window as PNG (ba
 
 Opening a PDF, handing a saved or exported file to the page, the file name and the unsaved flag stay with the host messages above.
 
-## Renderer selection and fallback flags
+## Renderer
 
-PdfCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to
-**WebGL2** on its own. URL query flags override this, and they work on the iframe `src` too:
-
-| Flag | Effect |
-|---|---|
-| *(none)* | WebGPU if available, otherwise WebGL2 |
-| `?webgl` | Force the WebGL2 backend (useful when a WebGPU driver misbehaves) |
-| `?cpu` | Force the CPU canvas path (slowest, most compatible) |
-
-For example: `<iframe src="https://example.com/pdfcraft/?webgl" ...>`.
-
-A browser with neither WebGPU nor WebGL2 gets a message in place of the app.
+The web app selects eframe's **Glow (WebGL)** renderer. Errors from `WebRunner::start` are
+written to the browser console and reported to a connected host through `pdfcraft:failed`.
+Downloading or initializing Wasm can fail before Rust starts, so those failures do not send
+`pdfcraft:failed`. Same-document hosts must also catch rejections from `init(...)`.
 
 The build uses WebAssembly SIMD (`.cargo/config.toml`), which reads a scanned page about 2.4
 times faster. Every current browser has it (Chrome and Edge 91, Firefox 89, Safari 16.4 and
