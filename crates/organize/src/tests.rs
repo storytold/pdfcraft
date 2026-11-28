@@ -14,6 +14,8 @@ fn page_rotation_resolves_inheritance_overrides_and_missing_pages() {
     assert_eq!(page_rotation(&doc, 1).unwrap(), 270);
     assert_eq!(page_rotation(&doc, 0).unwrap(), 90);
     assert_eq!(page_rotation(&doc, 3), Err(OrganizeError::NoSuchPage(3)));
+    // One walk gives each page's rotation, as the per-page call does.
+    assert_eq!(crate::page_rotations(&doc).unwrap(), [90, 270, 90]);
 }
 
 #[test]
@@ -2000,7 +2002,7 @@ fn bookmarks_add_rename_move_delete() {
 fn a_bookmark_tree_nests_entries_by_level_under_a_new_first_bookmark() {
     let mut d = doc_a();
     crate::add_bookmark(&mut d, &[], 0, "Existing", 0).unwrap();
-    let e = |level, title: &str, page, element| crate::OutlineEntry { level, title: title.into(), page, element, top: None };
+    let e = |level, title: &str, page, element| crate::OutlineEntry { level, title: title.into(), page, element, left: None, top: None };
     let se = ObjRef::new(4242, 0);
     let entries = [e(1, "One", 0, Some(se)), e(3, "Deep", 1, None), e(2, "Two", 1, None), e(1, "Next", 2, None)];
     assert_eq!(crate::add_bookmark_tree(&mut d, "Untitled", &entries).unwrap(), vec![0]);
@@ -4981,4 +4983,92 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     let all = full_roundtrip(&combine_selected(&[("C", &doc_c(), Some(&[0, 1]))]).unwrap());
     assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
     assert!(attachments(&all));
+}
+
+/// #7687: a watermark source must clip and size the same visible area as the page.
+#[test]
+fn page_form_clips_crop_to_media_before_rotation() {
+    for (crop, bbox, rotations) in [
+        (
+            [10, 20, 140, 170],
+            [20., 30., 100., 150.],
+            [
+                (0, [1., 0., 0., 1., -20., -30.], (80., 120.)),
+                (90, [0., -1., 1., 0., -30., 100.], (120., 80.)),
+                (180, [-1., 0., 0., -1., 100., 150.], (80., 120.)),
+                (270, [0., 1., -1., 0., 150., -20.], (120., 80.)),
+            ],
+        ),
+        // Neither input box equals the intersection: ignoring CropBox must fail too.
+        (
+            [40, 10, 140, 110],
+            [40., 30., 100., 110.],
+            [
+                (0, [1., 0., 0., 1., -40., -30.], (60., 80.)),
+                (90, [0., -1., 1., 0., -30., 100.], (80., 60.)),
+                (180, [-1., 0., 0., -1., 100., 110.], (60., 80.)),
+                (270, [0., 1., -1., 0., 110., -40.], (80., 60.)),
+            ],
+        ),
+        // The opposite overlap takes the bottom and right edges from CropBox.
+        (
+            [10, 50, 80, 170],
+            [20., 50., 80., 150.],
+            [
+                (0, [1., 0., 0., 1., -20., -50.], (60., 100.)),
+                (90, [0., -1., 1., 0., -50., 80.], (100., 60.)),
+                (180, [-1., 0., 0., -1., 80., 150.], (60., 100.)),
+                (270, [0., 1., -1., 0., 150., -20.], (100., 60.)),
+            ],
+        ),
+    ] {
+        for (rotation, matrix, size) in rotations {
+            for inherited in [false, true] {
+                let mut src = open(fixture());
+                let page = pages(&src).unwrap()[0].obj;
+                let target = if inherited { src.get(page).as_dict().unwrap().reference(b"Parent").unwrap() } else { page };
+                src.update_dict(target, |d| {
+                    d.set(b"MediaBox".to_vec(), Object::Array(vec![20.into(), 30.into(), 100.into(), 150.into()]));
+                    d.set(b"CropBox".to_vec(), Object::Array(crop.into_iter().map(Object::Int).collect()));
+                    d.set(b"Rotate".to_vec(), Object::Int(rotation));
+                })
+                .unwrap();
+                let mut dst = Document::new_empty();
+                let (form, actual_size) = page_as_form(&mut dst, &src, 0).unwrap();
+                assert_eq!(actual_size, size);
+                let obj = dst.get(form);
+                let Object::Stream(stream) = &*obj else { panic!("form stream") };
+                let numbers =
+                    |key: &[u8]| -> Vec<f64> { stream.dict.get(key).unwrap().as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect() };
+                assert_eq!(numbers(b"BBox"), bbox);
+                assert_eq!(numbers(b"Matrix"), matrix);
+            }
+        }
+    }
+}
+
+/// Importers such as 3D posters must still be able to reject an explicitly empty source.
+#[test]
+fn page_form_keeps_explicit_zero_area_for_caller_validation() {
+    for key in [b"MediaBox".as_slice(), b"CropBox".as_slice()] {
+        for inherited in [false, true] {
+            let mut src = open(fixture());
+            let page = pages(&src).unwrap()[0].obj;
+            src.update_dict(page, |d| d.set(b"Rotate".to_vec(), Object::Int(0))).unwrap();
+            let target = if inherited { src.get(page).as_dict().unwrap().reference(b"Parent").unwrap() } else { page };
+            if inherited {
+                src.update_dict(page, |d| {
+                    d.remove(key);
+                })
+                .unwrap();
+            }
+            src.update_dict(target, |d| {
+                d.set(key.to_vec(), Object::Array(vec![20.into(), 30.into(), 100.into(), 30.into()]));
+            })
+            .unwrap();
+            let mut dst = Document::new_empty();
+            let (_, size) = page_as_form(&mut dst, &src, 0).unwrap();
+            assert_eq!(size, (80.0, 0.0));
+        }
+    }
 }

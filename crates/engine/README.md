@@ -14,7 +14,7 @@ with optional semantic exclusions; see [word-count behavior and limits](../../do
 
 Two frontends exist on top of it today: `pdfcraft-ui-egui` (desktop and web) and
 `pdfcraft-automation` (headless tools, the CLI and MCP). Anything one can do, the other must be
-able to do — see AGENTS.md §3.
+able to do — see app-agents.md rule 14.
 
 When dynamic XFA layout is active, `JsRunner` does not initialize Acrobat JavaScript with
 scripts from the PDF container's `/Names /JavaScript` tree. Those scripts belong to the
@@ -86,6 +86,10 @@ AcroForm Keystroke, Validate, Calculate and Format scripts run automatically. Th
 ShowPanel and SaveAs requests are ignored with a JavaScript console diagnostic; field values,
 alerts and other requests are retained. Explicit button and console scripts can still request
 printing (#4088).
+
+Command shortcuts are resolved with `CommandSpec::shortcut_for(mac)` before displaying or
+matching them. The Comments binding is Ctrl+M on Windows/Linux; macOS leaves Command+M
+available for the system Minimize action.
 
 ## Not done here
 

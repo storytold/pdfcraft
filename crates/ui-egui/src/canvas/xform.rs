@@ -1,43 +1,87 @@
-use super::{Color32, DocInfo, DocView, Pos2, Rect, pos2, vec2};
+use craft::pages::ui::PlacedPage;
+use egui::{Color32, Pos2, Rect, pos2};
+use pdfcraft_render::DocInfo;
+
+use super::{DocView, PageSession};
+
+/// What the page body's functions read from the view besides the [`PageSession`]: every page's size, the view's
+/// rotation and the document area on screen. The page view holds the view state while the body runs, so the body
+/// reads these values before and hands them on.
+#[derive(Clone, Copy)]
+pub(crate) struct PageGeometry<'a> {
+    /// Every page's size in view space, by page index, unturned by the view (`DocView::page_sizes`).
+    pub(crate) sizes: &'a [(f32, f32)],
+    /// The view's rotation, in degrees clockwise.
+    pub(crate) rotation: u16,
+    /// The document area on screen.
+    pub(crate) viewport: Rect,
+}
+
+impl PageGeometry<'_> {
+    /// The transform of a placed page, with the view's rotation and the page's size as the view reads it.
+    pub(crate) fn xform_of(&self, placed: &PlacedPage) -> PageXform {
+        // A page the list no longer has (an edit since the pass) maps as a unit page; `of` keeps the size positive.
+        let size = self.sizes.get(placed.page).copied().unwrap_or((1.0, 1.0));
+        PageXform::of(placed, self.rotation, size)
+    }
+}
+
+impl PageSession {
+    /// Where `page` is drawn in the last pass (this pass's while the page body runs), with its coordinate mapping.
+    pub(crate) fn page_xform(&self, page: usize, geo: PageGeometry<'_>) -> Option<PageXform> {
+        self.placed.iter().find(|p| p.page == page).map(|p| geo.xform_of(p))
+    }
+
+    /// Where the pages are on screen in the last pass, with their transforms.
+    pub(crate) fn page_xforms(&self, geo: PageGeometry<'_>) -> Vec<(usize, PageXform)> {
+        self.placed.iter().map(|p| (p.page, geo.xform_of(p))).collect()
+    }
+
+    /// The page drawn under the screen point `at` in the last pass, and the point in that page's user space.
+    pub(crate) fn user_point_at(&self, geo: PageGeometry<'_>, info: &DocInfo, at: Pos2) -> Option<(usize, [f64; 2])> {
+        let (page, xf) = self.page_xforms(geo).into_iter().find(|(_, xf)| xf.rect.contains(at))?;
+        let (vx, vy) = xf.screen_to_view(at);
+        let u = info.pages.get(page)?.view_to_user(vx, vy);
+        Some((page, [f64::from(u[0]), f64::from(u[1])]))
+    }
+}
 
 impl DocView {
-    /// Where `page` is drawn on screen this frame (`None` when it is not on screen).
+    /// The page sizes, rotation and document area of the last pass, as the page body's functions read them.
+    pub(crate) fn geometry(&self) -> PageGeometry<'_> {
+        PageGeometry { sizes: &self.page_sizes, rotation: self.view.rotation, viewport: self.viewport }
+    }
+
+    /// Where `page` is drawn on screen in the last pass (`None` when it was not on screen).
     pub fn page_screen_rect(&self, page: usize) -> Option<Rect> {
-        self.screen_xforms.iter().find(|(p, _)| *p == page).map(|(_, xf)| xf.rect)
+        self.session.placed.iter().find(|p| p.page == page).map(|p| p.rect)
     }
 
     /// Whether the page full screen shows is wholly in view: no transition playing or waiting for
     /// its raster, so a click on it reaches what is on it. Always true outside full screen.
     pub fn presentation_settled(&self) -> bool {
-        self.presentation.is_none() || self.presenter.settled_on(self.current)
+        self.presentation.is_none() || self.session.presenter.settled_on(self.view.current)
     }
 
-    /// The document area on screen.
+    /// The document area on screen in the last pass.
     pub fn viewport_rect(&self) -> Rect {
-        self.viewport_screen
+        self.viewport
     }
 
-    /// Pages drawn last frame and their screen rectangles.
+    /// Pages drawn in the last pass and their screen rectangles.
     pub fn visible_page_rects(&self) -> Vec<(usize, Rect)> {
-        self.screen_xforms.iter().map(|(p, xf)| (*p, xf.rect)).collect()
+        self.session.placed.iter().map(|p| (p.page, p.rect)).collect()
     }
 
-    /// Where `page` is drawn this frame, with its coordinate mapping.
+    /// Where `page` is drawn in the last pass (this pass's while the page body runs), with its coordinate mapping.
     pub fn page_xform(&self, page: usize) -> Option<PageXform> {
-        self.screen_xforms.iter().find(|(p, _)| *p == page).map(|(_, xf)| *xf)
+        self.session.page_xform(page, self.geometry())
     }
 
-    /// Where the pages are on screen this frame, with their transforms.
+    /// Where the pages are on screen in the last pass, with their transforms.
     pub(crate) fn page_xforms(&self) -> Vec<(usize, PageXform)> {
-        self.screen_xforms.iter().map(|(p, xf)| (*p, *xf)).collect()
+        self.session.page_xforms(self.geometry())
     }
-}
-
-/// `r` moved so its corner lies on a whole physical pixel, so that a raster drawn from there
-/// maps texel for texel onto the screen.
-pub(super) fn snap_to_pixels(r: Rect, ppp: f32) -> Rect {
-    let snap = |v: f32| (v * ppp).round() / ppp;
-    Rect::from_min_size(pos2(snap(r.min.x), snap(r.min.y)), r.size())
 }
 
 /// Maps between a page's coordinate spaces and the screen, including view rotation.
@@ -56,6 +100,14 @@ pub struct PageXform {
 }
 
 impl PageXform {
+    /// The transform of `placed`, a page the page view placed: its screen rectangle, the view's `rotation` (degrees
+    /// clockwise) and the page's view-space `size` (width, height in points, before the view's rotation). The page
+    /// view places the page already turned, so a 600 × 800 page turned 90° has a rectangle 800 wide and 600 high,
+    /// and [`zoom`](Self::zoom) reads its height over 600.
+    pub fn of(placed: &PlacedPage, rotation: u16, size: (f32, f32)) -> PageXform {
+        PageXform { rect: placed.rect, rot: rotation, pw: size.0.max(1.0), ph: size.1.max(1.0) }
+    }
+
     /// Screen pixels per page point. The view's rotation swaps the rectangle's sides, so a page
     /// turned a quarter shows its width down the screen.
     pub(crate) fn zoom(&self) -> f32 {
@@ -63,32 +115,19 @@ impl PageXform {
         across / self.pw.max(1.0)
     }
 
-    /// Draw an image in the PDF user-space `rect` as a custom stamp's appearance draws it: turned
-    /// back by `turn` (the page /Rotate it was placed for), so with the page's own rotation it
-    /// reads upright as displayed.
-    pub(crate) fn paint_user_image(
-        &self,
-        painter: &egui::Painter,
-        tex: egui::TextureId,
-        p: &pdfcraft_render::PageInfo,
-        rect: [f64; 4],
-        turn: i64,
-        color: Color32,
-    ) {
-        let mut mesh = egui::Mesh::with_texture(tex);
+    /// Where the top left, top right, bottom right and bottom left of an upright picture land on screen when it is
+    /// drawn in the user-space `rect` turned back by `turn`, as [`paint_user_image`](Self::paint_user_image) draws it.
+    pub(crate) fn user_image_corners(&self, p: &pdfcraft_render::PageInfo, rect: [f64; 4], turn: i64) -> [Pos2; 4] {
         let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
         let (shown_w, shown_h) = if turn % 180 == 0 { (w, h) } else { (h, w) };
         let [a, b, c, d, e, f] = pdfcraft_model::view_matrix_for(turn, rect);
-        for (u, v) in [(0.0_f32, 0.0_f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+        [(0.0_f64, 0.0_f64), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(u, v)| {
             // The texture's (u, v), from its top-left, in the picture's upright frame, then in user space.
-            let (dx, dy) = (f64::from(u) * shown_w, f64::from(1.0 - v) * shown_h);
+            let (dx, dy) = (u * shown_w, (1.0 - v) * shown_h);
             let (x, y) = (a * dx + c * dy + e, b * dx + d * dy + f);
             let q = p.user_to_view(x as f32, y as f32);
-            mesh.vertices.push(egui::epaint::Vertex { pos: self.norm_to_screen(q[0] / self.pw, q[1] / self.ph), uv: pos2(u, v), color });
-        }
-        mesh.add_triangle(0, 1, 2);
-        mesh.add_triangle(0, 2, 3);
-        painter.add(egui::Shape::mesh(mesh));
+            self.norm_to_screen(q[0] / self.pw, q[1] / self.ph)
+        })
     }
     pub fn norm_to_screen(&self, u: f32, v: f32) -> Pos2 {
         let (a, b) = match self.rot {
@@ -156,15 +195,6 @@ impl PageXform {
         self.user_rect(info, page, r.map(|v| v as f32))
     }
 
-    /// This transform resized to a raster of `px` device pixels (width, height before the view
-    /// rotation), so each of its texels covers one screen pixel. The rectangle's corner must
-    /// already be on a whole pixel ([`snap_to_pixels`]).
-    pub(super) fn texel_aligned(&self, px: [usize; 2], ppp: f32) -> PageXform {
-        let (w, h) = (px[0] as f32 / ppp, px[1] as f32 / ppp);
-        let size = if self.rot % 180 == 90 { vec2(h, w) } else { vec2(w, h) };
-        PageXform { rect: Rect::from_min_size(self.rect.min, size), ..*self }
-    }
-
     /// Draw a texture covering the normalised page region, rotated with the view.
     pub fn paint_image(&self, painter: &egui::Painter, tex: egui::TextureId, u0: f32, v0: f32, u1: f32, v1: f32) {
         let mut mesh = egui::Mesh::with_texture(tex);
@@ -175,35 +205,5 @@ impl PageXform {
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
         painter.add(egui::Shape::mesh(mesh));
-    }
-
-    /// Draw a sub-rectangle of a whole-page raster texture with specific texture UVs covering the normalised page region.
-    #[allow(clippy::too_many_arguments)]
-    pub fn paint_image_region(
-        &self,
-        painter: &egui::Painter,
-        tex: egui::TextureId,
-        pu0: f32,
-        pv0: f32,
-        pu1: f32,
-        pv1: f32,
-        tu0: f32,
-        tv0: f32,
-        tu1: f32,
-        tv1: f32,
-    ) {
-        let mut mesh = egui::Mesh::with_texture(tex);
-        let corners = [(pu0, pv0, tu0, tv0), (pu1, pv0, tu1, tv0), (pu1, pv1, tu1, tv1), (pu0, pv1, tu0, tv1)];
-        for (u, v, tu, tv) in corners {
-            mesh.vertices.push(egui::epaint::Vertex { pos: self.norm_to_screen(u, v), uv: pos2(tu, tv), color: Color32::WHITE });
-        }
-        mesh.add_triangle(0, 1, 2);
-        mesh.add_triangle(0, 2, 3);
-        painter.add(egui::Shape::mesh(mesh));
-    }
-
-    /// Draw a sub-rectangle of a whole-page raster texture, where UV space matches page normalized space.
-    pub fn paint_page_texture_rect(&self, painter: &egui::Painter, tex: egui::TextureId, u0: f32, v0: f32, u1: f32, v1: f32) {
-        self.paint_image_region(painter, tex, u0, v0, u1, v1, u0, v0, u1, v1);
     }
 }
