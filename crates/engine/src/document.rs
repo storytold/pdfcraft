@@ -755,6 +755,14 @@ impl Document {
         self.editor.as_ref().and_then(|e| pdfcraft_organize::page_boxes(&e.cos).ok()).unwrap_or_default()
     }
 
+    /// The crop, bleed, trim and art boxes on `pages` (0-based) that their page's media box does not
+    /// contain (see [`pdfcraft_organize::boxes_outside_media`]). An error when the pages can't be read,
+    /// never an empty list.
+    pub fn boxes_outside_media(&self, pages: &[usize]) -> Result<Vec<pdfcraft_organize::BoxOutside>, String> {
+        let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+        pdfcraft_organize::boxes_outside_media(&editor.cos, pages).map_err(|e| e.to_string())
+    }
+
     /// Every page's `/UserUnit`: points per user-space unit, read as Acrobat reads it (1 when absent or invalid).
     pub fn page_user_units(&self) -> Vec<f64> {
         self.editor.as_ref().map(|e| pdfcraft_model::pages(&e.cos).iter().map(|p| p.user_unit(&e.cos)).collect()).unwrap_or_default()
