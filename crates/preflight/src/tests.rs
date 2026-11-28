@@ -2367,3 +2367,337 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// A stream object with `dict` added to its dictionary and `data` as its content.
+fn content(dict: &str, data: &str) -> String {
+    format!("<< {dict} /Length {} >>\nstream\n{data}\nendstream", data.len())
+}
+
+/// The 6.2.2 findings of a document whose page tree node has `pages` added and whose one page has
+/// `page` added and the content `data` (object 4), with the further objects `more` from object 5.
+fn content_findings(pages: &str, page: &str, data: &str, more: &[&str]) -> Vec<String> {
+    let pages = format!("<< /Type /Pages /Kids [3 0 R] /Count 1 {pages} >>");
+    let page = format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Contents 4 0 R {page} >>");
+    let data = content("", data);
+    let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>", pages.as_str(), page.as_str(), data.as_str()];
+    objs.extend_from_slice(more);
+    verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.2").map(|i| i.message).collect()
+}
+
+#[test]
+fn content_streams_use_only_defined_operators_clause_6_2_2() {
+    let none = Vec::<String>::new();
+    let unknown = ["Content uses the operator UnknownOperator, which ISO 32000 doesn't define"];
+    // Every operator of ISO 32000-2 Table A.1, an inline image among them.
+    let all = "q 1 0 0 1 0 0 cm 1 w 0 J 0 j 10 M [] 0 d /RelativeColorimetric ri 1 i 0 0 m 1 1 l 1 1 1 1 1 1 c 1 1 1 1 v 1 1 1 1 y h 0 0 1 1 re \
+        S s f F f* B B* b b* n W W* n BT 1 Tc 1 Tw 100 Tz 1 TL 0 Tr 0 Ts 1 1 Td 1 1 TD 1 0 0 1 0 0 Tm T* (a) Tj [(a)] TJ (a) ' 1 1 (a) \" ET \
+        /DeviceGray CS /DeviceGray cs 0 SC 0 SCN 0 sc 0 scn 0 G 0 g 0 0 0 RG 0 0 0 rg 0 0 0 0 K 0 0 0 0 k /T MP /T << >> DP /T BMC EMC \
+        /T << >> BDC EMC BX EX BI /W 1 /H 1 /BPC 8 /CS /G ID \x00 EI Q";
+    assert_eq!(content_findings("", "/Resources << >>", all, &[]), none);
+    // An operator ISO 32000 doesn't define: on the page, between BX and EX, in a form XObject a page
+    // paints, in an annotation's appearance and in a Type 3 glyph the page shows.
+    assert_eq!(content_findings("", "/Resources << >>", "q UnknownOperator Q", &[]), unknown);
+    assert_eq!(content_findings("", "/Resources << >>", "q BX UnknownOperator EX Q", &[]), unknown);
+    let form = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >>", "q UnknownOperator Q");
+    assert_eq!(content_findings("", "/Resources << /XObject << /X 5 0 R >> >>", "/X Do", &[&form]), unknown);
+    assert_eq!(content_findings("", "/Resources << /XObject << /X 5 0 R >> >>", "q Q", &[&form]), none);
+    let annot = "<< /Type /Annot /Subtype /Square /Rect [0 0 1 1] /F 4 /AP << /N 6 0 R >> >>";
+    assert_eq!(content_findings("", "/Resources << >> /Annots [5 0 R]", "", &[annot, &form]), unknown);
+    let glyph = content("", "1000 0 d0 UnknownOperator");
+    let type3 = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 6 0 R >> /Resources << >> >>";
+    assert_eq!(content_findings("", "/Resources << /Font << /F 5 0 R >> >>", "BT /F 1 Tf (a) Tj ET", &[type3, &glyph]), unknown);
+    // A keyword read only after the parser skipped a damaged operand isn't judged.
+    assert_eq!(content_findings("", "/Resources << >>", "q <41!> UnknownOperator Q", &[]), none);
+    // Nor one after a number written wrong, or a non-finite number printed as a word.
+    assert_eq!(content_findings("", "/Resources << >>", "0 0.0.75 1 1 re f UnknownOperator", &[]), none);
+    assert_eq!(content_findings("", "/Resources << >>", "BT Infinity Tz UnknownOperator ET", &[]), none);
+    assert_eq!(content_findings("", "/Resources << >>", "BT (0.0.75) Tj /a.b.c MP UnknownOperator ET", &[]), unknown);
+    // Nor binary data, or a stream whose filter only an inline image may name.
+    assert_eq!(content_findings("", "/Resources << >>", "q \u{e9}t\u{e9} UnknownOperator Q", &[]), none);
+    let abbreviated =
+        content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >> /Filter /AHx", "7120556E6B6E6F776E4F70657261746F722051>");
+    assert_eq!(content_findings("", "/Resources << /XObject << /X 5 0 R >> >>", "/X Do", &[&abbreviated]), none);
+    let hex = content(
+        "/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >> /Filter [/ASCIIHexDecode]",
+        "7120556E6B6E6F776E4F70657261746F722051>",
+    );
+    assert_eq!(content_findings("", "/Resources << /XObject << /X 5 0 R >> >>", "/X Do", &[&hex]), unknown);
+    // A form that paints itself is read once.
+    let looping = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /X 5 0 R >> >>", "/X Do");
+    assert_eq!(content_findings("", "/Resources << /XObject << /X 5 0 R >> >>", "/X Do", &[&looping]), none);
+}
+
+#[test]
+fn type3_fonts_a_graphics_state_selects_are_read_clause_6_2_2() {
+    let unknown = ["Content uses the operator UnknownOperator, which ISO 32000 doesn't define"];
+    // `gs` selects a font by reference, as `Tf` does by name (ISO 32000-2 Table 57).
+    let glyph = content("", "1000 0 d0 UnknownOperator");
+    let type3 = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 7 0 R >> /Resources << >> >>";
+    let selects = "/Resources << /ExtGState << /GS 5 0 R >> >>";
+    let gs = "<< /Type /ExtGState /Font [6 0 R 12] >>";
+    assert_eq!(content_findings("", selects, "BT /GS gs (a) Tj ET", &[gs, type3, &glyph]), unknown);
+    // A `/Font` that isn't a `[font size]` array selects nothing.
+    let none = Vec::<String>::new();
+    assert_eq!(content_findings("", selects, "BT /GS gs (a) Tj ET", &["<< /Type /ExtGState /Font 6 0 R >>", type3, &glyph]), none);
+}
+
+/// Content without resources of its own is read with each resource dictionary it is drawn with:
+/// a font or form first reached where its names find nothing is still judged where they do.
+#[test]
+fn content_without_resources_is_read_with_each_dictionary_it_is_drawn_with_clause_6_2_2() {
+    let cal = "/ColorSpace << /C [/CalGray << /WhitePoint [1 1 1] >>] >>";
+    // A Type 3 font without resources (6), selected first through a graphics state on the page,
+    // which doesn't define the /C its glyph (7) uses, then with Tf in form 8, which does.
+    let bare_type3 = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 7 0 R >> >>";
+    let glyph = content("", "1000 0 d0 /C cs");
+    let form = content(&format!("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /Font << /F 6 0 R >> {cal} >>"), "BT /F 1 Tf (a) Tj ET");
+    let page = "/Resources << /ExtGState << /GS 5 0 R >> /XObject << /X 8 0 R >> >>";
+    let gs = "<< /Type /ExtGState /Font [6 0 R 12] >>";
+    assert_eq!(
+        content_findings("", page, "BT /GS gs (a) Tj ET /X Do", &[gs, bare_type3, &glyph, &form]),
+        ["A Type 3 font's glyphs refer to resources by name, but the font has no Resources dictionary"]
+    );
+    // A form without resources (6) drawn by two forms: by 5 first, whose resources don't name /Y,
+    // then by 7, whose resources name it a form (8) with an undefined operator.
+    let bare = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", "/Y Do");
+    let first = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /B 6 0 R >> >>", "/B Do");
+    let second = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /B 6 0 R /Y 8 0 R >> >>", "/B Do");
+    let named = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >>", "UnknownOperator");
+    let found = content_findings("", "/Resources << /XObject << /P 5 0 R /Q 7 0 R >> >>", "/P Do /Q Do", &[&first, &bare, &second, &named]);
+    assert!(found.contains(&"Content uses the operator UnknownOperator, which ISO 32000 doesn't define".to_owned()), "{found:?}");
+    // Read with the same resources again, it isn't read again: a form that paints itself ends.
+    let looping = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", "/B Do");
+    let holder = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /B 6 0 R >> >>", "/B Do");
+    let found = content_findings("", "/Resources << /XObject << /P 5 0 R >> >>", "/P Do", &[&holder, &looping]);
+    assert_eq!(found, ["A form XObject refers to resources by name but has no Resources dictionary"]);
+
+    // Pages that share a content stream (4) each draw it with their own resources: page 5 names
+    // /X a form (7) with an undefined operator, page 3 a clean one (6).
+    let unknown = "Content uses the operator UnknownOperator, which ISO 32000 doesn't define";
+    let page = |contents: &str, x: u32| {
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Contents {contents} /Resources << /XObject << /X {x} 0 R >> >> >>")
+    };
+    let clean = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >>", "0 g");
+    let bad = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >>", "UnknownOperator");
+    let two_pages = |a: &str, part: &str, b: &str, more: &[&str]| {
+        let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>", a, part, b, &clean, &bad];
+        objs.extend_from_slice(more);
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.2").map(|i| i.message).collect::<Vec<_>>()
+    };
+    assert_eq!(two_pages(&page("4 0 R", 6), &content("", "/X Do"), &page("4 0 R", 7), &[]), [unknown]);
+    // A part listed twice on one page is drawn twice: parts `Do`, `/X` and `Do` again paint /X.
+    let found = two_pages(&page("[4 0 R 8 0 R 4 0 R]", 7), &content("", "Do"), &page("[]", 6), &[&content("", "/X")]);
+    assert_eq!(found, [unknown]);
+
+    // Type 3 fonts with resources of their own that share a glyph (6) without them: font 7 names
+    // /Y a form (9) with an undefined operator, font 5 a clean one (8).
+    let type3 = |y: u32| {
+        format!(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 6 0 R >> /Resources << /XObject << /Y {y} 0 R >> >> >>"
+        )
+    };
+    let glyph = content("", "1000 0 d0 /Y Do");
+    let fonts = "/Resources << /Font << /F 5 0 R /G 7 0 R >> >>";
+    let found = content_findings("", fonts, "BT /F 1 Tf (a) Tj /G 1 Tf (a) Tj ET", &[&type3(8), &glyph, &type3(9), &clean, &bad]);
+    assert_eq!(found, [unknown]);
+}
+
+#[test]
+fn content_streams_that_name_resources_have_their_own_clause_6_2_2() {
+    let none = Vec::<String>::new();
+    // Content that refers to resources by name has its own resource dictionary.
+    let page = ["A page refers to resources by name but has no Resources dictionary of its own"];
+    assert_eq!(
+        content_findings(
+            "/Resources << /XObject << /X 5 0 R >> >>",
+            "",
+            "/X Do",
+            &[&content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >>", "")]
+        ),
+        page
+    );
+    assert_eq!(content_findings("/Resources << /ColorSpace << /C [/CalGray << /WhitePoint [1 1 1] >>] >> >>", "", "/C cs", &[]), page);
+    assert_eq!(content_findings("", "", "/DeviceRGB cs 1 0 0 rg 0 0 1 1 re f", &[]), none);
+    assert_eq!(content_findings("", "", "BI /W 1 /H 1 /BPC 8 /CS /RGB ID \x00\x00\x00 EI", &[]), none);
+    let cal = "/ColorSpace << /C [/CalGray << /WhitePoint [1 1 1] >>] >>";
+    assert_eq!(content_findings(&format!("/Resources << {cal} >>"), "", "BI /W 1 /H 1 /BPC 8 /CS /C ID \x00 EI", &[]), page);
+    assert_eq!(content_findings("/Resources << /Properties << /P << >> >> >>", "", "/T /P BDC EMC", &[]), page);
+    // A name no resource dictionary defines isn't one the stream's own would have held.
+    assert_eq!(content_findings("", "", "/X Do BT /F 1 Tf ET /T /P BDC EMC", &[]), none);
+    assert_eq!(content_findings("", "", "/T BMC EMC /T << /MCID 0 >> BDC EMC", &[]), none);
+    let bare_form = |data: &str| content("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", data);
+    let form_msg = ["A form XObject refers to resources by name but has no Resources dictionary"];
+    assert_eq!(content_findings("", &format!("/Resources << /XObject << /X 5 0 R >> {cal} >>"), "/X Do", &[&bare_form("/C cs 0.5 sc")]), form_msg);
+    assert_eq!(content_findings("", "/Resources << /XObject << /X 5 0 R >> >>", "/X Do", &[&bare_form("0 g 0 0 1 1 re f")]), none);
+    let bare_type3 = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 6 0 R >> >>";
+    assert_eq!(
+        content_findings(
+            "",
+            &format!("/Resources << /Font << /F 5 0 R >> {cal} >>"),
+            "BT /F 1 Tf (a) Tj ET",
+            &[bare_type3, &content("", "1000 0 d0 /C cs")]
+        ),
+        ["A Type 3 font's glyphs refer to resources by name, but the font has no Resources dictionary"]
+    );
+    // A glyph's own stream may carry them.
+    assert_eq!(
+        content_findings(
+            "",
+            &format!("/Resources << /Font << /F 5 0 R >> {cal} >>"),
+            "BT /F 1 Tf (a) Tj ET",
+            &[bare_type3, &content(&format!("/Resources << {cal} >>"), "1000 0 d0 /C cs")]
+        ),
+        none
+    );
+    let tiling = content("/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 1 1] /XStep 1 /YStep 1", "/C cs 0 0 1 1 re f");
+    assert_eq!(
+        content_findings("", &format!("/Resources << /Pattern << /P 5 0 R >> {cal} >>"), "/Pattern cs /P scn 0 0 1 1 re f", &[&tiling]),
+        ["A tiling pattern refers to resources by name but has no Resources dictionary"]
+    );
+    // None is fixable.
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+            &content("", "Foo"),
+        ],
+        "",
+    );
+    let found: Vec<_> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.2").collect();
+    assert_eq!(found.len(), 1);
+    assert!(found.iter().all(|i| !i.fixable));
+}
+
+/// A comment that ends one part of a page's contents goes on into the next: the parts are joined
+/// with a space (ISO 32000-2 Table 31, /Contents), so the operator after it is commented out.
+#[test]
+fn a_comment_runs_on_across_content_parts_clause_6_2_2() {
+    let parts = |first: &str, second: &str| {
+        let (first, second) = (content("", first), content("", second));
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Contents [4 0 R 5 0 R] /Resources << >> >>",
+            first.as_str(),
+            second.as_str(),
+        ];
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.2").map(|i| i.message).collect::<Vec<_>>()
+    };
+    assert!(parts("q % a comment", "UnknownOperator\n0 g Q").is_empty());
+    assert_eq!(parts("q % a comment\n", "UnknownOperator\n0 g Q"), ["Content uses the operator UnknownOperator, which ISO 32000 doesn't define"]);
+}
+
+/// Content first reached so deep that what it draws lies past the depth limit is read again when
+/// it is reached less deep: a form S met at depth 32 through a chain of 31 forms, and drawn again
+/// by the page itself, still has its form T (or its Type 3 font F) read.
+#[test]
+fn content_reached_less_deep_is_read_again_clause_6_2_2() {
+    let unknown = ["Content uses the operator UnknownOperator, which ISO 32000 doesn't define"];
+    // Objects: 5 the shared resources; 6–36 forms A1–A31, each drawing the next, A31 drawing S
+    // (37); S draws T (38) or selects F (39), whose glyph is 40.
+    let found = |s: &str, page: &str| {
+        let form = |data: &str| content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources 5 0 R", data);
+        let names: String = (1..=31).map(|i| format!("/A{i} {} 0 R ", i + 5)).collect();
+        let resources = format!("<< /XObject << {names}/S 37 0 R /T 38 0 R >> /Font << /F 39 0 R >> >>");
+        let mut objs: Vec<String> = vec![resources];
+        objs.extend((1..=31).map(|i| form(&if i < 31 { format!("/A{} Do", i + 1) } else { "/S Do".to_owned() })));
+        objs.push(form(s));
+        objs.push(form("UnknownOperator"));
+        objs.push(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 40 0 R >> /Resources 5 0 R >>".to_owned(),
+        );
+        objs.push(content("", "1000 0 d0 UnknownOperator"));
+        let more: Vec<&str> = objs.iter().map(String::as_str).collect();
+        content_findings("", "/Resources 5 0 R", page, &more)
+    };
+    assert_eq!(found("/T Do", "/A1 Do /S Do"), unknown);
+    assert_eq!(found("BT /F 1 Tf (a) Tj ET", "/A1 Do BT /F 1 Tf (a) Tj ET"), unknown);
+    // Past the limit only, it isn't read.
+    assert!(found("/T Do", "/A1 Do").is_empty());
+}
+
+/// A glyph two Type 3 fonts share is read for each font as it stands: font A has the page's
+/// resources (5) as its own, font B none, so B's glyph naming /C is reported whichever is first.
+#[test]
+fn a_shared_glyph_is_read_for_a_font_without_resources_too_clause_6_2_2() {
+    let resources = "<< /ColorSpace << /C [/CalGray << /WhitePoint [1 1 1] >>] >> /Font << /A 6 0 R /B 7 0 R >> >>";
+    let font = |own: &str| format!("<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 8 0 R >> {own} >>");
+    let (a, b, glyph) = (font("/Resources 5 0 R"), font(""), content("", "1000 0 d0 /C cs"));
+    let said = ["A Type 3 font's glyphs refer to resources by name, but the font has no Resources dictionary"];
+    for page in ["BT /A 1 Tf (a) Tj /B 1 Tf (a) Tj ET", "BT /B 1 Tf (a) Tj /A 1 Tf (a) Tj ET"] {
+        assert_eq!(content_findings("", "/Resources 5 0 R", page, &[resources, &a, &b, &glyph]), said, "{page}");
+    }
+}
+
+/// Type 3 fonts that share one `/CharProcs` dictionary don't go through it once each: with the
+/// same resources it is gone through once, and glyphs passed over as read already count towards a
+/// limit past which no more glyphs are read. A last font `T`, selected after the others, has a
+/// glyph with an undefined operator.
+#[test]
+fn type3_fonts_sharing_char_procs_are_bounded_clause_6_2_2() {
+    let unknown = ["Content uses the operator UnknownOperator, which ISO 32000 doesn't define"];
+    // `fonts` fonts (each with `font_own` added) sharing a `/CharProcs` dictionary (6) of 256
+    // glyphs (each with `glyph_own` added).
+    let found = |fonts: usize, font_own: &str, glyph_own: &str| {
+        let glyphs = 256;
+        let first_font = 7 + glyphs;
+        let t = first_font + fonts;
+        let names: String = (0..fonts).map(|i| format!("/F{i} {} 0 R ", first_font + i)).collect();
+        let mut objs = vec![format!("<< /Font << {names}/T {t} 0 R >> >>")];
+        objs.push(format!("<< {}>>", (0..glyphs).map(|i| format!("/g{i} {} 0 R ", 7 + i)).collect::<String>()));
+        objs.extend((0..glyphs).map(|_| content(glyph_own, "1000 0 d0")));
+        let font = |procs: &str, own: &str| {
+            format!("<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs {procs} {own} >>")
+        };
+        objs.extend((0..fonts).map(|_| font("6 0 R", font_own)));
+        objs.push(font(&format!("<< /a {} 0 R >>", t + 1), "/Resources << >>"));
+        objs.push(content("", "1000 0 d0 UnknownOperator"));
+        let page: String = (0..fonts).map(|i| format!("/F{i} 1 Tf ")).collect();
+        let more: Vec<&str> = objs.iter().map(String::as_str).collect();
+        content_findings("", "/Resources 5 0 R", &format!("BT {page}/T 1 Tf (a) Tj ET"), &more)
+    };
+    // 300 fonts without resources, read with the page's: the dictionary is gone through once, so
+    // T's glyph is read.
+    assert_eq!(found(300, "", ""), unknown);
+    // Each font with resources of its own, its glyphs with theirs: each font after the first
+    // passes over all 256 as read already. 254 such fonts stay within the limit ...
+    assert_eq!(found(255, "/Resources << >>", "/Resources << >>"), unknown);
+    // ... 256 of them don't, and T's glyph isn't read.
+    assert!(found(257, "/Resources << >>", "/Resources << >>").is_empty());
+}
+
+/// Content past damage is not followed: a name it uses isn't looked up for the association
+/// finding, and the form it would draw isn't read from there. A page part that is there but can't
+/// be read ends the page's content: the parts after it aren't read without it, while a part that
+/// isn't there holds nothing and the next one is read.
+#[test]
+fn content_past_damage_or_an_unreadable_part_is_not_followed_clause_6_2_2() {
+    let unknown = ["Content uses the operator UnknownOperator, which ISO 32000 doesn't define"];
+    let page = ["A page refers to resources by name but has no Resources dictionary of its own"];
+    let form = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >>", "q UnknownOperator Q");
+    let inherited = "/Resources << /XObject << /X 5 0 R >> >>";
+    // The page inherits its resources: `/X Do` alone gives both findings.
+    let mut both: Vec<String> = unknown.iter().chain(page.iter()).map(|s| s.to_string()).collect();
+    both.sort();
+    let mut found = content_findings(inherited, "", "/X Do", &[&form]);
+    found.sort();
+    assert_eq!(found, both);
+    // After a damaged number, neither.
+    assert!(content_findings(inherited, "", "0 0.0.75 1 1 re f /X Do", &[&form]).is_empty());
+    // With its own resources, the form isn't read past the damage either.
+    assert!(content_findings("", inherited, "0 0.0.75 1 1 re f /X Do", &[&form]).is_empty());
+    assert_eq!(content_findings("", inherited, "/X Do", &[&form]), unknown);
+
+    let parts = |list: &str| {
+        let unreadable = content("/Filter /NoSuchDecode", "abc");
+        let last = content("", "UnknownOperator");
+        let page = format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Contents [{list}] /Resources << >> >>");
+        let objs =
+            ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", page.as_str(), unreadable.as_str(), last.as_str()];
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.2").map(|i| i.message).collect::<Vec<_>>()
+    };
+    assert!(parts("4 0 R 5 0 R").is_empty());
+    assert_eq!(parts("9 0 R 5 0 R"), unknown);
+    assert_eq!(parts("5 0 R"), unknown);
+}

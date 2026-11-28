@@ -23,6 +23,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod content_streams;
 mod gstate;
 mod header;
 pub mod icc;
@@ -204,6 +205,11 @@ pub const WORDINGS: &[&str] = &[
     "A graphics state has a rendering intent that isn't a name",
     "The form asks viewers to make appearances (NeedAppearances)",
     "Some content could not be read for device colour",
+    "Content uses the operator {}, which ISO 32000 doesn't define",
+    "A page refers to resources by name but has no Resources dictionary of its own",
+    "A form XObject refers to resources by name but has no Resources dictionary",
+    "A tiling pattern refers to resources by name but has no Resources dictionary",
+    "A Type 3 font's glyphs refer to resources by name, but the font has no Resources dictionary",
     // Pages, actions, annotations and fields.
     "Page {} has additional actions",
     "A {} action isn't allowed",
@@ -698,6 +704,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     check_limits(doc, &objs, &pages, &mut issue);
     check_spots(doc, &objs, &mut issue);
     check_graphics_states(doc, &mut issue);
+    check_content_streams(doc, &mut issue);
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut out = out.into_inner();
     let mut seen = std::collections::HashSet::new();
@@ -864,6 +871,31 @@ fn report_xmp_extension(
                 p.object,
                 false,
             );
+        }
+    }
+}
+
+/// 6.2.2: the operators of the content the pages draw, and the resource dictionaries of content
+/// that refers to resources by name. Neither can be fixed without rewriting the content.
+fn check_content_streams(doc: &Document, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    let found = content_streams::check(doc);
+    if let Some(op) = found.undefined {
+        issue("6.2.2", "Content uses the operator {}, which ISO 32000 doesn't define", Some(op), None, false);
+    }
+    for holder in found.unassociated {
+        match holder {
+            content_streams::Holder::Page => {
+                issue("6.2.2", "A page refers to resources by name but has no Resources dictionary of its own", None, None, false)
+            }
+            content_streams::Holder::Form => {
+                issue("6.2.2", "A form XObject refers to resources by name but has no Resources dictionary", None, None, false)
+            }
+            content_streams::Holder::Pattern => {
+                issue("6.2.2", "A tiling pattern refers to resources by name but has no Resources dictionary", None, None, false)
+            }
+            content_streams::Holder::Type3 => {
+                issue("6.2.2", "A Type 3 font's glyphs refer to resources by name, but the font has no Resources dictionary", None, None, false)
+            }
         }
     }
 }
