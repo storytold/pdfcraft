@@ -17,8 +17,9 @@ use pdfcraft_engine::catalog::{Availability, TOOL_GROUPS};
 
 use crate::{Mode, PdfCraftApp};
 
-/// The modes the strip offers. Read is a View command, not a tab.
-const MODES: [(Mode, &str); 4] = [(Mode::AllTools, "All tools"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")];
+/// The modes the strip offers.
+const MODES: [(Mode, &str); 5] =
+    [(Mode::AllTools, "All tools"), (Mode::Read, "Read"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")];
 
 /// The mode labels, keyed by position.
 struct ModeTabs;
@@ -51,8 +52,8 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         if menus {
             app.menu_bar_ui(ui);
         }
-        // Production replaces the search field with its icon when the field cannot keep its minimum width.
-        let compact_search = ui.available_width() < 140.0 + 116.0;
+        // Production replaces the search field with its icon when the field cannot keep its minimum width alongside the modes.
+        let compact_search = ui.available_width() < 420.0;
         // Below room for the current mode, the search icon and the three document buttons, the buttons give way
         // (their commands stay in the menus and on their shortcuts) so the search never lands on the strip.
         let document_buttons = ui.available_width() >= 200.0;

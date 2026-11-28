@@ -530,6 +530,7 @@ fn startup_files_wait_for_absolute_link_consent_and_preparation() {
          3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R] >> endobj\n\
          4 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 200 300] /Border [0 0 0] /A << /S /GoToR /F ({escaped_target}) /D [0 /Fit] >> >> endobj\n\
          trailer << /Root 1 0 R >>\n%%EOF",
+        target.path().replace('\\', "/")
     );
     let mut rig = Rig::empty();
     let ctx_h = rig.h.ctx.clone();

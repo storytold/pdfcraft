@@ -490,6 +490,18 @@ fn read_mode_rail_buttons_open_their_panels() {
     h.get_by_label("Alpha section");
 }
 
+/// The mode bar contains the Read tab alongside All tools, Edit, Convert and E-Sign.
+#[test]
+fn the_mode_bar_has_a_read_tab() {
+    use pdfcraft_ui_egui::Mode;
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    for label in ["All tools", "Read", "Edit", "Convert", "E-Sign"] {
+        assert!(h.query_all_by_label(label).next().is_some(), "the {label} tab is there");
+    }
+    h.get_by_label("Read").click();
+    h.run_steps(2);
+    assert_eq!(h.state().mode, Mode::Read);
+}
 /// A document that asks to open in Full Screen mode (`/PageMode /FullScreen`) is asked about
 /// first, as in Acrobat: "Not now" leaves the window as it is, "Full Screen" enters it.
 #[test]
@@ -547,9 +559,9 @@ fn read_mode_closes_the_panes_and_leaving_it_brings_them_back() {
     assert_eq!(right(h.state()), Some(RightPanel::Pages));
 }
 
-/// Read mode hides the quick toolbar too, and puts down the tool that was in use (#2646).
+/// Full screen mode hides the quick toolbar (#1459). In Read mode, the hover toolbar stays visible.
 #[test]
-fn read_mode_hides_the_quick_toolbar() {
+fn full_screen_hides_the_quick_toolbar() {
     use pdfcraft_ui_egui::{Mode, QuickTool};
     let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     // The toolbar's slots are named by their commands (L-233).
@@ -558,11 +570,13 @@ fn read_mode_hides_the_quick_toolbar() {
     assert_eq!(h.state().quick_tool, QuickTool::Hand);
     run_command(&mut h, "view.read_mode");
     h.run_steps(3);
-    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Select").is_none(), "no quick toolbar in Read mode");
-    assert_eq!(h.state().quick_tool, QuickTool::Select);
-    run_command(&mut h, "view.read_mode");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Select").is_some(), "quick toolbar stays visible in Read mode");
+    run_command(&mut h, "view.full_screen");
     h.run_steps(3);
-    assert_eq!(h.state().mode, Mode::AllTools);
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Select").is_none(), "no quick toolbar in Full Screen mode");
+    run_command(&mut h, "view.full_screen");
+    h.run_steps(3);
+    assert_eq!(h.state().mode, Mode::Read);
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Select");
 }
 
@@ -589,7 +603,7 @@ fn edit_a_pdf_from_all_tools_turns_on_editing() {
     h.set_option("tool", "organize").unwrap();
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::EditText);
-    // Read mode hides the quick toolbar and keeps the tools down, so the control channel's
+    // Read mode keeps the quick toolbar on Select and keeps the tools down, so the control channel's
     // `tool edit` there leaves editing off (review on #4605).
     run_command(&mut h, "view.read_mode");
     h.run_steps(2);
@@ -600,7 +614,7 @@ fn edit_a_pdf_from_all_tools_turns_on_editing() {
 }
 
 /// Opening a document with Read as the default mode puts down the tool in use, as entering Read
-/// mode from the mode bar does: the hidden toolbar would leave no way to see or change it.
+/// mode from the mode bar does: resetting to Select keeps reading distraction-free.
 #[test]
 fn opening_into_read_mode_puts_the_tool_down() {
     use pdfcraft_ui_egui::{Mode, QuickTool};
@@ -612,7 +626,7 @@ fn opening_into_read_mode_puts_the_tool_down() {
     h.state_mut().open_bytes(&ctx_h, "again.pdf", None, FIXTURE.to_vec()).unwrap();
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::Read, "the new document opens in the default mode");
-    assert_eq!(h.state().quick_tool, QuickTool::Select, "no tool stays active behind the hidden toolbar");
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "tool resets to Select when entering Read mode");
 }
 
 /// A pane closed in Read mode stays closed on the way out: leaving Read mode doesn't bring back the

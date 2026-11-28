@@ -7,8 +7,11 @@
 //! keys, the recent files and the open documents. Each is a command of the app's catalog
 //! (`commands::catalog`), fired once per click, whichever bar it came from.
 
-use craft::keymap::{Key, Mods};
-use craft::menu::{Chord, CommandRef, Document, Gate, Item, ItemRole, ItemState, Layout, LayoutOptions, Menu, MenuBar, MenuRole, Node, Target};
+use craft::keymap::{Key, Mods, Platform};
+use craft::menu::{
+    Builtin, Chord, CommandRef, Document, Gate, Item, ItemKind, ItemRole, ItemState, Layout, LayoutOptions, Menu, MenuBar, MenuRole, Node, Target,
+};
+use craft::ui::contract::{Props as _, Show as _};
 use craft::ui::runtime::commands::{FireSource, fire, resolve};
 use pdfcraft_engine::catalog::{Availability, TOOL_GROUPS};
 use pdfcraft_engine::commands::{self, Shortcut};
@@ -516,15 +519,128 @@ impl PdfCraftApp {
     }
 
     /// The menu bar drawn in the window (Windows, Linux, the web, and macOS when the native one
-    /// couldn't be installed), where the top bar starts. A chosen command fires through the board.
+    /// couldn't be installed), where the top bar starts: collapsed into a single "Menu" button that
+    /// opens the full hierarchical menu tree as a popup.
     pub(crate) fn menu_bar_ui(&mut self, ui: &mut egui::Ui) {
+        let out = craft::ui::buttons::Button::new(tl!("Menu"))
+            .variant(craft::theme::Variant::GHOST)
+            .icon(craft::behavior::IconId::new("panel-left"))
+            .show(ui);
+        let btn = out.response;
+        let popup_id = egui::Popup::default_response_id(&btn);
+        ui.ctx().accesskit_node_builder(btn.id, |n| {
+            n.set_role(egui::accesskit::Role::Button);
+            n.set_label(tl!("Menu"));
+            n.set_has_popup(egui::accesskit::HasPopup::Menu);
+        });
+        handle_menu_button_keys(self, ui.ctx(), popup_id, &btn);
+        egui::Popup::menu(&btn).show(|ui| self.menu_popup_ui(ui));
+    }
+
+    /// The menus as a vertical popup: each top-level menu is a submenu button, with its items and
+    /// submenus rendered recursively. Used by the "Menu" button in the mode bar.
+    pub(crate) fn menu_popup_ui(&mut self, ui: &mut egui::Ui) {
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("craft-menu-bar-open"), pass));
         let ctx = ui.ctx().clone();
-        let bar = craft::menu::layout(&self.menu_bar(&ctx), Target::current(), &layout_options()).bar;
-        let modal = gated(self);
-        if *self.window_menu_bar != bar {
-            *self.window_menu_bar = bar;
+        let mut layout = craft::menu::layout(&self.menu_bar(&ctx), Target::current(), &layout_options());
+        if *self.window_menu_bar != layout.bar {
+            *self.window_menu_bar = std::mem::take(&mut layout.bar);
         }
-        craft::menu::MenuBarUi::new(&self.window_menu_bar).target(Target::current()).keyboard(!modal).icons(false).compact(true).show(ui);
+        let mut bar = self.window_menu_bar.clone();
+        craft::menu::apply_state(&mut bar, |command| {
+            let resolved = resolve(&ctx, command.clone());
+            ItemState::default().enabled(resolved.enabled).checked(resolved.checked)
+        });
+        let bar = bar.into_inner();
+        let gate = Gate::default().modal(gated(self)).text_editing(text_editing(&ctx));
+        let mut chosen = Vec::new();
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        ui.set_min_width(220.0);
+
+        let pressed_key = ui.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Key { key, pressed: true, modifiers, .. }
+                    if !modifiers.alt && !modifiers.ctrl && !modifiers.command && !modifiers.mac_cmd =>
+                {
+                    key_letter(*key).map(|c| (c, *key))
+                }
+                _ => None,
+            })
+        });
+
+        let has_open_submenu = egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item.is_some());
+
+        // An explicit menu target (e.g. from Alt+F) always selects that top-level menu.
+        // A plain letter only targets top-level menus when no submenu is open yet;
+        // once a submenu is open, plain letters route into the active submenu.
+        let mut active_key = None;
+        let target = if let Some(t) = self.menu_target.take() {
+            Some(t)
+        } else if !has_open_submenu {
+            pressed_key.map(|(c, _)| c)
+        } else {
+            active_key = pressed_key;
+            None
+        };
+
+        let titles: Vec<&str> = bar.menus.iter().map(|m| m.title.as_str()).collect();
+        let preferred: Vec<Option<char>> = bar.menus.iter().map(|m| preferred_menu_role_mnemonic(m.role, &m.title)).collect();
+        let mnemonics = assign_mnemonics(&titles, &preferred);
+
+        for (menu, mnemonic) in bar.menus.iter().zip(mnemonics) {
+            let is_target = target.is_some() && target == mnemonic;
+            let next_id = ui.next_auto_id();
+            let submenu_id = egui::containers::menu::SubMenu::id_from_widget_id(next_id);
+            if is_target {
+                if let Some((c, key)) = pressed_key {
+                    consume_letter(ui.ctx(), egui::Modifiers::NONE, key, c);
+                }
+                // A fresh popup has no child MenuState yet, and egui's MenuState::from_id clears
+                // open_item when the open submenu was never shown (its state is missing). Mark
+                // the child shown to create its state, so Alt+F (the menu target) opens it.
+                egui::containers::menu::MenuState::mark_shown(ui.ctx(), submenu_id);
+                egui::containers::menu::MenuState::from_ui(ui, |state, _| {
+                    state.open_item = Some(submenu_id);
+                });
+                ui.memory_mut(|mem| {
+                    mem.request_focus(next_id);
+                    let dir = if ui.style().right_to_left { egui::FocusDirection::Left } else { egui::FocusDirection::Right };
+                    mem.move_focus(dir);
+                });
+            }
+            let sub_button = egui::containers::menu::SubMenuButton::new(mnemonic_label(ui, &menu.title, mnemonic, true))
+                .config(egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside));
+            let (resp_btn, _) = sub_button.ui(ui, |ui| {
+                ui.set_min_width(220.0);
+                ui.set_max_width(280.0);
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                let max_h = (ui.ctx().content_rect().height() - 40.0).max(200.0);
+                ui.set_max_height(max_h);
+                ui.spacing_mut().scroll.floating = false;
+                egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
+                    render_nodes(ui, &menu.children, &gate, &mut chosen, &mut active_key);
+                });
+            });
+            ctx.accesskit_node_builder(resp_btn.id, |n| {
+                n.set_role(egui::accesskit::Role::MenuItem);
+                n.set_label(&menu.title);
+                n.set_has_popup(egui::accesskit::HasPopup::Menu);
+                if let Some(m) = mnemonic {
+                    n.set_access_key(m.to_string());
+                }
+            });
+        }
+        for command in chosen {
+            if command.id == QUIT || matches!(Builtin::of(&command), Some(Builtin::Quit)) {
+                self.request_quit(&ctx);
+                craft_quit::on_menu_event(&ctx, QUIT);
+            } else if matches!(Builtin::of(&command), Some(Builtin::Minimize)) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            } else {
+                fire(&ctx, command, FireSource::Menu);
+            }
+        }
     }
 
     /// Install the native menu bar (macOS), once, from the eframe app creator. `false` when
@@ -573,6 +689,550 @@ pub(crate) fn param_index(command: &CommandRef) -> Option<usize> {
 pub(crate) fn panel(command: &CommandRef) -> Option<RightPanel> {
     let name = command.params.get("panel").and_then(serde_json::Value::as_str)?;
     PANELS.iter().find(|(_, n, _)| *n == name).map(|(p, ..)| *p)
+}
+
+/// Handle Alt-tap, F10, and Alt+letter mnemonics (e.g. Alt+F for File) for the mode bar Menu button.
+pub(crate) fn handle_menu_button_keys(app: &mut PdfCraftApp, ctx: &egui::Context, popup_id: egui::Id, btn: &egui::Response) {
+    let focus_id = egui::Id::unique("mode_bar_menu_focused");
+    let mut menu_focused: bool = ctx.data(|d| d.get_temp(focus_id)).unwrap_or(false);
+
+    // A command shortcut (Ctrl+S, F7…) pressed while the keyboard is on the button left the bar
+    // (craft_menu::bar::leave_for_shortcut, app.rs): the shortcut runs in that press and the
+    // keyboard goes back to the pages. Consume the handoff here, before the local focus state
+    // below can put the keyboard back on the bar every frame.
+    if ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("craft-menu-bar-leave"))).unwrap_or(false) {
+        ctx.data_mut(|d| d.remove::<bool>(egui::Id::unique("craft-menu-bar-leave")));
+        menu_focused = false;
+        btn.surrender_focus();
+    }
+
+    if btn.clicked() {
+        menu_focused = false;
+    }
+    if ctx.input(|i| i.pointer.any_click()) && !btn.hovered() {
+        menu_focused = false;
+    }
+
+    let f10 = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F10));
+
+    // Track Alt-tap (pressing and releasing Alt without another key) to focus the menu button.
+    #[derive(Clone, Copy, Default)]
+    struct AltTapState {
+        alt_tap: bool,
+        buttons_held: u32,
+    }
+    let alt_state_id = egui::Id::unique("mode_bar_alt_tap_state");
+    let mut alt_state: AltTapState = ctx.data(|d| d.get_temp(alt_state_id)).unwrap_or_default();
+    let mut alt_tapped = false;
+
+    for event in ctx.input(|i| i.events.clone()) {
+        match event {
+            egui::Event::Key { key: egui::Key::AltLeft | egui::Key::AltRight, pressed, repeat, modifiers, .. } => {
+                if pressed && !repeat {
+                    alt_state.alt_tap =
+                        !modifiers.ctrl && !modifiers.shift && !modifiers.command && !modifiers.mac_cmd && alt_state.buttons_held == 0;
+                } else if !pressed && alt_state.alt_tap {
+                    alt_tapped = true;
+                    alt_state.alt_tap = false;
+                }
+            }
+            egui::Event::PointerButton { pressed, button, .. } => {
+                let bit = 1u32 << (button as u8);
+                if pressed {
+                    alt_state.buttons_held |= bit;
+                } else {
+                    alt_state.buttons_held &= !bit;
+                }
+                alt_state.alt_tap = false;
+                alt_tapped = false;
+            }
+            egui::Event::WindowFocused(false) => {
+                alt_state.alt_tap = false;
+                alt_state.buttons_held = 0;
+            }
+            egui::Event::Key { pressed: true, .. } | egui::Event::Text(_) | egui::Event::MouseWheel { .. } => {
+                alt_state.alt_tap = false;
+            }
+            _ => {}
+        }
+    }
+    ctx.data_mut(|d| d.insert_temp(alt_state_id, alt_state));
+
+    let is_open = egui::Popup::is_id_open(ctx, popup_id);
+
+    if f10 || alt_tapped {
+        if is_open {
+            egui::Popup::close_all(ctx);
+            menu_focused = false;
+            btn.surrender_focus();
+        } else {
+            menu_focused = !menu_focused;
+            if menu_focused {
+                btn.request_focus();
+            } else {
+                btn.surrender_focus();
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    if menu_focused {
+        if ctx.input(|i| i.key_pressed(egui::Key::Tab)) || ctx.memory(|m| m.focused().is_some_and(|id| id != btn.id)) {
+            menu_focused = false;
+            btn.surrender_focus();
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            menu_focused = false;
+            btn.surrender_focus();
+            ctx.request_repaint();
+        } else if ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
+                || i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                || i.consume_key(egui::Modifiers::NONE, egui::Key::Space)
+        }) {
+            menu_focused = false;
+            egui::Popup::open_id(ctx, popup_id);
+            ctx.request_repaint();
+        } else {
+            let plain_letter = ctx.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Key { key, pressed: true, modifiers, .. }
+                        if !modifiers.alt && !modifiers.command && !modifiers.ctrl && !modifiers.mac_cmd =>
+                    {
+                        key_letter(*key).map(|c| (c, *key))
+                    }
+                    _ => None,
+                })
+            });
+            if let Some((c, key)) = plain_letter {
+                ctx.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::NONE, key);
+                    i.events
+                        .retain(|e| !matches!(e, egui::Event::Text(t) if t.chars().count() == 1 && t.chars().all(|ch| ch.to_ascii_uppercase() == c)));
+                });
+                menu_focused = false;
+                egui::Popup::open_id(ctx, popup_id);
+                app.menu_target = Some(c);
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    // Alt+letter (e.g. Alt+F) opens the Menu popup and selects that submenu.
+    // Disabled on macOS so Option-generated text remains available.
+    let is_mac = matches!(ctx.os(), egui::os::OperatingSystem::Mac | egui::os::OperatingSystem::IOS);
+    let alt_letter = ctx.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::Key { key, pressed: true, modifiers, .. }
+                if !is_mac && modifiers.alt && !modifiers.command && !modifiers.ctrl && !modifiers.mac_cmd =>
+            {
+                key_letter(*key).map(|c| (c, *key))
+            }
+            _ => None,
+        })
+    });
+    if let Some((c, key)) = alt_letter {
+        let bar = craft::menu::layout(&app.menu_bar(ctx), Target::current(), &layout_options()).bar;
+        let mnemonics = top_level_mnemonics(&bar);
+        if mnemonics.contains(&c) {
+            ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::ALT, key);
+                i.events.retain(|e| !matches!(e, egui::Event::Text(t) if t.chars().count() == 1 && t.chars().all(|ch| ch.to_ascii_uppercase() == c)));
+            });
+            menu_focused = false;
+            egui::Popup::open_id(ctx, popup_id);
+            app.menu_target = Some(c);
+            ctx.request_repaint();
+        }
+    }
+
+    ctx.data_mut(|d| d.insert_temp(focus_id, menu_focused));
+    let pass = ctx.cumulative_pass_nr();
+    if is_open {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("craft-menu-bar-open"), pass));
+    }
+    if menu_focused {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("craft-menu-bar-focus"), pass));
+    }
+}
+
+/// Render a slice of menu `Node`s into `ui` for the "Menu" button popup, collecting clicked
+/// commands. `Standard` items (AppKit-only) are skipped.
+fn render_nodes(ui: &mut egui::Ui, nodes: &[Node], gate: &Gate, chosen: &mut Vec<CommandRef>, active_key: &mut Option<(char, egui::Key)>) {
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+    let ctx = ui.ctx().clone();
+    let root_id = egui::containers::menu::find_menu_root(ui).unique_id;
+    egui::containers::menu::MenuState::mark_shown(&ctx, root_id);
+
+    let labels: Vec<&str> = nodes
+        .iter()
+        .map(|node| match node {
+            Node::Item(item) => item.label.as_str(),
+            Node::Submenu { label, .. } => label.as_str(),
+            _ => "",
+        })
+        .collect();
+
+    let preferred: Vec<Option<char>> = nodes
+        .iter()
+        .map(|node| match node {
+            Node::Item(item) => preferred_item_mnemonic(item),
+            Node::Submenu { label, .. } => extract_explicit_mnemonic(label),
+            _ => None,
+        })
+        .collect();
+
+    let mnemonics = assign_mnemonics(&labels, &preferred);
+    let child_open = egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item.is_some());
+
+    for (node, mnemonic) in nodes.iter().zip(mnemonics) {
+        match node {
+            Node::Separator => {
+                ui.separator();
+            }
+            Node::Item(item) => {
+                let enabled = item.enabled && gate.allows(item);
+                let role = match item.kind {
+                    ItemKind::Plain => egui::accesskit::Role::MenuItem,
+                    ItemKind::Check(_) => egui::accesskit::Role::MenuItemCheckBox,
+                    ItemKind::Radio(_) => egui::accesskit::Role::MenuItemRadio,
+                    _ => egui::accesskit::Role::MenuItem,
+                };
+                let mark = match item.kind {
+                    ItemKind::Check(true) | ItemKind::Radio(true) => "\u{2713} ",
+                    ItemKind::Check(false) | ItemKind::Radio(false) => "  ",
+                    ItemKind::Plain => "",
+                    _ => "",
+                };
+                let mut button = egui::Button::new(mnemonic_item_label(ui, mark, &item.label, mnemonic, true));
+                let shortcut_str = item.shortcut.as_ref().map(|c| c.display(shortcut_platform(&ctx)));
+                if let Some(ref s) = shortcut_str {
+                    button = button.shortcut_text(s.clone());
+                }
+                let resp = ui.add_enabled(enabled, button);
+                ctx.accesskit_node_builder(resp.id, |n| {
+                    n.set_role(role);
+                    n.set_label(&item.label);
+                    if !enabled {
+                        n.set_disabled();
+                    }
+                    if let Some(ref s) = shortcut_str {
+                        n.set_value(s.as_str());
+                    }
+                    if let Some(m) = mnemonic {
+                        n.set_access_key(m.to_string());
+                    }
+                    match item.kind {
+                        ItemKind::Check(on) | ItemKind::Radio(on) => {
+                            n.set_toggled(if on { egui::accesskit::Toggled::True } else { egui::accesskit::Toggled::False });
+                        }
+                        _ => {}
+                    }
+                });
+
+                let is_key_match = !child_open && active_key.is_some_and(|(c, _)| Some(c) == mnemonic);
+                if is_key_match && let Some((c, key)) = active_key.take() {
+                    consume_letter(&ctx, egui::Modifiers::NONE, key, c);
+                    if enabled {
+                        chosen.push(item.command.clone());
+                        ui.close();
+                        egui::Popup::close_all(&ctx);
+                    }
+                    ctx.request_repaint();
+                }
+
+                if resp.clicked() {
+                    chosen.push(item.command.clone());
+                    ui.close();
+                }
+            }
+            Node::Submenu { label, children, .. } => {
+                let enabled = any_enabled(children, gate);
+                let is_key_match = !child_open && active_key.is_some_and(|(c, _)| Some(c) == mnemonic);
+
+                let resp = ui
+                    .add_enabled_ui(enabled, |ui| {
+                        let sub_button = egui::containers::menu::SubMenuButton::new(mnemonic_label(ui, label, mnemonic, true))
+                            .config(egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside));
+                        let response = ui.add(sub_button.button);
+                        let submenu_id = egui::containers::menu::SubMenu::id_from_widget_id(response.id);
+
+                        if is_key_match && let Some((c, key)) = active_key.take() {
+                            consume_letter(&ctx, egui::Modifiers::NONE, key, c);
+                            if enabled {
+                                egui::containers::menu::MenuState::mark_shown(&ctx, submenu_id);
+                                egui::containers::menu::MenuState::from_ui(ui, |state, _| {
+                                    state.open_item = Some(submenu_id);
+                                });
+                            }
+                            ctx.request_repaint();
+                        }
+
+                        let open = egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item == Some(submenu_id));
+
+                        // A row scrolled out of view does not open its submenu on hover, but an
+                        // already-open submenu (e.g. from keyboard navigation) continues to render.
+                        let reach = response.rect.expand2(ui.spacing().item_spacing / 2.0);
+                        let hidden = response.rect.is_positive()
+                            && ui.ctx().pointer_hover_pos().is_some_and(|p| reach.contains(p) && !ui.clip_rect().contains(p));
+                        if !hidden || open {
+                            sub_button.sub_menu.show(ui, &response, |ui| {
+                                ui.set_min_width(220.0);
+                                ui.set_max_width(280.0);
+                                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                                let max_h = (ui.ctx().content_rect().height() - 40.0).max(200.0);
+                                ui.set_max_height(max_h);
+                                ui.spacing_mut().scroll.floating = false;
+                                egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
+                                    render_nodes(ui, children, gate, chosen, active_key);
+                                });
+                            });
+                        }
+                        response
+                    })
+                    .inner;
+                ctx.accesskit_node_builder(resp.id, |n| {
+                    n.set_role(egui::accesskit::Role::MenuItem);
+                    n.set_label(label);
+                    n.set_has_popup(egui::accesskit::HasPopup::Menu);
+                    if !enabled {
+                        n.set_disabled();
+                    }
+                    if let Some(m) = mnemonic {
+                        n.set_access_key(m.to_string());
+                    }
+                });
+            }
+            Node::Standard { .. } => {}
+            _ => {}
+        }
+    }
+}
+
+fn any_enabled(nodes: &[Node], gate: &Gate) -> bool {
+    nodes.iter().any(|node| match node {
+        Node::Item(item) => item.enabled && gate.allows(item),
+        Node::Submenu { children, .. } => any_enabled(children, gate),
+        _ => false,
+    })
+}
+
+/// The platform whose key names the shortcut column shows: the build's platform, but on the web
+/// the one the browser runs on (`ctx.os()`), as craft-menu's bar does for its own shortcut column.
+fn shortcut_platform(ctx: &egui::Context) -> Platform {
+    use egui::os::OperatingSystem;
+    if cfg!(target_arch = "wasm32") {
+        match ctx.os() {
+            OperatingSystem::Mac | OperatingSystem::IOS => Platform::Mac,
+            OperatingSystem::Windows => Platform::Windows,
+            _ => Platform::Linux,
+        }
+    } else {
+        Platform::current()
+    }
+}
+
+/// Extract the single ASCII character for an alphanumeric Key press, uppercase.
+pub(crate) fn key_letter(key: egui::Key) -> Option<char> {
+    let name = key.name();
+    let mut chars = name.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if c.is_ascii_alphanumeric() => Some(c.to_ascii_uppercase()),
+        _ => None,
+    }
+}
+
+/// Consume `key` and its matching `Event::Text` from the egui input state so that
+/// the pressed mnemonic letter is not passed to other widgets or text fields.
+pub(crate) fn consume_letter(ctx: &egui::Context, mods: egui::Modifiers, key: egui::Key, c: char) {
+    ctx.input_mut(|i| {
+        i.consume_key(mods, key);
+        i.events.retain(|e| !matches!(e, egui::Event::Text(t) if t.chars().count() == 1 && t.chars().all(|ch| ch.to_ascii_uppercase() == c)));
+    });
+}
+
+/// Extract explicit `(X)` mnemonic suffix from a label, if present.
+pub(crate) fn extract_explicit_mnemonic(title: &str) -> Option<char> {
+    if let Some(open) = title.rfind('(')
+        && let Some(close) = title.rfind(')')
+        && close == open + 2
+    {
+        let ch = title.as_bytes()[open + 1] as char;
+        if ch.is_ascii_alphanumeric() {
+            return Some(ch.to_ascii_uppercase());
+        }
+    }
+    None
+}
+
+/// Determine the preferred mnemonic for a top-level menu role.
+pub(crate) fn preferred_menu_role_mnemonic(role: MenuRole, title: &str) -> Option<char> {
+    if let Some(c) = extract_explicit_mnemonic(title) {
+        return Some(c);
+    }
+    match role {
+        MenuRole::File => Some('F'),
+        MenuRole::Edit => Some('E'),
+        MenuRole::View => Some('V'),
+        MenuRole::Window => Some('W'),
+        MenuRole::Help => Some('H'),
+        _ => {
+            if title == "Sign" || title == "Fill & Sign" || title.starts_with("Sign") {
+                Some('S')
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Determine the preferred mnemonic for a menu command item.
+fn preferred_item_mnemonic(item: &Item) -> Option<char> {
+    if let Some(c) = extract_explicit_mnemonic(&item.label) {
+        return Some(c);
+    }
+    let id = item.command.id.as_str();
+    if id == QUIT || matches!(Builtin::of(&item.command), Some(Builtin::Quit)) {
+        if item.label.chars().any(|c| c.eq_ignore_ascii_case(&'X')) {
+            return Some('X');
+        } else {
+            return Some('Q');
+        }
+    }
+    match id {
+        "file.open" => Some('O'),
+        "file.close" => Some('C'),
+        "file.save" => Some('S'),
+        "file.save_as" => Some('A'),
+        "file.print" => Some('P'),
+        "edit.undo" => Some('U'),
+        "edit.redo" => Some('R'),
+        "edit.cut" => Some('T'),
+        "edit.copy" => Some('C'),
+        "edit.paste" => Some('P'),
+        "edit.select_all" => Some('A'),
+        _ => None,
+    }
+}
+
+/// Assign unique uppercase ASCII mnemonics for a set of items or titles in a menu level,
+/// avoiding duplicate assignments.
+pub(crate) fn assign_mnemonics(labels: &[&str], preferred: &[Option<char>]) -> Vec<Option<char>> {
+    let mut result: Vec<Option<char>> = vec![None; labels.len()];
+    let mut used: Vec<char> = Vec::new();
+
+    // Pass 1: Match preferred characters that exist in the label (or explicit (X) suffix).
+    for (i, label) in labels.iter().enumerate() {
+        if label.is_empty() {
+            continue;
+        }
+        let explicit = extract_explicit_mnemonic(label);
+        let pref = explicit.or_else(|| preferred.get(i).copied().flatten()).map(|c| c.to_ascii_uppercase());
+        if let Some(p) = pref {
+            let has = label.chars().any(|c| c.to_ascii_uppercase() == p);
+            if has && !used.contains(&p) {
+                result[i] = Some(p);
+                used.push(p);
+            }
+        }
+    }
+
+    // Pass 2: For items without a mnemonic:
+    // If the label has no ASCII characters at all, fall back to preferred if unused.
+    // Otherwise try word starts first, then any ASCII alphanumeric character in the label.
+    for (i, label) in labels.iter().enumerate() {
+        if label.is_empty() || result[i].is_some() {
+            continue;
+        }
+        let explicit = extract_explicit_mnemonic(label);
+        let pref = explicit.or_else(|| preferred.get(i).copied().flatten()).map(|c| c.to_ascii_uppercase());
+
+        let has_ascii = label.chars().any(|c| c.is_ascii_alphanumeric());
+        if !has_ascii
+            && let Some(p) = pref
+            && !used.contains(&p)
+        {
+            result[i] = Some(p);
+            used.push(p);
+            continue;
+        }
+
+        let starts = label.split(|c: char| !c.is_alphanumeric()).filter_map(|w| w.chars().next());
+        let rest = label.chars();
+        let pick = starts.chain(rest).filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_uppercase()).find(|c| !used.contains(c));
+
+        if let Some(c) = pick {
+            result[i] = Some(c);
+            used.push(c);
+        } else if let Some(p) = pref {
+            if !used.contains(&p) {
+                result[i] = Some(p);
+                used.push(p);
+            }
+        } else if let Some(unused) = ('A'..='Z').chain('0'..='9').find(|c| !used.contains(c)) {
+            result[i] = Some(unused);
+            used.push(unused);
+        }
+    }
+
+    result
+}
+
+/// Top-level mnemonics for the menus in `bar`.
+pub(crate) fn top_level_mnemonics(bar: &MenuBar) -> Vec<char> {
+    let titles: Vec<&str> = bar.menus.iter().map(|m| m.title.as_str()).collect();
+    let preferred: Vec<Option<char>> = bar.menus.iter().map(|m| preferred_menu_role_mnemonic(m.role, &m.title)).collect();
+    assign_mnemonics(&titles, &preferred).into_iter().flatten().collect()
+}
+
+pub(crate) fn mnemonic_label(ui: &egui::Ui, label: &str, mnemonic: Option<char>, show_underline: bool) -> egui::WidgetText {
+    mnemonic_item_label(ui, "", label, mnemonic, show_underline)
+}
+
+pub(crate) fn mnemonic_item_label(ui: &egui::Ui, mark: &str, label: &str, mnemonic: Option<char>, show_underline: bool) -> egui::WidgetText {
+    let text_color = ui.visuals().text_color();
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+
+    let Some(m) = mnemonic else {
+        return egui::WidgetText::from(format!("{mark}{label}"));
+    };
+
+    let char_match = label.char_indices().find(|(_, c)| c.to_ascii_uppercase() == m);
+    let (display_text, match_idx, match_len) = match char_match {
+        Some((i, c)) => (label.to_owned(), Some(i), c.len_utf8()),
+        None => {
+            let formatted = format!("{label} ({m})");
+            let idx = formatted.rfind(m);
+            (formatted, idx, 1)
+        }
+    };
+
+    if !show_underline {
+        return egui::WidgetText::from(format!("{mark}{display_text}"));
+    }
+
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = f32::INFINITY;
+
+    let format_normal = egui::TextFormat { font_id: font_id.clone(), color: text_color, ..Default::default() };
+    let format_underlined = egui::TextFormat { font_id, color: text_color, underline: egui::Stroke::new(1.0, text_color), ..Default::default() };
+
+    if !mark.is_empty() {
+        job.append(mark, 0.0, format_normal.clone());
+    }
+
+    if let Some(i) = match_idx {
+        if i > 0 {
+            job.append(&display_text[..i], 0.0, format_normal.clone());
+        }
+        job.append(&display_text[i..i + match_len], 0.0, format_underlined);
+        if i + match_len < display_text.len() {
+            job.append(&display_text[i + match_len..], 0.0, format_normal);
+        }
+    } else {
+        job.append(&display_text, 0.0, format_normal);
+    }
+
+    egui::WidgetText::from(job)
 }
 
 #[cfg(test)]
@@ -654,5 +1314,95 @@ mod tests {
         let bar = linux(&app, &ctx);
         assert!(bar.find(&CommandRef::new(NO_RECENT)).is_some(), "an empty list shows a placeholder");
         assert!(bar.find(&CommandRef::new("file.clear_recent")).is_none());
+    }
+
+    #[test]
+    fn french_file_and_window_have_distinct_sibling_mnemonics() {
+        // Colliding first letter 'F', where Fenêtre's preferred role 'W' is absent from the title:
+        let titles = ["Fichier", "Fenêtre"];
+        let preferred = [Some('F'), Some('W')];
+        let mnemonics = assign_mnemonics(&titles, &preferred);
+        assert_eq!(mnemonics[0], Some('F'), "Fichier receives its preferred mnemonic 'F'");
+        assert_ne!(mnemonics[1], Some('F'), "Fenêtre must not collide with Fichier's 'F'");
+        assert!(mnemonics[1].is_some(), "Fenêtre receives an alternative unique mnemonic");
+        assert_ne!(mnemonics[0], mnemonics[1], "Mnemonics within the menu set must be distinct");
+
+        // French top-level menu set:
+        let fr_titles = ["Fichier", "Édition", "Affichage", "Signer", "Fenêtre", "Aide"];
+        let fr_pref = [Some('F'), Some('E'), Some('V'), Some('S'), Some('W'), Some('H')];
+        let fr_mnemonics = assign_mnemonics(&fr_titles, &fr_pref);
+        let mut seen = std::collections::HashSet::new();
+        for (title, m) in fr_titles.iter().zip(fr_mnemonics.iter()) {
+            let ch = m.unwrap_or_else(|| panic!("{title} has an assigned mnemonic"));
+            assert!(seen.insert(ch), "Mnemonic '{ch}' for '{title}' must be unique across the menu set");
+        }
+        assert_eq!(fr_mnemonics[0], Some('F'), "Fichier retains 'F'");
+        assert_ne!(fr_mnemonics[4], Some('F'), "Fenêtre does not collide on 'F'");
+    }
+
+    #[test]
+    fn item_mnemonics_are_assigned_uniquely_within_a_submenu() {
+        let labels = ["Save", "Save As", "Sign", "Exit"];
+        let preferred = [Some('S'), Some('A'), Some('S'), Some('X')];
+        let mnemonics = assign_mnemonics(&labels, &preferred);
+        let mut seen = std::collections::HashSet::new();
+        for (label, m) in labels.iter().zip(mnemonics.iter()) {
+            let ch = m.unwrap_or_else(|| panic!("{label} has an assigned mnemonic"));
+            assert!(seen.insert(ch), "Mnemonic '{ch}' for '{label}' must be unique within the submenu");
+        }
+        assert_eq!(mnemonics[0], Some('S'));
+        assert_eq!(mnemonics[1], Some('A'));
+        assert_eq!(mnemonics[3], Some('X'));
+    }
+
+    #[test]
+    fn clipped_submenu_row_does_not_open_on_hover_unless_already_open() {
+        let ctx = egui::Context::default();
+        let submenu = Node::submenu("Sub", vec![Item::new(CommandRef::new("cmd.test"), "Child Item").into()]);
+        let nodes = vec![submenu];
+        let gate = Gate::default();
+
+        // Pass 1: Pointer hover over the row's rectangle (y=150), but clip rect is y in 0..100.
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::PointerMoved(egui::pos2(50.0, 150.0)));
+        let out = ctx.run_ui(raw, |ui| {
+            ui.set_clip_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0)));
+            ui.add_space(130.0);
+            let mut chosen = Vec::new();
+            render_nodes(ui, &nodes, &gate, &mut chosen, &mut None);
+        });
+        out.drop_without_applying_deltas();
+
+        // The submenu must NOT have opened because the row was clipped out of view.
+        let mut open_item = None;
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_clip_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0)));
+            ui.add_space(130.0);
+            open_item = egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item);
+            let mut chosen = Vec::new();
+            render_nodes(ui, &nodes, &gate, &mut chosen, &mut None);
+        });
+        out.drop_without_applying_deltas();
+        assert_eq!(open_item, None, "Clipped submenu must not open on hover");
+
+        // Pass 2: Keyboard navigation opens the submenu (mnemonic 'S' for Sub) even when clipped.
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_clip_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0)));
+            ui.add_space(130.0);
+            let mut chosen = Vec::new();
+            render_nodes(ui, &nodes, &gate, &mut chosen, &mut Some(('S', egui::Key::S)));
+        });
+        out.drop_without_applying_deltas();
+
+        let mut open_after_key = None;
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_clip_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0)));
+            ui.add_space(130.0);
+            let mut chosen = Vec::new();
+            render_nodes(ui, &nodes, &gate, &mut chosen, &mut None);
+            open_after_key = egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item);
+        });
+        out.drop_without_applying_deltas();
+        assert!(open_after_key.is_some(), "Keyboard-opened submenu must remain open and render even when clipped");
     }
 }

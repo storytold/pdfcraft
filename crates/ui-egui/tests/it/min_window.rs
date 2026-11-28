@@ -34,12 +34,9 @@ fn at_the_minimum_width_the_menus_the_modes_and_search_stay_reachable() {
         .expect("the mode strip's current tab");
     assert!(window.contains_rect(mode), "the current mode is inside the window: {mode:?}");
     assert!(!mode.intersects(search), "the mode strip and the search do not overlap: {mode:?} {search:?}");
-    // The menu bar folds the titles that don't fit into "⋯", or all of them into one "Menu" when not
-    // even the first fits (craft-menu's `MenuBarUi`). macOS's system font is wider, and at this width
-    // the bar is the "Menu" button there; a real macOS window has the native menu bar instead.
+    // The menu bar has the "Menu" button (or in native/upstream menu bar, "File" or "Menu").
     let menus = |label| h.query_by_role_and_label(Role::MenuItem, label);
-    let bar = menus("File").or_else(|| if cfg!(target_os = "macos") { menus("Menu") } else { None });
-    let bar = bar.expect("main menu reachable").rect();
+    let bar = h.query_by_label("Menu").or_else(|| menus("File")).or_else(|| menus("Menu")).expect("main menu reachable").rect();
     assert!(window.contains_rect(bar), "the menus are inside the window: {bar:?}");
     assert!(!bar.intersects(search), "the menus and the search do not overlap: {bar:?} {search:?}");
 }

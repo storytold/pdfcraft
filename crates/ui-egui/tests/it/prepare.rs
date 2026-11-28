@@ -1369,16 +1369,16 @@ fn actions_tab_shows_a_chain_and_keeps_it_when_the_first_action_is_replaced() {
     };
     open(&mut h);
     h.get_by_label("Mouse Up: Run a JavaScript, then 1 more action");
-    // The menu bar's Edit menu and the Edit tab come first; the rows' follow (Mouse Up, On Blur).
-    assert_eq!(h.get_all_by_label("Edit").count(), 4);
-    h.get_all_by_label("Edit").nth(2).unwrap().click();
+    // The Edit mode tab comes first; the rows' follow (Mouse Up, On Blur).
+    assert_eq!(h.get_all_by_label("Edit").count(), 3);
+    h.get_all_by_label("Edit").nth(1).unwrap().click();
     h.run_steps(2);
     h.get_by_label("Edit Action");
     // While one script is open, no other Edit can overwrite it.
-    assert!(h.get_all_by_label("Edit").skip(2).all(|n| n.accesskit_node().is_disabled()));
+    assert!(h.get_all_by_label("Edit").skip(1).all(|n| n.accesskit_node().is_disabled()));
     h.get_by_label("Discard").click();
     h.run_steps(2);
-    assert!(h.get_all_by_label("Edit").skip(2).all(|n| !n.accesskit_node().is_disabled()));
+    assert!(h.get_all_by_label("Edit").skip(1).all(|n| !n.accesskit_node().is_disabled()));
     // Replace the Mouse Up script with a link: the chained link stays after it.
     add_action(&mut h, "Mouse Up", "Open a web link", "https://example.com");
     h.get_by_label("OK").click();

@@ -46,12 +46,12 @@ fn the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select() {
 }
 
 #[test]
-fn quick_toolbar_crop_is_hidden_on_home_and_in_read_mode() {
+fn quick_toolbar_crop_is_hidden_on_home_and_in_full_screen_mode() {
     let mut h = harness();
-    h.execute("view.read_mode");
+    h.execute("view.full_screen");
     h.run_steps(3);
     assert!(h.query_by_label("Crop pages").is_none());
-    h.execute("view.read_mode");
+    h.execute("view.full_screen");
     h.run_steps(3);
     h.get_by_label("Crop pages");
     h.state_mut().active = None;

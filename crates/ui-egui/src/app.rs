@@ -471,6 +471,7 @@ impl PdfCraftApp {
             autosave,
             recovered_paths: Default::default(),
             native_menu: None,
+            menu_target: None,
             window_menu_bar: Default::default(),
             window_title: String::new(),
             page_title: String::new(),
@@ -587,9 +588,10 @@ impl PdfCraftApp {
         }
     }
 
-    /// Read mode and full screen hide the hotbar (the quick tools), and its tools window with it.
+    /// Full screen hides the hotbar (the quick tools), and its tools window with it.
+    /// The unified toolbar stays visible in Read mode.
     pub(crate) fn hotbar_hidden(&self) -> bool {
-        self.mode == crate::Mode::Read || self.screen_mode.body_only()
+        self.screen_mode.body_only()
     }
 
     /// The pages are covered, and no page key reaches them, a menu click's included: by a dialog or

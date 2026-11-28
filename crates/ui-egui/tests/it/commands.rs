@@ -628,3 +628,242 @@ fn command_w_closes_empty_macos_window_but_not_an_empty_windows_window() {
         assert_eq!(close_requested(&h), should_close, "{os:?}: only an empty macOS window should close");
     }
 }
+
+#[test]
+fn file_menu_exit_requests_window_close_on_clean_document() {
+    let mut h = harness();
+    support::open_menu(&mut h, "File");
+    let exit_btn = h
+        .query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("Exit") || l.contains("Quit")))
+        .expect("Exit or Quit menu item found");
+    exit_btn.click_accesskit();
+    h.step();
+    let closed = h.output().viewport_output.values().any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+    assert!(closed, "File -> Exit/Quit requested viewport close");
+}
+
+#[test]
+fn file_menu_exit_intercepts_close_for_unsaved_changes() {
+    let mut h = harness();
+    assert!(h.execute("page.insert_blank"));
+    h.run_steps(2);
+    support::open_menu(&mut h, "File");
+    let exit_btn = h
+        .query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("Exit") || l.contains("Quit")))
+        .expect("Exit or Quit menu item found");
+    exit_btn.click_accesskit();
+    h.step();
+    assert!(!close_requested(&h));
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views.len(), 1);
+    assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty);
+    assert!(!close_requested(&h));
+}
+
+#[test]
+fn alt_f_opens_the_file_menu() {
+    let mut h = harness();
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::F);
+    h.run_steps(3);
+    let file = h
+        .query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File"))
+        .expect("Alt+F opened the Menu popup and targeted File");
+    file.click();
+    h.run_steps(2);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("Exit") || l.contains("Quit")))
+            .is_some(),
+        "File menu submenu opened"
+    );
+}
+
+#[test]
+fn f10_followed_by_down_arrow_opens_menu_popup() {
+    let mut h = harness();
+    h.key_press(egui::Key::F10);
+    h.run_steps(1);
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")).is_some(),
+        "F10 then Down opened the Menu popup"
+    );
+}
+
+#[test]
+fn f10_followed_by_f_opens_file_menu() {
+    let mut h = harness();
+    h.key_press(egui::Key::F10);
+    h.run_steps(1);
+    h.key_press(egui::Key::F);
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")).is_some(),
+        "F10 then F opened the File menu"
+    );
+}
+
+#[test]
+fn f10_followed_by_tab_clears_menu_focus_so_later_f_does_not_open_file() {
+    let mut h = harness();
+    h.key_press(egui::Key::F10);
+    h.run_steps(1);
+    // Tab moves keyboard focus away from the Menu button to the next control.
+    h.key_press(egui::Key::Tab);
+    h.run_steps(1);
+    // A subsequent 'F' key must be handled by the newly focused control, not open File.
+    h.key_press(egui::Key::F);
+    h.run_steps(2);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")).is_none(),
+        "File menu must not open when F is pressed after Tab moved focus away"
+    );
+}
+
+#[test]
+fn alt_f_mnemonic_is_disabled_on_macos_preserving_option_keys() {
+    let mut h = harness();
+    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::F);
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")).is_none(),
+        "Alt+F mnemonic must not open File menu on macOS"
+    );
+}
+
+#[test]
+fn alt_tap_followed_by_down_arrow_opens_menu_popup() {
+    let mut h = harness();
+    h.event(egui::Event::Key { key: egui::Key::AltLeft, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT });
+    h.run_steps(1);
+    h.event(egui::Event::Key { key: egui::Key::AltLeft, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(1);
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")).is_some(),
+        "Alt-tap then Down opened the Menu popup"
+    );
+}
+
+#[test]
+fn alt_f_opens_the_file_submenu_directly_on_a_fresh_popup() {
+    let mut h = harness();
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::F);
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("Exit") || l.contains("Quit")))
+            .is_some(),
+        "Alt+F opened the File submenu on the fresh popup, without a prior click"
+    );
+}
+
+#[test]
+fn a_command_shortcut_leaves_the_menu_bar_so_arrow_keys_do_not_reopen_the_popup() {
+    let mut h = harness();
+    h.key_press(egui::Key::F10);
+    h.run_steps(1);
+    // Ctrl+S is a command shortcut: it takes the keyboard off the bar (in the same press), like
+    // a native menu bar, so a following ArrowDown must not open the popup.
+    h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::S);
+    h.run_steps(1);
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")).is_none(),
+        "the bar was left, so ArrowDown did not open the Menu popup"
+    );
+}
+
+#[test]
+fn alt_f_followed_by_mnemonic_x_quits() {
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness();
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::F);
+    h.run_steps(3);
+    let exit_item = h
+        .query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("Exit") || l.contains("Quit")))
+        .expect("File submenu is open with Exit or Quit");
+    let key = match exit_item.accesskit_node().data().access_key() {
+        Some("Q") => egui::Key::Q,
+        _ => egui::Key::X,
+    };
+    h.key_down(key);
+    h.step();
+    let closed = h.output().viewport_output.values().any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+    assert!(closed, "Alt+F then mnemonic executed Exit/Quit via keyboard mnemonic without mouse click");
+}
+
+#[test]
+fn alt_f_opens_fichier_and_not_fenetre_under_french_locale() {
+    if crate::support::skip_without_catalogs("alt_f_opens_fichier_and_not_fenetre_under_french_locale") {
+        return;
+    }
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness();
+    h.set_option("language", "fr").unwrap();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::F);
+    h.run_steps(3);
+    let fichier = h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("Fichier"));
+    assert!(fichier.is_some(), "Alt+F opens Fichier");
+
+    let items: Vec<_> =
+        h.query_all_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.has_popup() == Some(egui::accesskit::HasPopup::Menu)).collect();
+    let mut keys = std::collections::HashSet::new();
+    for it in &items {
+        if let Some(ak) = it.accesskit_node().data().access_key() {
+            assert!(keys.insert(ak.to_string()), "Duplicate access key '{ak}' on menu item '{:?}'", it.accesskit_node().label());
+        }
+    }
+}
+
+#[test]
+fn plain_letters_in_open_submenu_do_not_switch_to_other_top_level_menus() {
+    let mut h = harness();
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::F);
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("Exit") || l.contains("Quit")))
+            .is_some(),
+        "File submenu is open"
+    );
+    // 'H' is Help's top-level menu mnemonic. While File submenu is open, plain
+    // letters route to the active submenu rather than retargeting other top-level menus.
+    h.key_down(egui::Key::H);
+    h.run_steps(2);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("Exit") || l.contains("Quit")))
+            .is_some(),
+        "File submenu remains open and did not switch to Help"
+    );
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("About"))).is_none(),
+        "Help submenu was not opened"
+    );
+}
+
+#[test]
+fn f10_twice_releases_button_focus() {
+    let mut h = harness();
+    h.key_press(egui::Key::F10);
+    h.run_steps(1);
+    assert!(h.ctx.memory(|m| m.focused().is_some()), "Menu button has focus after first F10");
+    h.key_press(egui::Key::F10);
+    h.run_steps(1);
+    assert!(h.ctx.memory(|m| m.focused().is_none()), "Menu button surrendered focus after second F10");
+}
+
+#[test]
+fn unmatched_alt_letter_does_not_open_menu_or_consume_key() {
+    let mut h = harness();
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::Z);
+    h.run_steps(2);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")).is_none(),
+        "Popup must not open for unmatched Alt+Z mnemonic"
+    );
+}

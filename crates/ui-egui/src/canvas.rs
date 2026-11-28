@@ -2313,6 +2313,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
     if let Some(notice) = app.views[index].session.comments.notice.take() {
         app.notify_tr(notice);
     }
+
     if let Some((source, file, destination)) = remote_open {
         app.open_remote_link(source, file, destination);
     }
