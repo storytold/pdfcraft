@@ -1645,6 +1645,33 @@ mod formcalc {
         assert!(go("Nope(1)", "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("unknown function"));
     }
 
+    /// `IPmt` and `PPmt` take the annual rate and accrue interest monthly; a payment below the
+    /// monthly interest answers 0 (the examples in the FormCalc specification and reference).
+    #[test]
+    fn ipmt_and_ppmt_read_an_annual_rate() {
+        let near = |script: &str, want: f64| {
+            let got = calc(script).parse::<f64>().unwrap_or(f64::NAN);
+            assert!((got - want).abs() < 1e-6, "{script} gave {got}, want {want}");
+        };
+        near("IPmt(30000, 0.085, 295.50, 7, 3)", 624.8839283142);
+        near("PPmt(30000, 0.085, 295.50, 7, 3)", 261.6160716858);
+        near("IPmt(160000, 0.0475, 980, 24, 12)", 7103.80833569485);
+        near("PPmt(160000, 0.0475, 980, 24, 12)", 4656.19166430515);
+        assert_eq!(calc("IPmt(15000, 0.065, 65.50, 15, 1)"), "0");
+        assert_eq!(calc("PPmt(15000, 0.065, 65.50, 15, 1)"), "0");
+        // A payment equal to the monthly interest pays interest only, though `pv * r` rounds up.
+        near("IPmt(35, 0.12, 0.35, 1, 12)", 4.2);
+        assert_eq!(calc("PPmt(35, 0.12, 0.35, 1, 12)"), "0");
+        // A cent short of the interest still answers 0.
+        assert_eq!(calc("IPmt(35, 0.12, 0.34, 1, 12)"), "0");
+        // The margin forgives rounding, not a real shortfall: 0.03125 short of 62,500,000,000.
+        assert_eq!(calc("IPmt(1000000000000, 0.75, 62499999999.96875, 1, 1)"), "0");
+        assert_eq!(calc("PPmt(1000000000000, 0.75, 62499999999.96875, 1, 1)"), "0");
+        // An interest of 1e308 is finite, and so is its margin: a payment of 1 still answers 0.
+        assert_eq!(calc("IPmt(1e308, 12, 1, 1, 1)"), "0");
+        assert_eq!(calc("PPmt(1e308, 12, 1, 1, 1)"), "0");
+    }
+
     #[test]
     fn format_nine_pads_the_integer_part() {
         assert_eq!(calc(r#"Format("99999", 42)"#), "00042");
@@ -1860,8 +1887,9 @@ $host.gotoURL("https://example.org")"#,
         assert!(e.is_some_and(|e| e.contains("too long")));
         let e = run("var s = Space(1000000)\nfor i = 1 upto 3000 do s == \"x\" endfor").error;
         assert!(e.is_some_and(|e| e.contains("too long")));
-        // Each period IPmt and PPmt walk costs a step.
-        let e = run("for i = 1 upto 600 do IPmt(1e9, 0.01, 1, 1, 10000) endfor").error;
+        // Each period IPmt and PPmt walk costs a step (at a tiny rate, a payment one above the
+        // monthly interest of 1000 repays about 1 a month, so the walk takes all 10,000 periods).
+        let e = run("for i = 1 upto 600 do IPmt(1e9, 0.000012, 1001, 1, 10000) endfor").error;
         assert!(e.is_some_and(|e| e.contains("too long")));
         // Exists answers no for a name that isn't there, but a limit inside it still stops the script.
         assert_eq!(run("Exists(nothing.here)").result.as_deref(), Some("0"));
