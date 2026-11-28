@@ -1,8 +1,8 @@
 use super::blocks::{BlockStyle, TextBlock, paragraph_separator, row_break, wrap};
 use super::fallback::{
-    Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, Type3Run, drop_unused_fallback_fonts, is_variation_selector, needs_type3, no_japanese_font,
-    source_character_advance, source_encodes, source_fallback_runs, source_family, source_program_completes, source_runs, source_show, source_space,
-    source_width, type3_encode, type3_font,
+    Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, Type3Run, drop_unused_fallback_fonts, has_joining_letters, is_variation_selector, needs_type3,
+    no_japanese_font, source_character_advance, source_encodes, source_fallback_runs, source_family, source_program_completes, source_runs,
+    source_show, source_space, source_width, type3_encode, type3_font,
 };
 use super::interp::{Carry, Origin, TextState, interpret};
 use super::lines::{
@@ -69,7 +69,7 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     let indic_text = if visual_indic { crate::indic::to_visual(&text) } else { text.clone() };
     // Typed in logical order; drawn left to right (right-to-left runs reversed).
     let shown = crate::bidi::to_visual(&indic_text);
-    let reused = font.as_ref().filter(|m| source_encodes(m, &shown));
+    let reused = font.as_ref().filter(|m| !has_joining_letters(&shown) && source_encodes(m, &shown));
     let mut substituted = None;
     let mut replacement: Vec<Op> = Vec::new();
     // ' and " also move to the next line (and " sets the spacing); keep that.
@@ -1036,7 +1036,10 @@ fn source_font(doc: &Document, fonts_res: &Dict, font_name: &str, first: &TextLi
     let metrics = fonts_res.get(font_name.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).map(|d| Metrics::from_dict(doc, &d));
     let visual_indic = metrics.as_ref().is_some_and(|m| m.visual_order) || first.visual_order;
     let indic_text = if visual_indic { crate::indic::to_visual(flat) } else { flat.to_owned() };
-    let reuse = style.family.is_none() && style.bold.is_none() && metrics.as_ref().is_some_and(|m| source_encodes(m, &indic_text));
+    let reuse = style.family.is_none()
+        && style.bold.is_none()
+        && !has_joining_letters(&indic_text)
+        && metrics.as_ref().is_some_and(|m| source_encodes(m, &indic_text));
     let space = metrics.as_ref().map_or(0.33, |m| source_space(doc, fonts_res, m));
     SourceFont { metrics, reuse, space }
 }

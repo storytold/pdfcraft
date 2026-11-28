@@ -695,6 +695,15 @@ pub(crate) fn source_encodes(metrics: &Metrics, text: &str) -> bool {
     text.split(' ').all(|word| metrics.encode(word).is_some())
 }
 
+/// Whether `text` has Arabic letters, which join: a font draws each in the form its neighbours
+/// call for, and a subset's ToUnicode maps every form of a letter to the same character. Encoding
+/// such text character by character ([`source_encodes`], [`source_show`]) draws one form wherever
+/// the letter falls, so the letters come apart; it needs shaping instead.
+pub(crate) fn has_joining_letters(text: &str) -> bool {
+    // ponytail: Arabic script letters only; Syriac and N'Ko join too, add them if they turn up.
+    text.chars().any(|c| matches!(u32::from(c), 0x0620..=0x064A | 0x066E..=0x066F | 0x0671..=0x06D5 | 0x06EE..=0x06EF | 0x06FA..=0x06FF | 0x0750..=0x077F | 0x0870..=0x0887 | 0x08A0..=0x08C9))
+}
+
 #[cfg(test)]
 thread_local! {
     /// How often [`source_space`] ran on this thread, for the test that pins it out of per-character loops.
