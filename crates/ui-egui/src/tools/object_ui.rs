@@ -180,6 +180,32 @@ fn screen(xf: &PageXform, info: &DocInfo, page: usize, object: &EditableObject) 
     xf.user_rect(info, page, object.rect.map(|v| v as f32))
 }
 
+/// The part of a drag by `delta` that keeps `rect` on its page. A move can't take content to
+/// another page (#5264): past the edge it would be clipped away. An axis where `rect` is
+/// already larger than the page moves freely, and one already past an edge may still move back
+/// (a drag that doesn't move it along that axis leaves it where it is).
+pub(crate) fn keep_on_page(rect: Rect, page: Rect, delta: egui::Vec2) -> egui::Vec2 {
+    let axis = |lo: f32, hi: f32, page_lo: f32, page_hi: f32, d: f32| {
+        if hi - lo > page_hi - page_lo {
+            d
+        } else if d > 0.0 {
+            d.min((page_hi - hi).max(0.0))
+        } else {
+            d.max((page_lo - lo).min(0.0))
+        }
+    };
+    egui::vec2(
+        axis(rect.left(), rect.right(), page.left(), page.right(), delta.x),
+        axis(rect.top(), rect.bottom(), page.top(), page.bottom(), delta.y),
+    )
+}
+
+/// The part of the drag `delta` the objects selected on `page` take: it keeps them on the page.
+fn selection_drag(xf: &PageXform, info: &DocInfo, page: usize, selected: &[EditableObject], delta: Vec2) -> Vec2 {
+    let union = selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o)));
+    if union == Rect::NOTHING { delta } else { keep_on_page(union, xf.rect, delta) }
+}
+
 fn single(session: &PageSession, page: usize) -> Option<ObjectTarget> {
     if let Some((_, index)) = session.content.selected.filter(|(p, _)| *p == page) {
         Some(ObjectTarget { kind: ObjectKind::Added, index })
@@ -423,7 +449,8 @@ pub(crate) fn object_controls(
                 PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => Some(*pos - start.origin),
                 _ => None,
             })
-            .unwrap_or(Vec2::ZERO);
+            // The drag the release will commit: kept on the page (#5264).
+            .map_or(Vec2::ZERO, |delta| selection_drag(&xf, info, page, &s.selected, delta));
         let rects: Vec<Rect> = s.selected.iter().map(|o| screen(&xf, info, page, o)).collect();
         let shown: Vec<BezPath> = rects.iter().map(|r| outline_path(body, r.translate(offset))).collect();
         SelectionOutline::solid(tl!("Selected object"), &shown).color(accent_ink(ui, 1.0)).show(ui);
@@ -480,7 +507,7 @@ pub(crate) fn page_parts(
 /// A press of a part [`object_controls`] registered: the objects selected together, or the frame of
 /// the paragraph open for typing, which selects its box and moves it. The drag shows the move; the
 /// release past 3 points returns it as one edit, and one within 3 changes nothing.
-pub(crate) fn objects_press(session: &mut PageSession, doc: &Document, _info: &DocInfo, press: &PagePress, geo: PageGeometry<'_>) -> Option<Edit> {
+pub(crate) fn objects_press(session: &mut PageSession, doc: &Document, info: &DocInfo, press: &PagePress, geo: PageGeometry<'_>) -> Option<Edit> {
     let page = press.page;
     match press.phase {
         PressPhase::Down { .. } => {
@@ -504,7 +531,13 @@ pub(crate) fn objects_press(session: &mut PageSession, doc: &Document, _info: &D
                 return None;
             }
             let xf = session.page_xform(page, geo)?;
-            let (a, b) = (xf.screen_to_view(start.origin), xf.screen_to_view(pos));
+            // A move can't take content to another page (#5264). Dragged outward at the page edge, the
+            // selection doesn't move, and the engine refuses a zero move.
+            let delta = selection_drag(&xf, info, page, &session.objects.selected, pos - start.origin);
+            if delta == Vec2::ZERO {
+                return None;
+            }
+            let (a, b) = (xf.screen_to_view(start.origin), xf.screen_to_view(start.origin + delta));
             match doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]) {
                 Ok(offset) => Some(session.objects.move_by(page, offset)),
                 Err(_) => {
@@ -515,7 +548,6 @@ pub(crate) fn objects_press(session: &mut PageSession, doc: &Document, _info: &D
         }
         _ => None,
     }
-    // `info` is the page geometry every press handler takes; the move itself needs none.
 }
 
 /// An arrow key moves the selected objects, else the selected picture, a point (`far`: ten points), as
@@ -593,6 +625,25 @@ mod tests {
         let once = [t(ObjectKind::Added, 0), t(ObjectKind::Text, 1), t(ObjectKind::Image, 0)];
         assert!(matches!(&edit, Edit::DeleteObjects { page: 0, objects } if *objects == once), "{edit:?}");
         assert_eq!(edit.label().wording, "Delete content");
+    }
+
+    /// `keep_on_page` stops a move at the page edge, lets an oversized axis move freely, and lets
+    /// content already past an edge move back but not further out.
+    #[test]
+    fn a_drag_stays_on_the_page() {
+        let page = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(100.0, 100.0));
+        let rect = Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(20.0, 20.0));
+        assert_eq!(keep_on_page(rect, page, egui::vec2(5.0, 5.0)), egui::vec2(5.0, 5.0));
+        assert_eq!(keep_on_page(rect, page, egui::vec2(500.0, 500.0)), egui::vec2(80.0, 80.0));
+        assert_eq!(keep_on_page(rect, page, egui::vec2(-500.0, -500.0)), egui::vec2(-10.0, -10.0));
+        let wide = Rect::from_min_max(Pos2::new(-10.0, 10.0), Pos2::new(120.0, 20.0));
+        assert_eq!(keep_on_page(wide, page, egui::vec2(500.0, 500.0)), egui::vec2(500.0, 80.0));
+        // Half past the left edge: a straight-down drag doesn't pull it sideways, and it may
+        // move back onto the page but no further off.
+        let past = Rect::from_min_max(Pos2::new(-10.0, 10.0), Pos2::new(10.0, 20.0));
+        assert_eq!(keep_on_page(past, page, egui::vec2(0.0, 5.0)), egui::vec2(0.0, 5.0));
+        assert_eq!(keep_on_page(past, page, egui::vec2(-5.0, 0.0)), egui::vec2(0.0, 0.0));
+        assert_eq!(keep_on_page(past, page, egui::vec2(5.0, 0.0)), egui::vec2(5.0, 0.0));
     }
 
     #[test]

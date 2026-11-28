@@ -4738,6 +4738,14 @@ fn editing_existing_form_artwork_on_the_page() {
     check_existing_artwork("figure.pdf", write_incremental(&doc, &SaveOptions::default()).unwrap());
 }
 
+/// Opens `name`, shrinks its page-filling artwork to the middle of the page, then selects it with
+/// Edit Text and drags it to the right as one "Move image" step.
+/// Apply `edit` through the app, with the harness's context.
+fn apply(h: &mut Harness<'static, PdfCraftApp>, edit: pdfcraft_engine::Edit) -> bool {
+    let ctx = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx, edit)
+}
+
 fn check_existing_artwork(name: &'static str, bytes: Vec<u8>) {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
@@ -4750,11 +4758,21 @@ fn check_existing_artwork(name: &'static str, bytes: Vec<u8>) {
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
+    // The artwork fills the page, and a move keeps it on its page (#5264). Shrink it to
+    // half the page in the middle first so it has room to move.
+    let full = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let (qw, qh) = ((full[2] - full[0]) / 4.0, (full[3] - full[1]) / 4.0);
+    let (mx, my) = ((full[0] + full[2]) / 2.0, (full[1] + full[3]) / 2.0);
+    apply(
+        &mut h,
+        pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: pdfcraft_engine::ImageEdit::Move([mx - qw, my - qh, mx + qw, my + qh]) },
+    );
+    h.run_steps(4);
     let before = h.state().session.get(id).unwrap().page_images(0)[0].rect;
     assert!(h.execute("edit.edit_text"));
     h.run_steps(2);
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    // Select it, then drag it a quarter of the page to the right.
+    // Select it, then drag it an eighth of the page (a quarter of its width) to the right.
     let c = r.center();
     h.hover_at(c);
     h.run_steps(1);
@@ -4763,7 +4781,7 @@ fn check_existing_artwork(name: &'static str, bytes: Vec<u8>) {
     h.drop_at(c);
     h.run_steps(2);
     assert!(h.state().views[0].session.image_selection.is_some(), "selected");
-    let to = c + egui::vec2(r.width() / 4.0, 0.0);
+    let to = c + egui::vec2(r.width() / 8.0, 0.0);
     h.hover_at(c);
     h.run_steps(1);
     h.drag_at(c);
@@ -5360,6 +5378,173 @@ fn dragging_a_paragraph_moves_it_and_its_edge_rewraps_it() {
     assert!(near(doc.text_lines(0)[0].rect[0], moved.rect[0]), "it keeps its place");
     assert_eq!(doc.can_undo(), Some("Edit text"), "edge drags still rewrap text");
     assert!(h.state().views[0].session.line_editor.is_none());
+}
+
+/// Dropping a paragraph on the next page leaves it inside its own page, as one "Move object" step (#5264).
+#[test]
+fn dragging_a_paragraph_onto_the_next_page_keeps_it_on_its_own() {
+    let mut h = harness(2, |app| {
+        app.set_option(&egui::Context::default(), "zoom", "50").unwrap();
+    });
+    assert!(h.execute("edit.edit_text"));
+    h.run_steps(2);
+    let block = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0)[0].clone()
+    };
+    let (r0, r1) = (h.state().views[0].page_screen_rect(0), h.state().views[0].page_screen_rect(1));
+    let (r0, r1) = (r0.expect("page 0 on screen"), r1.expect("page 1 on screen"));
+    let k = r0.width() / 200.0;
+    let before = block(&h);
+    let mid = egui::pos2(
+        r0.left() + ((before.rect[0] + before.rect[2]) / 2.0) as f32 * k,
+        r0.top() + (300.0 - (before.rect[1] + before.rect[3]) as f32 / 2.0) * k,
+    );
+    drag(&mut h, mid, r1.center());
+    let moved = block(&h);
+    assert_eq!(moved.text, before.text);
+    let r = moved.rect;
+    assert!(r[0] >= -0.5 && r[1] >= -0.5 && r[2] <= 200.5 && r[3] <= 300.5, "still on its page: {r:?}");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move object"));
+}
+
+/// A paragraph dragged past the page's left edge and back inside before release ends up where
+/// the pointer's displacement from the drag start puts it, not offset by the time at the edge (#5264).
+#[test]
+fn a_paragraph_dragged_past_the_edge_and_back_follows_the_pointer() {
+    let mut h = harness(1, |_| {});
+    assert!(h.execute("edit.edit_text"));
+    h.run_steps(2);
+    let block = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0)[0].clone()
+    };
+    // User space (200 × 300 page) → screen.
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    assert!(r.left() > 60.0, "room left of the page for the pointer: {r:?}");
+    let k = r.width() / 200.0;
+    let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+    let before = block(&h);
+    let mid = screen((before.rect[0] + before.rect[2]) / 2.0, (before.rect[1] + before.rect[3]) / 2.0);
+    // Out past the left edge, where the paragraph is held at the edge, then back inside and
+    // dropped 30 pt right and 50 pt up of where the drag started.
+    let out = egui::pos2(r.left() - 40.0, mid.y);
+    let to = mid + egui::vec2(30.0 * k, -50.0 * k);
+    h.hover_at(mid);
+    h.run_steps(1);
+    h.drag_at(mid);
+    h.run_steps(1);
+    for (from, end) in [(mid, out), (out, to)] {
+        for step in 1..=5 {
+            h.hover_at(from + (end - from) * (step as f32 / 5.0));
+            h.run_steps(1);
+        }
+    }
+    h.drop_at(to);
+    h.run_steps(4);
+    let moved = block(&h);
+    assert_eq!(moved.text, before.text);
+    let near = |a: f64, b: f64| (a - b).abs() < 1.5;
+    assert!(
+        near(moved.rect[0], before.rect[0] + 30.0) && near(moved.rect[1], before.rect[1] + 50.0),
+        "follows the pointer from the drag start: {:?} → {:?}",
+        before.rect,
+        moved.rect
+    );
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move object"));
+}
+
+/// Dragging a picture far past the page's corner moves it only up to the page edge (#5264).
+#[test]
+fn dragging_a_picture_past_the_page_edge_keeps_it_on_the_page() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    // A smaller picture in the middle of the page, with room to move.
+    let full = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let (qw, qh) = ((full[2] - full[0]) / 4.0, (full[3] - full[1]) / 4.0);
+    let (mx, my) = ((full[0] + full[2]) / 2.0, (full[1] + full[3]) / 2.0);
+    apply(
+        &mut h,
+        pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: pdfcraft_engine::ImageEdit::Move([mx - qw, my - qh, mx + qw, my + qh]) },
+    );
+    h.run_steps(4);
+    let before = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    assert!(h.execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    h.drop_at(c);
+    h.run_steps(2);
+    assert!(h.state().views[0].session.image_selection.is_some(), "selected");
+    // Far past the page's bottom right corner.
+    drag(&mut h, c, c + r.size());
+    let moved = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    assert!(moved[2] > before[2] + 1.0, "it moved: {before:?} -> {moved:?}");
+    assert!(
+        moved[0] >= full[0] - 0.5 && moved[1] >= full[1] - 0.5 && moved[2] <= full[2] + 0.5 && moved[3] <= full[3] + 0.5,
+        "still on its page {full:?}: {moved:?}"
+    );
+}
+
+/// A turned picture takes the rotated move path and also stops at the page edge (#5264).
+#[test]
+fn dragging_a_turned_picture_past_the_page_edge_keeps_it_on_the_page() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    // A smaller picture in the middle of the page, turned so it takes the rotated move path.
+    let full = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let (qw, qh) = ((full[2] - full[0]) / 4.0, (full[3] - full[1]) / 4.0);
+    let (mx, my) = ((full[0] + full[2]) / 2.0, (full[1] + full[3]) / 2.0);
+    apply(
+        &mut h,
+        pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: pdfcraft_engine::ImageEdit::Move([mx - qw, my - qh, mx + qw, my + qh]) },
+    );
+    apply(&mut h, pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: pdfcraft_engine::ImageEdit::RotateBy(30.0) });
+    h.run_steps(4);
+    let before = h.state().session.get(id).unwrap().page_images(0)[0].clone();
+    assert!(before.matrix[1].abs() > 1.0 || before.matrix[2].abs() > 1.0, "turned: {:?}", before.matrix);
+    let before = before.rect;
+    assert!(h.execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    h.drop_at(c);
+    h.run_steps(2);
+    assert!(h.state().views[0].session.image_selection.is_some(), "selected");
+    // Far past the page's bottom right corner.
+    drag(&mut h, c, c + r.size());
+    let moved = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    assert!(moved[2] > before[2] + 1.0, "it moved: {before:?} -> {moved:?}");
+    assert!(
+        moved[0] >= full[0] - 0.5 && moved[1] >= full[1] - 0.5 && moved[2] <= full[2] + 0.5 && moved[3] <= full[3] + 0.5,
+        "still on its page {full:?}: {moved:?}"
+    );
 }
 
 /// Press and release at `at` without moving.

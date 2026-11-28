@@ -175,6 +175,23 @@ fn corners_of(r: DocRect) -> [Point; 4] {
     [Point::new(r.x0, r.y0), Point::new(r.x1, r.y0), Point::new(r.x1, r.y1), Point::new(r.x0, r.y1)]
 }
 
+/// `end`, a move of the picture's corners `start` (document units), kept on the page `sheet` (#5264): past the
+/// edge the page would clip the picture away. A resize or a turn is left as it is.
+fn keep_move_on_page(start: [Point; 4], end: [Point; 4], sheet: DocRect) -> [Point; 4] {
+    let moved = end[0] - start[0];
+    if !(0..4).all(|i| ((end[i] - start[i]) - moved).hypot() < EPS) {
+        return end;
+    }
+    let screen_rect = |r: DocRect| Rect::from_min_max(Pos2::new(r.x0 as f32, r.y0 as f32), Pos2::new(r.x1 as f32, r.y1 as f32));
+    let wanted = egui::vec2(moved.x as f32, moved.y as f32);
+    let kept = crate::tools::object_ui::keep_on_page(screen_rect(bounds_of(&start)), screen_rect(sheet), wanted);
+    if kept == wanted {
+        return end;
+    }
+    let kept = Vec2::new(f64::from(kept.x), f64::from(kept.y));
+    start.map(|p| p + kept)
+}
+
 /// The map that takes the parallelogram `from` onto `to`, corner for corner.
 fn affine_between(from: [Point; 4], to: [Point; 4]) -> impl Fn(Point) -> Point {
     let (e1, e2) = (from[1] - from[0], from[3] - from[0]);
@@ -315,11 +332,14 @@ fn box_controls(
                 }
             }
             EditEvent::Commit { after, .. } => {
-                edit = picture_edit(page, index, image.matrix, image.rect, quad, after.quad, &to_user);
+                // A move keeps the picture on its page (#5264).
+                let sheet = [xf.rect.left_top(), xf.rect.right_top(), xf.rect.right_bottom(), xf.rect.left_bottom()].map(|p| view.to_doc(p));
+                let end = keep_move_on_page(quad, after.quad, bounds_of(&sheet));
+                edit = picture_edit(page, index, image.matrix, image.rect, quad, end, &to_user);
                 if let Some(s) = session.image_selection.as_mut() {
                     let from = s.settled.map_or_else(|| norm_rect(view, xf, bounds), |(from, _)| from);
                     if edit.is_some() {
-                        s.settled = Some((from, norm_rect(view, xf, bounds_of(&after.quad))));
+                        s.settled = Some((from, norm_rect(view, xf, bounds_of(&end))));
                     }
                     if s.settled.is_none() {
                         s.preview = None;

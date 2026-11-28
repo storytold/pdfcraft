@@ -772,7 +772,6 @@ pub(crate) fn paragraph_press(session: &mut PageSession, doc: &pdfcraft_engine::
     if !movable(session, page) {
         return None;
     }
-    let delta = *pos - start.origin;
     // Translation must keep the selected source operators. Rewriting unchanged text
     // would also remove unrelated paragraphs that now overlap this one (#594).
     let xf = session.page_xform(page, geo)?;
@@ -784,12 +783,19 @@ pub(crate) fn paragraph_press(session: &mut PageSession, doc: &pdfcraft_engine::
     if !b.expand(EDGE_REACH).contains(start.origin) {
         return None;
     }
+    let delta = paragraph_drag(b, xf.rect, *pos - start.origin);
     let (from, to) = (user_box(&xf, &doc.info, page, b), user_box(&xf, &doc.info, page, b.translate(delta)));
     (delta != Vec2::ZERO).then(|| Edit::MoveObjects {
         page,
         objects: vec![ObjectTarget { kind: ObjectKind::Text, index: block }],
         offset: [to[0] - from[0], to[1] - from[1]],
     })
+}
+
+/// The part of the drag `delta` the paragraph with the box `b` takes on the page `sheet` (screen points): the
+/// paragraph itself stays on its page, not its padded outline. A move can't take it to another page (#5264).
+fn paragraph_drag(b: Rect, sheet: Rect, delta: Vec2) -> Vec2 {
+    crate::object_ui::keep_on_page(b.shrink(2.0), sheet, delta)
 }
 
 /// A click on paragraph `block` of `page`.
@@ -911,7 +917,7 @@ pub(crate) fn paragraph_controls(
         let boxes: Vec<Rect> = blocks.iter().map(|l| paragraph_box(&xf, &doc.info, page, l.rect)).collect();
         open_waiting(session, doc, page, &blocks, &boxes, geo);
         outline_closed(ui, body, session, page, &boxes, xf.rect.intersect(geo.viewport));
-        draw_move(ui, body, session, page, &boxes, press);
+        draw_move(ui, body, session, (page, xf.rect), &boxes, press);
         let held = blocks
             .iter()
             .enumerate()
@@ -986,8 +992,9 @@ fn outline_closed(ui: &mut egui::Ui, body: &PageBody<'_>, session: &PageSession,
     }
 }
 
-/// The box of the paragraph being dragged, where the pass's press has taken it.
-fn draw_move(ui: &mut egui::Ui, body: &PageBody<'_>, session: &PageSession, page: usize, boxes: &[Rect], press: Option<&PagePress>) {
+/// The box of the paragraph being dragged on `page`, drawn on screen at `sheet`, where the pass's press has taken
+/// it (kept on the page, as its release moves it).
+fn draw_move(ui: &mut egui::Ui, body: &PageBody<'_>, session: &PageSession, (page, sheet): (usize, Rect), boxes: &[Rect], press: Option<&PagePress>) {
     let Some(press) = press.filter(|p| p.page == page) else { return };
     let Owner::Paragraph { block } = press.owner else { return };
     let (PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. }) = &press.phase else { return };
@@ -999,7 +1006,7 @@ fn draw_move(ui: &mut egui::Ui, body: &PageBody<'_>, session: &PageSession, page
     if !b.expand(EDGE_REACH).contains(start.origin) {
         return;
     }
-    let path = [rect_path(doc_rect(&body.view, b.translate(*pos - start.origin)))];
+    let path = [rect_path(doc_rect(&body.view, b.translate(paragraph_drag(*b, sheet, *pos - start.origin))))];
     let _ = SelectionOutline::solid(tl!("Edit text & images").to_string(), &path).show_at(ui, body.rect);
 }
 
