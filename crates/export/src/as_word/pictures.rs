@@ -146,7 +146,7 @@ mod tests {
         let pixels = RgbaImage::from_raw(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255]).expect("two pixels");
         let mut bytes = Vec::new();
         image::codecs::png::PngEncoder::new(&mut bytes).write_image(pixels.as_raw(), 2, 1, image::ExtendedColorType::Rgba8).expect("encode tiny PNG");
-        Image { ext: "png", bytes: bytes.into(), rect: [0.0, 0.0, 1.0, 2.0], size: [2.0, 1.0], rotation }
+        Image { ext: "png", bytes: bytes.into(), rect: [0.0, 0.0, 1.0, 2.0], size: [2.0, 1.0], rotation, flip: false }
     }
 
     #[test]
@@ -185,8 +185,7 @@ mod tests {
 
     #[test]
     fn flow_document_embeds_rotated_pixels_not_original_bytes() {
-        let page =
-            crate::layout::Page { width: 10.0, height: 10.0, blocks: Vec::new(), images: vec![sample(90.0)], background: None, rules: Vec::new() };
+        let page = crate::layout::Page { width: 10.0, height: 10.0, blocks: Vec::new(), images: vec![sample(90.0)], ..Default::default() };
         let (doc, _) = super::super::flow_doc(&[page], &super::super::Meta { title: "", language: None, font: "Helvetica" });
         let bytes = doc.media.values().next().expect("picture retained");
         let pixels = image::load_from_memory(bytes).expect("PNG").into_rgba8();
@@ -211,7 +210,7 @@ mod tests {
     fn flow_budget_counts_reused_media_at_each_placement() {
         let im = sample(0.0);
         let cost = rtf_bytes(im.bytes.len()).expect("small");
-        let page = crate::layout::Page { width: 10.0, height: 10.0, blocks: Vec::new(), images: vec![im; 3], background: None, rules: Vec::new() };
+        let page = crate::layout::Page { width: 10.0, height: 10.0, blocks: Vec::new(), images: vec![im; 3], ..Default::default() };
         let (doc, omitted) = super::super::flow_doc_with_budget(
             &[page],
             &super::super::Meta { title: "", language: None, font: "Helvetica" },
@@ -272,7 +271,7 @@ mod tests {
             margin_right: 50.0,
             ..Default::default()
         };
-        let p = super::super::picture(String::new(), &im, &section);
+        let p = super::super::picture(String::new(), &im, &section, (false, false));
         assert!(matches!(p.objects.first(), Some(craft_wordmodel::InlineObject::Image { w, h, .. }) if *w == 30.0 && *h == 300.0));
     }
 

@@ -9,6 +9,7 @@ mod document_fonts;
 mod form_rotation;
 mod marked_content_isolation;
 mod ocr_edit;
+mod office_export_forms;
 mod office_export_images;
 mod page_templates;
 mod private_image_resize;

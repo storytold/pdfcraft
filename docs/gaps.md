@@ -1,6 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
-> **Last reviewed:** 2026-11-11 | **Last updated:** 2026-11-11 | **Change:** minor (gap 8: known residual risk for the LibreOffice sidecar, sandbox tracked in #6953; estimates unchanged)
+> **Last reviewed:** 2026-11-11 | **Last updated:** 2026-11-11 | **Change:** minor (gap 8: Word form-layout export; known residual risk for the LibreOffice sidecar, sandbox tracked in #6953; estimates unchanged)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -198,8 +198,24 @@ update the numbers.
   don't take them yet.
 - **Evidence:** `create.export-docx` partial; the synthetic invoice regression for
   [#773](https://github.com/storytold/pdfcraft/issues/773) now covers absent inferred borders,
-  floating watermark text and per-page section sizes. Exact font matching, vector rules and
-  broader layout fidelity remain incomplete;
+  floating watermark text and per-page section sizes. A form keeps its layout on the pages the
+  export recognizes as one (fields, or text framed by rules or boxes; a flattened form with few
+  boxes still flows and loses them): vector rules and boxes become shapes behind the text, text
+  is placed line by line in its PDF font's family, and AcroForm text, check box, radio, combo
+  and list fields become content controls (password fields, multi-select lists and text/choice widgets whose displayed text is rotated are omitted and reported in `truncated_pages`; push buttons and signature fields are also left out),
+  filled in without protecting the document; Word doesn't limit a control's
+  length, so a text field's `/MaxLen` is only named in its title. The output is written by
+  craft-docx from the shared word model; on a 7-page claim form it opens in LibreOffice 24.2
+  with its 7 pages, values and all 241 controls in place, and in WordCraft 0.19.1 with the
+  page's art and labels in place but the framed fields in the text flow (8 pages). It has not
+  been opened in Microsoft Word, as the hand-written output it replaces was.
+  Radio groups keep their displayed selection as locked controls, with lost editability
+  reported through `truncated_pages`; each widget of a repeated field is a control of its own
+  (not bound to one value), and text typed into an empty field takes Word's own formatting,
+  both until craft-wordmodel models them.
+  Pictures and paths retain their shared painting order, including paths over scanned pictures.
+  Holes in filled paths, clipping, shadings, transparency, editable radio groups, exact font matching
+  and broader layout fidelity remain incomplete;
   `create.from-office` partial (LibreOffice sidecar; Writer and Calc never update linked content,
   but Impress has no such setting and the process's network access isn't sandboxed);
   `create.export-xlsx`, `create.export-pptx`,

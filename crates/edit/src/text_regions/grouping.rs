@@ -235,6 +235,111 @@ fn starts_list_item(row: &[usize], lines: &[TextLine]) -> bool {
     row.iter().filter_map(|i| lines.get(*i)).map(|l| l.text.trim_start()).find(|t| !t.is_empty()).is_some_and(opens_with_marker)
 }
 
+/// Each line as a block of its own, for placing rather than editing (only the text, box and
+/// style are meaningful). An upright line's box is narrowed to the words it draws: the spaces
+/// and `TJ` gaps a line starts or ends with draw nothing. A gap between two words wider than
+/// [`PIECE_GAP`] times the size (a tab stop, a column) splits the line into pieces, each placed
+/// at its own words, since a reader sets the words of one piece a single space apart.
+pub(crate) fn line_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
+    let mut out = Vec::new();
+    for line in lines.iter().filter(|l| !l.text.trim().is_empty()) {
+        let ink: Vec<[f64; 4]> = line.ink.iter().copied().filter(|r| r.iter().all(|v| v.is_finite())).collect();
+        for block in group_layout(std::slice::from_ref(line), false) {
+            let angle = block.rotation.to_radians();
+            let (dx, dy) = (angle.cos(), angle.sin());
+            // Quarter-turned page content still has axis-aligned word boxes. Compare gaps
+            // along its baseline, so /Rotate can make the resulting pieces upright later.
+            if !line.positioned_words() || ink.is_empty() || dx.abs().max(dy.abs()) < 0.99999 {
+                out.push(block);
+                continue;
+            }
+            let along = |r: [f64; 4]| {
+                let a = r[0] * dx + r[1] * dy;
+                let b = r[2] * dx + r[3] * dy;
+                [a.min(b), a.max(b)]
+            };
+            let narrow = |r: [f64; 4]| {
+                if dx.abs() > dy.abs() { [r[0], block.rect[1], r[2], block.rect[3]] } else { [block.rect[0], r[1], block.rect[2], r[3]] }
+            };
+            // Font names come from hostile PDF objects and would otherwise be copied in full
+            // for every tab-separated piece. Real PostScript font names fit within this cap.
+            let base_font: String = block.base_font.chars().take(127).collect();
+            let words = word_ranges(&line.text);
+            if words.len() != ink.len() {
+                // The words can't be matched to their boxes: one piece over all of them.
+                let all = ink.iter().copied().reduce(union).unwrap_or(block.rect);
+                out.push(TextBlock { rect: narrow(all), base_font, ..block });
+                continue;
+            }
+            let mut start = 0;
+            for end in 1..=words.len() {
+                let split = end == words.len()
+                    || ink.get(end).zip(ink.get(end - 1)).is_some_and(|(next, prev)| along(*next)[0] - along(*prev)[1] > PIECE_GAP * line.size);
+                if !split {
+                    continue;
+                }
+                // The line as it is when nothing splits it. A piece keeps the source's own spaces
+                // between its words (two spaces stay two): only those at a split go.
+                let whole = end - start == words.len();
+                let text = if whole {
+                    block.text.clone()
+                } else {
+                    let from = words.get(start).map_or(0, |w| w.start);
+                    let to = words.get(end - 1).map_or(from, |w| w.end);
+                    line.text.get(from..to).unwrap_or_default().to_string()
+                };
+                let r = ink.get(start..end).unwrap_or_default().iter().copied().reduce(union).unwrap_or(block.rect);
+                // A piece of a split line has no spaces of its own around it.
+                let editor_text = if whole { block.editor_text.clone() } else { text.clone() };
+                // These pieces are only for export. Cloning the editing block would retain its
+                // entire reflow_text in every piece, making a line with many tab gaps quadratic
+                // in memory; its editor indexes would not describe these pieces either.
+                out.push(TextBlock {
+                    text,
+                    editor_text,
+                    rect: narrow(r),
+                    base_font: base_font.clone(),
+                    size: block.size,
+                    bold: block.bold,
+                    italic: block.italic,
+                    color: block.color,
+                    rotation: block.rotation,
+                    invisible: block.invisible,
+                    reflow_text: String::new(),
+                    spans: Vec::new(),
+                    lines: Vec::new(),
+                    rows: Vec::new(),
+                });
+                start = end;
+            }
+        }
+    }
+    out
+}
+
+/// Where each word of `text` (what `split_whitespace` yields) starts and ends in it.
+fn word_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (i, c) in text.char_indices() {
+        if c.is_whitespace() {
+            if let Some(s) = start.take() {
+                out.push(s..i);
+            }
+        } else if start.is_none() {
+            start = Some(i);
+        }
+    }
+    if let Some(s) = start {
+        out.push(s..text.len());
+    }
+    out
+}
+
+/// A gap between words wider than this many times the text size splits a line into pieces
+/// ([`line_blocks`]): a word space is about a quarter of the size, two of them half.
+const PIECE_GAP: f64 = 0.8;
+
 fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
     let mut rows: Vec<Vec<usize>> = Vec::new();
     for (i, line) in lines.iter().enumerate() {

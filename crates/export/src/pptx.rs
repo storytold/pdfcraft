@@ -242,11 +242,14 @@ pub fn pptx(pages: &[Page], title: &str) -> Vec<u8> {
                     let cy = height_pt(h * k);
                     let x = mx + (content_w - cx) / 2.0;
                     let y = current_y;
-
+                    // Slides place pictures upright: a picture the PDF mirrors or turns half round
+                    // is flipped to match (a bottom-up bitmap vertically, a left-right mirror
+                    // horizontally).
+                    let (flip_h, flip_v) = im.upright_flips();
                     shapes.push(Shape {
                         id: ShapeId(shape_id),
                         name: format!("Picture {shape_id}"),
-                        xfrm: Some(Xfrm { x, y, w: cx, h: cy, ..Default::default() }),
+                        xfrm: Some(Xfrm { x, y, w: cx, h: cy, flip_h, flip_v, ..Default::default() }),
                         kind: ShapeKind::Picture { fill: PictureFill { media: MediaId(global_img_idx as u32), ..Default::default() } },
                         geom: Geom::Preset { name: "rect".into(), adj: Vec::new() },
                         ..Default::default()

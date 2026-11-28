@@ -6390,6 +6390,8 @@ dependencies = [
  "craft-zip",
  "flate2",
  "image",
+ "pdfcraft-fonts",
+ "pdfcraft-forms",
 ]
 
 [[package]]

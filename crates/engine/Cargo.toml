@@ -13,7 +13,7 @@ craft-docpath = { workspace = true }
 craft-font-catalog = { workspace = true }
 craft-image-codecs = { workspace = true }
 pdfcraft-measure = { workspace = true }
-image = { version = "0.25", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 pdfcraft-render = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-organize = { workspace = true }

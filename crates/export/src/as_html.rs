@@ -43,11 +43,18 @@ pub(crate) fn language_tag(lang: Option<&str>) -> Option<&str> {
 
 /// One HTML file: headings and paragraphs, tables as real `<table>` elements, images inline, a
 /// rule between pages.
+///
+/// Image bytes must already have the displayed orientation: this low-level writer does not
+/// decode images or apply [`super::Image::upright_flips`]. Callers preparing [`Page`] values
+/// must bake mirrors and half turns into the pixels and clear their orientation flags.
+/// The engine's `OfficeFormat::Html` and `OfficeFormat::HtmlSimple` exports perform this bounded
+/// preprocessing.
 pub fn html(pages: &[Page], title: &str) -> String {
     html_with_language(pages, title, None)
 }
 
-/// A simple HTML export with no CSS; page layout and colours are omitted.
+/// A simple HTML export with no CSS; page layout and colours are omitted. Images have the same
+/// displayed-orientation precondition as [`html`].
 pub fn html_simple(pages: &[Page], title: &str) -> String {
     html_simple_with_language(pages, title, None)
 }
@@ -60,7 +67,8 @@ pub fn html_with_language(pages: &[Page], title: &str, language: Option<&str>) -
 }
 
 /// [`html_simple`] for a document in `language`, named as [`html_with_language`] names it: a
-/// language is not styling, so the simple export keeps it.
+/// language is not styling, so the simple export keeps it. Images have the same
+/// displayed-orientation precondition as [`html`].
 pub fn html_simple_with_language(pages: &[Page], title: &str, language: Option<&str>) -> String {
     html_with_mode(pages, title, true, language)
 }
@@ -135,6 +143,7 @@ mod tests {
             text: text.into(),
             rect: [x0, y0, x1, y1],
             size: 12.0,
+            font: String::new(),
             bold: false,
             italic: false,
             color: [0.0; 3],
@@ -156,6 +165,7 @@ mod tests {
             images: Vec::new(),
             background: None,
             rules: Vec::new(),
+            ..Default::default()
         };
         let out = html(&[page], "Clean");
         assert!(out.contains("<p style=\"color:#008000\">Hello</p>"), "{out}");
@@ -184,8 +194,8 @@ mod tests {
             rect: [0.0, 0.0, 100.0, 20.0],
             cols: vec![0.0, 50.0],
             rows: vec![vec![
-                Cell { text: "\u{1}".into(), size: 11.0, bold: true, italic: true, color: [0.0; 3], span: 1 },
-                Cell { text: "Val".into(), size: 11.0, bold: true, italic: false, color: [0.0; 3], span: 1 },
+                Cell { text: "\u{1}".into(), size: 11.0, font: String::new(), bold: true, italic: true, color: [0.0; 3], span: 1 },
+                Cell { text: "Val".into(), size: 11.0, font: String::new(), bold: true, italic: false, color: [0.0; 3], span: 1 },
             ]],
             ruled: None,
         };

@@ -1,7 +1,8 @@
 //! Word (.docx) through craft-docx (storytold/craft-libs#793): the pages are mapped onto a
 //! `craft_wordmodel::Document` ([`super::as_word`]); pages that can't flow keep their layout as
-//! positioned text boxes and pictures.
+//! positioned text boxes, pictures and vector shapes, their form fields as content controls.
 
+pub use super::as_word::{MAX_DOCX_PAGE_POINTS, MAX_DOCX_PAGE_SHAPES};
 use super::as_word::{Meta, word_doc};
 use super::layout::{Image, Page};
 pub(crate) fn image_mime(ext: &str) -> &'static str {
@@ -49,17 +50,35 @@ const FONT: &str = "Arial";
 const APPLICATION: &str = "PdfCraft";
 
 /// A Word document (.docx, Office Open XML). Ordinary pages flow as paragraphs and tables;
-/// pages with rotated text, or text that overlaps artwork, use floating shapes to retain their layout.
+/// pages with rotated text, text that overlaps artwork, form fields or text framed by boxes and
+/// rules use floating shapes to retain their layout, and so does every page of a document where
+/// most pages do.
 pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
-    docx_with_language(pages, title, None)
+    docx_checked(pages, title).0
 }
 
 /// [`docx`] for a document in `language` (a BCP 47 tag such as `bg-BG`, as a PDF's `/Lang` gives
 /// it): the default language of its text, so Word checks the spelling in that language rather
 /// than in its own. A language that is not a well formed tag is left out.
 pub fn docx_with_language(pages: &[Page], title: &str, language: Option<&str>) -> Vec<u8> {
+    docx_checked_with_language(pages, title, language).0
+}
+
+/// [`docx`], and the pages (0-based) that kept their layout but had more shapes, points or fields
+/// than a Word page holds ([`MAX_DOCX_PAGE_SHAPES`], [`MAX_DOCX_PAGE_POINTS`]), or whose paths
+/// were not all read ([`Page::art_truncated`]): the rest of those are missing from the document.
+/// Compound fills that exceed the bounded tessellation work are omitted and reported too.
+/// A page that flows draws no shapes, so it is never listed for them. A page of either kind is
+/// listed when a picture of it is past the document's picture limits and so left out.
+pub fn docx_checked(pages: &[Page], title: &str) -> (Vec<u8>, Vec<usize>) {
+    docx_checked_with_language(pages, title, None)
+}
+
+/// [`docx_checked`] with the document's default text language, as in [`docx_with_language`].
+pub fn docx_checked_with_language(pages: &[Page], title: &str, language: Option<&str>) -> (Vec<u8>, Vec<usize>) {
     craft_docx::set_application_name(APPLICATION);
+    let (doc, dropped) = word_doc(pages, &Meta { title, language, font: FONT });
     // Writing a document built here fails only on a hostile size the mapping already bounds; an
     // empty result is what the export returned for a package it couldn't finish.
-    craft_docx::write(&word_doc(pages, &Meta { title, language, font: FONT })).unwrap_or_default()
+    (craft_docx::write(&doc).unwrap_or_default(), dropped)
 }

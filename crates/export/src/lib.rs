@@ -2,11 +2,14 @@
 //!
 //! The engine reduces each page to [`Page`]: paragraphs (text, box, size, bold/italic) and
 //! images (encoded bytes and box), in reading order. The writers turn that into a flowing
-//! document: headings are the paragraphs set larger than the body text; a block that
-//! continues another on its line (an italic word, a link) is a run of that block's paragraph, and
-//! a paragraph that wraps onto the next line runs on there. Word keeps pages with
-//! rotated text, or text overlapped by artwork or watermark-sized text, as positioned, editable
-//! shapes to avoid reflowing overlays; other pages flow with images inline.
+//! document: headings are the paragraphs set larger than the body text, and a block that
+//! continues another on its line (an italic word, a link) is a run of that block's paragraph;
+//! a paragraph that wraps onto the next line runs on there.
+//! Word keeps pages with
+//! rotated text, text overlapped by artwork or watermark-sized text, form fields or text framed by
+//! rules (and every page of a document most of whose pages are such) as positioned, editable
+//! shapes: the page's vector paths behind the text, its text line by line, its fields as Word
+//! content controls. Other pages flow with images inline.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -28,19 +31,24 @@ mod layout;
 #[cfg(test)]
 use as_docx::MAX_MEDIA;
 pub(crate) use as_docx::hex;
-pub use as_docx::{docx, docx_with_language};
+pub use as_docx::{MAX_DOCX_PAGE_POINTS, MAX_DOCX_PAGE_SHAPES, docx, docx_checked, docx_checked_with_language, docx_with_language};
 pub use as_html::{html, html_simple, html_simple_with_language, html_with_language};
 pub use as_markdown::markdown;
 #[cfg(test)]
 use as_markdown::{emphasis, paragraph};
 pub use as_rtf::{rtf, rtf_with_title, rtf_with_title_checked};
-pub use clip::{ClipBuilder, ClipSpan, ClipStyle, ClipText, MAX_CLIP_HTML_BYTES, MAX_CLIP_SPANS, MAX_CLIP_TEXT_BYTES, clip_html, font_family};
+#[cfg(test)]
+use as_word::{FRAMING_SHAPES, MAX_DOCX_LIST_ITEMS, MAX_FIELD_NAME_CHARS, word_font};
+pub use clip::{
+    ClipBuilder, ClipSpan, ClipStyle, ClipText, MAX_CLIP_HTML_BYTES, MAX_CLIP_SPANS, MAX_CLIP_TEXT_BYTES, clip_html, font_family,
+    font_weight_and_slant,
+};
 pub(crate) use craft_html::standalone::esc;
 #[cfg(test)]
 use craft_html::standalone::{allowed, base64};
 #[cfg(test)]
 use flow::list_item;
-pub use layout::{Block, Cell, Image, Page, Table};
+pub use layout::{Block, Cell, Field, FieldKind, Image, Page, Paint, Shape, Stroke, Table};
 #[cfg(test)]
 use layout::{LOOKUP_STEPS, MAX_COLS, body_size};
 pub(crate) use layout::{Run, flowing_paragraphs, reading_order, tables};
