@@ -6395,6 +6395,7 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
 }
 
 mod annotation_geometry;
+mod appearance_resources;
 mod descriptions;
 mod elsewhere;
 mod form_matrix;
