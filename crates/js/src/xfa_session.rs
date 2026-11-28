@@ -42,6 +42,9 @@ pub struct Script {
     pub root: std::sync::Arc<XfaNode>,
     pub limits: Limits,
     pub timeout: std::time::Duration,
+    /// Property changes earlier scripts of the event made since `root` was built, which the
+    /// script sees as part of the form (so the caller needn't build a new `root` for each).
+    pub props: Vec<crate::xfa::XfaPropSet>,
 }
 
 /// Run `s` here: a fresh context (JavaScript) or interpreter (FormCalc) on its copy of the
@@ -60,13 +63,13 @@ fn run_script(s: Script, doc: &XfaDoc, started: &dyn Fn()) -> XfaOutcome {
     if s.formcalc {
         // FormCalc has no engine to start: its time (and its own deadline) begins at once.
         started();
-        return crate::formcalc::run_formcalc_at(&s.source, &s.event, doc, s.root, true, s.limits, Some(s.timeout));
+        return crate::formcalc::run_formcalc_at(&s.source, &s.event, doc, (s.root, &s.props), true, s.limits, Some(s.timeout));
     }
     if let Some(why) = crate::refuse(&s.source) {
         started();
         return XfaOutcome { error: Some(why), ..Default::default() };
     }
-    crate::xfa::run_here(&s.source, &s.event, doc, s.root, true, s.limits, started)
+    crate::xfa::run_here(&s.source, &s.event, doc, (s.root, &s.props), true, s.limits, started)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

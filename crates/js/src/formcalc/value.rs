@@ -16,8 +16,11 @@ pub(super) enum Val {
     Xfa,
     /// The instance manager of `name` under `parent`.
     Im(usize, String),
-    /// A property object whose contents are not modelled (`$.border.fill…`): reads give
-    /// another sink, writes change nothing.
+    /// A property object of the form object at the index (`$.border.fill.color`, XFA 3.3 ch. 3,
+    /// "Properties vs. Children", p. 78), by its path from the object (see `xfa::props`).
+    Prop(usize, String),
+    /// An object whose contents are not modelled (`$.layout…`): reads give another sink, writes
+    /// change nothing.
     Sink,
 }
 

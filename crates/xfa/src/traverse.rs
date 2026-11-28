@@ -109,20 +109,6 @@ fn with_som(parent: &str, name: Option<&str>, index: usize) -> String {
     }
 }
 
-/// The SOM index of each of `names` among the same-named ones before it (0 when unnamed).
-fn som_indices<'a>(names: impl Iterator<Item = Option<&'a str>>) -> Vec<usize> {
-    let mut seen: HashMap<&str, usize> = HashMap::new();
-    names
-        .map(|n| {
-            n.map_or(0, |n| {
-                let c = seen.entry(n).or_insert(0);
-                *c += 1;
-                *c - 1
-            })
-        })
-        .collect()
-}
-
 impl<'t> Tree<'t> {
     /// An empty tree knowing the widgets laid out on `pages`, from `tpl` with `data`.
     fn new(tpl: &'t Template, data: Option<&'t DataNode>, pages: &[Page]) -> Tree<'t> {
@@ -187,9 +173,8 @@ impl<'t> Tree<'t> {
                 for k in 0..self.instances(sf, parent_som, shown) {
                     let som = with_som(parent_som, c.name.as_deref(), sib + k);
                     let Some(id) = self.push(Class::Subform, c, parent, shown) else { return };
-                    let sibs = som_indices(sf.children.iter().map(|k| k.common().name.as_deref()));
-                    for (i, kid) in sf.children.iter().enumerate() {
-                        self.add(kid, Some(id), &som, sibs.get(i).copied().unwrap_or(0), shown, depth + 1);
+                    for kid in &sf.children {
+                        self.add(kid, Some(id), &som, kid.common().som_index, shown, depth + 1);
                     }
                     self.order(id, sf.layout == Layout::Positioned);
                 }
@@ -197,18 +182,17 @@ impl<'t> Tree<'t> {
             Node::Area(a) => {
                 let som = with_som(parent_som, c.name.as_deref(), sib);
                 let Some(id) = self.push(Class::Area, c, parent, shown) else { return };
-                let sibs = som_indices(a.children.iter().map(|k| k.common().name.as_deref()));
-                for (i, kid) in a.children.iter().enumerate() {
-                    self.add(kid, Some(id), &som, sibs.get(i).copied().unwrap_or(0), shown, depth + 1);
+                for kid in &a.children {
+                    self.add(kid, Some(id), &som, kid.common().som_index, shown, depth + 1);
                 }
                 self.order(id, true);
             }
             Node::ExclGroup(g) => {
-                let som = with_som(parent_som, c.name.as_deref(), sib);
+                // The layout names an unnamed group `group`.
+                let som = with_som(parent_som, Some(c.name.as_deref().unwrap_or("group")), sib);
                 let Some(id) = self.push(Class::ExclGroup, c, parent, shown) else { return };
-                let sibs = som_indices(g.fields.iter().map(|f| f.common.name.as_deref()));
-                for (i, f) in g.fields.iter().enumerate() {
-                    self.add_field(f, id, &som, sibs.get(i).copied().unwrap_or(0), shown);
+                for f in &g.fields {
+                    self.add_field(f, id, &som, f.common.som_index, shown);
                 }
                 self.order(id, g.layout == Layout::Positioned);
             }

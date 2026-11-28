@@ -431,7 +431,7 @@ impl Automation {
             edits.push(Edit::SetFieldValue { name: name.clone(), value: value_for(f, v)? });
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Fill in form".into(), edits } };
-        let mut out = self.apply(a, edit)?;
+        let mut out = self.apply_scripted(a, edit)?;
         out["filled"] = json!(values.len());
         // A value the box cuts off at a fixed font size is saved whole but shows only in part:
         // said, not silent (#4018).
@@ -455,7 +455,7 @@ impl Automation {
 
     pub(crate) fn form_reset(&mut self, a: &Args) -> Result<Value> {
         let names = a.get("fields").map(|_| a.strs("fields").map(|v| v.into_iter().map(str::to_owned).collect::<Vec<_>>())).transpose()?;
-        self.apply(a, Edit::ResetForm { names })
+        self.apply_scripted(a, Edit::ResetForm { names })
     }
 
     pub(crate) fn form_add_field(&mut self, a: &Args) -> Result<Value> {

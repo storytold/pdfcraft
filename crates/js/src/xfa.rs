@@ -23,16 +23,19 @@ mod host;
 mod instances;
 mod model;
 mod nodes;
-mod props;
+pub(crate) mod props;
+// The rules a property change must meet, the crate the form (`pdfcraft_xfa`, which re-exports it
+// as `pdfcraft_xfa::prop_rules`) depends on too: one source for both sides.
+pub(crate) use pdfcraft_xfa_rules as prop_rules;
 mod run;
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) use host::forget_base;
 pub(crate) use host::{HNode, XHost};
-pub use model::{MAX_ALERTS, MAX_CONSOLE, MAX_EFFECTS, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome};
-pub(crate) use model::{MAX_LINE, MAX_PAYLOAD, clip, clip_result, reset_names};
-pub(crate) use nodes::{child_named, descendants_named, instances, resolve_som};
-pub use props::{XfaProp, XfaProps};
+pub(crate) use model::{FormCopy, MAX_LINE, MAX_PAYLOAD, clip, clip_result, reset_names};
+pub use model::{MAX_ALERTS, MAX_CONSOLE, MAX_EFFECTS, UnkeptSoms, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, XfaPropSet};
+pub(crate) use nodes::{child_named, descendants_named, instance_place, instances, managed_named, resolve_som, scope_of, scoped};
+pub use props::{MAX_CHANGES_PER_OBJECT, XfaProp, XfaProps, property_value_ok};
 #[cfg(test)]
 pub(crate) use run::run_within_limits;
 #[cfg(not(target_arch = "wasm32"))]

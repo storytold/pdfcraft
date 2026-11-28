@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use super::super::{XfaDoc, XfaEvent, XfaKind, XfaNode, XfaOutcome, run_xfa};
+use super::super::{UnkeptSoms, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, run_xfa};
 use super::{XfaProp, XfaProps};
 use crate::Limits;
 
@@ -94,6 +94,19 @@ fn form() -> XfaNode {
 fn go_on(root: &XfaNode, script: &str, target: &str) -> XfaOutcome {
     let ev = XfaEvent { activity: "click".into(), target: format!("form1[0].{target}[0]"), ..Default::default() };
     run_xfa(script, &ev, &XfaDoc::default(), root, Limits::default())
+}
+
+/// A document whose form keeps no property change at the SOM paths `unkept`, as the engine's
+/// says of the paths its template doesn't make one object at.
+fn keeping_none_at(unkept: &[&str]) -> XfaDoc {
+    let unkept: Vec<String> = unkept.iter().map(|s| s.to_string()).collect();
+    XfaDoc { unkept: UnkeptSoms::new(move |som| unkept.iter().any(|s| s == som)), ..Default::default() }
+}
+
+/// [`go_on`] in the document `doc`.
+fn go_in(doc: &XfaDoc, root: &XfaNode, script: &str, target: &str) -> XfaOutcome {
+    let ev = XfaEvent { activity: "click".into(), target: format!("form1[0].{target}[0]"), ..Default::default() };
+    run_xfa(script, &ev, doc, root, Limits::default())
 }
 
 /// The script's result, failing the test on a script error.
@@ -277,10 +290,20 @@ fn widget_border_and_validate_reads_throw_no_type_error() {
     }
 }
 
-/// A script's writes are read back later in the same run, make the property specified, and
-/// change nothing on the form (no effect comes back).
+/// The property change a script's write hands the form.
+fn set(som: &str, path: &str, attr: Option<&str>, value: &str) -> XfaEffect {
+    XfaEffect::SetProperty { som: som.into(), path: path.into(), attr: attr.map(str::to_string), value: value.into(), copied: false }
+}
+
+/// The property change the host hands the form for a value it copied from a drawn edge.
+fn copy(som: &str, path: &str, attr: Option<&str>, value: &str) -> XfaEffect {
+    XfaEffect::SetProperty { som: som.into(), path: path.into(), attr: attr.map(str::to_string), value: value.into(), copied: true }
+}
+
+/// Every write reaches the engine as a property change, once per property (the last value
+/// wins), with the path the read takes.
 #[test]
-fn writes_are_read_back_in_the_run_and_have_no_effect() {
+fn writes_are_read_back_in_the_run_and_handed_to_the_engine() {
     let script = "this.border.fill.color.value = '255,0,0'; \
                   this.validate.nullTest = 'error'; \
                   this.assist.toolTip.value = 'Now'; \
@@ -291,14 +314,203 @@ fn writes_are_read_back_in_the_run_and_have_no_effect() {
     let o = go_on(&form(), script, "plain");
     assert_eq!(o.error, None, "{o:?}");
     assert_eq!(o.result.as_deref(), Some("255,0,0|error|Now|bold|true|true|true|bold"));
-    assert!(o.effects.is_empty(), "{o:?}");
-    // Another object is untouched, and a fresh run starts from the template again.
+    let som = "form1[0].plain[0]";
+    assert_eq!(
+        o.effects,
+        [
+            set(som, "border#0/fill#0/color#0", Some("value"), "255,0,0"),
+            set(som, "validate#0", Some("nullTest"), "error"),
+            set(som, "assist#0/toolTip#0", None, "Now"),
+            set(som, "font#0", Some("weight"), "bold"),
+        ]
+    );
+    // Another object is untouched, and a fresh run starts from the snapshot it is given.
     assert_eq!(eval("this.border.fill.color.value", "label"), "255,255,255");
     assert_eq!(eval("this.validate.nullTest", "plain"), "disabled");
+    // Set again: one change, the last value.
+    let o = go_on(&form(), "this.fillColor = '1,1,1'; this.fillColor = '2,2,2'; this.mandatory = 'error'; this.mandatory = 'bogus';", "plain");
+    assert_eq!(o.effects, [set(som, "border#0/fill#0/color#0", Some("value"), "2,2,2"), set(som, "validate#0", Some("nullTest"), "error")]);
+}
+
+/// What forms write, as public forms write it: a text property assigned directly
+/// (`assist.speak = …`), an edge by `getElement` (past the listed ones: the one function that
+/// decides it, `element_path`), the colour shorthands, validation messages.
+#[test]
+fn the_writes_forms_make_name_their_properties() {
+    let som = "form1[0].styled[0]";
+    let o = go_on(
+        &form(),
+        "this.assist.speak = 'Say'; this.assist.toolTip = 'Tip'; \
+         this.border.getElement('edge', 1).color.value = '0,128,0'; \
+         this.ui.oneOfChild.border.getElement('edge', 0).thickness = '1pt'; \
+         this.fontColor = '0,0,255'; this.validationMessage = 'Bad'; \
+         this.font.size = '12pt';",
+        "styled",
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(
+        o.effects,
+        [
+            set(som, "assist#0/speak#0", None, "Say"),
+            set(som, "assist#0/toolTip#0", None, "Tip"),
+            set(som, "border#0/edge#1/color#0", Some("value"), "0,128,0"),
+            set(som, "ui#0/choiceList#0/border#0/edge#0", Some("thickness"), "1pt"),
+            set(som, "font#0/fill#0/color#0", Some("value"), "0,0,255"),
+            set(som, "validate#0/message#0/text#1", None, "Bad"),
+            set(som, "font#0", Some("size"), "12pt"),
+        ]
+    );
+    // An edge past the two listed is made as a copy of the edge drawn on its side (the second,
+    // 2pt); borderColor then makes the bottom edge too (a copy of the first, as it is by then),
+    // each attribute of that copy handed to the engine as one, and colours all four.
+    let o = go_on(&form(), "this.border.getElement('edge', 3).presence = 'hidden'; this.borderColor = '1,1,1';", "styled");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(
+        o.effects,
+        [
+            // `getElement` reached the left edge, made as a copy of the edge drawn there (the
+            // second) when it was read: the form makes it from the same edge, so only the write
+            // is handed on.
+            set(som, "border#0/edge#3", Some("presence"), "hidden"),
+            set(som, "border#0/edge#0/color#0", Some("value"), "1,1,1"),
+            set(som, "border#0/edge#1/color#0", Some("value"), "1,1,1"),
+            // The bottom, copied from the top as it is by then.
+            copy(som, "border#0/edge#2", Some("thickness"), "2pt"),
+            copy(som, "border#0/edge#2/color#0", Some("value"), "1,1,1"),
+            set(som, "border#0/edge#2/color#0", Some("value"), "1,1,1"),
+            set(som, "border#0/edge#3/color#0", Some("value"), "1,1,1"),
+        ]
+    );
+}
+
+/// How often a subform occurs is not among the properties a script changes (`prop_rules`): a
+/// write to `occur`, from JavaScript or FormCalc, is noted on the console, the script reads what
+/// it read before, the instance manager allows what it allowed, and no effect goes to the form.
+/// The subform's other properties are written.
+#[test]
+fn occur_is_not_written() {
+    let mut root = form();
+    if let Some(rows) = root.children.iter_mut().find(|c| c.name == "rows") {
+        rows.occur_max = Some(1);
+        rows.repeatable = false;
+    }
+    let script = "var m = this.parent._rows; var read = function () { return [rows.occur.max, rows.occur.min, rows.occur.initial].join(); }; \
+                  var before = read(); rows.occur.max = '3'; rows.occur.min = '2'; rows.occur.initial = '2'; var a = m.addInstance(); \
+                  rows.font.size = '20pt'; [read() === before, a === null, m.count, m.max, rows.font.size].join('|')";
+    let o = go_on(&root, script, "plain");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("true|true|1|1|20pt"), "{o:?}");
+    assert_eq!(o.effects, [set("form1[0].rows[0]", "font#0", Some("size"), "20pt")], "{o:?}");
+    let notes: Vec<&String> = o.console.iter().filter(|l| l.contains("occur#0 is not a property scripts may change")).collect();
+    assert_eq!(notes.len(), 3, "{o:?}");
+    assert!(notes.first().is_some_and(|l| l.starts_with("form1[0].rows[0]: occur#0 max not set")), "{o:?}");
+
+    let ev = XfaEvent { activity: "click".into(), target: "form1[0].plain[0]".into(), ..Default::default() };
+    let o = crate::formcalc::run_formcalc("rows.occur.max = \"3\"\nrows.occur.max", &ev, &XfaDoc::default(), &root, Limits::default());
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("-1")), "what the fixture's `occur` element says: {o:?}");
+    assert!(o.effects.is_empty() && o.console.iter().any(|l| l.contains("occur#0 max not set")), "{o:?}");
+}
+
+/// FormCalc reads and writes the same property objects (`$.font.fill.color.value = …`).
+#[test]
+fn formcalc_reads_and_writes_properties() {
+    let ev = XfaEvent { activity: "click".into(), target: "form1[0].styled[0]".into(), ..Default::default() };
+    let run = |s: &str| crate::formcalc::run_formcalc(s, &ev, &XfaDoc::default(), &form(), Limits::default());
+    let o = run(
+        "$.font.fill.color.value = \"0,0,255\"\n$.mandatory = \"disabled\"\n$.fillColor = \"9,9,9\"\nconcat($.font.fill.color.value, \"|\", $.validate.nullTest, \"|\", $.border.edge.color.value, \"|\", $.assist.toolTip, \"|\", $.ui.oneOfChild.className)",
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("0,0,255|disabled|255,0,0|Pick one|choiceList"));
+    let som = "form1[0].styled[0]";
+    assert_eq!(
+        o.effects,
+        [
+            set(som, "font#0/fill#0/color#0", Some("value"), "0,0,255"),
+            set(som, "validate#0", Some("nullTest"), "disabled"),
+            set(som, "border#0/fill#0/color#0", Some("value"), "9,9,9"),
+        ]
+    );
+}
+
+/// The form keeps at most 64 property changes for one object: on an object holding as many, a
+/// write to a property it already changed is kept, a write to another is left out (with a
+/// note) rather than read back, and so is a copy of a drawn edge the form would refuse.
+#[test]
+fn a_write_past_the_objects_limit_on_changes_is_left_out() {
+    let mut root = form();
+    let kept: Vec<String> = (0..super::MAX_CHANGES_PER_OBJECT - 1)
+        .map(|i| format!("extras#0/text#{i}"))
+        .chain(["assist#0/toolTip#0".to_string()])
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let styled = root.children.iter_mut().find(|c| c.name == "styled").unwrap();
+    styled.changed = kept.into();
+    let o = go_on(
+        &root,
+        "this.assist.toolTip.value = 'Kept'; this.font.size = '20pt'; this.border.getElement('edge', 3).color.value = '1,1,1'; [this.assist.toolTip.value, this.font.size].join('|')",
+        "styled",
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("Kept|10pt"), "{o:?}");
+    let som = "form1[0].styled[0]";
+    assert_eq!(o.effects, [set(som, "assist#0/toolTip#0", None, "Kept")], "{o:?}");
+    assert!(o.notes.iter().any(|l| l.contains("more than 64 properties of one object")), "{o:?}");
+    // One fewer kept: the first new property fits, the next doesn't.
+    let mut root = form();
+    let styled = root.children.iter_mut().find(|c| c.name == "styled").unwrap();
+    styled.changed = (0..super::MAX_CHANGES_PER_OBJECT - 1).map(|i| format!("extras#0/text#{i:02}")).collect();
+    let o = go_on(&root, "this.font.size = '20pt'; this.font.typeface = 'Courier'; [this.font.size, this.font.typeface].join('|')", "styled");
+    assert_eq!(o.result.as_deref(), Some("20pt|Arial"), "{o:?}");
+}
+
+/// A value a property refuses changes nothing: a colour that isn't one, written to a border that
+/// lists fewer edges than it draws, doesn't make the sides it would have made first.
+#[test]
+fn a_refused_write_makes_no_sides() {
+    let o = go_on(&form(), "this.borderColor = 'not a colour'; this.border.getElement('edge', 3).color.value", "styled");
+    assert_eq!(o.error, None, "{o:?}");
+    assert!(o.effects.is_empty(), "{o:?}");
+}
+
+/// FormCalc reads a property object holding text (`$.assist.toolTip`) as its value where it
+/// takes a number or a truth value directly: a `for` bound, a negation, an `if` condition.
+/// Read as text it was right (`deref`), but read as a number it was 0, and as a condition true.
+#[test]
+fn formcalc_reads_a_property_as_its_value_in_numbers_and_conditions() {
+    let ev = XfaEvent { activity: "click".into(), target: "form1[0].styled[0]".into(), ..Default::default() };
+    let run = |s: &str| crate::formcalc::run_formcalc(s, &ev, &XfaDoc::default(), &form(), Limits::default());
+    let o = run(
+        "$.assist.toolTip = \"3\"\nvar n = 0\nfor i = 1 upto $.assist.toolTip do n = n + 1 endfor\nvar neg = -$.assist.toolTip\n$.assist.toolTip = \"0\"\nvar t = \"off\"\nif ($.assist.toolTip) then t = \"on\" endif\nconcat(n, \"|\", neg, \"|\", t)",
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("3|-3|off"));
+}
+
+/// Comparing a property object's text costs steps by its length, as comparing a field's value
+/// does: a long tool tip compared over and over runs out of steps, where there is no clock too
+/// (wasm). The same comparison a few times is within them.
+#[test]
+fn formcalc_charges_a_property_objects_text_to_the_step_budget() {
+    let long = "a".repeat(256 * 1024);
+    let tip = node("tip", XfaKind::Field, &[], vec![p("assist", &[], vec![t("toolTip", &[], &long)])]);
+    let mut root = form();
+    root.children.push(tip);
+    let ev = XfaEvent { activity: "click".into(), target: "form1[0].tip[0]".into(), ..Default::default() };
+    let run = |times: usize| {
+        let script = format!("var same = 0\nfor i = 1 upto {times} do same = same + ($.assist.toolTip == $.assist.toolTip) endfor\nsame");
+        crate::formcalc::run_formcalc(&script, &ev, &XfaDoc::default(), &root, Limits::default())
+    };
+    let o = run(20);
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("20")));
+    // Each comparison is 2,048 steps (two texts of 256 KiB, a step per 256 bytes): 3,000 of
+    // them are past the 5,000,000 a script has.
+    let e = run(3_000).error;
+    assert!(e.as_deref().is_some_and(|e| e.contains("too long")), "{e:?}");
 }
 
 /// form1 > { label (a field captioned "Name:"), rich (a field whose caption is rich text),
-/// list (a choice list with shown and saved items), box (a check button with on and off values) }
+/// list (a choice list that takes typed text, with shown and saved items), box (a check button with on and off values) }
 fn caption_form() -> XfaNode {
     let caption =
         |content: XfaProp| p("caption", &[("reserve", "1in")], vec![p("value", &[], vec![content]), p("font", &[("weight", "bold")], vec![])]);
@@ -306,7 +518,16 @@ fn caption_form() -> XfaNode {
     let fields = vec![
         node("label", XfaKind::Field, &[], vec![caption(t("text", &[], "Name:"))]),
         node("rich", XfaKind::Field, &[], vec![caption(t("exData", &[("contentType", "text/html")], "Date of birth:"))]),
-        node("list", XfaKind::Field, &[], vec![items(&[], "text", &["A", "B", "C"]), items(&[("save", "1")], "text", &["1", "2", "3"])]),
+        node(
+            "list",
+            XfaKind::Field,
+            &[],
+            vec![
+                p("ui", &[], vec![p("choiceList", &[("textEntry", "1")], vec![])]),
+                items(&[], "text", &["A", "B", "C"]),
+                items(&[("save", "1")], "text", &["1", "2", "3"]),
+            ],
+        ),
         node("box", XfaKind::Field, &[], vec![items(&[], "integer", &["1", "0"])]),
         node("bare", XfaKind::Field, &[], vec![]),
     ];
@@ -513,7 +734,11 @@ fn named_children_class_names_and_validation_members_read_as_forms_use_them() {
         "this.mandatory = 'error'; this.validationMessage = 'Bad'; var a = this.mandatory + this.validate.nullTest + this.validationMessage; this.mandatory = 'nonsense'; a + this.mandatory",
         "plain",
     );
-    assert_eq!((o.error, o.result.as_deref(), o.effects.len()), (None, Some("errorerrorBaderror"), 0));
+    assert_eq!(
+        (o.error, o.result.as_deref(), o.effects.len()),
+        (None, Some("errorerrorBaderror"), 3),
+        "nullTest, and the message text with its name"
+    );
 }
 
 /// A validation message set through the node is the message's text of that name, read back
@@ -992,4 +1217,383 @@ fn assist_speak_reads_its_text_and_attributes() {
     let expr = "[this.assist.speak.value, this.assist.speak.priority, this.assist.speak.disable, this.assist.speak.className].join('|')";
     assert_eq!(eval_on(&root, expr, "spoken"), "Say this|toolTip|1|speak");
     assert_eq!(eval_on(&root, "this.assist.speak.value + '|' + this.assist.isPropertySpecified('speak')", "plain"), "|false");
+}
+
+/// A value the form can't take (a colour that isn't `r,g,b`, a measurement or count that
+/// doesn't read) is refused in the script, as the engine would refuse it: the property keeps
+/// its value, no change is handed on, and the console says so.
+#[test]
+fn values_the_form_cannot_take_are_refused_in_the_script() {
+    let o = go_on(
+        &form(),
+        "this.border.fill.color.value = 'red'; this.font.size = 'big'; this.occur.max = 'lots'; this.fillColor = '9,9,9'; \
+         [this.border.fill.color.value, this.font.size].join('|')",
+        "styled",
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("9,9,9|10pt"));
+    assert_eq!(o.effects, [set("form1[0].styled[0]", "border#0/fill#0/color#0", Some("value"), "9,9,9")]);
+    assert_eq!(o.console.len(), 3, "{:?}", o.console);
+    assert!(o.console.iter().all(|l| l.contains("keeps its value")), "{:?}", o.console);
+}
+
+/// `execValidate()` reports every empty object that must be filled in, in form order, in one
+/// message: a written `mandatoryMessage` as written, else one naming the object; hidden objects
+/// and filled ones are not reported, and the call answers whether all passed. A
+/// `mandatoryMessage` nobody set reads empty.
+#[test]
+fn exec_validate_lists_every_empty_required_object_in_one_message() {
+    let required = |name: &str| node(name, XfaKind::Field, &[], vec![p("validate", &[("nullTest", "error")], vec![])]);
+    let hidden = XfaNode { presence: "hidden".into(), ..required("R3") };
+    let filled = XfaNode { value: "x".into(), ..required("R4") };
+    let warned = node("R5", XfaKind::Field, &[], vec![p("validate", &[("nullTest", "warning")], vec![])]);
+    let mut root = form();
+    root.children.extend([required("R1"), required("R2"), hidden, filled, warned]);
+    let script = "R1.mandatoryMessage = 'Custom required message'; var ok = xfa.form.execValidate(); \
+                  [ok, R2.mandatoryMessage === '', R4.execValidate()].join('|')";
+    let o = go_on(&root, script, "R1");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("false|true|true")));
+    let boxes: Vec<&String> = o.effects.iter().filter_map(|e| if let XfaEffect::MessageBox(m) = e { Some(&m.text) } else { None }).collect();
+    assert_eq!(boxes, ["Required\nCustom required message\nR2 cannot be left blank.\nR5 cannot be left blank."]);
+}
+
+/// `execValidate()` asked of an object under a hidden or inactive subform reports nothing, as
+/// asking the form does not report it: what is in a hidden subform can't be filled in.
+#[test]
+fn exec_validate_of_an_object_under_a_hidden_subform_reports_nothing() {
+    let required = |name: &str| node(name, XfaKind::Field, &[], vec![p("validate", &[("nullTest", "error")], vec![])]);
+    for presence in ["hidden", "inactive"] {
+        let inner = XfaNode { som: "form1[0].box[0].R1[0]".into(), ..required("R1") };
+        let boxed = XfaNode { presence: presence.into(), children: vec![inner], ..node("box", XfaKind::Subform, &[], vec![]) };
+        let mut root = form();
+        root.children.extend([boxed, required("R2")]);
+        let o = go_on(&root, "[box.R1.execValidate(), xfa.form.execValidate(), R2.execValidate()].join('|')", "plain");
+        assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("true|false|false")), "{presence}");
+        let boxes: Vec<&String> = o.effects.iter().filter_map(|e| if let XfaEffect::MessageBox(m) = e { Some(&m.text) } else { None }).collect();
+        assert_eq!(boxes, ["Required\nR2 cannot be left blank.", "R2 cannot be left blank."], "{presence}");
+    }
+}
+
+/// `execValidate()` on a form of many empty required objects lists no more of them than its one
+/// message shows: the list stops once it is longer than the message's limit, so the size of
+/// the form (and of each object's own message) doesn't decide how much is copied. The message
+/// is the same as the whole list cut to the limit.
+#[test]
+fn exec_validate_stops_listing_past_what_its_message_shows() {
+    use super::super::{MAX_LINE, XHost};
+    let required = |name: &str| node(name, XfaKind::Field, &[], vec![p("validate", &[("nullTest", "error")], vec![])]);
+    let mut root = form();
+    let before = root.children.len();
+    root.children.extend((0..20_000).map(|i| required(&format!("R{i}"))));
+    let o = go_on(&root, "xfa.form.execValidate()", "plain");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("false")));
+    let boxes: Vec<&String> = o.effects.iter().filter_map(|e| if let XfaEffect::MessageBox(m) = e { Some(&m.text) } else { None }).collect();
+    assert_eq!(boxes.len(), 1);
+    assert_eq!(boxes[0].chars().count(), MAX_LINE + 1, "cut to the limit, with the mark that more follows");
+    assert!(boxes[0].contains("R0 cannot be left blank.\nR1 cannot be left blank.") && boxes[0].ends_with('…'), "{:.80}", boxes[0]);
+
+    let h = XHost::new(Arc::new(root), true, "form1[0].plain[0]", &XfaDoc::default());
+    let listed = super::null_failures(&h, 0);
+    let bytes: usize = listed.iter().map(|m| m.len() + 1).sum();
+    // "R123 cannot be left blank." is under 32 bytes, so the limit's 16 KiB is past by 2,000.
+    assert!(listed.len() > 500 && listed.len() < 2_000 + before, "{} of 20,000 listed", listed.len());
+    assert!(bytes > MAX_LINE * 4 && bytes < MAX_LINE * 4 + 64, "{bytes}");
+}
+
+/// The caption, item and calculation writes forms make (round two of the property writes) reach
+/// the engine as property changes and read back in the run: a caption's font colour, weight,
+/// posture and underline, its reserve and its rich text's words (`caption.value.exData.value`),
+/// a check button's on value (`items.nodes.item(0).value`), a calculation's override, a field's
+/// font posture, a spoken text turned on (`assist.speak.disable`) and a choice list that stops
+/// taking typed text (`ui.choiceList.textEntry`).
+#[test]
+fn caption_item_and_calculation_writes_reach_the_engine() {
+    let root = caption_form();
+    let o = go_on(
+        &root,
+        "this.caption.font.fill.color.value = '244,15,55'; this.caption.font.weight = 'normal'; \
+         this.caption.font.posture = 'italic'; this.caption.font.underline = '1'; this.caption.reserve = '2in'; \
+         this.font.posture = 'italic'; this.assist.speak.disable = '0'; this.calculate.override = 'warning'; \
+         [this.caption.font.fill.color.value, this.caption.font.weight, this.caption.font.posture, this.caption.font.underline, \
+          this.caption.reserve, this.font.posture, this.assist.speak.disable, this.calculate.override].join('|')",
+        "label",
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("244,15,55|normal|italic|1|2in|italic|0|warning"));
+    let som = "form1[0].label[0]";
+    assert_eq!(
+        o.effects,
+        [
+            set(som, "caption#0/font#0/fill#0/color#0", Some("value"), "244,15,55"),
+            set(som, "caption#0/font#0", Some("weight"), "normal"),
+            set(som, "caption#0/font#0", Some("posture"), "italic"),
+            set(som, "caption#0/font#0", Some("underline"), "1"),
+            set(som, "caption#0", Some("reserve"), "2in"),
+            set(som, "font#0", Some("posture"), "italic"),
+            set(som, "assist#0/speak#0", Some("disable"), "0"),
+            set(som, "calculate#0", Some("override"), "warning"),
+        ]
+    );
+    // A caption's rich text takes new words, as forms mark a label required.
+    let script = "var v = this.caption.value.exData; v.value = v.value.replace(':', '* :'); v.value";
+    let o = go_on(&root, script, "rich");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("Date of birth* :")));
+    assert_eq!(o.effects, [set("form1[0].rich[0]", "caption#0/value#0/exData#0", None, "Date of birth* :")]);
+    // A check button's on value set to its caption's text; its off value emptied.
+    let script = "if (this.items.nodes.item(0).value == '1') this.items.nodes.item(0).value = 'Yes'; \
+                  this.items.nodes.item(1).value = ''; this.items.nodes.item(0).value + '|' + this.items.nodes.item(1).value";
+    let o = go_on(&root, script, "box");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("Yes|")));
+    assert_eq!(o.effects, [set("form1[0].box[0]", "items#0/integer#0", None, "Yes"), set("form1[0].box[0]", "items#0/integer#1", None, "")]);
+    // A choice list that stops taking typed text.
+    let o = go_on(&root, "this.ui.choiceList.textEntry = '0'; this.ui.choiceList.textEntry", "list");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("0")));
+    assert_eq!(o.effects, [set("form1[0].list[0]", "ui#0/choiceList#0", Some("textEntry"), "0")]);
+    // A size that is no measurement is refused, as the form would: nothing reaches it.
+    let o = go_on(&root, "this.caption.reserve = 'wide'; this.caption.reserve", "label");
+    assert_eq!((o.error.as_deref(), o.result.as_deref(), o.effects.len()), (None, Some("1in"), 0));
+    assert!(o.console.iter().any(|l| l.contains("\"wide\" is not a measurement")), "{:?}", o.console);
+}
+
+/// FormCalc reads a caption as JavaScript does (`$.caption.value.text.value`), and a SOM string
+/// that runs into properties (`resolveNode("label.ui.#textEdit.border.fill.color")`) gives the
+/// property object, which reads and takes a value as the property does.
+#[test]
+fn formcalc_reads_captions_and_resolves_into_properties() {
+    let mut root = caption_form();
+    if let Some(label) = root.children.iter_mut().find(|n| &*n.name == "label") {
+        let mut props = (*label.props).clone();
+        props.elements.push(p(
+            "ui",
+            &[],
+            vec![p("textEdit", &[], vec![p("border", &[], vec![p("fill", &[], vec![p("color", &[("value", "1,2,3")], vec![])])])])],
+        ));
+        label.props = Arc::new(props);
+    }
+    let fc = |script: &str, target: &str| {
+        let ev = XfaEvent { activity: "click".into(), target: format!("form1[0].{target}[0]"), ..Default::default() };
+        crate::formcalc::run_formcalc(script, &ev, &XfaDoc::default(), &root, Limits::default())
+    };
+    let o = fc("Concat($.caption.value.text.value, \"|\", $.caption.font.weight, \"|\", $.caption.reserve)", "label");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("Name:|bold|1in")));
+    let o = fc("xfa.resolveNode(\"form1.label.ui.#textEdit.border.fill.color\").value", "label");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("1,2,3")));
+    let o = fc("$.resolveNode(\"ui.#textEdit.border.fill.color\").value = \"255,255,255\"\n$.ui.oneOfChild.border.fill.color.value", "label");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("255,255,255")));
+    assert_eq!(o.effects, [set("form1[0].label[0]", "ui#0/textEdit#0/border#0/fill#0/color#0", Some("value"), "255,255,255")]);
+    // A node is still a node: its value, as before.
+    let o = fc("xfa.resolveNode(\"form1.label\").name", "label");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("label")));
+}
+
+/// An instance an instance manager adds is a copy of the template's object (XFA 3.3, "Instance
+/// Manager", p. 353): it and what it holds read the template's properties, not the changes the
+/// form keeps for the instance it is copied from, whichever way it is added; a write to it
+/// counts against an empty list of kept changes.
+#[test]
+fn an_added_instance_reads_the_templates_properties_not_the_first_instances_changes() {
+    let thick = |t: &str| vec![p("border", &[], vec![p("edge", &[("thickness", t)], vec![])])];
+    let font = |s: &str| vec![p("font", &[("size", s)], vec![])];
+    let tree = |elements| Some(Arc::new(XfaProps { attrs: Vec::new(), elements }));
+    let field = XfaNode {
+        som: "form1[0].row[0].f[0]".into(),
+        template_props: tree(font("10pt")),
+        changed: Arc::from(["font#0@size".to_string()]),
+        ..node("f", XfaKind::Field, &[], font("20pt"))
+    };
+    let row = XfaNode {
+        som: "form1[0].row[0]".into(),
+        repeatable: true,
+        occur_min: 1,
+        children: vec![field],
+        template_props: tree(thick("1pt")),
+        changed: Arc::from(["border#0/edge#0@thickness".to_string()]),
+        ..node("row", XfaKind::Subform, &[], thick("3pt"))
+    };
+    let root = XfaNode { name: "form1".into(), som: "form1[0]".into(), kind: Some(XfaKind::Subform), children: vec![row], ..Default::default() };
+    for add in ["_row.addInstance(1)", "_row.insertInstance(1)", "_row.setInstances(2)", "_row.count = 2"] {
+        let script = format!(
+            "{add}; var r = xfa.resolveNode('xfa.form.form1.row[1]'); \
+             [this.border.edge.thickness, this.f.font.size, r.border.edge.thickness, r.f.font.size].join('|')"
+        );
+        let o = go_on(&root, &script, "row");
+        assert_eq!((o.error, o.result.as_deref()), (None, Some("3pt|20pt|1pt|10pt")), "{add}");
+    }
+}
+
+/// Two unnamed fields of one container share their SOM path (`…field[0]`), which the form keeps
+/// property changes by: a write to either is refused with a note, never handed to the form (it
+/// would reach both), and reads back as before. A named field beside them takes its write.
+/// Which paths it keeps none at is the form's to say ([`XfaDoc::unkept`]), from its template, not
+/// counted on the objects there now: a field alone at a path another object would take as rows
+/// are added is refused as the two are, since the form refuses it, and a script must not read
+/// back a change the form won't keep.
+#[test]
+fn a_write_to_an_object_at_a_som_path_the_form_keeps_none_at_is_refused() {
+    let unnamed = || XfaNode { name: "field".into(), som: "form1[0].field[0]".into(), ..node("field", XfaKind::Field, &[], vec![]) };
+    let doc = keeping_none_at(&["form1[0].field[0]"]);
+    for fields in [2, 1] {
+        let mut root = form();
+        root.children.extend((0..fields).map(|_| unnamed()));
+        let o = go_in(&doc, &root, "this.fillColor = '1,2,3'; xfa.form.form1.plain.fillColor = '4,5,6'; this.fillColor", "field");
+        assert_eq!(o.error, None, "{fields}: {o:?}");
+        assert_eq!(o.result.as_deref(), Some("255,255,255"), "{fields}: read back as before");
+        assert_eq!(o.effects, [set("form1[0].plain[0]", "border#0/fill#0/color#0", Some("value"), "4,5,6")], "{fields}");
+        assert!(o.console.iter().any(|l| l.contains("its template makes once")), "{fields}: {o:?}");
+    }
+    // At a path the form keeps changes at, the unnamed field takes the write.
+    let mut root = form();
+    root.children.push(unnamed());
+    let o = go_on(&root, "this.fillColor = '1,2,3'; this.fillColor", "field");
+    assert_eq!(o.result.as_deref(), Some("1,2,3"), "{o:?}");
+    assert_eq!(o.effects, [set("form1[0].field[0]", "border#0/fill#0/color#0", Some("value"), "1,2,3")]);
+    assert!(!o.console.iter().any(|l| l.contains("SOM path")), "{o:?}");
+}
+
+/// Named objects have a SOM path each, numbered through unnamed subforms (XFA 3.3 "Transparent
+/// Nodes", p. 95, Example 3.12: two `yes` fields, each in an unnamed subform, are `yes[0]` and
+/// `yes[1]`), so a write to one is handed to the form for that one. Where the form does give
+/// two named objects one path (a later instance of a repeating subform numbered as a same-named
+/// object after it), a write to either is refused like any other the form can't keep for one
+/// object, rather than reaching both.
+#[test]
+fn a_write_to_a_named_object_is_kept_for_it_unless_another_has_its_som_path() {
+    let yes = |i: usize| XfaNode { name: "yes".into(), som: format!("form1[0].yes[{i}]"), index: i, ..node("yes", XfaKind::Field, &[], vec![]) };
+    let inside = |kid: XfaNode| XfaNode {
+        name: "#subform".into(),
+        som: "form1[0]".into(),
+        kind: Some(XfaKind::Subform),
+        children: vec![kid],
+        ..Default::default()
+    };
+    let mut root = form();
+    root.children.extend([inside(yes(0)), inside(yes(1))]);
+    let ev = XfaEvent { activity: "click".into(), target: "form1[0].yes[1]".into(), ..Default::default() };
+    let o = run_xfa("this.font.fill.color.value = '0,0,255'; this.font.fill.color.value", &ev, &XfaDoc::default(), &root, Limits::default());
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("0,0,255"), "{o:?}");
+    assert_eq!(o.effects, [set("form1[0].yes[1]", "font#0/fill#0/color#0", Some("value"), "0,0,255")]);
+    assert!(!o.console.iter().any(|l| l.contains("SOM path")), "{o:?}");
+    // Two named objects with one path: refused, and read back as before.
+    let mut root = form();
+    root.children.extend([yes(0), yes(0)]);
+    let o = go_in(&keeping_none_at(&["form1[0].yes[0]"]), &root, "this.font.fill.color.value = '0,0,255'; this.font.fill.color.value", "yes");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("0,0,0"), "{o:?}");
+    assert!(o.effects.is_empty(), "{o:?}");
+    assert!(o.console.iter().any(|l| l.contains("its template makes once")), "{o:?}");
+}
+
+/// The changes earlier scripts of an event made are put in each script's copy of the form
+/// before it runs (`XHost::preset`): on the object whose SOM path they name, never on one
+/// without a path of its own (an unnamed field beside another, or named objects given one
+/// path, which the form keeps no change for). The objects are found by who owns each path,
+/// counted once for the scripts of an event: counting the whole form again before each script
+/// added more than a second to opening Ontario Works 0983 (1,571 opening scripts).
+#[test]
+fn changes_from_earlier_scripts_are_put_on_their_objects_counting_the_paths_once() {
+    use super::super::XfaPropSet;
+    use super::take_owners_counted;
+    let unnamed = || node("field", XfaKind::Field, &[], vec![]);
+    let mut root = form();
+    root.children.extend([unnamed(), unnamed(), node("twin", XfaKind::Field, &[], vec![]), node("twin", XfaKind::Field, &[], vec![])]);
+    root.children.extend((0..500).map(|i| node(&format!("f{i}"), XfaKind::Field, &[], vec![])));
+    let root = Arc::new(root);
+    let doc = XfaDoc::default();
+    let set = |som: &str| XfaPropSet { som: som.into(), path: "font#0".into(), attr: Some("size".into()), value: "14pt".into(), copied: false };
+    let sets = [set("form1[0].plain[0]"), set("form1[0].field[0]"), set("form1[0].twin[0]"), set("form1[0].f499[0]"), set("form1[0].gone[0]")];
+    let _ = take_owners_counted();
+    for script in 0..4 {
+        let mut h = super::super::XHost::new(Arc::clone(&root), true, "form1[0].plain[0]", &doc);
+        h.preset(&sets);
+        let counted = take_owners_counted();
+        if script == 0 {
+            assert!(counted > 500, "the first script counts the form: {counted}");
+        } else {
+            assert_eq!(counted, 0, "script {script} takes the counts");
+        }
+        let mut written: Vec<(usize, &str)> = h.prop_writes.keys().filter_map(|&i| h.nodes.get(i).map(|n| (i, &*n.som))).collect();
+        written.sort_unstable();
+        let soms: Vec<&str> = written.iter().map(|w| w.1).collect();
+        assert_eq!(soms, ["form1[0].plain[0]", "form1[0].f499[0]"], "the unnamed fields share their path and take none, nor do the twins");
+        assert_eq!(super::attr(&h, h.current, "font#0", "size").as_deref(), Some("14pt"));
+    }
+}
+
+/// A property write asks the form whether it keeps changes at the object's SOM path ([`XfaDoc::unkept`]),
+/// by the path as it is now: it counts no objects, however many rows the script added or
+/// removed before it. Counting the objects again after each row made a script that adds rows
+/// and styles each take time by rows × objects, against the time a script is given.
+#[test]
+fn a_property_write_after_rows_are_added_or_removed_counts_no_objects() {
+    use super::take_owners_counted;
+    use std::sync::Mutex;
+    let mut root = form();
+    root.children.extend((0..500).map(|i| node(&format!("f{i}"), XfaKind::Field, &[], vec![])));
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let doc = {
+        let asked = Arc::clone(&asked);
+        let note = move |som: &str| {
+            asked.lock().unwrap().push(som.to_string());
+            false
+        };
+        XfaDoc { unkept: UnkeptSoms::new(note), ..Default::default() }
+    };
+    let mut h = super::super::XHost::new(Arc::new(root), true, "form1[0].plain[0]", &doc);
+    let form1 = h.nodes.iter().position(|n| &*n.som == "form1[0]").unwrap();
+    let _ = take_owners_counted();
+    let mut last = 0;
+    for _ in 0..20 {
+        last = h.add_instance(form1, "rows").expect("a row");
+        h.write_prop(last, "font#0", Some("size"), "14pt".into());
+    }
+    assert_eq!(h.nodes.get(last).map(|n| &*n.som), Some("form1[0].rows[20]"));
+    h.remove_instance(form1, "rows", 3);
+    assert_eq!(h.nodes.get(last).map(|n| &*n.som), Some("form1[0].rows[19]"));
+    h.write_prop(last, "font#0", Some("size"), "16pt".into());
+    assert_eq!(take_owners_counted(), 0, "no object is counted for a write");
+    let asked = asked.lock().unwrap();
+    assert!(asked.iter().any(|s| s == "form1[0].rows[20]") && asked.last().map(String::as_str) == Some("form1[0].rows[19]"), "{asked:?}");
+    let sets: Vec<&XfaEffect> = h.effects.iter().filter(|e| matches!(e, XfaEffect::SetProperty { .. })).collect();
+    assert_eq!(sets.len(), 21, "each row's write, and the one after the removal: {sets:?}");
+    assert_eq!(sets.last(), Some(&&set("form1[0].rows[19]", "font#0", Some("size"), "16pt")));
+}
+
+/// A row that moves down as one before it is removed takes that row's SOM path, and what it
+/// holds the paths of what that row held: a write there after the removal is the moved row's,
+/// handed to the form after the removal and read back. (The removed row's objects are not
+/// counted as still having their paths, which refused the write.)
+#[test]
+fn a_write_to_a_row_that_moved_down_after_a_removal_is_kept() {
+    let row = |i: usize| XfaNode {
+        som: format!("form1[0].row[{i}]"),
+        index: i,
+        repeatable: true,
+        occur_min: 1,
+        children: vec![XfaNode {
+            som: format!("form1[0].row[{i}].f[0]"),
+            ..node("f", XfaKind::Field, &[], vec![p("font", &[("size", "10pt")], vec![])])
+        }],
+        ..node("row", XfaKind::Subform, &[], vec![])
+    };
+    let root = XfaNode {
+        name: "form1".into(),
+        som: "form1[0]".into(),
+        kind: Some(XfaKind::Subform),
+        children: vec![row(0), row(1), row(2)],
+        ..Default::default()
+    };
+    let script = "_row.removeInstance(1); var r = xfa.resolveNode('xfa.form.form1.row[1]'); \
+                  r.f.font.size = '14pt'; r.border.edge.thickness = '2pt'; [_row.count, r.f.font.size, r.border.edge.thickness].join('|')";
+    let o = go_on(&root, script, "row");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("2|14pt|2pt")), "{o:?}");
+    assert_eq!(
+        o.effects,
+        [
+            XfaEffect::RemoveInstance { som: "form1[0].row[1]".into() },
+            set("form1[0].row[1].f[0]", "font#0", Some("size"), "14pt"),
+            set("form1[0].row[1]", "border#0/edge#0", Some("thickness"), "2pt"),
+        ]
+    );
+    assert!(!o.console.iter().any(|l| l.contains("SOM path")), "{o:?}");
 }

@@ -72,8 +72,10 @@ pub fn som_to_path(som: &str) -> DataPath {
 /// The data path the object at `som` binds to: [`som_to_path`] without the areas on the way.
 /// An area is a named container in the form, so it is part of SOM expressions, but only
 /// subforms, exclusion groups and fields are data scopes: what an area holds binds under the
-/// area's parent, as Adobe's viewers write it. The template tells which segments are areas;
-/// segments it doesn't have (page-set objects, or a SOM from another template) are kept.
+/// area's parent, as Adobe's viewers write it. The template tells which segments are areas,
+/// each looked up by its number as the form numbers its objects ([`named_toward`]), so a
+/// subform that shares its name with an area keeps its segment; segments the template doesn't
+/// have (page-set objects, or a SOM from another template) are kept.
 pub fn data_path(tpl: &Template, som: &str) -> DataPath {
     let mut out = DataPath::new();
     // The template children the next segment is looked up in; `None` until the root matched,
@@ -81,13 +83,15 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
     let mut level: Option<&[Node]> = None;
     let segments = som_to_path(som);
     let page_area_index = page_area_index(tpl, &segments);
-    for (i, (name, index)) in segments.into_iter().enumerate() {
+    for (i, (name, index)) in segments.iter().enumerate() {
         // A page area's SOM index is the page made from it; see [`page_area_index`].
-        let index = if i == 0 { page_area_index.unwrap_or(index) } else { index };
+        let index = if i == 0 { page_area_index.unwrap_or(*index) } else { *index };
         let found = match level {
             None if i == 0 && tpl.root.common.name.as_deref() == Some(name.as_str()) => Some(Container::Children(&tpl.root.children)),
             None => None,
-            Some(children) => match named(children, &name, 0) {
+            // By its number, not its name alone: a subform and an area may share a name, and
+            // only the area's segment is dropped.
+            Some(children) => match named_toward(children, name, index, i.checked_add(1).and_then(|next| segments.get(next))) {
                 Some(Node::Subform(sf)) => Some(Container::Children(&sf.children)),
                 Some(Node::Area(a)) => Some(Container::Area(&a.children)),
                 _ => None,
@@ -97,11 +101,11 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
             Some(Container::Area(children)) => level = Some(children),
             Some(Container::Children(children)) => {
                 level = Some(children);
-                out.push((name, index));
+                out.push((name.clone(), index));
             }
             None => {
                 level = None;
-                out.push((name, index));
+                out.push((name.clone(), index));
             }
         }
     }
@@ -125,8 +129,8 @@ fn page_area_index(tpl: &Template, segments: &[(String, usize)]) -> Option<usize
     // The object the rest of the path names, inside the page area's own content.
     let mut nodes: &[Node] = &area.items;
     let mut target = None;
-    for (name, index) in rest {
-        let found = named_at(nodes, name, *index, 0)?;
+    for (i, (name, index)) in rest.iter().enumerate() {
+        let found = named_toward(nodes, name, *index, i.checked_add(1).and_then(|next| rest.get(next)))?;
         target = Some(found);
         nodes = match found {
             Node::Subform(sf) => &sf.children,
@@ -144,50 +148,154 @@ enum Container<'a> {
     Area(&'a [Node]),
 }
 
-/// The child of `nodes` named `name`, looking through unnamed subforms and areas (which have no
-/// SOM segment of their own).
-fn named<'a>(nodes: &'a [Node], name: &str, depth: usize) -> Option<&'a Node> {
-    if depth > MAX_DEPTH {
-        return None;
-    }
-    nodes.iter().find(|n| n.common().name.as_deref() == Some(name)).or_else(|| {
-        nodes.iter().find_map(|n| match n {
-            Node::Subform(sf) if sf.common.name.is_none() => named(&sf.children, name, depth + 1),
-            Node::Area(a) if a.common.name.is_none() => named(&a.children, name, depth + 1),
-            _ => None,
-        })
-    })
+/// The object the SOM segment `name[index]` names among `nodes`, the content of a named
+/// container, numbered as the form numbers its objects ([`crate::model::Common::som_index`]):
+/// same-named objects count up through unnamed subforms and areas, which are looked through
+/// (XFA 3.3 pp. 94-95), and the instances of a repeating subform take the numbers from its own
+/// on. A number no object has is an instance of the nearest subform below it that the template
+/// lets repeat, else (a path the form doesn't write, read leniently) of the nearest one below
+/// it.
+fn named_at<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Option<&'a Node> {
+    let mut repeating = None;
+    exactly_at(nodes, name, index, depth, &mut repeating).or(repeating)
 }
 
-/// The child of `nodes` the SOM segment `name[index]` names, numbered as the form numbers its
-/// objects ([`SomIndices`]): same-named siblings count up, and the instances of a repeating
-/// subform take the numbers from its own on. Unnamed subforms and areas are looked through,
-/// as [`named`] does.
-fn named_at<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Option<&'a Node> {
+/// [`named_at`] for a segment on the way to `next`, the segment after it. A later instance of
+/// a subform that may repeat has the number the template gave a same-named object after the
+/// subform (a `row` area after the `row` subform is `row[1]`, and so is the second row), so
+/// two objects answer to the segment: when the one numbered so exactly doesn't hold what
+/// `next` names and the subform does, the path is the instance's, and otherwise the object's
+/// numbered exactly. A path's last segment has nothing after it to tell them apart: it is the
+/// instance's when the other is an area, whose segment a data path leaves out, since a path
+/// that ends at a container is asked for to count or to change the data under it (the rows'
+/// nested instances, a row added or removed), and that data is a row's; for any other pair
+/// the data path is the same, and it is the object numbered exactly.
+fn named_toward<'a>(nodes: &'a [Node], name: &str, index: usize, next: Option<&(String, usize)>) -> Option<&'a Node> {
+    let mut repeating = None;
+    let exact = exactly_at(nodes, name, index, 0, &mut repeating);
+    let (Some(numbered), Some(instance)) = (exact, repeating) else { return exact.or(repeating) };
+    let may_repeat = matches!(instance, Node::Subform(sf) if sf.occur.max != Some(1));
+    let Some((next, at)) = next else {
+        return if may_repeat && matches!(numbered, Node::Area(_)) { Some(instance) } else { exact };
+    };
+    let holds = |n: &Node| match n {
+        Node::Subform(sf) => named_at(&sf.children, next, *at, 0).is_some(),
+        Node::Area(a) => named_at(&a.children, next, *at, 0).is_some(),
+        _ => false,
+    };
+    if may_repeat && !holds(numbered) && holds(instance) { Some(instance) } else { exact }
+}
+
+/// [`named_at`]'s walk: the object numbered `index` exactly, noting in `repeating` the last
+/// subform of the name numbered below it on the way (one the template lets repeat, when there
+/// is one).
+fn exactly_at<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize, repeating: &mut Option<&'a Node>) -> Option<&'a Node> {
     if depth > MAX_DEPTH {
         return None;
     }
-    let sibs = SomIndices::of(nodes);
-    let mut repeating = None;
-    for (i, n) in nodes.iter().enumerate() {
-        if n.common().name.as_deref() != Some(name) {
-            continue;
-        }
-        let sib = sibs.at(i);
-        if sib == index {
-            return Some(n);
-        }
-        if sib < index && matches!(n, Node::Subform(sf) if sf.occur.max != Some(1)) {
-            repeating = Some(n);
+    for n in nodes {
+        let c = n.common();
+        let found = match (c.name.as_deref(), n) {
+            (Some(own), _) if own == name => {
+                if c.som_index == index {
+                    return Some(n);
+                }
+                if c.som_index < index
+                    && let Node::Subform(sf) = n
+                    && (sf.occur.max != Some(1) || !repeating.is_some_and(|r| matches!(r, Node::Subform(s) if s.occur.max != Some(1))))
+                {
+                    *repeating = Some(n);
+                }
+                None
+            }
+            (None, Node::Subform(sf)) => exactly_at(&sf.children, name, index, depth + 1, repeating),
+            (None, Node::Area(a)) => exactly_at(&a.children, name, index, depth + 1, repeating),
+            _ => None,
+        };
+        if found.is_some() {
+            return found;
         }
     }
-    repeating.or_else(|| {
-        nodes.iter().find_map(|n| match n {
-            Node::Subform(sf) if sf.common.name.is_none() => named_at(&sf.children, name, index, depth + 1),
-            Node::Area(a) if a.common.name.is_none() => named_at(&a.children, name, index, depth + 1),
-            _ => None,
-        })
-    })
+    None
+}
+
+/// Whether more than one object of the live form may have the SOM path `som`, so that
+/// nothing can be kept by it for one object. Named objects have a path each: same-named ones are numbered
+/// through unnamed subforms and areas, which add no segment (XFA 3.3 ch. 3, "Transparent
+/// Nodes", pp. 94-95, Example 3.12; [`crate::model::Common::som_index`]). The paths that are
+/// shared:
+///
+/// - an unnamed field is `field[0]` and an unnamed exclusion group `group[0]`, so two of them
+///   in one named container share theirs (XFA 3.3 gives unnamed objects no path of their own:
+///   they are "invisible to the normal SOM syntax", p. 94);
+/// - the instances of an unnamed subform the template makes more than once each name their
+///   content as the first does;
+/// - a later instance of a subform that may repeat takes the next numbers, which a same-named
+///   object after it in the template has too. The template can't tell how many instances the
+///   data makes, so such an object's path counts as shared whenever the subform before it may
+///   repeat, and so do the paths of what is inside either.
+///
+/// Who owns which path is worked out once per template ([`crate::script::SomOwners`]); each
+/// call looks up the segments of `som`. `false` when the template has no object at `som`, and
+/// for the root and a page area themselves.
+pub fn som_is_shared(tpl: &Template, som: &str) -> bool {
+    tpl.memo.som_owners(tpl).shared(som)
+}
+
+/// Whether the form keeps what scripts change about the properties of the object at the SOM
+/// path `som`: it does for an object the template makes no more than once, whose path is its
+/// own whatever the data holds. That is so when the path starts at the root subform and each
+/// segment after it names one object that occurs once (`occur max="1"`, as fields, draws, areas
+/// and exclusion groups always do), with no instance of a subform that may repeat able to take
+/// its number: same-named objects are numbered through unnamed subforms and areas, which add no
+/// segment (XFA 3.3 ch. 3, "Transparent Nodes", pp. 94-95, Example 3.12;
+/// [`crate::model::Common::som_index`]), and a repeating subform's later instances take the
+/// numbers after its own. Not so, and `false`:
+///
+/// - a subform that may repeat and anything inside one (a change there would be one
+///   instance's, and the template object stands for all of them);
+/// - a same-named object after a subform that may repeat, and what is inside it;
+/// - what an unnamed subform the template makes more than once holds (each instance names its
+///   content as the first does);
+/// - two unnamed fields, or two unnamed exclusion groups, of one container (each is `field[0]`
+///   or `group[0]`: unnamed objects are "invisible to the normal SOM syntax", p. 94);
+/// - a page area and its content (a page area makes a page each time it is used, each with its
+///   own path), and everything in a form whose root subform has no name;
+/// - a path the template has no object at, or one not written as the form writes paths
+///   (`name[n]` for each segment);
+/// - every path of a template that has `[` or `]` in an object's name (a path there doesn't
+///   say where a segment ends).
+///
+/// An object made once never shares its path ([`som_is_shared`]). Who owns which path is worked
+/// out once per template ([`crate::script::SomOwners`]); each call looks up the segments of
+/// `som` once.
+pub fn som_made_once(tpl: &Template, som: &str) -> bool {
+    tpl.memo.som_owners(tpl).made_once(som)
+}
+
+/// [`som_made_once`] for one template, to ask away from it: on the thread scripts run on, by
+/// the scripting host, which refuses a property write the form would refuse. It holds the
+/// template's record of who owns each path (made once per template, and shared), so both give
+/// one answer for every path.
+#[derive(Clone)]
+pub struct SomPaths(std::sync::Arc<crate::script::SomOwners>);
+
+impl SomPaths {
+    /// The paths of `tpl`.
+    pub fn of(tpl: &Template) -> SomPaths {
+        SomPaths(std::sync::Arc::clone(tpl.memo.som_owners(tpl)))
+    }
+
+    /// [`som_made_once`] of the template and `som`.
+    pub fn made_once(&self, som: &str) -> bool {
+        self.0.made_once(som)
+    }
+}
+
+impl std::fmt::Debug for SomPaths {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SomPaths")
+    }
 }
 
 /// The template field the object at a SOM path is an instance of, each segment's number counted
@@ -211,8 +319,9 @@ pub(crate) fn template_object<'a>(tpl: &'a Template, som: &str) -> Option<&'a No
     }
     let ((last, last_index), inner) = rest.split_last()?;
     let mut children: &[Node] = &tpl.root.children;
-    for (name, index) in inner {
-        children = match named_at(children, name, *index, 0)? {
+    for (i, (name, index)) in inner.iter().enumerate() {
+        // `rest` is `inner` and the last segment, so the one after an inner segment is there.
+        children = match named_toward(children, name, *index, i.checked_add(1).and_then(|next| rest.get(next)))? {
             Node::Subform(sf) => &sf.children,
             Node::Area(a) => &a.children,
             _ => return None,
@@ -223,8 +332,8 @@ pub(crate) fn template_object<'a>(tpl: &'a Template, som: &str) -> Option<&'a No
 
 /// Every field with an `id`, with the SOM path the layout gives it: the root subform's
 /// fields under the root, a page area's under the area (as master pages lay them out), each
-/// named object adding its name and its number among its siblings (repeating subforms as their
-/// first instance). Bounded by [`MAX_DEPTH`].
+/// named object adding its name and its SOM number ([`crate::model::Common::som_index`];
+/// repeating subforms as their first instance). Bounded by [`MAX_DEPTH`].
 pub(crate) fn fields_with_ids(tpl: &Template) -> Vec<(&str, String, &Field)> {
     fn walk<'a>(nodes: &'a [Node], som: &str, out: &mut Vec<(&'a str, String, &'a Field)>, depth: usize) {
         if depth > MAX_DEPTH {

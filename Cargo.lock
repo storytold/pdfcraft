@@ -6436,6 +6436,7 @@ version = "0.22.0"
 dependencies = [
  "boa_engine",
  "chrono",
+ "pdfcraft-xfa-rules",
 ]
 
 [[package]]
@@ -6743,9 +6744,15 @@ dependencies = [
  "craft-xml",
  "pdfcraft-cos",
  "pdfcraft-fonts",
+ "pdfcraft-xfa-rules",
+ "proptest",
  "sha2 0.11.1",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "pdfcraft-xfa-rules"
+version = "0.22.0"
 
 [[package]]
 name = "pdfcraft-xfdf"
