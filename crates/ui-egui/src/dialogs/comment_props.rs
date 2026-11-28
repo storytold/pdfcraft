@@ -57,6 +57,8 @@ const COLOUR: &str = "comment.props.colour";
 const BORDER: &str = "comment.props.border";
 const FILL: &str = "comment.props.fill";
 const MAKE_DEFAULT: &str = "make_default";
+const TEXT_ALIGNMENT: &str = "text_alignment";
+const ALIGNMENTS: [(&str, &str); 3] = [("left", "Align left"), ("center", "Centre"), ("right", "Align right")];
 
 /// The name shown in the line-ending combo. [`LineEnding::name`] stays the PDF `/LE` token.
 fn ending_label(ending: LineEnding) -> &'static str {
@@ -100,6 +102,9 @@ fn opening(o: &CommentProps) -> DialogFields {
     if let Some(size) = o.font_size {
         f.set("font_size", FieldValue::Number(size));
     }
+    if let Some((id, _)) = o.text_alignment.and_then(|a| ALIGNMENTS.get(usize::from(a))) {
+        f.set(TEXT_ALIGNMENT, *id);
+    }
     f.set("opacity", FieldValue::Number(o.opacity * 100.0));
     if let Some(t) = o.text_opacity {
         f.set("text_opacity", FieldValue::Number(t * 100.0));
@@ -141,6 +146,12 @@ pub fn edited(original: &CommentProps, fields: &DialogFields) -> CommentProps {
     }
     if let Some(name) = text("border_shape").filter(|_| e.border_shape.is_some()) {
         e.border_shape = BorderShape::ALL.into_iter().find(|s| s.name() == name).or(e.border_shape);
+    }
+    if e.text_alignment.is_some()
+        && let Some(id) = fields.text(TEXT_ALIGNMENT)
+        && let Some(alignment) = ALIGNMENTS.iter().position(|(choice, _)| *choice == id)
+    {
+        e.text_alignment = Some(alignment as u8);
     }
     if e.fillable {
         e.fill = fields.color(FILL).map(rgb);
@@ -264,6 +275,14 @@ fn comment_props_dialog<'b>(
         rows.push(PropertyRow::field(
             Param::number("font_size", tl!("Font size"), 12.0, 0.5, 1).bounds(Some(1.0), Some(400.0)).unit(UnitKind::Points),
         ));
+    }
+    if o.text_alignment.is_some() {
+        let options = ALIGNMENTS.into_iter().map(|(id, label)| (id.to_string(), tl!(label).into())).collect();
+        let row = Param::new(TEXT_ALIGNMENT, tl!("Text alignment"), ParamKind::choice(options, None));
+        let e = edited(o, fields);
+        let width = e.width.filter(|_| e.width != o.width);
+        let enabled = applied_border_shape(o, &e, o, width) == Some(BorderShape::Rectangle);
+        rows.push(PropertyRow::field(if enabled { row } else { row.disabled() }));
     }
     // One opacity for the whole comment, or each part's of its own; a part not drawn is disabled.
     let (fill, text) = parts_shown(o);
@@ -394,7 +413,8 @@ impl PdfCraftApp {
                 self.fill_text_color = color;
             }
             let width = p.width.and_then(crate::fill_sign::valid_text_border).unwrap_or(0.0);
-            let border = crate::fill_sign::TextBorder { width, color: p.border_color, shape: drawn_border_shape(p).unwrap_or_default() };
+            let border =
+                crate::fill_sign::TextBorder { width, color: p.border_color, shape: drawn_border_shape(p.border_shape, p.width).unwrap_or_default() };
             self.fill_text_default = border;
             (self.fill_text_border, self.fill_text_border_color, self.fill_text_border_shape) = (border.width, border.color, border.shape);
             self.notify_fmt("New {tool} comments will look like this one", &[("tool", &kind)]);
@@ -411,7 +431,7 @@ impl PdfCraftApp {
         self.comment_prefs.set_style(tool, style);
         // A text box's or callout's own border colour (cleared for tools that have none).
         self.comment_prefs.set_border_color(tool, p.border_color);
-        if let Some(shape) = drawn_border_shape(p) {
+        if let Some(shape) = drawn_border_shape(p.border_shape, p.width) {
             self.comment_prefs.set_border_shape(tool, shape);
         }
         // The fill's and text's own opacities where they show (else the opacity is the whole
@@ -533,10 +553,22 @@ impl PdfCraftApp {
     }
 }
 
-/// The border shape `p` draws: a Thickness of 0 takes an oval or a circle away with the line, as
+/// The border shape in the preview: a Thickness of 0 takes an oval or a circle away with the line, as
 /// the toolbar's Border ▸ None does.
-fn drawn_border_shape(p: &CommentProps) -> Option<pdfcraft_engine::BorderShape> {
-    p.border_shape.map(|s| if p.width.is_some_and(|w| w <= 0.0) { pdfcraft_engine::BorderShape::Rectangle } else { s })
+fn drawn_border_shape(shape: Option<BorderShape>, width: Option<f64>) -> Option<BorderShape> {
+    shape.map(|s| if width.is_some_and(|w| w <= 0.0) { BorderShape::Rectangle } else { s })
+}
+
+/// The stored shape after applying the draft. A borderless oval stays an oval until its shape
+/// or thickness changes, even though its preview has no oval to draw.
+fn applied_border_shape(o: &CommentProps, e: &CommentProps, target: &CommentProps, width: Option<f64>) -> Option<BorderShape> {
+    let stored = target.border_shape?;
+    let changed = e.border_shape != o.border_shape;
+    if !changed && width.is_none() {
+        return Some(stored);
+    }
+    let shape = if changed { e.border_shape } else { Some(stored) };
+    drawn_border_shape(shape, width.or(target.width))
 }
 
 /// Which of the comment's parts show an opacity of their own: (its fill, its text). A text box's
@@ -627,16 +659,18 @@ fn changes(o: &CommentProps, e: &CommentProps, page: usize, index: usize, t: &Co
     }
     // After the width (StyleAnnotation), whose border the shape goes around: each selected
     // text keeps its own shape unless the draft's changed, and loses it with its border.
-    let mut shaped = after;
-    if e.border_shape != o.border_shape {
-        shaped.border_shape = e.border_shape;
-    }
+    let resulting_shape = applied_border_shape(o, e, t, width);
     if t.restylable
-        && t.border_shape.is_some()
-        && (e.border_shape != o.border_shape || width.is_some())
-        && let Some(shape) = drawn_border_shape(&shaped).filter(|s| Some(*s) != t.border_shape)
+        && let Some(shape) = resulting_shape.filter(|s| Some(*s) != t.border_shape)
     {
         out.push(Edit::BorderShapeAnnotation { page, index, shape });
+    }
+    if t.restylable
+        && resulting_shape == Some(BorderShape::Rectangle)
+        && t.text_alignment.is_some()
+        && let Some(alignment) = e.text_alignment.filter(|a| Some(*a) != o.text_alignment)
+    {
+        out.push(Edit::AlignAnnotationText { page, index, alignment });
     }
     let author = (e.author != o.author).then(|| e.author.clone());
     let subject = (e.subject != o.subject).then(|| e.subject.clone());

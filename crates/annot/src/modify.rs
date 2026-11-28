@@ -56,39 +56,38 @@ pub(crate) fn rich_text(d: &mut Dict) {
 /// none) and the border colour it gives (`RG`, [`appearance::da_border`]) with the new colour and
 /// size, and `/DS` and `/RC` carry the face, so the text keeps the face it is drawn in (ISO
 /// 32000-2 Table 177).
-fn restyle_text(d: &mut Dict, style: TextStyle) {
+fn restyle_text(d: &mut Dict, style: TextStyle, contents: &str) {
     let border = appearance::da_border(d);
-    restyle_text_bordered(d, style, border);
+    restyle_text_bordered(d, style, border, contents);
 }
 
 /// [`restyle_text`] with the border colour `border` (`None`: the text's).
-fn restyle_text_bordered(d: &mut Dict, style: TextStyle, border: Option<crate::Rgb>) {
+fn restyle_text_bordered(d: &mut Dict, style: TextStyle, border: Option<crate::Rgb>, contents: &str) {
     let font = text_style::da_font_name(d).unwrap_or_else(|| "Helv".into());
     let [r, g, b] = style.color.map(|x| x.clamp(0.0, 1.0));
     let stroke = border.map(|c| c.map(|x| x.clamp(0.0, 1.0))).map(|[r, g, b]| format!("{} {} {} RG ", n(r), n(g), n(b))).unwrap_or_default();
     d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg {stroke}/{font} {} Tf", n(r), n(g), n(b), n(style.size)).into_bytes()));
-    rich_text_in(d, TextStyle { color: [r, g, b], ..style });
+    rich_text_with_contents(d, TextStyle { color: [r, g, b], ..style }, contents);
 }
 
 /// A text box's rich text (§12.7.4.3): `/DS` (default style) and `/RC` (XHTML) written from its
 /// plain `/Contents`, its text `style` and `/Q`, so viewers that edit rich text show the same thing.
 fn rich_text_in(d: &mut Dict, style: TextStyle) {
     let text = d.get(b"Contents").and_then(|c| c.as_string()).map(PdfString::to_text).unwrap_or_default();
-    let TextStyle { face, size, color: col } = style;
+    rich_text_with_contents(d, style, &text);
+}
+
+fn rich_text_with_contents(d: &mut Dict, style: TextStyle, text: &str) {
+    let TextStyle { face, size, color } = style;
     let (family, weight, slant) = text_style::css(face);
-    let hex = format!(
-        "#{:02X}{:02X}{:02X}",
-        (col[0].clamp(0.0, 1.0) * 255.0).round() as u8,
-        (col[1].clamp(0.0, 1.0) * 255.0).round() as u8,
-        (col[2].clamp(0.0, 1.0) * 255.0).round() as u8
-    );
+    let hex = color_hex(color);
     let align = match d.get(b"Q").and_then(Object::as_int) {
         Some(1) => "center",
         Some(2) => "right",
         _ => "left",
     };
-    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
-    let body: String = text.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect();
+    let normalized = text.replace("\r\n", "\n");
+    let body: String = normalized.split(['\n', '\r']).map(|line| format!("<p dir=\"ltr\">{}</p>", escape_xml(line))).collect();
     let style = format!(
         "font-size:{}pt;text-align:{align};color:{hex};font-weight:{weight};font-style:{slant};font-family:{family};font-stretch:normal",
         n(size)
@@ -100,6 +99,171 @@ fn rich_text_in(d: &mut Dict, style: TextStyle) {
     let keywords = format!("{}{}", if slant == "normal" { "" } else { "italic " }, if weight == "normal" { "" } else { "bold " });
     d.set(b"DS".to_vec(), PdfString::text(&format!("font: {keywords}{family} {}pt; text-align:{align}; color:{hex}", n(size))));
     d.set(b"RC".to_vec(), PdfString::text(&rc));
+}
+
+fn escape_xml(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+fn color_hex(color: Rgb) -> String {
+    let [r, g, b] = color.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+    format!("#{r:02X}{g:02X}{b:02X}")
+}
+
+/// Add the requested alignment after the existing declarations without disturbing their values.
+/// Remove our previous declaration so repeated alignment changes do not grow the style.
+fn aligned_style(style: &str, alignment: &str) -> String {
+    let style = ["text-align:left !important", "text-align:center !important", "text-align:right !important"]
+        .into_iter()
+        .find_map(|last| style.strip_suffix(last).filter(|prefix| prefix.is_empty() || prefix.ends_with(';')))
+        .unwrap_or(style)
+        .trim_end_matches(';');
+    let separator = if style.is_empty() { "" } else { ";" };
+    format!("{style}{separator}text-align:{alignment} !important")
+}
+
+/// Collect the hard lines of a body with simple paragraphs and line breaks.
+fn rich_text_contents(body: roxmltree::Node<'_, '_>) -> Option<String> {
+    if body.tag_name().name() != "body" {
+        return None;
+    }
+    fn append_inline(node: roxmltree::Node<'_, '_>, text: &mut String) -> Option<()> {
+        for child in node.children() {
+            if child.is_text() {
+                let part = child.text()?;
+                // Hard line breaks must be represented by markup, not by XML formatting.
+                if part.contains(['\n', '\r']) {
+                    return None;
+                }
+                text.push_str(part);
+            } else if child.is_element() && child.tag_name().name() == "br" && child.first_child().is_none() {
+                text.push('\n');
+            } else if child.is_element() {
+                return None;
+            }
+        }
+        Some(())
+    }
+    let is_block = |node: roxmltree::Node<'_, '_>| node.is_element() && matches!(node.tag_name().name(), "p" | "div");
+    let mut text = String::new();
+    if body.children().any(is_block) {
+        let mut previous_block = false;
+        for child in body.children() {
+            if is_block(child) {
+                if previous_block {
+                    text.push('\n');
+                }
+                append_inline(child, &mut text)?;
+                previous_block = true;
+            } else if child.is_element() || (child.is_text() && !child.text()?.trim_matches(|c: char| c.is_ascii_whitespace()).is_empty()) {
+                return None;
+            }
+        }
+    } else {
+        append_inline(body, &mut text)?;
+    }
+    Some(text)
+}
+
+/// Text boxes redraw with one font and colour, using /Contents rather than /RC.
+fn uniform_rich_text<'a>(text: &'a str, drawn: TextStyle, contents: &str) -> Result<roxmltree::Document<'a>, AnnotError> {
+    let invalid = || AnnotError::Invalid("the text box's rich text cannot be aligned".into());
+    let document = roxmltree::Document::parse_with_options(text, roxmltree::ParsingOptions { nodes_limit: 100_000, ..Default::default() })
+        .map_err(|_| invalid())?;
+    let (family, weight, slant) = text_style::css(drawn.face);
+    let size = format!("{}pt", n(drawn.size));
+    let color = color_hex(drawn.color);
+    let supported = |rule: &str, is_body: bool| {
+        if rule.trim().is_empty() {
+            return true;
+        }
+        let Some((name, value)) = rule.split_once(':') else { return false };
+        let name = name.trim().to_ascii_lowercase();
+        if name == "text-align" {
+            return true;
+        }
+        let expected = match (is_body, name.as_str()) {
+            (true, "font-family") => family,
+            (true, "font-weight") => weight,
+            (true, "font-style") => slant,
+            (true, "font-size") => &size,
+            (true, "font-stretch") => "normal",
+            (true, "color") => &color,
+            _ => return false,
+        };
+        value.trim().eq_ignore_ascii_case(expected)
+    };
+    for element in document.descendants().filter(|node| node.is_element()) {
+        let tag = element.tag_name().name();
+        if !matches!(tag, "body" | "p" | "div" | "br")
+            || element.attribute("dir").is_some_and(|dir| !dir.eq_ignore_ascii_case("ltr"))
+            || element.attribute("style").is_some_and(|style| !style.split(';').all(|rule| supported(rule, tag == "body")))
+        {
+            return Err(AnnotError::Invalid("the text box's rich-text formatting cannot be preserved when aligning it".into()));
+        }
+    }
+    let matches = rich_text_contents(document.root_element()).is_some_and(|rich| {
+        // Normalizing CRLF can remove at most half the bytes. Bound the allocation to the
+        // already size-limited rich text before making the same split as the renderer.
+        contents.len() <= rich.len().saturating_mul(2) && rich.split('\n').eq(contents.replace("\r\n", "\n").split(['\n', '\r']))
+    });
+    if !matches {
+        return Err(AnnotError::Invalid("the text box's rich text and plain contents differ".into()));
+    }
+    Ok(document)
+}
+
+fn annotation_contents(doc: &Document, d: &Dict) -> String {
+    d.get(b"Contents").and_then(|value| doc.resolve(value).as_string().map(PdfString::to_text)).unwrap_or_default()
+}
+
+fn annotation_rich_text(doc: &Document, d: &Dict) -> Result<Option<String>, AnnotError> {
+    d.get(b"RC")
+        .map(|value| {
+            let value = doc.resolve(value);
+            let value = value.as_string().ok_or_else(|| AnnotError::Invalid("expected a rich-text string in the text box".into()))?;
+            if value.bytes.len() > 1 << 20 {
+                return Err(AnnotError::Invalid("the text box's rich text exceeds 1 MiB".into()));
+            }
+            Ok(value.to_text())
+        })
+        .transpose()
+}
+
+/// The box can offer alignment even while its current border shape disables that control.
+pub(crate) fn editable_box_alignment(doc: &Document, d: &Dict) -> Option<u8> {
+    let alignment = text_style::box_alignment(d)?;
+    if let Some(text) = annotation_rich_text(doc, d).ok()? {
+        let drawn = text_style::text_style(d, text_style::dr_face(doc, d));
+        let contents = annotation_contents(doc, d);
+        uniform_rich_text(&text, drawn, &contents).ok()?;
+    }
+    Some(alignment)
+}
+
+/// Adjust the block styles in uniform rich text without rewriting its markup or contents.
+fn aligned_rich_text(text: &str, alignment: &str, drawn: TextStyle, contents: &str) -> Result<String, AnnotError> {
+    let invalid = || AnnotError::Invalid("the text box's rich text cannot be aligned".into());
+    let document = uniform_rich_text(text, drawn, contents)?;
+    let mut result = String::with_capacity(text.len());
+    let mut cursor = 0;
+    // Descendants visit the start tags in source order, so copy each unchanged slice once.
+    for node in document.descendants().filter(|n| n.is_element() && matches!(n.tag_name().name(), "body" | "p" | "div")) {
+        let (range, style) = if let Some(style) = node.attribute_node("style") {
+            let aligned = aligned_style(style.value(), alignment);
+            (style.range_value(), escape_xml(&aligned).replace('\'', "&apos;"))
+        } else {
+            let name = node.range().start + 1;
+            let end = text.get(name..).and_then(|s| s.find(|c: char| c.is_ascii_whitespace() || matches!(c, '/' | '>'))).ok_or_else(invalid)?;
+            let at = name + end;
+            (at..at, format!(" style=\"{}\"", aligned_style("", alignment)))
+        };
+        result.push_str(text.get(cursor..range.start).ok_or_else(invalid)?);
+        result.push_str(&style);
+        cursor = range.end;
+    }
+    result.push_str(text.get(cursor..).ok_or_else(invalid)?);
+    Ok(result)
 }
 
 pub(crate) fn touch(d: &mut Dict, meta: &Meta) {
@@ -1175,6 +1339,7 @@ fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) ->
     // entries, which a new width keeps.
     let direct = crate::draw::with_direct_values(doc, &d);
     let (old_width, old_bs) = (border_width_of(&direct), direct.get(b"BS").and_then(Object::as_dict).cloned());
+    let contents = if free_text && color.is_some() { annotation_contents(doc, &d) } else { String::new() };
     let regrow = width.filter(|_| typewriter).and_then(|w| {
         let by = w.max(0.0) - if d.contains(b"BS") || d.contains(b"Border") { old_width } else { 0.0 };
         let rect = grow(text_box_of(&d)?, by);
@@ -1187,7 +1352,7 @@ fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) ->
         }
         if let Some(c) = color {
             if free_text {
-                restyle_text(d, TextStyle { color: c, ..drawn });
+                restyle_text(d, TextStyle { color: c, ..drawn }, &contents);
             } else {
                 d.set(b"C".to_vec(), rgb(c));
             }
@@ -1248,12 +1413,47 @@ pub fn set_border_color(doc: &mut Document, page: usize, index: usize, color: Op
     refuse_foreign_text(doc, &d)?;
     // The face, size and colour the text is drawn in, which the border colour keeps.
     let drawn = text_style::text_style(&d, text_style::dr_face(doc, &d));
+    let contents = annotation_contents(doc, &d);
     let before = d;
     doc.update_dict(r, |d| {
-        restyle_text_bordered(d, drawn, color);
+        restyle_text_bordered(d, drawn, color, &contents);
         touch(d, meta);
     })?;
     redraw_or_restore(doc, r, before)
+}
+
+/// Set a rectangular text box's `/Q`: 0 is left, 1 is centered and 2 is right.
+pub fn set_text_alignment(doc: &mut Document, page: usize, index: usize, alignment: u8, meta: &Meta) -> Result<(), AnnotError> {
+    let (_, reference) = annot_ref(doc, page, index)?;
+    unlocked(doc, reference)?;
+    let before = annot_dict(doc, reference);
+    let direct = crate::draw::with_direct_values(doc, &before);
+    if text_style::box_alignment(&direct).is_none() || BorderShape::of(&direct) != BorderShape::Rectangle || alignment > 2 {
+        return Err(AnnotError::Invalid("expected left, center or right alignment for a rectangular text box".into()));
+    }
+    refuse_foreign_text(doc, &direct)?;
+    let style = text_style::text_style(&direct, text_style::dr_face(doc, &direct));
+    let contents = annotation_contents(doc, &before);
+    let alignment_name = match alignment {
+        1 => "center",
+        2 => "right",
+        _ => "left",
+    };
+    let rich_text = annotation_rich_text(doc, &before)?.map(|text| aligned_rich_text(&text, alignment_name, style, &contents)).transpose()?;
+    let default_style = direct.get(b"DS").and_then(Object::as_string).map(PdfString::to_text);
+    doc.update_dict(reference, |d| {
+        d.set(b"Q".to_vec(), Object::Int(i64::from(alignment)));
+        if let Some(rich_text) = &rich_text {
+            d.set(b"RC".to_vec(), PdfString::text(rich_text));
+            if let Some(default_style) = &default_style {
+                d.set(b"DS".to_vec(), PdfString::text(&aligned_style(default_style, alignment_name)));
+            }
+        } else {
+            rich_text_with_contents(d, style, &contents);
+        }
+        touch(d, meta);
+    })?;
+    redraw_or_restore(doc, reference, before)
 }
 
 /// Change the font size of a text box, typewriter text or callout (`/DA` keeps its colour; the
@@ -1273,9 +1473,10 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
     let snug = is_snug(&d);
     // The face and colour the text is drawn in, which the new size keeps.
     let drawn = text_style::text_style(&d, text_style::dr_face(doc, &d));
+    let contents = annotation_contents(doc, &d);
     let before = d;
     doc.update_dict(r, |d| {
-        restyle_text(d, TextStyle { size, ..drawn });
+        restyle_text(d, TextStyle { size, ..drawn }, &contents);
         touch(d, meta);
     })?;
     let text = text_value(doc, &annot_dict(doc, r), b"Contents").unwrap_or_default();

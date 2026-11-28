@@ -303,6 +303,12 @@ pub enum Edit {
         index: usize,
         size: f64,
     },
+    /// Change the alignment of a rectangular text box comment.
+    AlignAnnotationText {
+        page: usize,
+        index: usize,
+        alignment: u8,
+    },
     /// Give a text box, typewriter text or callout a border colour of its own (`None`: the
     /// text's again).
     BorderColorAnnotation {
