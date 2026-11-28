@@ -456,8 +456,9 @@ impl LineEditor {
         self.size_chosen = true;
     }
 
-    /// After applying formatting: the paragraph now has it. Its old selection is cleared; the
-    /// rewritten paragraph may have different text or geometry.
+    /// After applying formatting: the paragraph now has it. The selection stays, so the next
+    /// format or keystroke acts on the same characters; [`Self::refresh_source`] drops it when
+    /// the rewritten paragraph's text differs.
     pub fn applied(&mut self) {
         self.size_chosen = false;
         self.font_resource = None;
@@ -465,7 +466,6 @@ impl LineEditor {
         self.look0 = self.look.clone();
         self.extras0 = self.extras;
         self.original = self.text.clone();
-        self.selection = None;
         // The page now has this text: the box's history restarts, even when the format left the
         // text as it was, so a Redo from before can't put undone typing back on top of it.
         self.history.restart(self.typed());
