@@ -236,6 +236,109 @@ fn a_black_and_white_scan_stays_one_bit_and_loses_its_specks() {
     assert_eq!(px.data.iter().filter(|&&v| v == 0).count(), 40 * 10);
 }
 
+/// A layered (mixed-raster) scan: the background picture, then the ink's colours drawn through a
+/// mask of the text's shapes. Only the background is paper (#6811 review).
+#[test]
+fn the_ink_layer_of_a_layered_scan_is_left_as_it_is() {
+    let ink = "/Type /XObject /Subtype /Image /Width 300 /Height 400 /ColorSpace /DeviceGray /BitsPerComponent 8";
+    let shapes = "/Type /XObject /Subtype /Image /Width 300 /Height 400";
+    let page = |ink: u32| {
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {W} {H}] /Resources << /XObject << /Im0 4 0 R /Ink {ink} 0 R >> >> /Contents 9 0 R >>")
+    };
+    let bytes = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R 7 0 R] /Count 2 >>")
+        .obj(page(5))
+        .stream(&format!("/Type /XObject /Subtype /Image /Width {W} /Height {H} /ColorSpace /DeviceGray /BitsPerComponent 8"), scan_pixels(1))
+        // Page 1's ink goes through a stencil, page 2's through a one-bit soft mask.
+        .stream(&format!("{ink} /Mask 6 0 R"), vec![40u8; W * H])
+        .stream(&format!("{shapes} /ImageMask true /BitsPerComponent 1"), vec![0xaau8; W.div_ceil(8) * H])
+        .obj(page(8))
+        .stream(&format!("{ink} /SMask 10 0 R"), vec![40u8; W * H])
+        .stream("", format!("q {W} 0 0 {H} 0 0 cm /Im0 Do /Ink Do Q"))
+        .stream(&format!("{shapes} /ColorSpace /DeviceGray /BitsPerComponent 1"), vec![0xaau8; W.div_ceil(8) * H])
+        .build();
+    let (mut s, id) = open(bytes);
+    let before = [object(&s, id, 5), object(&s, id, 8)];
+    let report = s.enhance_scanned_pages(id, &[], ScanCleanSettings::at(100)).unwrap();
+    assert_eq!((report.images, &report.pages), (1, &vec![0, 1]), "the background is cleaned, once");
+    let why: Vec<(usize, &str)> = report.skipped.iter().map(|k| (k.pages[0], k.reason.as_str())).collect();
+    assert_eq!(why.len(), 2, "{why:?}");
+    assert!(why.iter().all(|(_, reason)| reason.contains("stencil mask")), "{why:?}");
+    assert_eq!([object(&s, id, 5), object(&s, id, 8)], before, "the ink keeps its colours");
+}
+
+/// Contributor-original JPEG 2000: a `w` × `h` codestream of `components` 8-bit components in one
+/// tile, every sample 128 (an empty packet decodes to the midpoint).
+fn jpx(w: u32, h: u32, components: u16) -> Vec<u8> {
+    let mut c = vec![0xff, 0x4f, 0xff, 0x51];
+    c.extend_from_slice(&(38 + 3 * components).to_be_bytes());
+    c.extend_from_slice(&0_u16.to_be_bytes());
+    for v in [w, h, 0, 0, w, h, 0, 0] {
+        c.extend_from_slice(&v.to_be_bytes());
+    }
+    c.extend_from_slice(&components.to_be_bytes());
+    for _ in 0..components {
+        c.extend_from_slice(&[7, 1, 1]);
+    }
+    c.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 0, 4, 4, 0, 1]);
+    c.extend_from_slice(&[0xff, 0x5c, 0, 4, 0x40, 0x40]);
+    c.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0]);
+    c.extend_from_slice(&(14 + u32::from(components)).to_be_bytes());
+    c.extend_from_slice(&[0, 1, 0xff, 0x93]);
+    c.extend(std::iter::repeat_n(0, usize::from(components)));
+    c.extend_from_slice(&[0xff, 0xd9]);
+    c
+}
+
+#[test]
+fn a_jpeg_2000_scan_is_cleaned_and_written_back_as_a_jpeg() {
+    // Grey paper, stored as JPEG 2000 with the colour space left to the data.
+    let dict = format!("/Width {W} /Height {H} /BitsPerComponent 8 /Filter /JPXDecode");
+    let (mut s, id) = open(scan_pdf(&dict, &jpx(W as u32, H as u32, 1)));
+    let report = s.enhance_scanned_pages(id, &[], ScanCleanSettings::at(50)).unwrap();
+    assert_eq!((report.images, &report.pages, report.skipped.len()), (1, &vec![0, 2], 0), "{:?}", report.skipped);
+    let Object::Stream(img) = &*object(&s, id, 4) else { panic!("the image") };
+    assert_eq!(img.dict.name(b"Filter"), Some(&b"DCTDecode"[..]));
+    assert_eq!(img.dict.name(b"ColorSpace"), Some(&b"DeviceGray"[..]), "the new encoding names what the data said");
+    assert_eq!((img.dict.int(b"Width"), img.dict.int(b"Height")), (Some(W as i64), Some(H as i64)));
+    let px = samples(&s, id);
+    assert!(grey_at(&px, 150, 200) >= 250, "the grey paper is white: {}", grey_at(&px, 150, 200));
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Enhance scanned file"));
+}
+
+/// #6811 review: a JPEG 2000 image the decoder panics on (a grey image with a three-column
+/// palette) is reported, and the other pages are still cleaned.
+#[test]
+fn a_jpeg_2000_image_the_decoder_cannot_read_does_not_stop_the_other_pages() {
+    let boxed = |kind: &[u8; 4], data: &[u8]| [&(data.len() as u32 + 8).to_be_bytes()[..], kind, data].concat();
+    let header = [boxed(b"colr", &[1, 0, 0, 0, 0, 0, 17]), boxed(b"pclr", &[&[1u8, 0, 3, 7, 7, 7][..], &[9u8; 256 * 3]].concat())].concat();
+    let hostile = [
+        boxed(b"jP  ", &[0x0d, 0x0a, 0x87, 0x0a]),
+        boxed(b"ftyp", b"jp2 \0\0\0\0jp2 "),
+        boxed(b"jp2h", &header),
+        boxed(b"jp2c", &jpx(W as u32, H as u32, 1)),
+    ]
+    .concat();
+    let page = |image: u32| {
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {W} {H}] /Resources << /XObject << /Im0 {image} 0 R >> >> /Contents 7 0 R >>")
+    };
+    let bytes = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>")
+        .obj(page(4))
+        .stream(&format!("/Type /XObject /Subtype /Image /Width {W} /Height {H} /BitsPerComponent 8 /Filter /JPXDecode"), hostile)
+        .obj(page(6))
+        .stream(&format!("/Type /XObject /Subtype /Image /Width {W} /Height {H} /ColorSpace /DeviceGray /BitsPerComponent 8"), scan_pixels(1))
+        .stream("", format!("q {W} 0 0 {H} 0 0 cm /Im0 Do Q"))
+        .build();
+    let (mut s, id) = open(bytes);
+    let report = s.enhance_scanned_pages(id, &[], ScanCleanSettings::at(50)).unwrap();
+    assert_eq!((report.images, &report.pages), (1, &vec![1]), "page 2 is cleaned");
+    assert_eq!(report.skipped.len(), 1, "{:?}", report.skipped);
+    assert_eq!(report.skipped[0].pages, vec![0]);
+}
+
 #[test]
 fn hostile_images_are_reported_not_a_panic() {
     // Each page draws one image over the whole page.
