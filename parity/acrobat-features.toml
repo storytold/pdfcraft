@@ -5701,6 +5701,18 @@ evidence = ["crates/engine/src/tests.rs::protect_with_an_open_password_then_save
 notes = "needs the permissions password (or none set)"
 
 [[feature]]
+id = "protect.unlock-copy"
+title = "Unlock for editing (copy without security)"
+area = "G"
+tier = "P2"
+milestone = "M8"
+status = "shipped"
+commands = ["protect.unlock_copy"]
+tools = ["doc_unlock_copy"]
+evidence = ["crates/engine/src/tests.rs::an_unrestricted_copy_needs_no_permissions_password", "crates/engine/src/tests.rs::an_unrestricted_copy_that_does_not_reopen_is_refused", "crates/automation/tests/it/automation.rs::unlocking_a_copy_for_editing_without_the_permissions_password"]
+notes = "Beyond Acrobat (#2465): an editable copy, written as a new file and opened beside the original, without the permissions password. The original file and document keep their security; a signature in the original doesn't validate in the copy."
+
+[[feature]]
 id = "protect.certificate-encryption"
 title = "Encrypt with certificates for recipients"
 area = "G"

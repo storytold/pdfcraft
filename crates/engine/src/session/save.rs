@@ -51,6 +51,30 @@ impl Session {
         guard(|| write_full(&cos, &opts)).map_err(EditError::Write)?.map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
     }
 
+    /// A full rewrite of the document without its password security, for an editable copy of a
+    /// file the user owns whose permissions password they don't have (Unlock for editing). The
+    /// open document is left as it is: the copy is written to a new file and opened on its own.
+    /// The document must open without a password or with the one the user typed.
+    pub fn unrestricted_copy_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
+        // A signed original keeps its signature; the copy is a new file, so the signature no
+        // longer validates there (the UI says so).
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+        if editor.cos.output_handler().is_none() {
+            return Err(EditError::Protection("the document isn't protected".into()));
+        }
+        let mut cos = writable(&editor.cos)?.into_owned();
+        cos.remove_encryption();
+        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
+        let bytes = guard(|| write_full(&cos, &opts)).map_err(EditError::Write)?.map(Arc::new).map_err(|e| EditError::Write(e.to_string()))?;
+        // As `check_save` does before a save (#1698): the copy must reopen with every page, or
+        // nothing is written. A damaged file opened after repair can rewrite without a page tree.
+        // The copy has no security, so it reopens without a password.
+        pdfcraft_cos::Document::open(bytes.clone()).map_err(|e| EditError::Reopen(e.to_string()))?;
+        pdfcraft_render::check_pages(bytes.clone(), None, doc.info.pages.len()).map_err(|e| EditError::Reopen(e.to_string()))?;
+        Ok(bytes)
+    }
+
     /// Check that `bytes`, from [`Self::save_bytes`] or [`Self::save_full_bytes`], reopen as this
     /// document before they are written (#1698): [`Self::mark_saved`] only finds out after the
     /// file has been replaced. Same error as `mark_saved`.

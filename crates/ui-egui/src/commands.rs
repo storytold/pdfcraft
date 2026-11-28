@@ -437,6 +437,11 @@ impl PdfCraftApp {
                 self.request_unlock(Some(then));
             }
             "protect.unlock" => self.request_unlock(None),
+            "protect.unlock_copy" => {
+                if let Some((_, id)) = self.active_ids() {
+                    self.open_unrestricted_copy(id);
+                }
+            }
             "protect.password" => self.open_protect(),
             "prepress.convert_colors" => self.open_convert_colours(ctx),
             "prepress.hairlines" => self.open_fix_hairlines(ctx),

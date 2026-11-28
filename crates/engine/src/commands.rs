@@ -424,6 +424,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("protect.password", "Protect using password…", FILE, None, Security, "lock"),
     c("protect.remove", "Remove security", FILE, None, ProtectedSecurity, "lock_open"),
     c("protect.unlock", "Enter permissions password…", None, None, Unlock, "lock_open"),
+    // An editable copy without the restrictions, for the user's own file whose permissions password they don't have.
+    c("protect.unlock_copy", "Unlock for editing (copy)", FILE, None, Unlock, "lock_open"),
     c("protect.properties", "Security properties…", FILE, None, Document, "shield-check"),
     c("page.organize", "Organize pages", PAGES, None, Document, "layout_grid"),
     c("bookmark.add", "New bookmark", PAGES, Some(Shortcut::cmd("B")), Assembly, "bookmark-plus"),

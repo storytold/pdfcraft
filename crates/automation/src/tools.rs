@@ -1194,6 +1194,10 @@ pub fn tools() -> Vec<ToolDef> {
             .cmd("protect.remove")
             .destructive()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t("doc_unlock_copy", "Unlock for editing (copy)", "Write a copy of the document without its password security to path and open it, returning the copy's summary. Works without the permissions password, for a file that opens with no password or with the open password given to doc_open; the open document and its file are left unchanged. A digital signature in the original doesn't validate in the copy.")
+            .cmd("protect.unlock_copy")
+            .destructive()
+            .with(schema(json!({ "doc": doc(), "path": path_arg() }), &["doc", "path"])),
         t("page_replace", "Replace pages", "Replace the content of pages with pages of another PDF (same count). Links, comments, form fields and bookmarks on the original pages stay, as in Acrobat. Undoable.")
             .cmd("page.replace")
             .with(schema(json!({ "doc": doc(), "pages": pages("to replace"), "path": path_arg(), "from_pages": pages("of the other file, in order (default: its first pages)") }), &["doc", "pages", "path"])),

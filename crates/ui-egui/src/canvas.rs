@@ -754,6 +754,12 @@ fn apply_notice(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, notice
                 app.unlock_prompt = Some(crate::UnlockPrompt::new(doc, None));
             }
         }
+        Some(Notice::UnlockCopy) => {
+            if let Some(view) = app.views.get(index) {
+                let id = view.id;
+                app.open_unrestricted_copy(id);
+            }
+        }
         // Flags the view: the tab closes at the top of the next frame, where no document
         // borrow is held.
         Some(Notice::Close) => {
