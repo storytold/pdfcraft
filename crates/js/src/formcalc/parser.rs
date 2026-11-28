@@ -268,11 +268,11 @@ impl Parser {
     }
 
     fn and_expr(&mut self) -> Result<Expr, String> {
-        let mut l = self.cmp_expr()?;
+        let mut l = self.eq_expr()?;
         loop {
             if self.eat_op("&") || self.eat_kw("and") {
                 self.link()?;
-                let r = self.cmp_expr()?;
+                let r = self.eq_expr()?;
                 l = Expr::Bin("&", Box::new(l), Box::new(r));
             } else {
                 return Ok(l);
@@ -280,18 +280,33 @@ impl Parser {
         }
     }
 
-    fn cmp_expr(&mut self) -> Result<Expr, String> {
-        let mut l = self.add_expr()?;
+    /// `==` and `<>` (`eq`, `ne`) bind looser than the relational operators, so `a < b == c < d`
+    /// compares two comparisons (XFA 3.3 p. 1061).
+    fn eq_expr(&mut self) -> Result<Expr, String> {
+        let mut l = self.rel_expr()?;
         loop {
             let op = match self.peek() {
                 Tok::Op("==") => "==",
                 Tok::Op("<>") => "<>",
+                Tok::Ident(w) if w.eq_ignore_ascii_case("eq") => "==",
+                Tok::Ident(w) if w.eq_ignore_ascii_case("ne") => "<>",
+                _ => return Ok(l),
+            };
+            self.at += 1;
+            self.link()?;
+            let r = self.rel_expr()?;
+            l = Expr::Bin(op, Box::new(l), Box::new(r));
+        }
+    }
+
+    fn rel_expr(&mut self) -> Result<Expr, String> {
+        let mut l = self.add_expr()?;
+        loop {
+            let op = match self.peek() {
                 Tok::Op("<=") => "<=",
                 Tok::Op(">=") => ">=",
                 Tok::Op("<") => "<",
                 Tok::Op(">") => ">",
-                Tok::Ident(w) if w.eq_ignore_ascii_case("eq") => "==",
-                Tok::Ident(w) if w.eq_ignore_ascii_case("ne") => "<>",
                 Tok::Ident(w) if w.eq_ignore_ascii_case("le") => "<=",
                 Tok::Ident(w) if w.eq_ignore_ascii_case("ge") => ">=",
                 Tok::Ident(w) if w.eq_ignore_ascii_case("lt") => "<",
@@ -463,6 +478,21 @@ mod tests {
         assert_eq!(parse(r#""\u0041\u20ac\U00000042\U0001F600""#), Ok(vec![Stmt::Expr(Expr::Str("A\u{20ac}B\u{1F600}".into()))]));
         assert_eq!(parse(r#""\uD83D\uDE00""#), Ok(vec![Stmt::Expr(Expr::Str("\u{1F600}".into()))]));
         assert_eq!(parse(r#""C:\temp\new\u12""#), Ok(vec![Stmt::Expr(Expr::Str(r"C:\temp\new\u12".into()))]));
+    }
+
+    /// Equality binds looser than the relational operators, in symbols and keywords alike, and
+    /// each level is still left-associative.
+    #[test]
+    fn equality_binds_looser_than_relational_operators() {
+        let bin = |op, l, r| Expr::Bin(op, Box::new(l), Box::new(r));
+        let (a, b, c, d) = (Expr::Ident("a".into()), Expr::Ident("b".into()), Expr::Ident("c".into()), Expr::Ident("d".into()));
+        let expected = vec![Stmt::Expr(bin("==", bin("<", a.clone(), b.clone()), bin("<", c.clone(), d.clone())))];
+        assert_eq!(parse("a < b == c < d"), Ok(expected.clone()));
+        assert_eq!(parse("a lt b eq c LT d"), Ok(expected));
+        assert_eq!(parse("a <> b >= c"), Ok(vec![Stmt::Expr(bin("<>", a.clone(), bin(">=", b.clone(), c.clone())))]));
+        assert_eq!(parse("a ne b ge c"), Ok(vec![Stmt::Expr(bin("<>", a.clone(), bin(">=", b.clone(), c.clone())))]));
+        assert_eq!(parse("a < b > c"), Ok(vec![Stmt::Expr(bin(">", bin("<", a.clone(), b.clone()), c.clone()))]));
+        assert_eq!(parse("a == b <> c"), Ok(vec![Stmt::Expr(bin("<>", bin("==", a, b), c))]));
     }
 
     #[test]
