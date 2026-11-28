@@ -1,4 +1,4 @@
-//! Walk page content streams and collect the opaque filled rectangles they draw.
+//! Walk page content streams and collect opaque path and image covers.
 //!
 //! This is the geometric half of the faux-redaction audit: a rectangle filled with an opaque
 //! color (`re` + `f`) is the classic way a "redaction" is faked. A single closed `m`/`l` subpath
@@ -10,6 +10,7 @@
 //! `/CA` and `/LW`). Form XObjects are followed read-only with a depth cap. Anything fancier
 //! (other filled paths, slanted or bent strokes, shadings, patterns) is out of scope and
 //! documented as such.
+//! Image-specific state and sample geometry live in `image`.
 //!
 //! Paint order: a page's content streams are one stream in pieces (ISO 32000-2 §7.8.2), so they
 //! are parsed joined and walked once with a single graphics state — state set in an earlier
@@ -18,10 +19,12 @@
 //! the joined stream)`; rectangles inside a form XObject carry the `Do` operator's position.
 //! Positions compare lexicographically in paint order.
 
+use std::sync::Arc;
+
 use pdfcraft_content::{Matrix, Op, Pieces, ops};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, Object};
 
-use crate::AuditError;
+use crate::{AuditError, image};
 
 /// Maximum form-XObject nesting followed. Deeper nesting (including a cycle) fails the audit: a
 /// cover drawn below the cut could otherwise go unseen and the page be reported clean.
@@ -40,6 +43,7 @@ pub struct FilledRect {
     /// Paint position: `(content-stream index, operator index in the joined stream)`.
     /// Rectangles inside a form XObject carry the `Do` operator's position.
     pub pos: (usize, usize),
+    pub image: Option<image::Coverage>,
 }
 
 #[derive(Clone)]
@@ -53,6 +57,7 @@ struct Gs {
     width: f64,
     /// Line cap (`J`, `/LC`): 0 butt, 1 round, 2 projecting square.
     cap: i64,
+    image: image::State,
 }
 
 /// The path under construction, as far as the audit cares about it.
@@ -138,8 +143,18 @@ fn lines_rect(mut pts: Vec<[f64; 2]>) -> Option<[f64; 4]> {
 }
 
 impl Default for Gs {
+    /// Start with an identity transform, opaque black fill and stroke and no image-specific restrictions.
     fn default() -> Self {
-        Gs { ctm: Matrix::IDENTITY, fill: [0.0, 0.0, 0.0], alpha: 1.0, stroke: [0.0, 0.0, 0.0], stroke_alpha: 1.0, width: 1.0, cap: 0 }
+        Gs {
+            ctm: Matrix::IDENTITY,
+            fill: [0.0, 0.0, 0.0],
+            alpha: 1.0,
+            stroke: [0.0, 0.0, 0.0],
+            stroke_alpha: 1.0,
+            width: 1.0,
+            cap: 0,
+            image: image::State::default(),
+        }
     }
 }
 
@@ -148,6 +163,9 @@ struct Walker<'a> {
     pieces: &'a Pieces,
     out: Vec<FilledRect>,
     ops_seen: usize,
+    image_budget: image::Budget,
+    images_seen: bool,
+    form_text: bool,
     /// Decoded bytes and form entries left for the page, its forms included: spending either
     /// fails the audit.
     budget: DecodeBudget,
@@ -175,7 +193,11 @@ impl<'a> Walker<'a> {
         depth: usize,
         at_do: Option<(usize, usize)>,
     ) -> Result<(), AuditError> {
+        gs.image.resources(self.doc, resources);
         let mut path = Path::Empty;
+        let mut image_path = image::ClipPath::default();
+        let mut marked = Vec::new();
+        let mut optional_depth = 0usize;
         for (i, op) in ops.enumerate() {
             self.bump()?;
             let op = &op;
@@ -185,8 +207,41 @@ impl<'a> Walker<'a> {
                 Some(p) => p,
                 None => (self.pieces.pieces_of(op).0, i),
             };
+            if depth > 0 && matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") {
+                self.form_text = true;
+            }
+            gs.image.observe(op);
+            image_path.observe(op, gs.ctm, &mut gs.image);
             match op.op.as_slice() {
-                b"q" => stack.push(gs.clone()),
+                b"BDC" => {
+                    let optional = op.name(0) == Some(b"OC");
+                    marked.push(optional);
+                    if optional {
+                        optional_depth += 1;
+                    }
+                }
+                b"BMC" => marked.push(false),
+                b"EMC" => {
+                    if marked.pop() == Some(true) {
+                        optional_depth = optional_depth.saturating_sub(1);
+                    }
+                }
+                b"BI" => {
+                    let (dict, data) = op.inline.as_ref().ok_or_else(|| AuditError::Image("unreadable inline image".into()))?;
+                    if optional_depth > 0 {
+                        return Err(AuditError::Image("image optional content requires further analysis".into()));
+                    }
+                    self.image(&image::inline(dict, data), gs, pos)?;
+                }
+                _ => {}
+            }
+            match op.op.as_slice() {
+                b"q" => {
+                    if stack.len() >= 4096 {
+                        return Err(AuditError::Image("graphics-state stack bound exceeded".into()));
+                    }
+                    stack.push(gs.clone());
+                }
                 b"Q" => {
                     // The current path is not graphics state (ISO 32000-2 §8.4.1): `re Q f` still
                     // fills the rectangle, whose corners are already in user space.
@@ -242,6 +297,7 @@ impl<'a> Walker<'a> {
                 b"gs" => {
                     if let Some(name) = op.name(0) {
                         ext_state(self.doc, resources, name, gs);
+                        gs.image.ext(self.doc, resources, name);
                     }
                 }
                 b"re" => {
@@ -286,19 +342,19 @@ impl<'a> Walker<'a> {
                         && let Some(r) = done.stroked_rect(gs)
                         && gs.stroke_alpha >= 1.0
                     {
-                        self.out.push(FilledRect { rect: r, rgb: gs.stroke, pos });
+                        self.out.push(FilledRect { rect: r, rgb: gs.stroke, pos, image: None });
                     }
                     if let Some(r) = done.rect()
                         && gs.alpha >= 1.0
                     {
-                        self.out.push(FilledRect { rect: r, rgb: gs.fill, pos });
+                        self.out.push(FilledRect { rect: r, rgb: gs.fill, pos, image: None });
                     }
                 }
                 b"S" | b"s" => {
                     if let Some(r) = std::mem::replace(&mut path, Path::Empty).stroked_rect(gs)
                         && gs.stroke_alpha >= 1.0
                     {
-                        self.out.push(FilledRect { rect: r, rgb: gs.stroke, pos });
+                        self.out.push(FilledRect { rect: r, rgb: gs.stroke, pos, image: None });
                     }
                 }
                 b"n" => path = Path::Empty,
@@ -308,7 +364,11 @@ impl<'a> Walker<'a> {
                         if depth >= MAX_DEPTH {
                             return Err(AuditError::TooDeep);
                         }
-                        self.walk_xobject(name, gs, resources, depth, pos)?;
+                        let mut sub = gs.clone();
+                        if optional_depth > 0 {
+                            sub.image.clip(None);
+                        }
+                        self.walk_xobject(name, &sub, resources, depth, pos)?;
                     }
                     path = Path::Empty;
                 }
@@ -318,16 +378,35 @@ impl<'a> Walker<'a> {
         Ok(())
     }
 
-    /// Follow a form XObject read-only, composing its matrix onto the current CTM. State
-    /// changes inside never leak out; every rectangle found is stamped with the `Do`
-    /// position `pos`.
+    /// Charge image analysis to the page budgets and retain its painted coverage at `pos`.
+    /// Record even invisible images as encountered, so unaudited form text cannot pass cleanly.
+    fn image(&mut self, stream: &pdfcraft_cos::Stream, gs: &Gs, pos: (usize, usize)) -> Result<(), AuditError> {
+        self.images_seen = true;
+        if let Some((rect, coverage)) = image::collect(self.doc, stream, &mut self.budget, &mut self.image_budget, &gs.image, gs.ctm, gs.fill)? {
+            self.out.push(FilledRect { rect, rgb: gs.fill, pos, image: Some(coverage) });
+        }
+        Ok(())
+    }
+
+    /// Audit an image XObject or follow a form read-only, composing its matrix onto the CTM
+    /// and intersecting image coverage with its BBox. Form state changes never leak out;
+    /// every cover found is stamped with the `Do` position `pos`. Unreadable or unsupported
+    /// image analysis propagates an error instead of silently skipping the object.
     fn walk_xobject(&mut self, name: &[u8], gs: &Gs, resources: &Dict, depth: usize, pos: (usize, usize)) -> Result<(), AuditError> {
         // Borrowed, not copied: a `Do` must not cost the size of the whole XObject table.
         let xobjects = resources.get(b"XObject").map(|o| self.doc.resolve(o));
-        let Some(entry) = xobjects.as_deref().and_then(Object::as_dict).and_then(|d| d.get(name)) else { return Ok(()) };
+        let Some(entry) = xobjects.as_deref().and_then(Object::as_dict).and_then(|d| d.get(name)) else {
+            return Err(AuditError::Image("unresolved XObject".into()));
+        };
         let resolved = self.doc.resolve(entry);
-        let Object::Stream(stream) = &*resolved else { return Ok(()) };
+        let Object::Stream(stream) = &*resolved else { return Err(AuditError::Image("invalid XObject stream".into())) };
         let dict = &stream.dict;
+        if crate::subtype(self.doc, dict)?.as_deref() == Some(b"Image") {
+            if dict.get(b"OC").is_some() {
+                return Err(AuditError::Image("image optional content requires further analysis".into()));
+            }
+            return self.image(stream, gs, pos);
+        }
         if crate::subtype(self.doc, dict)?.as_deref() != Some(b"Form") {
             return Ok(());
         }
@@ -350,8 +429,30 @@ impl<'a> Walker<'a> {
         // The XObject matrix maps form space into the user space active at `Do`.
         let mut sub_gs = gs.clone();
         sub_gs.ctm = matrix.then(&gs.ctm);
+        if let Some(m) = dict.get(b"Matrix") {
+            let m = self.doc.resolve(m);
+            let valid = m.as_array().is_some_and(|a| a.len() == 6 && a.iter().all(|o| self.doc.resolve(o).as_f64().is_some_and(|n| n.is_finite())));
+            if !valid {
+                sub_gs.image.clip(None);
+            }
+        }
+        let bbox = dict.get(b"BBox").map(|o| self.doc.resolve(o));
+        let bbox = bbox.as_ref().and_then(|o| o.as_array()).and_then(|a| {
+            let nums: Option<Vec<f64>> = a.iter().map(|o| self.doc.resolve(o).as_f64()).collect();
+            let [x0, y0, x1, y1]: [f64; 4] = nums?.try_into().ok()?;
+            Some(image::rectangle(sub_gs.ctm, [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]))
+        });
+        sub_gs.image.clip(bbox);
+        if dict.get(b"Group").is_some() || dict.get(b"OC").is_some() {
+            sub_gs.image.clip(None);
+        }
         let mut sub_stack = Vec::new();
-        self.walk_ops(ops(&data), &mut sub_gs, &mut sub_stack, sub_resources, depth + 1, Some(pos))
+        let mut reader = ops(&data);
+        self.walk_ops(&mut reader, &mut sub_gs, &mut sub_stack, sub_resources, depth + 1, Some(pos))?;
+        if reader.skipped() > 0 || reader.ambiguous_images() > 0 {
+            return Err(AuditError::Image("incomplete form content parse".into()));
+        }
+        Ok(())
     }
 }
 
@@ -392,33 +493,79 @@ fn ext_state(doc: &Document, resources: &Dict, name: &[u8], gs: &mut Gs) {
     }
 }
 
-/// Every opaque filled rectangle drawn by a page's content (and its form XObjects), with paint
+/// Follow content references like `Document::resolve`, while propagating failed object reads.
+fn resolve_content(doc: &Document, entry: &Object) -> Result<Arc<Object>, AuditError> {
+    let mut object = Arc::new(entry.clone());
+    // Match the COS reader's limit of one initial lookup and up to 32 further hops.
+    for _ in 0..=32 {
+        let Object::Ref(reference) = &*object else { return Ok(object) };
+        if !doc.accepted_generations(reference.num).contains(&reference.generation) {
+            return Ok(Arc::new(Object::Null));
+        }
+        object = doc.try_get(reference.num)?;
+    }
+    if matches!(&*object, Object::Ref(_)) {
+        return Err(AuditError::Image("page content reference chain is too deep".into()));
+    }
+    Ok(object)
+}
+
+/// Every opaque path or image cover drawn by a page's content (and its form XObjects), with paint
 /// positions. A page's content streams are walked once, joined, with one graphics state, so
 /// state set in an earlier stream is still in force in the later ones. Any content stream that
 /// cannot be decoded, or content and forms that decode or enter past one page's [`DecodeBudget`]
-/// in all, is an audit failure, never an empty result.
+/// in all, is an audit failure, never an empty result. Image coverage also obeys the page box
+/// and its sample/geometry bounds; images combined with unaudited form text fail closed.
 pub fn filled_rects(doc: &Document, page: &Dict) -> Result<Vec<FilledRect>, AuditError> {
     let resources = page.get(b"Resources").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
-    let contents: Vec<Object> = match page.get(b"Contents") {
-        None => Vec::new(),
-        Some(c) => match &*doc.resolve(c) {
-            Object::Array(a) => a.clone(),
-            _ => vec![c.clone()],
-        },
-    };
+    let contents = page.get(b"Contents").map(|entry| resolve_content(doc, entry)).transpose()?;
     let mut budget = DecodeBudget::page();
-    let mut streams = Vec::with_capacity(contents.len());
-    for c in &contents {
-        if let Object::Stream(s) = &*doc.resolve(c) {
-            streams.push(budget.decode_strict(doc, s)?);
+    let mut streams = Vec::new();
+    match contents.as_deref() {
+        None | Some(Object::Null) => {}
+        Some(Object::Stream(stream)) => streams.push(budget.decode_strict(doc, stream)?),
+        Some(Object::Array(entries)) => {
+            streams.reserve(entries.len());
+            for entry in entries {
+                match &*resolve_content(doc, entry)? {
+                    Object::Stream(stream) => streams.push(budget.decode_strict(doc, stream)?),
+                    // Text extraction leaves an empty piece here. Keep the same piece indices.
+                    Object::Null => streams.push(Vec::new()),
+                    _ => return Err(AuditError::Image("unreadable page content entry".into())),
+                }
+            }
         }
+        Some(_) => return Err(AuditError::Image("unreadable page content entry".into())),
     }
     let pieces = Pieces::join(&streams);
-    let mut w = Walker { doc, pieces: &pieces, out: Vec::new(), ops_seen: 0, budget };
+    let mut w = Walker {
+        doc,
+        pieces: &pieces,
+        out: Vec::new(),
+        ops_seen: 0,
+        image_budget: image::Budget::default(),
+        images_seen: false,
+        form_text: false,
+        budget,
+    };
     let mut gs = Gs::default();
+    if let Some(o) = page.get(b"CropBox").or_else(|| page.get(b"MediaBox")) {
+        let o = doc.resolve(o);
+        let bbox = o.as_array().and_then(|a| {
+            let values: Option<Vec<f64>> = a.iter().map(|o| doc.resolve(o).as_f64()).collect();
+            let [x0, y0, x1, y1]: [f64; 4] = values?.try_into().ok()?;
+            Some(image::rectangle(Matrix::IDENTITY, [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]))
+        });
+        gs.image.clip(bbox);
+    }
     let mut stack = Vec::new();
-    // Read one operator at a time: the joined stream can hold millions of them within the
-    // decode budget, and the walk only ever needs the current one.
-    w.walk_ops(ops(pieces.data()), &mut gs, &mut stack, &resources, 0, None)?;
+    let mut reader = ops(pieces.data());
+    w.walk_ops(&mut reader, &mut gs, &mut stack, &resources, 0, None)?;
+    if reader.skipped() > 0 || reader.ambiguous_images() > 0 {
+        return Err(AuditError::Image("incomplete page content parse".into()));
+    }
+    if w.images_seen && w.form_text {
+        return Err(AuditError::Image("text inside form XObjects is not fully audited".into()));
+    }
     Ok(w.out)
 }

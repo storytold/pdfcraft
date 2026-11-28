@@ -1,7 +1,7 @@
 //! Verification tooling: audit a document for faux redactions.
 //!
-//! [`audit_redactions`] finds *faux redactions* — opaque filled rectangles drawn over text
-//! that is still extractable underneath — and redaction annotations that were marked but
+//! [`audit_redactions`] finds *faux redactions* — opaque rectangles and images drawn over
+//! text that is still extractable underneath — and redaction annotations that were marked but
 //! never applied. A properly applied redaction removes the text, so it never flags.
 //!
 //! A rectangle counts as a cover only when it was painted strictly *after* the text it
@@ -10,6 +10,10 @@
 //! marks are therefore not flagged. A white (or nearly white) opaque rectangle painted after
 //! dark text hides it just as well, the way forms are "whited out"; that is reported as its
 //! own kind, [`FindingKind::HiddenUnderWhite`], so callers can decide (#2385).
+//!
+//! Images (XObject, stencil and inline) use sample coverage, CTM polygons, clipping and run
+//! paint order. Unsupported image analysis returns an incomplete-audit error; see the crate
+//! README for supported formats, transparency and resource bounds.
 //!
 //! Covers come from the page content — `re` rectangles and single closed `m`/`l` subpaths whose
 //! four corners form an axis-aligned rectangle in user space (#1510), filled opaquely, and a
@@ -37,6 +41,7 @@ use pdfcraft_cos::{Dict, Document};
 use pdfcraft_edit::TextLine;
 
 mod cover;
+mod image;
 
 #[cfg(test)]
 mod tests;
@@ -86,6 +91,8 @@ pub struct AuditFinding {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuditError {
+    #[error("image audit incomplete: {0}")]
+    Image(String),
     #[error("page {0}: {1}")]
     Text(usize, String),
     #[error("content walk exceeded the operator bound")]
@@ -227,6 +234,8 @@ impl Budget {
     }
 }
 
+/// Audit page content and annotations within comparison and report bounds, respecting copy
+/// permissions. Image geometry and ambiguous run order must be fully analyzable or error.
 fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError> {
     let copying = doc.permissions().is_none_or(|p| p.copy());
     let mut budget = Budget { limits, comparisons: 0, page_cost: 0, covered_text: 0 };
@@ -238,6 +247,17 @@ fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError
         budget.start_page(&lines);
         // 1. Opaque rectangles (filled, or painted by a thick stroke) over extractable text.
         for r in cover::filled_rects(doc, &page.dict)? {
+            if let Some(image) = &r.image {
+                budget.spend(budget.page_cost.saturating_mul(image.cost()).saturating_mul(3))?;
+                if lines.iter().any(|l| l.rect.iter().chain(l.ink.iter().flatten()).any(|v| !v.is_finite() || v.abs() > image::MAX_COORD)) {
+                    return Err(AuditError::Image("text geometry exceeds the image audit range".into()));
+                }
+                if lines.iter().any(|l| {
+                    l.painted_word_runs().next().is_none() && l.first_paint_pos() < r.pos && l.last_paint_pos() >= r.pos && covers(&r.rect, l)
+                }) {
+                    return Err(AuditError::Image("interleaved reordered text requires further analysis".into()));
+                }
+            }
             if let Some(covered) = budget.hidden_text(&lines, copying, std::slice::from_ref(&r.rect), |line| hides(&r, line))? {
                 let covered_text = budget.report_text(covered, copying)?;
                 out.push(AuditFinding { page: n, kind: rect_kind(&r), rect: r.rect, covered_text });
@@ -270,13 +290,17 @@ fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError
 /// cover; the later ones are drawn on it in the same low-contrast color, so they are unreadable
 /// too.
 fn is_cover(rect: &cover::FilledRect, line: &TextLine) -> bool {
-    rect.pos > line.first_paint_pos() && covers(&rect.rect, line) && contrast(line.color, rect.rgb) < COVER_CONTRAST
+    rect.pos > line.first_paint_pos()
+        && rect
+            .image
+            .as_ref()
+            .map_or_else(|| covers(&rect.rect, line) && contrast(line.color, rect.rgb) < COVER_CONTRAST, |image| image.covers(line, rect.pos))
 }
 
 /// What a painted rectangle does to the text under it: white or nearly so, it whites the text out
 /// whatever its color; otherwise it is a cover, and only hides text it is dark enough against.
 fn rect_kind(rect: &cover::FilledRect) -> FindingKind {
-    if luminance(rect.rgb) >= WHITE_LUMINANCE { FindingKind::HiddenUnderWhite } else { FindingKind::CoveredText }
+    if rect.image.is_none() && luminance(rect.rgb) >= WHITE_LUMINANCE { FindingKind::HiddenUnderWhite } else { FindingKind::CoveredText }
 }
 
 /// Does `rect` hide `line`: painted after the start of the line and over it, and white or a cover
