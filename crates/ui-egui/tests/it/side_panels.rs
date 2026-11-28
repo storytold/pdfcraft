@@ -119,3 +119,25 @@ fn f4_toggles_the_side_panel_and_shift_f4_the_tools_panel() {
     h.run_steps(3);
     h.get_by_label("Expand all tools");
 }
+
+/// Clicks the mode bar's tab for a workspace.
+fn click_mode_tab(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    h.get_all_by_role_and_label(Role::Tab, label).find(|n| n.rect().bottom() < 120.0).expect("a mode tab").click();
+    h.run_steps(4);
+}
+
+/// #8526: after the × closes Edit a PDF, clicking the Edit tab, already the workspace, opens the panel again
+/// rather than leaving no way back but Shift+F4. With the panel open, the click leaves it open.
+#[test]
+fn the_current_mode_tab_reopens_its_closed_tool_panel() {
+    let mut h = harness(|_| {});
+    click_mode_tab(&mut h, "Edit");
+    h.get_by_label("Close Edit a PDF").click();
+    h.run_steps(4);
+    assert!(!h.state().left_open(), "the × closes the Edit a PDF panel");
+    click_mode_tab(&mut h, "Edit");
+    assert!(h.state().left_open(), "the Edit tab opens the closed panel again");
+    h.get_by_label("Close Edit a PDF");
+    click_mode_tab(&mut h, "Edit");
+    h.get_by_label("Close Edit a PDF");
+}
