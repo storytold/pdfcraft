@@ -287,6 +287,10 @@ impl PdfCraftApp {
             status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),
+            tab_groups: Vec::new(),
+            next_group_id: 1,
+            editing_group: None,
+            group_title_draft: String::new(),
             rename_draft: None,
             rename_returned: rename_ui::Returned::default(),
             active: None,
@@ -463,6 +467,7 @@ impl PdfCraftApp {
             last_copied_file: None,
             clipboard,
             page_props_draft: None,
+            delete_pages_draft: None,
             form_preview: false,
             #[cfg(not(target_arch = "wasm32"))]
             recovery: store,

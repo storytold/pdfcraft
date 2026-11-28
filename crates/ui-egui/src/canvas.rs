@@ -155,6 +155,10 @@ pub struct DocView {
     /// Where the tab shows (split view's panes) and the key that tells two
     /// views of one document apart (`crate::panes`).
     pub(crate) pane: crate::panes::ViewPane,
+    /// Browser tab group this document belongs to, if any.
+    pub group: Option<crate::tab_group::TabGroupId>,
+    /// Whether this tab is pinned to the beginning of the tab strip.
+    pub pinned: bool,
     pub id: DocId,
     /// The document and attached file this tab was opened from, when a form or the Attachments
     /// panel opened it: asking for that attachment again comes back to this tab.
@@ -416,6 +420,11 @@ pub struct PageSession {
 }
 
 impl PageSession {
+    /// Whether a page-box drag (Snapshot, Crop, Redact, or signature area) is currently active.
+    pub fn is_box_dragging(&self) -> bool {
+        self.box_drag.is_active()
+    }
+
     /// The session of a newly opened document.
     fn new(info: &DocInfo, highlight_fields: bool) -> Self {
         Self {
@@ -478,7 +487,7 @@ impl PageSession {
 }
 
 /// Organize-toolbar actions that need the app (file pickers, new tabs, dialogs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ViewAction {
     InsertFromFile,
     /// Insert files at a gap of the page grid (0 = before the first page).
@@ -515,6 +524,12 @@ pub enum ViewAction {
     },
     /// Lock now, on the notice shown after a signature is placed (#2149).
     LockSignatures,
+    /// Ask before deleting the pages the panel picked, captured with the document's edit
+    /// generation when the ask was made.
+    ConfirmDeletePages {
+        pages: Vec<usize>,
+        generation: u64,
+    },
 }
 
 impl DocView {
@@ -581,6 +596,8 @@ impl DocView {
     pub fn new(id: DocId, info: &DocInfo, defaults: ViewDefaults, highlight_fields: bool) -> Self {
         Self {
             pane: Default::default(),
+            group: None,
+            pinned: false,
             id,
             from_attachment: None,
             view: PageViewState::from_defaults(&defaults),
@@ -693,6 +710,8 @@ impl DocView {
         // The revision stamps carry on, so the pictures on screen stay until their replacements land.
         fresh.revisions = std::mem::take(&mut self.revisions);
         fresh.viewport = self.viewport;
+        fresh.group = self.group;
+        fresh.pinned = self.pinned;
         // Same view key (`pane`): the page view's remembered state and the grid's press id are still this view's.
         fresh.pane = self.pane.clone();
         *self = fresh;
@@ -716,6 +735,8 @@ impl DocView {
         let mut v = Self::new(self.id, info, ViewDefaults::default(), self.session.highlight_fields);
         v.view = self.view.clone();
         v.view.go_to(self.view.current);
+        v.group = self.group;
+        v.pinned = self.pinned;
         v.page_input = self.page_input.clone();
         v.notice_dismissed = self.notice_dismissed;
         v.scripts_off_noted = self.scripts_off_noted;
@@ -2249,7 +2270,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
             app.add_image_dialog();
         }
         Some(PageMenuAction::DeletePage(page)) => {
-            app.views[index].session.pending_edit = Some(pdfcraft_engine::Edit::DeletePages { pages: vec![page] });
+            app.request_delete_pages(index, vec![page]);
         }
         Some(PageMenuAction::ExportPdf) => {
             app.select_tool(ctx, "export");
