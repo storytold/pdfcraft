@@ -454,8 +454,6 @@ fn changes(
 pub type Runtime = std::sync::Arc<std::sync::Mutex<pdfcraft_js::session::ScriptSession>>;
 
 /// Invalidate pending results while retaining the document's native worker reservation.
-// Wasm's JS session stays on its owning thread; retain the Runtime handle shared with native jobs.
-#[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
 pub(crate) fn replace_runtime(runtime: &mut Runtime) {
     let Ok(mut old) = runtime.lock() else { return };
     let next = old.fresh_realm();
@@ -1354,6 +1352,15 @@ impl Session {
         // The timers the script left, the layers it turned, and how fields show (#169).
         self.after_script(id, &o, &written);
         Ok(o)
+    }
+
+    /// The script errors not taken yet, out of what [`Session::take_js_output`] returns; the
+    /// alerts, console lines and requests stay for that call. A document script's error taken
+    /// here is reported again when the document scripts fail again on a later edit.
+    pub fn take_js_errors(&mut self, id: DocId) -> Vec<String> {
+        let Some(d) = self.docs.iter_mut().find(|d| d.id == id) else { return Vec::new() };
+        d.js_output.doc_errors.clear();
+        std::mem::take(&mut d.js_output.errors)
     }
 }
 
