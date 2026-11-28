@@ -36,6 +36,13 @@ pub enum Needs {
     HasComments,
     /// The document has form fields and allows changes.
     HasFields,
+    /// The document's security allows some import: comments or changes (ISO 32000-2 Table 22,
+    /// bits 6 or 4), or filling in form fields (bit 9) where it has fields or an XFA form to take
+    /// the values. What the file brings in is checked once it is read.
+    Import,
+    /// The document has form fields and its security allows filling them in or changing the
+    /// document, so an import can bring in their values.
+    ImportFields,
     /// The document has redaction marks and allows changes.
     HasRedactions,
     /// The document has page marks of this kind and allows changes.
@@ -323,12 +330,12 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("form.fields", "Form fields panel", VIEW, None, Document, "list"),
     c("form.clear", "Clear form", EDIT, None, FillForms, "eraser"),
     c("comment.flatten", "Flatten comments", None, None, HasComments, "layers"),
-    c("comment.import", "Import comments…", None, None, Modification, "file-input"),
+    c("comment.import", "Import comments…", None, None, Import, "file-input"),
     c("comment.stamp", "Add a stamp", None, None, Annotate, "stamp"),
     c("comment.export", "Export all comments to data file…", None, None, HasComments, "file-output"),
     c("comment.hide_all", "Hide all comments", None, None, Document, "eye_off"),
     c("comment.summarize", "Summarize comments", None, None, HasComments, "file-text"),
-    c("form.import_data", "Import form data…", None, None, HasFields, "file-input"),
+    c("form.import_data", "Import form data…", None, None, ImportFields, "file-input"),
     c("form.export_data", "Export form data…", None, None, HasFields, "file-output"),
     c("standards.pdfa", "PDF/A…", None, None, Document, "file-check"),
     c("actions.wizard", "Action Wizard…", None, None, Nothing, "list-checks"),
@@ -483,6 +490,10 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
         Marks(k) => doc.is_some_and(|d| d.allows_modification() && d.marks().contains(&k)),
         HasComments => doc.is_some_and(|d| d.allows_modification() && !d.info.annotations.is_empty()),
         HasFields => doc.is_some_and(|d| d.allows_modification() && !d.form.is_empty()),
+        Import => doc.is_some_and(|d| {
+            d.allows_modification() || d.allows_annotation() || (d.allows_form_filling() && (!d.form.is_empty() || d.xfa.is_some()))
+        }),
+        ImportFields => doc.is_some_and(|d| (d.allows_modification() || d.allows_form_filling()) && !d.form.is_empty()),
         HasRedactions => doc.is_some_and(|d| d.allows_modification() && d.redaction_marks() > 0),
         Security => doc.is_some_and(|d| d.allows_security_change() || d.can_unlock()),
         ProtectedSecurity => doc.is_some_and(|d| (d.allows_security_change() || d.can_unlock()) && d.security_summary().is_some()),

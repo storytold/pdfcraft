@@ -165,8 +165,9 @@ impl Session {
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
-        if let Some(p) = editor.cos.permissions() {
-            check_permission(&edit, &p)?;
+        cx.permissions = editor.cos.permissions();
+        if let Some(p) = &cx.permissions {
+            check_permission(&edit, p)?;
         }
         let Some(edit) = prepare_ocr_text_edit(editor, &doc.info, edit) else {
             return Ok(None);
