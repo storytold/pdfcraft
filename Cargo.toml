@@ -21,9 +21,6 @@ edit-session = { path = "vendor/edit-session", version = "=0.1.0-alpha.2" }
 craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
 # Quit the macOS way (#1136): ⌘Q asks about unsaved changes, and closing quits through `terminate:`.
 craft-quit = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-# One menu definition for the native macOS menu bar and the in-window bar elsewhere.
-craft-menu = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", default-features = false }
 # Interface translations: lookup, fallback, CLDR plurals and language names over the craft-i18n
 # catalogs that `crates/ui-egui/build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, at
 # the commit in `craft-i18n.rev`). Already in the tree through craft-ui.
@@ -47,8 +44,6 @@ craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0"
 # its font and colour lookups take constant time, as PdfCraft's own writer did. craft-rtf, craft-wordmodel and
 # craft-docx move together: craft_rtf::doc::export takes its own revision's Document.
 craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
-# Shared Base64 encoder; use the existing RTF revision to reuse its codepage dependency.
-craft-mime = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
 craft-csv = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
 craft-xml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
 craft-image-codecs = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
@@ -109,7 +104,6 @@ lopdf = "0.45"
 # miniz_oxide backend; flate2 prefers zlib-rs when both are built, as the Windows build already did
 # through craft-update. `flate::tests::a_copy_from_before_the_start_is_damage` shows which runs.
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
-weezl = "0.2"
 # CCITT Group 4 encoding (pdfcraft-filters); already in the tree through tiff.
 fax = "0.2.7"
 # Independent CCITT and JBIG2 codecs, already in the tree through hayro.
@@ -134,7 +128,6 @@ proptest = "1"
 
 # ui
 egui = "0.37"
-egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 eframe = { version = "0.37", default-features = false }
 egui_kittest = "0.37"
 rfd = "0.17"
@@ -196,7 +189,6 @@ egui = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c3
 egui-winit = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
 egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
 egui_glow = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
 egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
 egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
 eframe = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
