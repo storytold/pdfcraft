@@ -221,6 +221,30 @@ fn get_ocgs_turns_a_layer_in_the_view() {
     assert!(!s.get(id).unwrap().dirty);
 }
 
+/// A document script that hides a layer as the file opens leaves it hidden and not drawn
+/// (#8277).
+#[test]
+fn a_document_script_hides_a_layer_on_open() {
+    let script = "var layers = this.getOCGs(); for (var i = 0; layers && i < layers.length; i++) { if (layers[i].name == 'warning') layers[i].state = false; }";
+    let out = pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript << /Names [(showForm) 6 0 R] >> >> \
+         /OCProperties << /OCGs [5 0 R] /D << /BaseState /ON /ON [5 0 R] /Order [5 0 R] >> >> >>"
+            .into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Properties << /L1 5 0 R >> >> >>".into(),
+        "<< /Length 41 >>\nstream\n/OC /L1 BDC 1 0 0 rg 0 0 200 300 re f EMC\nendstream".into(),
+        "<< /Type /OCG /Name (warning) >>".into(),
+        "<< /S /JavaScript /JS 7 0 R >>".into(),
+        format!("<< /Length {} >>\nstream\n{script}\nendstream", script.len()),
+    ]);
+    let mut s = Session::new();
+    let id = s.open("warning.pdf", None, Arc::new(out), None).unwrap();
+    assert!(s.take_js_output(id).errors.is_empty());
+    assert!(!s.get(id).unwrap().info.layers[0].visible);
+    assert_eq!(shown(&s, id, 0, 100, 150), [255, 255, 255, 255]);
+    assert!(!s.get(id).unwrap().dirty);
+}
+
 /// A page action whose document edit is refused (here: past the reset limit) shows nothing it
 /// did either. The frame it showed stays hidden.
 #[test]

@@ -215,11 +215,18 @@ impl Realm {
                 })
                 .unwrap_or((job.fields, 0, 0));
             let saved = link.then(|| crate::timers::save(ctx)).flatten();
+            // The script runs with the layers as the document scripts left them (#8277).
+            let mut doc = job.doc.clone();
+            for &(i, on) in &initial.layers {
+                if let Some(l) = doc.layers.get_mut(i) {
+                    l.on = on;
+                }
+            }
             let mut out = crate::run::run_in_context(
                 ctx,
                 &job.script,
                 &job.event,
-                &job.doc,
+                &doc,
                 fields,
                 crate::run::ScriptSetup {
                     doc_scripts: &[],
@@ -249,6 +256,13 @@ impl Realm {
             out.console = initial.console;
             initial.requests.append(&mut out.requests);
             out.requests = initial.requests;
+            // Layers the document scripts turned, unless the script turned them again (#8277).
+            for (i, on) in initial.layers {
+                if !out.layers.iter().any(|&(j, _)| j == i) {
+                    out.layers.push((i, on));
+                }
+            }
+            out.layers.sort_by_key(|&(i, _)| i);
             out.doc_errors = initial.doc_errors;
             if out.error.is_none() {
                 out.error = initial.error;
@@ -666,6 +680,26 @@ mod tests {
     /// A job firing timer `id` of the realm, as the viewer runs one that fell due (#169).
     fn fire(id: u32) -> Job {
         Job { script: String::new(), event: Event { kind: "App".into(), ..Event::doc("Timer") }, timer: Some(id), ..job("") }
+    }
+    #[test]
+    /// A layer the document scripts turn as the realm starts is reported, and the job's own
+    /// script sees it as they left it (#8277).
+    fn layers_the_document_scripts_turn_are_reported() {
+        let layer = |name: &str| crate::Layer { name: name.into(), on: true, initial: true };
+        let doc = DocInfo { layers: vec![layer("intro"), layer("warning")], ..DocInfo::default() };
+        let mut s = ScriptSession::default();
+        let o = s.run(
+            Job {
+                event: Event::doc("Open"),
+                doc,
+                doc_scripts: vec!["this.getOCGs()[1].state = false;".into()],
+                ..job("console.println(this.getOCGs()[1].state);")
+            },
+            &[],
+        );
+        assert_eq!(o.error, None);
+        assert_eq!(o.layers, [(1, false)]);
+        assert_eq!(o.console, ["false"]);
     }
     #[test]
     /// Timers a script sets stay in the document's realm and fire there: an interval until it is
