@@ -943,6 +943,27 @@ fn an_xobject_of_unknown_subtype_with_a_bbox_of_the_wrong_length_counts() {
     }
 }
 
+/// Remove Hidden Information reads hidden text and layers with no mark, so no place is under one:
+/// an unclassifiable XObject whose `/Matrix` or `/BBox` is malformed is neither counted nor taken
+/// off the page, as one whose geometry can be read isn't, and there is nothing to remove. It was
+/// both, though nothing hides it. The readable geometry is the control.
+#[test]
+fn hidden_information_leaves_an_xobject_of_unknown_subtype_with_malformed_geometry() {
+    use crate::sanitize::{Hidden, remove_hidden, scan_only};
+    for subtype in ["", "/Subtype /PS"] {
+        for geometry in ["/BBox [0 0 10 10]", "/BBox [0 0 10]", "/Matrix [1 0 0 1 100] /BBox [0 0 10 10]"] {
+            for hidden in [Hidden::HiddenText, Hidden::HiddenLayers] {
+                let x = stream(&format!("/Type /XObject {subtype} {geometry}"), [0]);
+                let mut doc = one_page(b"q 10 0 0 10 200 200 cm /X1 Do Q", "/XObject << /X1 7 0 R >>", vec![x]);
+                assert_eq!(scan_only(&doc, &[hidden]), [(hidden, 0)], "{subtype:?} {geometry}");
+                assert_eq!(remove_hidden(&mut doc, &[hidden]), Err(RedactError::NothingToApply), "{subtype:?} {geometry} {hidden:?}");
+                let c = content(&doc, 0);
+                assert!(c.contains("/X1 Do"), "{subtype:?} {geometry} {hidden:?}: {c}");
+            }
+        }
+    }
+}
+
 #[test]
 fn vectors_are_removed_or_clipped_and_inline_images_go() {
     let src = b"0 g 10 10 20 20 re f 0 0 300 300 re f q 10 0 0 10 50 50 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q 1 0 0 RG 150 150 m 160 160 l S";
