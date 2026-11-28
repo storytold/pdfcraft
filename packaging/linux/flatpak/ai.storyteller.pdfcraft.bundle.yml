@@ -48,9 +48,7 @@ finish-args:
   # Network: Help ▸ Check for updates reaches GitHub. The optional `--control <PORT>` channel
   # (token-authenticated) still listens on 127.0.0.1 inside the sandbox.
   - --share=network
-  # Deliberately not granted: home/host filesystem access. No CUPS socket either: printing
-  # runs the `lp` command (crates/print), which the freedesktop runtime doesn't ship, so Print
-  # reports that the spooler is unavailable until it goes through the print portal.
+  # Deliberately not granted: home/host filesystem access.
 # The release runner's flatpak-builder has no eu-strip (elfutils), which its debuginfo pass runs
 # on cups-client's unstripped tools, in whichever module comes first after they're installed. The
 # app's own binaries come from the release tarball, already stripped.

@@ -49,9 +49,7 @@ finish-args:
   # Network: Help ▸ Check for updates reaches GitHub. The optional `--control <PORT>` channel
   # (token-authenticated) still listens on 127.0.0.1 inside the sandbox.
   - --share=network
-  # Deliberately not granted: home/host filesystem access. No CUPS socket either: printing
-  # runs the `lp` command (crates/print), which the freedesktop runtime doesn't ship, so Print
-  # reports that the spooler is unavailable until it goes through the print portal.
+  # Deliberately not granted: home/host filesystem access.
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
 modules:
