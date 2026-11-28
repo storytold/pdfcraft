@@ -2116,6 +2116,11 @@ fn with_prepare_open_a_double_click_on_a_field_leaves_the_polygon_unfinished() {
 /// The form fixture with a check box `consent` (checked) and a drop-down `shade` (green) added,
 /// preparing the form, on a clipboard the test reads.
 fn copy_paste_harness() -> (Harness<'static, PdfCraftApp>, crate::support::RecordingClipboard, Vec<String>) {
+    copy_paste_harness_turned(0)
+}
+
+/// [`copy_paste_harness`] with page 1 turned by `degrees`.
+fn copy_paste_harness_turned(degrees: i64) -> (Harness<'static, PdfCraftApp>, crate::support::RecordingClipboard, Vec<String>) {
     use pdfcraft_engine::{Edit, FieldValue, NewField, Session};
     let mut session = Session::new();
     let id = session.open("form.pdf", None, std::sync::Arc::new(include_bytes!("../data/form.pdf").to_vec()), None).unwrap();
@@ -2127,6 +2132,9 @@ fn copy_paste_harness() -> (Harness<'static, PdfCraftApp>, crate::support::Recor
         Edit::SetFieldValue { name: "shade".into(), value: FieldValue::Choice(vec!["green".into()]) },
     ] {
         session.apply(id, edit).unwrap();
+    }
+    if degrees != 0 {
+        session.apply(id, Edit::RotatePages { pages: vec![0], degrees }).unwrap();
     }
     let bytes = session.save_bytes(id).unwrap().as_ref().clone();
     let clipboard = crate::support::RecordingClipboard::default();
@@ -2164,7 +2172,8 @@ fn copying_and_pasting_the_selected_fields() {
         assert_eq!((copy.kind, &copy.value, &copy.options), (s.kind, &s.value, &s.options), "{source} → {}", copy.name);
         let (a, b) = (s.widgets[0].rect, copy.widgets[0].rect);
         assert_eq!((copy.widgets.len(), copy.widgets[0].page), (1, Some(0)));
-        assert_eq!([b[0] - a[0], b[1] - a[1], b[2] - a[2], b[3] - a[3]], [18.0, -18.0, 18.0, -18.0], "{source}: same size, moved");
+        let moved = [b[0] - a[0], b[1] - a[1], b[2] - a[2], b[3] - a[3]];
+        assert!(moved.iter().zip([18.0, -18.0, 18.0, -18.0]).all(|(m, e)| (m - e).abs() < 0.01), "{source}: same size, moved {moved:?}");
     }
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Paste fields"));
     let pasted: Vec<_> = added.iter().map(|f| (f.name.clone(), 0)).collect();
@@ -2186,7 +2195,8 @@ fn copying_and_pasting_the_selected_fields() {
     let form = &s.session.get(s.views[0].id).unwrap().form;
     let second: Vec<_> = form.iter().filter(|f| !again.contains(&f.name)).collect();
     let consent = form.iter().find(|f| f.name == "consent").unwrap().widgets[0].rect;
-    assert_eq!((second.len(), second[0].widgets[0].rect[0] - consent[0]), (2, 36.0), "{:?}", names(&h));
+    assert_eq!(second.len(), 2, "{:?}", names(&h));
+    assert!((second[0].widgets[0].rect[0] - consent[0] - 36.0).abs() < 0.01, "{:?}", second[0].widgets[0].rect);
 }
 
 #[test]
@@ -2209,4 +2219,20 @@ fn pasting_under_a_dialog_does_nothing() {
     h.event(egui::Event::Paste("consent\nshade".into()));
     h.run_steps(3);
     assert_eq!(names(&h), before, "Paste under a dialog pasted fields behind it");
+}
+
+#[test]
+fn a_paste_on_a_turned_page_moves_right_and_down_as_shown() {
+    let (mut h, _clipboard, before) = copy_paste_harness_turned(180);
+    copy_two_fields(&mut h);
+    h.event(egui::Event::Paste("consent\nshade".into()));
+    h.run_steps(3);
+    let s = h.state();
+    let form = &s.session.get(s.views[0].id).unwrap().form;
+    let copy = form.iter().find(|f| !before.contains(&f.name)).unwrap();
+    let source = form.iter().find(|f| f.name == "consent").unwrap();
+    let (a, b) = (source.widgets[0].rect, copy.widgets[0].rect);
+    // Upside down, right and down on screen is left and up in the page's own space.
+    let moved = [b[0] - a[0], b[1] - a[1]];
+    assert!((moved[0] + 18.0).abs() < 0.01 && (moved[1] - 18.0).abs() < 0.01, "{moved:?}");
 }

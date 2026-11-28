@@ -870,9 +870,9 @@ impl Automation {
         }
         let (dx, dy) = (a.opt_num("dx")?.unwrap_or(0.0), a.opt_num("dy")?.unwrap_or(0.0));
         // Points right and down on the displayed page → a move in user space.
-        let p = &doc.info.pages[page];
-        let (o, m) = (p.view_to_user(0.0, 0.0), p.view_to_user(dx as f32, dy as f32));
-        let offset = [f64::from(m[0] - o[0]), f64::from(m[1] - o[1])];
+        let p = doc.info.pages.get(page).ok_or_else(|| failed(format!("page {} does not exist", page + 1)))?;
+        let (o, m) = (p.view_to_user_f64(0.0, 0.0), p.view_to_user_f64(dx, dy));
+        let offset = [m[0] - o[0], m[1] - o[1]];
         let before: Vec<String> = doc.form.iter().map(|f| f.name.clone()).collect();
         let mut out = self.apply(a, Edit::CopyField { name, widgets: Vec::new(), page, offset })?;
         out["field"] = json!(self.doc(a)?.form.iter().map(|f| &f.name).find(|n| !before.contains(n)));

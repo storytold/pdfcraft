@@ -4,7 +4,9 @@
 use super::lifecycle::WIDGET_KEYS;
 use super::look::redraw_field;
 use super::tree::{add_to_fields, add_to_page, ensure_form, free_name, inherited, top_names};
-use super::{Dict, Document, FieldKind, FormError, Object, PdfString, Widget, fields, invalid, page_refs};
+use std::collections::HashMap;
+
+use super::{Dict, Document, Field, FieldKind, FormError, ObjRef, Object, PdfString, Widget, fields, invalid, page_refs};
 
 /// Keys a copy never takes from its source: what ties a field into the tree, names it, or binds
 /// it to a structure element or an XFA template node.
@@ -61,13 +63,13 @@ fn opt_position(name: &[u8]) -> Option<usize> {
 }
 
 /// `name` renamed after the new position `moved` gives its old one, when it is a position.
-fn renumbered(name: &[u8], moved: &std::collections::HashMap<usize, usize>) -> Option<Vec<u8>> {
+fn renumbered(name: &[u8], moved: &HashMap<usize, usize>) -> Option<Vec<u8>> {
     opt_position(name).and_then(|i| moved.get(&i)).map(|j| j.to_string().into_bytes())
 }
 
 /// Rename a copied widget's on states that are `/Opt` positions (in `/AP /N`, `/AP /D` and
 /// `/AS`) after the positions its field's copied `/Opt` gives them. Other names stay.
-fn renumber_states(doc: &Document, w: &mut Dict, moved: &std::collections::HashMap<usize, usize>) {
+fn renumber_states(doc: &Document, w: &mut Dict, moved: &HashMap<usize, usize>) {
     if let Some(mut ap) = w.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()) {
         let mut changed = false;
         for k in [&b"N"[..], b"D"] {
@@ -109,9 +111,44 @@ pub fn copy_field(doc: &mut Document, name: &str, widgets: &[usize], page: usize
     if !offset.iter().all(|v| v.is_finite()) {
         return invalid("the offset must be a finite number");
     }
+    let picked = pick_widgets(f, widgets)?;
+    let own = doc.get(f.obj).as_dict().cloned().unwrap_or_default();
+    let (mut field, moved) = field_half(doc, f, &own, &picked);
+    let signature = field.name(b"FT") == Some(&b"Sig"[..]);
+    let new_name = free_name(&all, &top_names(doc), copy_base(&f.name));
+    field.set(b"T".to_vec(), PdfString::text(&new_name));
+    let place = Place { page: page_ref, offset };
+    let mut kids = Vec::new();
+    for w in &picked {
+        kids.push(widget_half(doc, f, &own, w, signature, &moved, place)?);
+    }
+    let af = ensure_form(doc)?;
+    let top = attach(doc, page_ref, field, kids)?;
+    add_to_fields(doc, af, top)?;
+    if signature {
+        redraw_field(doc, &new_name)?;
+    }
+    // A calculated field's copy calculates too.
+    let co = doc.get(af).as_dict().and_then(|d| d.get(b"CO").cloned()).map(|c| doc.resolve(&c)).and_then(|c| c.as_array().cloned());
+    if let Some(mut co) = co.filter(|co| co.iter().any(|o| o.as_ref() == Some(f.obj))) {
+        co.push(Object::Ref(top));
+        doc.update_dict(af, |d| d.set(b"CO".to_vec(), Object::Array(co)))?;
+    }
+    Ok(new_name)
+}
+
+/// Where a copied widget goes: its page, and how far it moves in user space.
+#[derive(Clone, Copy)]
+struct Place {
+    page: ObjRef,
+    offset: [f64; 2],
+}
+
+/// The widgets of `f` at `widgets` (each once), or every widget when `widgets` is empty.
+fn pick_widgets<'a>(f: &'a Field, widgets: &[usize]) -> Result<Vec<&'a Widget>, FormError> {
     let mut picked: Vec<&Widget> = Vec::new();
     for i in widgets {
-        let w = f.widgets.get(*i).ok_or_else(|| FormError::Invalid(format!("{name} has no widget {i}")))?;
+        let w = f.widgets.get(*i).ok_or_else(|| FormError::Invalid(format!("{} has no widget {i}", f.name)))?;
         if !picked.iter().any(|p| p.obj == w.obj) {
             picked.push(w);
         }
@@ -120,9 +157,13 @@ pub fn copy_field(doc: &mut Document, name: &str, widgets: &[usize], page: usize
         picked = f.widgets.iter().collect();
     }
     if picked.is_empty() {
-        return invalid(format!("{name} has no widget"));
+        return invalid(format!("{} has no widget", f.name));
     }
-    let own = doc.get(f.obj).as_dict().cloned().unwrap_or_default();
+    Ok(picked)
+}
+
+/// The copy's field dictionary, without `/T`, and how its buttons' `/Opt` positions moved.
+fn field_half(doc: &Document, f: &Field, own: &Dict, picked: &[&Widget]) -> (Dict, HashMap<usize, usize>) {
     let mut field = Dict::new();
     for (k, v) in own.iter() {
         if !COPY_DROPS.contains(&k.as_slice()) && !WIDGET_KEYS.contains(&k.as_slice()) {
@@ -134,71 +175,83 @@ pub fn copy_field(doc: &mut Document, name: &str, widgets: &[usize], page: usize
         field.set(k.clone(), v.clone());
     }
     // A signature's value is someone's signature: the copy is a blank signature field.
-    let signature = field.name(b"FT") == Some(&b"Sig"[..]);
-    if signature {
+    if field.name(b"FT") == Some(&b"Sig"[..]) {
         field.remove(b"V");
         field.remove(b"Lock");
     }
-    // A check box or radio group's /Opt holds one export value per widget: the copied ones'.
-    // When its on states are named after those positions (/0, /1 ...), the copies' are renamed
-    // after their new ones, and a value naming a button left behind is off.
-    let mut moved = std::collections::HashMap::new();
-    if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
-        let opt = field.get(b"Opt").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned());
-        if let Some(opt) = opt.filter(|o| o.len() == f.widgets.len()) {
-            let at: Vec<usize> = picked.iter().filter_map(|p| f.widgets.iter().position(|w| w.obj == p.obj)).collect();
-            field.set(b"Opt".to_vec(), Object::Array(at.iter().filter_map(|i| opt.get(*i).cloned()).collect()));
-            if f.widgets.iter().enumerate().all(|(i, w)| w.on_state.as_deref().and_then(|s| opt_position(s.as_bytes())) == Some(i)) {
-                moved = at.iter().enumerate().map(|(new, old)| (*old, new)).collect();
-                for k in [&b"V"[..], b"DV"] {
-                    let v = field.get(k).map(|v| doc.resolve(v)).and_then(|v| v.as_name().map(<[u8]>::to_vec));
-                    if let Some(v) = v.filter(|v| opt_position(v).is_some()) {
-                        field.set(k.to_vec(), Object::Name(renumbered(&v, &moved).unwrap_or_else(|| b"Off".to_vec())));
-                    }
-                }
-            }
-        }
-    }
+    let moved = if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) { copy_opt(doc, f, picked, &mut field) } else { HashMap::new() };
     // Radio buttons copied without the selected one: none of the copies is selected.
     if f.kind == FieldKind::Radio && !f.value.iter().any(|v| picked.iter().any(|w| w.on_state.as_ref() == Some(v))) {
         field.set(b"V".to_vec(), Object::name("Off"));
     }
-    let new_name = free_name(&all, &top_names(doc), copy_base(&f.name));
-    field.set(b"T".to_vec(), PdfString::text(&new_name));
-    let mut kids = Vec::new();
-    for w in &picked {
-        let mut d = if w.obj == f.obj {
-            let mut d = Dict::new();
-            for k in WIDGET_KEYS {
-                if let Some(v) = own.get(k) {
-                    d.set(k.to_vec(), v.clone());
-                }
-            }
-            d
-        } else {
-            doc.get(w.obj).as_dict().cloned().unwrap_or_default()
-        };
-        for k in COPY_DROPS {
-            d.remove(k);
-        }
-        // The signer's visible signature isn't the copy's: redrawn blank below.
-        if signature {
-            d.remove(b"AP");
-            d.remove(b"AS");
-        }
-        renumber_states(doc, &mut d, &moved);
-        own_look(doc, &mut d);
-        d.set(b"P".to_vec(), Object::Ref(page_ref));
-        let r = w.rect;
-        let rect = [r[0] + offset[0], r[1] + offset[1], r[2] + offset[0], r[3] + offset[1]];
-        if !rect.iter().all(|v| v.is_finite()) {
-            return invalid("the offset moves the field out of range");
-        }
-        d.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|v| Object::Real(*v)).collect()));
-        kids.push(d);
+    (field, moved)
+}
+
+/// A check box or radio group's /Opt holds one export value per widget: the copied ones'.
+/// When its on states are named after those positions (/0, /1 ...), the copies' are renamed
+/// after their new ones, and a value naming a button left behind is off. Returns the moves.
+fn copy_opt(doc: &Document, f: &Field, picked: &[&Widget], field: &mut Dict) -> HashMap<usize, usize> {
+    let opt = field.get(b"Opt").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned());
+    let Some(opt) = opt.filter(|o| o.len() == f.widgets.len()) else { return HashMap::new() };
+    let at: Vec<usize> = picked.iter().filter_map(|p| f.widgets.iter().position(|w| w.obj == p.obj)).collect();
+    field.set(b"Opt".to_vec(), Object::Array(at.iter().filter_map(|i| opt.get(*i).cloned()).collect()));
+    if !f.widgets.iter().enumerate().all(|(i, w)| w.on_state.as_deref().and_then(|s| opt_position(s.as_bytes())) == Some(i)) {
+        return HashMap::new();
     }
-    let af = ensure_form(doc)?;
-    let top = match kids.pop() {
+    let moved: HashMap<usize, usize> = at.iter().enumerate().map(|(new, old)| (*old, new)).collect();
+    for k in [&b"V"[..], b"DV"] {
+        let v = field.get(k).map(|v| doc.resolve(v)).and_then(|v| v.as_name().map(<[u8]>::to_vec));
+        if let Some(v) = v.filter(|v| opt_position(v).is_some()) {
+            field.set(k.to_vec(), Object::Name(renumbered(&v, &moved).unwrap_or_else(|| b"Off".to_vec())));
+        }
+    }
+    moved
+}
+
+/// The copy of widget `w`, placed by `place`, with a look of its own.
+fn widget_half(
+    doc: &mut Document,
+    f: &Field,
+    own: &Dict,
+    w: &Widget,
+    signature: bool,
+    moved: &HashMap<usize, usize>,
+    place: Place,
+) -> Result<Dict, FormError> {
+    let mut d = if w.obj == f.obj {
+        let mut d = Dict::new();
+        for k in WIDGET_KEYS {
+            if let Some(v) = own.get(k) {
+                d.set(k.to_vec(), v.clone());
+            }
+        }
+        d
+    } else {
+        doc.get(w.obj).as_dict().cloned().unwrap_or_default()
+    };
+    for k in COPY_DROPS {
+        d.remove(k);
+    }
+    // The signer's visible signature isn't the copy's: the caller redraws it blank.
+    if signature {
+        d.remove(b"AP");
+        d.remove(b"AS");
+    }
+    renumber_states(doc, &mut d, moved);
+    own_look(doc, &mut d);
+    d.set(b"P".to_vec(), Object::Ref(place.page));
+    let (r, o) = (w.rect, place.offset);
+    let rect = [r[0] + o[0], r[1] + o[1], r[2] + o[0], r[3] + o[1]];
+    if !rect.iter().all(|v| v.is_finite()) {
+        return invalid("the offset moves the field out of range");
+    }
+    d.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|v| Object::Real(*v)).collect()));
+    Ok(d)
+}
+
+/// Adds the copy to the document and to `page_ref`'s annotations. Returns its top object.
+fn attach(doc: &mut Document, page_ref: ObjRef, mut field: Dict, mut kids: Vec<Dict>) -> Result<ObjRef, FormError> {
+    match kids.pop() {
         // One widget: field and widget in one dictionary, as added fields are.
         Some(only) if kids.is_empty() => {
             for (k, v) in only.iter() {
@@ -206,7 +259,7 @@ pub fn copy_field(doc: &mut Document, name: &str, widgets: &[usize], page: usize
             }
             let r = doc.add(Object::Dict(field));
             add_to_page(doc, page_ref, r)?;
-            r
+            Ok(r)
         }
         last => {
             kids.extend(last);
@@ -219,18 +272,7 @@ pub fn copy_field(doc: &mut Document, name: &str, widgets: &[usize], page: usize
                 refs.push(Object::Ref(r));
             }
             doc.update_dict(parent, |d| d.set(b"Kids".to_vec(), Object::Array(refs)))?;
-            parent
+            Ok(parent)
         }
-    };
-    add_to_fields(doc, af, top)?;
-    if signature {
-        redraw_field(doc, &new_name)?;
     }
-    // A calculated field's copy calculates too.
-    let co = doc.get(af).as_dict().and_then(|d| d.get(b"CO").cloned()).map(|c| doc.resolve(&c)).and_then(|c| c.as_array().cloned());
-    if let Some(mut co) = co.filter(|co| co.iter().any(|o| o.as_ref() == Some(f.obj))) {
-        co.push(Object::Ref(top));
-        doc.update_dict(af, |d| d.set(b"CO".to_vec(), Object::Array(co)))?;
-    }
-    Ok(new_name)
 }

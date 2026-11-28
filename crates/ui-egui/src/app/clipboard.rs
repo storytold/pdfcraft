@@ -213,7 +213,9 @@ impl PdfCraftApp {
         let text = delivered_text
             .or_else(|| if self.clipboard.has(&[TEXT]) { self.clipboard.read_text().ok().flatten().filter(|t| !t.is_empty()) } else { None });
         let image = delivered_image.or_else(|| self.clipboard.read_image().ok().flatten());
-        if self.is_preparing() && self.paste_fields(i, text.as_deref()) {
+        // Prepare a form keeps Paste for its fields: anything else on the clipboard pastes nothing.
+        if self.is_preparing() {
+            self.paste_fields(i, text.as_deref());
             return;
         }
         if self.quick_tool == QuickTool::EditText && self.object_clipboard.is_some() && self.pastes_objects(text.as_deref(), image.as_ref()) {
@@ -246,19 +248,16 @@ impl PdfCraftApp {
     }
 
     /// Paste while preparing a form: the fields Copy took, when the clipboard still holds their
-    /// copy (`text`). `false` when it holds something else.
-    fn paste_fields(&mut self, i: usize, text: Option<&str>) -> bool {
-        let Some(view) = self.views.get_mut(i) else { return false };
-        if !crate::prepare::pastes_fields(&view.session.prepare, text) {
-            return false;
+    /// copy (`text`), they still exist, and the document may be changed.
+    fn paste_fields(&mut self, i: usize, text: Option<&str>) {
+        let Some(view) = self.views.get_mut(i) else { return };
+        let Some(doc) = self.session.get(view.id) else { return };
+        if !crate::prepare::pastes_fields(&view.session.prepare, text) || !doc.allows_modification() {
+            return;
         }
-        let Some(doc) = self.session.get(view.id) else { return false };
-        if !doc.allows_modification() {
-            return false;
+        if let Some(edit) = crate::prepare::paste_copied(view, &doc.form, &doc.info.pages) {
+            view.session.pending_edit = Some(edit);
         }
-        let edit = crate::prepare::paste_copied(view, &doc.form);
-        view.session.pending_edit = edit;
-        true
     }
 
     /// Copy in Edit a PDF with objects selected together: copy them for Paste in any open
