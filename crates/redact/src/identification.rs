@@ -1,12 +1,12 @@
 //! The PDF/A and PDF/UA identification of a document XMP packet the metadata check removes
 //! (#2539 review).
 //!
-//! The scrub removes the catalog's XMP packet whole when it holds the removed text, and the
-//! packet is where a file says it conforms to PDF/A (ISO 19005, the `pdfaid` schema) or PDF/UA
-//! (ISO 14289, `pdfuaid`). Rather than drop that claim silently, the scrub writes back a packet
-//! holding only those identification properties, read by namespace (not by prefix), each
-//! checked to be the short code it must be (a part number, a conformance letter, a year), and
-//! none of them holding the removed text. Nothing else of the old packet is copied. What became
+//! The scrub removes the catalog's XMP packet whole when it holds the removed text or a
+//! thumbnail (#7921), and the packet is where a file says it conforms to PDF/A (ISO 19005, the
+//! `pdfaid` schema) or PDF/UA (ISO 14289, `pdfuaid`). Rather than drop that claim silently, the
+//! scrub writes back a packet holding only those identification properties, read by namespace
+//! (not by prefix), each checked to be the short code it must be (a part number, a conformance
+//! letter, a year), and none of them holding the removed text. Nothing else of the old packet is copied. What became
 //! of each claim is reported ([`Identification`]).
 
 use pdfcraft_cos::{Dict, Document, Object, Stream};
