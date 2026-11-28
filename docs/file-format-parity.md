@@ -1,6 +1,6 @@
 # File format parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-22 · **Change:** minor (Word, Excel, PowerPoint, OpenDocument and RTF open through an installed LibreOffice; `.p7b`/`.p7c` bundles read for trust import) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-26 · **Last updated:** 2026-11-26 · **Change:** minor (rows brought up to date with the code and `parity/acrobat-features.toml`: PCX in Create PDF, the portfolio view, Markdown export, and OCR's editable output, second engine, scan clean-up and camera images) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every format Acrobat Pro reads or writes, and PdfCraft's support for it. Acrobat's list comes from
 its bundle's `Info.plist` `CFBundleDocumentTypes` (what it opens) and its public documentation
@@ -28,7 +28,7 @@ features total).
 | Damaged PDF | R (repair) | R (repair, logged) | high | `core.repair-broken-files`, nightly fuzzing |
 | PDF/A-1, 2, 3, 4 | R W, verify | R; verify/convert 2b and 3b (partial) | basic | `optimize.pdfa-*`; veraPDF not yet used as oracle |
 | PDF/X, PDF/UA, PDF/E, PDF/VT | R W, verify | R only | none | [pdf-spec-parity.md](pdf-spec-parity.md) |
-| PDF Portfolio (collection) | R W | R as a PDF with attachments; no portfolio view | none | `organize.portfolio-*` planned |
+| PDF Portfolio (collection) | R W | R: opens the document its `/D` names, and lists its files in the Attachments panel, each PDF opening in a tab; no details or tile view, folders, preview or saving edits back; no creating or extracting | basic | `organize.portfolio-view` partial; `organize.portfolio-extract`, `organize.portfolio-create` planned |
 | XFA forms (in PDF) | R W (fill) | R, lay out dynamic forms, fill, save datasets (partial) | basic | `form.xfa-*` partial; `crates/xfa` tests |
 
 ## Data and interchange formats
@@ -64,7 +64,7 @@ features total).
 | Source | Acrobat | PdfCraft | Fidelity | Tests and evidence |
 |---|---|---|---|---|
 | JPEG, PNG, TIFF (multipage, and BigTIFF), GIF, BMP, JPEG 2000 | yes | yes (ICC profiles kept; DPI choices) | good | `create.from-images`, `create.from-multipage-tiff`, `bigtiff_images_become_pages` |
-| PCX | yes | no | none | in Acrobat's document types |
+| PCX | yes | yes: 8-bit with 1 or 3 planes and 1-bit with 1 to 4 planes; other layouts are refused | good | `pcx_images_become_pages`, `a_pcx_run_may_cross_planes_but_not_scanlines` (#6396, #7378); not yet named in `create.from-images` |
 | Plain text | yes | yes | good | `create.from-text` |
 | Clipboard (image or text) | yes | yes | good | `create.from-clipboard` |
 | Screenshot | yes | no | none | `create.from-screenshot` planned |
@@ -86,6 +86,7 @@ features total).
 | PowerPoint (`.pptx`) | yes | slides per page: title from largest text, body text, images, tables (no slide overflow reflow / normAutofit; first page sets presentation dimensions) | basic | `create.export-pptx` partial |
 | RTF | yes | yes | basic | `create.export-rtf` |
 | HTML (single page, multiple pages) | yes | single file with headings, paragraphs, images, tables | basic | `create.export-html` partial |
+| Markdown | no | CommonMark with pipe tables: headings, bold and italic, tables, page rules; no menu item, images, lists or links | basic | `create.export-markdown` partial (not an Acrobat export; #1595, #5208) |
 | Plain text | yes | yes (reading order) | good (word-F1 0.98 vs `pdftotext`; reading order is scored separately, because F1 cannot see it) | `create.export-text`, `xtask text-oracle` |
 | Accessible text (from tags) | yes | no | none | `create.export-accessible-text` planned |
 | PNG, JPEG, TIFF | yes | yes | good | `create.export-png`, `create.export-jpeg-tiff` |
@@ -100,16 +101,17 @@ features total).
 | Capability | Acrobat | PdfCraft | Fidelity |
 |---|---|---|---|
 | Searchable image (invisible text layer) | yes | yes (Tr 3 text fitted to word boxes) | good for English |
-| Editable text and images output | yes | no | none |
-| Languages | dozens (Latin with accents, Cyrillic, Greek, CJK, Arabic, Hebrew, Indic) | Latin without accents only (ocrs models) | **basic** (#744) |
-| Deskew, rotation, despeckle, background and halo removal, descreen | yes | no | none |
-| Camera images (edges, perspective, whiteboard, card) | yes | no | none |
+| Editable text and images output | yes | on demand, per edit: recognised phrases open in Edit text & images and are redrawn visibly over the scan; `ocr_recognize` can write visible text; known limits in `ocr.editable-text-output` | basic |
+| Languages | dozens (Latin with accents, Cyrillic, Greek, CJK, Arabic, Hebrew, Indic) | ocrs: Latin without accents only; an installed tesseract adds 12 allow-listed languages, as far as its language packs go, and an Automatic mode merges both engines | **basic** (#744; quality beyond English untested) |
+| Deskew, rotation, despeckle, background and halo removal, descreen | yes | opt-in rotation (quarter turns) and deskew (±5°) before recognition, proven at the preprocessing layer only; despeckle, background and edge-shadow removal through Enhance scanned file; no halo removal or descreen | basic |
+| Camera images (edges, perspective, whiteboard, card) | yes | Enhance camera image: edges found or set by hand, perspective straightened, then a clean-up level; no whiteboard or card types | basic |
 | MRC (adaptive) compression, PDF/A output of scans | yes | no | none |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-26 | minor | Rows brought up to date: Create PDF reads PCX (#6396, #7378); the portfolio view is partial (#5259); Markdown export is listed (#5208); OCR's editable output, the tesseract engine and its languages, rotation and deskew, scan clean-up and camera images are basic, not none. |
 | 2026-10-22 | minor | Office documents (Word, Excel, PowerPoint, OpenDocument, RTF) open from File ▸ Open as new PDFs, converted by an installed LibreOffice; `create.from-office` partial. |
 | 2026-10-19 | patch | Certificates row: `.p7b`/`.p7c` bundles (DER or PEM `PKCS7`/`CMS`) are read for trust import. |
 | 2026-10-12 | minor | XDP split into data (read and write for XFA forms, already shipped under `form.xfa-data`) and opening `.xdp` as a document (none). Create PDF reads BigTIFF; malformed GIF headers are no longer detected as images. |
