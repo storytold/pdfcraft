@@ -4,8 +4,12 @@
 //!
 //! Binding is the default "normal" one: a field's data node is named after the field and nested
 //! under nodes named after its named ancestor subforms, repeated instances as repeated sibling
-//! elements. Areas are named in SOM expressions but are not data scopes, so their contents bind
-//! under the area's parent ([`data_path`]). Explicit `bind ref` expressions are not followed.
+//! elements. Areas, and subforms marked `<bind match="none"/>`, are named in SOM expressions but
+//! are not data scopes, so their contents bind under their parent ([`data_path`]). A field,
+//! exclusion group or subform with `<bind match="dataRef" ref="…"/>` binds to the node the
+//! reference names (`$record`, `$data`, `$.` or a relative name, each segment with an optional
+//! `[n]` or `[*]`, whose instances objects with the same reference take in turn); a reference
+//! past that binds by name.
 
 use std::collections::HashMap;
 
@@ -34,8 +38,8 @@ pub use dates::{iso_to_pattern, pattern_to_iso};
 pub(crate) use import::MAX_IMPORT_BYTES;
 pub use import::{DataImport, ImportNode, export_data, import_data, parse_data_file, write_data_image};
 pub use passwords::{clear_password_values, has_password_values};
-pub use path::{data_path, parse_datasets, som_to_path};
-pub(crate) use path::{fields_with_ids, template_field, template_object};
+pub use path::{binds_elsewhere, data_path, parse_datasets, same_template_object, som_to_path};
+pub(crate) use path::{data_instances, fields_with_ids, mark_bindings, number_star_refs, template_field, template_object};
 pub use values::{FieldData, FieldDatum, is_on, name_text, radio_dataset_value, radio_state_for_item, read_values, read_values_with};
 #[cfg(test)]
 pub(crate) use write::ENSURED;

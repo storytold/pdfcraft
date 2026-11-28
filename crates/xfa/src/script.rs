@@ -313,10 +313,7 @@ impl Walker<'_> {
             let sib = sibs.at(i);
             match n {
                 Node::Subform(sf) => {
-                    let from_data = match (&sf.common.name, self.data) {
-                        (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
-                        _ => 0,
-                    };
+                    let from_data = self.data.map_or(0, |d| crate::data::data_instances(self.tpl, d, sf, parent_som));
                     let instances = crate::layout::instance_count(&sf.occur, from_data);
                     for k in 0..instances {
                         // The first instance was counted above.
@@ -834,7 +831,9 @@ pub fn path_is_embedded(tpl: &Template, path: &crate::DataPath) -> bool {
 /// field inside an area shares its node with one outside, since areas are left out of data
 /// paths), the value [`form_tree`] would give it from `data` now, so a value change needs no
 /// rebuild of the tree. The walk follows the data path only (through areas and unnamed
-/// containers, which have no data segment), so it costs the depth, not the form. `None`: a
+/// containers, which have no data segment), so it costs the depth, not the form, except in a
+/// template with explicit bindings ([`Template::explicit_binds`]), where each field's own data
+/// path is compared. `None`: a
 /// node bound there is not a plain field the tree can refresh alone (a radio button, an
 /// exclusion group, an object the template doesn't have): rebuild the tree.
 pub fn refresh_value(live: &mut FormNode, tpl: &Template, data: Option<&DataNode>, som: &str) -> Option<bool> {
@@ -842,6 +841,45 @@ pub fn refresh_value(live: &mut FormNode, tpl: &Template, data: Option<&DataNode
     let path = data_path(tpl, som);
     if path.is_empty() {
         return None;
+    }
+    // Where data paths don't follow the form's names (a `match="none"` section, a field bound
+    // by a reference), the fields bound to the node can be anywhere: each field's own path
+    // is compared instead of walking down the names.
+    if tpl.explicit_binds {
+        fn every(
+            n: &mut FormNode,
+            tpl: &Template,
+            data: Option<&DataNode>,
+            path: &[(String, usize)],
+            changed: &mut bool,
+            depth: usize,
+        ) -> Option<()> {
+            if depth > MAX_DEPTH {
+                return Some(());
+            }
+            for c in n.children.iter_mut() {
+                match c.kind {
+                    Some(NodeKind::Field) => {
+                        if data_path(tpl, &c.som) == path {
+                            let f = crate::data::template_field(tpl, &c.som)?;
+                            let value = Walker::plain_field_value(tpl, data, f, &c.som);
+                            if c.value != value {
+                                c.value = value;
+                                *changed = true;
+                            }
+                        }
+                    }
+                    // Not a plain field the tree can refresh alone: rebuild the tree.
+                    Some(NodeKind::ExclGroup) if data_path(tpl, &c.som) == path => return None,
+                    Some(NodeKind::ExclGroup) => {}
+                    _ => every(c, tpl, data, path, changed, depth + 1)?,
+                }
+            }
+            Some(())
+        }
+        let mut changed = false;
+        every(live, tpl, data, &path, &mut changed, 0)?;
+        return Some(changed);
     }
     /// Down the one branch of `n` that `path` leads to from segment `pos`, giving each field
     /// bound there its value from `data`; `None` when something there needs a rebuild.
