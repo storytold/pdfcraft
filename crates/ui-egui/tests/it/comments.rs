@@ -5247,3 +5247,54 @@ fn comment_menu_rows_follow_permissions_and_run_their_action() {
     }
     attachment_page_menu_row();
 }
+
+/// Advanced Search with Include comments lists a reply's match under its page and goes to its
+/// thread; with comments hidden the same result selects nothing, so Delete has no target.
+#[test]
+fn advanced_search_finds_a_reply_and_selects_its_thread_unless_comments_are_hidden() {
+    let mut h = harness_with_bytes(PER_PAGE_NAMES.to_vec(), |_| {});
+    assert!(h.execute("edit.advanced_search"));
+    h.run_steps(2);
+    h.get_by_label("Include comments").click();
+    h.run_steps(1);
+    h.state_mut().views[0].find.as_mut().expect("Advanced Search opens a search").query = "page two".into();
+    h.run_steps(3);
+    h.get_by_label("1 instance");
+    h.get_by_label("Page 2");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SEARCH_SHOTS") {
+        let _gpu = crate::gpu();
+        h.render().unwrap().save(std::path::Path::new(&dir).join("search-comments.png")).unwrap();
+    }
+    h.get_by_label("Note: Reply on page two").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].session.comments.selection(), vec![(1, 0)], "the reply's thread");
+    assert_eq!(h.state().views[0].current(), 1);
+
+    assert!(h.execute("comment.hide_all"));
+    h.run_steps(2);
+    h.state_mut().views[0].find.as_mut().expect("still searching").query = "two".into();
+    h.run_steps(3);
+    // A selection left from before hiding: going to the hidden result must not keep it.
+    h.state_mut().views[0].session.comments.select_keys(&[(1, 0)]);
+    h.get_by_label("Note: Reply on page two").click();
+    h.run_steps(3);
+    assert!(h.state().views[0].session.comments.selection().is_empty(), "a hidden comment is not selected");
+}
+
+/// Include comments is reachable without the interface: the `find-comments` option.
+#[test]
+fn the_find_comments_option_turns_include_comments_on_and_off() {
+    let mut h = harness_with_bytes(PER_PAGE_NAMES.to_vec(), |_| {});
+    let ctx = egui::Context::default();
+    assert!(h.execute("edit.advanced_search"));
+    h.run_steps(2);
+    for (key, value) in [("find", "page two"), ("find-comments", "on")] {
+        h.state_mut().set_option(&ctx, key, value).unwrap();
+    }
+    h.run_steps(3);
+    h.get_by_label("Note: Reply on page two");
+    h.state_mut().set_option(&ctx, "find-comments", "off").unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label("Note: Reply on page two").is_none());
+    assert!(h.state_mut().set_option(&ctx, "find-comments", "maybe").is_err());
+}

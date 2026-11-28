@@ -2,10 +2,12 @@
 use craft::behavior::kurbo::Point;
 use craft::behavior::overlay::Align;
 use craft::pages::ui::TextMark;
-use craft::text::find::{FindMatches, FindOptions};
+use craft::text::find::{FindMatch, FindMatches, FindOptions};
 use craft::text::ui::find::{FindBar, FindBarState, FindRequest};
 use craft::ui::canvas_controls::TaskBar;
+use pdfcraft_render::DocInfo;
 
+use super::find_comments::{CommentHit, comment_hits};
 use super::{DocView, Rect, ViewAction};
 
 /// The find bar (⌘F): query, matches across the document, current match.
@@ -25,6 +27,25 @@ pub struct Find {
     /// Find and replace (in Edit text mode): the Replace row shows, with what replaces a match.
     pub replacing: bool,
     pub replacement: String,
+    /// Include comments (Search panel): comment threads are found as well as page text.
+    pub include_comments: bool,
+    /// The threads found, in page order, while Include comments is on with a query.
+    pub comment_hits: Vec<CommentHit>,
+    /// What `comment_hits` were found for: query, options and the annotations' fingerprint.
+    comments_for: Option<(String, bool, bool, u64)>,
+    /// The comment the reader went to from the results.
+    picked: Option<PickedComment>,
+}
+
+/// A comment the reader went to from the Search panel. It stays the current result while the
+/// Comments selection is that thread alone (edits keep the selection on the right thread) and
+/// the reader has not moved to another text match since.
+struct PickedComment {
+    key: (usize, usize),
+    /// The current text match when the comment was picked.
+    text: Option<FindMatch>,
+    /// Comments were hidden: the thread was gone to but not selected.
+    hidden: bool,
 }
 
 impl Find {
@@ -53,6 +74,7 @@ impl DocView {
 
     /// Re-run the search on all pages whose text is known (after the query changed).
     pub fn rerun_find(&mut self) {
+        self.release_find_comment();
         let current = self.view.current;
         let Some(f) = self.find.as_mut() else { return };
         f.case_query = f.query.clone();
@@ -113,6 +135,7 @@ impl DocView {
     /// `flash_match` alone.
     pub(super) fn show_current_match(&mut self) {
         let Some(p) = self.find.as_ref().and_then(|f| f.matches.current_match()).map(|m| m.page) else { return };
+        self.leave_comments_for_text();
         self.go_to_page(p);
         self.flash_match(p);
     }
@@ -157,6 +180,109 @@ impl DocView {
                 Some((y, h)) => self.view.go_to_point(page, Point::new(f64::NAN, y.clamp(0.0, h)), (0.5, 0.5)),
                 None => self.view.go_to(page),
             }
+        }
+    }
+
+    /// Bring the comment results up to date with the query, options and annotations, and let the
+    /// picked comment follow the Comments selection. Comments are searched only while Include
+    /// comments is on with a query.
+    pub fn sync_comment_hits(&mut self, info: &DocInfo) {
+        let Some(f) = self.find.as_ref() else { return };
+        if !f.include_comments || f.case_query.trim().is_empty() {
+            // Released first: the hits tell which outline is Find's.
+            self.release_find_comment();
+            if let Some(f) = self.find.as_mut() {
+                f.comment_hits.clear();
+                f.comments_for = None;
+            }
+            return;
+        }
+        let Some(f) = self.find.as_mut() else { return };
+        let wanted = (f.case_query.clone(), f.options.match_case, f.options.whole_word, annotations_fingerprint(info));
+        // An edit changed the annotations: the app moved the selection with its thread, so a
+        // different key is the same thread. Without an edit, a different key is the reader's choice.
+        let edited = f.comments_for.as_ref().is_some_and(|old| old.3 != wanted.3);
+        if f.comments_for.as_ref() != Some(&wanted) {
+            f.comment_hits = comment_hits(info, &wanted.0, wanted.1, wanted.2);
+            f.comments_for = Some(wanted);
+        }
+        let selection = self.session.comments.selection();
+        let Some(f) = self.find.as_mut() else { return };
+        let text = f.matches.current_match().cloned();
+        f.picked = f.picked.take().and_then(|mut picked| {
+            if picked.text != text {
+                return None;
+            }
+            // No selection follows a hidden thread through an edit, so its old key may name another.
+            if picked.hidden {
+                return (!edited).then_some(picked);
+            }
+            let [key] = selection.as_slice() else { return None };
+            if *key != picked.key && !edited {
+                return None;
+            }
+            picked.key = *key;
+            Some(picked)
+        });
+    }
+
+    /// The comment result that is current, by its place in `comment_hits`.
+    pub fn current_comment(&self) -> Option<usize> {
+        let f = self.find.as_ref()?;
+        let key = f.picked.as_ref()?.key;
+        f.comment_hits.iter().position(|hit| hit.key() == key)
+    }
+
+    /// Go to comment result `i`. A visible thread is selected and outlined, as a click on its
+    /// Comments card does. While comments are hidden the view goes to it, but nothing is selected
+    /// or outlined, so Delete cannot act on a comment the reader does not see.
+    pub fn go_to_comment(&mut self, i: usize, info: &DocInfo, hidden: bool) {
+        let Some(f) = self.find.as_mut() else { return };
+        let Some(hit) = f.comment_hits.get(i).cloned() else { return };
+        f.matches.stop_following();
+        f.picked = Some(PickedComment { key: hit.key(), text: f.matches.current_match().cloned(), hidden });
+        if hidden {
+            self.session.comments.clear_selection();
+        } else {
+            self.session.comments.select_only(hit.key());
+            self.session.comments.reveal = true;
+        }
+        self.reveal_rect(hit.page, hit.rect, info);
+        self.session.flash = (!hidden).then_some((hit.page, hit.rect, 0.0));
+    }
+
+    /// Set Advanced Search's Include comments. Turning it off releases a comment Find selected
+    /// here, since only the open panel brings the comment results up to date.
+    pub fn set_include_comments(&mut self, on: bool) {
+        if !on {
+            self.release_find_comment();
+        }
+        self.find.get_or_insert_with(Find::default).include_comments = on;
+    }
+
+    /// Explicit navigation to page text while comments are searched too (a text result, Find
+    /// Next, the bar's arrows): no comment stays selected, so Delete cannot act on one while the
+    /// result shown is page text.
+    fn leave_comments_for_text(&mut self) {
+        if let Some(f) = self.find.as_mut().filter(|f| f.include_comments) {
+            f.picked = None;
+            self.session.comments.clear_selection();
+        }
+    }
+
+    /// Forget the picked comment; a selection Find made is released, one the reader made stays.
+    fn release_find_comment(&mut self) {
+        let Some(f) = self.find.as_mut() else { return };
+        let Some(picked) = f.picked.take() else { return };
+        if picked.hidden {
+            return;
+        }
+        if self.session.comments.selection() == [picked.key] {
+            self.session.comments.clear_selection();
+        }
+        let outline = f.comment_hits.iter().find(|hit| hit.key() == picked.key).map(|hit| (hit.page, hit.rect));
+        if outline.is_some() && self.session.flash.map(|(page, rect, _)| (page, rect)) == outline {
+            self.session.flash = None;
         }
     }
 
@@ -211,4 +337,16 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
         // The bar already stepped the matches.
         view.show_current_match();
     }
+}
+
+/// Changes whenever a comment result could change: a comment's place, text, author, type or thread.
+fn annotations_fingerprint(info: &DocInfo) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for a in &info.annotations {
+        (a.page, a.index, &a.subtype, &a.intent, &a.contents, &a.author, &a.name, &a.in_reply_to, a.parent, a.grouped, a.no_rotate).hash(&mut hasher);
+        a.rect.map(f32::to_bits).hash(&mut hasher);
+    }
+    info.pages.iter().map(|page| page.rotation).collect::<Vec<_>>().hash(&mut hasher);
+    hasher.finish()
 }
