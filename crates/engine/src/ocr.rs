@@ -816,11 +816,16 @@ impl OcrJob {
     pub fn render_scale(&self, page: usize) -> f32 {
         let wanted = self.settings.dpi.clamp(72.0, 600.0) / 72.0;
         let Some(native) = self.native.get(page).copied().flatten() else { return wanted };
-        // A scan whose page is larger than a sheet (often a box given in pixels, one point per
-        // pixel, #1848) is measured as if shrunk to one: otherwise 1 px/pt is already its full
-        // image, and no "Downsample to" choice could ask for less.
-        let fit = self.infos.get(page).map_or(1.0, |i| (SHEET / i.width.max(i.height).max(1e-3)).min(1.0));
+        let fit = self.sheet_fit(page);
         native.clamp(fit, wanted * fit)
+    }
+
+    /// A scan whose page is larger than a sheet (often a box given in pixels, one point per
+    /// pixel, #1848) is measured as if shrunk to one: otherwise 1 px/pt is already its full
+    /// image, and no "Downsample to" choice could ask for less. This is that shrink, 1 for a
+    /// page no larger than a sheet.
+    fn sheet_fit(&self, page: usize) -> f32 {
+        self.infos.get(page).map_or(1.0, |i| (SHEET / i.width.max(i.height).max(1e-3)).min(1.0))
     }
 
     /// Whether any of the job's pages already has text (at least one non-blank run): the
@@ -922,11 +927,22 @@ impl OcrSteps {
         // page is then ENLARGED before recognition (the Lanczos policy): 72-dpi letters are
         // too small for the recognisers, and declaring a finer resolution adds no pixels.
         let scale = self.job.render_scale(page);
-        let resolution = if scale * 72.0 < 150.0 {
-            pdfcraft_ocr::resolution::ResolutionPolicy::UpscaleLanczos { factor: 3 }
-        } else {
-            pdfcraft_ocr::resolution::ResolutionPolicy::Native
+        let mut options = pdfcraft_ocr::preprocess::PreprocessOptions {
+            auto_rotate: settings.auto_rotate,
+            deskew: settings.deskew,
+            denoise: settings.denoise,
+            binarize: settings.binarize,
+            resolution: pdfcraft_ocr::resolution::ResolutionPolicy::Native,
         };
+        // The scan's resolution on paper, measured as render_scale measures it: a page given in
+        // pixels (#1848) renders at 1 px/pt whatever its resolution, so `scale` alone would call
+        // every such scan 72 dpi and enlarge a 300-dpi one past the raster caps. With any step
+        // on, preprocessing already brings the raster to 300 dpi; enlarging it again would only
+        // pass the caps too.
+        let paper_dpi = scale * 72.0 / self.job.sheet_fit(page);
+        if !options.any() && paper_dpi < 150.0 {
+            options.resolution = pdfcraft_ocr::resolution::ResolutionPolicy::UpscaleLanczos { factor: 3 };
+        }
         let shot = r.render(RenderRequest { page, scale, ..Default::default() });
         if let Some(e) = shot.error {
             return Err(skip(&e));
@@ -948,18 +964,7 @@ impl OcrSteps {
         // back in processed coordinates and are mapped to the ORIGINAL raster's before
         // placement. The render dpi is the real one (pixels per point × 72), never a
         // fixed value.
-        let pre = pdfcraft_ocr::preprocess::preprocess(
-            image,
-            scale * 72.0,
-            &pdfcraft_ocr::preprocess::PreprocessOptions {
-                auto_rotate: settings.auto_rotate,
-                deskew: settings.deskew,
-                denoise: settings.denoise,
-                binarize: settings.binarize,
-                resolution,
-            },
-        )
-        .map_err(|e| skip(&e.to_string()))?;
+        let pre = pdfcraft_ocr::preprocess::preprocess(image, scale * 72.0, &options).map_err(|e| skip(&e.to_string()))?;
         let pixels = [pre.image.width() as f32, pre.image.height() as f32];
         Ok(OcrShot {
             page,
@@ -1667,6 +1672,40 @@ mod tests {
         let glyphs: Vec<[f32; 4]> = text.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect();
         let coverage = covered([0.0, 0.0, size[0] as f32, size[1] as f32], &glyphs);
         (glyphs.len(), coverage)
+    }
+
+    /// The Lanczos enlargement is for scans whose letters are too small. A 72-dpi letter scan is
+    /// enlarged; a 300-dpi scan whose page is given in pixels (#1848) is read as rendered, not
+    /// judged 72 dpi and enlarged past the raster caps; and with a cleanup step on, which brings
+    /// the raster to 300 dpi itself, nothing is enlarged a second time. No page is skipped.
+    #[test]
+    fn only_scans_below_legible_resolution_are_enlarged() {
+        let s = Session::new();
+        let text = s.create_from_text("t", "The quick brown fox jumps over the lazy dog.").unwrap();
+        let mut viewer = Session::new();
+        let id = viewer.open("text.pdf", None, text, None).unwrap();
+        let scan = |dpi: f64| {
+            let png = export::Exporter::new(viewer.get(id).unwrap()).png(0, dpi).unwrap();
+            s.create_from_images(&[("scan.png".into(), png)]).unwrap()
+        };
+        let (low, fine) = (scan(72.0), scan(300.0));
+        let prepare = |bytes: Arc<Vec<u8>>, settings: OcrSettings| {
+            let mut reader = Session::new();
+            let id = reader.open("scan.pdf", None, bytes, None).unwrap();
+            let width = reader.get(id).unwrap().info.pages[0].width;
+            let shot = reader.ocr_job(id, &[0], settings).unwrap().steps().next_page().unwrap();
+            let shot = shot.unwrap_or_else(|page| panic!("the page was skipped: {:?}", page.skipped));
+            (shot.image().unwrap().width() as f32, width)
+        };
+
+        let (read, page) = prepare(low.clone(), OcrSettings::default());
+        assert!(read > 2.0 * page, "a 72-dpi scan is enlarged: {read} px for a {page} pt page");
+        let (read, page) = prepare(fine, OcrSettings::default());
+        assert!(page > SHEET, "the PNG says no resolution, so its page is given in pixels: {page} pt");
+        assert!(read <= page, "a 300-dpi scan is read as rendered: {read} px for a {page} pt page");
+        let (read, page) = prepare(low, OcrSettings { binarize: true, ..Default::default() });
+        let normalized = page * 300.0 / 72.0;
+        assert!(read < 2.0 * normalized, "normalized to 300 dpi once, not enlarged again: {read} px");
     }
 
     #[test]
