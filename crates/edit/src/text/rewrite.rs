@@ -355,6 +355,18 @@ fn choose_rewrite_path(
     if !upright && (!style.ranges.is_empty() || style.resource.is_some()) {
         return Err(EditError::Invalid("formatting part of turned text, or choosing a document font for it, isn't supported yet".into()));
     }
+    // Vertical text (a `-V` or `WMode 1` CMap) advances down the page; the styled path lays runs
+    // out along page x and would turn a column into a squeezed row (#7280).
+    if !style.ranges.is_empty() || style.resource.is_some() {
+        for line in members {
+            let font = fonts.get(line.font.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned());
+            if let Some(font) = font
+                && vertical_encoding(doc, &font)?
+            {
+                return Err(EditError::Invalid("formatting part of vertical text, or choosing a document font for it, isn't supported yet".into()));
+            }
+        }
+    }
     let visual_indic = members.iter().any(|line| line.visual_order);
     let has_special_text = text.is_some_and(|draft| {
         draft.contains(row_break)
