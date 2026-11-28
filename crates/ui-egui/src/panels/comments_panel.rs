@@ -453,6 +453,7 @@ mod tests {
 
     use super::*;
 
+    /// Builds a minimal annotation for comments-panel tests.
     fn mock_annotation(subtype: &str, intent: Option<&str>) -> Annotation {
         Annotation {
             page: 0,
@@ -479,6 +480,7 @@ mod tests {
         }
     }
 
+    /// Checks that a freehand highlight annotation uses its localized kind label.
     #[test]
     fn freehand_highlight_kind_label() {
         let freehand = mock_annotation("Ink", Some("FreehandHighlight"));

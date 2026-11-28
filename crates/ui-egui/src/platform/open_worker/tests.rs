@@ -223,6 +223,19 @@ fn open_prepare_keeps_control_and_existing_tabs_live_until_atomic_commit() {
     let reply = rig.request("ui.open", json!({ "path": file.path() }));
     assert_eq!(reply["pending"], true);
     assert_eq!(rig.jobs.waiting(), 1);
+    let opening_label = format!("Opening {}…", file.name());
+    assert_eq!(rig.h.state().opening_notice.as_ref().map(|notice| notice.label.as_str()), Some(opening_label.as_str()));
+    rig.h.run_steps(1);
+    assert!(rig.notice_says(&opening_label));
+    if crate::i18n::needs_catalogs() {
+        let language = std::mem::replace(&mut rig.h.state_mut().language, "ja".into());
+        rig.h.run_steps(1);
+        let japanese_label = format!("{} を開いています…", file.name());
+        assert_eq!(rig.h.state().opening_notice.as_ref().map(|notice| notice.label.as_str()), Some(japanese_label.as_str()));
+        rig.h.state_mut().language = language;
+        rig.h.run_steps(1);
+    }
+    assert_eq!(rig.h.state().opening_notice.as_ref().map(|notice| notice.label.as_str()), Some(opening_label.as_str()));
 
     let state = rig.request("ui.state", json!({}));
     assert_eq!(state["documents"].as_array().map(Vec::len), Some(1));
@@ -238,6 +251,8 @@ fn open_prepare_keeps_control_and_existing_tabs_live_until_atomic_commit() {
     assert_eq!(app.views.len(), 2, "one prepared document commits exactly once");
     assert_eq!(app.session.get(app.views[1].id).expect("new tab").info.pages.len(), 2);
     assert_eq!(app.active, Some(1));
+    assert!(app.opening_notice.is_none(), "the opening notice clears after commit");
+    assert!(!rig.notice_says(&opening_label), "the opening notice is no longer visible");
 }
 
 /// Picking a file for a tool must carry the tool through native preparation; another file

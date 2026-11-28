@@ -5,6 +5,14 @@
 //! removed when the job ends ([`end_progress`]); both only queue a [`ProgressRequest`] that [`show`] applies with the
 //! pass's `Context`, so none is lost before the first pass or from a headless caller. Nothing is mirrored every pass.
 
+#[cfg(not(target_arch = "wasm32"))]
+use craft::theme::variant::Tone;
+#[cfg(not(target_arch = "wasm32"))]
+use craft::ui::contract::{Politeness, Props as _, Show as _};
+#[cfg(not(target_arch = "wasm32"))]
+use craft::ui::display::Spinner;
+#[cfg(not(target_arch = "wasm32"))]
+use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::notices::{NoticeEnd, PostedNotice};
 use craft::ui::runtime::toast::ToastId;
 #[cfg(test)]
@@ -157,6 +165,31 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         // PLAN: assumed script_notice_ended(&mut self, &egui::Context, &NoticeEnd) (pdf-forms-w16)
         app.script_notice_ended(&ctx, &end);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    show_opening(app, ui);
+}
+
+/// Shows the pending native document, above the toast stack.
+#[cfg(not(target_arch = "wasm32"))]
+fn show_opening(app: &PdfCraftApp, ui: &mut egui::Ui) {
+    let Some(notice) = &app.opening_notice else { return };
+    let ctx = ui.ctx().clone();
+    let screen = ctx.content_rect();
+    let window = craft::ui::runtime::env::WindowKey::main();
+    let toast_count = craft::ui::runtime::toast::cards(&ctx, &window).len();
+    let lift = (28.0 + toast_count as f32 * 120.0).min((screen.height() - 72.0).max(28.0));
+
+    let _ = egui::Area::new(egui::Id::unique("opening-notice"))
+        .order(egui::Order::Tooltip)
+        .pivot(egui::Align2::CENTER_BOTTOM)
+        .fixed_pos(screen.center_bottom() - egui::vec2(0.0, lift))
+        .show(&ctx, |ui| {
+            Notice::new(Tone::Neutral, notice.label.clone())
+                .layout(NoticeLayout::Toast)
+                .announce(Politeness::Polite)
+                .content(Spinner::new().label(notice.label.clone()), |_| {})
+                .show(ui);
+        });
 }
 
 /// The notice an end is about.

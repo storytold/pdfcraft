@@ -212,6 +212,13 @@ struct PendingDestination {
     name: String,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+struct OpeningNotice {
+    token: u64,
+    lang: i18n::Lang,
+    label: String,
+}
+
 pub struct PdfCraftApp {
     /// The app's services: jobs, files, settings sections, commands. Every queue is built from it.
     pub(crate) host: std::sync::Arc<craft::host::Host>,
@@ -461,6 +468,8 @@ pub struct PdfCraftApp {
     /// The documents a lookup in `named_destinations` is for, and the name asked.
     #[cfg(not(target_arch = "wasm32"))]
     pending_destinations: Vec<PendingDestination>,
+    #[cfg(not(target_arch = "wasm32"))]
+    opening_notice: Option<OpeningNotice>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.

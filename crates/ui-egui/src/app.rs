@@ -375,6 +375,8 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             pending_opens: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
+            opening_notice: None,
+            #[cfg(not(target_arch = "wasm32"))]
             password_retry: None,
             #[cfg(not(target_arch = "wasm32"))]
             next_open_token: 0,
