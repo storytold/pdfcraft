@@ -760,6 +760,7 @@ impl PdfCraftApp {
                 self.marks_draft.focused_box = 5;
                 self.open_marks(ctx, pdfcraft_engine::MarkKind::HeaderFooter, false);
             }
+            "edit.bates_files" => self.open_bates_files(ctx),
             "prepress.marks" => self.open_printer_marks(ctx),
             "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" | "prepress.marks.remove" => {
                 use pdfcraft_engine::MarkKind as K;
