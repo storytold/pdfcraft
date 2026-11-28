@@ -5,6 +5,7 @@ pub(super) mod combine_ui;
 pub(super) mod compare_ui;
 pub(super) mod create_multiple_ui;
 pub(super) mod create_ui;
+pub(super) mod data_export_ui;
 pub(super) mod export_ui;
 pub(super) mod files;
 pub(crate) mod job_count;

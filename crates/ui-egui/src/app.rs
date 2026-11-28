@@ -490,6 +490,7 @@ impl PdfCraftApp {
             attachment_description: None,
             export_draft: Default::default(),
             export_status: None,
+            data_format: None,
             signature: None,
             initials: None,
             sign_graphic: sign_ui::SignGraphic::Name,

@@ -829,34 +829,44 @@ impl PdfCraftApp {
         });
     }
 
-    /// Export all comments / form data: the format follows the file name's extension.
-    pub fn export_data_dialog(&mut self, ctx: &egui::Context, comments: bool, fields: bool) {
+    /// Export form data or Export comments: choose the format first (#5215).
+    pub fn export_data_dialog(&mut self, ctx: &egui::Context, kind: crate::data_export_ui::DataKind) {
         // What's typed in a form field is part of the document (#166).
+        if !self.commit_form_typing(ctx) {
+            return;
+        }
+        if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some() {
+            crate::data_export_ui::open(self, ctx, kind);
+        }
+    }
+
+    /// Write `kind` as `format` through the save panel, named for that format and allowing every
+    /// format offered for `kind`. A name the user changes to another offered format's extension is
+    /// written in that format. A format not offered for `kind` (comments as CSV, say) is refused,
+    /// rather than writing other data than was asked for.
+    pub fn export_data_as(&mut self, ctx: &egui::Context, kind: crate::data_export_ui::DataKind, format: pdfcraft_engine::DataFormat) {
+        use crate::data_export_ui::{DataKind, extension, formats, name, save_extensions};
         if !self.commit_form_typing(ctx) {
             return;
         }
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
+        let offered = formats(kind, doc.info.xfa.is_some());
+        if !offered.contains(&format) {
+            let what = if kind == DataKind::Comments { tl!("comments") } else { tl!("form data") };
+            self.notify_fmt("{format} can't hold {what}", &[("format", &name(format)), ("what", what)]);
+            return;
+        }
+        let (comments, fields) = (kind == DataKind::Comments, kind == DataKind::FormData);
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         let folder = document_folder(doc.path.as_deref());
-        let xfa = doc.info.xfa.is_some();
         let title = if comments { tl!("Export comments") } else { tl!("Export form data") };
-        let mut request = PickRequest::save("export.data").title(title).file_name(format!("{stem}.xfdf"));
-        request = if comments {
-            request.filter("XFDF", &["xfdf"]).filter("FDF", &["fdf"])
-        } else if xfa {
-            // An XFA form's data, as Acrobat exports it, first.
-            request
-                .file_name(format!("{stem}.xml"))
-                .filter("XML", &["xml"])
-                .filter("XDP", &["xdp"])
-                .filter("XFDF", &["xfdf"])
-                .filter("FDF", &["fdf"])
-                .filter("CSV", &["csv"])
-                .filter(tl!("Text"), &["txt"])
-        } else {
-            request.filter("XFDF", &["xfdf"]).filter("FDF", &["fdf"]).filter("XML", &["xml"]).filter("CSV", &["csv"]).filter(tl!("Text"), &["txt"])
-        };
+        // Named for `format`, which is the default, but allowing every offered format, as a name
+        // changed to another one's extension is written in that format.
+        let mut request = PickRequest::save("export.data")
+            .title(title)
+            .file_name(format!("{stem}.{}", extension(format)))
+            .filter(name(format), &save_extensions(format, offered));
         if let Some(folder) = folder {
             request = request.default_directory(folder);
         }
@@ -867,7 +877,7 @@ impl PdfCraftApp {
                 return;
             }
             let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
-            let format = pdfcraft_engine::DataFormat::from_extension(&ext).unwrap_or(pdfcraft_engine::DataFormat::Xfdf);
+            let format = pdfcraft_engine::DataFormat::from_extension(&ext).filter(|f| offered.contains(f)).unwrap_or(format);
             match app.session.export_data(id, format, comments, fields) {
                 Ok(bytes) => match app.host.files().write(&path, &bytes, WriteIntent::SaveAs) {
                     Ok(_) => app.notify_fmt("Exported to {path}", &[("path", &path.display().to_string())]),

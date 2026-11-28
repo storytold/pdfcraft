@@ -1139,9 +1139,76 @@ fn exporting_form_data_while_typing_includes_the_text() {
     h.event(egui::Event::Text("Exported value".into()));
     h.run_steps(2);
     let ctx_h = h.ctx.clone();
-    h.state_mut().export_data_dialog(&ctx_h, false, true);
+    h.state_mut().export_data_dialog(&ctx_h, pdfcraft_ui_egui::DataKind::FormData);
+    h.run_steps(2);
+    h.get_by_label("Export").click();
     wait_for_file(&mut h, &files, &out);
     assert!(String::from_utf8_lossy(&files.file(&out).unwrap_or_default()).contains("Exported value"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #5215: Export form data asks for the format in PdfCraft (the macOS save panel shows no list of
+/// file types) and writes the format chosen there. The file has no extension, so only the
+/// dialog's choice can make it CSV.
+#[test]
+fn export_form_data_asks_for_the_format_and_writes_that_format() {
+    let dir = scratch("export-format");
+    let out = dir.join("data");
+    let (mut h, files) = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
+    assert!(h.execute("form.export_data"));
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Export form data");
+    let format = |h: &Harness<'static, PdfCraftApp>, value: &str| {
+        h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some(value))
+    };
+    assert!(format(&h, "XFDF (.xfdf)"), "XFDF is the default for an AcroForm");
+    h.get_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.value().is_some_and(|v| v == "XFDF (.xfdf)")).click();
+    h.run_steps(2);
+    for offered in ["FDF (.fdf)", "XML (.xml)", "Text (.txt)"] {
+        h.get_by_label(offered);
+    }
+    h.get_by_label("CSV (.csv)").click();
+    h.run_steps(2);
+    h.get_by_label("Export").click();
+    wait_for_file(&mut h, &files, &out);
+    assert!(!crate::support::dialog_open(&h), "the dialog closes once the file is chosen");
+    let written = String::from_utf8_lossy(&files.file(&out).unwrap_or_default()).into_owned();
+    assert!(!written.trim_start().starts_with('<') && written.lines().next().is_some_and(|l| l.contains(',')), "CSV, not XML: {written:?}");
+    // The choice is remembered for the next export.
+    assert!(h.execute("form.export_data"));
+    h.run_steps(2);
+    assert!(format(&h, "CSV (.csv)"), "the last format chosen is offered first");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(!crate::support::dialog_open(&h));
+    // Export comments, which has no CSV, shows its own default; cancelling it keeps CSV.
+    let ctx_h = h.ctx.clone();
+    h.state_mut().export_data_dialog(&ctx_h, pdfcraft_ui_egui::DataKind::Comments);
+    h.run_steps(2);
+    assert!(format(&h, "XFDF (.xfdf)"), "comments are XFDF or FDF");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.execute("form.export_data"));
+    h.run_steps(2);
+    assert!(format(&h, "CSV (.csv)"), "a cancelled comments export does not replace the form data's format");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A format the export does not offer is refused, not written as other data: comments have no
+/// CSV, and CSV would hold the form's values instead.
+#[test]
+fn export_data_refuses_a_format_its_kind_does_not_offer() {
+    let dir = scratch("export-refused");
+    let out = dir.join("comments.csv");
+    let (mut h, files) = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().export_data_as(&ctx_h, pdfcraft_ui_egui::DataKind::Comments, pdfcraft_engine::DataFormat::Csv);
+    h.run_steps(2);
+    assert!(files.requests().is_empty(), "no save panel is asked for");
+    assert!(files.written().is_empty(), "nothing is written");
+    assert_eq!(notice(&h).as_deref(), Some("CSV can't hold comments"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

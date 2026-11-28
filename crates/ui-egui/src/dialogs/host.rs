@@ -101,6 +101,7 @@ fn results(app: &mut PdfCraftApp, ctx: &egui::Context) {
     crate::a11y_ui::pass(ctx, app);
     crate::actions_ui::pass(app);
     crate::export_ui::pass(ctx, app);
+    crate::data_export_ui::pass(ctx, app);
     crate::compare_ui::pass(app, ctx);
     // Shell.
     app.recovery_pass(ctx);
