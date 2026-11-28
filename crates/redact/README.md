@@ -189,6 +189,21 @@ neither their own content nor a form without resources of its own drawn through 
 for the same reason, and a redacted page keeps a name under that rule too. Pages that aren't
 redacted are left untouched.
 
+A redacted page's content goes into new stream objects; the original stays only while a page
+still shows it: lists it in `/Contents`, or, when the original is a form XObject, draws it with
+`Do` (directly, through other forms, annotation appearances or inherited resources) or shows it
+as an annotation's appearance. Each name is looked up where the stream using it draws from, as
+the interpreter reads it, so the same name in a dictionary nothing draws from keeps nothing.
+Such a page is left as it was. An original a page reaches only through a tiling pattern, a soft
+mask's group or a Type 3 font's glyphs that its content selects may or may not be shown, so
+`apply` refuses with `RedactError::Residue` rather than keep it or change that page. Any other
+reference to it that a full save would follow (a private catalog key, a structure element's
+`/Stm`, `/PieceInfo`, a resource name nothing draws, the trailer) is pointed at the redacted copy. A walk of what a
+full save writes then proves no such original is left, or `apply` fails with
+`RedactError::Residue`. It fails the same way when an original is a form XObject and what the
+pages draw can't be told: a page listed twice in the page tree, or a stream that won't decode
+(#7922).
+
 ## Remove hidden information / Sanitize
 
 ```rust

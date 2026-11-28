@@ -1040,3 +1040,197 @@ fn many_names_of_a_redacted_image_are_unlinked_reading_inherited_forms_once() {
     assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
     assert!(!full_save_holds(&doc, b"IMAGESECRET"), "an alias kept the removed image reachable");
 }
+
+/// A page with `SECRETTOKEN` under the mark and `keepme` outside it, in content stream 4 0 R,
+/// which `catalog`, `resources` and `extra` may name again.
+fn content_named_again(catalog: &str, resources: &str, stream_keys: &str, extra: Vec<Vec<u8>>) -> Document {
+    let mut objs = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>").into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> {resources} >> >>")
+            .into_bytes(),
+        stream(stream_keys, b"BT /F1 10 Tf 100 100 Td (SECRETTOKEN) Tj ET BT /F1 10 Tf 100 200 Td (keepme) Tj ET"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+    ];
+    objs.extend(extra);
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[90.0, 90.0, 170.0, 115.0]], "");
+    doc
+}
+
+/// The page's original content stream is replaced, not changed, as another page may draw it:
+/// anything else that names it must not keep the unredacted bytes in a full save (#7922).
+#[test]
+fn a_redacted_pages_original_content_named_elsewhere_leaves_the_saved_file() {
+    let form = "/Type /XObject /Subtype /Form /BBox [0 0 300 300]";
+    let cases = [
+        ("a private catalog key", content_named_again("/VPriv << /Copy 4 0 R >>", "", "", vec![])),
+        (
+            "a structure element's /Stm",
+            content_named_again(
+                "/StructTreeRoot 7 0 R",
+                "",
+                "",
+                vec![
+                    b"<< /Type /StructTreeRoot /K 8 0 R >>".to_vec(),
+                    b"<< /Type /StructElem /S /Span /P 7 0 R /Pg 3 0 R /K << /Type /MCR /Pg 3 0 R /MCID 0 /Stm 4 0 R >> >>".to_vec(),
+                ],
+            ),
+        ),
+        ("a resource name nothing draws", content_named_again("", "/XObject << /Fq 4 0 R >>", form, vec![])),
+    ];
+    for (case, mut doc) in cases {
+        assert!(apply(&mut doc, None).unwrap().glyphs > 0, "{case}: nothing was redacted");
+        assert!(!full_save_holds(&doc, b"SECRETTOKEN"), "{case} keeps the original content stream");
+        assert!(full_save_holds(&doc, b"keepme"), "{case}: the text outside the mark is gone");
+    }
+}
+
+/// Page 1's content stream 5 0 R holds `SECRETTOKEN` under the mark; page 2 is not marked and
+/// draws `page_two` with `resources`, which `pages_resources` (on the /Pages node) may add to.
+fn content_another_page_names(pages_resources: &str, resources: &str, page_two: &[u8], extra: Vec<Vec<u8>>) -> Document {
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        format!("<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 {pages_resources} >>").into_bytes(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Resources << /Font << /F1 6 0 R >> >> >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 8 0 R {resources} >>").into_bytes(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"BT /F1 10 Tf 100 100 Td (SECRETTOKEN) Tj ET"),
+        FONT.replace("95 0 R", "7 0 R").into_bytes(),
+        widths(),
+        stream("", page_two),
+    ];
+    objs.extend(extra);
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[90.0, 90.0, 170.0, 115.0]], "");
+    doc
+}
+
+/// An unmarked page that draws the marked page's original content as a form keeps showing it,
+/// directly or through a form its inherited resources name, or through an annotation's
+/// appearance on a page with no resources (#7922). One that names it without drawing it doesn't
+/// keep it in the file.
+#[test]
+fn a_content_stream_another_page_draws_as_a_form_stays_after_redaction() {
+    let own = "/Resources << /Font << /F1 6 0 R >> /XObject << /S 5 0 R >> >>";
+    let mark_rect = [[90.0, 90.0, 170.0, 115.0]];
+    let in_content = [
+        ("directly", content_another_page_names("", own, b"/S Do", vec![])),
+        (
+            "through a form its inherited resources name",
+            content_another_page_names(
+                "/Resources << /Font << /F1 6 0 R >> /XObject << /Outer 9 0 R >> >>",
+                "",
+                b"/Outer Do",
+                vec![stream(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 6 0 R >> /XObject << /S 5 0 R >> >>",
+                    b"/S Do",
+                )],
+            ),
+        ),
+    ];
+    for (case, mut doc) in in_content {
+        assert!(apply(&mut doc, None).unwrap().glyphs > 0, "{case}: nothing was redacted");
+        let mut saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        for (when, doc) in [("in memory", &mut doc), ("after a full save", &mut saved)] {
+            assert_eq!(under(doc, 0, &mark_rect), 0, "{case}, {when}: the marked page still shows it");
+            assert!(under(doc, 1, &mark_rect) > 0, "{case}, {when}: the unmarked page lost the text it draws");
+        }
+    }
+    let mut appearance = content_another_page_names(
+        "",
+        "/Annots [9 0 R]",
+        b"",
+        vec![
+            b"<< /Type /Annot /Subtype /Square /Rect [0 0 300 300] /AP << /N 10 0 R >> >>".to_vec(),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 6 0 R >> /XObject << /S 5 0 R >> >>", b"/S Do"),
+        ],
+    );
+    assert!(apply(&mut appearance, None).unwrap().glyphs > 0);
+    assert_eq!(under(&mut appearance, 0, &mark_rect), 0, "the marked page still shows it");
+    assert!(full_save_holds(&appearance, b"SECRETTOKEN"), "an appearance on the unmarked page lost the form it draws");
+    let mut undrawn = content_another_page_names("", own, b"", vec![]);
+    assert!(apply(&mut undrawn, None).unwrap().glyphs > 0);
+    assert!(!full_save_holds(&undrawn, b"SECRETTOKEN"), "a name the unmarked page never draws keeps the original");
+}
+
+/// The unmarked page names the original /S but draws only /Outer, which draws its own /S, another
+/// form. A name is looked up where the stream using it draws from, so the page's /S, which
+/// nothing draws, doesn't keep the original in the file, and Outer's form stays (#7922).
+#[test]
+fn a_content_stream_named_where_nothing_draws_it_leaves_though_a_form_draws_that_name() {
+    let mut doc = content_another_page_names(
+        "",
+        "/Resources << /Font << /F1 6 0 R >> /XObject << /S 5 0 R /Outer 9 0 R >> >>",
+        b"/Outer Do",
+        vec![
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 6 0 R >> /XObject << /S 10 0 R >> >>", b"/S Do"),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"BT /F1 10 Tf 100 100 Td (OUTERSHOWS) Tj ET"),
+        ],
+    );
+    assert!(apply(&mut doc, None).unwrap().glyphs > 0, "nothing was redacted");
+    assert!(!full_save_holds(&doc, b"SECRETTOKEN"), "a name only a form's own resources draw kept the page's original");
+    let mut saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert!(under(&mut saved, 1, &[[90.0, 90.0, 170.0, 115.0]]) > 0, "the unmarked page lost the form Outer draws");
+}
+
+/// The unmarked page reaches the original only through a tiling pattern or a soft mask's group
+/// it selects, whether or not it then paints with it. Selecting paints nothing, and what is
+/// painted with it isn't followed: keeping the original could leave the marked text in the file,
+/// and pointing it at the copy could change the page. Apply refuses (#7922).
+#[test]
+fn a_content_stream_reached_only_through_a_selected_pattern_or_soft_mask_refuses_the_redaction() {
+    let pattern = "/Resources << /Font << /F1 6 0 R >> /Pattern << /P 9 0 R >> >>";
+    let mask = "/Resources << /Font << /F1 6 0 R >> /ExtGState << /GS << /SMask << /S /Luminosity /G 5 0 R >> >> >> >>";
+    let tile = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 6 0 R >> /XObject << /S 5 0 R >> >>",
+        b"/S Do",
+    );
+    let cases = [
+        ("a pattern selected and never painted", pattern, b"/Pattern cs /P scn".as_slice(), vec![tile.clone()]),
+        ("a pattern painted", pattern, b"/Pattern cs /P scn 0 0 300 300 re f".as_slice(), vec![tile]),
+        ("a soft mask selected and never painted", mask, b"q /GS gs Q".as_slice(), vec![]),
+        ("a soft mask painted", mask, b"q /GS gs 0 0 300 300 re f Q".as_slice(), vec![]),
+    ];
+    for (case, resources, content, extra) in cases {
+        let mut doc = content_another_page_names("", resources, content, extra);
+        let out = apply(&mut doc, None);
+        assert!(matches!(out, Err(RedactError::Residue(_))), "{case}: {out:?}");
+    }
+}
+
+/// An unmarked annotation shows the original itself, as its normal appearance or a state of its
+/// down appearance, and no `Do` draws it: it stays for that annotation (#7922).
+#[test]
+fn a_content_stream_an_annotation_shows_as_its_appearance_stays_after_redaction() {
+    for (case, ap) in [("normal", "/N 5 0 R"), ("down, by state", "/D << /On 5 0 R >>")] {
+        let mut doc = content_another_page_names(
+            "",
+            "/Annots [9 0 R]",
+            b"",
+            vec![format!("<< /Type /Annot /Subtype /Square /Rect [0 0 300 300] /AP << {ap} >> >>").into_bytes()],
+        );
+        assert!(apply(&mut doc, None).unwrap().glyphs > 0, "{case}: nothing was redacted");
+        assert_eq!(under(&mut doc, 0, &[[90.0, 90.0, 170.0, 115.0]]), 0, "{case}: the marked page still shows it");
+        // Only the annotation still names the original.
+        assert!(full_save_holds(&doc, b"SECRETTOKEN"), "{case}: the annotation lost the appearance it shows");
+    }
+}
+
+/// The control: another page draws the same content stream, so the original stays with it.
+#[test]
+fn a_content_stream_another_page_draws_stays_after_redaction() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /VPriv << /Copy 5 0 R >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Resources << /Font << /F1 6 0 R >> >> >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Resources << /Font << /F1 6 0 R >> >> >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 100 100 Td (SECRETTOKEN) Tj ET"),
+        FONT.replace("95 0 R", "7 0 R").into_bytes(),
+        widths(),
+    ]);
+    mark(&mut doc, 0, &[[90.0, 90.0, 170.0, 115.0]], "");
+    assert!(apply(&mut doc, None).unwrap().glyphs > 0);
+    assert!(!content(&doc, 0).contains("SECRETTOKEN"), "the marked page still shows it");
+    assert!(content(&doc, 1).contains("SECRETTOKEN"), "the unmarked page lost what it shows");
+}

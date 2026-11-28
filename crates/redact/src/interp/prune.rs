@@ -205,17 +205,7 @@ fn names_drawn(doc: &Document, res: &Dict, pages: &[ObjRef], index: &HashMap<Obj
         let (_, content) = page_streams(doc, &dict, index.get(page).copied().unwrap_or(0)).ok()?;
         // One stream may end with a name its `Do` begins the next with: read them as one.
         note(Pieces::join(&content).data());
-        let annots = dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
-        for annot in annots {
-            let ap = doc.resolve(&annot).as_dict().and_then(|a| a.get(b"AP")).map(|ap| doc.resolve(ap)).and_then(|ap| ap.as_dict().cloned());
-            // Each of /N, /R and /D is an appearance, or a dictionary of them by state.
-            for (_, look) in ap.unwrap_or_default().iter() {
-                match look.as_ref() {
-                    Some(r) if matches!(&*doc.resolve(look), Object::Stream(_)) => streams.push(r),
-                    _ => streams.extend(doc.resolve(look).as_dict().into_iter().flat_map(|states| states.iter().filter_map(|(_, v)| v.as_ref()))),
-                }
-            }
-        }
+        streams.extend(appearances(doc, &dict));
     }
     let mut budget = DecodeBudget::page();
     let mut read = HashSet::new();
@@ -249,6 +239,235 @@ fn names_drawn(doc: &Document, res: &Dict, pages: &[ObjRef], index: &HashMap<Obj
         }
     }
     Some(drawn)
+}
+
+/// The appearance streams of a page's annotations: each of /N, /R and /D, which is an appearance
+/// or a dictionary of them by state.
+fn appearances(doc: &Document, page: &Dict) -> Vec<ObjRef> {
+    let mut found = Vec::new();
+    let annots = page.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+    for annot in annots {
+        let ap = doc.resolve(&annot).as_dict().and_then(|a| a.get(b"AP")).map(|ap| doc.resolve(ap)).and_then(|ap| ap.as_dict().cloned());
+        for (_, look) in ap.unwrap_or_default().iter() {
+            match look.as_ref() {
+                Some(r) if matches!(&*doc.resolve(look), Object::Stream(_)) => found.push(r),
+                _ => found.extend(doc.resolve(look).as_dict().into_iter().flat_map(|states| states.iter().filter_map(|(_, v)| v.as_ref()))),
+            }
+        }
+    }
+    found
+}
+
+/// The form XObjects the pages draw ([`forms_pages_draw`]).
+#[derive(Default)]
+pub(crate) struct FormsDrawn {
+    /// Forms a page paints whenever it is shown: drawn with `Do` from its content, or shown as
+    /// one of its annotations' appearances, and the forms those draw with `Do` in turn.
+    pub(crate) painted: HashSet<ObjRef>,
+    /// Forms reached only through a tiling pattern, a soft mask's group or a Type 3 font's glyphs
+    /// that some content selects (`scn`, `gs`, `Tf`). Selecting one paints nothing by itself, and
+    /// what is painted with it isn't followed, so such a form may or may not be shown.
+    pub(crate) selected: HashSet<ObjRef>,
+}
+
+/// The form XObjects some page draws (#7922), from its content, its annotations' appearances and
+/// the forms, tiling patterns, soft masks and Type 3 glyphs those draw in turn ([`FormWalk`]),
+/// sorted into those it paints and those it only selects. A page with no resources anywhere is
+/// read too, for its annotations' appearances. Fails closed, as [`unlink_doomed`] does, when that
+/// can't be told: a page listed twice in the page tree, a stream that won't decode, or the budget
+/// spent.
+pub(crate) fn forms_pages_draw(doc: &Document) -> Result<FormsDrawn, RedactError> {
+    let pages: Vec<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
+    let index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (*p, i)).collect();
+    let (holders, whole) = resource_holders(doc);
+    if !whole {
+        return Err(RedactError::Residue(1));
+    }
+    let mut groups: Vec<(Dict, Vec<ObjRef>)> = Vec::new();
+    let mut covered = HashSet::new();
+    for (node, users) in holders {
+        if users.is_empty() {
+            continue;
+        }
+        let res = doc.get(node).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
+        covered.extend(users.iter().copied());
+        groups.push((res, users));
+    }
+    let bare: Vec<ObjRef> = pages.into_iter().filter(|p| !covered.contains(p)).collect();
+    if !bare.is_empty() {
+        groups.push((Dict::default(), bare));
+    }
+    let mut forms = FormsDrawn::default();
+    for (res, users) in groups {
+        FormWalk::new(doc, res, &mut forms).pages(&users, &index).ok_or(RedactError::Residue(1))?;
+    }
+    Ok(forms)
+}
+
+/// The resource names one content stream uses to draw another: with `Do`, as a pattern colour
+/// (`scn`, `SCN`), as a font (`Tf`, for a Type 3 font's glyphs) and as a graphics state (`gs`, for
+/// its soft mask's group).
+#[derive(Default)]
+struct Uses {
+    xobjects: HashSet<Vec<u8>>,
+    patterns: HashSet<Vec<u8>>,
+    fonts: HashSet<Vec<u8>>,
+    states: HashSet<Vec<u8>>,
+}
+
+impl Uses {
+    fn of(data: &[u8]) -> Self {
+        let mut uses = Self::default();
+        for op in &pdfcraft_content::parse(data).ops {
+            let (set, name) = match op.op.as_slice() {
+                b"Do" => (&mut uses.xobjects, op.last_name()),
+                b"scn" | b"SCN" => (&mut uses.patterns, op.operands.last().and_then(Object::as_name)),
+                b"Tf" => (&mut uses.fonts, op.operands.len().checked_sub(2).and_then(|i| op.name(i))),
+                b"gs" => (&mut uses.states, op.last_name()),
+                _ => continue,
+            };
+            set.extend(name.map(<[u8]>::to_vec));
+        }
+        uses
+    }
+}
+
+/// [`forms_pages_draw`] for the pages that draw through one resource dictionary. Each name a
+/// stream uses is looked up where that stream draws from, as the interpreter reads it: its own
+/// /Resources, or, with none, those of what draws it (a Type 3 glyph: its font's, then those).
+/// So a name nothing uses in a dictionary keeps nothing, though a stream drawing from another
+/// dictionary uses the same name there. Each stream is decoded once, and walked once for each
+/// dictionary it draws from and each of [`FormsDrawn`]'s sets it counts towards; every walk is
+/// charged to one budget, which bounds the total.
+struct FormWalk<'a> {
+    doc: &'a Document,
+    /// The resource dictionaries streams draw from, the pages' first.
+    scopes: Vec<Dict>,
+    /// The dictionary each stream or Type 3 font with /Resources of its own has in `scopes`.
+    owned: HashMap<ObjRef, usize>,
+    /// Streams still to visit, each with the dictionary of what draws it, and whether it is
+    /// reached only through a selection ([`FormsDrawn::selected`]).
+    pending: Vec<(ObjRef, usize, bool)>,
+    visited: HashSet<(ObjRef, usize, bool)>,
+    uses: HashMap<ObjRef, Rc<Uses>>,
+    budget: DecodeBudget,
+    forms: &'a mut FormsDrawn,
+}
+
+impl<'a> FormWalk<'a> {
+    fn new(doc: &'a Document, res: Dict, forms: &'a mut FormsDrawn) -> Self {
+        let (owned, pending, visited, uses) = Default::default();
+        Self { doc, scopes: vec![res], owned, pending, visited, uses, budget: DecodeBudget::page(), forms }
+    }
+
+    /// Walk what `pages` draw. `None` when that can't be told.
+    fn pages(mut self, pages: &[ObjRef], index: &HashMap<ObjRef, usize>) -> Option<()> {
+        let doc = self.doc;
+        for page in pages {
+            let dict = doc.get(*page).as_dict().cloned().unwrap_or_default();
+            let (_, content) = page_streams(doc, &dict, index.get(page).copied().unwrap_or(0)).ok()?;
+            // One stream may end with a name its `Do` begins the next with: read them as one.
+            self.follow(0, &Uses::of(Pieces::join(&content).data()), false)?;
+            for look in appearances(doc, &dict) {
+                self.reach(look, 0, false);
+            }
+        }
+        while let Some((r, outer, selected)) = self.pending.pop() {
+            if !self.visited.insert((r, outer, selected)) {
+                continue;
+            }
+            let obj = doc.resolve(&Object::Ref(r));
+            let Object::Stream(s) = &*obj else { continue };
+            if !self.budget.enter_form() {
+                return None;
+            }
+            let used = match self.uses.get(&r) {
+                Some(used) => Rc::clone(used),
+                None => {
+                    let used = Rc::new(Uses::of(&self.budget.decode_strict(doc, s).ok()?));
+                    self.uses.insert(r, Rc::clone(&used));
+                    used
+                }
+            };
+            let scope = match s.dict.get(b"Resources").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()) {
+                Some(own) => self.own(r, own),
+                None => outer,
+            };
+            self.follow(scope, &used, selected)?;
+        }
+        Some(())
+    }
+
+    /// Note the form `r`, drawn from `scope`, and queue it.
+    fn reach(&mut self, r: ObjRef, scope: usize, selected: bool) {
+        let set = if selected { &mut self.forms.selected } else { &mut self.forms.painted };
+        set.insert(r);
+        self.pending.push((r, scope, selected));
+    }
+
+    /// The place in `scopes` of `res`, the /Resources `owner` has of its own.
+    fn own(&mut self, owner: ObjRef, res: Dict) -> usize {
+        *self.owned.entry(owner).or_insert_with(|| {
+            self.scopes.push(res);
+            self.scopes.len() - 1
+        })
+    }
+
+    /// Queue what a stream drawing from `scope` draws with `used`, and note the forms among it.
+    /// What a pattern, soft mask or font draws is reached only through a selection, as is all
+    /// that a stream already reached that way (`selected`) draws.
+    fn follow(&mut self, scope: usize, used: &Uses, selected: bool) -> Option<()> {
+        let doc = self.doc;
+        let res = self.scopes.get(scope).cloned().unwrap_or_default();
+        let stream = |o: &Object| match &*doc.resolve(o) {
+            Object::Stream(s) => Some(s.dict.clone()),
+            _ => None,
+        };
+        let xobjects = res_dict(doc, &res, b"XObject");
+        for r in used.xobjects.iter().filter_map(|n| xobjects.get(n)).filter_map(Object::as_ref) {
+            if stream(&Object::Ref(r)).is_some_and(|d| d.name(b"Subtype") == Some(b"Form")) {
+                self.reach(r, scope, selected);
+            }
+        }
+        let patterns = res_dict(doc, &res, b"Pattern");
+        for r in used.patterns.iter().filter_map(|n| patterns.get(n)).filter_map(Object::as_ref) {
+            if stream(&Object::Ref(r)).is_some_and(|d| d.int(b"PatternType") == Some(1)) {
+                self.pending.push((r, scope, true));
+            }
+        }
+        let states = res_dict(doc, &res, b"ExtGState");
+        for gs in used.states.iter().filter_map(|n| states.get(n)) {
+            let mask = doc.resolve(gs).as_dict().and_then(|g| g.get(b"SMask")).map(|m| doc.resolve(m));
+            if let Some(r) = mask.as_ref().and_then(|m| m.as_dict()).and_then(|m| m.reference(b"G")) {
+                self.reach(r, scope, true);
+            }
+        }
+        let fonts = res_dict(doc, &res, b"Font");
+        for f in used.fonts.iter().filter_map(|n| fonts.get(n)) {
+            let font = doc.resolve(f);
+            let Some(font) = font.as_dict().filter(|f| f.name(b"Subtype") == Some(b"Type3")) else { continue };
+            // The glyphs look names up in the font's /Resources, or with none, in `scope`.
+            let glyphs = match font.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()) {
+                None => scope,
+                Some(own) => match f.as_ref() {
+                    Some(owner) => self.own(owner, own),
+                    // A font written in place has no number to hold its dictionary by: each look
+                    // is a new one, charged like a form so fonts naming each other can't go round
+                    // for ever.
+                    None => {
+                        if !self.budget.enter_form() {
+                            return None;
+                        }
+                        self.scopes.push(own);
+                        self.scopes.len() - 1
+                    }
+                },
+            };
+            let procs = font.get(b"CharProcs").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()).unwrap_or_default();
+            self.pending.extend(procs.iter().filter_map(|(_, v)| v.as_ref()).map(|r| (r, glyphs, true)));
+        }
+        Some(())
+    }
 }
 
 /// The content streams the resource dictionary `res` lists: its form XObjects, its tiling
