@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::types::{Detail, Modification, Status, TrustStore};
-use super::validate::{SignatureValidation, is_doc_timestamp, validate_doc_timestamp, validate_into};
+use super::validate::{SignatureValidation, is_doc_timestamp, validate_doc_timestamp, validate_into, whole_file};
 use super::{Arc, Dict, DigestAlg, Document, HashMap, HashSet, ObjRef, Object, SignatureInfo};
 
 /// Digests of signed byte ranges (and parsed signed revisions), kept across revalidations of
@@ -433,10 +433,13 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
     let pages = annot_pages(doc);
     let mut out: Vec<SignatureInfo> = Vec::new();
     let mut field_values: HashSet<ObjRef> = HashSet::new();
-    // Fields that name one signature value are judged once: validation does not depend on the
-    // field, and repeating it per field would repeat the digest, chain and evidence work.
+    // Fields that name one signature value are judged once: repeating it per field would repeat
+    // the digest, chain and evidence work. Only fields that held the value when it was signed
+    // share a verdict ([`held_when_signed`]); one that did not is refused without reading it.
     // The row of `out` that holds each value's verdict: a later field copies it, not a map of copies.
     let mut judged: HashMap<ObjRef, usize> = HashMap::new();
+    // Each signed revision's signature fields by object, to their fully qualified names.
+    let mut signed_names: HashMap<usize, HashMap<ObjRef, String>> = HashMap::new();
     let (fields, whole) = walk_sig_fields(doc);
     for f in fields {
         if let Some(v_ref) = f.dict.get(b"V").and_then(Object::as_ref) {
@@ -451,7 +454,8 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
         let visible = widget.is_some_and(|(_, w)| widget_shown(doc, w));
         // A repeat of a judged value reads nothing of it: the signature dictionary is not copied.
         let shared = f.dict.get(b"V").and_then(Object::as_ref).filter(|_| f.dict.get(b"V").is_some_and(|v| doc.resolve(v).as_dict().is_some()));
-        if let Some(first) = shared.and_then(|r| judged.get(&r)).and_then(|&i| out.get(i)) {
+        let held = shared.is_none_or(|r| held_when_signed(doc, bytes, cache, &mut signed_names, &f, r));
+        if held && let Some(first) = shared.and_then(|r| judged.get(&r)).and_then(|&i| out.get(i)) {
             let own = SignatureInfo { field: f.name.clone(), signed: true, page, rect, visible, ..first.clone() };
             out.push(own);
             continue;
@@ -485,6 +489,23 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             verdict_shown: false,
             details: Vec::new(),
         };
+        if !held {
+            // As validation says of a field the signed revision does not have holding its value.
+            let stamp = v.as_ref().is_some_and(is_doc_timestamp);
+            if stamp {
+                info.sub_filter = Some("ETSI.RFC3161".to_string());
+                info.doc_timestamp = true;
+                info.timestamp = true;
+            }
+            info.status = Status::Invalid;
+            info.details.push(Detail::plain(if stamp {
+                "The timestamp's byte range does not match the file."
+            } else {
+                "The signature's byte range does not match the file."
+            }));
+            out.push(info);
+            continue;
+        }
         if let Some(v) = v {
             validate_into(SignatureValidation { doc, bytes, trust, field: Some(&f), stamp_ref: None, info: &mut info, cache }, &v);
         }
@@ -539,6 +560,41 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
         out.push(unread_fields());
     }
     out
+}
+
+/// Whether field `f` held signature value `value` when it was signed: the revision the value's byte
+/// range covers has `f`'s object, with `value` as its `/V`, under the same fully qualified name. A
+/// field added since, or pointed at the value since, was never signed, and a field renamed since
+/// (an ancestor's `/T` rewritten) shows the signature under a name the signer never signed. A field
+/// that is a direct object can't be found there (ISO 32000-2 requires fields to be indirect). A
+/// value that covers the whole file was signed with every field as it is, and one whose byte range
+/// or revision can't be read is left to validation, which refuses it. `names` keeps each signed
+/// revision's signature fields, so a form of many fields is walked once per revision.
+fn held_when_signed(
+    doc: &Document,
+    bytes: &[u8],
+    cache: &DigestCache,
+    names: &mut HashMap<usize, HashMap<ObjRef, String>>,
+    f: &Field,
+    value: ObjRef,
+) -> bool {
+    let br = doc.get(value).as_dict().and_then(|v| nums(doc, v, b"ByteRange")).unwrap_or_default();
+    // Finite and non-negative, so the casts below are exact up to `usize::MAX`, where they saturate.
+    let &[_, _, o1, l1] = br.as_slice() else { return true };
+    if ![o1, l1].iter().all(|x| x.is_finite() && *x >= 0.0) {
+        return true;
+    }
+    let Some(covered) = (o1 as usize).checked_add(l1 as usize) else { return true };
+    if covered > bytes.len() || whole_file(bytes, covered) {
+        return true;
+    }
+    let Some(old) = cache.revision(doc, bytes, covered) else { return true };
+    let Some(r) = f.r else { return false };
+    let holds = old.generation(r.num) == r.generation
+        && old.try_get(r.num).ok().is_some_and(|o| o.as_dict().and_then(|d| d.get(b"V")).and_then(Object::as_ref) == Some(value));
+    holds
+        && names.entry(covered).or_insert_with(|| sig_fields(&old).into_iter().filter_map(|of| Some((of.r?, of.name))).collect()).get(&r)
+            == Some(&f.name)
 }
 
 /// The row [`list_cached`] adds for the fields a walk cut short did not read ([`walk_sig_fields`]).
