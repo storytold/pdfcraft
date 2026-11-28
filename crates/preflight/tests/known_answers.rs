@@ -166,12 +166,18 @@ fn xmp_metadata_is_required_clause_6_6_2_1() {
 }
 
 #[test]
-fn the_declared_part_and_conformance_must_be_the_level_clause_6_6_4() {
+fn the_declared_part_must_be_the_level_and_the_conformance_a_b_or_u_clause_6_6_4() {
     let page = "<< /Type /Page /Parent 2 0 R >>";
     let matching = a2b_packet(None);
     let doc = page_document(page, Some(matching.as_str()), "", &[], "");
     assert_not_reported(&doc, Level::A2b, "6.6.4");
-    for (part, conformance) in [(3, "B"), (2, "A")] {
+    // A level A or U file meets level B too.
+    for conformance in ["A", "U"] {
+        let packet = xmp(2, conformance, None);
+        let doc = page_document(page, Some(packet.as_str()), "", &[], "");
+        assert_not_reported(&doc, Level::A2b, "6.6.4");
+    }
+    for (part, conformance) in [(3, "B"), (3, "A"), (2, "C")] {
         let packet = xmp(part, conformance, None);
         let doc = page_document(page, Some(packet.as_str()), "", &[], "");
         assert_reported(&doc, Level::A2b, "6.6.4");
