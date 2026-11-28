@@ -3,8 +3,8 @@
 //! showing a placeholder page.
 
 use craft::ui::runtime::{env::WindowKey, toast};
-use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 // PLAN: assumed `pdfcraft_ui_egui::JsDialog` with `Console` (pdf-forms-w17)
 use pdfcraft_ui_egui::{JsDialog, PdfCraftApp};
 
@@ -262,8 +262,7 @@ fn a_keystroke_that_leaves_the_text_unchanged_still_runs_the_change_script() {
     {
         let fx = h.state_mut().views[0].session.forms.focus.as_mut().unwrap();
         fx.text = "a".into();
-        fx.select_all = true;
-        fx.request_focus = true;
+        fx.selection = craft::text::ui::editor::TextSelection::new(0, fx.text.chars().count());
     }
     h.run_steps(3);
     h.event(egui::Event::Text("a".into()));

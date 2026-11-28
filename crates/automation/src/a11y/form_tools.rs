@@ -1,4 +1,4 @@
-use super::{failed, json, with_warnings, write_atomic, Args, Automation, Result, ToolError, Value};
+use super::{Args, Automation, Result, ToolError, Value, failed, json, with_warnings, write_atomic};
 
 /// A script's request to the viewer as the JSON that running a script reports (page numbers
 /// 1-based); a side panel goes by its fixed id.
