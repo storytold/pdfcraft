@@ -1604,9 +1604,9 @@ mod formcalc {
         assert_eq!(calc(r#"Substr("abcdef", 2, 3)"#), "bcd");
         assert_eq!(calc(r#"Stuff("abcdef", 2, 3, "XY")"#), "aXYef");
         assert_eq!(calc(r#"Replace("a-b-c", "-", "+")"#), "a+b+c");
-        assert_eq!(calc(r#"WordNum(42)"#), "Forty-Two");
-        assert_eq!(calc(r#"WordNum(1.999, 2)"#), "Two Dollars And 00 Cents");
-        assert_eq!(calc(r#"WordNum(1.01, 2)"#), "One Dollar And 01 Cent");
+        assert_eq!(calc(r#"WordNum(42)"#), "Forty-two");
+        assert_eq!(calc(r#"WordNum(1.999, 2)"#), "Two Dollars And Zero Cents");
+        assert_eq!(calc(r#"WordNum(1.01, 2)"#), "One Dollar And One Cent");
         assert_eq!(calc(r#"Encode("a b&c", "url")"#), "a%20b%26c");
         assert_eq!(calc(r#"Decode("a%20b", "url")"#), "a b");
     }
@@ -1643,6 +1643,17 @@ mod formcalc {
     fn assert_builtin_errors() {
         assert!(go(r#"Get("http://example.com")"#, "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("network"));
         assert!(go("Nope(1)", "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("unknown function"));
+    }
+
+    /// `WordNum` writes the examples of the FormCalc specification and reference: the word after a
+    /// hyphen in lower case, `Dollars` for format 1 and the cents in words for format 2.
+    #[test]
+    fn word_num_writes_dollars_and_cents_in_words() {
+        assert_eq!(calc(r#"WordNum(123.54)"#), "One Hundred Twenty-three");
+        assert_eq!(calc(r#"WordNum(1011.54, 1)"#), "One Thousand Eleven Dollars");
+        assert_eq!(calc(r#"WordNum(73.54, 2)"#), "Seventy-three Dollars And Fifty-four Cents");
+        assert_eq!(calc(r#"WordNum(1154.67, 2)"#), "One Thousand One Hundred Fifty-four Dollars And Sixty-seven Cents");
+        assert_eq!(calc(r#"WordNum(43, 2)"#), "Forty-three Dollars And Zero Cents");
     }
 
     #[test]
