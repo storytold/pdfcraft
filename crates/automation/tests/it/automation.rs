@@ -15379,3 +15379,30 @@ fn pdf_watermark_uses_visible_source_crop_through_tools() {
         assert_eq!(rendered[0], rendered[1], "same displayed source gives identical saved watermark at target rotation {rotation}");
     }
 }
+
+/// Added text can be underlined, and it reads back (#4236).
+#[test]
+fn added_text_underline_through_tools() {
+    let dir = workdir("content-underline");
+    let png = encode_png(40, 20, craft_image_codecs::ChannelLayout::Rgb, vec![200u8; 2400]);
+    std::fs::write(dir.join("logo.png"), png).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "Title", "at": [20, 20], "underline": true }));
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "Body", "at": [20, 60] }));
+    ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 1, "path": "logo.png", "rect": [100, 200, 180, 240] }));
+    let flags = |a: &mut Automation| -> Vec<Option<bool>> {
+        let list = ok(a, "content_list", json!({ "doc": doc }));
+        list["items"].as_array().unwrap().iter().map(|i| i["underline"].as_bool()).collect()
+    };
+    assert_eq!(flags(&mut a), [Some(true), Some(false), None]);
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "underline": false }));
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 2, "underline": true }));
+    assert_eq!(flags(&mut a), [Some(false), Some(true), None]);
+    assert!(
+        matches!(a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 3, "underline": true })), Err(ToolError::InvalidArgs(_))),
+        "pictures aren't underlined"
+    );
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(flags(&mut a), [Some(false), Some(false), None]);
+}

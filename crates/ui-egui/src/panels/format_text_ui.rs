@@ -312,7 +312,7 @@ pub(crate) fn values(target: &Target, fmt: Option<&SelectionFormatting>, sources
     };
     character.faux_bold = fmt.map_or(Some(look.bold), |f| f.bold);
     character.faux_italic = fmt.map_or(Some(look.italic), |f| f.italic);
-    character.underline = Some(extras.is_some_and(|e| e.underline));
+    character.underline = Some(extras.map_or(look.underline, |e| e.underline));
     character.position = Some(match &paragraphs {
         Some(p) if pdfcraft_engine::text_script::is_in(p.text, p.selection.as_ref(), Script::Super) => BaselinePosition::Superscript,
         Some(p) if pdfcraft_engine::text_script::is_in(p.text, p.selection.as_ref(), Script::Sub) => BaselinePosition::Subscript,
@@ -344,7 +344,7 @@ pub(crate) fn values(target: &Target, fmt: Option<&SelectionFormatting>, sources
     Values { character, paragraph, line_spacing, font }
 }
 
-/// The controls `target` can't apply, each with why: the two list buttons always; underline, line
+/// The controls `target` can't apply, each with why: the two list buttons always; line
 /// and paragraph spacing and scale for added text; superscript and subscript for text
 /// that is not open for typing; alignment while a paragraph selection is not tidy.
 pub(crate) fn unsupported(target: &Target) -> Vec<(FormatControl, Label)> {
@@ -353,7 +353,6 @@ pub(crate) fn unsupported(target: &Target) -> Vec<(FormatControl, Label)> {
     let paragraphs = target.paragraphs();
     if target.extras().is_none() {
         out.extend([
-            (FormatControl::Underline, planned()),
             (FormatControl::LineSpacing, planned()),
             (FormatControl::ParagraphSpacing, planned()),
             (FormatControl::HorizontalScale, planned()),
@@ -531,8 +530,9 @@ fn step(look: &mut AddedText, extras: Option<&mut Extras>, paragraphs: Option<&P
                 None
             }
             CharacterChange::Underline(on) => {
-                if let Some(extras) = extras {
-                    extras.underline = *on;
+                match extras {
+                    Some(extras) => extras.underline = *on,
+                    None => look.underline = *on,
                 }
                 None
             }

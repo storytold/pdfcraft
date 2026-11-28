@@ -70,6 +70,9 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
     if let Some(i) = a.opt_bool("italic")? {
         t.italic = i;
     }
+    if let Some(u) = a.opt_bool("underline")? {
+        t.underline = u;
+    }
     if let Some(ink) = ink_arg(a)? {
         t.set_ink(Some(ink));
     } else if let Some(c) = a.opt_str("color")? {
@@ -148,6 +151,7 @@ impl Automation {
                         v["size"] = json!(t.size);
                         v["bold"] = json!(t.bold);
                         v["italic"] = json!(t.italic);
+                        v["underline"] = json!(t.underline);
                         v["char_spacing"] = json!(t.char_spacing);
                         // Text painted in a print colour space says so; RGB text has neither.
                         match t.painted_ink() {
@@ -236,8 +240,11 @@ impl Automation {
                 if a.get("text").is_some() {
                     return Err(bad("images have no text"));
                 }
-                if ["font", "size", "bold", "italic", "color", "gray", "cmyk", "align", "aligns", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
-                    return Err(bad("font, size, bold, italic, color, gray, cmyk, align, aligns and char_spacing apply to text"));
+                if ["font", "size", "bold", "italic", "underline", "color", "gray", "cmyk", "align", "aligns", "char_spacing"]
+                    .iter()
+                    .any(|k| a.get(k).is_some())
+                {
+                    return Err(bad("font, size, bold, italic, underline, color, gray, cmyk, align, aligns and char_spacing apply to text"));
                 }
                 if let Some(deg) = a.opt_int("rotate")? {
                     if deg.rem_euclid(90) != 0 {
