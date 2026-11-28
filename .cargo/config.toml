@@ -6,10 +6,17 @@ xtask = "run -p xtask --"
 [target.wasm32-unknown-unknown]
 rustflags = ["-C", "target-feature=+simd128"]
 
+[env]
 # aws-lc (digital signatures and TLS, through aws-lc-rs) detects the CPU when `main` asks it to
 # (`pdfcraft_sign::init_crypto`), not in a static initializer before `main`. On x86 it reads
 # `OPENSSL_ia32cap` then, and aborts when that asks for a feature the processor lacks; each
 # executable first runs itself again without the variable (#2916, `pdfcraft_platform::crypto_env`),
 # which it can only do once `main` runs.
-[env]
 AWS_LC_SYS_CFLAGS = "-DBORINGSSL_NO_STATIC_INITIALIZER"
+
+# The optional craft-fonts build input (the Japanese face and the other UI faces; see
+# crates/fonts/build.rs). A plain build embeds nothing and prints no warning, so a local build
+# embeds a craft-fonts checkout next to this repository when there is one. A `CRAFT_FONTS_DIR`
+# already in the environment wins (CI sets its own), and a missing checkout only gives the
+# "building without craft-fonts" warning.
+CRAFT_FONTS_DIR = { value = "../craft-fonts", relative = true }

@@ -198,6 +198,11 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
 /// that starts with `=`, `+`, `-` or `@` (after any leading whitespace) as a formula. Such a cell
 /// is written with a leading `'`, which keeps it text; a plain number such as `-12.5` is not.
 pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
+    merge_csv_with_columns(files).0
+}
+
+/// Merge to CSV and report the number of distinct fields used to write the header.
+pub fn merge_csv_with_columns(files: &[Vec<(String, Vec<String>)>]) -> (String, usize) {
     let mut columns: Vec<&str> = Vec::new();
     let mut known: HashSet<&str> = HashSet::new();
     for f in files {
@@ -218,9 +223,7 @@ pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
             out
         }
     };
-    // An empty name is written as `""`, so a lone field with no name is still a column and not
-    // the empty header line of files without fields.
-    let mut out = columns.iter().map(|c| if c.is_empty() { "\"\"".to_string() } else { q(c) }).collect::<Vec<_>>().join(",");
+    let mut out = columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(",");
     out.push('\n');
     for f in files {
         // The first value of a name repeated in one file wins, as the scan it replaces found it.
@@ -232,7 +235,7 @@ pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
         out.push_str(&row.join(","));
         out.push('\n');
     }
-    out
+    (out, columns.len())
 }
 
 /// Whether a spreadsheet program runs CSV cell `s` as a formula: after any leading whitespace it

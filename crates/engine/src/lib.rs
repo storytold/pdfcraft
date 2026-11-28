@@ -60,6 +60,7 @@ pub mod signature_scan;
 mod sources;
 pub mod spooler;
 mod stamp_preview;
+pub mod suggest_outline;
 #[cfg(test)]
 mod test_hooks;
 pub mod text_fonts;
@@ -190,8 +191,8 @@ mod doc_state;
 pub use pdfcraft_edit::ArrangeOrder;
 
 use clock::{local_utc_offset, parse_ymd};
-pub use doc_state::{DocId, ImageEdit, OptimizeReport, RecoverySnapshot, SplitPart, guard, merge_data_files};
-use doc_state::{LOW_RESOLUTION_PRINT_DPI, render_threads, renderer_password, signatures_of, writable};
+pub use doc_state::{DocId, ImageEdit, OptimizeReport, RecoverySnapshot, SplitPart, guard, merge_data_files, merge_data_files_with_columns};
+use doc_state::{LOW_RESOLUTION_PRINT_DPI, editor_signatures, render_threads, renderer_password, signatures_of, writable};
 
 /// The configuration of the pool that draws the viewer: the document's own, plus installed CJK
 /// fonts for fonts a PDF does not embed (`pdfcraft_render::RenderConfig::system_fonts`). Exports,

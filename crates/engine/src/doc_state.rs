@@ -34,9 +34,14 @@ pub enum ImageEdit {
 /// Forms ▸ Merge data files into spreadsheet: the field values of each file (FDF, XFDF or a
 /// filled-in PDF form), as CSV with one row per file.
 pub fn merge_data_files(files: &[(String, Vec<u8>)]) -> Result<String, String> {
+    merge_data_files_with_columns(files).map(|(csv, _)| csv)
+}
+
+/// Merge the files to CSV and report the distinct field count.
+pub fn merge_data_files_with_columns(files: &[(String, Vec<u8>)]) -> Result<(String, usize), String> {
     let rows =
         files.iter().map(|(name, bytes)| pdfcraft_xfdf::data_values(bytes).map_err(|e| format!("{name}: {e}"))).collect::<Result<Vec<_>, _>>()?;
-    Ok(pdfcraft_xfdf::merge_csv(&rows))
+    Ok(pdfcraft_xfdf::merge_csv_with_columns(&rows))
 }
 
 /// One file produced by a split: (1-based first page, last page, PDF bytes).
@@ -114,6 +119,21 @@ pub(crate) fn signatures_of(
     cache: &pdfcraft_sign::DigestCache,
 ) -> Vec<SignatureInfo> {
     pdfcraft_sign::pdf::list_cached(cos, bytes, trust, cache)
+}
+
+/// Validate the signature fields of `editor`'s working state (written as `bytes`). While that
+/// state is still the file as opened plus only what opening appended, the file as read is
+/// validated instead: PdfCraft's own open-time revisions are not changes made since signing.
+pub(crate) fn editor_signatures(
+    editor: &crate::history::Editor,
+    bytes: &[u8],
+    trust: &TrustStore,
+    cache: &pdfcraft_sign::DigestCache,
+) -> Vec<SignatureInfo> {
+    match &editor.as_opened {
+        Some(o) if !editor.cos.is_modified() && Arc::ptr_eq(editor.cos.bytes(), &editor.saved) => signatures_of(&o.cos, &o.bytes, trust, cache),
+        _ => signatures_of(&editor.cos, bytes, trust, cache),
+    }
 }
 
 /// What Optimize PDF did.
