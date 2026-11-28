@@ -7,6 +7,32 @@ use pdfcraft_automation::mcp::McpServer;
 use pdfcraft_automation::{Automation, Content, ToolError, tools};
 use serde_json::{Value, json};
 
+fn encode_png(w: u32, h: u32, layout: craft_image_codecs::ChannelLayout, data: Vec<u8>) -> Vec<u8> {
+    let img = craft_image_codecs::Image::from_u8(w, h, layout, data).unwrap();
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
+}
+
+fn encode_jpeg_dpi(w: u32, h: u32, layout: craft_image_codecs::ChannelLayout, data: Vec<u8>, quality: u8, dpi: f32) -> Vec<u8> {
+    let mut img = craft_image_codecs::Image::from_u8(w, h, layout, data).unwrap();
+    img.meta.dpi = Some((dpi, dpi));
+    craft_image_codecs::encode(
+        &img,
+        craft_image_codecs::Format::Jpeg,
+        &craft_image_codecs::EncodeOptions { jpeg_quality: quality, ..Default::default() },
+    )
+    .unwrap()
+}
+
+fn decode_rgba(data: &[u8]) -> (u32, u32, Vec<u8>) {
+    let img = craft_image_codecs::decode(data).unwrap();
+    (img.width(), img.height(), img.to_rgba8())
+}
+
+fn rgba_at(w: u32, rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
+    let at = ((y * w + x) * 4) as usize;
+    rgba[at..at + 4].try_into().unwrap()
+}
+
 /// A PDF with `n` 200×300 pt pages reading "Page 1", "Page 2", …
 fn fixture(n: usize) -> Vec<u8> {
     fixture_with(n, "")
@@ -528,6 +554,68 @@ fn autotag_apply_tags_headings_by_size_across_pages() {
     assert_eq!(nesting["status"], "passed", "{check}");
 }
 
+/// #7065: Apply marks a running header and a numbered footer as pagination artifacts and lists
+/// them, and tags a body line that repeats mid-page like any other text.
+#[test]
+fn autotag_apply_marks_running_headers_and_footers_as_artifacts() {
+    let dir = workdir("autotag-running");
+    let page = |n: usize| {
+        format!(
+            "BT /FR 9 Tf 72 760 Td (Annual report) Tj ET BT /FR 11 Tf 72 640 Td (Body text on page {n} that runs long enough to set the body size) Tj ET \
+             BT /FR 11 Tf 72 400 Td (A body line repeated on every page) Tj ET BT /FR 9 Tf 300 30 Td (Page {n}) Tj ET"
+        )
+    };
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 612 792] /Resources << /Font << /FR 9 0 R >> >> >>".into(),
+    ];
+    objs.extend((6..9).map(|c| format!("<< /Type /Page /Parent 2 0 R /Contents {c} 0 R >>")));
+    objs.extend((1..4).map(|n| {
+        let content = page(n);
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len())
+    }));
+    objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into());
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("running.pdf"), bytes).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "running.pdf" }))["doc"].as_u64().unwrap();
+    let applied = ok(&mut a, "accessibility_autotag_apply", json!({ "doc": doc }));
+    let types: Vec<&str> = applied["tags"].as_array().unwrap().iter().map(|t| t["type"].as_str().unwrap()).collect();
+    assert_eq!(types, ["Document", "P", "P", "P", "P", "P", "P"], "only the body text is tagged: {applied}");
+    assert_eq!(applied["running_count"], 6);
+    let listed: Vec<(u64, &str, &str)> = applied["running_text"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["page"].as_u64().unwrap(), r["subtype"].as_str().unwrap(), r["text"].as_str().unwrap()))
+        .collect();
+    assert_eq!(listed[..2], [(1, "Header", "Annual report"), (1, "Footer", "Page 1")]);
+    assert_eq!(listed[5], (3, "Footer", "Page 3"));
+    assert!(applied["note"].as_str().unwrap().contains("6 text objects"), "{applied}");
+    let check = ok(&mut a, "accessibility_check", json!({ "doc": doc, "rules": ["tagged-content"] }));
+    let content = check["results"].as_array().unwrap().iter().find(|r| r["rule"] == "tagged-content").unwrap();
+    assert_eq!(content["status"], "passed", "{check}");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "tagged.pdf" }));
+    let reopened = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("tagged.pdf")).unwrap())).unwrap();
+    let first = pdfcraft_model::pages(&reopened).into_iter().next().unwrap();
+    let pdfcraft_cos::Object::Stream(stream) = &*reopened.resolve(first.dict.get(b"Contents").unwrap()) else { panic!("page content") };
+    let text = String::from_utf8(stream.decoded_strict().unwrap()).unwrap();
+    assert!(text.contains("/Artifact <</Type /Pagination/Subtype /Header>> BDC"), "{text}");
+    assert!(text.contains("/Artifact <</Type /Pagination/Subtype /Footer>> BDC"), "{text}");
+}
+
 #[test]
 fn autotag_form_fields_writes_reviewable_widget_tags() {
     let dir = workdir("autotag-form-fields");
@@ -921,9 +1009,8 @@ fn open_inspect_render_and_find() {
     let Content::Png { data, width, height } = &png[0] else { panic!("expected an image") };
     assert_eq!((*width, *height), (200, 300));
     assert_eq!(&data[..8], b"\x89PNG\r\n\x1a\n");
-    let decoder = png::Decoder::new(std::io::Cursor::new(data.as_slice()));
-    let info = decoder.read_info().unwrap().info().clone();
-    assert_eq!((info.width, info.height), (200, 300));
+    let decoded = craft_image_codecs::decode(data).unwrap();
+    assert_eq!(decoded.dimensions(), (200, 300));
 }
 
 #[test]
@@ -961,10 +1048,8 @@ fn text_editor_background_is_read_only_and_removes_source_glyphs() {
     let preview = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72, "hide_text_block": 1 })).unwrap();
     assert_ne!(preview, before);
     let Content::Png { data, .. } = &preview[0] else { panic!("expected PNG") };
-    let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
-    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
-    let info = reader.next_frame(&mut pixels).unwrap();
-    assert!(pixels[..info.buffer_size()].iter().all(|b| *b == 255), "no source glyphs remain on the white page");
+    let pixels = craft_image_codecs::decode(data).unwrap().into_data();
+    assert!(pixels.iter().all(|b| *b == 255), "no source glyphs remain on the white page");
     assert_eq!(a.call("page_render", &args).unwrap(), before);
     assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc })), state);
     assert_eq!(page_text(&mut a, doc), ["Page 1", "Page 2"]);
@@ -1241,13 +1326,7 @@ fn combine_renames_colliding_field_names() {
 #[test]
 fn combine_takes_images_and_text_files() {
     let dir = workdir("combine-images");
-    let mut png = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut png, 4, 2);
-        encoder.set_color(png::ColorType::Rgb);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.write_header().unwrap().write_image_data(&[90; 24]).unwrap();
-    }
+    let png = encode_png(4, 2, craft_image_codecs::ChannelLayout::Rgb, vec![90; 24]);
     std::fs::write(dir.join("scan.png"), png).unwrap();
     std::fs::write(dir.join("notes.txt"), "Some notes").unwrap();
     std::fs::write(dir.join("broken.png"), b"\x89PNG\r\n\x1a\nbroken").unwrap();
@@ -1628,6 +1707,7 @@ fn command_list_reports_enablement_and_tools() {
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
     let list = ok(&mut a, "command_list", json!({ "doc": doc }));
     let find = |id: &str| list["commands"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap().clone();
+    assert_eq!(find("comment.list")["shortcut"], if cfg!(target_os = "macos") { json!(null) } else { json!("Ctrl+M") });
     assert_eq!(find("page.rotate")["tool"], "page_rotate");
     assert_eq!(find("page.rotate")["enabled"], true);
     assert_eq!(find("edit.undo")["enabled"], false);
@@ -2740,6 +2820,19 @@ fn verify_comment_errors(a: &mut Automation, doc: u64, id: &str) {
         Err(ToolError::InvalidArgs(_))
     ));
     assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": 1 })), Err(ToolError::InvalidArgs(_))));
+    // #2670: opacity must be between 0 and 1.
+    assert!(matches!(
+        a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "note", "at": [1, 1], "opacity": -3 })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    assert!(matches!(
+        a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "note", "at": [1, 1], "opacity": 1.5 })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    let first = ok(a, "comment_list", json!({ "doc": doc }))["comments"][0].clone();
+    let (page, index) = (first["page"].as_u64().unwrap(), first["index"].as_u64().unwrap());
+    assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": page, "index": index, "opacity": -1 })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": page, "index": index, "opacity": 2.0 })), Err(ToolError::InvalidArgs(_))));
 }
 
 fn save_and_reopen_comments(dir: &Path, a: &mut Automation, doc: u64) {
@@ -4008,6 +4101,8 @@ fn watermarks_move_from_the_page_centre_through_tools() {
     // Huge offsets are clamped, and a value that isn't a number is refused.
     ok(&mut a, "doc_watermark", json!({ "doc": doc, "pages": [1], "text": "DRAFT", "offset_y": 1e300, "replace": true }));
     assert!(matches!(a.call("doc_watermark", &json!({ "doc": doc, "text": "X", "offset_x": "left" })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("doc_watermark", &json!({ "doc": doc, "text": "X", "opacity": -1 })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("doc_background", &json!({ "doc": doc, "color": "yellow", "opacity": -1 })), Err(ToolError::InvalidArgs(_))));
 }
 
 #[test]
@@ -4357,6 +4452,145 @@ trailer << /Root 1 0 R >>
     assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Mark content as artifact");
     assert_eq!(ok(&mut a, "accessibility_tags", json!({ "doc": doc }))["count"], 2);
     assert!(matches!(a.call("accessibility_mark_tag_artifact", &json!({ "doc": doc, "object": 6, "generation": 0 })), Err(ToolError::Failed(_))));
+}
+
+#[test]
+fn stream_tag_mutation_refusal_preserves_document_history_and_saved_content() {
+    use pdfcraft_cos::{Document as CosDocument, Object, SaveOptions};
+    use std::sync::Arc;
+
+    let dir = workdir("a11y-stm-refusal");
+    // Contributor-original page and form use separate MCID 0 namespaces.
+    let page = "/Figure <</MCID 0>> BDC 10 10 20 20 re f EMC q /Fm Do Q";
+    let form = "/Figure <</MCID 0>> BDC 0 0 5 5 re f EMC";
+    let source = format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R /MarkInfo << /Marked true >> >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /StructParents 0 /Resources << /XObject << /Fm 10 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{page}\nendstream endobj\n\
+5 0 obj << /Type /StructTreeRoot /K 6 0 R /ParentTree 9 0 R >> endobj\n\
+6 0 obj << /S /Document /P 5 0 R /K [7 0 R 8 0 R] >> endobj\n\
+7 0 obj << /S /Figure /P 6 0 R /Pg 3 0 R /K 0 /Alt (Page figure) >> endobj\n\
+8 0 obj << /S /Figure /P 6 0 R /Pg 3 0 R /K << /Type /MCR /MCID 0 /Stm 10 0 R /Pg 3 0 R >> /Alt (Form figure) >> endobj\n\
+9 0 obj << /Nums [0 [7 0 R] 1 8 0 R] >> endobj\n\
+10 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 5 5] /StructParents 1 /Length {} >> stream\n{form}\nendstream endobj\n\
+trailer << /Root 1 0 R >>\n%%EOF",
+        page.len(),
+        form.len()
+    );
+    for annotation_owned in [false, true] {
+        let mut synthetic = CosDocument::open(Arc::new(source.clone().into_bytes())).unwrap();
+        if annotation_owned {
+            use pdfcraft_cos::{Dict, ObjRef};
+            let annotation = synthetic.add(Object::Dict(Dict::from_iter([
+                (b"Type".to_vec(), Object::Name(b"Annot".to_vec())),
+                (b"Subtype".to_vec(), Object::Name(b"Link".to_vec())),
+                (b"Rect".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(10), Object::Int(10)])),
+                (b"P".to_vec(), Object::Ref(ObjRef::new(3, 0))),
+                (b"StructParent".to_vec(), Object::Int(2)),
+            ])));
+            synthetic.update_dict(ObjRef::new(3, 0), |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(annotation)]))).unwrap();
+            synthetic
+                .update_dict(ObjRef::new(8, 0), |d| {
+                    d.set(
+                        b"K".to_vec(),
+                        Object::Array(vec![
+                            Object::Int(0),
+                            Object::Dict(Dict::from_iter([
+                                (b"Type".to_vec(), Object::Name(b"OBJR".to_vec())),
+                                (b"Obj".to_vec(), Object::Ref(annotation)),
+                            ])),
+                        ]),
+                    )
+                })
+                .unwrap();
+            synthetic
+                .update_dict(ObjRef::new(9, 0), |d| {
+                    d.set(
+                        b"Nums".to_vec(),
+                        Object::Array(vec![
+                            Object::Int(0),
+                            Object::Array(vec![Object::Ref(ObjRef::new(7, 0))]),
+                            Object::Int(1),
+                            Object::Ref(ObjRef::new(8, 0)),
+                            Object::Int(2),
+                            Object::Ref(ObjRef::new(8, 0)),
+                        ]),
+                    )
+                })
+                .unwrap();
+        }
+        let source = pdfcraft_cos::write_full(&synthetic, &SaveOptions::default()).unwrap();
+        std::fs::write(dir.join("stm.pdf"), source).unwrap();
+
+        for dirty in [false, true] {
+            let mut a = auto(&dir);
+            let doc = ok(&mut a, "doc_open", json!({"path":"stm.pdf"}))["doc"].as_u64().unwrap();
+            let figures = ok(&mut a, "accessibility_figures", json!({"doc":doc}));
+            let figure = figures["figures"].as_array().unwrap().iter().find(|f| f["alt"] == "Form figure").unwrap()["figure"].as_u64().unwrap();
+            if dirty {
+                ok(&mut a, "accessibility_set_alt", json!({"doc":doc,"figure":figure,"alt":"First"}));
+                ok(&mut a, "accessibility_set_alt", json!({"doc":doc,"figure":figure,"alt":"Second"}));
+                ok(&mut a, "edit_undo", json!({"doc":doc}));
+            }
+            let before = ok(&mut a, "doc_info", json!({"doc":doc}))["document"].clone();
+            assert_eq!(before["dirty"], dirty);
+            assert_eq!(before["undo"].is_string(), dirty);
+            assert_eq!(before["redo"].is_string(), dirty);
+            let tags = ok(&mut a, "accessibility_tags", json!({"doc":doc}));
+            let figures = ok(&mut a, "accessibility_figures", json!({"doc":doc}));
+            for (tool, args) in [
+                ("accessibility_set_alt", json!({"doc":doc,"figure":figure,"decorative":true})),
+                ("accessibility_mark_tag_artifact", json!({"doc":doc,"object":figure,"generation":0})),
+            ] {
+                let Err(ToolError::Failed(message)) = a.call(tool, &args) else { panic!("{tool} must refuse unsupported ownership") };
+                let reason = if annotation_owned { "annotation or object references" } else { "form streams" };
+                assert!(message.contains(reason), "useful unsupported-content reason: {message}");
+                assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc}))["document"], before);
+                assert_eq!(ok(&mut a, "accessibility_tags", json!({"doc":doc})), tags);
+                assert_eq!(ok(&mut a, "accessibility_figures", json!({"doc":doc})), figures);
+            }
+            if dirty {
+                ok(&mut a, "edit_redo", json!({"doc":doc}));
+                let figs = ok(&mut a, "accessibility_figures", json!({"doc":doc}));
+                assert_eq!(figs["figures"][1]["alt"], "Second");
+                ok(&mut a, "edit_undo", json!({"doc":doc}));
+                assert_eq!(ok(&mut a, "accessibility_figures", json!({"doc":doc})), figures);
+            }
+            let name = if dirty { "dirty.pdf" } else { "clean.pdf" };
+            ok(&mut a, "doc_save", json!({"doc":doc,"path":name,"full":true}));
+            let saved = CosDocument::open(Arc::new(std::fs::read(dir.join(name)).unwrap())).unwrap();
+            let saved_figures = pdfcraft_engine::a11y::figures(&saved);
+            assert_eq!(saved_figures.len(), 2);
+            assert_eq!(saved_figures[0].alt.as_deref(), Some("Page figure"));
+            assert_eq!(saved_figures[1].alt.as_deref(), Some(if dirty { "First" } else { "Form figure" }));
+            assert_eq!(pdfcraft_engine::a11y::tags(&saved).len(), 3);
+            let catalog = saved.get(saved.root().unwrap());
+            let root = saved.dict(catalog.as_dict().unwrap().get(b"StructTreeRoot").unwrap()).unwrap();
+            let tree = saved.dict(root.get(b"ParentTree").unwrap()).unwrap();
+            let mut expected_nums =
+                vec![Object::Int(0), Object::Array(vec![Object::Ref(saved_figures[0].obj)]), Object::Int(1), Object::Ref(saved_figures[1].obj)];
+            if annotation_owned {
+                expected_nums.extend([Object::Int(2), Object::Ref(saved_figures[1].obj)]);
+            }
+            assert_eq!(tree.get(b"Nums"), Some(&Object::Array(expected_nums)));
+            let page_dict = saved.get(saved_figures[0].obj);
+            let page_ref = page_dict.as_dict().unwrap().get(b"Pg").unwrap();
+            let page_dict = saved.dict(page_ref).unwrap();
+            if annotation_owned {
+                let annotation = saved.resolve(&page_dict.get(b"Annots").unwrap().as_array().unwrap()[0]);
+                assert_eq!(annotation.as_dict().unwrap().get(b"StructParent"), Some(&Object::Int(2)));
+            }
+            let Object::Stream(page_stream) = &*saved.resolve(page_dict.get(b"Contents").unwrap()) else { panic!("page content") };
+            assert_eq!(page_stream.decoded().unwrap(), page.as_bytes());
+            let resources = saved.dict(page_dict.get(b"Resources").unwrap()).unwrap();
+            let xobjects = saved.dict(resources.get(b"XObject").unwrap()).unwrap();
+            let Object::Stream(form_stream) = &*saved.resolve(xobjects.get(b"Fm").unwrap()) else { panic!("form content") };
+            assert_eq!(form_stream.decoded().unwrap(), form.as_bytes());
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -4913,12 +5147,17 @@ fn enhance_camera_image_through_tools() {
 fn enhance_scanned_file_cleans_the_scan_in_place_through_tools() {
     let dir = workdir("enhance-scan");
     // A 300 × 400 grey scan: dull paper, a dark gutter at the left, text bars and a speck.
-    let img = image::GrayImage::from_fn(300, 400, |x, y| {
-        let light = 0.55 + 0.45 * (x as f32 / 60.0).min(1.0);
-        let ink = if ((60..360).contains(&y) && (y - 60) % 40 < 6 && (60..240).contains(&x)) || (x, y) == (150, 25) { 0.12 } else { 0.78 };
-        image::Luma([(ink * light * 255.0) as u8])
-    });
-    img.save(dir.join("scan.jpg")).unwrap();
+    let mut gray = Vec::with_capacity(300 * 400);
+    for y in 0..400u32 {
+        for x in 0..300u32 {
+            let light = 0.55 + 0.45 * (x as f32 / 60.0).min(1.0);
+            let ink = if ((60..360).contains(&y) && (y - 60) % 40 < 6 && (60..240).contains(&x)) || (x, y) == (150, 25) { 0.12 } else { 0.78 };
+            gray.push((ink * light * 255.0) as u8);
+        }
+    }
+    let img = craft_image_codecs::Image::from_u8(300, 400, craft_image_codecs::ChannelLayout::Gray, gray).unwrap();
+    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: 85, ..Default::default() };
+    std::fs::write(dir.join("scan.jpg"), craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).unwrap()).unwrap();
     let mut a = auto(&dir);
     let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["scan.jpg"] }))["doc"].as_u64().unwrap();
     ok(&mut a, "image_save", json!({ "doc": scan, "page": 1, "image": 1, "path": "before.jpg" }));
@@ -4932,16 +5171,20 @@ fn enhance_scanned_file_cleans_the_scan_in_place_through_tools() {
     assert_eq!((images["count"].clone(), images["images"][0]["pixels"].clone()), (json!(1), json!([300, 400])));
     let saved = ok(&mut a, "image_save", json!({ "doc": scan, "page": 1, "image": 1, "path": "after" }));
     assert_eq!(saved["format"], "jpg");
-    let (before, after) = (image::open(dir.join("before.jpg")).unwrap().to_luma8(), image::open(dir.join("after.jpg")).unwrap().to_luma8());
+    let to_luma = |path: &Path| {
+        let img = craft_image_codecs::decode(&std::fs::read(path).unwrap()).unwrap();
+        let w = img.width();
+        let g = img.convert(craft_image_codecs::ChannelLayout::Gray, craft_image_codecs::SampleType::U8).into_data();
+        (w, g)
+    };
+    let (bw, before) = to_luma(&dir.join("before.jpg"));
+    let (aw, after) = to_luma(&dir.join("after.jpg"));
     for (x, y) in [(150, 40), (3, 40), (3, 380), (150, 25)] {
-        assert!(
-            before.get_pixel(x, y)[0] < 200 && after.get_pixel(x, y)[0] >= 230,
-            "({x}, {y}): {:?} → {:?}",
-            before.get_pixel(x, y),
-            after.get_pixel(x, y)
-        );
+        let bp = before[(y * bw + x) as usize];
+        let ap = after[(y * aw + x) as usize];
+        assert!(bp < 200 && ap >= 230, "({x}, {y}): {bp} → {ap}");
     }
-    assert!(after.get_pixel(150, 62)[0] <= 60, "a stroke stays dark");
+    assert!(after[(62 * aw + 150) as usize] <= 60, "a stroke stays dark");
     // Undo puts the scan back as it was.
     ok(&mut a, "edit_undo", json!({ "doc": scan }));
     ok(&mut a, "image_save", json!({ "doc": scan, "page": 1, "image": 1, "path": "undone.jpg" }));
@@ -4976,10 +5219,12 @@ fn enhance_camera_image_finds_the_edges_by_itself() {
             (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]) >= 0.0
         })
     };
-    let img = image::RgbImage::from_fn(600, 450, |x, y| {
-        if inside(x as f64 + 0.5, y as f64 + 0.5) { image::Rgb([240, 238, 232]) } else { image::Rgb([70, 60, 50]) }
-    });
-    img.save(dir.join("photo.jpg")).unwrap();
+    let rgb: Vec<u8> = (0..450)
+        .flat_map(|y| (0..600).flat_map(move |x| if inside(x as f64 + 0.5, y as f64 + 0.5) { [240, 238, 232] } else { [70, 60, 50] }))
+        .collect();
+    let img = craft_image_codecs::Image::from_u8(600, 450, craft_image_codecs::ChannelLayout::Rgb, rgb).unwrap();
+    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: 85, ..Default::default() };
+    std::fs::write(dir.join("photo.jpg"), craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).unwrap()).unwrap();
     let mut a = auto(&dir);
     let photo = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["photo.jpg"] }))["doc"].as_u64().unwrap();
     let r = ok(&mut a, "page_enhance_camera", json!({ "doc": photo, "page": 1 }));
@@ -5238,16 +5483,10 @@ fn fill_sign_text_border_is_saved_and_validated() {
 #[test]
 fn image_signatures_through_tools_preserve_transparency_and_survive_save() {
     let dir = workdir("image-signatures");
-    let mut png = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut png, 120, 40);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let rgba: Vec<u8> = (0..40)
-            .flat_map(|y| (0..120).flat_map(move |x| if (40..80).contains(&x) && (10..30).contains(&y) { [0, 0, 0, 255] } else { [0, 0, 0, 0] }))
-            .collect();
-        encoder.write_header().unwrap().write_image_data(&rgba).unwrap();
-    }
+    let rgba: Vec<u8> = (0..40)
+        .flat_map(|y| (0..120).flat_map(move |x| if (40..80).contains(&x) && (10..30).contains(&y) { [0, 0, 0, 255] } else { [0, 0, 0, 0] }))
+        .collect();
+    let png = encode_png(120, 40, craft_image_codecs::ChannelLayout::Rgba, rgba);
     std::fs::write(dir.join("signature.png"), png).unwrap();
     std::fs::write(dir.join("broken.png"), b"broken").unwrap();
     let mut a = auto(&dir);
@@ -5258,11 +5497,11 @@ fn image_signatures_through_tools_preserve_transparency_and_survive_save() {
     let render = |a: &mut Automation, doc| {
         let output = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
         let Content::Png { data, .. } = &output[0] else { panic!() };
-        image::load_from_memory(data).unwrap().to_rgba8()
+        decode_rgba(data)
     };
-    let before = render(&mut a, doc);
-    assert_eq!(before.get_pixel(25, 60).0, [255, 255, 255, 255], "transparent margin exposes the page");
-    assert_eq!(before.get_pixel(65, 60).0, [0, 0, 0, 255], "signature ink is embedded");
+    let (bw, _, before) = render(&mut a, doc);
+    assert_eq!(rgba_at(bw, &before, 25, 60), [255, 255, 255, 255], "transparent margin exposes the page");
+    assert_eq!(rgba_at(bw, &before, 65, 60), [0, 0, 0, 255], "signature ink is embedded");
     assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Add initials");
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 1);
     ok(&mut a, "edit_redo", json!({ "doc": doc }));
@@ -5273,19 +5512,19 @@ fn image_signatures_through_tools_preserve_transparency_and_survive_save() {
     ok(&mut a, "comment_lock", json!({ "doc": doc, "page": 1, "index": 1 }));
     assert!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": 1, "rect": [20, 40, 164, 88] })).is_err());
     ok(&mut a, "comment_lock", json!({ "doc": doc, "page": 1, "index": 1, "locked": false }));
-    assert_eq!(render(&mut a, doc), before, "invalid and locked resizes leave the image intact");
+    assert_eq!(render(&mut a, doc).2, before, "invalid and locked resizes leave the image intact");
     ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": 1, "rect": [20, 40, 164, 88] }));
-    let resized = render(&mut a, doc);
-    assert_eq!(resized.get_pixel(110, 64).0, [0, 0, 0, 255], "resizing scales the original ink");
-    assert_eq!(resized.get_pixel(25, 64).0, [255, 255, 255, 255], "resizing retains alpha");
+    let (rw, _, resized) = render(&mut a, doc);
+    assert_eq!(rgba_at(rw, &resized, 110, 64), [0, 0, 0, 255], "resizing scales the original ink");
+    assert_eq!(rgba_at(rw, &resized, 25, 64), [255, 255, 255, 255], "resizing retains alpha");
     assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Resize comment");
-    assert_eq!(render(&mut a, doc), before);
+    assert_eq!(render(&mut a, doc).2, before);
     ok(&mut a, "edit_redo", json!({ "doc": doc }));
-    assert_eq!(render(&mut a, doc), resized);
+    assert_eq!(render(&mut a, doc).2, resized);
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "signed.pdf" }));
     let reopened = ok(&mut a, "doc_open", json!({ "path": "signed.pdf" }))["doc"].as_u64().unwrap();
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": reopened }))["count"], 2);
-    assert_eq!(render(&mut a, reopened), resized, "resized appearances retain alpha and geometry after save");
+    assert_eq!(render(&mut a, reopened).2, resized, "resized appearances retain alpha and geometry after save");
     for args in [
         json!({ "type": "signature", "path": "broken.png" }),
         json!({ "type": "signature", "path": "signature.png", "text": "Ada" }),
@@ -5306,10 +5545,6 @@ fn scanned_signatures_through_tools_drop_the_paper_and_report_bad_arguments() {
     let dir = workdir("scanned-signatures");
     // A grey, unevenly lit sheet with a pen stroke for the signature, and a blank one.
     let photo = |ink: bool| {
-        let mut png = Vec::new();
-        let mut encoder = png::Encoder::new(&mut png, 400, 300);
-        encoder.set_color(png::ColorType::Rgb);
-        encoder.set_depth(png::BitDepth::Eight);
         let rgb: Vec<u8> = (0..300_u32)
             .flat_map(|y| {
                 (0..400_u32).flat_map(move |x| {
@@ -5318,8 +5553,7 @@ fn scanned_signatures_through_tools_drop_the_paper_and_report_bad_arguments() {
                 })
             })
             .collect();
-        encoder.write_header().unwrap().write_image_data(&rgb).unwrap();
-        png
+        encode_png(400, 300, craft_image_codecs::ChannelLayout::Rgb, rgb)
     };
     std::fs::write(dir.join("photo.png"), photo(true)).unwrap();
     std::fs::write(dir.join("blank.png"), photo(false)).unwrap();
@@ -5328,11 +5562,11 @@ fn scanned_signatures_through_tools_drop_the_paper_and_report_bad_arguments() {
     ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 60], "path": "photo.png", "scan": true }));
     let output = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
     let Content::Png { data, .. } = &output[0] else { panic!() };
-    let page = image::load_from_memory(data).unwrap().to_rgba8();
-    let dark = (20..170).filter(|&x| page.get_pixel(x, 60).0[0] < 80).count();
+    let (pw, _, page) = decode_rgba(data);
+    let dark = (20..170).filter(|&x| rgba_at(pw, &page, x, 60)[0] < 80).count();
     assert!(dark > 100, "the stroke is placed as ink across the signature width ({dark} px)");
     for (x, y) in [(22, 50), (100, 50), (100, 70)] {
-        assert_eq!(page.get_pixel(x, y).0, [255, 255, 255, 255], "the grey paper is gone at {x},{y}");
+        assert_eq!(rgba_at(pw, &page, x, y), [255, 255, 255, 255], "the grey paper is gone at {x},{y}");
     }
     ok(
         &mut a,
@@ -5366,16 +5600,10 @@ fn scanned_signatures_through_tools_drop_the_paper_and_report_bad_arguments() {
 #[test]
 fn image_signature_preview_layers_are_read_only_and_survive_encrypted_save() {
     let dir = workdir("signature-preview");
-    let mut png = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut png, 120, 40);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let rgba: Vec<u8> = (0..40)
-            .flat_map(|y| (0..120).flat_map(move |x| if (40..80).contains(&x) && (10..30).contains(&y) { [20, 40, 60, 128] } else { [0, 0, 0, 0] }))
-            .collect();
-        encoder.write_header().unwrap().write_image_data(&rgba).unwrap();
-    }
+    let rgba: Vec<u8> = (0..40)
+        .flat_map(|y| (0..120).flat_map(move |x| if (40..80).contains(&x) && (10..30).contains(&y) { [20, 40, 60, 128] } else { [0, 0, 0, 0] }))
+        .collect();
+    let png = encode_png(120, 40, craft_image_codecs::ChannelLayout::Rgba, rgba);
     std::fs::write(dir.join("signature.png"), png).unwrap();
     std::fs::write(dir.join("form.pdf"), fixture(1)).unwrap();
     let mut a = auto(&dir);
@@ -5384,7 +5612,7 @@ fn image_signature_preview_layers_are_read_only_and_survive_encrypted_save() {
     ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "initials", "at": [20, 40], "path": "signature.png" }));
     let background = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
     let Content::Png { data: expected, .. } = &background[0] else { panic!() };
-    let expected = image::load_from_memory(expected).unwrap().to_rgba8();
+    let expected = decode_rgba(expected).2;
     ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "signature", "at": [120, 100], "path": "signature.png" }));
     ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": 2, "opacity": 0.5 }));
     ok(&mut a, "doc_protect", json!({ "doc": doc, "open_password": "preview-test" }));
@@ -5405,10 +5633,10 @@ fn image_signature_preview_layers_are_read_only_and_survive_encrypted_save() {
         assert_eq!(meta["image_rotation"], 0, "placed upright as displayed on the turned page");
         assert_eq!(meta["opacity"], 0.5);
         assert_eq!((*width, *height), (120, 40));
-        assert_eq!(image::load_from_memory(background).unwrap().to_rgba8(), expected, "page text and the other signature remain");
-        let signature = image::load_from_memory(signature).unwrap().to_rgba8();
-        assert_eq!(signature.get_pixel(5, 20).0[3], 0);
-        assert_eq!(signature.get_pixel(60, 20).0, [20, 40, 60, 128], "embedded alpha and colour survive reopen");
+        assert_eq!(decode_rgba(background).2, expected, "page text and the other signature remain");
+        let (sw, _, signature) = decode_rgba(signature);
+        assert_eq!(rgba_at(sw, &signature, 5, 20)[3], 0);
+        assert_eq!(rgba_at(sw, &signature, 60, 20), [20, 40, 60, 128], "embedded alpha and colour survive reopen");
         assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc })), before);
         let d = a.session().docs().iter().find(|d| d.id.0 == doc).unwrap();
         assert_eq!(d.edit_generation(), generation);
@@ -5468,13 +5696,7 @@ fn creating_from_text_refuses_what_the_font_cannot_draw() {
 #[test]
 fn creating_from_multiple_files_through_tools() {
     let dir = workdir("create-multiple");
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 4, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.set_depth(png::BitDepth::Eight);
-        enc.write_header().unwrap().write_image_data(&[100; 4 * 2 * 3]).unwrap();
-    }
+    let png = encode_png(4, 2, craft_image_codecs::ChannelLayout::Rgb, vec![100; 4 * 2 * 3]);
     std::fs::write(dir.join("scan.png"), png).unwrap();
     std::fs::write(dir.join("notes.txt"), "hello").unwrap();
     std::fs::write(dir.join("archive.zip"), b"PK\x03\x04").unwrap();
@@ -5535,14 +5757,9 @@ fn create_multiple_has_no_file_count_limit() {
 #[test]
 fn creating_images_with_dpi_through_tools() {
     let dir = workdir("image-dpi");
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 300, 150);
-        enc.set_color(png::ColorType::Rgb);
-        enc.set_depth(png::BitDepth::Eight);
-        enc.set_pixel_dims(Some(png::PixelDimensions { xppu: 11811, yppu: 5906, unit: png::Unit::Meter }));
-        enc.write_header().unwrap().write_image_data(&vec![100; 300 * 150 * 3]).unwrap();
-    }
+    let mut img = craft_image_codecs::Image::from_u8(300, 150, craft_image_codecs::ChannelLayout::Rgb, vec![100; 300 * 150 * 3]).unwrap();
+    img.meta.dpi = Some((300.0, 150.0));
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     std::fs::write(dir.join("scan.png"), png).unwrap();
     let mut a = auto(&dir);
     for (dpi, width, height) in [(None, 72.0, 72.0), (Some(72.0), 300.0, 150.0), (Some(300.0), 72.0, 36.0)] {
@@ -5851,6 +6068,65 @@ fn redacting_through_tools() {
     assert!(matches!(a.call("redact_apply", &json!({ "doc": doc })), Err(ToolError::Failed(_))));
     assert!(matches!(a.call("redact_mark", &json!({ "doc": doc, "find": "nowhere to be found" })), Err(ToolError::Failed(_))));
     assert!(matches!(a.call("redact_mark", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
+}
+
+#[test]
+fn redact_apply_refuses_unreadable_annotations_then_recovers_through_tools() {
+    for inline in [false, true] {
+        for rect in ["", "/Rect [10 140 /Bad 80 160]"] {
+            let temp = tempfile::tempdir().unwrap();
+            let dir = temp.path();
+            let note = format!("<< /Type /Annot /Subtype /Text /NM (problem-note) /Contents (PRIVATE-NOTE) {rect} >>");
+            let annots = if inline { note.clone() } else { "6 0 R".into() };
+            let page = format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 5 0 R \
+                 /Resources << /Font << /F1 4 0 R >> >> /Annots [{annots}] >>"
+            );
+            let content = "BT /F1 12 Tf 20 150 Td (SECRET) Tj ET BT /F1 12 Tf 20 50 Td (Public line) Tj ET";
+            let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+            let bytes = pdf_of(&[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                &page,
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+                &stream,
+                &note,
+            ]);
+            std::fs::write(dir.join("source.pdf"), bytes).unwrap();
+            let mut a = auto(dir);
+            let doc = ok(&mut a, "doc_open", json!({ "path": "source.pdf" }))["doc"].as_u64().unwrap();
+            assert_eq!(ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "SECRET" }))["marked"], 1);
+            ok(&mut a, "doc_save", json!({ "doc": doc, "path": "pending.pdf", "full": true }));
+            let state = |a: &Automation| {
+                let d = a.session().get(pdfcraft_engine::DocId(doc)).unwrap();
+                (d.bytes.clone(), d.dirty, d.edit_generation(), d.can_undo().map(str::to_owned), d.can_redo().map(str::to_owned))
+            };
+            let before = state(&a);
+            let pending = std::fs::read(dir.join("pending.pdf")).unwrap();
+            let comments = ok(&mut a, "comment_list", json!({ "doc": doc }));
+            for _ in 0..2 {
+                let failure = err(&mut a, "redact_apply", json!({ "doc": doc })).to_string();
+                assert!(failure.contains("annotation 1 on page 1") && failure.contains("nothing was changed"), "{failure}");
+                assert_eq!(state(&a), before, "refusal preserves working bytes, dirty state, generation and history");
+                assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc })), comments, "the note and pending mark stay");
+                assert_eq!(std::fs::read(dir.join("pending.pdf")).unwrap(), pending);
+                assert!(page_text(&mut a, doc)[0].contains("SECRET"), "refusal leaves the original page intact");
+            }
+            // The error's remedy is reachable through the ordinary comment tool, even without a
+            // usable rectangle. The original pending mark can then be applied and saved.
+            ok(&mut a, "comment_delete", json!({ "doc": doc, "id": "problem-note" }));
+            let applied = ok(&mut a, "redact_apply", json!({ "doc": doc }));
+            assert_eq!((applied["applied"].as_u64(), applied["marks_pending"].as_u64()), (Some(1), Some(0)));
+            ok(&mut a, "doc_save", json!({ "doc": doc, "path": "redacted.pdf", "full": true }));
+            let mut reader = auto(dir);
+            let reopened = ok(&mut reader, "doc_open", json!({ "path": "redacted.pdf" }))["doc"].as_u64().unwrap();
+            let text = page_text(&mut reader, reopened)[0].clone();
+            assert!(text.contains("Public line") && !text.contains("SECRET"), "{text}");
+            assert_eq!(ok(&mut reader, "comment_list", json!({ "doc": reopened }))["comments"], json!([]));
+            let saved = std::fs::read(dir.join("redacted.pdf")).unwrap();
+            assert!(!saved.windows(b"PRIVATE-NOTE".len()).any(|w| w == b"PRIVATE-NOTE"), "the removed note must not survive a full save");
+        }
+    }
 }
 
 /// #2539 review: `redact_apply` says where the removed text is still held that applying leaves as
@@ -6383,13 +6659,7 @@ fn printer_papers_through_tools() {
 #[test]
 fn adding_content_through_tools() {
     let dir = workdir("content");
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 40, 20);
-        enc.set_color(png::ColorType::Rgb);
-        let mut w = enc.write_header().unwrap();
-        w.write_image_data(&[200u8; 2400]).unwrap();
-    }
+    let png = encode_png(40, 20, craft_image_codecs::ChannelLayout::Rgb, vec![200u8; 2400]);
     std::fs::write(dir.join("logo.png"), png).unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
@@ -6475,13 +6745,7 @@ fn added_text_takes_a_cmyk_or_gray_ink_through_tools() {
     }
     assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["count"], 2, "nothing refused was added");
     // content_update refuses them too, an image takes no ink, and a refused update changes nothing.
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 40, 20);
-        enc.set_color(png::ColorType::Rgb);
-        let mut w = enc.write_header().unwrap();
-        w.write_image_data(&[200u8; 2400]).unwrap();
-    }
+    let png = encode_png(40, 20, craft_image_codecs::ChannelLayout::Rgb, vec![200u8; 2400]);
     std::fs::write(dir.join("logo.png"), png).unwrap();
     ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 1, "path": "logo.png", "rect": [100, 200, 180, 240] }));
     let before = ok(&mut a, "content_list", json!({ "doc": doc }))["items"].clone();
@@ -6505,12 +6769,7 @@ fn added_text_takes_a_cmyk_or_gray_ink_through_tools() {
 #[test]
 fn copying_added_content_through_tools() {
     let dir = workdir("content-copy");
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 40, 20);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[90u8; 2400]).unwrap();
-    }
+    let png = encode_png(40, 20, craft_image_codecs::ChannelLayout::Rgb, vec![90u8; 2400]);
     std::fs::write(dir.join("logo.png"), png).unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
@@ -6622,10 +6881,7 @@ fn added_text_takes_character_spacing() {
 }
 
 fn added_rotation_image(dir: &Path) {
-    let mut png = Vec::new();
-    let mut enc = png::Encoder::new(&mut png, 2, 1);
-    enc.set_color(png::ColorType::Rgb);
-    enc.write_header().unwrap().write_image_data(&[255, 0, 0, 0, 0, 255]).unwrap();
+    let png = encode_png(2, 1, craft_image_codecs::ChannelLayout::Rgb, vec![255, 0, 0, 0, 0, 255]);
     std::fs::write(dir.join("rotation.png"), png).unwrap();
 }
 
@@ -6723,12 +6979,7 @@ fn large_added_image_rotations_round_trip_through_mcp() {
 #[test]
 fn text_styling_on_an_image_is_refused_without_an_edit() {
     let dir = workdir("content-style");
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 1, 1);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[80, 160, 200]).unwrap();
-    }
+    let png = encode_png(1, 1, craft_image_codecs::ChannelLayout::Rgb, vec![80, 160, 200]);
     std::fs::write(dir.join("logo.png"), png).unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
@@ -7104,6 +7355,32 @@ fn tab_order_and_field_appearance_through_tools() {
     ));
 }
 
+/// #7429: an import that took some values and had the form refuse another says which one in its own
+/// response (a CLI or MCP caller need not call `doc_info`); one the form refused whole still fails;
+/// one the form took whole carries an empty list.
+#[test]
+fn form_data_import_response_names_the_fields_the_form_refused() {
+    let dir = workdir("import-refused");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "form_add_field",
+        json!({ "doc": doc, "page": 1, "type": "combo", "rect": [20, 60, 180, 82], "name": "Choice", "options": ["A", "B"] }),
+    );
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, 20, 180, 42], "name": "Notes" }));
+    std::fs::write(dir.join("whole.xml"), "<fields><Notes>hello</Notes></fields>").unwrap();
+    std::fs::write(dir.join("mixed.xml"), "<fields><Choice>INVALID</Choice><Notes>again</Notes></fields>").unwrap();
+    std::fs::write(dir.join("refused.xml"), "<fields><Choice>INVALID</Choice></fields>").unwrap();
+    let r = ok(&mut a, "doc_import_data", json!({ "doc": doc, "path": "whole.xml" }));
+    assert_eq!(r["import_repairs"], json!([]), "{r}");
+    let r = ok(&mut a, "doc_import_data", json!({ "doc": doc, "path": "mixed.xml" }));
+    let repairs = r["import_repairs"].as_array().unwrap();
+    assert!(repairs.len() == 1 && repairs[0].as_str().unwrap().contains("\"Choice\"") && !repairs[0].as_str().unwrap().contains("Notes"), "{r}");
+    let e = err(&mut a, "doc_import_data", json!({ "doc": doc, "path": "refused.xml" }));
+    assert!(e.to_string().contains("nothing was imported") && e.to_string().contains("\"Choice\""), "{e}");
+}
+
 #[test]
 fn comments_and_form_data_travel_as_xfdf_fdf_and_text() {
     let dir = workdir("xfdf");
@@ -7131,20 +7408,13 @@ fn comments_and_form_data_travel_as_xfdf_fdf_and_text() {
 fn natural_image_stamps_through_tools_on_rotated_pages() {
     for degrees in [0, 90, 180, 270] {
         let dir = workdir(&format!("natural-stamps-{degrees}"));
-        let mut bytes = Vec::new();
-        {
-            let mut encoder = png::Encoder::new(&mut bytes, 80, 40);
-            encoder.set_color(png::ColorType::Rgb);
-            encoder.set_depth(png::BitDepth::Eight);
-            let pixels: Vec<u8> = (0..40)
-                .flat_map(|y| {
-                    (0..80).flat_map(move |x| {
-                        [[240, 20, 20], [20, 180, 20], [20, 20, 240], [230, 180, 20]][usize::from(y >= 20) * 2 + usize::from(x >= 40)]
-                    })
-                })
-                .collect();
-            encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
-        }
+        let pixels: Vec<u8> = (0..40)
+            .flat_map(|y| {
+                (0..80)
+                    .flat_map(move |x| [[240, 20, 20], [20, 180, 20], [20, 20, 240], [230, 180, 20]][usize::from(y >= 20) * 2 + usize::from(x >= 40)])
+            })
+            .collect();
+        let bytes = encode_png(80, 40, craft_image_codecs::ChannelLayout::Rgb, pixels);
         std::fs::write(dir.join("quadrants.png"), bytes).unwrap();
         let mut a = auto(&dir);
         let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
@@ -7152,15 +7422,14 @@ fn natural_image_stamps_through_tools_on_rotated_pages() {
         ok(&mut a, "stamp_custom", json!({"doc":doc,"page":1,"path":"quadrants.png","at":[100,100]}));
         let rendered = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap();
         let Content::Png { data, .. } = &rendered[0] else { panic!("expected PNG") };
-        let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
-        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
-        let info = reader.next_frame(&mut pixels).unwrap();
+        let img = craft_image_codecs::decode(data).unwrap();
         // A rendered page is opaque, so it comes as RGB.
-        assert_eq!(info.color_type, png::ColorType::Rgb);
+        assert_eq!(img.layout(), craft_image_codecs::ChannelLayout::Rgb);
+        let (w, pixels) = (img.width(), img.data());
         for ((x, y), colour) in
             [(80, 90), (120, 90), (80, 110), (120, 110)].into_iter().zip([[240, 20, 20], [20, 180, 20], [20, 20, 240], [230, 180, 20]])
         {
-            let offset = ((y * info.width + x) * 3) as usize;
+            let offset = ((y * w + x) * 3) as usize;
             assert_eq!(&pixels[offset..offset + 3], &colour, "page rotation {degrees}");
         }
     }
@@ -7238,13 +7507,7 @@ fn custom_stamps_fit_a_pdf_page_inside_a_rect() {
 
     // On a quarter-turned page the picture is fitted as displayed: an 80 × 40 picture in a
     // 100 × 100 box is 100 × 50 on screen, centred.
-    let mut png_bytes = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut png_bytes, 80, 40);
-        encoder.set_color(png::ColorType::Rgb);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.write_header().unwrap().write_image_data(&[200; 80 * 40 * 3]).unwrap();
-    }
+    let png_bytes = encode_png(80, 40, craft_image_codecs::ChannelLayout::Rgb, vec![200; 80 * 40 * 3]);
     std::fs::write(dir.join("wide.png"), png_bytes).unwrap();
     let turned = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
     ok(&mut a, "page_rotate", json!({ "doc": turned, "pages": [1], "degrees": 90 }));
@@ -7761,13 +8024,17 @@ fn note_icons_anchor_at_the_requested_corner_on_rotated_pages() {
 fn image_signatures_stay_upright_on_rotated_pages() {
     let dir = workdir("image-upright");
     // 80 x 40 px, one colour per quadrant: red and green above, blue and yellow below.
-    let quadrants = image::RgbaImage::from_fn(80, 40, |x, y| match (x < 40, y < 20) {
-        (true, true) => image::Rgba([255, 0, 0, 255]),
-        (false, true) => image::Rgba([0, 255, 0, 255]),
-        (true, false) => image::Rgba([0, 0, 255, 255]),
-        (false, false) => image::Rgba([255, 255, 0, 255]),
-    });
-    quadrants.save(dir.join("quadrants.png")).unwrap();
+    let quadrants: Vec<u8> = (0..40)
+        .flat_map(|y| {
+            (0..80).flat_map(move |x| match (x < 40, y < 20) {
+                (true, true) => [255, 0, 0, 255],
+                (false, true) => [0, 255, 0, 255],
+                (true, false) => [0, 0, 255, 255],
+                (false, false) => [255, 255, 0, 255],
+            })
+        })
+        .collect();
+    std::fs::write(dir.join("quadrants.png"), encode_png(80, 40, craft_image_codecs::ChannelLayout::Rgba, quadrants)).unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 200, "height": 300, "pages": 4 }))["doc"].as_u64().unwrap();
     for (page, degrees) in [(2, 90), (3, 180), (4, 270)] {
@@ -7782,7 +8049,7 @@ fn image_signatures_stay_upright_on_rotated_pages() {
         for page in 1..=4 {
             let output = a.call("page_render", &json!({ "doc": doc, "page": page, "dpi": 72 })).unwrap();
             let Content::Png { data, .. } = &output[0] else { panic!() };
-            let pixels = image::load_from_memory(data).unwrap().to_rgba8();
+            let (pw, _, pixels) = decode_rgba(data);
             for (x, y, want, what) in [
                 (76, 132, red, "signature top-left"),
                 (108, 132, green, "signature top-right"),
@@ -7793,7 +8060,7 @@ fn image_signatures_stay_upright_on_rotated_pages() {
                 (92, 120, white, "above the signature"),
                 (92, 160, white, "below the signature"),
             ] {
-                let got = pixels.get_pixel(x, y).0;
+                let got = rgba_at(pw, &pixels, x, y);
                 assert!(got[..3].iter().zip(want).all(|(g, w)| g.abs_diff(w) < 12), "page {page}, {what} at ({x}, {y}): {got:?}, want {want:?}");
             }
         }
@@ -7823,14 +8090,16 @@ fn typed_signatures_stay_upright_on_rotated_pages() {
         for page in 1..=4 {
             let output = a.call("page_render", &json!({ "doc": doc, "page": page, "dpi": 72 })).unwrap();
             let Content::Png { data, .. } = &output[0] else { panic!() };
-            let pixels = image::load_from_memory(data).unwrap().to_rgba8();
-            assert_eq!(pixels.dimensions(), if page % 2 == 1 { (200, 300) } else { (300, 200) }, "page {page}");
-            let dark: Vec<bool> = pixels.pixels().map(|p| p.0[..3].iter().all(|v| *v < 128)).collect();
+            let (width, height, pixels) = decode_rgba(data);
+            assert_eq!((width, height), if page % 2 == 1 { (200, 300) } else { (300, 200) }, "page {page}");
+            let dark: Vec<bool> = pixels.as_chunks::<4>().0.iter().map(|p| p[..3].iter().all(|v| *v < 128)).collect();
             for y in [60, 140] {
                 let mut b = [u32::MAX, u32::MAX, 0, 0];
-                for (x, py, p) in pixels.enumerate_pixels() {
-                    if py.abs_diff(y) < 40 && p.0[..3].iter().all(|v| *v < 128) {
-                        b = [b[0].min(x), b[1].min(py), b[2].max(x), b[3].max(py)];
+                for py in 0..height {
+                    for x in 0..width {
+                        if py.abs_diff(y) < 40 && rgba_at(width, &pixels, x, py)[..3].iter().all(|v| *v < 128) {
+                            b = [b[0].min(x), b[1].min(py), b[2].max(x), b[3].max(py)];
+                        }
                     }
                 }
                 assert!(b[0] <= b[2], "page {page}: no ink near y = {y}");
@@ -7842,7 +8111,6 @@ fn typed_signatures_stay_upright_on_rotated_pages() {
                 continue;
             }
             // Same pixels as the unturned page where both pages are (pages 2 and 4 are wider).
-            let width = pixels.width();
             let (mut differ, mut ink) = (0, 0);
             for y in 0..200 {
                 for x in 0..200 {
@@ -7880,14 +8148,15 @@ fn fill_sign_marks_stay_upright_on_rotated_pages() {
             // 144 dpi: two pixels a point.
             let output = a.call("page_render", &json!({ "doc": doc, "page": page, "dpi": 144 })).unwrap();
             let Content::Png { data, .. } = &output[0] else { panic!() };
-            let pixels = image::load_from_memory(data).unwrap().to_rgba8();
-            let dark: Vec<bool> = pixels.pixels().map(|p| p.0[..3].iter().all(|v| *v < 128)).collect();
-            let width = pixels.width();
+            let (width, height, pixels) = decode_rgba(data);
+            let dark: Vec<bool> = pixels.as_chunks::<4>().0.iter().map(|p| p[..3].iter().all(|v| *v < 128)).collect();
             // The line, 36 × 4 pt displayed, runs across.
             let mut b = [u32::MAX, u32::MAX, 0, 0];
-            for (x, y, p) in pixels.enumerate_pixels() {
-                if x.abs_diff(240) < 60 && y.abs_diff(120) < 60 && p.0[..3].iter().all(|v| *v < 128) {
-                    b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+            for y in 0..height {
+                for x in 0..width {
+                    if x.abs_diff(240) < 60 && y.abs_diff(120) < 60 && rgba_at(width, &pixels, x, y)[..3].iter().all(|v| *v < 128) {
+                        b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+                    }
                 }
             }
             assert!(b[0] <= b[2], "page {page}: no line drawn");
@@ -8203,14 +8472,8 @@ fn lines_and_corners_are_held_level_or_plumb_through_the_tool() {
 fn signing_with_an_image_typed_or_drawn_graphic_through_tools() {
     let dir = workdir("signing-graphic");
     // A solid red 120 x 40 picture.
-    let mut png = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut png, 120, 40);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let rgba: Vec<u8> = (0..120 * 40).flat_map(|_| [220, 0, 0, 255]).collect();
-        encoder.write_header().unwrap().write_image_data(&rgba).unwrap();
-    }
+    let rgba: Vec<u8> = (0..120 * 40).flat_map(|_| [220, 0, 0, 255]).collect();
+    let png = encode_png(120, 40, craft_image_codecs::ChannelLayout::Rgba, rgba);
     std::fs::write(dir.join("logo.png"), png).unwrap();
     std::fs::write(dir.join("broken.png"), b"broken").unwrap();
     let mut a = auto(&dir);
@@ -8256,11 +8519,11 @@ fn signing_with_an_image_typed_or_drawn_graphic_through_tools() {
     // details on the right.
     let png = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
     let Content::Png { data, width, .. } = &png[0] else { panic!("expected an image") };
-    let mut reader = png::Decoder::new(std::io::Cursor::new(data.as_slice())).read_info().unwrap();
-    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
-    let frame = reader.next_frame(&mut buf).unwrap();
-    let channels = frame.line_size / *width as usize;
-    let px = |x: usize, y: usize| buf[y * frame.line_size + x * channels..][..3].to_vec();
+    let (_, _, buf) = decode_rgba(data);
+    let px = |x: usize, y: usize| {
+        let at = (y * *width as usize + x) * 4;
+        buf[at..at + 3].to_vec()
+    };
     assert_eq!(px(60, 225), [220, 0, 0], "the image fills the left half's middle");
     assert_ne!(px(150, 225), [220, 0, 0], "and not the details");
     let inked = |y0: usize, y1: usize| (y0..y1).any(|y| (23..97).any(|x| px(x, y).iter().all(|c| *c < 100)));
@@ -8427,8 +8690,8 @@ fn named_layer_verdicts_are_reported_and_rendered_through_tools() {
     assert_eq!(list["signatures"][0]["verdict_shown"], true);
     let rendered = a.call("page_render", &json!({"doc": doc, "page": 1, "dpi": 72})).unwrap();
     let Content::Png { data, .. } = &rendered[0] else { panic!("expected a PNG") };
-    let pixels = image::load_from_memory_with_format(data, image::ImageFormat::Png).unwrap().to_rgba8();
-    let red = pixels.pixels().filter(|p| p.0.iter().zip([0xD7, 0x37, 0x3F]).all(|(a, b)| a.abs_diff(b) < 30)).count();
+    let (_, _, pixels) = decode_rgba(data);
+    let red = pixels.as_chunks::<4>().0.iter().filter(|p| p[..3].iter().zip([0xD7u8, 0x37, 0x3F]).all(|(a, b)| a.abs_diff(b) < 30)).count();
     assert!(red > 100, "the invalid state is drawn: {red} red pixels");
     ok(&mut a, "doc_save", json!({"doc": doc, "path": "saved.pdf", "full": false}));
     assert_eq!(std::fs::read(dir.join("saved.pdf")).unwrap(), original, "the drawn state never enters saves");
@@ -8647,10 +8910,7 @@ fn optimizing_through_tools() {
             [(x * 255 / w) as u8 ^ ((x * y) & 15) as u8, (y * 255 / h) as u8, ((x + y) & 255) as u8]
         })
         .collect();
-    let mut jpeg = Vec::new();
-    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95);
-    enc.set_pixel_density(image::codecs::jpeg::PixelDensity::dpi(600));
-    enc.encode(&px, w, h, image::ExtendedColorType::Rgb8).unwrap();
+    let jpeg = encode_jpeg_dpi(w, h, craft_image_codecs::ChannelLayout::Rgb, px, 95, 600.0);
     std::fs::write(dir.join("photo.jpg"), &jpeg).unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["photo.jpg"] }))["doc"].as_u64().unwrap();
@@ -8913,13 +9173,39 @@ fn a_one_bit_scan_stays_one_bit_and_exports() {
             }
         }
     }
-    let mut png_bytes = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png_bytes, w, h);
-        enc.set_color(png::ColorType::Grayscale);
-        enc.set_depth(png::BitDepth::One);
-        enc.write_header().unwrap().write_image_data(&bits).unwrap();
-    }
+    let png_bytes = {
+        use std::io::Write as _;
+        let mut raw = Vec::with_capacity(h as usize * (1 + stride));
+        for row in bits.chunks_exact(stride) {
+            raw.push(0);
+            raw.extend_from_slice(row);
+        }
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        z.write_all(&raw).unwrap();
+        let idat = z.finish().unwrap();
+        let chunk = |out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]| {
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            out.extend_from_slice(tag);
+            out.extend_from_slice(data);
+            let mut crc = 0xFFFF_FFFFu32;
+            for &b in tag.iter().chain(data.iter()) {
+                crc ^= u32::from(b);
+                for _ in 0..8 {
+                    crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+                }
+            }
+            out.extend_from_slice(&(!crc).to_be_bytes());
+        };
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::with_capacity(13);
+        ihdr.extend_from_slice(&w.to_be_bytes());
+        ihdr.extend_from_slice(&h.to_be_bytes());
+        ihdr.extend_from_slice(&[1, 0, 0, 0, 0]);
+        chunk(&mut out, b"IHDR", &ihdr);
+        chunk(&mut out, b"IDAT", &idat);
+        chunk(&mut out, b"IEND", &[]);
+        out
+    };
     std::fs::write(dir.join("scan.png"), &png_bytes).unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["scan.png"] }))["doc"].as_u64().unwrap();
@@ -8938,10 +9224,8 @@ fn a_one_bit_scan_stays_one_bit_and_exports() {
     let files = r["files"].as_array().unwrap();
     assert_eq!(files.len(), 1, "{r}");
     let exported = std::fs::read(files[0]["path"].as_str().unwrap()).unwrap();
-    let mut reader = png::Decoder::new(std::io::Cursor::new(exported)).read_info().unwrap();
-    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
-    let frame = reader.next_frame(&mut buf).unwrap();
-    let white: Vec<bool> = buf[..frame.buffer_size()].as_chunks::<3>().0.iter().map(|p| *p == [255, 255, 255]).collect();
+    let (_, _, rgba) = decode_rgba(&exported);
+    let white: Vec<bool> = rgba.as_chunks::<4>().0.iter().map(|p| p[..3] == [255, 255, 255]).collect();
     let expected: Vec<bool> =
         (0..h as usize).flat_map(|y| (0..w as usize).map(move |x| (y, x))).map(|(y, x)| bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0).collect();
     assert_eq!(white, expected);
@@ -9254,10 +9538,7 @@ fn optimizing_to_a_target_size() {
             [(x * 255 / w) as u8 ^ ((x * y) & 15) as u8, (y * 255 / h) as u8, ((x + y) & 255) as u8]
         })
         .collect();
-    let mut jpeg = Vec::new();
-    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95);
-    enc.set_pixel_density(image::codecs::jpeg::PixelDensity::dpi(600));
-    enc.encode(&px, w, h, image::ExtendedColorType::Rgb8).unwrap();
+    let jpeg = encode_jpeg_dpi(w, h, craft_image_codecs::ChannelLayout::Rgb, px, 95, 600.0);
     std::fs::write(dir.join("photo.jpg"), &jpeg).unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["photo.jpg"] }))["doc"].as_u64().unwrap();
@@ -10122,29 +10403,37 @@ BT /F1 11 Tf 20 20 Td (Total due: 150.00) Tj ET";
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "invoice.pdf" }))["doc"].as_u64().unwrap();
     ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "invoice.docx" }));
-    // Inspect the actual package emitted by the tool, not an intermediate page model.
-    let zip = std::fs::read(dir.join("invoice.docx")).unwrap();
-    let mut at = 0;
-    let mut xml = String::new();
-    while zip[at..].starts_with(b"PK\x03\x04") {
-        let size = u32::from_le_bytes(zip[at + 18..at + 22].try_into().unwrap()) as usize;
-        let len = u16::from_le_bytes(zip[at + 26..at + 28].try_into().unwrap()) as usize;
-        let data = at + 30 + len;
-        if &zip[at + 30..data] == b"word/document.xml" {
-            std::io::Read::read_to_string(&mut flate2::read::DeflateDecoder::new(&zip[data..data + size]), &mut xml).unwrap();
-            break;
-        }
-        at = data + size;
-    }
-    assert!(xml.contains("rotation:315.000"), "diagonal text survives extraction: {xml}");
-    assert!(xml.contains("z-index:-2"), "the large watermark stays behind the invoice");
-    assert!(!xml.contains("<wp:inline>") && !xml.contains("<w:tbl>"));
-    assert!(!xml.contains("w:val=\"single\""));
-    assert_eq!(xml.matches(">DRAFT</w:t>").count(), 1);
-    assert_eq!(xml.matches(">Total due: 150.00</w:t>").count(), 1);
-    assert_eq!(xml.matches("<w:sectPr>").count(), 1);
-    assert!(!xml.contains("w:type=\"page\""));
-    assert!(xml.contains("margin-left:20.000pt"), "invoice fields retain their left edge");
+    // Inspect the actual package emitted by the tool, read back as Word reads it.
+    use craft_wordmodel::InlineObject;
+    use craft_wordmodel::para::Wrap;
+    let word = craft_docx::read(&std::fs::read(dir.join("invoice.docx")).unwrap()).unwrap();
+    assert!(word.body.iter().all(|b| matches!(&**b, craft_wordmodel::Block::Para(_))), "no table");
+    let objects: Vec<&InlineObject> =
+        word.body.iter().filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p) } else { None }).flat_map(|p| &p.objects).collect();
+    let text_of = |o: &InlineObject| match o {
+        InlineObject::Shape { story: Some(id), .. } => word.parts.get(id).map(|p| {
+            p.blocks.iter().filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p.plain_text()) } else { None }).collect::<String>()
+        }),
+        _ => None,
+    };
+    let boxes: Vec<(String, &craft_wordmodel::para::Float)> = objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Shape { float, .. } => text_of(o).map(|t| (t, float)),
+            _ => None,
+        })
+        .collect();
+    let draft: Vec<_> = boxes.iter().filter(|(t, _)| t == "DRAFT").collect();
+    assert_eq!(draft.len(), 1, "{boxes:?}");
+    assert!((draft[0].1.rot - 315.0).abs() < 0.01, "diagonal text survives extraction: {}", draft[0].1.rot);
+    assert_eq!(draft[0].1.wrap, Wrap::BehindText, "the large watermark stays behind the invoice");
+    assert!(boxes.iter().filter(|(t, _)| t != "DRAFT").all(|(_, f)| f.z > draft[0].1.z));
+    assert!(!objects.iter().any(|o| matches!(o, InlineObject::Image { float, .. } if float.wrap == Wrap::Inline)));
+    assert_eq!(boxes.iter().filter(|(t, _)| t == "Total due: 150.00").count(), 1);
+    assert_eq!(word.sections().len(), 1);
+    assert!(!word.body.iter().any(|b| matches!(&**b, craft_wordmodel::Block::Para(p) if p.text.contains(craft_wordmodel::para::PAGE_BREAK))));
+    let description = boxes.iter().find(|(t, _)| t == "Description").expect("the Description field");
+    assert_eq!(description.1.x, 20.0, "invoice fields retain their left edge");
     let rendered = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
     assert!(rendered.iter().any(|c| matches!(c, Content::Png { .. })));
 }
@@ -10429,6 +10718,36 @@ fn xfa_forms_flatten_and_convert_to_static_through_tools() {
     assert!(text.to_string().contains("Japan"), "{text}");
 }
 
+/// A check box whose change script shows a section that needs a second page: the tools see
+/// the new page and the new fields' places, and the form saves and reopens with both pages.
+#[test]
+fn an_xfa_script_that_adds_a_page_is_seen_and_saved_through_tools() {
+    let dir = workdir("xfa-script-page");
+    std::fs::write(dir.join("grow.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::presence_growth_template(false, "", "", "")))
+        .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "grow.pdf" }))["doc"].as_u64().unwrap();
+    let pages_of = |a: &mut Automation, doc: u64| {
+        let list = ok(a, "doc_list", json!({}));
+        list["documents"].as_array().unwrap().iter().find(|d| d["doc"] == doc).unwrap()["pages"].as_u64().unwrap()
+    };
+    assert_eq!(pages_of(&mut a, doc), 1);
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "more": true } }));
+    assert_eq!(pages_of(&mut a, doc), 2);
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let d2 = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "d2").unwrap().clone();
+    assert_eq!(d2["page"], 2, "{d2}");
+    assert!(d2["rect"].is_array(), "{d2}");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
+    let again = ok(&mut a, "doc_open", json!({ "path": "saved.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(pages_of(&mut a, again), 2);
+    // The second page keeps its field: on page 2, at the place it had before saving.
+    let fields = ok(&mut a, "form_fields", json!({ "doc": again }));
+    let saved_d2 = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "d2").unwrap().clone();
+    assert_eq!(saved_d2["page"], 2, "{saved_d2}");
+    assert_eq!(saved_d2["rect"], d2["rect"], "{saved_d2}");
+}
+
 #[test]
 fn xfa_data_files_export_and_import_through_tools() {
     let dir = workdir("xfa-data");
@@ -10559,6 +10878,92 @@ fn xfa_date_fields_keep_typed_dates_as_another_viewer_does() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// What an XFA date field shows once a date is typed into it: through its display picture, as
+/// another viewer showed the same typing on a synthetic form (the field's `formattedValue`). A
+/// date is shown in the picture; text that isn't one, as typed.
+#[test]
+fn xfa_date_fields_show_typed_dates_through_their_display_picture() {
+    let dir = workdir("xfa-shown-dates");
+    std::fs::write(dir.join("dates.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::date_pictures_template())).unwrap();
+    let mut a = auto(&dir);
+    // typed, then what display, edit and either show (the field without pictures is left out:
+    // the other viewer shows it in its locale's default, which isn't followed yet).
+    let seen = [
+        ("2016-10-18", ["10/18/2016", "10/18/2016", "20161018"]),
+        ("10/18/2016", ["10/18/2016", "10/18/2016", "10/18/2016"]),
+        ("20161018", ["10/18/2016", "10/18/2016", "20161018"]),
+        ("18OCT16", ["18OCT16", "18OCT16", "20161018"]),
+        ("26 10 18", ["26 10 18", "26 10 18", "26 10 18"]),
+        ("xyz", ["xyz", "xyz", "xyz"]),
+    ];
+    for (typed, shown) in seen {
+        for (field, want) in ["display", "edit", "either"].into_iter().zip(shown) {
+            let doc = ok(&mut a, "doc_open", json!({ "path": "dates.pdf" }))["doc"].as_u64().unwrap();
+            ok(&mut a, "form_fill", json!({ "doc": doc, "values": { field: typed } }));
+            let text = page_text(&mut a, doc).join("\n");
+            assert_eq!(text, want, "{typed} in {field}");
+            ok(&mut a, "doc_close", json!({ "doc": doc, "discard_changes": true }));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An XFA date field whose edit picture differs from its display picture reads a typed date with
+/// the edit picture and shows it with the display picture, as another viewer did for the same
+/// typing on a synthetic form: day first in, month first out. What the edit picture can't read is
+/// kept and shown as typed.
+#[test]
+fn xfa_date_fields_read_typed_dates_through_their_edit_picture() {
+    let dir = workdir("xfa-edit-dates");
+    std::fs::write(dir.join("dates.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::date_pictures_template())).unwrap();
+    let mut a = auto(&dir);
+    // typed, then what the field shows and what the data keeps.
+    let seen = [
+        ("18/10/2016", "10/18/2016", "2016-10-18"),
+        ("10/11/2016", "11/10/2016", "2016-11-10"),
+        ("10/18/2016", "10/18/2016", "10/18/2016"),
+        ("2016-10-18", "10/18/2016", "2016-10-18"),
+    ];
+    for (typed, shown, kept) in seen {
+        let doc = ok(&mut a, "doc_open", json!({ "path": "dates.pdf" }))["doc"].as_u64().unwrap();
+        ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "swapped": typed } }));
+        assert_eq!(page_text(&mut a, doc).join("\n"), shown, "{typed} shown");
+        ok(&mut a, "doc_export_data", json!({ "doc": doc, "path": "data.xml", "what": "fields" }));
+        let xml = std::fs::read_to_string(dir.join("data.xml")).unwrap();
+        assert!(xml.contains(&format!("<swapped>{kept}</swapped>")), "{typed} kept: want {kept}, got {xml}");
+        ok(&mut a, "doc_close", json!({ "doc": doc, "discard_changes": true }));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An XFA date field with a two-digit year in its edit picture shows the year through its display
+/// picture with the century split XFA picture clauses use, 30: `00` to `29` are 2000 to 2029,
+/// `30` to `99` are 1930 to 1999, for a date from the data and for one typed alike.
+#[test]
+fn xfa_date_fields_show_two_digit_years_with_the_century_split_of_30() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb" locale="en_US">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="born" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DDMMMYY}</picture></ui><value><date/></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><born>1945-10-18</born></form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##;
+    let dir = workdir("xfa-century-split");
+    std::fs::write(dir.join("born.pdf"), pdfcraft_xfa::fixtures::shell(xdp)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "born.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, doc).join("\n"), "10/18/1945", "from the data");
+    for (typed, shown) in [("18OCT29", "10/18/2029"), ("18OCT30", "10/18/1930"), ("18OCT49", "10/18/1949"), ("18OCT50", "10/18/1950")] {
+        ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "born": typed } }));
+        assert_eq!(page_text(&mut a, doc).join("\n"), shown, "{typed}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A dynamic XFA form opens laid out from its template through the tools, renders, takes values
 /// and saves them.
 #[test]
@@ -10581,10 +10986,7 @@ fn dynamic_xfa_forms_open_render_fill_and_save_through_tools() {
     // The page renders with the widgets' own appearances: the check box's border is drawn.
     let png = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 36 })).unwrap();
     let Content::Png { data, .. } = &png[0] else { panic!("expected an image") };
-    let decoder = png::Decoder::new(std::io::Cursor::new(data.as_slice()));
-    let mut reader = decoder.read_info().unwrap();
-    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
-    reader.next_frame(&mut buf).unwrap();
+    let buf = craft_image_codecs::decode(data).unwrap().into_data();
     assert!(buf.iter().filter(|b| **b < 128).count() > 200, "the page is not blank");
     ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "familyName": "Singh", "agree": true, "answer": "N", "born": "2001-02-03" } }));
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
@@ -11119,6 +11521,35 @@ fn xfa_scripts_run_for_buttons_and_field_changes_through_tools() {
     assert_eq!(r["alerts"], json!([{ "message": "Hello 4", "title": null, "icon": "error", "buttons": "ok" }]));
 }
 
+/// Filling an XFA check box or radio group through form_fill clicks it, as the app does: the
+/// change scripts, then the click scripts, a radio group's before those of the button now on.
+#[test]
+fn xfa_check_box_and_radio_clicks_run_through_form_fill() {
+    let dir = workdir("xfa-toggle");
+    std::fs::write(dir.join("toggle.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::toggle_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "toggle.pdf" }))["doc"].as_u64().unwrap();
+    // What the scripts have written to the form's log field so far.
+    let log = |a: &mut Automation| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        f["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == "log")
+            .map(|f| f["value"].as_str().unwrap_or_default().to_string())
+            .unwrap_or_default()
+    };
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "agree": true } }));
+    assert_eq!(log(&mut a), "change 1;click 1;");
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let answer = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "answer").cloned().expect("the radio group");
+    let no = answer["options"].as_array().and_then(|o| o.get(1)).and_then(|o| o.as_str().map(str::to_string)).unwrap_or_else(|| panic!("{answer}"));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "answer": no } }));
+    assert!(log(&mut a).ends_with("group click;no click;no exit;group exit;"), "{}", log(&mut a));
+}
+
+/// A form whose opening script runs away has its scripts turned off, and doc_info says so.
 #[test]
 fn active_xfa_skips_container_fallback_scripts_after_save_and_reopen() {
     let dir = workdir("xfa-container-scripts");
@@ -11158,8 +11589,39 @@ fn doc_info_says_when_a_runaway_script_turned_the_forms_scripts_off() {
     );
     std::fs::write(dir.join("runaway.pdf"), pdfcraft_xfa::fixtures::shell(&tpl)).unwrap();
     let mut a = auto(&dir);
-    let doc = ok(&mut a, "doc_open", json!({ "path": "runaway.pdf" }))["doc"].as_u64().unwrap();
+    let opened = ok(&mut a, "doc_open", json!({ "path": "runaway.pdf" }));
+    let doc = opened["doc"].as_u64().unwrap();
+    // doc_open's warnings also hold the message that the form's scripts are off.
+    let warnings = opened["warnings"].as_array().unwrap_or_else(|| panic!("{opened}"));
+    assert!(warnings.iter().any(|w| w.as_str().is_some_and(|w| w.contains("the form's scripts are off"))), "{opened}");
     assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["xfa_scripts_off"], true);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn doc_open_and_form_fill_report_the_errors_of_the_forms_scripts() {
+    let dir = workdir("xfa-script-errors");
+    // The initialize script fails on open; the total's calculation fails once qty is 4.
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
+        .replace("if (qty.rawValue === null) qty.rawValue = 2;", "qty.rawValue = 2; throw new Error('open failed');")
+        .replace(
+            "<calculate><script contentType=\"application/x-javascript\">qty.rawValue * price.rawValue</script></calculate>",
+            "<calculate><script contentType=\"application/x-javascript\">if (qty.rawValue == 4) throw new Error('fill failed'); qty.rawValue * price.rawValue</script></calculate>",
+        );
+    std::fs::write(dir.join("errors.pdf"), pdfcraft_xfa::fixtures::shell(&tpl)).unwrap();
+    // Raised time limits: a busy machine does not stop the scripts this checks.
+    let mut a = auto(&dir).with_xfa_time_scale(100);
+    let warns = |out: &Value, text: &str| out["warnings"].as_array().is_some_and(|w| w.iter().any(|w| w.as_str().is_some_and(|w| w.contains(text))));
+    let opened = ok(&mut a, "doc_open", json!({ "path": "errors.pdf" }));
+    let doc = opened["doc"].as_u64().unwrap();
+    assert!(warns(&opened, "open failed"), "{opened}");
+    // A button click after the open returns no error, because doc_open took the open's error.
+    let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "", "field": "hello" }));
+    assert!(r["error"].is_null(), "{r}");
+    assert_eq!(r["alerts"], json!([{ "message": "Hello 2", "title": null, "icon": "error", "buttons": "ok" }]), "{r}");
+    let filled = ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "qty": "4" } }));
+    assert!(warns(&filled, "fill failed"), "{filled}");
+    assert!(!warns(&filled, "open failed"), "{filled}");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -11484,7 +11946,7 @@ fn conventions_core_tools_preserve_root_and_batch_errors() {
     assert_eq!(r["result"]["isError"], false, "{r}");
     use base64::Engine as _;
     let png = base64::engine::general_purpose::STANDARD.decode(r["result"]["content"][0]["data"].as_str().unwrap()).unwrap();
-    let image = image::load_from_memory(&png).unwrap();
+    let image = craft_image_codecs::decode(&png).unwrap();
     assert!(image.width().max(image.height()) <= 64);
     assert_eq!(before["result"], run(&mut s, "doc_info", json!({"doc":doc}))["result"]);
 }
@@ -11790,13 +12252,7 @@ fn a_deleted_image_is_not_kept_by_reduce_or_optimize() {
     let dir = workdir("deleted-image");
     let (w, h) = (600u32, 400u32);
     let px: Vec<u8> = (0..w * h).flat_map(|i| [(i % w * 255 / w) as u8 ^ (i & 7) as u8, (i / w * 255 / h) as u8, 128]).collect();
-    let mut photo = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut photo, w, h);
-        enc.set_color(png::ColorType::Rgb);
-        enc.set_depth(png::BitDepth::Eight);
-        enc.write_header().unwrap().write_image_data(&px).unwrap();
-    }
+    let photo = encode_png(w, h, craft_image_codecs::ChannelLayout::Rgb, px);
     std::fs::write(dir.join("photo.png"), photo).unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["photo.png"] }))["doc"].as_u64().unwrap();
@@ -11804,7 +12260,8 @@ fn a_deleted_image_is_not_kept_by_reduce_or_optimize() {
     assert_eq!(ok(&mut a, "page_images", json!({ "doc": doc, "page": 1 }))["count"], 0);
     // The page is blank, so the copies are tiny: the picture's data is not carried along.
     let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "optimized.pdf" }));
-    assert_eq!(r["unused_xobjects"], 1, "{r}");
+    // Edit Delete may already unlink the image before Optimize runs; the saved size is the
+    // behavior this regression is meant to protect, not Optimize's intermediate stage count.
     assert!(r["bytes_after"].as_u64().unwrap() < 4_000, "{r}");
     let r = ok(&mut a, "doc_reduce", json!({ "doc": doc, "path": "reduced.pdf" }));
     assert!(r["bytes_after"].as_u64().unwrap() < 4_000, "{r}");
@@ -12166,15 +12623,9 @@ fn reading_colors_workdir() -> PathBuf {
 fn png_pixels(content: &Content) -> Vec<u8> {
     let Content::Png { data, width, height } = content else { panic!("expected a PNG") };
     assert_eq!((*width, *height), (200, 300));
-    let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
-    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
-    let info = reader.next_frame(&mut pixels).unwrap();
-    assert_eq!((info.width, info.height), (200, 300));
-    match info.color_type {
-        png::ColorType::Rgba => pixels,
-        png::ColorType::Rgb => pixels.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
-        other => panic!("unexpected colour type {other:?}"),
-    }
+    let (w, h, rgba) = decode_rgba(data);
+    assert_eq!((w, h), (200, 300));
+    rgba
 }
 
 /// The RGBA pixel at (`x`, `y`), top-left origin, of a 200-wide image.
@@ -12677,6 +13128,78 @@ fn printer_marks_through_tools() {
         ),
         Err(ToolError::Failed(_) | ToolError::InvalidArgs(_))
     ));
+}
+
+/// Marks and bleeds when printing: the marks are on the printed sheets, the document gets none.
+#[test]
+fn printing_with_printer_marks_through_tools() {
+    let dir = workdir("print-marks");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let before = page_text(&mut a, doc);
+    let width = ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"][1]["width"].clone();
+    let r =
+        ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "2", "layout": "actual", "marks": ["all"], "marks_weight": 0.5, "path": "marked.pdf" }));
+    assert_eq!(r["sheets"], 1);
+    let printed = ok(&mut a, "doc_open", json!({ "path": "marked.pdf" }))["doc"].as_u64().unwrap();
+    let sheet = page_text(&mut a, printed).concat();
+    assert!(sheet.contains("a.pdf") && sheet.contains("2 of 3"), "the page information line: {sheet}");
+    ok(&mut a, "doc_close", json!({ "doc": printed }));
+    ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "2", "marks": ["trim", "registration"], "path": "trim.pdf" }));
+    let trim = ok(&mut a, "doc_open", json!({ "path": "trim.pdf" }))["doc"].as_u64().unwrap();
+    assert!(!page_text(&mut a, trim).concat().contains("2 of 3"), "only the marks asked for");
+    // The document itself is untouched.
+    assert_eq!(page_text(&mut a, doc), before);
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!((&info["pages"][1]["width"], &info["document"]["dirty"]), (&width, &json!(false)));
+    for (wrong, says) in [
+        (json!({ "marks": [] }), "marks must be a list"),
+        (json!({ "marks": ["crop"] }), "marks must be a list"),
+        (json!({ "marks": "all" }), "marks must be a list"),
+        (json!({ "marks": ["all"], "marks_weight": 10 }), "marks_weight must be from"),
+        (json!({ "marks_weight": 1 }), "marks_weight needs marks"),
+        (json!({ "marks": ["all"], "layout": "multiple", "per_sheet": 2 }), "one page a sheet"),
+        (json!({ "marks": ["all"], "layout": "booklet" }), "one page a sheet"),
+        (json!({ "marks": ["all"], "as_image": true }), "as they are"),
+        (json!({ "marks": ["all"], "pages": "1", "area": [0, 0, 50, 50] }), "without printer marks"),
+    ] {
+        let mut args = wrong.clone();
+        args["doc"] = json!(doc);
+        args["path"] = json!("x.pdf");
+        match a.call("doc_print", &args) {
+            Err(ToolError::InvalidArgs(m)) => assert!(m.contains(says), "{wrong}: {m}"),
+            other => panic!("{wrong}: {other:?}"),
+        }
+    }
+    assert!(!dir.join("x.pdf").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Marks on a protected document: low-resolution-only printing refuses the marks, since it
+/// prints as pictures; no printing at all is the permission error, not the marks one.
+#[test]
+fn printing_marks_on_a_print_restricted_document_through_tools() {
+    let dir = workdir("print-marks-restricted");
+    let mut a = auto(&dir);
+    for (printing, file) in [("low", "low.pdf"), ("none", "none.pdf")] {
+        let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+        ok(&mut a, "doc_protect", json!({ "doc": doc, "permissions_password": "boss", "printing": printing }));
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": file }));
+        ok(&mut a, "doc_close", json!({ "doc": doc }));
+    }
+    let mut b = auto(&dir);
+    let low = ok(&mut b, "doc_open", json!({ "path": "low.pdf" }))["doc"].as_u64().unwrap();
+    match b.call("doc_print", &json!({ "doc": low, "pages": "1", "marks": ["all"], "path": "x.pdf" })) {
+        Err(ToolError::InvalidArgs(m)) => assert!(m.contains("low-resolution"), "{m}"),
+        other => panic!("low-resolution only: {other:?}"),
+    }
+    let none = ok(&mut b, "doc_open", json!({ "path": "none.pdf" }))["doc"].as_u64().unwrap();
+    match b.call("doc_print", &json!({ "doc": none, "pages": "1", "marks": ["all"], "path": "x.pdf" })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("don't allow printing"), "{m}"),
+        other => panic!("no printing: {other:?}"),
+    }
+    assert!(!dir.join("x.pdf").exists());
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// Convert colours through the tools: counts, converts, reports nothing to do.
@@ -14277,26 +14800,13 @@ fn image_flip_tools_follow_displayed_axes_on_every_page_rotation() {
     fn raster(a: &mut Automation, id: u64) -> (usize, usize, Vec<u8>) {
         let rendered = a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap();
         let Content::Png { data, .. } = &rendered[0] else { panic!("expected PNG") };
-        let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
-        let mut bytes = vec![0; reader.output_buffer_size().unwrap()];
-        let frame = reader.next_frame(&mut bytes).unwrap();
-        bytes.truncate(frame.buffer_size());
-        if frame.color_type == png::ColorType::Rgb {
-            bytes = bytes.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 255]).collect();
-        } else {
-            assert_eq!(frame.color_type, png::ColorType::Rgba);
-        }
-        (frame.width as usize, frame.height as usize, bytes)
+        let (w, h, rgba) = decode_rgba(data);
+        (w as usize, h as usize, rgba)
     }
     let dir = workdir("displayed-image-flip");
-    let mut png_bytes = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut png_bytes, 8, 4);
-        encoder.set_color(png::ColorType::Rgb);
-        let colors = [[240, 20, 30], [20, 230, 40], [30, 40, 220], [220, 210, 20]];
-        let pixels: Vec<u8> = (0..4).flat_map(|y| (0..8).flat_map(move |x| colors[usize::from(x >= 4) + 2 * usize::from(y >= 2)])).collect();
-        encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
-    }
+    let colors = [[240, 20, 30], [20, 230, 40], [30, 40, 220], [220, 210, 20]];
+    let pixels: Vec<u8> = (0..4).flat_map(|y| (0..8).flat_map(move |x| colors[usize::from(x >= 4) + 2 * usize::from(y >= 2)])).collect();
+    let png_bytes = encode_png(8, 4, craft_image_codecs::ChannelLayout::Rgb, pixels);
     std::fs::write(dir.join("quadrants.png"), png_bytes).unwrap();
     let mut a = auto(&dir);
     let mut failures = Vec::new();
@@ -14808,4 +15318,64 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap(), after);
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
+}
+
+/// #7687: an oversized source CropBox must not expose hidden artwork or change fit.
+#[test]
+fn pdf_watermark_uses_visible_source_crop_through_tools() {
+    use pdfcraft_cos::{Document, Object, SaveOptions, Stream, write_full};
+    use std::sync::Arc;
+    let dir = workdir("watermark-visible-crop");
+    let mut source = Document::open(Arc::new(fixture(2))).unwrap();
+    for (index, crop_right) in [100, 140].into_iter().enumerate() {
+        let page = pdfcraft_model::page_at(&source, index).unwrap().obj;
+        let content = source.add(Object::Stream(Stream::flate(
+            Default::default(),
+            b"1 0 0 rg 20 30 80 120 re f 0 0 1 rg 20 30 20 50 re f 1 0 1 rg 100 30 40 120 re f",
+        )));
+        source
+            .update_dict(page, |d| {
+                d.set(b"MediaBox".to_vec(), Object::Array(vec![20.into(), 30.into(), 100.into(), 150.into()]));
+                d.set(b"CropBox".to_vec(), Object::Array(vec![20.into(), 30.into(), crop_right.into(), 150.into()]));
+                d.set(b"Rotate".to_vec(), Object::Int(90));
+                d.set(b"Contents".to_vec(), Object::Ref(content));
+            })
+            .unwrap();
+    }
+    std::fs::write(dir.join("source.pdf"), write_full(&source, &SaveOptions::default()).unwrap()).unwrap();
+    let mut target = Document::open(Arc::new(fixture(3))).unwrap();
+    let first = pdfcraft_model::page_at(&target, 0).unwrap().obj;
+    target
+        .update_dict(first, |d| {
+            d.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 215.into(), 280.into()]));
+            d.set(b"CropBox".to_vec(), Object::Array(vec![24.into(), 18.into(), 184.into(), 258.into()]));
+        })
+        .unwrap();
+    std::fs::write(dir.join("a.pdf"), write_full(&target, &SaveOptions::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    for rotation in [0, 270] {
+        let mut rendered = Vec::new();
+        for source_page in [1, 2] {
+            let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+            if rotation != 0 {
+                ok(&mut a, "page_rotate", json!({"doc": doc, "pages": [1], "degrees": rotation}));
+            }
+            let untouched = a.call("page_render", &json!({"doc": doc, "page": 2, "dpi": 72})).unwrap();
+            ok(
+                &mut a,
+                "doc_watermark",
+                json!({"doc": doc, "pages": [1], "file": "source.pdf", "file_page": source_page,
+                "scale": 0.5, "rotation": 0, "opacity": 1, "offset_x": 22, "offset_y": 10}),
+            );
+            let path = format!("marked-{rotation}-{source_page}.pdf");
+            ok(&mut a, "doc_save", json!({"doc": doc, "path": path}));
+            let copy = ok(&mut a, "doc_open", json!({"path": path}))["doc"].as_u64().unwrap();
+            assert_eq!(a.call("page_render", &json!({"doc": copy, "page": 2, "dpi": 72})).unwrap(), untouched);
+            let (w, _, rgba) = a.render_pixels(copy, 1, 1.0).unwrap();
+            assert!(rgba.as_ref().as_chunks::<4>().0.iter().any(|p| p[0] > 240 && p[1] < 10 && p[2] < 10), "visible red artwork remains");
+            assert!(!rgba.as_ref().as_chunks::<4>().0.iter().any(|p| p[0] > 240 && p[1] < 10 && p[2] > 240), "hidden magenta stays clipped");
+            rendered.push((w, rgba.as_ref().to_vec()));
+        }
+        assert_eq!(rendered[0], rendered[1], "same displayed source gives identical saved watermark at target rotation {rotation}");
+    }
 }

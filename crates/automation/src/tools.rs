@@ -183,7 +183,7 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("attachment_edit", "Edit an attachment description", "Change the description of a document attachment by its exact key from doc_info, or by a unique displayed name. An empty description clears it. The file and other attachment data are preserved. Undoable.")
             .with(schema(json!({"doc": doc(), "key": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}}), &["doc", "description"])),
-        t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited. A path that ends in open parameters, as help systems pass them (`manual.pdf#page=12`, `#nameddest=Intro` or `#Intro`), opens the file and reports its destination as link_open does; a path that names a file opens as it is.")
+        t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited. A path that ends in open parameters, as help systems pass them (`manual.pdf#page=12`, `#nameddest=Intro` or `#Intro`), opens the file and reports its destination as link_open does; a path that names a file opens as it is. `warnings` lists the errors of the form's scripts on open, including the messages that they were stopped or turned off.")
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),
         t("doc_list", "List open documents", "List the open documents with their ids, page counts and unsaved state.").ro().with(schema(json!({}), &[])),
@@ -210,6 +210,13 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
+        t(
+            "doc_rename",
+            "Rename a document's file",
+            "Rename the open document's file on disk, in its own folder; the document stays open with its undo history. The extension is kept (added back when left out). Refused, with the reason, when the document has unsaved changes (save first), has no file yet, the name is taken, the file is in use, or the name can't be a file name on Windows, macOS or Linux (no / \\ : * ? \" < > |, no device names such as CON, no trailing dot, at most 255 bytes, a full path within the system limit).",
+        )
+        .destructive()
+        .with(schema(json!({ "doc": doc(), "name": { "type": "string", "description": "The new file name, with or without the extension." } }), &["doc", "name"])),
         t("doc_set_info", "Set document metadata", "Set a document information entry such as Title, Author, Subject or Keywords, or a custom property under any other name (no spaces, delimiters, / or #; at most 127 bytes; doc_info lists them under custom); an empty value removes it. When the file has XMP metadata, the matching XMP property (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) is changed too, so viewers that read XMP first show the new value, and a custom property is kept there as pdfx:<name> when its name can be an XML name (in a PDF/A file only one already there is changed). Undoable.")
             .with(schema(json!({ "doc": doc(), "key": { "type": "string" }, "value": { "type": "string" } }), &["doc", "key", "value"])),
         t("page_render", "Render a page", "Render one page to a PNG image (default 96 dpi, at most 600). When the picture is incomplete or approximate (content cut at the page's safety budget, a picture left out because its JBIG2 mask is past a decoder limit, a colour painted in a fallback colour), a JSON part follows the image: { page, warnings: [sentence, ...] }.")
@@ -488,6 +495,13 @@ pub fn tools() -> Vec<ToolDef> {
         )
         .with(schema(json!({ "doc": doc() }), &["doc"])),
         t(
+            "bookmark_suggest",
+            "Suggest bookmarks",
+            "Propose a bookmark tree for the whole document, for review: its tagged headings (H, H1-H6) when it has them (source \"structure\"), or else headings found from how its text looks (source \"layout\"): short blocks set larger than the body text, or bold where the body is not, levelled by size without skipping a level, a heading set on several lines as one bookmark that goes to its top; captions such as \"Figure 3\" are left out. Reads the first 5000 pages for a layout suggestion; pages_read counts the pages whose text was read. truncated is true when headings may be missing: the document has more pages, a page's text could not be read, there were more than 10000 headings (the first 10000 are given), or the structure tree nests or branches too far to read whole. Changes nothing: bookmarks is in bookmark_export's form, so edit titles, remove entries or move them into or out of a bookmark's children to change the nesting, then apply it with bookmark_import (with replace to drop the existing outline), one undoable step. headings counts the suggested bookmarks; note says what to try when there are none. Needs the document to allow copying, as its text is returned.",
+        )
+        .ro()
+        .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t(
             "text_styles",
             "List text styles",
             "The styles the document's text is set in, the largest first: font (without its subset tag), the size it is shown at in points, bold, italic, how many lines and pages use it, and the first line in it as a sample. For choosing the styles bookmark_from_text_styles makes bookmarks from (headings are usually the larger, rarer styles). Reads the first 5000 pages.",
@@ -537,7 +551,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "form_fill",
             "Fill in form fields",
-            "Set several fields at once (one undo step). values maps field names (from form_fields) to: a string for text fields, combo boxes and radio groups (an option), true/false for check boxes (or one of a check box's options, to check that widget and clear the others), an array of strings for multi-select lists; {\"widget\": n} turns on button n (1-based) of a check box or radio group and never turns it off (to clear, use null for a radio group that allows it, false for a check box); of radio buttons sharing an option only that one is on unless the group has RadiosInUnison. A radio option is an export value as form_fields lists it in options; where one button's on-state name equals another button's export value, the export value wins, and an on-state name that no export value matches still selects its button. A radio option may also be a JSON number: a whole number names the option spelled as that integer (1, 1.0 and 1e0 all name \"1\"), any other number only an option spelled exactly as JSON prints it (1.5). A value that names no option is refused with the options listed. Appearances are regenerated so every viewer shows the values. Thai the field's font can't hold is drawn from PdfCraft's built-in Thai face (a build without one refuses it). Any other value whose characters the field's font can't draw (Chinese in a Helvetica field) is still saved; `warnings` in the result names the field and character: PdfCraft draws `?` there and asks other viewers to redraw the field from its value.",
+            "Set several fields at once (one undo step). values maps field names (from form_fields) to: a string for text fields, combo boxes and radio groups (an option), true/false for check boxes (or one of a check box's options, to check that widget and clear the others), an array of strings for multi-select lists; {\"widget\": n} turns on button n (1-based) of a check box or radio group and never turns it off (to clear, use null for a radio group that allows it, false for a check box); of radio buttons sharing an option only that one is on unless the group has RadiosInUnison. A radio option is an export value as form_fields lists it in options; where one button's on-state name equals another button's export value, the export value wins, and an on-state name that no export value matches still selects its button. A radio option may also be a JSON number: a whole number names the option spelled as that integer (1, 1.0 and 1e0 all name \"1\"), any other number only an option spelled exactly as JSON prints it (1.5). A value that names no option is refused with the options listed. Appearances are regenerated so every viewer shows the values. Thai the field's font can't hold is drawn from PdfCraft's built-in Thai face (a build without one refuses it). Any other value whose characters the field's font can't draw (Chinese in a Helvetica field) is still saved; `warnings` in the result names the field and character: PdfCraft draws `?` there and asks other viewers to redraw the field from its value. `warnings` also lists the errors of the form's scripts that the change ran, including the messages that they were stopped or turned off.",
         )
         .with(schema(json!({ "doc": doc(), "values": { "type": "object", "description": "Field name → value." } }), &["doc", "values"])),
         t(
@@ -681,7 +695,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("doc_export_data", "Export comments or form data", "Write comments and/or form data to path; the extension picks the format: .xfdf or .fdf (comments and/or fields), .xml, .csv or .txt (form data). For an XFA form, .xml is its data alone (rooted at the form's root data node, as Acrobat exports it) and .xdp an XML Data Package holding the whole datasets. what: all (default), comments, fields.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "what": { "type": "string", "enum": ["all", "comments", "fields"] } }), &["doc", "path"])),
-        t("doc_import_data", "Import comments or form data", "Import comments and/or field values from an XFDF, FDF, XML, CSV or tab-delimited text file (detected from its content), or the comments of another PDF, each onto the page with the same number (comments on pages past this document's last page are left out). Comments with the same name are replaced; values go through the form's formats and validation. For an XFA form, an XDP, datasets or data XML file replaces the form's data: a laid-out form is laid out again from it (rows included) and its calculations run. Undoable.")
+        t("doc_import_data", "Import comments or form data", "Import comments and/or field values from an XFDF, FDF, XML, CSV or tab-delimited text file (detected from its content), or the comments of another PDF, each onto the page with the same number (comments on pages past this document's last page are left out). Comments with the same name are replaced; values go through the form's formats and validation. For an XFA form, an XDP, datasets or data XML file replaces the form's data: a laid-out form is laid out again from it (rows included) and its calculations run. Undoable. The result lists in `import_repairs` what this import left out (values the form refused, comments taken without their appearance); the import fails instead only when the form refuses every value and no comment is taken.")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
         t("form_delete_field", "Delete a field", "Delete a form field and all its widgets, or with widget only that one: one radio button of a group (widget n is the nth of the radio group's options in form_fields), or one copy of a duplicated field. A field's last widget takes the field with it. Undoable.")
             .destructive()
@@ -746,7 +760,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_audit_redactions",
             "Audit faux redactions",
-            "Find faux redactions: opaque filled rectangles painted over text that is still extractable, and /Redact annotations that were marked but never applied. Paint-order and colour-aware: a rectangle counts only when painted after the text and dark enough to hide it (page backgrounds and light shading are not flagged). Each finding reports the 1-based page, the kind (covered-text or unapplied-mark), the rectangle (points from the top-left of the displayed page, like comment_list), and the hidden text. Fails closed: unreadable content is an error, never a clean bill. A properly applied redaction removes the text and never flags.",
+            "Find faux redactions: opaque covers painted over text that is still extractable (filled rectangles, thick marker-style strokes, dark opaque Highlight annotations), text whited out under an opaque white rectangle, and /Redact annotations that were marked but never applied. Paint-order and colour-aware: a cover counts only when painted after the text and dark enough to hide it (page backgrounds and light shading are not flagged); a white rectangle over dark text is reported apart. Each finding reports the 1-based page, the kind (covered-text, hidden-under-white or unapplied-mark), the rectangle, and the hidden text. Fails closed: unreadable content is an error, never a clean bill. A properly applied redaction removes the text and never flags.",
         )
         .ro()
         .with(schema(json!({ "doc": doc() }), &["doc"])),
@@ -767,7 +781,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_print",
             "Print",
-            "Print with Acrobat's Print dialog options, or save the print-ready PDF. pages: a range such as \"1-3, 6, 9-\" (page labels allowed, \"(n)\" for the nth page whatever its label, unless a page is labelled exactly \"(n)\", since labels are looked up first; default all); subset odd/even (by page number, as Acrobat counts them: pages 2, 7-10 with even prints 2, 8 and 10, not every second page of the range); reverse. layout: fit (default), actual, shrink, custom (scale %), multiple (per_sheet 2/4/6/9/16, which turns the sheet to suit the grid, or a custom grid of cols across by rows down, each 1-99, on the sheet as oriented (auto prints portrait); order, border, auto_rotate; cut-stack order arranges single-sided sheets for cutting into piles and stacking left to right, top to bottom, keeping sheet order within each pile; duplex must be off), booklet (booklet_subset both/front/back, binding left/right; a booklet sets two-sided itself, as Acrobat does: both flips on the short edge, front or back prints one-sided), poster (scale %, overlap pt, cut_marks). orientation auto/portrait/landscape; comments_forms document / document-and-markups (default) / document-and-stamps / form-fields-only; paper Letter/Legal/Tabloid, ARCH A/B/C/D/E1/E, ANSI C/D/E, A0/A1/A2/A3/A4/A5/A6, US #10 Envelope, a driver paper name from printer_papers, or dimensions \"<w>x<h>\"; when printer is given and paper is omitted, uses the printer's default paper if available; use layout actual for 100% in the print-ready PDF; printer drivers may still substitute paper or scale. Then path (save) or printer (a name or \"default\") with copies, collate, duplex off/long-edge/short-edge, grayscale, and options (driver options from printer_options, CUPS). color_management app (Acrobat's Color Handling, the app managing colours) prints the pages as images converted into color_profile with rendering_intent and black_point_compensation; turn the driver's own colour management off for that job, or the printer converts them again.",
+            "Print with Acrobat's Print dialog options, or save the print-ready PDF. pages: a range such as \"1-3, 6, 9-\" (page labels allowed, \"(n)\" for the nth page whatever its label, unless a page is labelled exactly \"(n)\", since labels are looked up first; default all); subset odd/even (by page number, as Acrobat counts them: pages 2, 7-10 with even prints 2, 8 and 10, not every second page of the range); reverse. layout: fit (default), actual, shrink, custom (scale %), multiple (per_sheet 2/4/6/9/16, which turns the sheet to suit the grid, or a custom grid of cols across by rows down, each 1-99, on the sheet as oriented (auto prints portrait); order, border, auto_rotate; cut-stack order arranges single-sided sheets for cutting into piles and stacking left to right, top to bottom, keeping sheet order within each pile; duplex must be off), booklet (booklet_subset both/front/back, binding left/right; a booklet sets two-sided itself, as Acrobat does: both flips on the short edge, front or back prints one-sided), poster (scale %, overlap pt, cut_marks). marks (Acrobat's Marks and Bleeds, with a one-page-a-sheet layout: fit, actual, shrink or custom): a list of all, trim, bleed, registration, color_bars and page_info (document name, page n of N, date), drawn around each page on the printed copy only, in registration colour except the colour bars, at marks_weight points (0.1 to 4, default 0.25); the page is widened for them, so fit shrinks it to make room, and marks the document already has print once; not with as_image, color_management app or area. orientation auto/portrait/landscape; comments_forms document / document-and-markups (default) / document-and-stamps / form-fields-only; paper Letter/Legal/Tabloid, ARCH A/B/C/D/E1/E, ANSI C/D/E, A0/A1/A2/A3/A4/A5/A6, US #10 Envelope, a driver paper name from printer_papers, or dimensions \"<w>x<h>\"; when printer is given and paper is omitted, uses the printer's default paper if available; use layout actual for 100% in the print-ready PDF; printer drivers may still substitute paper or scale. Then path (save) or printer (a name or \"default\") with copies, collate, duplex off/long-edge/short-edge, grayscale, and options (driver options from printer_options, CUPS). color_management app (Acrobat's Color Handling, the app managing colours) prints the pages as images converted into color_profile with rendering_intent and black_point_compensation; turn the driver's own colour management off for that job, or the printer converts them again. Any caller-supplied `media` option is replaced by the paper the document was laid out on."
         )
         .with(schema(
             json!({
@@ -788,9 +802,11 @@ pub fn tools() -> Vec<ToolDef> {
                 "creep": { "type": "number", "minimum": 0, "maximum": 10, "description": "Booklet creep compensation: points each sheet's pages move toward the fold, times the sheet's place from the outside (default 0)." },
                 "overlap": { "type": "number", "minimum": 0 },
                 "cut_marks": { "type": "boolean" },
+                "marks": { "type": "array", "items": { "type": "string", "enum": ["all", "trim", "bleed", "registration", "color_bars", "page_info"] }, "description": "Printer's marks drawn around each page on the printed copy only (one page a sheet; not with as_image, color_management app or area)." },
+                "marks_weight": { "type": "number", "minimum": 0.1, "maximum": 4, "description": "With marks: their line weight in points (default 0.25)." },
                 "orientation": { "type": "string", "enum": ["auto", "portrait", "landscape"] },
                 "comments_forms": { "type": "string", "enum": ["document", "document-and-markups", "document-and-stamps", "form-fields-only"] },
-                "paper": { "type": "string", "description": "A paper name (US Letter, A4…) or a size of its own such as 8.5x14in, 210x297mm, 10x15cm or 612x792pt (1 to 200 inches a side)." },
+                "paper": { "type": "string", "description": "A paper name (US Letter, A4…) or a size of its own such as 8.5x14in, 210x297mm, 10x15cm or 612x792pt (1 to 200 inches a side). The paper the document is laid out on determines the `media` option sent to the printer; any caller-supplied `media` option in `options` is replaced by this paper." },
                 "path": { "type": "string" },
                 "printer": { "type": "string" },
                 "copies": { "type": "integer", "minimum": 1, "maximum": 999 },
@@ -800,7 +816,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "area": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "Print a selected area: [x0, y0, x1, y1] in points from the top-left of the displayed page, of the one page in pages, sized by layout fit/actual/shrink/custom." },
                 "as_image": { "type": "boolean", "description": "Print as image (Acrobat's Advanced Print Setup): every page rendered to a picture at dpi before it is placed on the paper, for printers that skip text, shading or transparency; the print is no longer searchable text, and with grayscale the pictures are grey, so the printer isn't asked for grayscale (a driver without that setting still prints them)." },
                 "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution for as_image (default 300)." },
-                "options": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Printer driver options from printer_options: key → choice value." },
+                "options": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Printer driver options from printer_options: key → choice value. Any caller-supplied `media` option is replaced by the paper the document was laid out on." },
                 "color_management": { "type": "string", "enum": ["printer", "app"], "description": "Who converts the colours: printer (default, the driver does) or app, which prints the pages as images (dpi, grayscale apply) converted from sRGB into color_profile." },
                 "color_profile": { "type": "string", "description": "For color_management app: a name or file name from print_color_profiles, or the path of an RGB or grey ICC printer profile." },
                 "rendering_intent": { "type": "string", "enum": ["perceptual", "relative", "saturation", "absolute"], "description": "For color_management app: how colours the printer can't reach are mapped (default relative colorimetric)." },
@@ -908,6 +924,9 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "page", "index"],
             )),
+        t("link_run_javascript", "Run a link's JavaScript", "Run the JavaScript action of link `index` on page `page` (1-based, from link_list: index is the link's place among the page's annotations), as clicking it does: event.type Link, event.name Mouse Up, event.target the document, this.pageNum the link's page, in the document's script realm. answers reply to its popup menus, response dialogs and alerts in order (null cancels a menu or response; missing answers do too); a menu with no items answers null without using one. Field changes and resetForm are one undoable step; a script that fails commits nothing and its requests are dropped. Returns alerts, console, requests (page, url, open_doc and others, never carried out), error and result.")
+            .destructive()
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 }, "answers": {"type":"array","maxItems":32,"items":{"type":["string","null"],"maxLength":4096}} }), &["doc", "page", "index"])),
         t("link_delete", "Delete a link", "Delete one link (page, index from link_list). Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 } }), &["doc", "page", "index"])),
@@ -1181,6 +1200,13 @@ pub fn tools() -> Vec<ToolDef> {
         t("page_duplicate", "Duplicate pages", "Insert copies of pages so the first copy becomes page `at`, or after the last of them when `at` is left out (fonts and images are shared, not copied). Undoable.")
             .cmd("page.duplicate")
             .with(schema(json!({ "doc": doc(), "pages": pages("to duplicate"), "at": { "type": "integer", "minimum": 1 } }), &["doc", "pages"])),
+        t("page_templates", "List page templates", "The document's page templates (ISO 32000-2 §7.7.4: the name dictionary's /Templates, pages kept out of the document, then /Pages, named visible pages): each name, and whether it is hidden. A form's JavaScript adds pages from them (Template.spawn) or shows them (Template.hidden = false).")
+            .ro()
+            .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t("page_template_spawn", "Add a page from a template", "Insert a copy of page template `name` so it becomes page `at` (default: after the last page), as JavaScript's Template.spawn does. With rename (the default, as in Acrobat) the copy's fields are its own, named P<at-1>.<name>.<field>; with rename false they are more widgets of the template's fields and share their values. Undoable.")
+            .with(schema(json!({ "doc": doc(), "name": { "type": "string" }, "at": { "type": "integer", "minimum": 1 }, "rename": { "type": "boolean" } }), &["doc", "name"])),
+        t("page_template_set_hidden", "Show or hide a page template", "Show page template `name` (hidden false: its own page goes at the end of the document, with its fields) or hide it again (hidden true: the page leaves the document and is kept as a template), as JavaScript's Template.hidden does. Undoable.")
+            .with(schema(json!({ "doc": doc(), "name": { "type": "string" }, "hidden": { "type": "boolean" } }), &["doc", "name", "hidden"])),
         t(
             "page_transition_set",
             "Set page transitions",
@@ -1204,7 +1230,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "page_set_box",
             "Set page boxes / crop",
-            "Set a page box (crop by default; also trim, bleed, art, media) on pages: either margins in points from the media box [left, bottom, right, top], or an absolute rect in points from the top-left of the displayed page. Omit both to reset the box to its default. Undoable.",
+            "Set a page box (crop by default; also trim, bleed, art, media) on pages: either margins from the media box [left, bottom, right, top] in default user-space units of the unrotated page (not points when the page has /UserUnit), or an absolute rect in points from the top-left of the displayed page. Omit both to reset the box to its default. Undoable.",
         )
         .cmd("page.boxes")
         .with(schema(
@@ -1303,7 +1329,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("accessibility_autotag_preview", "Preview automatic tags", "Propose paragraph and heading tags for visible text blocks on one page. Returns page bounds, tentative roles and reasons. Does not change the PDF or claim accessibility compliance. Images, tables, lists, annotations and existing structure require separate review.")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc", "page"])),
-        t("accessibility_autotag_apply", "Automatically tag text-only PDF", "Write marked content, a Document structure element, paragraph tags and a parent tree for every text object in an untagged, text-only PDF. Refuses graphics, images, annotations, forms, existing tags and malformed streams before changing anything. Review all resulting roles; this does not certify accessibility. Undoable.")
+        t("accessibility_autotag_apply", "Automatically tag text-only PDF", "Write marked content, a Document structure element, heading and paragraph tags and a parent tree for every text object in an untagged, text-only PDF. Text repeating at the top or bottom of most pages (running headers, footers and page numbers) is marked as pagination artifacts instead and listed in running_text. Refuses graphics, images, annotations, forms, existing tags and malformed streams before changing anything. Review all resulting roles; this does not certify accessibility. Undoable.")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("accessibility_autotag_form_fields", "Tag form fields", "Write `/Form` tags, widget structure-parent keys, and a parent tree for all page widgets in an untagged AcroForm. Existing tag trees are refused for review. Text, figures, links, and other content are not tagged.")
             .cmd("a11y.autotag_fields")
@@ -1373,7 +1399,7 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("a11y.alt_text")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
-        t("accessibility_set_alt", "Set alternate text", "Set a figure's alternate text (alt; empty or omitted clears it), or mark it decorative (decorative: true: its content becomes an artifact and the figure leaves the tags). figure is a number from accessibility_figures. Returns the figures. Undoable.")
+        t("accessibility_set_alt", "Set alternate text", "Set a figure's alternate text (alt; empty or omitted clears it), or mark it decorative (decorative: true: its content becomes an artifact and the figure leaves the tags). Decorative actions reject form streams, annotation or object references, other-page or invalid content references, and tags with structure children before changing the document. figure is a number from accessibility_figures. Returns the figures. Undoable.")
             .cmd("a11y.alt_text")
             .with(schema(json!({ "doc": doc(), "figure": { "type": "integer", "minimum": 1 }, "alt": { "type": "string" }, "decorative": { "type": "boolean" } }), &["doc", "figure"])),
         t("accessibility_tags", "List structure tags", "List reachable indirect structure tags in document order with PDF object number, generation, nearest indirect parent, depth, page, type, title, actual text, alternate text, language, a table's summary and a header cell's scope, one page at a time: count is how many tags match, next the offset of the following page (null at the end). types, pages and max_depth keep only some tags. Inline tag dictionaries have no stable object reference and are not listed.")
@@ -1401,7 +1427,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "property": { "type": "string", "enum": ["type", "title", "actual_text", "alternate_text", "language", "summary", "scope"] },
                 "value": { "type": "string" },
             }), &["doc", "object", "generation", "property"])),
-        t("accessibility_mark_tag_artifact", "Mark tag content as artifact", "Mark a reachable leaf structure tag's direct marked content as an artifact and remove the tag from the reading structure. Use object and generation from accessibility_tags. Tags with child structure elements, no direct marked content, content not found on its page, or content that a damaged or undecodable content stream may hide or change are rejected. Undoable.")
+        t("accessibility_mark_tag_artifact", "Mark tag content as artifact", "Mark a reachable leaf structure tag's direct marked content as an artifact and remove the tag from the reading structure. Use object and generation from accessibility_tags. Form streams, annotation or object references, other-page or invalid content references, and structure children are rejected before changing the document. Tags with no direct marked content, content not found on its page, or content that a damaged or undecodable content stream may hide or change are also rejected. Undoable.")
             .with(schema(json!({
                 "doc": doc(), "object": { "type": "integer", "minimum": 1 },
                 "generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
@@ -1752,6 +1778,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "aligns": { "type": "array", "maxItems": 4096, "items": { "type": "string", "enum": ["left", "center", "right", "justify", "inherit"] }, "description": "Each paragraph's (line's) own alignment, by index; inherit (or legacy null) follows align." },
                     "underline": { "type": "boolean" },
                     "line_spacing": { "type": "number", "description": "Multiple of the font size (1.2 is ordinary)." },
+                    "paragraph_spacing": { "type": "number", "description": "Points between paragraphs (a line break in text starts one), beyond the line spacing; unset, half the size for a paragraph the page did not have (rows it had keep their space); 0 is none." },
                     "dx": { "type": "number", "description": "Paragraph only: move right by this many points (negative: left)." },
                     "dy": { "type": "number", "description": "Paragraph only: move up by this many points (negative: down)." },
                     "width": { "type": "number", "description": "Paragraph only: rewrap to this width in points (dragging the box's edge)." },
