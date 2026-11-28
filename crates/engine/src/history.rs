@@ -107,6 +107,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::AddBackground { .. }
         | Edit::RemoveMarks { .. }
         | Edit::ConvertColours { .. }
+        | Edit::ConvertSpotsToProcess { .. }
         | Edit::FixHairlines { .. }
         // Recognized text is an invisible text layer stamped on its page, with its font in the
         // page's resources (#6310): a full re-inspection made applying one word cost seconds on

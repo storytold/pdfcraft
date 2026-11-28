@@ -147,6 +147,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddAttachment { .. }
         | Edit::DeleteAttachment { .. }
         | Edit::ConvertColours { .. }
+        | Edit::ConvertSpotsToProcess { .. }
         | Edit::EditAttachmentDescription { .. }
         | Edit::AutoTagText
         | Edit::SetAltText { .. }
@@ -717,6 +718,16 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             let done = pdfcraft_edit::convert_colours(doc, pages, settings, &mut recolour)?;
             if done.colours == 0 && done.images == 0 {
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("nothing on those pages needed converting".into())));
+            }
+        }
+        Edit::ConvertSpotsToProcess { inks } => {
+            let done = pdfcraft_edit::convert_spots_to_process(doc, inks)?;
+            if done.converted() == 0 {
+                let why = done
+                    .refused
+                    .first()
+                    .map_or_else(|| "no spot ink to convert was found".to_owned(), |r| format!("nothing was converted: {} ({})", r.reason, r.ink));
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(why)));
             }
         }
         Edit::EditAttachmentDescription { key, description } => {

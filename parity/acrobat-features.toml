@@ -8592,11 +8592,11 @@ title = "Ink aliases and spot-to-process"
 area = "L"
 tier = "P2"
 milestone = "M11"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_convert_spots"]
+evidence = ["crates/edit/tests/it/spots_to_process.rs::a_spot_colour_becomes_the_cmyk_its_tint_transform_gives", "crates/edit/tests/it/spots_to_process.rs::a_devicen_that_also_names_a_spot_not_chosen_is_left_and_reported", "crates/edit/tests/it/spots_to_process.rs::a_spot_whose_alternate_is_not_cmyk_is_refused", "crates/edit/tests/it/spots_to_process.rs::a_form_is_converted_under_the_colour_its_caller_set", "crates/edit/tests/it/spots_to_process.rs::a_comment_appearance_is_converted", "crates/edit/tests/it/spots_to_process.rs::overprint_on_a_converted_ink_is_reported_in_either_mode", "crates/edit/tests/it/spots_to_process.rs::an_image_in_the_spot_becomes_cmyk_samples", "crates/edit/tests/it/spots_to_process.rs::an_indexed_space_over_the_spot_gets_a_cmyk_lookup_table", "crates/edit/tests/it/spots_to_process.rs::an_axial_shading_in_the_spot_is_resampled_in_cmyk", "crates/edit/tests/it/spots_to_process.rs::an_ink_named_with_hex_escapes_is_the_one_with_those_bytes", "crates/edit/tests/it/spots_to_process.rs::a_shading_with_an_empty_domain_is_refused", "crates/edit/tests/it/spots_to_process.rs::a_form_drawn_twice_counts_its_paints_once", "crates/edit/tests/it/spots_to_process.rs::an_image_decode_array_is_applied_before_the_tint_transform", "crates/automation/tests/it/automation.rs::converting_a_spot_ink_to_process_through_the_tool"]
+notes = "Headless only: doc_convert_spots converts the chosen spot inks (default every spot ink) to process, across the whole document, to the CMYK each space's own tint transform gives, evaluated by the renderer's function evaluator (ISO 32000-1 §8.6.6.4, §8.6.6.5). Converted: colours set in page content, the forms it draws, and comment and field appearances; images (written as 8-bit DeviceCMYK, Flate); Indexed lookup tables over the spot; axial and radial shadings (the colour resampled as 64 linear pieces; Background converted). A space converts only when every ink it names is chosen, it has at most 32 colorants and its alternate is DeviceCMYK; anything else stays as it is and is listed in refused with the reason (an RGB, Lab or ICC alternate, a DeviceN naming an ink not chosen, a picture codec, a colour-key mask, function, mesh and patch shadings, a content stream whose inline images can't be told apart). The space definitions stay in the file. An overprinted spot paint left the process plates alone; as CMYK it replaces them where it is nonzero, and where it is zero too under overprint mode 0, so every object painting a converted ink with overprint on is reported in overprint_changed. Chosen inks no space names are reported in notes. One undo step. Missing: a dialog, ink aliases (one ink printed as another), and per-ink choice of process versus spot at print time."
 
 [[feature]]
 id = "print.printer-marks"

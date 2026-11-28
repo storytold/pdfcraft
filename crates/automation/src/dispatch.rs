@@ -788,6 +788,7 @@ impl Automation {
                 self.apply(&a, edit)?
             }
             "doc_convert_colours" => self.convert_colours(&a)?,
+            "doc_convert_spots" => self.convert_spots(&a)?,
             "attachment_edit" => {
                 let key = a.opt_str("key")?;
                 let name = a.opt_str("name")?;

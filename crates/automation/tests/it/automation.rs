@@ -15379,3 +15379,33 @@ fn pdf_watermark_uses_visible_source_crop_through_tools() {
         assert_eq!(rendered[0], rendered[1], "same displayed source gives identical saved watermark at target rotation {rotation}");
     }
 }
+
+#[test]
+fn converting_a_spot_ink_to_process_through_the_tool() {
+    let tint = "{ dup 0 exch 0.2 mul 3 -1 roll 0 }";
+    let content = "/G cs 1 scn 0 0 10 10 re f";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << /G [/Separation /Gold /DeviceCMYK 5 0 R] >> >> /Contents 4 0 R >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        format!("<< /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1 0 1] /Length {} >>\nstream\n{tint}\nendstream", tint.len()),
+    ];
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let dir = workdir("spots-to-process");
+    std::fs::write(dir.join("gold.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "gold.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_convert_spots", json!({ "doc": doc, "inks": ["Silver"] }));
+    assert_eq!((r["converted"].as_u64(), r["undo"].is_null()), (Some(0), true), "an ink no space names converts nothing: {r}");
+    assert!(r["notes"].as_array().is_some_and(|n| !n.is_empty()), "and says so: {r}");
+    let r = ok(&mut a, "doc_convert_spots", json!({ "doc": doc, "inks": ["Gold"] }));
+    assert!(r["converted"].as_u64() > Some(0) && r["undo"].is_string(), "{r}");
+    let again = ok(&mut a, "doc_convert_spots", json!({ "doc": doc }));
+    assert_eq!(again["converted"].as_u64(), Some(0), "nothing is left in the spot: {again}");
+    for bad in [json!({ "inks": "Gold" }), json!({ "inks": [1] }), json!({ "inks": ["Black"] }), json!({ "inks": ["A#G0"] })] {
+        let mut args = bad.clone();
+        args["doc"] = json!(doc);
+        assert!(matches!(a.call("doc_convert_spots", &args), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+}

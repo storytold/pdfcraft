@@ -72,7 +72,9 @@ pub mod convert_colours;
 pub mod hairlines;
 mod page_streams;
 pub use convert_colours::{ColourTarget, ConvertColours, Converted as ColoursConverted, ImageRecolour, convert_colours};
+pub mod spots_to_process;
 pub use hairlines::{Fixed as HairlinesFixed, Hairlines, fix_hairlines};
+pub use spots_to_process::{SpotRefusal, SpotsConverted, convert_spots_to_process, spot_selection_refusal};
 pub mod added;
 pub use added::{
     Added, AddedImage, AddedText, Align, Content, Family, Ink, MarkerScan, add_content, delete_content, first_undrawable, isolate_content,

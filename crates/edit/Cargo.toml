@@ -10,6 +10,9 @@ workspace = true
 
 [dependencies]
 pdfcraft-annot = { workspace = true }
+# Tint transforms are evaluated by the renderer's own function evaluator (spots_to_process), so a
+# spot converted to process gets the CMYK the page shows on screen; already in the tree via render.
+craft-pdf = { workspace = true, features = ["interpret"] }
 pdfcraft-cos = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-fonts = { workspace = true }
