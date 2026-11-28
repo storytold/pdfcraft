@@ -9396,6 +9396,28 @@ fn multi_glyph_rtl_actual_text_keeps_its_own_reading_order() {
     }
 }
 
+/// #8079: a producer that places right-to-left words in reading order draws each to the left of
+/// the one before. They are still one line, read and replaced as one.
+#[test]
+fn arabic_words_placed_right_to_left_are_one_line() {
+    // "سم" at x 400, then "سمم" to its left, ending a word space (8 points) short of it.
+    let rtl = arabic_ligature_page("BT /F1 12 Tf 400 700 Td (BA) Tj ET BT /F1 12 Tf 374 700 Td (BBA) Tj ET", false);
+    // The same words placed left to right.
+    let ltr = arabic_ligature_page("BT /F1 12 Tf 374 700 Td (BBA) Tj ET BT /F1 12 Tf 400 700 Td (BA) Tj ET", false);
+    let lines = text::text_lines(&rtl, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["سم سمم"]);
+    assert_eq!(lines[0].text, text::text_lines(&ltr, 0).unwrap()[0].text);
+    assert_eq!(text::text_blocks(&rtl, 0).unwrap().len(), 1);
+
+    // Replacing the line draws the new text once, from the line's left edge.
+    let before = lines[0].rect;
+    let mut doc = rtl;
+    text::replace_line(&mut doc, 0, 0, "سم سم").unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["سم سم"]);
+    assert!((lines[0].rect[0] - before[0]).abs() < 0.5, "{:?} vs {before:?}", lines[0].rect);
+}
+
 #[test]
 fn replacing_word_with_actual_text_ligature_removes_all_its_source_operators() {
     let mut doc = arabic_ligature_page(

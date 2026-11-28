@@ -516,6 +516,7 @@ pub(super) struct Pen {
     pub(super) bt: usize,
     dir: (f64, f64),
     across: f64,
+    start: f64,
     end: f64,
     pub(super) size: f64,
     vertical: bool,
@@ -523,19 +524,31 @@ pub(super) struct Pen {
 
 impl Pen {
     pub(super) fn after(s: &Shown) -> Self {
-        let (dir, _, end, across) = s.span();
-        Pen { bt: s.bt, dir, across, end, size: s.size.max(1.0), vertical: s.state.vertical.is_some() }
+        let (dir, start, end, across) = s.span();
+        Pen { bt: s.bt, dir, across, start, end, size: s.size.max(1.0), vertical: s.state.vertical.is_some() }
+    }
+
+    /// Whether `s` is on the same baseline and in the same direction.
+    fn same_baseline(&self, s: &Shown) -> bool {
+        let (dir, _, _, across) = s.span();
+        let same_dir = (dir.0 - self.dir.0).abs() < 1e-3 && (dir.1 - self.dir.1).abs() < 1e-3;
+        // A column continues a column (along which the pen moves), a baseline a baseline.
+        same_dir && self.vertical == s.state.vertical.is_some() && (across - self.across).abs() < self.size * 0.3
     }
 
     /// Whether `s` could continue the same line on geometry alone: on the same baseline, starting
     /// at most a word gap (`reach` sizes) after it. Also the gap along the baseline.
     pub(super) fn continues(&self, s: &Shown, reach: f64) -> (bool, f64) {
-        let (dir, start, _, across) = s.span();
-        let gap = start - self.end;
-        let same_dir = (dir.0 - self.dir.0).abs() < 1e-3 && (dir.1 - self.dir.1).abs() < 1e-3;
-        // A column continues a column (along which the pen moves), a baseline a baseline.
-        let same_dir = same_dir && self.vertical == s.state.vertical.is_some();
-        (same_dir && (across - self.across).abs() < self.size * 0.3 && gap > -self.size && gap < self.size * reach, gap)
+        let gap = s.span().1 - self.end;
+        (self.same_baseline(s) && gap > -self.size && gap < self.size * reach, gap)
+    }
+
+    /// [`Pen::continues`] the other way: `s` ends at most a word gap before this run starts, as
+    /// when a producer places right-to-left words in reading order, each to the left of the last
+    /// (#8079). Also the gap.
+    pub(super) fn precedes(&self, s: &Shown, reach: f64) -> (bool, f64) {
+        let gap = self.start - s.span().2;
+        (self.same_baseline(s) && gap > -self.size && gap < self.size * reach, gap)
     }
 }
 

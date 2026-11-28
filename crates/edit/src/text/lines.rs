@@ -475,9 +475,19 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
         // A line belongs to one stream piece. Within it, PDF producers often put every word
         // in its own BT/ET: geometry and text state, not object boundaries, define a line.
         let si = ops.get(s.op).map_or(0, |op| pieces.pieces_of(op).0);
+        // Right-to-left words placed in reading order: each to the left of the one before.
+        let leftward = last.is_some_and(|(_, pen)| {
+            let reach = if pen.bt == s.bt { 3.0 } else { 1.5 };
+            s.state.render_mode != 3
+                && s.text.chars().any(crate::bidi::is_rtl)
+                && lines.last().is_some_and(|l| l.text.chars().any(crate::bidi::is_rtl))
+                && !pen.continues(&s, reach).0
+                && pen.precedes(&s, reach).0
+        });
         let joins = last.is_some_and(|(piece, pen)| {
             let bt = pen.bt;
             let (near, gap) = pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 });
+            let near = near || leftward;
             piece == si
                 && lines.last().is_some_and(|l| {
                     l.scope == s.scope && l.paint == s.paint && l.containers == s.containers && l.logical_order == s.logical_order
@@ -498,17 +508,33 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 && (s.state.render_mode != 3 || (gap < pen.size * 0.6 && !invisible_apart))
         });
         if joins && let Some(l) = lines.last_mut() {
-            let gap = last.map_or(0.0, |(_, pen)| pen.continues(&s, 0.0).1);
-            let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ');
-            if spaced {
-                l.text.push(' ');
+            if leftward {
+                // The line's text is in drawing order (left to right), so the word goes in front.
+                // The line now starts where it does, and its show comes first in `ops`, as the
+                // leftmost show does on any other line: a rewrite draws the new text from there.
+                // Its runs no longer follow content order, so the line keeps none (see `runs`).
+                let gap = last.map_or(0.0, |(_, pen)| pen.precedes(&s, 0.0).1);
+                let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.starts_with(' ') && !s.text.ends_with(' ');
+                l.text.insert_str(0, &if spaced { format!("{} ", s.text) } else { s.text.clone() });
+                l.origin.tm = s.tm.0;
+                l.origin.x = s.start_x;
+                l.ops.insert(0, s.op);
+                l.runs.clear();
+            } else {
+                let gap = last.map_or(0.0, |(_, pen)| pen.continues(&s, 0.0).1);
+                let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ');
+                if spaced {
+                    l.text.push(' ');
+                }
+                l.text.push_str(&s.text);
+                l.ops.push(s.op);
+                if !l.runs.is_empty() {
+                    l.runs.push((s.text.clone(), l.ink.len() + s.ink.len(), spaced));
+                }
             }
-            l.text.push_str(&s.text);
             l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
             l.frame = union(l.frame, s.frame);
             l.ink.extend(s.ink.iter().copied());
-            l.runs.push((s.text.clone(), l.ink.len(), spaced));
-            l.ops.push(s.op);
             l.ops.extend(s.extra_ops.iter().copied());
             l.decodable &= s.decodable;
             l.visual_order |= s.visual_order;
