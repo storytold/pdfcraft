@@ -269,7 +269,7 @@ fn actual_text_follows_the_pdf_rules_for_marked_content() {
         // Empty: the marked glyphs stand for no text (a soft hyphen at a line break); the gap
         // the hyphen leaves still reads as one.
         "BT /F1 20 Tf 1 0 0 1 100 150 Tm (co) Tj /Span <</ActualText ()>> BDC (-) Tj EMC (op) Tj ET",
-        // Across two lines: each glyph keeps its own text, so selection and lines still work.
+        // Across two lines: the replacement still stands for both, read once at the first line.
         "BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</ActualText (Q)>> BDC (x) Tj 0 -40 Td (y) Tj EMC ET",
         // Unbalanced: a stray EMC first, and a replacement the page never closes.
         "EMC BT /F1 20 Tf 1 0 0 1 100 150 Tm (a) Tj /Span <</ActualText (fi)>> BDC (xy) Tj ET",
@@ -277,7 +277,102 @@ fn actual_text_follows_the_pdf_rules_for_marked_content() {
         "BT /F1 20 Tf 1 0 0 1 100 150 Tm /P <</MCID 0>> BDC (ab) Tj EMC /Artifact BMC (c) Tj EMC ET",
     ]);
     let plain: Vec<String> = (0..6).map(|p| marked_text(&pdf, p).plain_text()).collect();
-    assert_eq!(plain, ["ofice", "AB", "co op", "x\ny", "afi", "abc"]);
+    assert_eq!(plain, ["ofice", "AB", "co op", "Q", "afi", "abc"]);
+}
+
+/// ISO 32000-2 §14.9.4: `/ActualText` replaces the whole marked-content sequence, however many lines it
+/// spans (PDFBOX-5868 wraps groups of lines in a tab replacement). The replacement reads once, boxed on its
+/// first line, so selection, lines and Find still work; the glyphs of its other lines read as nothing.
+#[test]
+fn actual_text_across_several_lines_replaces_all_of_them() {
+    let pdf = marked_pages(&[
+        "BT /F1 20 Tf 1 0 0 1 20 250 Tm (Before) Tj ET /Span <</ActualText (Replaced)>> BDC \
+         BT /F1 20 Tf 1 0 0 1 20 200 Tm (Shown one) Tj 0 -30 Td (Shown two) Tj ET EMC BT /F1 20 Tf 1 0 0 1 20 100 Tm (After) Tj ET",
+        // A tab stands for nothing, as an empty replacement does.
+        "BT /F1 20 Tf 1 0 0 1 20 250 Tm (Before) Tj ET /Span <</ActualText <FEFF0009>>> BDC \
+         BT /F1 20 Tf 1 0 0 1 20 200 Tm (Hidden one) Tj 0 -30 Td (Hidden two) Tj ET EMC BT /F1 20 Tf 1 0 0 1 20 100 Tm (After) Tj ET",
+        // Turning away from the first glyph's direction ends its line too.
+        "BT /F1 20 Tf /Span <</ActualText (Up)>> BDC 1 0 0 1 20 200 Tm (ab) Tj 0 1 -1 0 150 100 Tm (cd) Tj EMC ET",
+        // Lines set closer than their glyph boxes are tall: the boxes overlap, the baselines don't.
+        "BT /F1 20 Tf 1 0 0 1 20 200 Tm /Span <</ActualText (Tight)>> BDC (ab) Tj 0 -15 Td (cd) Tj EMC ET",
+        // A small glyph, then large ones on its baseline: one line, boxed to the large glyphs' end.
+        "BT 1 0 0 1 20 200 Tm /Span <</ActualText (Mixed)>> BDC /F1 8 Tf (a) Tj /F1 20 Tf (bbbb) Tj EMC ET",
+    ]);
+    let text = marked_text(&pdf, 0);
+    assert_eq!(text.plain_text(), "Before\nReplaced\nAfter");
+    // The replacement is boxed on its first line (view space, y down: the line at y = 200 sits near 100).
+    let at = text.glyphs.iter().position(|g| g.text == "Replaced").unwrap();
+    let r = text.glyphs[at].rect;
+    assert!(r[1] > 70.0 && r[3] < 110.0, "{r:?}");
+    assert_eq!(text.find("Replaced").len(), 1);
+    assert!(text.find("Shown").is_empty());
+    assert_eq!(marked_text(&pdf, 1).plain_text(), "Before\nAfter");
+    assert_eq!(marked_text(&pdf, 2).plain_text(), "Up");
+    // Each case's box (view space, y down): the first line's em box spans y 84-104.
+    let boxed = |page: usize, text: &str| {
+        let page = marked_text(&pdf, page);
+        assert_eq!(page.plain_text(), text);
+        page.glyphs.iter().find(|g| g.text == text).map(|g| g.rect).unwrap()
+    };
+    let tight = boxed(3, "Tight");
+    assert!(tight[3] < 105.0, "the second line's box reaches y 119: {tight:?}");
+    let mixed = boxed(4, "Mixed");
+    // "a" at 8 pt ends near x 24.4, the four "b"s at 20 pt near x 68.9.
+    assert!(mixed[2] > 68.0 && mixed[1] < 85.0, "{mixed:?}");
+}
+
+/// A superscript on the replacement's first line (text rise, ISO 32000-2 §9.3.7) stays in its
+/// box, and so do the glyphs after it; so do the first line's glyphs drawn after a run on the
+/// next line, which stays out. A small first line with a larger one set close below it (`Td`,
+/// no text rise) is no superscript: the larger line stays out.
+#[test]
+fn actual_text_boxes_keep_superscripts_and_glyphs_drawn_after_another_line() {
+    let sup = "/F1 20 Tf 1 0 0 1 20 200 Tm (ab) Tj /F1 8 Tf 12 Ts (2) Tj /F1 20 Tf 0 Ts (cd) Tj";
+    let back = "/F1 20 Tf 1 0 0 1 20 200 Tm (ab) Tj 1 0 0 1 20 160 Tm (xy) Tj 1 0 0 1 60 200 Tm (ef) Tj";
+    let small_first = "1 0 0 1 20 200 Tm /F1 8 Tf (ab) Tj /F1 20 Tf 0 -15 Td (cd) Tj";
+    let pages = [
+        format!("BT /Span <</ActualText (Sup)>> BDC {sup} EMC ET"),
+        format!("BT {sup} ET"),
+        format!("BT /Span <</ActualText (Back)>> BDC {back} EMC ET"),
+        format!("BT {back} ET"),
+        format!("BT /Span <</ActualText (Small)>> BDC {small_first} EMC ET"),
+        format!("BT {small_first} ET"),
+    ];
+    let pdf = marked_pages(&pages.iter().map(String::as_str).collect::<Vec<_>>());
+    let boxed = |page: usize, text: &str| {
+        let t = marked_text(&pdf, page);
+        assert_eq!(t.plain_text(), text);
+        t.glyphs.iter().find(|g| g.text == text).map(|g| g.rect).unwrap()
+    };
+    let glyph = |page: usize, text: &str| marked_text(&pdf, page).glyphs.iter().find(|g| g.text == text).map(|g| g.rect).unwrap();
+    let (sup_box, two, d) = (boxed(0, "Sup"), glyph(1, "2"), glyph(1, "d"));
+    assert!((sup_box[1] - two[1]).abs() < 0.01, "up to the superscript's top: {sup_box:?}, 2 at {two:?}");
+    assert!((sup_box[2] - d[2]).abs() < 0.01, "on to the end of the line: {sup_box:?}, d at {d:?}");
+    let (back_box, f, y) = (boxed(2, "Back"), glyph(3, "f"), glyph(3, "y"));
+    assert!((back_box[2] - f[2]).abs() < 0.01, "the first line's last run is in: {back_box:?}, f at {f:?}");
+    assert!(back_box[3] < y[1], "the next line stays out: {back_box:?}, y at {y:?}");
+    let (small_box, b, c, d) = (boxed(4, "Small"), glyph(5, "b"), glyph(5, "c"), glyph(5, "d"));
+    assert!((small_box[2] - b[2]).abs() < 0.01, "up to the first line's end: {small_box:?}, b at {b:?}, d at {d:?}");
+    assert!((small_box[3] - b[3]).abs() < 0.01, "the larger line below stays out: {small_box:?}, b at {b:?}, c at {c:?}");
+}
+
+/// A vertical glyph is as wide across its column as its horizontal width, centred on the column
+/// (ISO 32000-2 §9.7.4.3), so its place across the column is the middle, whatever its width: a
+/// glyph three times as wide in the next column, 18 units away on either side, stays out of the
+/// first column's replacement box.
+#[test]
+fn actual_text_in_a_vertical_column_keeps_the_next_column_out() {
+    for next in [82, 118] {
+        let text = vertical_latin(
+            &[(36, 500), (37, 1500)],
+            None,
+            &format!("/Span <</ActualText (Q)>> BDC BT /F1 20 Tf 1 0 0 1 100 340 Tm <0024> Tj 1 0 0 1 {next} 340 Tm <0025> Tj ET EMC"),
+        );
+        assert_eq!(text.plain_text(), "Q", "{next}");
+        let q = text.glyphs.iter().find(|g| g.text == "Q").map(|g| g.rect).unwrap();
+        // The first glyph is 20 × 0.5 = 10 wide, centred on x = 100.
+        assert!(q[0] > 94.9 && q[2] < 105.1, "next column at {next}: {q:?}");
+    }
 }
 
 #[test]

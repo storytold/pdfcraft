@@ -27,8 +27,8 @@ pub(super) struct TextDevice {
     /// How many marked content sequences are open.
     depth: usize,
     /// The outermost open `/ActualText` replacement: its depth, text and the glyphs drawn inside
-    /// it (with no text of their own yet).
-    actual: Option<(usize, String, Vec<Drawn>)>,
+    /// it (with no text of their own yet), and for each glyph whether it is a vertical one.
+    actual: Option<(usize, String, Vec<Drawn>, Vec<bool>)>,
     /// What the open `/ActualText` replacement paints besides glyphs (paths, images), as far as
     /// it can be seen: where its text reads when it marks no glyph (words drawn as outlines).
     painted: Option<Painted>,
@@ -90,9 +90,15 @@ fn redraw_tolerance(rect: &[f32; 4]) -> f32 {
     0.2 * (rect[3] - rect[1]).max(0.1)
 }
 
-/// One glyph carrying `text`, boxed around `drawn` in their writing direction; `None` when they
-/// span several lines or writing directions (one box would break selection and line grouping).
-fn merge(drawn: &[Drawn], text: String) -> Option<Drawn> {
+/// One glyph carrying `text`, boxed around the glyphs of `drawn` on the line of the first, in its
+/// writing direction: those that keep its direction and sit on its line, wherever they come in the
+/// sequence (a run on the next line between two of the first line's is skipped, not an end).
+/// ActualText replaces the whole marked-content sequence (ISO 32000-2 §14.9.4), so a replacement
+/// spanning several lines or writing directions still reads once, from its first line, and the
+/// glyphs after that line stand for nothing of their own. One box over several lines would break
+/// selection and line grouping. `None` when the first glyph's box isn't finite.
+/// `vertical` says which glyphs are a vertical font's (missing ones are not).
+fn merge(drawn: &[Drawn], vertical: &[bool], text: String) -> Option<Drawn> {
     let first = drawn.first()?;
     let (quarter, u) = (first.0, first.1);
     // Across the line: from the writing direction a quarter turn towards the line's bottom.
@@ -100,13 +106,62 @@ fn merge(drawn: &[Drawn], text: String) -> Option<Drawn> {
     let along = |p: &[f32; 2]| f64::from(p[0]) * u[0] + f64::from(p[1]) * u[1];
     let across = |p: &[f32; 2]| f64::from(p[0]) * n[0] + f64::from(p[1]) * n[1];
     let height = across(&first.2.quad[0]) - across(&first.2.quad[3]);
+    // A glyph's line position across the line and its extent across it. A horizontal glyph's em
+    // box starts a fifth of its height below the baseline (`draw_glyph`'s em box runs from -200
+    // to 800). A vertical glyph is as wide across its column as its horizontal width, centred
+    // on the column (ISO 32000-2 §9.7.4.3), so its position is the middle, whatever its width.
+    let baseline = |i: usize, d: &Drawn| {
+        let (near, far) = (across(&d.2.quad[0]), across(&d.2.quad[3]));
+        let at = if vertical.get(i).copied().unwrap_or(false) { 0.5 } else { 0.2 };
+        (near + at * (far - near), (near - far).abs())
+    };
+    let (line, line_height) = baseline(0, first);
+    // A glyph's extent along the line.
+    let span = |d: &Drawn| d.2.quad.iter().map(along).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+    let first_span = span(first);
+    // Baselines (with their glyph's extent) shown to be another line's; a few are enough, as only
+    // a line within a raised glyph's reach of the first can be mistaken for one.
+    let mut other_lines: Vec<(f64, f64)> = Vec::new();
     let (mut s0, mut s1, mut t0, mut t1) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
-    for p in drawn.iter().flat_map(|d| d.2.quad.iter()) {
-        (s0, s1) = (s0.min(along(p)), s1.max(along(p)));
-        (t0, t1) = (t0.min(across(p)), t1.max(across(p)));
+    for (i, d) in drawn.iter().enumerate() {
+        // A glyph is on the first one's line when its baseline lies within half the taller
+        // glyph's height of the first's, whatever its own height: a larger glyph on the same
+        // baseline stays (and widens the box), the next line's doesn't, even where the glyph
+        // boxes of lines set close together overlap. A smaller glyph raised or lowered on the
+        // taller one's line (text rise, §9.3.7: a superscript or subscript) stays too. A NaN
+        // baseline is on no line.
+        let (at, h) = baseline(i, d);
+        let horizontal = !vertical.first().copied().unwrap_or(false) && !vertical.get(i).copied().unwrap_or(false);
+        if !compatible(u, d.1) {
+            continue;
+        }
+        match line_of((line, line_height), (at, h), horizontal) {
+            Line::Other => continue,
+            Line::Same => {}
+            // Raised or lowered off the first glyph's baseline: a superscript follows its base
+            // along the line, while the next line starts back where the first did. A glyph over
+            // the first one's place along the line is on another line, and so is every glyph on
+            // that line's baseline (a small first line, then a larger one set close below it).
+            Line::Shifted => {
+                if other_lines.iter().any(|&(b, hb)| (at - b).abs() <= 0.5 * h.max(hb)) {
+                    continue;
+                }
+                let g = span(d);
+                let overlap = g.1.min(first_span.1) - g.0.max(first_span.0);
+                if overlap > 0.5 * (g.1 - g.0).min(first_span.1 - first_span.0) {
+                    if other_lines.len() < MAX_OTHER_LINES {
+                        other_lines.push((at, h));
+                    }
+                    continue;
+                }
+            }
+        }
+        for p in &d.2.quad {
+            (s0, s1) = (s0.min(along(p)), s1.max(along(p)));
+            (t0, t1) = (t0.min(across(p)), t1.max(across(p)));
+        }
     }
-    let one_line = drawn.iter().all(|d| compatible(u, d.1)) && t1 - t0 <= 2.0 * height.abs();
-    if !(one_line && s0.is_finite() && s1.is_finite() && t0.is_finite() && t1.is_finite()) {
+    if !(s0.is_finite() && s1.is_finite() && t0.is_finite() && t1.is_finite()) {
         return None;
     }
     // The edge towards the next line is the one the first glyph's quad starts on.
@@ -117,6 +172,41 @@ fn merge(drawn: &[Drawn], text: String) -> Option<Drawn> {
         [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]
     });
     Some((quarter, u, TextGlyph { text, rect, quad, direction: first.2.direction }))
+}
+
+/// How many other lines' baselines [`merge`] keeps to tell raised glyphs from them.
+const MAX_OTHER_LINES: usize = 8;
+
+/// Where a glyph sits against the first glyph's line, by [`line_of`].
+enum Line {
+    /// On the same baseline.
+    Same,
+    /// Off the baseline by as much as text rise moves a smaller glyph (a superscript or a
+    /// subscript), or the larger glyph is the one moved.
+    Shifted,
+    /// On another line.
+    Other,
+}
+
+/// Where two glyphs, each at `(position across the line, extent across it)` as [`merge`]
+/// measures them (larger is further down the line's across direction), sit against each other:
+/// on one line when their baselines lie within half the taller one's extent of each other, or,
+/// for `horizontal` glyphs, shifted when the smaller one (under 0.9 of the taller) sits on the
+/// taller one's line raised by up to 0.8 of its extent, as far as its ascender, or lowered by up
+/// to half of it. A vertical glyph's extent across its column is its width, not its height, so a
+/// narrower one is no superscript.
+fn line_of((a, ha): (f64, f64), (b, hb): (f64, f64), horizontal: bool) -> Line {
+    let tall = ha.max(hb);
+    if (a - b).abs() <= 0.5 * tall {
+        return Line::Same;
+    }
+    if !horizontal {
+        return Line::Other;
+    }
+    let ((big, big_h), (small, small_h)) = if ha >= hb { ((a, ha), (b, hb)) } else { ((b, hb), (a, ha)) };
+    // Raised is towards the line's top: a smaller position across it.
+    let rise = big - small;
+    if small_h < 0.9 * big_h && (-0.5 * big_h..=0.8 * big_h).contains(&rise) { Line::Shifted } else { Line::Other }
 }
 
 /// The widest or tallest box (view-space points) a glyph, or the paint standing in for one, may
@@ -238,12 +328,12 @@ impl TextDevice {
     /// a ligature) have no Unicode of their own, so without it those marks are lost and the
     /// words can't be found.
     ///
-    /// A replacement spanning several lines or writing directions stays per glyph (each glyph's own
-    /// Unicode). An empty one (a soft hyphen at a line break, say) stands for no text at all. One
-    /// that marks no glyph reads where it paints, as far as that can be seen: words drawn as
-    /// outlines or pictures.
+    /// A replacement spanning several lines or writing directions reads once, at its first line
+    /// (see [`merge`]). An empty one (a soft hyphen at a line break, say), or one of
+    /// control characters only (a tab), stands for no text at all. One that marks no glyph reads where
+    /// it paints, as far as that can be seen: words drawn as outlines or pictures.
     fn end_actual_text(&mut self) {
-        let Some((_, text, mut drawn)) = self.actual.take() else { return };
+        let Some((_, text, mut drawn, mut vertical)) = self.actual.take() else { return };
         let painted = self.painted.take();
         let paint_filtered = std::mem::take(&mut self.paint_filtered);
         let paint_cropped = std::mem::take(&mut self.paint_cropped);
@@ -274,8 +364,9 @@ impl TextDevice {
                 return;
             }
             drawn.push(stand_in);
+            vertical.push(false);
         }
-        let Some(glyph) = merge(&drawn, text.clone()) else {
+        let Some(glyph) = merge(&drawn, &vertical, text.clone()) else {
             self.glyphs.extend(drawn.into_iter().filter(|d| !d.2.text.chars().all(char::is_control)));
             return;
         };
@@ -391,7 +482,7 @@ impl TextDevice {
             #[cfg(test)]
             REDRAW_TEXT_BYTES.with(|c| c.set(c.get() + text.len()));
             if !text.chars().all(char::is_control) {
-                match merge(run, text) {
+                match merge(run, &[], text) {
                     Some(glyph) => self.glyphs.push(glyph),
                     None => self.glyphs.extend_from_slice(run),
                 }
@@ -507,7 +598,8 @@ impl<'a> Device<'a> for TextDevice {
         };
         // The baseline direction in view space (y down).
         let coefficients = t.as_coeffs();
-        let (dx, dy) = if matches!(glyph, Glyph::Outline(g) if g.is_vertical()) {
+        let upright = matches!(glyph, Glyph::Outline(g) if g.is_vertical());
+        let (dx, dy) = if upright {
             // PDF vertical fonts advance along negative glyph-space y (WMode 1), while
             // keeping the glyph outline upright. Its x axis is not the writing direction.
             (-coefficients[2], -coefficients[3])
@@ -545,7 +637,10 @@ impl<'a> Device<'a> for TextDevice {
             direction: direction.map(|d| d as f32),
         };
         match &mut self.actual {
-            Some((_, _, drawn)) => drawn.push((dir, direction, glyph)),
+            Some((_, _, drawn, vertical)) => {
+                drawn.push((dir, direction, glyph));
+                vertical.push(upright);
+            }
             None => self.glyphs.push((dir, direction, glyph)),
         }
     }
@@ -576,11 +671,11 @@ impl<'a> Device<'a> for TextDevice {
     fn actual_text(&mut self, text: &[u8]) {
         // A replacement nested in another is already covered by the outer one.
         if self.actual.is_none() && self.excluded_depth.is_none() {
-            self.actual = Some((self.depth, pdfcraft_cos::PdfString::literal(text).to_text(), Vec::new()));
+            self.actual = Some((self.depth, pdfcraft_cos::PdfString::literal(text).to_text(), Vec::new(), Vec::new()));
         }
     }
     fn end_marked_content(&mut self) {
-        if self.actual.as_ref().is_some_and(|(depth, _, _)| *depth == self.depth) {
+        if self.actual.as_ref().is_some_and(|(depth, _, _, _)| *depth == self.depth) {
             self.end_actual_text();
         }
         if self.excluded_depth == Some(self.depth) {
