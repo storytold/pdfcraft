@@ -187,6 +187,7 @@ impl Ocr {
         let source = ocrs::ImageSource::from_bytes(&rgb, (width, height)).map_err(|e| err(&e))?;
         let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
         let found = self.detect_words(&rgb, width, height, &input)?;
+        let input = self.without_rules(&rgb, width, height, &found)?.unwrap_or(input);
         let mut lines = self.engine.find_text_lines(&input, &found);
         let before: Vec<Option<RectF>> = lines.iter_mut().map(|l| pad_line(l)).collect();
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
@@ -207,6 +208,23 @@ impl Ocr {
             })
             .filter(|l| !l.words.is_empty())
             .collect())
+    }
+
+    /// The page without its ruled lines, prepared again, or `None` when it has no rules (or
+    /// no words): a rule touching a word is read as a letter otherwise (`crate::rules`). The
+    /// rules are measured against the median height of the words found, and the words are
+    /// read again from this input in the boxes already found: finding them again would cost
+    /// a second detection, three to eight seconds on a drawing, for boxes that differ little.
+    fn without_rules(&self, rgb: &[u8], width: u32, height: u32, found: &[RotatedRect]) -> Result<Option<ocrs::OcrInput>, OcrError> {
+        let mut heights: Vec<f32> = found.iter().map(RotatedRect::height).filter(|h| h.is_finite() && *h > 0.0).collect();
+        heights.sort_by(f32::total_cmp);
+        let Some(&word_height) = heights.get(heights.len() / 2) else { return Ok(None) };
+        let area = (width as usize).checked_mul(height as usize).filter(|&a| a > 0);
+        let channels = area.and_then(|a| rgb.len().is_multiple_of(a).then(|| rgb.len() / a)).unwrap_or(0);
+        let Some(clean) = crate::rules::erase_rules(rgb, width, height, channels, word_height) else { return Ok(None) };
+        let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
+        let source = ocrs::ImageSource::from_bytes(&clean, (width, height)).map_err(|e| err(&e))?;
+        Ok(Some(self.engine.prepare_input(source).map_err(|e| err(&e))?))
     }
 
     /// The words in a page, `rgb` (1 or 3 bytes per pixel) prepared as `page`. A page at least
@@ -349,6 +367,39 @@ mod tests {
         assert_eq!(checked_len(2, 2).unwrap(), 16);
         // Exactly the area cap fits: 8000 × 8000 = 64 MP.
         assert_eq!(checked_len(8000, 8000).unwrap(), 8000usize * 8000 * 4);
+    }
+
+    /// Words in a table cell read as the words alone: the cell's rules are erased, measured
+    /// against the words found, before the words are read again. With the rules in
+    /// the image the models read, the word beside the cell's left rule loses or doubles its
+    /// first letter (`ELLO`, `HHELLO`; the issue's `DDATE`) and the cell's corner can read as
+    /// a word of its own (`T`). The blocky letters' `D` reads `O` with or without the rules,
+    /// so only the first word's text is claimed. Needs the models.
+    #[test]
+    fn a_rule_beside_a_word_is_not_read_as_a_letter() {
+        let Some(models) = Models::find() else {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        };
+        let ocr = Ocr::load(&models).unwrap();
+        let (w, h, dot) = (344u32, 160u32, 4u32);
+        let (x0, y0) = (40u32, 66u32);
+        let mut px = crate::tests::test_image::hello_on(w, h, dot, &[(x0, y0)]);
+        // A cell around the words: 5 px rules, the left one a pixel clear of the H.
+        let mut fill = |x: u32, y: u32, fw: u32, fh: u32| {
+            for yy in y..y + fh {
+                for xx in x..x + fw {
+                    px[((yy * w + xx) * 4) as usize..((yy * w + xx) * 4 + 3) as usize].fill(0);
+                }
+            }
+        };
+        fill(x0 - 6, 10, 5, h - 20);
+        fill(w - 15, 10, 5, h - 20);
+        fill(x0 - 6, 10, w - 4 - x0, 5);
+        fill(x0 - 6, h - 15, w - 4 - x0, 5);
+        let words: Vec<String> = ocr.recognize(&px, w, h).unwrap().iter().flat_map(|l| l.words.iter().map(|w| w.text.clone())).collect();
+        assert_eq!(words.len(), 2, "{words:?}");
+        assert_eq!(words.first().map(String::as_str), Some("HELLO"), "{words:?}");
     }
 
     /// The current ONNX pair wins when an installation also retains both legacy models.

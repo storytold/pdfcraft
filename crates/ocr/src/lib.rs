@@ -25,6 +25,7 @@ pub mod merge;
 mod ocrs;
 mod pitch;
 pub mod preprocess;
+mod rules;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tesseract;
 mod tiles;
@@ -1025,7 +1026,7 @@ mod tests {
         }
     }
 
-    mod test_image {
+    pub(crate) mod test_image {
         /// "HELLO WORLD" drawn with blocky 5×7 letters, 4 pixels per dot, black on white.
         pub fn hello() -> (u32, u32, Vec<u8>) {
             let (dot, x0, y0) = (4u32, 40u32, 40u32);

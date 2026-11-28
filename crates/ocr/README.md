@@ -54,6 +54,13 @@ let layer = visible_text_layer(&placed, &plan);          // visible text: the ed
   appended under their engine's name. A merge is capped at 100 M word-pair comparisons (over
   it, the primary reading stands alone), and a failing partner degrades to the primary with a
   recorded note — a page is never skipped because a partner could not read it.
+- **Ruled lines are erased before the words are read.** A table rule touching a word was
+  boxed with it and read as a letter (`|DATE`, `IDATE`, `DDATE`). Once the detector has found
+  the words, a run of ink across or down the page at least three times the median word height
+  long and no thicker than six tenths of it (`rules`) takes the paper grey beside it, and the
+  words are read again from that copy in the boxes found; a stroke crossing a rule keeps its ink, a
+  junction goes, filled areas and dashes stay, and a page without rules is read as it is. The
+  page itself is untouched.
 - **Preprocessing between the raster and recognition**, a pure function in fixed order: DPI
   normalization to 300 (only when one of the steps below is on, since they are calibrated for
   it; with all of them off the raster is read exactly as rendered, and a scan at or above 300
