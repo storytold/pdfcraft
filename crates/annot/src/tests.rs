@@ -5409,6 +5409,47 @@ fn a_stroke_that_reaches_onto_the_page_from_points_off_it_widens_the_box() {
     assert_eq!(nums_of(&shown[0], b"Rect"), [10.0, 10.0, 203.0, 400.0]);
 }
 
+/// A callout's leader line (`/CL`, ISO 32000-2 Table 177) outside its `/Rect` is drawn: the
+/// display copy's `/Rect` and `/BBox` take in the line and its arrow, and `/RD` grows with them
+/// so the text box stays where it was. A text box or typewriter text that carries a `/CL`
+/// ("meaningful only if IT is FreeTextCallout") draws no leader line and keeps its `/Rect`. A
+/// restyle saves the wider `/Rect` and `/RD`, and drawing it again changes neither.
+#[test]
+fn a_callout_line_past_its_rect_is_drawn_and_the_text_box_keeps_its_place() {
+    let callout: &[u8] = b"<< /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [100 100 250 200] /RD [5 30 5 10] /CL [20 280 60 240 100 150] /LE /OpenArrow /BS << /W 2 >> /C [1 1 0] /DA (0 g /Helv 10 Tf) /Contents (callout) >>";
+    let (doc, display) = displayed(&[
+        callout,
+        b"<< /Type /Annot /Subtype /FreeText /IT /FreeTextTypeWriter /Rect [100 300 250 400] /CL [50 50 300 600] /LE /OpenArrow /DA (0 g /Helv 10 Tf) /Contents (typed) >>",
+    ]);
+    let shown = list(&display, 0);
+    // Half the width (1) and the arrow (6 + 3 × 2) past the line's top-left point (20, 280).
+    assert_eq!(nums_of(&shown[0], b"Rect"), [7.0, 100.0, 250.0, 293.0], "the callout's /Rect takes in its line");
+    assert_eq!(ap_bbox(&display, &shown[0]), nums_of(&shown[0], b"Rect"));
+    assert_eq!(nums_of(&shown[0], b"RD"), [98.0, 30.0, 5.0, 103.0], "/RD grows by what /Rect grew");
+    let content = ap_content(&display, &shown[0]);
+    assert!(content.contains("20 280 m\n60 240 l\n100 150 l\nS"), "the leader line: {content}");
+    assert!(content.contains("1 1 0 rg\n105 130 140 60 re f"), "the text box is where /Rect less /RD put it: {content}");
+    assert_eq!(nums_of(&list(&doc, 0)[0], b"Rect"), [100.0, 100.0, 250.0, 200.0], "the source document is unchanged");
+    assert_eq!(nums_of(&shown[1], b"Rect"), [100.0, 300.0, 250.0, 400.0], "typewriter text keeps its /Rect");
+    let typed = ap_content(&display, &shown[1]);
+    assert!(!typed.contains("50 50 m"), "and draws no leader line: {typed}");
+
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        callout,
+    ]);
+    for _ in 0..2 {
+        set_style(&mut doc, 0, 0, StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("")).unwrap();
+        let saved = reopen(&doc);
+        let shown = list(&saved, 0);
+        assert_eq!(nums_of(&shown[0], b"Rect"), [7.0, 100.0, 250.0, 293.0], "the saved /Rect takes in the line");
+        assert_eq!(nums_of(&shown[0], b"RD"), [98.0, 30.0, 5.0, 103.0], "and the saved /RD keeps the text box");
+        assert_eq!(ap_bbox(&saved, &shown[0]), nums_of(&shown[0], b"Rect"));
+    }
+}
+
 /// A cached display appearance was drawn for its page's crop box: once the crop box grows, the
 /// next refresh draws the annotation again for the larger region.
 #[test]

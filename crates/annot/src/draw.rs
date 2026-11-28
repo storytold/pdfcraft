@@ -255,9 +255,11 @@ struct Built {
     missing: Option<char>,
     /// A note's or attachment's `/Rect`, as written.
     rect: Option<Vec<f64>>,
-    /// Points (/QuadPoints, /L, /Vertices, /InkList) past /Rect: its appearance covers them, so
-    /// /Rect does too.
+    /// Points (/QuadPoints, /L, /Vertices, /InkList, a callout's /CL) past /Rect: its appearance
+    /// covers them, so /Rect does too.
     markup_rect: Option<[f64; 4]>,
+    /// A callout's /RD for that wider /Rect, so its text box stays where it was.
+    callout_rd: Option<[f64; 4]>,
 }
 
 impl Built {
@@ -266,8 +268,13 @@ impl Built {
         let rect = matches!(direct.name(b"Subtype"), Some(b"Text" | b"FileAttachment"))
             .then(|| direct.get(b"Rect")?.as_array()?.iter().map(|o| o.as_f64()).collect::<Option<Vec<f64>>>())
             .flatten();
-        let markup_rect = appearance::widened_rect(direct, &stream);
-        Built { stream, missing, rect, markup_rect }
+        let mut markup_rect = appearance::widened_rect(direct, &stream);
+        let callout_rd = markup_rect.and_then(|r| appearance::widened_rd(direct, r));
+        // A callout's /Rect grows only with its /RD, or its text box would move.
+        if direct.name(b"Subtype") == Some(b"FreeText") && callout_rd.is_none() {
+            markup_rect = None;
+        }
+        Built { stream, missing, rect, markup_rect, callout_rd }
     }
 }
 
@@ -275,7 +282,7 @@ impl Built {
 fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, built: Built) -> Result<(), AnnotError> {
     // `missing`: characters the standard fonts can't draw came out as `?`; the annotation is
     // marked with the first.
-    let Built { mut stream, missing, rect, markup_rect } = built;
+    let Built { mut stream, missing, rect, markup_rect, callout_rd } = built;
     // A text box's Thai glyphs are streams of their own.
     pdfcraft_fonts::shaped_text::store_streams(doc, &mut stream.dict);
     let ap = doc.add(Object::Stream(stream));
@@ -296,6 +303,9 @@ fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, built: Built) -> Re
         d.set(b"AP".to_vec(), Object::Dict(apd));
         if let Some(rect) = icon_rect.or(markup_rect) {
             d.set(b"Rect".to_vec(), num_array(&rect));
+        }
+        if let Some(rd) = callout_rd {
+            d.set(b"RD".to_vec(), num_array(&rd));
         }
         d.remove(b"AS");
         pdfcraft_fonts::set_undrawn_mark(d, missing);
