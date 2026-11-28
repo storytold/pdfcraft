@@ -1738,8 +1738,123 @@ fn only_fonts_something_draws_with_must_be_embedded() {
     assert_eq!(fonts(&form("/Font << /Helv 4 0 R >>")), ["The font Helvetica isn't embedded"]);
     // Named through a reference to it, it is still the font something draws with.
     assert_eq!(fonts(&form("/Font << /Helv 8 0 R >>")), ["The font Helvetica isn't embedded"]);
+    // Inline font dictionaries in an undrawn appearance stream (no `Tf`) do not require embedding.
+    let inline = "/Font << /PCFHelvetica << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> /PCFHelveticaBold << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >> >>";
+    assert!(fonts(&form(inline)).is_empty(), "{:?}", fonts(&form(inline)));
+    // Inline font dictionaries in `/Resources /Font` (such as `/PCFHelvetica` and `/PCFHelveticaBold`
+    // added by `page_add_text`) ARE checked once selected by `Tf` (#6843).
+    let drawn_form = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << >> /Annots [4 0 R] >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /F 4 /Rect [10 10 90 30] /P 3 0 R /AP << /N 5 0 R >> >>",
+            &format!(
+                "<< /Type /XObject /Subtype /Form /BBox [0 0 80 20] /Resources << {inline} >> /Length 49 >>\nstream\nBT /PCFHelvetica 12 Tf /PCFHelveticaBold 10 Tf ET\nendstream"
+            ),
+        ],
+        "",
+    );
+    assert_eq!(fonts(&drawn_form), ["The font Helvetica isn't embedded", "The font Helvetica-Bold isn't embedded"]);
     // A page's own font is checked as before.
     assert_eq!(fonts(&messy()), ["The font Helvetica isn't embedded"]);
+}
+
+/// Regression tests for direct `/Resources /Font` entries (#6843 & veraPDF parity):
+/// unused fonts (such as `/PCHelv` added after redaction or `/Helv` in an empty `/BBox [0 0 0 0]`
+/// invisible signature appearance) are skipped, while fonts drawn via `Tf` across pages, inherited
+/// resources, indirect/multi-hop resource chains, `/AP` state dicts, reachable (and cyclic) Form
+/// XObjects, Tiling Patterns, and Type 3 glyph streams are flagged once.
+#[test]
+fn direct_resource_fonts_must_be_selected_by_tf() {
+    let fonts =
+        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect() };
+
+    // 1. Redaction leaves unused `/PCHelv` on the page while drawing vector graphics only.
+    let redacted = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /PCHelv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >> >> >>",
+            "<< /Length 14 >>\nstream\n0 0 10 10 re f\nendstream",
+        ],
+        "",
+    );
+    assert!(fonts(&redacted).is_empty(), "{:?}", fonts(&redacted));
+
+    // 2. Invisible signature with empty `/AP /N` (`/BBox [0 0 0 0]`) listing direct `/Helv`.
+    let invisible_sig = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << >> /Annots [4 0 R] >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Sig1) /Rect [0 0 0 0] /P 3 0 R /AP << /N 5 0 R >> >>",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 0 0] /Resources << /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Length 0 >>\nstream\n\nendstream",
+        ],
+        "",
+    );
+    assert!(fonts(&invisible_sig).is_empty(), "{:?}", fonts(&invisible_sig));
+
+    // 3. Appearance state dictionary (`/AP /N << /Yes ... /Off ... >>`) draws direct `/Helv` in `/Yes`.
+    let drawn_ap_state = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << >> /Annots [4 0 R] >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Sig1) /Rect [10 10 80 30] /P 3 0 R /AP << /N << /Off 5 0 R /Yes 6 0 R >> >> >>",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 70 20] /Resources << /Font << /Unused << /Type /Font /Subtype /Type1 /BaseFont /Courier >> >> >> /Length 0 >>\nstream\n\nendstream",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 70 20] /Resources << /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Length 28 >>\nstream\nBT /Helv 12 Tf (Signed) Tj ET\nendstream",
+        ],
+        "",
+    );
+    assert_eq!(fonts(&drawn_ap_state), ["The font Helvetica isn't embedded"]);
+
+    // 4. Inherited `/Pages` `/Resources`, multi-hop indirect `/Resources` & `/Font` dicts, `/Contents` array,
+    // repeated `Tf` calls deduplicated, and unused sibling font skipped.
+    let inherited_chain = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] /Resources 5 0 R >>",
+            "<< /Type /Page /Parent 2 0 R /Contents [4 0 R] >>",
+            "<< /Length 36 >>\nstream\nBT /F1 12 Tf /F1 10 Tf (Hi) Tj ET\nendstream",
+            "6 0 R",
+            "<< /Font 7 0 R >>",
+            "8 0 R",
+            "<< /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> /Unused << /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >> >>",
+        ],
+        "",
+    );
+    assert_eq!(fonts(&inherited_chain), ["The font Helvetica isn't embedded"]);
+
+    // 5. Reachable cyclic Form XObject (`/Fm0 Do`) plus Form XObject omitting `/Resources` (inherits page's),
+    // while an undrawn Form XObject (`/Idle`) is ignored.
+    let xobject_graph = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /Inherited << /Type /Font /Subtype /Type1 /BaseFont /Courier >> >> /XObject << /Fm0 5 0 R /NoRes 6 0 R /Idle 7 0 R >> >> >>",
+            "<< /Length 16 >>\nstream\n/Fm0 Do /NoRes Do\nendstream",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Resources << /Font << /FmFont << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> /XObject << /Self 5 0 R >> >> /Length 27 >>\nstream\n/Self Do BT /FmFont 10 Tf ET\nendstream",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Length 22 >>\nstream\nBT /Inherited 10 Tf ET\nendstream",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Resources << /Font << /Never << /Type /Font /Subtype /Type1 /BaseFont /Symbol >> >> >> /Length 18 >>\nstream\nBT /Never 10 Tf ET\nendstream",
+        ],
+        "",
+    );
+    assert_eq!(fonts(&xobject_graph), ["The font Helvetica isn't embedded", "The font Courier isn't embedded"]);
+
+    // 6. Tiling pattern (`/PatternType 1`) and direct Type 3 font `/CharProcs` selecting direct fonts.
+    let pattern_and_type3 = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /T3 << /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 6 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [500] /Resources << /Font << /SubT3 << /Type /Font /Subtype /Type1 /BaseFont /Courier >> >> >> >> >> /Pattern << /P0 5 0 R >> >> >>",
+            "<< /Length 38 >>\nstream\n/Pattern cs /P0 scn BT /T3 12 Tf (a) Tj ET\nendstream",
+            "<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << /Font << /PatF << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Length 17 >>\nstream\nBT /PatF 10 Tf ET\nendstream",
+            "<< /Length 28 >>\nstream\n10 0 0 0 10 10 d1 BT /SubT3 10 Tf ET\nendstream",
+        ],
+        "",
+    );
+    assert_eq!(fonts(&pattern_and_type3), ["The font Courier isn't embedded", "The font Helvetica isn't embedded"]);
 }
 
 /// PDF/A-2 6.1.2: the file starts with `%PDF-1.0` to `%PDF-1.7` and an end-of-line marker, then a
