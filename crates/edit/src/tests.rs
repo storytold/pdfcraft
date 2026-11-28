@@ -9,6 +9,12 @@ mod mark_transactions;
 #[path = "paragraph_grouping_tests.rs"]
 mod paragraph_grouping;
 
+#[path = "mixed_text_tests.rs"]
+mod mixed_text;
+
+#[path = "korean_text_tests.rs"]
+mod korean_text;
+
 /// Three pages: an upright page with content that leaves the graphics state changed (an
 /// unbalanced `cm`), a page rotated 90° and one with inherited, shared resources.
 fn fixture() -> Document {
@@ -6809,6 +6815,117 @@ fn ungrouping_form_artwork_makes_its_text_editable() {
     assert_eq!(depth, 0, "the unclosed q inside the form is closed");
 }
 
+/// Hangul is drawn with the Korean face from craft-fonts (NanumGothic), and so are the Latin
+/// letters and digits on its line; the Japanese faces have no Hangul, so it used to be refused.
+/// A build without the Korean face says so and changes nothing.
+#[test]
+fn korean_replacement_uses_the_korean_face() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let before = page_content_bytes(&doc, 0);
+    // Syllables, a compatibility jamo, Latin, digits and punctuation on one line.
+    let typed = "한글 편집 ㅋ 2026 (PDF), 가나다!";
+    let line = text::replace_line(&mut doc, 0, 0, typed);
+    if pdfcraft_fonts::document_korean_font().is_none() {
+        let Err(EditError::Invalid(msg)) = line else { panic!("expected a clear error, got {line:?}") };
+        assert!(msg.contains("Korean fallback font") && msg.contains("CRAFT_FONTS_DIR"), "{msg}");
+        assert_eq!(page_content_bytes(&doc, 0), before);
+        eprintln!("built without a craft-fonts Korean face: the Type 3 path is checked with CRAFT_FONTS_DIR");
+        return;
+    }
+    assert_eq!(line.unwrap().substituted.as_deref(), Some("NanumGothic Type3"));
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/PCKo") && !content.contains("/PCJp"), "{content}");
+    let reopened = reopen(&doc);
+    assert_eq!(text::text_lines(&reopened, 0).unwrap()[0].text, typed);
+    // One outlined glyph per distinct character, in a font recognized as ours.
+    let p = pdfcraft_model::pages(&reopened).swap_remove(0);
+    let res = reopened.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = reopened.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let font = reopened.resolve(fonts.as_dict().unwrap().get(b"PCKo").unwrap());
+    assert_eq!(font.as_dict().unwrap().name(b"Name"), Some(&b"PCKorean"[..]));
+    let procs = reopened.resolve(font.as_dict().unwrap().get(b"CharProcs").unwrap());
+    let procs = procs.as_dict().unwrap();
+    assert_eq!(procs.iter().count(), typed.chars().collect::<std::collections::HashSet<_>>().len());
+    // Every character that has ink is drawn with a path, not an empty box.
+    let mut outlined = 0;
+    for (_, glyph) in procs.iter() {
+        let pdfcraft_cos::Object::Stream(s) = &*reopened.resolve(glyph) else { panic!("glyph stream") };
+        let path = String::from_utf8(s.decoded().unwrap()).unwrap();
+        assert!(path.starts_with(|c: char| c.is_ascii_digit()) && path.contains(" d1"), "{path}");
+        outlined += usize::from(path.contains(" m\n"));
+    }
+    let inked = typed.chars().filter(|c| !c.is_whitespace()).collect::<std::collections::HashSet<_>>().len();
+    assert_eq!(outlined, inked);
+
+    // A whole paragraph too, then an edit of the edited line.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "문단 전체를 한글로").unwrap().substituted.as_deref(), Some("NanumGothic Type3"));
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].text, "문단 전체를 한글로");
+    text::replace_line(&mut doc, 0, 0, "다시 고침").unwrap();
+    assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].text, "다시 고침");
+
+    // Hanja the Korean face lacks come from the Japanese faces, into the same Korean font. 働 is a
+    // Japanese-made character, outside the Korean character sets the Korean face covers.
+    let korean = pdfcraft_fonts::document_korean_font().unwrap();
+    if pdfcraft_fonts::japanese_glyph_from(korean, '働').is_ok() || pdfcraft_fonts::document_japanese_font().is_none() {
+        eprintln!("the Korean face has 働, or there is no Japanese face: the Hanja fallback isn't exercised");
+    } else {
+        let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+        text::replace_line(&mut doc, 0, 0, "노동 勞動 働").unwrap();
+        let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        assert!(content.contains("/PCKo") && !content.contains("/PCJp"), "{content}");
+        assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].text, "노동 勞動 働");
+    }
+}
+
+/// Hangul pasted as conjoining jamo (NFD, as macOS file names have it) is composed into
+/// syllables before it is drawn, one glyph per syllable, and style ranges given in the typed text
+/// still land on the characters they were given for.
+#[test]
+fn decomposed_korean_is_written_as_syllables() {
+    if pdfcraft_fonts::document_korean_font().is_none() {
+        eprintln!("built without a craft-fonts Korean face: the Type 3 path is checked with CRAFT_FONTS_DIR");
+        return;
+    }
+    let nfd = "\u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF} 2026";
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, nfd).unwrap();
+    let reopened = reopen(&doc);
+    assert_eq!(text::text_lines(&reopened, 0).unwrap()[0].text, "한글 2026");
+    let p = pdfcraft_model::pages(&reopened).swap_remove(0);
+    let res = reopened.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = reopened.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let font = reopened.resolve(fonts.as_dict().unwrap().get(b"PCKo").unwrap());
+    let procs = reopened.resolve(font.as_dict().unwrap().get(b"CharProcs").unwrap());
+    // 한, 글, space, 2, 0, 6: no glyph for a lone jamo.
+    assert_eq!(procs.as_dict().unwrap().iter().count(), 6);
+
+    // A styled paragraph: the range is given in the decomposed text and styles "CD" after it.
+    let typed = "AB \u{1112}\u{1161}\u{11AB} CD";
+    let cd = typed.find("CD").unwrap();
+    let style = BlockStyle {
+        ranges: vec![RangeStyle {
+            range: cd..cd + 2,
+            family: None,
+            resource: None,
+            size: Some(18.0),
+            color: None,
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some(typed), &style).unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/PCKo"), "{content}");
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>().replace(' ', ""), "AB한CD", "{lines:?}");
+    assert!(lines.iter().any(|l| l.text.trim() == "CD" && l.size == 18.0), "{lines:?}");
+    assert!(lines.iter().all(|l| !l.text.contains("CD") || l.size == 18.0), "{lines:?}");
+}
+
 /// Ungroup refuses what would draw differently inline: knockout groups, transparency groups that
 /// blend inside or are drawn translucent, and forms whose content restores more states than it
 /// saves. Plain groups drawn opaque, and translucency that a later `gs` turns off, are fine.
@@ -8085,9 +8202,9 @@ fn thai_headers_footers_and_watermarks_are_drawn_from_the_thai_face() {
 fn page_text_the_standard_fonts_cant_draw_is_refused() {
     let mut doc = fixture();
     let before: Vec<Vec<String>> = (0..3).map(|p| streams(&reopen(&doc), p)).collect();
-    let text = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "日本語のテキスト".into(), ..AddedText::default() };
+    let text = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Unwritable \u{10ffff}".into(), ..AddedText::default() };
     let err = add_content(&mut doc, 0, &Content::Text(text)).unwrap_err().to_string();
-    assert!(err.contains("\"日\" (U+65E5)"), "{err}");
+    assert!(err.contains("U+10FFFF"), "{err}");
     let hf = HeaderFooter {
         text: ["Ελληνικά".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
         ..HeaderFooter::default()
@@ -8102,8 +8219,8 @@ fn page_text_the_standard_fonts_cant_draw_is_refused() {
     add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
     // Retyping existing text is refused the same way, and the whole document is left as it was.
     let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
-    let retyped = AddedText { text: "Café 中".into(), ..text.clone() };
-    assert!(update_content(&mut doc, 0, 0, &Content::Text(retyped)).unwrap_err().to_string().contains("U+4E2D"));
+    let retyped = AddedText { text: "Café \u{10ffff}".into(), ..text.clone() };
+    assert!(update_content(&mut doc, 0, 0, &Content::Text(retyped)).unwrap_err().to_string().contains("U+10FFFF"));
     assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), saved, "a refused update changes nothing");
     // A carriage return is checked where it would be drawn: added text splits on LF only, so
     // CRLF would leave a `?`; headers and watermarks split CRLF into lines, but not a lone CR.
@@ -8120,13 +8237,13 @@ fn page_text_the_standard_fonts_cant_draw_is_refused() {
     let arabic = |text: &str| AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: text.into(), ..AddedText::default() };
     // U+061C is in the Arabic block but is a direction mark that's dropped, not shaped: it never
     // makes text drawable, nor (with the face) undrawable.
-    assert!(add_content(&mut doc, 0, &Content::Text(arabic("\u{061C}中"))).is_err());
+    assert!(add_content(&mut doc, 0, &Content::Text(arabic("\u{061C}\u{10ffff}"))).is_err());
     if pdfcraft_fonts::arabic_has('م') {
         add_content(&mut doc, 0, &Content::Text(arabic("مرحبا Hello"))).unwrap();
         add_content(&mut doc, 0, &Content::Text(arabic("\u{061C}Hello"))).unwrap();
-        for text in ["مرحبا 中", "\u{061C}中"] {
+        for text in ["مرحبا \u{10ffff}", "\u{061C}\u{10ffff}"] {
             let err = add_content(&mut doc, 0, &Content::Text(arabic(text))).unwrap_err().to_string();
-            assert!(err.contains("U+4E2D"), "{text:?}: {err}");
+            assert!(err.contains("U+10FFFF"), "{text:?}: {err}");
         }
     } else {
         // #403's own refusal says what's missing; the Add-text editor still keeps the draft.
@@ -8137,8 +8254,8 @@ fn page_text_the_standard_fonts_cant_draw_is_refused() {
         // the standard font would write as `?`.
         let n = list_added(&doc).iter().filter(|a| a.page == 0).count();
         add_content(&mut doc, 0, &Content::Text(arabic("x"))).unwrap();
-        let err = update_content(&mut doc, 0, n, &Content::Text(arabic("ب中"))).unwrap_err().to_string();
-        assert!(err.contains("U+4E2D"), "{err}");
+        let err = update_content(&mut doc, 0, n, &Content::Text(arabic("ب\u{10ffff}"))).unwrap_err().to_string();
+        assert!(err.contains("U+10FFFF"), "{err}");
         update_content(&mut doc, 0, n, &Content::Text(arabic("ب"))).unwrap();
     }
 }
@@ -8630,7 +8747,7 @@ fn added_thai_text_wraps_clusters_and_survives_reopen() {
     assert_eq!(super::added::lines(&narrow), ["กิ่", "กิ่", "กิ่"]);
     update_content(&mut doc, 0, 0, &Content::Text(AddedText { text: "แก้ไข น้ำ".into(), ..t.clone() })).unwrap();
     assert!(!own(&doc, 0).is_empty());
-    let bad = Content::Text(AddedText { text: "ไทย 日".into(), ..t });
+    let bad = Content::Text(AddedText { text: "ไทย \u{10ffff}".into(), ..t });
     let before = list_added(&doc);
     assert!(update_content(&mut doc, 0, 0, &bad).is_err());
     assert_eq!(list_added(&doc), before);

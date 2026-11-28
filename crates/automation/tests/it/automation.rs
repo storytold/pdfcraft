@@ -7,6 +7,9 @@ use pdfcraft_automation::mcp::McpServer;
 use pdfcraft_automation::{Automation, Content, ToolError, tools};
 use serde_json::{Value, json};
 
+#[path = "mixed_text.rs"]
+mod mixed_text;
+
 fn encode_png(w: u32, h: u32, layout: craft_image_codecs::ChannelLayout, data: Vec<u8>) -> Vec<u8> {
     let img = craft_image_codecs::Image::from_u8(w, h, layout, data).unwrap();
     craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
@@ -5688,9 +5691,16 @@ fn creating_from_text_refuses_what_the_font_cannot_draw() {
     // WinAnsi characters, line breaks and tabs are still fine.
     let d = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Price: 5 € at café\r\n\tnext\u{c}page two" }))["doc"].as_u64().unwrap();
     assert_eq!(page_text(&mut a, d).len(), 2);
-    // #959: page_add_text refuses it too.
+    // #959: page_add_text refuses it too when no face can draw it. A build with the craft-fonts
+    // Korean face draws Hangul instead (#7675).
     let doc = ok(&mut a, "doc_create", json!({ "from": "blank" }))["doc"].as_u64().unwrap();
-    refused(a.call("page_add_text", &json!({ "doc": doc, "page": 1, "text": "ABC 제안서 시험", "at": [20, 20] })));
+    let added = a.call("page_add_text", &json!({ "doc": doc, "page": 1, "text": "ABC 제안서 시험", "at": [20, 20] }));
+    if pdfcraft_fonts::document_korean_font().is_some() {
+        assert!(added.is_ok(), "{added:?}");
+        assert!(page_text(&mut a, doc).concat().contains("제안서"));
+    } else {
+        refused(added);
+    }
 }
 
 #[test]
