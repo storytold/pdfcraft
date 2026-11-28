@@ -4,7 +4,7 @@
 //! → crop) and are clipped to the media box. Margins are measured inward from the media box in
 //! default user space (unrotated), as Acrobat's dialog does.
 
-use pdfcraft_cos::{Document, Object};
+use pdfcraft_cos::{Dict, Document, Object};
 
 use crate::{OrganizeError, check, walk};
 
@@ -84,13 +84,17 @@ pub fn page_boxes(doc: &Document) -> Result<Vec<[[f64; 4]; 5]>, OrganizeError> {
         .map(|(page, inherited)| {
             let obj = doc.get(*page);
             let d = obj.as_dict().cloned().unwrap_or_default();
-            let own = |k: &[u8]| rect_of(d.get(k).or_else(|| inherited.get(k)), doc);
-            let media = own(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
-            let crop = own(b"CropBox").and_then(|c| clip(c, media)).unwrap_or(media);
-            let child = |k: &[u8]| rect_of(d.get(k), doc).and_then(|c| clip(c, media)).unwrap_or(crop);
-            [media, crop, child(b"BleedBox"), child(b"TrimBox"), child(b"ArtBox")]
+            effective_boxes(doc, &d, inherited)
         })
         .collect())
+}
+
+pub(crate) fn effective_boxes(doc: &Document, page: &Dict, inherited: &Dict) -> [[f64; 4]; 5] {
+    let own = |k: &[u8]| rect_of(page.get(k).or_else(|| inherited.get(k)), doc);
+    let media = own(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
+    let crop = own(b"CropBox").and_then(|c| clip(c, media)).unwrap_or(media);
+    let child = |k: &[u8]| rect_of(page.get(k), doc).and_then(|c| clip(c, media)).unwrap_or(crop);
+    [media, crop, child(b"BleedBox"), child(b"TrimBox"), child(b"ArtBox")]
 }
 
 /// Set a box on `pages` (0-based). Margins apply to each page's own media box.

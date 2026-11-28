@@ -54,12 +54,12 @@ fn fields(s: &Session, id: DocId) -> Vec<String> {
 #[test]
 fn a_script_shows_a_template_as_one_undo_step() {
     let (mut s, id) = open();
-    let names: Vec<(String, bool)> = s.get(id).unwrap().templates().into_iter().map(|t| (t.name, t.hidden)).collect();
+    let names: Vec<(String, bool)> = s.get(id).unwrap().page_templates().into_iter().map(|t| (t.name, t.hidden)).collect();
     assert_eq!(names, [("More".to_string(), true)]);
     let o = s.run_javascript(id, "console.println(this.templates.length); getTemplate('More').hidden = false;", None).unwrap();
     assert_eq!((o.error, o.console), (None, vec!["1".to_string()]));
     assert_eq!(pages(&s, id), 2, "the template's page is shown");
-    assert!(!s.get(id).unwrap().templates()[0].hidden);
+    assert!(!s.get(id).unwrap().page_templates()[0].hidden);
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
     s.undo(id).unwrap();
     assert_eq!(pages(&s, id), 1, "one undo takes it out again");

@@ -1,7 +1,7 @@
 use super::host::{
     FieldKey, arg, charge, colour, error, function, host, kind_of, read, s, strings, text, text_bytes, text_line, value_for, value_of, write,
 };
-use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, Request};
+use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, PrintDuplex, PrintSettings, Request};
 use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
 
 macro_rules! getter {
@@ -31,7 +31,7 @@ pub(crate) fn field_object_by_id(ctx: &mut Context, name: &str, id: Option<u64>)
     }
     let object = field_object_new(ctx, name, id, token);
     if let Ok(h) = host(ctx)
-        && h.borrow().field_keys.contains(&key)
+        && h.borrow().field_keys.contains_key(&key)
     {
         h.borrow_mut().objects.insert(key, object.clone());
     }
@@ -40,20 +40,54 @@ pub(crate) fn field_object_by_id(ctx: &mut Context, name: &str, id: Option<u64>)
 /// Construct live accessors whose identity survives host snapshot refreshes.
 fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) -> JsObject {
     let n = (JsString::from(name), id, token);
-    let value_get = getter!(ctx, n, |f, c| value_of(&f, c));
+    let value_get = function(
+        ctx,
+        NativeFunction::from_copy_closure_with_captures(
+            |_, _, key, ctx| match crate::selected_pdf::field_path(ctx, key) {
+                Some(path) => Ok(path),
+                None => Ok(value_of(&read(ctx, key)?, ctx)),
+            },
+            n.clone(),
+        ),
+    );
+    let default_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
+            let values = value_for(kind_of(c, name)?, strings(&arg(args, 0), c)?);
+            charge(c, name, |f| text_bytes(&f.default), text_bytes(&values))?;
+            write(c, name, |f| {
+                f.default = values;
+                f.default_known = true;
+            })?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
     let value_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let vals = value_for(kind_of(c, name)?, strings(&arg(args, 0), c)?);
             charge(c, name, |f| text_bytes(&f.value), text_bytes(&vals))?;
+            crate::selected_pdf::clear_field_path(c, name);
             write(c, name, |f| f.value = vals)?;
             Ok(JsValue::undefined())
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
     };
-    let as_string = getter!(ctx, n, |f, _c| s(&match f.kind {
-        FieldType::CheckBox | FieldType::RadioButton => f.value.first().cloned().unwrap_or_else(|| "Off".into()),
-        _ => f.value.join(","),
-    }));
+    let as_string = function(
+        ctx,
+        NativeFunction::from_copy_closure_with_captures(
+            |_, _, key, ctx| {
+                if let Some(path) = crate::selected_pdf::field_path(ctx, key) {
+                    return Ok(path);
+                }
+                let f = read(ctx, key)?;
+                Ok(s(&match f.kind {
+                    FieldType::CheckBox | FieldType::RadioButton => f.value.first().cloned().unwrap_or_else(|| "Off".into()),
+                    _ => f.value.join(","),
+                }))
+            },
+            n.clone(),
+        ),
+    );
     let default = getter!(ctx, n, |f, _c| s(&f.default.first().cloned().unwrap_or_default()));
     let kind = getter!(ctx, n, |f, _c| s(f.kind.name()));
     let fname = getter!(ctx, n, |f, _c| s(&f.name));
@@ -79,7 +113,10 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let display_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let d = arg(args, 0).to_number(c)? as i32;
-            write(c, name, |f| f.display = d.clamp(0, 3))?;
+            write(c, name, |f| {
+                f.display_before_write.get_or_insert(f.display);
+                f.display = d.clamp(0, 3);
+            })?;
             Ok(JsValue::undefined())
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
@@ -88,7 +125,10 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let hidden_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let on = arg(args, 0).to_boolean();
-            write(c, name, |f| f.display = if on { DISPLAY_HIDDEN } else { DISPLAY_VISIBLE })?;
+            write(c, name, |f| {
+                f.display_before_write.get_or_insert(f.display);
+                f.display = if on { DISPLAY_HIDDEN } else { DISPLAY_VISIBLE };
+            })?;
             Ok(JsValue::undefined())
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
@@ -163,6 +203,21 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
     };
     let user_name_get = getter!(ctx, n, |f, c| s(&f.user_name));
+    let submit_name_get = getter!(ctx, n, |f, _c| s(&f.submit_name));
+    let submit_name_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
+            let v = crate::host::text_with_budget(&arg(args, 0), c, 1 << 20, "submitName is too long")?;
+            charge(c, name, |f| f.submit_name.len(), v.len())?;
+            write(c, name, |f| f.submit_name = v)?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
+    let pages_get = getter!(ctx, n, |f, c| if f.pages.len() == 1 {
+        JsValue::from(f.pages.first().copied().unwrap_or(-1))
+    } else {
+        JsArray::from_iter(f.pages.into_iter().map(JsValue::from), c).into()
+    });
     let user_name_set = {
         /// Bound the tooltip string to 4,096 bytes before staging the field user name.
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
@@ -189,22 +244,7 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let rect_set = {
         /// Validate finite ordered rectangle coordinates while permitting zero-sized script overlays.
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
-            let a = arg(args, 0).as_object().ok_or_else(|| error("rect needs an array"))?;
-            let a = JsArray::from_object(a)?;
-            if a.length(c)? != 4 {
-                return Err(error("rect needs four coordinates"));
-            }
-            let mut coords = [0.0; 4];
-            for (i, v) in coords.iter_mut().enumerate() {
-                *v = a.get(i as u32, c)?.to_number(c)?;
-                if !v.is_finite() || v.abs() > 1e7 {
-                    return Err(error("rect coordinates are out of range"));
-                }
-            }
-            if coords[2] < coords[0] || coords[1] < coords[3] {
-                return Err(error("rect must use left, top, right, bottom order"));
-            }
-            let v = Some(coords);
+            let v = Some(rect_value(args, c)?);
             write(c, name, |f| f.rect = v)?;
             Ok(JsValue::undefined())
         }
@@ -360,7 +400,7 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     ObjectInitializer::new(ctx)
         .accessor(js_string!("value"), Some(value_get), Some(value_set), rw)
         .accessor(js_string!("valueAsString"), Some(as_string), None, rw)
-        .accessor(js_string!("defaultValue"), Some(default), None, rw)
+        .accessor(js_string!("defaultValue"), Some(default), Some(default_set), rw)
         .accessor(js_string!("type"), Some(kind), None, rw)
         .accessor(js_string!("name"), Some(fname), None, rw)
         .accessor(js_string!("readonly"), Some(readonly_get), Some(readonly_set), rw)
@@ -377,11 +417,14 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         .accessor(js_string!("lineWidth"), Some(line_width_get), Some(line_width_set), rw)
         .accessor(js_string!("borderStyle"), Some(border_style_get), Some(border_style_set), rw)
         .accessor(js_string!("userName"), Some(user_name_get), Some(user_name_set), rw)
+        .accessor(js_string!("submitName"), Some(submit_name_get), Some(submit_name_set), rw)
+        .accessor(js_string!("page"), Some(pages_get), None, rw)
         .accessor(js_string!("strokeColor"), Some(stroke_color_get), Some(stroke_color_set), rw)
         .accessor(js_string!("rect"), Some(rect_get), Some(rect_set), rw)
         .function(get_item_at, js_string!("getItemAt"), 2)
         .function(is_box_checked, js_string!("isBoxChecked"), 1)
         .function(check_this_box, js_string!("checkThisBox"), 2)
+        .function(NativeFunction::from_copy_closure_with_captures(crate::selected_pdf::browse, n.clone()), js_string!("browseForFileToSubmit"), 0)
         .function(set_focus, js_string!("setFocus"), 0)
         .function(set_action, js_string!("setAction"), 2)
         .function(set_items, js_string!("setItems"), 1)
@@ -389,6 +432,7 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         .function(button_set_icon, js_string!("buttonSetIcon"), 2)
         .function(button_get_caption, js_string!("buttonGetCaption"), 1)
         .function(button_set_caption, js_string!("buttonSetCaption"), 2)
+        .function(NativeFunction::from_copy_closure_with_captures(leaf_array, n), js_string!("getArray"), 0)
         .build()
 }
 
@@ -402,6 +446,77 @@ const MAX_ITEM_BYTES: usize = 1 << 20;
 
 // ── the document (global object) ────────────────────────────────────────────────────────────
 
+fn rect_value(args: &[JsValue], c: &mut Context) -> JsResult<[f64; 4]> {
+    let a = arg(args, 0).as_object().ok_or_else(|| error("rect needs an array"))?;
+    let a = JsArray::from_object(a)?;
+    if a.length(c)? != 4 {
+        return Err(error("rect needs four coordinates"));
+    }
+    let mut coords = [0.0; 4];
+    for (i, v) in coords.iter_mut().enumerate() {
+        *v = a.get(i as u32, c)?.to_number(c)?;
+        if !v.is_finite() || v.abs() > 1e7 {
+            return Err(error("rect coordinates are out of range"));
+        }
+    }
+    if coords[2] < coords[0] || coords[1] < coords[3] {
+        return Err(error("rect must use left, top, right, bottom order"));
+    }
+    Ok(coords)
+}
+
+/// A widget selector provides its own rectangle, while the unqualified field uses widget 0.
+fn widget_rect_field(ctx: &mut Context, name: &str) -> JsResult<JsValue> {
+    let Some((base, index)) = name.rsplit_once('.').and_then(|(base, index)| index.parse::<usize>().ok().map(|index| (base, index))) else {
+        return Ok(JsValue::null());
+    };
+    let key = host(ctx)?
+        .borrow()
+        .fields
+        .iter()
+        .find(|f| f.name == base)
+        .and_then(|f| (f.rect.is_some() && index <= f.additional_widget_rects.len()).then(|| (JsString::from(base), f.object_id, f.instance_id)));
+    let Some(key) = key else { return Ok(JsValue::null()) };
+    let get = function(
+        ctx,
+        NativeFunction::from_copy_closure_with_captures(
+            |_, _, (key, index), ctx| {
+                let field = read(ctx, key)?;
+                let rect = if *index == 0 { field.rect } else { field.additional_widget_rects.get(index - 1).map(|widget| widget.rect) };
+                let rect = rect.ok_or_else(|| error("the widget is no longer available"))?;
+                Ok(JsArray::from_iter(rect.map(JsValue::from), ctx).into())
+            },
+            (key.clone(), index),
+        ),
+    );
+    let set = function(
+        ctx,
+        NativeFunction::from_copy_closure_with_captures(
+            |_, args, (key, index), ctx| {
+                let rect = rect_value(args, ctx)?;
+                let field = read(ctx, key)?;
+                if field.rect.is_none() || *index > field.additional_widget_rects.len() {
+                    return Err(error("the widget is no longer available"));
+                }
+                write(ctx, key, |field| {
+                    if *index == 0 {
+                        field.rect = Some(rect);
+                    } else {
+                        std::sync::Arc::make_mut(&mut field.additional_widget_rects)[index - 1].rect = rect;
+                    }
+                })?;
+                Ok(JsValue::undefined())
+            },
+            (key, index),
+        ),
+    );
+    Ok(ObjectInitializer::new(ctx)
+        .property(js_string!("name"), s(name), Attribute::READONLY)
+        .accessor(js_string!("rect"), Some(get), Some(set), Attribute::CONFIGURABLE)
+        .build()
+        .into())
+}
+
 pub(crate) fn get_field(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let name = text(&arg(args, 0), ctx)?;
     let exists = host(ctx)?.borrow().fields.iter().any(|f| f.name == name);
@@ -411,7 +526,41 @@ pub(crate) fn get_field(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
     // A parent name (e.g. "total" for "total.0"): its first kid stands in, as for groups.
     let prefix = format!("{name}.");
     let kid = host(ctx)?.borrow().fields.iter().find(|f| f.name.starts_with(&prefix)).map(|f| f.name.clone());
-    Ok(kid.map_or(JsValue::null(), |k| field_object(ctx, &k).into()))
+    let Some(kid) = kid else { return widget_rect_field(ctx, &name) };
+    let (id, token) = host(ctx)?.borrow().fields.iter().find(|f| f.name == kid).map_or((None, 0), |f| (f.object_id, f.instance_id));
+    let group = field_object_new(ctx, &kid, id, token);
+    group.define_property_or_throw(
+        js_string!("name"),
+        boa_engine::property::PropertyDescriptor::builder().value(s(&name)).configurable(true),
+        ctx,
+    )?;
+    let array = function(ctx, NativeFunction::from_copy_closure_with_captures(group_array, JsString::from(name)));
+    group.set(js_string!("getArray"), array, false, ctx)?;
+    Ok(group.into())
+}
+
+fn leaf_array(_: &JsValue, _: &[JsValue], key: &FieldKey, ctx: &mut Context) -> JsResult<JsValue> {
+    let field = read(ctx, key)?;
+    let value = field_object_by_id(ctx, &field.name, field.object_id);
+    Ok(JsArray::from_iter([value.into()], ctx).into())
+}
+fn group_array(_: &JsValue, _: &[JsValue], name: &JsString, ctx: &mut Context) -> JsResult<JsValue> {
+    let prefix = format!("{}.", name.to_std_string_escaped());
+    // Each returned field constructs native accessors. Cap the expansion before creating
+    // those objects, just as setItems bounds a document-supplied list.
+    let fields: Vec<_> = host(ctx)?
+        .borrow()
+        .fields
+        .iter()
+        .filter(|f| f.name.starts_with(&prefix))
+        .take(MAX_ITEMS + 1)
+        .map(|f| (f.name.clone(), f.object_id))
+        .collect();
+    if fields.len() > MAX_ITEMS {
+        return Err(error("getArray: too many descendant fields"));
+    }
+    let values: Vec<_> = fields.into_iter().map(|(name, id)| field_object_by_id(ctx, &name, id)).collect();
+    Ok(JsArray::from_iter(values.into_iter().map(JsValue::from), ctx).into())
 }
 
 pub(crate) fn get_nth_field_name(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -435,6 +584,7 @@ pub(crate) fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
     h.request(Request::Reset(names));
     // Keep the live shadow and the bounded host request in agreement, including clipped names.
     let Some(Request::Reset(names)) = h.requests.get(queued).cloned() else { return Ok(JsValue::undefined()) };
+    h.calculations_current = false;
     let super::host::Host { fields, changed, .. } = &mut *h;
     for (i, field) in std::sync::Arc::make_mut(fields).iter_mut().enumerate() {
         if field.default_known
@@ -449,8 +599,84 @@ pub(crate) fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
     Ok(JsValue::undefined())
 }
 
-pub(crate) fn print(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    host(ctx)?.borrow_mut().request(Request::Print);
+pub(crate) fn get_print_params(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let interaction = ObjectInitializer::new(ctx).property(js_string!("full"), js_string!("full"), Attribute::all()).build();
+    let duplex = ObjectInitializer::new(ctx)
+        .property(js_string!("Simplex"), js_string!("Simplex"), Attribute::all())
+        .property(js_string!("DuplexFlipLongEdge"), js_string!("DuplexFlipLongEdge"), Attribute::all())
+        .build();
+    let constants = ObjectInitializer::new(ctx)
+        .property(js_string!("interactionLevel"), interaction, Attribute::all())
+        .property(js_string!("duplexTypes"), duplex, Attribute::all())
+        .build();
+    Ok(ObjectInitializer::new(ctx)
+        .property(js_string!("constants"), constants, Attribute::all())
+        .property(js_string!("interactive"), js_string!("full"), Attribute::all())
+        .build()
+        .into())
+}
+
+fn print_pages(value: JsValue, ctx: &mut Context) -> JsResult<Option<Vec<usize>>> {
+    // Bound both the work reading the array and the expanded selection.
+    const MAX_PAGES: usize = 100_000;
+    if value.is_undefined() {
+        return Ok(None);
+    }
+    let array = JsArray::from_object(value.as_object().ok_or_else(|| error("printRange must be an array of page pairs"))?)?;
+    let len = array.length(ctx)?;
+    if len == 0 || len > MAX_PAGES as u64 {
+        return Err(error("printRange is empty or exceeds the page selection limit"));
+    }
+    let count = host(ctx)?.borrow().doc.num_pages;
+    let mut pages = Vec::new();
+    for i in 0..len {
+        let pair = array.get(i, ctx)?;
+        let pair = JsArray::from_object(pair.as_object().ok_or_else(|| error("printRange must contain page pairs"))?)?;
+        if pair.length(ctx)? != 2 {
+            return Err(error("printRange must contain page pairs"));
+        }
+        let mut endpoint = |index| {
+            let n = pair.get(index, ctx)?.as_number().ok_or_else(|| error("printRange needs integer page positions"))?;
+            if n < 0.0 || n >= count as f64 || n.fract() != 0.0 {
+                return Err(error("printRange page is outside the document or is not an integer"));
+            }
+            Ok(n as usize)
+        };
+        let (first, last) = (endpoint(0)?, endpoint(1)?);
+        if first > last || pages.len() + (last - first) + 1 > MAX_PAGES {
+            return Err(error("printRange must use ascending pairs within the page selection limit"));
+        }
+        pages.extend(first..=last);
+    }
+    Ok(Some(pages))
+}
+
+pub(crate) fn print(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let request = if let Some(params) = arg(args, 0).as_object() {
+        let interactive = params.get(js_string!("interactive"), ctx)?;
+        if !interactive.is_undefined() && interactive.as_string() != Some(js_string!("full")) {
+            return Err(error("print requires full interaction"));
+        }
+        let duplex = params.get(js_string!("DuplexType"), ctx)?;
+        let duplex = if duplex.is_undefined() {
+            None
+        } else if duplex.as_string() == Some(js_string!("Simplex")) {
+            Some(PrintDuplex::Simplex)
+        } else if duplex.as_string() == Some(js_string!("DuplexFlipLongEdge")) {
+            Some(PrintDuplex::LongEdge)
+        } else {
+            return Err(error("unsupported DuplexType"));
+        };
+        let pages = print_pages(params.get(js_string!("printRange"), ctx)?, ctx)?;
+        if !interactive.is_undefined() || pages.is_some() || duplex.is_some() {
+            Request::PrintWithSettings(PrintSettings { pages, duplex })
+        } else {
+            Request::Print
+        }
+    } else {
+        Request::Print
+    };
+    host(ctx)?.borrow_mut().request(request);
     Ok(JsValue::undefined())
 }
 
@@ -487,95 +713,4 @@ pub(crate) fn page_num_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> 
     h.doc.page = p;
     h.request(Request::GoToPage(p));
     Ok(JsValue::undefined())
-}
-
-// ── page templates (#1429) ──────────────────────────────────────────────────────────────────
-
-/// A Template object (`this.getTemplate(name)`): its `name`, whether it is `hidden` (setting it
-/// shows or hides the template's page), and `spawn` to add a page from it.
-pub(crate) fn template_object(ctx: &mut Context, name: &str) -> JsObject {
-    let n = JsString::from(name);
-    fn get_name(_: &JsValue, _: &[JsValue], name: &JsString, _c: &mut Context) -> JsResult<JsValue> {
-        Ok(JsValue::from(name.clone()))
-    }
-    fn get_hidden(_: &JsValue, _: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
-        let name = name.to_std_string_escaped();
-        let hidden = host(c)?.borrow().doc.templates.iter().find(|(n, _)| *n == name).is_some_and(|(_, h)| *h);
-        Ok(JsValue::from(hidden))
-    }
-    fn set_hidden(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
-        let hidden = arg(args, 0).to_boolean();
-        let name = name.to_std_string_escaped();
-        let mut h = host(c)?.borrow_mut();
-        // The script reads back what it set.
-        if let Some(t) = h.doc.templates.iter_mut().find(|(n, _)| *n == name) {
-            t.1 = hidden;
-        }
-        h.request(Request::SetTemplateHidden { name, hidden });
-        Ok(JsValue::undefined())
-    }
-    fn spawn(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
-        let request = spawn_request(name.to_std_string_escaped(), args, 0, c)?;
-        host(c)?.borrow_mut().request(request);
-        Ok(JsValue::null())
-    }
-    let rw = Attribute::CONFIGURABLE | Attribute::ENUMERABLE;
-    let get_name = function(ctx, NativeFunction::from_copy_closure_with_captures(get_name, n.clone()));
-    let get_hidden = function(ctx, NativeFunction::from_copy_closure_with_captures(get_hidden, n.clone()));
-    let set_hidden = function(ctx, NativeFunction::from_copy_closure_with_captures(set_hidden, n.clone()));
-    let spawn = NativeFunction::from_copy_closure_with_captures(spawn, n);
-    ObjectInitializer::new(ctx)
-        .accessor(js_string!("name"), Some(get_name), None, rw)
-        .accessor(js_string!("hidden"), Some(get_hidden), Some(set_hidden), rw)
-        .function(spawn, js_string!("spawn"), 4)
-        .build()
-}
-
-/// The request for a page from template `name`, from `spawn`'s arguments starting at `first`:
-/// `(nPage, bRename, bOverlay)` or one object holding them. As in Acrobat, the page is 0 unless
-/// given, and the fields are renamed and the page laid over unless asked otherwise.
-fn spawn_request(name: String, args: &[JsValue], first: usize, ctx: &mut Context) -> JsResult<Request> {
-    let given = arg(args, first);
-    let named = given.as_object().filter(|o| !o.is_array());
-    let mut value = |key: &str, index: usize| -> JsResult<JsValue> {
-        match &named {
-            Some(o) => o.get(JsString::from(key), ctx),
-            None => Ok(arg(args, first.saturating_add(index))),
-        }
-    };
-    let (page, rename, overlay) = (value("nPage", 0)?, value("bRename", 1)?, value("bOverlay", 2)?);
-    let page = if page.is_undefined() { 0.0 } else { page.to_number(ctx)? };
-    // NaN, negative and huge numbers land on the first page and past the last, where the
-    // document clamps them.
-    let page = if page.is_finite() {
-        page.max(0.0).min(usize::MAX as f64) as usize
-    } else if page > 0.0 {
-        usize::MAX
-    } else {
-        0
-    };
-    let flag = |v: &JsValue| if v.is_undefined() { true } else { v.to_boolean() };
-    Ok(Request::SpawnTemplate { name, page, rename: flag(&rename), overlay: flag(&overlay) })
-}
-
-/// `this.getTemplate(cName)`: the Template object, or `null` when there is none of that name.
-pub(crate) fn get_template(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let name = text(&arg(args, 0), ctx)?;
-    let exists = host(ctx)?.borrow().doc.templates.iter().any(|(n, _)| *n == name);
-    Ok(if exists { template_object(ctx, &name).into() } else { JsValue::null() })
-}
-
-/// `this.spawnPageFromTemplate(cTemplate, nPage, bRename, bOverlay)`: the older way to spawn.
-pub(crate) fn spawn_page_from_template(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    // `({ cTemplate, nPage, bRename, bOverlay })` names its arguments, the template included.
-    let (name, first) = match arg(args, 0).as_object().filter(|o| !o.is_array()) {
-        Some(o) => (text(&o.get(js_string!("cTemplate"), ctx)?, ctx)?, 0),
-        None => (text(&arg(args, 0), ctx)?, 1),
-    };
-    if !host(ctx)?.borrow().doc.templates.iter().any(|(n, _)| *n == name) {
-        return Err(error(format!("there is no template named {name}")));
-    }
-    let request = spawn_request(name, args, first, ctx)?;
-    host(ctx)?.borrow_mut().request(request);
-    Ok(JsValue::null())
 }

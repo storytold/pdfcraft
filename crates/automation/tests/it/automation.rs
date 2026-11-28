@@ -9838,6 +9838,246 @@ fn ocr_recognize_files_with_distinct_names_runs_as_before() {
     }
 }
 
+/// Large libraries keep calculations usable through a complete save/close/reopen workflow.
+#[test]
+fn character_sheet_libraries_calculate_after_save_and_reopen() {
+    let dir = workdir("character-sheet-libraries");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    for (name, y) in [("Strength", 20), ("Modifier", 60)] {
+        ok(&mut a, "form_add_field", json!({"doc":doc,"page":1,"type":"text","rect":[20,y,180,y+22],"name":name}));
+    }
+    let library = format!("/*{}*/ function abilityModifier(n) {{ return Math.floor((n-10)/2); }}", " ".repeat(600_000));
+    ok(&mut a, "js_set_document_script", json!({"doc":doc,"name":"rules","script":library}));
+    ok(&mut a, "js_set_document_script", json!({"doc":doc,"name":"state","script":format!("/*{}*/ var initialized = true;", " ".repeat(600_000))}));
+    ok(
+        &mut a,
+        "form_set_script",
+        json!({"doc":doc,"field":"Modifier","event":"calculate","script":"event.value = abilityModifier(getField('Strength').value);"}),
+    );
+    ok(&mut a, "form_fill", json!({"doc":doc,"values":{"Strength":"18"}}));
+    let result = ok(&mut a, "js_run", json!({"doc":doc,"script":"getField('Modifier').value"}));
+    assert_eq!(result["result"], "4");
+    assert_eq!(result["document_errors"], json!([]));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"character.pdf"}));
+    ok(&mut a, "doc_close", json!({"doc":doc}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"character.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_fill", json!({"doc":reopened,"values":{"Strength":"8"}}));
+    let result = ok(&mut a, "js_run", json!({"doc":reopened,"script":"initialized + ':' + getField('Modifier').value"}));
+    assert_eq!(result["result"], "true:-1");
+    assert_eq!(result["document_errors"], json!([]));
+}
+
+#[test]
+fn script_dialog_and_tool_button_commit_answers_without_replaying_callbacks() {
+    let dir = workdir("script-dialog");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({"doc":doc,"page":1,"name":"class","type":"text","rect":[10,10,140,32]}));
+    ok(
+        &mut a,
+        "js_run",
+        json!({"doc":doc,"script":"app.addToolButton({cName:'choose',cLabel:'Choose class',cExec:\"app.execDialog({initialize:function(d){d.load({name:'Fighter'})},commit:function(d){getField('class').value=d.store().name},description:{name:'Class',elements:[{type:'edit_text',item_id:'name'},{type:'ok_cancel'}]}})\"})"}),
+    );
+    assert_eq!(ok(&mut a, "js_tool_buttons", json!({"doc":doc}))["buttons"][0]["name"], "choose");
+    let out = ok(&mut a, "js_tool_button", json!({"doc":doc,"name":"choose","answers":["{\"event\":\"ok\",\"values\":{\"name\":\"Wizard\"}}"]}));
+    assert_eq!(out["error"], Value::Null);
+    assert_eq!(out["doc"], doc);
+    assert_eq!(out["pages"], 3);
+    assert_eq!(out["dirty"], true);
+    assert!(out["undo"].as_str().is_some());
+    assert!(out["redo"].is_null());
+    let cancelled = ok(&mut a, "js_tool_button", json!({"doc":doc,"name":"choose","answers":[null]}));
+    for key in ["doc", "pages", "dirty", "undo", "redo"] {
+        assert_eq!(cancelled[key], out[key]);
+    }
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":doc,"script":"getField('class').value"}))["result"], "Wizard");
+}
+
+#[test]
+fn selected_script_streams_are_confined_and_survive_save_reopen() {
+    let parent = workdir("script-streams");
+    let dir = parent.join("root");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("a.pdf"), fixture(3)).unwrap();
+    std::fs::write(parent.join("outside.js"), "readable but outside the root").unwrap();
+    std::fs::write(dir.join("rules.js"), "({name:'Scout',bonus:function(n){return n+2;}})").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({"doc":doc,"page":1,"name":"rules","type":"text","rect":[10,10,140,32]}));
+    let script = "var stream=util.readFileIntoStream();getField('rules').value=util.stringFromStream(stream);eval(getField('rules').value).bonus(18)";
+    let out = ok(&mut a, "js_run", json!({"doc":doc,"script":script,"answers":[{"file":"rules.js"}]}));
+    assert_eq!(out["error"], Value::Null);
+    assert_eq!(out["result"], "20");
+    let error = a.call("js_run", &json!({"doc":doc,"script":script,"answers":[{"file":"../outside.js"}]})).unwrap_err();
+    assert!(error.to_string().contains("outside the allowed directory"), "{error}");
+    let error = a.call("js_run", &json!({"doc":doc,"script":script,"answers":[{"file":"."}]})).unwrap_err();
+    assert!(error.to_string().contains("not a regular file"), "{error}");
+    assert!(
+        ok(&mut a, "js_run", json!({"doc":doc,"script":"util.readFileIntoStream('rules.js')"}))["error"]
+            .as_str()
+            .unwrap()
+            .contains("cannot open paths")
+    );
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"imported.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"imported.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":reopened,"script":"eval(getField('rules').value).bonus(8)"}))["result"], "10");
+}
+
+#[test]
+fn templates_are_live_to_scripts_and_keep_values_after_save_reopen() {
+    let dir = workdir("script-templates");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"b.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({"doc":doc,"page":2,"name":"note","type":"text","rect":[10,10,140,32]}));
+    let out = ok(
+        &mut a,
+        "js_run",
+        json!({"doc":doc,"script":"var held=getField('note');createTemplate('Notes',1);getTemplate('Notes').hidden=true;held.value='before copy';getTemplate('Notes').spawn(numPages,true,false);getField('P1.Notes.note').value+=' after copy';[numPages,held.page,getField('P1.Notes.note').value].join('|')"}),
+    );
+    assert_eq!(out["error"], Value::Null);
+    assert_eq!(out["result"], "2|-1|before copy after copy");
+    let templates = ok(&mut a, "page_templates", json!({"doc":doc}));
+    assert_eq!(templates["templates"][0]["hidden"], true);
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"templates.pdf"}));
+    ok(&mut a, "doc_close", json!({"doc":doc}));
+    let doc = ok(&mut a, "doc_open", json!({"path":"templates.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":doc,"script":"getField('P1.Notes.note').value"}))["result"], "before copy after copy");
+    ok(&mut a, "js_run", json!({"doc":doc,"script":"deletePages(1);numPages"}));
+    ok(&mut a, "page_template_spawn", json!({"doc":doc,"name":"Notes","rename":false}));
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":doc,"script":"getField('note').value+':'+getField('note').page"}))["result"], "before copy:1");
+}
+
+#[test]
+fn script_print_uses_live_template_positions_and_explicit_destination() {
+    let dir = workdir("script-print");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"b.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({"doc":doc,"page":2,"name":"note","type":"text","rect":[10,10,140,32]}));
+    let run = |a: &mut Automation, script: &str| ok(a, "js_run", json!({"doc":doc,"script":script}));
+
+    let out = run(
+        &mut a,
+        "createTemplate('Notes',1); var t=getTemplate('Notes'); t.hidden=true; t.spawn(numPages,true,false); t.spawn(numPages,true,false); var p=getPrintParams(); var n=getField('P2.Notes.note').page; p.printRange=[[n,n],[0,0]]; p.DuplexType=p.constants.duplexTypes.DuplexFlipLongEdge; print(p)",
+    );
+    assert_eq!(out["error"], Value::Null);
+    let request = &out["requests"][0];
+    assert_eq!(request, &json!({"print":true,"page_numbers":[3,1],"duplex":"long-edge"}));
+    let args = json!({"doc":doc,"page_numbers":request["page_numbers"],"duplex":request["duplex"],"path":"print.pdf"});
+    let printed = ok(&mut a, "doc_print", args.clone());
+    assert_eq!(printed["sheets"], 2);
+    assert!(printed["warnings"][0].as_str().unwrap().contains("cannot apply"));
+    let exported = ok(&mut a, "doc_open", json!({"path":"print.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, exported), ["Page 2", "Page 1"]);
+    assert!(a.call("doc_print", &json!({"doc":doc,"page_numbers":[1],"path":"../outside.pdf"})).is_err());
+    // An existing directory is not a writable PDF destination.
+    std::fs::create_dir(dir.join("blocked.pdf")).unwrap();
+    let mut blocked = args;
+    blocked["path"] = json!("blocked.pdf");
+    assert!(a.call("doc_print", &blocked).is_err());
+    assert!(dir.join("blocked.pdf").is_dir());
+
+    let out = run(
+        &mut a,
+        "deletePages(1); var p=getPrintParams(); p.DuplexType=p.constants.duplexTypes.Simplex; var n=getField('P2.Notes.note').page; p.printRange=[[n,n]]; print(p)",
+    );
+    assert_eq!(out["error"], Value::Null);
+    assert_eq!(out["requests"][0], json!({"print":true,"page_numbers":[2],"duplex":"off"}));
+    let invalid = run(&mut a, "var p=getPrintParams(); p.printRange=[[2,2]]; print(p)");
+    assert!(invalid["error"].is_string());
+    assert_eq!(invalid["requests"], json!([]));
+    let cancelled = ok(
+        &mut a,
+        "js_run",
+        json!({"doc":doc,
+            "script":"if (app.execDialog({description:{name:'Print notes',elements:[{type:'ok_cancel'}]}}) === 'ok') print(getPrintParams());","answers":[null]
+        }),
+    );
+    assert_eq!(cancelled["error"], Value::Null);
+    assert_eq!(cancelled["requests"], json!([]));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    let restored = run(&mut a, "getField('P2.Notes.note').page");
+    assert_eq!(restored["result"], "2");
+}
+
+#[test]
+fn script_calculation_switch_and_timer_resume_pending_values() {
+    let dir = workdir("script-calculation-switch");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    for (name, y) in [("input", 20), ("total", 60)] {
+        ok(&mut a, "form_add_field", json!({"doc":doc,"page":1,"name":name,"type":"text","rect":[10,y,140,y+22]}));
+    }
+    ok(&mut a, "form_set_script", json!({"doc":doc,"field":"total","event":"calculate","script":"event.value=2*getField('input').value"}));
+    ok(&mut a, "js_run", json!({"doc":doc,"script":"calculate=false;app.calculate"}));
+    ok(&mut a, "form_fill", json!({"doc":doc,"values":{"input":"18"}}));
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":doc,"script":"getField('total').value"}))["result"], "0");
+    ok(&mut a, "js_run", json!({"doc":doc,"script":"app.setTimeOut('calculate=true;calculateNow()',25)"}));
+    let out = ok(&mut a, "js_advance", json!({"doc":doc,"ms":25}));
+    assert_eq!(out["errors"], json!([]));
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":doc,"script":"getField('total').value"}))["result"], "36");
+    ok(
+        &mut a,
+        "form_set_script",
+        json!({"doc":doc,"field":"total","event":"calculate","script":"var passes=(typeof passes==='undefined'?0:passes)+1;event.value=2*getField('input').value"}),
+    );
+    ok(&mut a, "js_run", json!({"doc":doc,"script":"passes=0;getField('input').value=8;calculateNow();"}));
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":doc,"script":"passes+':'+getField('total').value"}))["result"], "1:16");
+    ok(&mut a, "js_run", json!({"doc":doc,"script":"passes=0;getField('input').value=3;calculateNow();getField('input').value=4;"}));
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":doc,"script":"passes+':'+getField('total').value"}))["result"], "2:8");
+}
+
+#[test]
+fn script_field_groups_defaults_and_submit_names_survive_save_reopen() {
+    let dir = workdir("script-groups");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    for (name, y) in [("stats.one", 20), ("stats.two", 60)] {
+        ok(&mut a, "form_add_field", json!({"doc":doc,"page":1,"name":name,"type":"text","rect":[10,y,140,y+22]}));
+    }
+    let out = ok(
+        &mut a,
+        "js_run",
+        json!({"doc":doc,"script":"var group=getField('stats');group.getArray().forEach(function(f){f.defaultValue='7';f.submitName='rule';});resetForm(['stats']);[group.name,group.getArray().length,getField('stats.one').getArray().length,getField('stats.two').value].join('|')"}),
+    );
+    assert_eq!(out["error"], Value::Null);
+    assert_eq!(out["result"], "stats|2|1|7");
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"groups.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"groups.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_fill", json!({"doc":reopened,"values":{"stats.one":"99"}}));
+    let out = ok(
+        &mut a,
+        "js_run",
+        json!({"doc":reopened,"script":"resetForm(['stats']);[getField('stats.one').value,getField('stats.one').defaultValue,getField('stats.one').submitName].join('|')"}),
+    );
+    assert_eq!(out["error"], Value::Null);
+    assert_eq!(out["result"], "7|7|rule");
+}
+
+#[test]
+fn script_bookmark_properties_are_undoable_and_saved() {
+    let dir = workdir("script-bookmarks");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "bookmark_add", json!({"doc":doc,"title":"Original","page":1}));
+    let out = ok(
+        &mut a,
+        "js_run",
+        json!({"doc":doc,"script":"var mark=bookmarkRoot.children[0];mark.name='Notes';mark.style=3;mark.color=['RGB',0.5,0,0];mark.open=false;mark.name"}),
+    );
+    assert_eq!(out["error"], Value::Null);
+    assert_eq!(out["result"], "Notes");
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":doc,"script":"bookmarkRoot.children[0].name"}))["result"], "Original");
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"bookmarks.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"bookmarks.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(
+        ok(&mut a, "js_run", json!({"doc":reopened,"script":"var m=bookmarkRoot.children[0];[m.name,m.style,m.color.join(',')].join('|')"}))["result"],
+        "Notes|3|RGB,0.5,0,0"
+    );
+}
+
 /// Field scripts set through the tools validate, calculate and format, and `js_run` reports console
 /// lines, every message with its details, and requests.
 #[test]
@@ -15378,4 +15618,157 @@ fn pdf_watermark_uses_visible_source_crop_through_tools() {
         }
         assert_eq!(rendered[0], rendered[1], "same displayed source gives identical saved watermark at target rotation {rotation}");
     }
+}
+
+#[test]
+fn selected_pdf_import_is_confined_and_commits_only_destination_edits() {
+    let parent = workdir("selected-pdf");
+    let dir = parent.join("root");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("blank.pdf"), fixture(1)).unwrap();
+    let mut a = auto(&dir);
+    let source = ok(&mut a, "doc_open", json!({"path":"blank.pdf"}))["doc"].as_u64().unwrap();
+    let dest = ok(&mut a, "doc_open", json!({"path":"blank.pdf"}))["doc"].as_u64().unwrap();
+    for name in ["character", "level", "version"] {
+        ok(&mut a, "form_add_field", json!({"doc":source,"page":1,"name":name,"type":"text","rect":[10,10,140,32]}));
+    }
+    for name in ["source", "character", "level"] {
+        ok(&mut a, "form_add_field", json!({"doc":dest,"page":1,"name":name,"type":"text","rect":[10,10,140,32]}));
+    }
+    ok(&mut a, "js_run", json!({"doc":source,"script":"getField('character').value='Rowan';getField('level').value=6;getField('version').value=2;"}));
+    ok(
+        &mut a,
+        "js_set_document_script",
+        json!({"doc":source,"name":"Character","script":"function describe(){var field=getField('character');field.display=display.hidden;return field.value;}"}),
+    );
+    ok(&mut a, "doc_save", json!({"doc":source,"path":"source.pdf"}));
+    let bytes = std::fs::read(dir.join("source.pdf")).unwrap();
+    std::fs::write(parent.join("outside.pdf"), &bytes).unwrap();
+    let script = r#"
+        (function (dest) {
+            var chosen = dest.getField('source');
+            if (!chosen.browseForFileToSubmit()) return 'cancelled';
+            var from = app.openDoc({cPath:chosen.value, oDoc:dest});
+            if (from.getField('version').value !== 2) return 'incompatible';
+            dest.getField('character').value = from.describe();
+            dest.getField('level').value = from.getField('level').value;
+            from.closeDoc(true);
+            return 'imported';
+        })(this);
+    "#;
+    let selected = json!([{"pdf":"source.pdf"}]);
+    let cancelled = ok(&mut a, "js_run", json!({"doc":dest,"script":script,"answers":[null]}));
+    assert_eq!(cancelled["result"], "cancelled");
+    let retry = r#"
+        var picker = getField('source');
+        picker.browseForFileToSubmit();
+        var earlier = picker.value;
+        getField('character').value = 'staged';
+        var cancelled = !picker.browseForFileToSubmit() && picker.value === '';
+        var stale = false;
+        try { app.openDoc(earlier); } catch (error) { stale = true; }
+        cancelled && stale;
+    "#;
+    let result = ok(&mut a, "js_run", json!({"doc":dest,"script":retry,"answers":[{"pdf":"source.pdf"},null]}));
+    assert_eq!(result["result"], "true", "{result}");
+    let non_form = ok(&mut a, "js_run", json!({"doc":dest,"script":script,"answers":[{"pdf":"blank.pdf"}]}));
+    assert!(non_form["error"].as_str().unwrap().contains("AcroForm"), "{non_form}");
+    let outside = a.call("js_run", &json!({"doc":dest,"script":script,"answers":[{"pdf":"../outside.pdf"}]})).unwrap_err();
+    assert!(outside.to_string().contains("outside the allowed directory"));
+    let incompatible = script.replace("!== 2", "!== 3");
+    let result = ok(&mut a, "js_run", json!({"doc":dest,"script":incompatible,"answers":selected}));
+    assert_eq!(result["result"], "incompatible", "{result}");
+    let failing = script.replace("from.closeDoc(true);", "throw Error('transfer interrupted');");
+    let failure = ok(&mut a, "js_run", json!({"doc":dest,"script":failing,"answers":selected}));
+    assert!(failure["error"].as_str().unwrap().contains("transfer interrupted"), "{failure}");
+    let read = "getField('character').value+':'+getField('level').value+':'+getField('source').value";
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":dest,"script":read}))["result"], "::");
+    let result = ok(&mut a, "js_run", json!({"doc":dest,"script":script,"answers":selected}));
+    assert_eq!(result["error"], Value::Null, "{result}");
+    assert_eq!(result["result"], "imported");
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":dest,"script":read}))["result"], "Rowan:6:");
+    ok(&mut a, "doc_save", json!({"doc":dest,"path":"destination.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"destination.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":reopened,"script":read}))["result"], "Rowan:6:");
+    ok(&mut a, "edit_undo", json!({"doc":dest}));
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":dest,"script":read}))["result"], "::");
+    ok(&mut a, "doc_protect", json!({"doc":dest,"permissions_password":"owner","changes":"none"}));
+    ok(&mut a, "doc_save", json!({"doc":dest,"path":"restricted.pdf"}));
+    let restricted = ok(&mut a, "doc_open", json!({"path":"restricted.pdf"}))["doc"].as_u64().unwrap();
+    let failure = a.call("js_run", &json!({"doc":restricted,"script":script,"answers":selected})).unwrap_err();
+    assert!(failure.to_string().contains("filling in form fields"), "{failure}");
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":restricted,"script":read}))["result"], "::");
+    let refusal = ok(&mut a, "js_run", json!({"doc":dest,"script":script,"answers":[{"pdf":"restricted.pdf"}]}));
+    assert!(refusal["error"].is_string(), "{refusal}");
+    assert_eq!(std::fs::read(dir.join("source.pdf")).unwrap(), bytes);
+}
+
+#[test]
+fn scripted_form_data_round_trips_and_rolls_back_failed_imports() {
+    let parent = workdir("script-form-data");
+    let dir = parent.join("root");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("blank.pdf"), fixture(1)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"blank.pdf"}))["doc"].as_u64().unwrap();
+    for name in ["gear.item", "description", "empty", "summary"] {
+        ok(&mut a, "form_add_field", json!({"doc":doc,"page":1,"name":name,"type":"text","rect":[10,10,140,32]}));
+    }
+
+    let read = "getField('gear.item').value+':'+getField('description').value+':'+getField('summary').value";
+    let run = |a: &mut Automation, script: &str, answers: Value| ok(a, "js_run", json!({"doc":doc,"script":script,"answers":answers}));
+    let stamp = "getField('gear.item').value='Compass';getField('description').value='North & east';";
+    let result = run(
+        &mut a,
+        &format!("{stamp} exportAsXFDF({{bAllFields:true}}); exportAsXFDFStr({{aFields:['gear','description'],cHRef:'ref & file'}});"),
+        json!([{"export_xfdf":"all.xfdf"}]),
+    );
+    assert_eq!(result["error"], Value::Null, "{result}");
+    let selected = result["result"].as_str().unwrap();
+    assert!(selected.contains("Compass") && selected.contains("North &amp; east") && selected.contains("ref &amp; file"), "{selected}");
+    assert!(!selected.contains("empty") && !selected.contains("summary"), "{selected}");
+    let all = std::fs::read_to_string(dir.join("all.xfdf")).unwrap();
+    assert!(all.contains("Compass") && all.contains("<field name=\"empty\"><value></value>"), "{all}");
+    std::fs::write(dir.join("selected.xfdf"), selected).unwrap();
+    ok(&mut a, "doc_export_data", json!({"doc":doc,"path":"all.fdf","what":"fields"}));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(run(&mut a, read, json!([]))["result"], "::");
+
+    for (method, file) in [("importAnXFDF", "selected.xfdf"), ("importAnFDF", "all.fdf")] {
+        let script = format!("getField('summary').value='before'; {method}(); getField('summary').value='Imported '+getField('gear.item').value;");
+        let cancelled = run(&mut a, &script, json!([null]));
+        assert_eq!(cancelled["error"], Value::Null, "{cancelled}");
+        assert_eq!(run(&mut a, read, json!([]))["result"], "::");
+        let result = run(&mut a, &script, json!([{"form_data":file}]));
+        assert_eq!(result["error"], Value::Null, "{result}");
+        assert_eq!(run(&mut a, read, json!([]))["result"], "Compass:North & east:Imported Compass");
+        ok(&mut a, "edit_undo", json!({"doc":doc}));
+        assert_eq!(run(&mut a, read, json!([]))["result"], "::");
+    }
+
+    let wrong_format = run(&mut a, "importAnFDF();", json!([{"form_data":"selected.xfdf"}]));
+    assert!(wrong_format["error"].is_string(), "{wrong_format}");
+    let script_path = run(&mut a, "importAnXFDF('selected.xfdf');", json!([]));
+    assert!(script_path["error"].as_str().unwrap().contains("omit cPath"), "{script_path}");
+    std::fs::write(parent.join("outside.xfdf"), &all).unwrap();
+    for (script, answer) in
+        [("importAnXFDF();", json!({"form_data":"../outside.xfdf"})), ("exportAsXFDF();", json!({"export_xfdf":"../outside.xfdf"}))]
+    {
+        assert!(a.call("js_run", &json!({"doc":doc,"script":script,"answers":[answer]})).is_err());
+    }
+    assert_eq!(std::fs::read_to_string(parent.join("outside.xfdf")).unwrap(), all);
+    let cancelled = run(&mut a, &format!("{stamp} exportAsXFDF();"), json!([null]));
+    assert_eq!(cancelled["result"], "false");
+    let failed = run(&mut a, &format!("{stamp} exportAsXFDF();"), json!([{"export_xfdf":"."}]));
+    assert!(failed["error"].is_string(), "{failed}");
+    assert_eq!(run(&mut a, read, json!([]))["result"], "::");
+
+    ok(&mut a, "doc_protect", json!({"doc":doc,"permissions_password":"owner","changes":"none","copy":false}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"restricted.pdf"}));
+    let restricted = ok(&mut a, "doc_open", json!({"path":"restricted.pdf"}))["doc"].as_u64().unwrap();
+    let denied = a.call("js_run", &json!({"doc":restricted,"script":"importAnXFDF();", "answers":[{"form_data":"selected.xfdf"}]})).unwrap_err();
+    assert!(denied.to_string().contains("filling in form fields"), "{denied}");
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":restricted,"script":read}))["result"], "::");
+    let denied = ok(&mut a, "js_run", json!({"doc":restricted,"script":"exportAsXFDFStr({bAllFields:true});"}));
+    assert!(denied["error"].as_str().unwrap().contains("prohibit exporting"), "{denied}");
 }

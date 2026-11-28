@@ -18,8 +18,17 @@ mod tree;
 
 pub(crate) use tree::ancestor_sets;
 
+/// Write the alternate field name without changing its appearance.
+pub(crate) fn write_tooltip(dict: &mut Dict, tooltip: &str) {
+    if tooltip.is_empty() {
+        dict.remove(b"TU");
+    } else {
+        dict.set(b"TU".to_vec(), PdfString::text(tooltip));
+    }
+}
+
 pub use edit::set_props;
-pub(crate) use edit::set_props_object;
+pub(crate) use edit::set_script_props;
 pub use lifecycle::{add_field, delete_field, delete_field_object, delete_widget, duplicate_field};
 pub(crate) use look::button_appearance;
 pub(crate) use look::redraw_field_object;

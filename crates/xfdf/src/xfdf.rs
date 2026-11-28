@@ -456,7 +456,7 @@ fn xfdf_annots(doc: &Document, out: &mut String, only: Option<&HashSet<(usize, u
 }
 
 /// Field values as nested XFDF `<field>` elements.
-fn xfdf_fields(doc: &Document, out: &mut String) {
+fn xfdf_fields(values: impl IntoIterator<Item = (String, Vec<String>)>, out: &mut String) {
     #[derive(Default)]
     struct Node {
         values: Vec<String>,
@@ -465,10 +465,7 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
         index: std::collections::HashMap<String, usize>,
     }
     let mut root = Node::default();
-    for f in pdfcraft_forms::fields(doc) {
-        if matches!(f.kind, FieldKind::PushButton | FieldKind::Signature) {
-            continue;
-        }
+    for (name, values) in values {
         let mut node = &mut root;
         // One `<field>` level per part of the name, but no more levels than the import reads
         // back. A `/T` can hold periods of its own, so a name can split into far more parts than
@@ -476,7 +473,7 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
         // a long enough name, recursed in `write_node` until the stack overflowed. The parts past
         // the last level stay together in the deepest element's name, and the import joins them
         // back with periods into the same full name.
-        for part in f.name.splitn(MAX_DEPTH, '.') {
+        for part in name.splitn(MAX_DEPTH, '.') {
             let i = match node.index.get(part) {
                 Some(&i) => i,
                 None => {
@@ -487,10 +484,7 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
             };
             node = &mut node.kids[i].1;
         }
-        node.values = match f.kind {
-            FieldKind::CheckBox | FieldKind::Radio if f.value.is_empty() => vec!["Off".into()],
-            _ => f.export_values(),
-        };
+        node.values = values;
     }
     fn write_node(name: &str, node: &Node, out: &mut String) {
         let _ = write!(out, "<field name=\"{}\">", esc(name));
@@ -697,9 +691,20 @@ fn translate(d: &mut Dict, dx: f64, dy: f64) {
     }
 }
 
+const XFDF_HEADER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\">\n";
+
+/// Encode a live form snapshot with the same field hierarchy as document export.
+pub fn export_xfdf_values(values: Vec<(String, Vec<String>)>, file: &str) -> String {
+    let mut out = String::from(XFDF_HEADER);
+    out.push_str("<fields>\n");
+    xfdf_fields(values, &mut out);
+    let _ = writeln!(out, "</fields>\n<f href=\"{}\"/>\n</xfdf>", esc(file));
+    out
+}
+
 /// XFDF with the document's comments and/or field values.
 pub fn export_xfdf(doc: &Document, comments: bool, fields: bool, file: &str) -> String {
-    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\">\n");
+    let mut out = String::from(XFDF_HEADER);
     if comments {
         out.push_str("<annots>\n");
         xfdf_annots(doc, &mut out, None, false);
@@ -707,7 +712,15 @@ pub fn export_xfdf(doc: &Document, comments: bool, fields: bool, file: &str) -> 
     }
     if fields {
         out.push_str("<fields>\n");
-        xfdf_fields(doc, &mut out);
+        let values = pdfcraft_forms::fields(doc).into_iter().filter_map(|f| {
+            let values = match f.kind {
+                FieldKind::PushButton | FieldKind::Signature => return None,
+                FieldKind::CheckBox | FieldKind::Radio if f.value.is_empty() => vec!["Off".into()],
+                _ => f.export_values(),
+            };
+            Some((f.name, values))
+        });
+        xfdf_fields(values, &mut out);
         out.push_str("</fields>\n");
     }
     let _ = writeln!(out, "<f href=\"{}\"/>", esc(file));

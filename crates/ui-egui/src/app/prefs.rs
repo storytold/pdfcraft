@@ -164,7 +164,7 @@ impl PdfCraftApp {
             print_paper_size: Some([size.0, size.1]),
             print_paper_overridden: Some(d.paper_overridden),
             print_printers: json_text(&crate::print_ui::setups_to_json(&d.setups)),
-            duplex: Some(print_names::duplex(d.duplex).to_string()),
+            duplex: Some(print_names::duplex(d.preferred_duplex()).to_string()),
             grayscale: Some(d.grayscale),
             collate: Some(d.collate),
             custom_scale: Some(d.custom_scale),

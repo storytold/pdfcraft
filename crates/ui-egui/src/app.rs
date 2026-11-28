@@ -610,6 +610,10 @@ impl PdfCraftApp {
     /// on the document underneath it. The full-screen prompt covers the pages (`covers_pages`)
     /// while leaving the menus on, as production's `pending_full_screen` did.
     pub(crate) fn modal_open(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.script_pending.as_ref().is_some_and(crate::script_dialog::Pending::has_prompt) {
+            return true;
+        }
         // Dialogs other than the full-screen prompt (which leaves the menus on) and the startup recovery offer.
         let fs_open = self.prompts.full_screen.is_some_and(|(id, _)| self.dialogs.open_dialogs().iter().any(|d| d.id == id));
         self.dialogs.open_dialogs().len() > usize::from(fs_open) + usize::from(self.dialogs.is_open::<craft::ui::dialog::RecoveryDialog>())
@@ -874,6 +878,8 @@ impl PdfCraftApp {
         }
         // Dialogs and notices show in full screen too: a refused field value or a failed save must be seen.
         dialogs::show(self, ui);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.show_script_dialog(&ctx);
         crate::notices::show(self, ui);
         // A notice or progress change made after the notices' turn (a finished job's result) is posted next pass: ask for it.
         if !self.posted_notices.is_empty() || !self.progress_requests.is_empty() {

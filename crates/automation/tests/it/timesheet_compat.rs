@@ -155,7 +155,13 @@ fn popup_and_manual_response_resume_the_same_script_and_validate_choices() {
 #[test]
 fn prompt_answer_schema_advertises_the_length_budget() {
     let tool = pdfcraft_automation::tools().into_iter().find(|t| t.name == "js_run").unwrap();
-    assert_eq!(tool.input_schema["properties"]["answers"]["items"]["maxLength"], 4096);
+    let answers = &tool.input_schema["properties"]["answers"];
+    assert_eq!(answers["maxItems"], 128);
+    // Dialog/file replies share an 8 MiB ceiling; ordinary prompts enforce
+    // their smaller 4 KiB limit in the runtime after the prompt type is known.
+    assert_eq!(answers["items"]["oneOf"][0]["maxLength"], 8 << 20);
+    assert_eq!(answers["items"]["oneOf"][1]["required"], json!(["file"]));
+    assert_eq!(answers["items"]["oneOf"][1]["additionalProperties"], false);
 }
 
 #[test]

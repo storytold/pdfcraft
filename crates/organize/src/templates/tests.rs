@@ -3,7 +3,11 @@ use std::sync::Arc;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, write_full};
 
 use super::*;
-use crate::pages;
+use crate::{page_count, pages};
+
+fn listed_templates(doc: &Document) -> Vec<(String, bool)> {
+    templates(doc).into_iter().map(|t| (t.name, t.hidden)).collect()
+}
 
 fn build(bodies: &[&str]) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
@@ -103,10 +107,10 @@ fn reopen(doc: &Document) -> Document {
 
 #[test]
 fn hidden_templates_and_named_pages_are_listed() {
-    assert_eq!(templates(&form()), [Template { name: "More".into(), hidden: true }]);
+    assert_eq!(listed_templates(&form()), [("More".to_string(), true)]);
     let mut doc = form();
     set_template_hidden(&mut doc, "More", false).unwrap();
-    assert_eq!(templates(&doc), [Template { name: "More".into(), hidden: false }]);
+    assert_eq!(listed_templates(&doc), [("More".to_string(), false)]);
 }
 
 /// `spawn(1, false, false)`: a copy of the template's page, whose widget joins the template's
@@ -122,7 +126,7 @@ fn a_spawned_page_without_renaming_shares_the_templates_fields() {
     let page = pages(&doc).unwrap()[1].obj;
     let media = doc.get(page).as_dict().and_then(|d| d.get(b"MediaBox").cloned());
     assert!(media.is_some(), "a template without a media box takes the first page's");
-    assert_eq!(templates(&doc), [Template { name: "More".into(), hidden: true }], "the template stays");
+    assert_eq!(listed_templates(&doc), [("More".to_string(), true)], "the template stays");
 }
 
 /// `spawn(0, true, false)`: the copy's fields are its own, named `P0.More.Extra`.
@@ -165,7 +169,7 @@ fn showing_and_hiding_a_template_moves_its_own_page() {
     assert!(page.get(b"MediaBox").is_some() && page.get(b"Parent").is_none(), "{page:?}");
     let hidden = reopen(&doc);
     assert_eq!(texts(&hidden), ["Visible"]);
-    assert_eq!(templates(&hidden), [Template { name: "More".into(), hidden: true }]);
+    assert_eq!(listed_templates(&hidden), [("More".to_string(), true)]);
 }
 
 #[test]
@@ -193,7 +197,7 @@ fn hostile_template_trees_end() {
         "<< /Kids [4 0 R 5 0 R] >>",
         "<< /Names [(Broken) 42] >>",
     ]);
-    assert_eq!(templates(&doc), []);
+    assert_eq!(listed_templates(&doc), []);
     assert!(spawn_template(&mut doc, "Broken", 0, false).is_err());
     assert!(set_template_hidden(&mut doc, "Broken", false).is_err());
 }
@@ -237,7 +241,7 @@ fn a_hidden_page_keeps_what_it_inherited() {
     let page: Dict = doc.get(ObjRef::new(4, 0)).as_dict().cloned().unwrap();
     let media = page.get(b"MediaBox").and_then(|m| m.as_array().cloned()).expect("its media box, inherited before");
     assert_eq!(media.len(), 4);
-    assert_eq!(templates(&doc), [Template { name: "Cover".into(), hidden: true }]);
+    assert_eq!(listed_templates(&doc), [("Cover".to_string(), true)]);
 }
 
 /// Showing or hiding a template rewrites both name trees from every entry, not from the first
@@ -252,7 +256,16 @@ fn showing_and_hiding_keep_every_name_of_a_long_tree() {
     bodies.extend(form_bodies().iter().skip(1).map(|b| b.to_string()));
     bodies.push(pages_tree);
     let mut doc = build(&bodies.iter().map(String::as_str).collect::<Vec<_>>());
-    let count = |doc: &Document, tree: &[u8]| all_entries(doc, tree).len();
+    let count = |doc: &Document, tree: &[u8]| {
+        let catalog = doc.get(doc.root().unwrap());
+        let names = doc.resolve(catalog.as_dict().unwrap().get(b"Names").unwrap());
+        let Some(tree) = names.as_dict().unwrap().get(tree) else {
+            return 0;
+        };
+        let mut pairs = Vec::new();
+        crate::import::name_tree_entries(doc, tree, 0, &mut HashSet::new(), &mut pairs);
+        pairs.len()
+    };
     assert_eq!(count(&doc, b"Pages"), MAX_NAMES + 10);
     set_template_hidden(&mut doc, "More", false).unwrap();
     assert_eq!((count(&doc, b"Pages"), count(&doc, b"Templates")), (MAX_NAMES + 11, 0));

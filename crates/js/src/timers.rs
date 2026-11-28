@@ -107,7 +107,7 @@ pub(crate) fn set_time_out(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> 
 
 fn set(args: &[JsValue], repeat: bool, ctx: &mut Context) -> JsResult<JsValue> {
     let handle = ObjectInitializer::new(ctx).build();
-    if ctx.get_data::<Shared>().is_none() {
+    if !crate::selected_pdf::primary(ctx) || ctx.get_data::<Shared>().is_none() {
         return Ok(handle.into());
     }
     let what = arg(args, 0);
@@ -138,7 +138,8 @@ fn set(args: &[JsValue], repeat: bool, ctx: &mut Context) -> JsResult<JsValue> {
 /// `app.clearInterval(oInterval)` and `app.clearTimeOut(oTime)`: forget the timer the object
 /// stands for. Anything else, or a timer already gone, is ignored.
 pub(crate) fn clear(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    if let Some(o) = arg(args, 0).as_object()
+    if crate::selected_pdf::primary(ctx)
+        && let Some(o) = arg(args, 0).as_object()
         && let Some(timers) = ctx.get_data::<Shared>()
     {
         timers.borrow_mut().table.retain(|_, e| !JsObject::equals(&e.handle, &o));

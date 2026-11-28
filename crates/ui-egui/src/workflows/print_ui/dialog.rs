@@ -48,6 +48,10 @@ fn settings_of(d: &PrintDraft, looking: bool) -> Settings {
 impl PdfCraftApp {
     /// Open the Print dialog, preselecting the default printer and reading papers in the background.
     pub fn open_print(&mut self) {
+        self.open_script_print(None);
+    }
+
+    pub(crate) fn open_script_print(&mut self, request: Option<pdfcraft_engine::js::PrintSettings>) {
         let Some((i, id)) = self.active_ids() else { return };
         #[cfg(not(target_arch = "wasm32"))]
         let (printers, listening) = if self.printer_source.is_some() {
@@ -61,8 +65,13 @@ impl PdfCraftApp {
         let printers = self.sync_listed();
 
         let current = self.views[i].current();
-        let selected: Vec<usize> = self.views[i].selected.items.to_vec();
+        let scripted = request.is_some();
+        let (pages, duplex) = request.map_or((None, None), |settings| (settings.pages, settings.duplex));
+        let selected = pages.unwrap_or_else(|| if scripted { Vec::new() } else { self.views[i].selected.items.to_vec() });
         let mut keep = std::mem::take(&mut self.print_draft);
+        if let Some((_, previous)) = keep.script_duplex.take() {
+            keep.duplex = previous;
+        }
         // Leaving Label gives back the paper it replaced (#3564), before the layout resets below.
         if keep.handling == Handling::Label {
             keep.set_handling(Handling::Size);
@@ -116,6 +125,16 @@ impl PdfCraftApp {
         };
         if changed {
             self.print_draft.apply_setup();
+        }
+        if let Some(duplex) = duplex {
+            use pdfcraft_engine::js::PrintDuplex;
+            let d = &mut self.print_draft;
+            let mode = match duplex {
+                PrintDuplex::Simplex => spool::Duplex::Off,
+                PrintDuplex::LongEdge => spool::Duplex::LongEdge,
+            };
+            d.script_duplex = Some((mode, d.duplex));
+            d.duplex = Some(mode);
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(p) = printer {

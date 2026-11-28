@@ -7410,6 +7410,38 @@ fn javascript_field_rect_moves_first_widget_and_undoes() {
     assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().widgets[0].rect, [30.0, 40.0, 130.0, 60.0]);
 }
 
+#[test]
+fn javascript_indexed_rect_preserves_other_widgets() {
+    let mut session = Session::new();
+    let id = session.open("rect.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    session.apply(id, Edit::InsertBlankPage { at: 1, width: 200.0, height: 300.0 }).unwrap();
+    session.apply(id, Edit::DuplicateField { name: "price".into(), pages: vec![1] }).unwrap();
+    let rectangles = |session: &Session| {
+        session.get(id).unwrap().form.iter().find(|field| field.name == "price").unwrap().widgets.iter().map(|widget| widget.rect).collect::<Vec<_>>()
+    };
+    let before = rectangles(&session);
+    let out = session
+        .run_javascript(
+            id,
+            "
+        var widget = getField('price.1');
+        var rect = widget.rect;
+        rect[0] += 5;
+        widget.rect = rect;
+        widget.rect[0] > getField('price.0').rect[0] && getField('price.2') === null;
+    ",
+            None,
+        )
+        .unwrap();
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("true"));
+    let after = rectangles(&session);
+    assert_eq!(after[0], before[0]);
+    assert!(after[1][0] > before[1][0]);
+    session.undo(id).unwrap();
+    assert_eq!(rectangles(&session), before);
+}
+
 /// XFA forms check `xfa_installed` and `xfa_version` in a document script that runs before
 /// each of their scripts, and alert when either is missing.
 #[test]
@@ -14572,6 +14604,7 @@ fn a_batch_that_applies_redactions_and_copies_a_page_is_refused() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let page = one_line_page_with("/Font << /F1 4 0 R >>", "", "BT /F1 16 Tf 20 150 Td (Public words then SECRET42) Tj ET");
     let id = s.open("batch.pdf", None, Arc::new(page), None).unwrap();
+    s.apply(id, Edit::ScriptPages { changes: vec![crate::js::TemplateChange::Create { name: "Notes".into(), page: 0 }] }).unwrap();
     mark_shown_text(&mut s, id, "SECRET42");
     let apply = Edit::ApplyRedactions { pages: None };
     let copy = Edit::DuplicatePages { pages: vec![0], at: None };
@@ -14579,6 +14612,10 @@ fn a_batch_that_applies_redactions_and_copies_a_page_is_refused() {
     assert!(matches!(&refused, Err(EditError::Invalid(m)) if m.contains("copy pages")), "{refused:?}");
     assert!(page_texts(&s, id)[0].contains("SECRET42"), "nothing changed");
     assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
+    let spawn = Edit::ScriptPages { changes: vec![crate::js::TemplateChange::Spawn { name: "Notes".into(), page: 1, rename: true, overlay: false }] };
+    let refused = s.apply(id, Edit::Batch { label: "spawn".into(), edits: vec![apply.clone(), spawn] });
+    assert!(matches!(&refused, Err(EditError::Invalid(m)) if m.contains("spawn template pages")), "{refused:?}");
+    assert!(page_texts(&s, id)[0].contains("SECRET42"));
     // Copying before the redaction is applied puts the mark on the copy too, and both are checked.
     s.apply(id, Edit::Batch { label: "y".into(), edits: vec![copy, apply] }).unwrap();
     assert!(page_texts(&s, id).iter().all(|t| !t.contains("SECRET42")), "{:?}", page_texts(&s, id));

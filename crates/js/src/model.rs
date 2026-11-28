@@ -33,9 +33,20 @@ pub const DISPLAY_NO_PRINT: i32 = 2;
 
 pub const DISPLAY_NO_VIEW: i32 = 3;
 
+/// Rectangle geometry for an individual widget after the first.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WidgetRect {
+    pub object_id: u64,
+    pub rect: [f64; 4],
+    pub crop: [f64; 4],
+    pub rotation: i64,
+}
+
 /// A field as scripts see it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldState {
+    pub submit_name: String,
+    pub pages: Vec<i32>,
     pub name: String,
     /// Stable PDF object identity, absent for synthetic name-only callers.
     pub object_id: Option<u64>,
@@ -50,7 +61,12 @@ pub struct FieldState {
     pub default_known: bool,
     pub readonly: bool,
     pub required: bool,
+    pub password: bool,
+    /// Appearance state to export value for buttons with explicit /Opt entries.
+    pub button_exports: Vec<(String, String)>,
     pub display: i32,
+    /// Live display before the first write or template copy in this run.
+    pub display_before_write: Option<i32>,
     /// Choice options (export value, display text); check boxes and radios: their export
     /// values, one per widget.
     pub options: Vec<(String, String)>,
@@ -63,6 +79,8 @@ pub struct FieldState {
     /// A setter ran, even if its text equals widget 0: other widgets may differ.
     pub caption_written: bool,
     pub rect: Option<[f64; 4]>,
+    pub first_widget_id: Option<u64>,
+    pub additional_widget_rects: std::sync::Arc<[WidgetRect]>,
     pub page_rotation: i64,
     pub page_crop: [f64; 4],
     pub stroke_color: Option<std::sync::Arc<[String]>>,
@@ -85,6 +103,8 @@ impl FieldState {
     /// Construct a field snapshot with explicit defaults for optional appearance and interaction state.
     pub fn new(name: impl Into<String>, kind: FieldType, value: Vec<String>) -> FieldState {
         FieldState {
+            submit_name: String::new(),
+            pages: vec![-1],
             name: name.into(),
             object_id: None,
             instance_id: 0,
@@ -94,7 +114,10 @@ impl FieldState {
             default_known: true,
             readonly: false,
             required: false,
+            password: false,
+            button_exports: Vec::new(),
             display: DISPLAY_VISIBLE,
+            display_before_write: None,
             options: Vec::new(),
             char_limit: None,
             text_color: None,
@@ -102,6 +125,8 @@ impl FieldState {
             caption: None,
             caption_written: false,
             rect: None,
+            first_widget_id: None,
+            additional_widget_rects: Default::default(),
             page_rotation: 0,
             page_crop: [0.0; 4],
             stroke_color: None,
@@ -169,15 +194,18 @@ impl Event {
 /// About the document, for `this.numPages`, `this.info` and the like.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DocInfo {
+    pub templates: Vec<crate::templates::Template>,
+    pub bookmarks: Vec<crate::bookmarks::Bookmark>,
     /// Changes when history can replace an icon object under the same PDF reference.
     pub icon_epoch: u64,
     /// Revisions of referenced icons that can change independently across history.
     pub icon_versions: std::sync::Arc<std::collections::BTreeMap<u64, u64>>,
     pub file_name: String,
+    pub form_data: Option<crate::form_data::Codec>,
     pub num_pages: usize,
     /// The current page, 0-based.
     pub page: usize,
-    /// Document information (`this.info.title` etc.): lower-case key, value.
+    /// Document information: standard keys are lowercase; custom keys preserve PDF spelling.
     pub info: Vec<(String, String)>,
     /// Effective page boxes in PDF user space, ordered media, crop, bleed, trim, art.
     pub page_boxes: Vec<[[f64; 4]; 5]>,
@@ -185,8 +213,6 @@ pub struct DocInfo {
     pub page_rotations: Vec<i64>,
     /// The document has an XFA form, so scripts see `xfa_installed`.
     pub xfa: bool,
-    /// The page templates, with whether each is hidden (`this.templates`, #1429).
-    pub templates: Vec<(String, bool)>,
     pub zoom: f64,
     pub runtime_highlight: bool,
     /// The document's layers (optional content groups), for `getOCGs`, in the viewer's order.
@@ -304,6 +330,7 @@ pub enum Request {
     /// `this.resetForm([names])` (empty: every field).
     Reset(Vec<String>),
     Print,
+    PrintWithSettings(PrintSettings),
     /// `this.pageNum = n` (0-based).
     GoToPage(usize),
     LaunchUrl(String),
@@ -332,19 +359,30 @@ pub enum Request {
     },
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
     ShowPanel(Panel),
-    /// `template.spawn(nPage, bRename, bOverlay)` or `this.spawnPageFromTemplate(…)`: a page from
-    /// template `name` at `page` (0-based), with its fields renamed or not, or laid over `page`.
-    SpawnTemplate {
-        name: String,
-        page: usize,
-        rename: bool,
-        overlay: bool,
-    },
-    /// `template.hidden = hidden`.
-    SetTemplateHidden {
-        name: String,
-        hidden: bool,
-    },
+}
+
+/// The subset of Acrobat print parameters carried to the viewer for confirmation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrintSettings {
+    /// Zero-based page positions in print order. None selects the whole document.
+    pub pages: Option<Vec<usize>>,
+    /// None uses the viewer's usual duplex choice.
+    pub duplex: Option<PrintDuplex>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrintDuplex {
+    Simplex,
+    LongEdge,
+}
+
+impl PrintDuplex {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Simplex => "off",
+            Self::LongEdge => "long-edge",
+        }
+    }
 }
 
 /// A side panel a script can show or hide (`app.execMenuItem("ShowHideFileAttachment")`, …).
@@ -378,6 +416,13 @@ impl Panel {
 /// What running a script did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Outcome {
+    /// When the interactive worker queued this outcome.
+    pub completed_at: Option<std::time::Instant>,
+    pub page_changes: Vec<crate::templates::Change>,
+    pub calculate_enabled: Option<bool>,
+    pub calculations_current: bool,
+    pub document_changes: Vec<crate::bookmarks::Change>,
+    pub tool_buttons: Vec<crate::viewer::ButtonChange>,
     /// The runtime could not execute the callback safely.
     pub execution_refused: bool,
     /// Execution was refused before invoking any code in the retained realm.
@@ -399,6 +444,8 @@ pub struct Outcome {
     pub formatted: std::collections::BTreeSet<String>,
     /// The messages the script showed, in order.
     pub alerts: Vec<Message>,
+    /// Informational import alerts which the viewer should show after destination writeback.
+    pub post_commit_alerts: Vec<Message>,
     pub console: Vec<String>,
     pub requests: Vec<Request>,
     /// The script's error (syntax error, exception, or a limit reached), if it failed.

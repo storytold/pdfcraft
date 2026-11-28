@@ -1,7 +1,4 @@
-use super::document::{
-    get_field, get_nth_field_name, get_template, noop, num_fields, page_num_get, page_num_set, print, reset_form, spawn_page_from_template,
-    submit_form, template_object,
-};
+use super::document::{get_field, get_nth_field_name, noop, num_fields, page_num_get, page_num_set, print, reset_form, submit_form};
 use super::format::{printd, printf, printx, scand};
 use super::host::{arg, error, function, host, s, strings, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
@@ -81,11 +78,16 @@ pub(crate) fn message_box_message(args: &[JsValue], ctx: &mut Context) -> JsResu
 /// given in that order or as one object with those keys, and returns 1 (the OK button).
 fn alert(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let m = alert_message(args, ctx)?;
-    host(ctx)?.borrow_mut().alert(m.clone());
-    if !crate::interaction::has_host() {
+    let (index, recorded) = {
+        let mut host = host(ctx)?.borrow_mut();
+        let index = host.alerts.len();
+        host.alert(m.clone());
+        (index, host.alerts.len() != index)
+    };
+    if (matches!(m.buttons, MessageButtons::Ok) && crate::selected_pdf::defer_alert(ctx, index, recorded)) || !crate::interaction::has_host() {
         return Ok(JsValue::from(1));
     }
-    let answer = crate::interaction::ask(crate::interaction::Prompt::Alert(m.clone()))?;
+    let answer = crate::interaction::ask(ctx, crate::interaction::Prompt::Alert(m.clone()))?;
     let fallback = match m.buttons {
         MessageButtons::Ok => "1",
         MessageButtons::YesNo => "3",
@@ -143,10 +145,9 @@ fn launch_url(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     Ok(JsValue::undefined())
 }
 
-/// `app.openDoc(cPath, oDoc)` or `app.openDoc({cPath, oDoc, cFS})`: queues a request to open
-/// the local file `cPath`, relative to this document. Only this document may be the base and
-/// only the local file system is supported; other options are refused. The viewer asks the
-/// user first, so no document object can be returned: the call answers null (#2081).
+/// `app.openDoc(cPath, oDoc)` or `app.openDoc({cPath, oDoc, cFS})`. A selection path
+/// opens the temporary PDF. Other local paths queue a viewer request for separate consent
+/// (#2081). Only this document can be the base.
 fn open_doc(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let unset = |v: &JsValue| v.is_undefined() || v.is_null();
     // Only this context's own document object (not a lookalike, proxy or inherited object).
@@ -173,6 +174,12 @@ fn open_doc(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
     };
     if path.is_empty() || path.len() > 4096 {
         return Err(error("invalid openDoc path"));
+    }
+    if !crate::selected_pdf::primary(ctx) {
+        return Err(error("a selected PDF cannot open another document"));
+    }
+    if let Some(document) = crate::selected_pdf::open(&path, ctx)? {
+        return Ok(document);
     }
     let shared = host(ctx)?;
     let mut h = shared.borrow_mut();
@@ -324,6 +331,7 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
             return Err(error);
         }
     };
+    let mut rolled_back = false;
     let result = (|| {
         for (index, script) in calculations {
             let Some(field) = host(ctx)?.borrow().fields.get(index).cloned() else { continue };
@@ -355,6 +363,7 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
                 if err.as_engine().is_some() || h.calculation_limit_exceeded || h.reset_limit_exceeded {
                     return Err(err);
                 }
+                rolled_back = true;
                 h.fields = fields_before;
                 h.changed = changed_before;
                 h.formatted = formatted_before;
@@ -389,6 +398,7 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     if let Ok(shared) = host(ctx) {
         let mut h = shared.borrow_mut();
         h.calculate_depth = h.calculate_depth.saturating_sub(1);
+        h.calculations_current = !rolled_back && result.is_ok() && restored.is_ok();
     }
     result.and(restored)
 }
@@ -530,10 +540,17 @@ fn document_info_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<
 
 /// Install the host API once; live document properties continue reading each job's snapshot.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
-    let globals: [(&str, usize, NativeFunction); 15] = [
+    crate::selected_pdf::install(ctx)?;
+    let globals: [(&str, usize, NativeFunction); 19] = [
+        ("bringToFront", 0, NativeFunction::from_fn_ptr(noop)),
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
+        ("importAnFDF", 1, NativeFunction::from_fn_ptr(crate::form_data::import_fdf)),
+        ("importAnXFDF", 1, NativeFunction::from_fn_ptr(crate::form_data::import_xfdf)),
+        ("exportAsXFDF", 5, NativeFunction::from_fn_ptr(crate::form_data::export_file)),
+        ("exportAsXFDFStr", 5, NativeFunction::from_fn_ptr(crate::form_data::export_string)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
+        ("getPrintParams", 0, NativeFunction::from_fn_ptr(super::document::get_print_params)),
         ("print", 1, NativeFunction::from_fn_ptr(print)),
         ("submitForm", 1, NativeFunction::from_fn_ptr(submit_form)),
         ("mailDoc", 1, NativeFunction::from_fn_ptr(noop)),
@@ -542,8 +559,6 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ("AFSimple_Calculate", 2, NativeFunction::from_fn_ptr(af_simple_calculate)),
         ("syncAnnotScan", 0, NativeFunction::from_fn_ptr(noop)),
         ("dirty", 0, NativeFunction::from_fn_ptr(noop)),
-        ("getTemplate", 1, NativeFunction::from_fn_ptr(get_template)),
-        ("spawnPageFromTemplate", 5, NativeFunction::from_fn_ptr(spawn_page_from_template)),
         ("exportDataObject", 4, NativeFunction::from_fn_ptr(export_data_object)),
         ("getOCGs", 1, NativeFunction::from_fn_ptr(crate::ocg::get_ocgs)),
     ];
@@ -551,6 +566,14 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ctx.register_global_callable(JsString::from(name), len, f)?;
     }
     let zg = function(ctx, NativeFunction::from_fn_ptr(zoom_get));
+    let calculate_get = function(ctx, NativeFunction::from_fn_ptr(|_, _, ctx| Ok(host(ctx)?.borrow().calculate.into())));
+    let calculate_set = function(
+        ctx,
+        NativeFunction::from_fn_ptr(|_, args, ctx| {
+            host(ctx)?.borrow_mut().calculate = arg(args, 0).to_boolean();
+            Ok(JsValue::undefined())
+        }),
+    );
     let zs = function(ctx, NativeFunction::from_fn_ptr(zoom_set));
 
     let border = ObjectInitializer::new(ctx)
@@ -561,7 +584,14 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .property(js_string!("u"), s("underline"), Attribute::all())
         .build();
     ctx.register_global_property(js_string!("border"), border, Attribute::CONFIGURABLE)?;
+    let bookmark_root = crate::bookmarks::root(ctx)?;
+    ctx.register_global_property(js_string!("bookmarkRoot"), bookmark_root, Attribute::CONFIGURABLE)?;
     let global = ctx.global_object();
+    global.define_property_or_throw(
+        js_string!("calculate"),
+        boa_engine::property::PropertyDescriptor::builder().get(calculate_get.clone()).set(calculate_set.clone()).configurable(true),
+        ctx,
+    )?;
     global.define_property_or_throw(
         js_string!("zoom"),
         boa_engine::property::PropertyDescriptor::builder().get(zg).set(zs).configurable(true).build(),
@@ -578,16 +608,12 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
     for (name, getter) in [
         ("numPages", num_pages_get as fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>),
         ("documentFileName", document_file_name_get),
+        ("path", document_file_name_get),
         ("info", document_info_get),
     ] {
         let getter = function(ctx, NativeFunction::from_fn_ptr(getter));
         global.define_property_or_throw(JsString::from(name), PropertyDescriptor::builder().get(getter).configurable(true), ctx)?;
     }
-    // `this.templates`: every page template, as Template objects (#1429).
-    let names: Vec<String> = host(ctx)?.borrow().doc.templates.iter().map(|(n, _)| n.clone()).collect();
-    let templates: Vec<JsValue> = names.iter().map(|n| template_object(ctx, n).into()).collect();
-    let templates = JsArray::from_iter(templates, ctx);
-    ctx.register_global_property(js_string!("templates"), templates, rw)?;
     // XFA forms check both before they run: every document sees the XFA version, and only an
     // XFA form sees `xfa_installed`.
     ctx.register_global_property(js_string!("xfa_version"), JsValue::from(XFA_VERSION), rw)?;
@@ -597,11 +623,17 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
 
     let highlight_get = function(ctx, NativeFunction::from_fn_ptr(runtime_highlight));
     let highlight_set = function(ctx, NativeFunction::from_fn_ptr(set_runtime_highlight));
+    let thermometer = crate::viewer::thermometer(ctx)?;
     let app = ObjectInitializer::new(ctx)
+        .accessor(js_string!("calculate"), Some(calculate_get), Some(calculate_set), rw)
+        .property(js_string!("thermometer"), thermometer, rw)
         .accessor(js_string!("runtimeHighlight"), Some(highlight_get), Some(highlight_set), rw)
         .function(NativeFunction::from_fn_ptr(alert), js_string!("alert"), 1)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 0)
         .function(NativeFunction::from_fn_ptr(crate::interaction::response), js_string!("response"), 1)
+        .function(NativeFunction::from_fn_ptr(crate::dialogs::execute), js_string!("execDialog"), 1)
+        .function(NativeFunction::from_fn_ptr(crate::viewer::add_button), js_string!("addToolButton"), 1)
+        .function(NativeFunction::from_fn_ptr(crate::viewer::remove_button), js_string!("removeToolButton"), 1)
         .function(NativeFunction::from_fn_ptr(launch_url), js_string!("launchURL"), 2)
         .function(NativeFunction::from_fn_ptr(crate::interaction::popup_menu), js_string!("popUpMenuEx"), 0)
         .function(NativeFunction::from_fn_ptr(open_doc), js_string!("openDoc"), 1)
@@ -619,6 +651,8 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .build();
     ctx.register_global_property(js_string!("app"), app, rw)?;
     let util = ObjectInitializer::new(ctx)
+        .function(NativeFunction::from_fn_ptr(crate::streams::read), js_string!("readFileIntoStream"), 0)
+        .function(NativeFunction::from_fn_ptr(crate::streams::string), js_string!("stringFromStream"), 1)
         .function(NativeFunction::from_fn_ptr(printf), js_string!("printf"), 1)
         .function(NativeFunction::from_fn_ptr(printd), js_string!("printd"), 2)
         .function(NativeFunction::from_fn_ptr(printx), js_string!("printx"), 2)
@@ -632,6 +666,9 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .function(NativeFunction::from_fn_ptr(console_clear), js_string!("clear"), 0)
         .build();
     ctx.register_global_property(js_string!("console"), console, rw)?;
+    // Document scripts can keep temporary references here without sharing them with other PDFs.
+    let globals = ObjectInitializer::new(ctx).build();
+    ctx.register_global_property(js_string!("global"), globals, rw)?;
     let display = ObjectInitializer::new(ctx)
         .property(js_string!("visible"), DISPLAY_VISIBLE, Attribute::READONLY)
         .property(js_string!("hidden"), DISPLAY_HIDDEN, Attribute::READONLY)
@@ -642,6 +679,8 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
     let color = color_object(ctx);
     ctx.register_global_property(js_string!("color"), color, rw)?;
     crate::source::install(ctx)?;
+    crate::legacy::install(ctx)?;
+    crate::templates::install(ctx)?;
     Ok(())
 }
 

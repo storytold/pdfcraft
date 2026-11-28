@@ -12,7 +12,9 @@ its separate stack policy). Document scripts initialize once with `Doc/Open`, be
 button, console, format, validate and calculate scripts then share that context. Field objects
 read the latest snapshot supplied by the engine, including objects retained by earlier scripts.
 Exposed Field objects are cached by PDF object identity; synthetic fields use name keys. Separate documents cannot share globals or
-icon objects. `eval` and dynamic Function construction remain disabled.
+icon objects. Retained document sessions allow `eval` and dynamic Function construction with
+the same parser, loop and recursion guards, an 8 MiB per-source limit and a 16 MiB
+per-event compilation budget. Stateless runners continue to refuse dynamic compilation.
 
 Changing the document-script sources recreates the context. Closing, reopening, reloading,
 Revert, disabling JavaScript, and saving a full rewrite release/reset the context. Incremental saves retain it. A rewrite can reuse PDF object numbers, so old Field and icon objects must not be carried across it. PDF Undo/Redo restores PDF state;
@@ -24,7 +26,10 @@ and comma-separated sibling expressions reset only their own level; comparisons 
 Keyword unary/new chains share the prefix
 depth bound of 64. These conservative limits protect recursive parser/compiler paths before
 execution on the smaller worker stack. Boundary and refusal cases run in subprocess regressions.
-These bounds do not establish a hard JavaScript heap quota.
+These bounds do not establish a hard JavaScript heap quota. Native operations have
+a shared 10-second deadline, increased to 30 seconds for more than 1,024 fields
+or more than 1 MiB of document libraries. Explicit shorter callback deadlines
+remain authoritative; the native viewer uses the same operation allowance.
 
 `calculateNow()` evaluates the current calculation list synchronously, in `/CO` order, using
 pending writes. Later statements in the same invocation see the new values. The caller's

@@ -25,6 +25,10 @@ mod pdfx;
 mod prune;
 mod templates;
 mod transition;
+pub use templates::{
+    Template, create_template, delete_script_pages, remove_template, set_template_hidden, spawn_template, template_fallback, template_geometry,
+    template_geometry_with_fallback, templates,
+};
 pub mod view;
 mod xmp;
 
@@ -43,7 +47,6 @@ pub use outline::{
     move_bookmark, rename_bookmark, set_bookmark_color, set_bookmark_open, set_bookmark_page, set_bookmark_style, top_level_bookmarks,
 };
 pub use outline_io::{MAX_IMPORT_BOOKMARKS, OutlineNode, OutlineTree, import_outline, outline_tree, unmapped, view_arity};
-pub use templates::{Template, set_template_hidden, spawn_template, templates};
 pub use transition::{TRANSITION_DIRECTIONS, TRANSITION_STYLES, Transition, TransitionSpec, set_transition};
 pub use view::{InitialView, displays_doc_title, initial_view, set_initial_view};
 
@@ -277,16 +280,23 @@ pub fn rotate_pages(doc: &mut Document, indices: &[usize], degrees: i64) -> Resu
 pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), OrganizeError> {
     let all = walk(doc)?;
     check(indices, all.len())?;
-    let keep: Vec<(ObjRef, Dict)> = all.iter().enumerate().filter(|(i, _)| !indices.contains(i)).map(|(_, p)| p.clone()).collect();
+    let selected: std::collections::HashSet<_> = indices.iter().copied().collect();
+    let (mut gone, mut keep) = (Vec::new(), Vec::new());
+    for (i, (page, attrs)) in all.into_iter().enumerate() {
+        if selected.contains(&i) {
+            gone.push(page);
+        } else {
+            keep.push((page, attrs));
+        }
+    }
     if keep.is_empty() {
         return Err(OrganizeError::WouldRemoveAllPages);
     }
     rebuild(doc, &keep)?;
-    labels::drop_deleted_pages(doc, indices)?;
+    labels::drop_deleted_pages(doc, indices, keep.len())?;
     // The deleted pages go for good: bookmarks, links and widgets that still point at one would
     // otherwise keep it, with its content, in the saved file. Their form widgets leave the form,
     // and bookmarks and links that went to them lose that destination.
-    let gone: Vec<ObjRef> = all.iter().map(|(r, _)| *r).filter(|r| !keep.iter().any(|(k, _)| k == r)).collect();
     let mut widgets = Vec::new();
     for r in &gone {
         let annots = doc.get(*r).as_dict().and_then(|d| d.get(b"Annots").cloned()).map(|a| doc.resolve(&a).as_array().cloned().unwrap_or_default());

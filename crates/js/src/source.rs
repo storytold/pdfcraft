@@ -1,7 +1,7 @@
 //! `toSource()` on objects and arrays, which older forms use to keep state in a field or a
-//! global as text (#269, ported from #344). It writes a JavaScript literal of the value; scripts
-//! here can't `eval` it back, since strings never compile. Plain data only: strings, numbers,
-//! booleans, null, undefined, arrays and objects of them. Functions and cycles are refused, and
+//! global as text (#269, ported from #344). It writes a JavaScript literal of the value,
+//! including source functions, regular expressions and dates used by imported form rules.
+//! Native functions and cycles are refused, and
 //! so is a value past the depth, size or length bounds, rather than writing something that
 //! reads as another value.
 
@@ -12,9 +12,10 @@ use boa_engine::property::{PropertyDescriptor, PropertyKey};
 /// Deepest nesting written.
 const MAX_DEPTH: usize = 64;
 /// Most values (each array item, property and the value itself) written.
-const MAX_VALUES: usize = 10_000;
+const MAX_VALUES: usize = 100_000;
 /// Longest source written, in bytes.
-const MAX_BYTES: usize = 1 << 20;
+const MAX_BYTES: usize = 16 << 20;
+const MAX_RESULT_BYTES: usize = 8 << 20;
 
 /// Install `toSource` on `Object.prototype` (arrays inherit it), not enumerable, as in the
 /// engines that had it.
@@ -29,6 +30,9 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
 fn to_source(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let mut writer = Writer { values: MAX_VALUES, bytes: MAX_BYTES, open: Vec::new() };
     let out = writer.value(this, ctx)?;
+    if out.len() > MAX_RESULT_BYTES {
+        return Err(error("toSource: the result would be too long"));
+    }
     Ok(s(&out))
 }
 
@@ -43,11 +47,61 @@ impl Writer {
     fn value(&mut self, v: &JsValue, ctx: &mut Context) -> JsResult<String> {
         self.values = self.values.checked_sub(1).ok_or_else(|| error("toSource: the value has too many parts"))?;
         let out = if v.is_callable() {
-            return Err(error("toSource: functions can't be written"));
+            let prototype = ctx.intrinsics().constructors().function().prototype();
+            let stringify =
+                prototype.get(js_string!("toString"), ctx)?.as_callable().ok_or_else(|| error("toSource: function source is unavailable"))?;
+            let source = crate::host::text_with_budget(&stringify.call(v, &[], ctx)?, ctx, MAX_RESULT_BYTES, "toSource: function is too long")?;
+            if source.contains("[native code]") {
+                return Err(error("toSource: native functions can't be written"));
+            }
+            // Object methods stringify as `name(args) { ... }`, not an expression.
+            // Parse only: a method is not a standalone expression, whereas an arrow or
+            // function is. Nested arrows and literal text must not classify its outer form.
+            let expression = format!("({source})");
+            let source = if boa_engine::Script::parse(boa_engine::Source::from_bytes(&expression), None, ctx).is_ok() {
+                source
+            } else if let Some(method) = source.strip_prefix("async ") {
+                format!("async function {method}")
+            } else {
+                format!("function {source}")
+            };
+            format!("({source})")
         } else if let Some(o) = v.as_object() {
-            self.object(&o, ctx)?
-        } else if let Some(text) = v.as_string() {
-            quote(&text.to_std_string_escaped())
+            if let Ok(regex) = boa_engine::object::builtins::JsRegExp::from_object(o.clone()) {
+                let mut pattern = String::new();
+                let mut escaped = false;
+                let source = regex.source(ctx)?;
+                if source.len() > MAX_RESULT_BYTES {
+                    return Err(error("toSource: regular expression is too long"));
+                }
+                for c in source.chars() {
+                    match c {
+                        '/' if !escaped => pattern.push_str("\\/"),
+                        '\n' => pattern.push_str("\\n"),
+                        '\r' => pattern.push_str("\\r"),
+                        '\u{2028}' => pattern.push_str("\\u2028"),
+                        '\u{2029}' => pattern.push_str("\\u2029"),
+                        _ => pattern.push(c),
+                    }
+                    escaped = c == '\\' && !escaped;
+                }
+                format!("/{pattern}/{}", regex.flags(ctx)?)
+            } else if let Ok(date) = crate::JsDate::from_object(o.clone()) {
+                format!("(new Date({}))", text(&date.get_time(ctx)?, ctx)?)
+            } else if o.is::<boa_engine::builtins::error::Error>() {
+                let name = crate::host::text_with_budget(&o.get(js_string!("name"), ctx)?, ctx, 256, "toSource: error name is too long")?;
+                let name = match name.as_str() {
+                    "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError" | "URIError" => name.as_str(),
+                    _ => "Error",
+                };
+                let message =
+                    crate::host::text_with_budget(&o.get(js_string!("message"), ctx)?, ctx, MAX_RESULT_BYTES, "toSource: error message is too long")?;
+                format!("(new {name}({}))", quote(&message))
+            } else {
+                self.object(&o, ctx)?
+            }
+        } else if v.is_string() {
+            quote(&crate::host::text_with_budget(v, ctx, self.bytes.min(MAX_RESULT_BYTES), "toSource: the result would be too long")?)
         } else if v.is_null() {
             "null".into()
         } else if v.is_undefined() {

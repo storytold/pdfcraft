@@ -403,7 +403,7 @@ pub fn set_page_label_ranges(doc: &mut Document, ranges: &[LabelRange]) -> Resul
 /// it, and keeps its first number, so numbering continues over the gap as in Acrobat. A range whose
 /// first page went starts on the next page left; one left with no pages gives way to the next.
 /// A tree that can't be read is left as it is: the delete still goes ahead.
-pub(crate) fn drop_deleted_pages(doc: &mut Document, deleted: &[usize]) -> Result<(), OrganizeError> {
+pub(crate) fn drop_deleted_pages(doc: &mut Document, deleted: &[usize], remaining: usize) -> Result<(), OrganizeError> {
     let Ok(old) = checked_ranges(doc) else { return Ok(()) };
     let mut deleted = deleted.to_vec();
     deleted.sort_unstable();
@@ -411,6 +411,9 @@ pub(crate) fn drop_deleted_pages(doc: &mut Document, deleted: &[usize]) -> Resul
     let mut ranges: Vec<LabelRange> = Vec::with_capacity(old.len());
     for r in &old {
         let start = r.start.saturating_sub(deleted.partition_point(|d| *d < r.start));
+        if start >= remaining {
+            continue;
+        }
         match ranges.last_mut() {
             // The later range is the one on the first page left; ranges stay sorted by start.
             Some(last) if last.start == start => *last = LabelRange { start, ..r.clone() },

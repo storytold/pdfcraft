@@ -70,8 +70,8 @@ fn source_document(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Result<pdfcr
     source_document_if(bytes, password, |d| d.permissions().is_none_or(|p| p.extract_pages()))
 }
 
-/// Open `bytes` as a page source, refused as [`SourceProblem::NotPermitted`] unless `permitted`.
-fn source_document_if(
+/// Open `bytes` as a PDF source, refused as [`SourceProblem::NotPermitted`] unless `permitted`.
+pub(crate) fn source_document_if(
     bytes: &Arc<Vec<u8>>,
     password: Option<&str>,
     permitted: impl Fn(&pdfcraft_cos::Document) -> bool,

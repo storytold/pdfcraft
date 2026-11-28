@@ -318,7 +318,8 @@ impl Automation {
                 self.apply(&a, Edit::DuplicatePages { pages, at })?
             }
             "page_templates" => {
-                let templates: Vec<Value> = self.doc(&a)?.templates().into_iter().map(|t| json!({ "name": t.name, "hidden": t.hidden })).collect();
+                let templates: Vec<Value> =
+                    self.doc(&a)?.page_templates().into_iter().map(|t| json!({ "name": t.name, "hidden": t.hidden })).collect();
                 json!({ "templates": templates })
             }
             "page_template_spawn" => {
@@ -856,6 +857,8 @@ impl Automation {
             "accessibility_autotag_form_fields" => self.accessibility_autotag_form_fields(&a)?,
             "ocr_recognize" => self.ocr_recognize(&a)?,
             "js_run" => self.js_run(&a)?,
+            "js_tool_buttons" => self.js_tool_buttons(&a)?,
+            "js_tool_button" => self.js_tool_button(&a)?,
             "js_event" => self.js_event(&a)?,
             "js_page" => self.js_page(&a)?,
             "js_advance" => self.js_advance(&a)?,

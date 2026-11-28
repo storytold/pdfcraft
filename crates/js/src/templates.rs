@@ -1,0 +1,397 @@
+//! A bounded shadow of page structure: page edits and new fields are visible immediately to
+//! the running script, then the engine replays the edits atomically on the PDF object graph.
+use crate::host::{arg, error, function, host, s, text_with_budget};
+use crate::{Context, JsArray, JsObject, JsResult, JsValue, NativeFunction, ObjectInitializer, js_string};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+#[derive(Clone, Debug, PartialEq)]
+pub struct Template {
+    pub name: String,
+    /// Shared identity for names that refer to the same source page.
+    pub source: u64,
+    pub page: Option<usize>,
+    pub fields: Arc<Vec<FieldIdentity>>,
+    pub boxes: [[f64; 4]; 5],
+    pub rotation: i64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FieldIdentity {
+    Object(u64),
+    Spawned(u64),
+    Name(String),
+}
+
+impl FieldIdentity {
+    fn of(field: &crate::FieldState) -> Self {
+        match (field.object_id, field.instance_id) {
+            (Some(id), _) => Self::Object(id),
+            (None, 0) => Self::Name(field.name.clone()),
+            (None, id) => Self::Spawned(id),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Change {
+    Spawn { name: String, page: usize, rename: bool, overlay: bool },
+    Hidden { name: String, hidden: bool },
+    Create { name: String, page: usize },
+    Remove { name: String },
+    Delete { start: usize, end: usize },
+}
+
+fn guard(h: &mut crate::host::Host) -> bool {
+    let problem = if !h.may_change_pages || h.calculate_depth > 0 {
+        "only a button may change the pages in a field script"
+    } else if h.page_changes.len() >= 100 {
+        "a script may change at most 100 pages in one run"
+    } else {
+        return true;
+    };
+    if !h.console.iter().any(|line| line == problem) {
+        h.print(problem.into());
+    }
+    false
+}
+/// Console message shared with the engine writeback check for live page additions.
+pub const LIVE_ADDITION_REFUSAL: &str = "page actions and timers may not add or show template pages";
+
+fn guard_live_addition(h: &mut crate::host::Host) -> bool {
+    if !h.live_event {
+        return true;
+    }
+    if !h.console.iter().any(|line| line == LIVE_ADDITION_REFUSAL) {
+        h.print(LIVE_ADDITION_REFUSAL.into());
+    }
+    false
+}
+
+fn template(ctx: &Context, name: &str) -> JsResult<Template> {
+    host(ctx)?
+        .borrow()
+        .doc
+        .templates
+        .iter()
+        .find(|t| t.name == name)
+        .cloned()
+        .ok_or_else(|| error(format!("there is no page template named {name:?}")))
+}
+/// Replace positions without invalidating held field objects, and remap calculation targets.
+fn fields(h: &mut crate::host::Host, next: Vec<crate::FieldState>, added: &HashSet<FieldIdentity>) {
+    h.calculations_current = false;
+    let key = FieldIdentity::of;
+    let changed: HashSet<_> = h.changed.iter().filter_map(|i| h.fields.get(*i)).map(key).collect();
+    let calculations: Vec<_> = h.calculations.iter().filter_map(|(i, s)| h.fields.get(*i).map(|f| (key(f), s.clone()))).collect();
+    h.changed = next.iter().enumerate().filter(|(_, f)| added.contains(&key(f)) || changed.contains(&key(f))).map(|(i, _)| i).collect();
+    let by_key: HashMap<_, _> = next.iter().enumerate().map(|(i, f)| (key(f), i)).collect();
+    h.calculations = calculations.into_iter().filter_map(|(id, s)| by_key.get(&id).map(|i| (*i, s))).collect();
+    h.formatted = h.formatted.iter().filter_map(|i| h.fields.get(*i).and_then(|f| by_key.get(&key(f)).copied())).collect();
+    h.field_keys = crate::host::field_indices(&next);
+    h.objects.retain(|key, _| h.field_keys.contains_key(key));
+    h.fields = Arc::new(next);
+}
+fn field_bytes(f: &crate::FieldState) -> usize {
+    f.value
+        .iter()
+        .chain(&f.default)
+        .map(String::len)
+        .chain(f.options.iter().map(|(a, b)| a.len().saturating_add(b.len())))
+        .chain(f.actions.iter().map(|(a, b)| a.len().saturating_add(b.len())))
+        .chain([f.name.len(), f.submit_name.len(), f.user_name.len(), std::mem::size_of::<crate::FieldState>()])
+        .fold(0usize, usize::saturating_add)
+}
+fn insert(h: &mut crate::host::Host, template: &Template, page: usize, rename: bool) -> JsResult<()> {
+    let prefix = if rename {
+        let roots: HashSet<_> = h.fields.iter().filter_map(|f| f.name.split('.').next()).collect();
+        let base = format!("P{page}");
+        let mut root = base.clone();
+        for suffix in 1..=roots.len() {
+            if !roots.contains(root.as_str()) {
+                break;
+            }
+            root = format!("{base}-{suffix}");
+        }
+        format!("{root}.{}.", template.name)
+    } else {
+        String::new()
+    };
+    let identities: HashSet<_> = template.fields.iter().collect();
+    let source: Vec<_> = h.fields.iter().enumerate().filter(|(_, f)| identities.contains(&FieldIdentity::of(f))).collect();
+    let bytes = h.fields.iter().map(field_bytes).fold(0usize, usize::saturating_add);
+    let extra = if rename { source.iter().map(|(_, f)| field_bytes(f).saturating_add(prefix.len())).fold(0usize, usize::saturating_add) } else { 0 };
+    if bytes.saturating_add(extra) > 64 << 20 {
+        return Err(error("template expansion exceeds its field data budget"));
+    }
+    if h.fields.len().saturating_add(if rename { source.len() } else { 0 }) > 100_000 || h.doc.num_pages >= 100_000 {
+        return Err(error("template expansion exceeds its page or field limit"));
+    }
+    let mut next = h.fields.as_ref().clone();
+    for f in &mut next {
+        for p in &mut f.pages {
+            if *p >= 0 && *p as usize >= page {
+                *p = p.saturating_add(1);
+            }
+        }
+    }
+    let mut added = HashSet::new();
+    let mut copies = HashMap::new();
+    for (old, f) in source {
+        if rename {
+            let mut f = f.clone();
+            let index = next.len();
+            f.name = format!("{prefix}{}", f.name);
+            f.object_id = None;
+            f.display_before_write.get_or_insert(f.display);
+            h.last_spawned_field += 1;
+            f.instance_id = h.last_spawned_field;
+            f.pages = vec![i32::try_from(page).map_err(|_| error("page index is too large"))?];
+            let crop = template.boxes[1];
+            if f.page_crop != crop || f.page_rotation != template.rotation {
+                f.rect = f.rect.map(|r| crate::rotate_rect(crate::unrotate_rect(r, f.page_crop, f.page_rotation), crop, template.rotation));
+            }
+            f.page_crop = crop;
+            f.page_rotation = template.rotation;
+            added.insert(FieldIdentity::of(&f));
+            copies.insert(old, index);
+            next.push(f);
+        } else if let Some(field) = next.get_mut(old) {
+            field.pages.retain(|p| *p >= 0);
+            field.pages.push(i32::try_from(page).map_err(|_| error("page index is too large"))?);
+            field.pages.sort_unstable();
+            field.pages.dedup();
+        }
+    }
+    let calculations: Vec<_> = h.calculations.iter().filter_map(|(old, script)| copies.get(old).map(|index| (*index, script.clone()))).collect();
+    fields(h, next, &added);
+    h.calculations.extend(calculations);
+    for t in &mut h.doc.templates {
+        if let Some(p) = &mut t.page
+            && *p >= page
+        {
+            *p = p.saturating_add(1);
+        }
+    }
+    h.doc.num_pages = h.doc.num_pages.saturating_add(1);
+    h.doc.page_boxes.insert(page.min(h.doc.page_boxes.len()), template.boxes);
+    h.doc.page_rotations.insert(page.min(h.doc.page_rotations.len()), template.rotation);
+    Ok(())
+}
+fn delete(h: &mut crate::host::Host, start: usize, end: usize) -> JsResult<()> {
+    if start > end || end >= h.doc.num_pages {
+        return Err(error("deletePages range is outside this document"));
+    }
+    let count = end.saturating_sub(start).saturating_add(1);
+    if count >= h.doc.num_pages {
+        return Err(error("a document must keep at least one page"));
+    }
+    let originals: HashSet<_> = h.doc.templates.iter().flat_map(|t| t.fields.iter()).collect();
+    let mut next = Vec::new();
+    for mut f in h.fields.iter().cloned() {
+        let hidden = f.pages.iter().all(|p| *p < 0);
+        f.pages.retain(|p| *p >= 0 && ((*p as usize) < start || (*p as usize) > end));
+        for p in &mut f.pages {
+            if *p >= 0 && *p as usize > end {
+                *p = p.saturating_sub(i32::try_from(count).unwrap_or(i32::MAX));
+            }
+        }
+        if f.pages.is_empty() {
+            if hidden || originals.contains(&FieldIdentity::of(&f)) {
+                f.pages.push(-1);
+            } else {
+                continue;
+            }
+        }
+        next.push(f);
+    }
+    fields(h, next, &HashSet::new());
+    for t in &mut h.doc.templates {
+        if let Some(p) = t.page {
+            t.page = if (start..=end).contains(&p) { None } else { Some(if p > end { p - count } else { p }) };
+        }
+    }
+    h.doc.num_pages -= count;
+    h.doc.page = h.doc.page.min(h.doc.num_pages.saturating_sub(1));
+    for n in (start..=end).rev() {
+        if n < h.doc.page_boxes.len() {
+            h.doc.page_boxes.remove(n);
+        }
+        if n < h.doc.page_rotations.len() {
+            h.doc.page_rotations.remove(n);
+        }
+    }
+    Ok(())
+}
+fn page_number(value: &JsValue, ctx: &mut Context) -> JsResult<Option<f64>> {
+    if value.is_undefined() { Ok(None) } else { value.to_number(ctx).map(Some) }
+}
+
+fn page(value: Option<f64>, max: usize, default: usize) -> usize {
+    value.map_or(default.min(max), |n| n.max(0.0).min(max as f64) as usize)
+}
+fn spawn(_: &JsValue, args: &[JsValue], name: &crate::JsString, ctx: &mut Context) -> JsResult<JsValue> {
+    let first = arg(args, 0);
+    let (p, r, o) = if let Some(obj) = first.as_object().filter(|o| !o.is_array()) {
+        (obj.get(js_string!("nPage"), ctx)?, obj.get(js_string!("bRename"), ctx)?, obj.get(js_string!("bOverlay"), ctx)?)
+    } else {
+        (first, arg(args, 1), arg(args, 2))
+    };
+    let p = page_number(&p, ctx)?;
+    let rename = r.is_undefined() || r.to_boolean();
+    let overlay = o.is_undefined() || o.to_boolean();
+    let t = template(ctx, &name.to_std_string_escaped())?;
+    let mut h = host(ctx)?.borrow_mut();
+    let p = page(p, h.doc.num_pages, 0);
+    if (!overlay && !guard_live_addition(&mut h)) || !guard(&mut h) {
+        return Ok(JsValue::undefined());
+    }
+    if overlay {
+        let message = format!("Laying template {} over an existing page isn't supported; use bOverlay=false", t.name);
+        if !h.console.iter().any(|line| line.contains("use bOverlay=false")) {
+            h.print(message);
+        }
+        return Ok(JsValue::undefined());
+    }
+    insert(&mut h, &t, p, rename)?;
+    h.page_changes.push(Change::Spawn { name: t.name, page: p, rename, overlay });
+    Ok(JsValue::undefined())
+}
+fn hidden_get(_: &JsValue, _: &[JsValue], name: &crate::JsString, ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(template(ctx, &name.to_std_string_escaped())?.page.is_none().into())
+}
+fn hidden_set(_: &JsValue, args: &[JsValue], name: &crate::JsString, ctx: &mut Context) -> JsResult<JsValue> {
+    let t = template(ctx, &name.to_std_string_escaped())?;
+    let hidden = arg(args, 0).to_boolean();
+    let mut h = host(ctx)?.borrow_mut();
+    if (!hidden && t.page.is_none() && !guard_live_addition(&mut h)) || !guard(&mut h) {
+        return Ok(JsValue::undefined());
+    }
+    if hidden == t.page.is_none() {
+        return Ok(JsValue::undefined());
+    }
+    if hidden {
+        if let Some(page) = t.page {
+            delete(&mut h, page, page)?;
+        }
+    } else {
+        let page = h.doc.num_pages;
+        insert(&mut h, &t, page, false)?;
+        for alias in h.doc.templates.iter_mut().filter(|alias| alias.source == t.source) {
+            alias.page = Some(page);
+        }
+    }
+    h.page_changes.push(Change::Hidden { name: t.name, hidden });
+    Ok(JsValue::undefined())
+}
+fn object(ctx: &mut Context, name: &str) -> JsObject {
+    let key = crate::JsString::from(name);
+    let spawn = function(ctx, NativeFunction::from_copy_closure_with_captures(spawn, key.clone()));
+    let get = function(ctx, NativeFunction::from_copy_closure_with_captures(hidden_get, key.clone()));
+    let set = function(ctx, NativeFunction::from_copy_closure_with_captures(hidden_set, key));
+    ObjectInitializer::new(ctx)
+        .property(js_string!("name"), s(name), boa_engine::property::Attribute::READONLY)
+        .property(js_string!("spawn"), spawn, boa_engine::property::Attribute::all())
+        .accessor(js_string!("hidden"), Some(get), Some(set), boa_engine::property::Attribute::all())
+        .build()
+}
+fn get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let first = arg(args, 0);
+    let first = if let Some(o) = first.as_object() { o.get(js_string!("cName"), ctx)? } else { first };
+    let name = text_with_budget(&first, ctx, 4096, "template name is too long")?;
+    Ok(if host(ctx)?.borrow().doc.templates.iter().any(|t| t.name == name) { object(ctx, &name).into() } else { JsValue::null() })
+}
+fn all(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let names: Vec<_> = host(ctx)?.borrow().doc.templates.iter().map(|t| t.name.clone()).collect();
+    let values: Vec<JsValue> = names.iter().map(|n| object(ctx, n).into()).collect();
+    Ok(JsArray::from_iter(values, ctx).into())
+}
+fn create(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let first = arg(args, 0);
+    let (name, p) =
+        if let Some(o) = first.as_object() { (o.get(js_string!("cName"), ctx)?, o.get(js_string!("nPage"), ctx)?) } else { (first, arg(args, 1)) };
+    let name = text_with_budget(&name, ctx, 4096, "template name is too long")?;
+    if name.is_empty() {
+        return Err(error("template name must not be empty"));
+    }
+    let p = page_number(&p, ctx)?;
+    {
+        let mut h = host(ctx)?.borrow_mut();
+        if !guard(&mut h) {
+            return Ok(JsValue::undefined());
+        }
+        if h.doc.templates.len() >= 4096 {
+            return Err(error("too many templates"));
+        }
+        let max = h.doc.num_pages.checked_sub(1).ok_or_else(|| error("createTemplate requires an existing page"))?;
+        let p = page(p, max, 0);
+        let fields = Arc::new(h.fields.iter().filter(|f| f.pages.contains(&(i32::try_from(p).unwrap_or(-1)))).map(FieldIdentity::of).collect());
+        let boxes = h.doc.page_boxes.get(p).copied().unwrap_or_default();
+        let rotation = h.doc.page_rotations.get(p).copied().unwrap_or(0);
+        let source = h
+            .doc
+            .templates
+            .iter()
+            .find(|t| t.page == Some(p))
+            .map_or_else(|| h.doc.templates.iter().map(|t| t.source).max().unwrap_or(0).saturating_add(1), |t| t.source);
+        h.doc.templates.retain(|t| t.name != name);
+        h.doc.templates.push(Template { name: name.clone(), source, page: Some(p), fields, boxes, rotation });
+        h.page_changes.push(Change::Create { name: name.clone(), page: p });
+    }
+    Ok(object(ctx, &name).into())
+}
+fn remove(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let name = text_with_budget(&arg(args, 0), ctx, 4096, "template name is too long")?;
+    template(ctx, &name)?;
+    let mut h = host(ctx)?.borrow_mut();
+    if !guard(&mut h) {
+        return Ok(JsValue::undefined());
+    }
+    h.doc.templates.retain(|t| t.name != name);
+    h.page_changes.push(Change::Remove { name });
+    Ok(JsValue::undefined())
+}
+fn delete_pages(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let first = arg(args, 0);
+    let (start, end) =
+        if let Some(o) = first.as_object() { (o.get(js_string!("nStart"), ctx)?, o.get(js_string!("nEnd"), ctx)?) } else { (first, arg(args, 1)) };
+    let start = page_number(&start, ctx)?;
+    let end = page_number(&end, ctx)?;
+    let mut h = host(ctx)?.borrow_mut();
+    let start = page(start, h.doc.num_pages, 0);
+    let end = page(end, h.doc.num_pages, start);
+    if !guard(&mut h) {
+        return Ok(JsValue::undefined());
+    }
+    delete(&mut h, start, end)?;
+    h.page_changes.push(Change::Delete { start, end });
+    Ok(JsValue::undefined())
+}
+fn spawn_named(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let first = arg(args, 0);
+    let (name, params) = if let Some(o) = first.as_object() {
+        (o.get(js_string!("cTemplate"), ctx)?, vec![first])
+    } else {
+        (first, vec![arg(args, 1), arg(args, 2), arg(args, 3)])
+    };
+    let name = text_with_budget(&name, ctx, 4096, "template name is too long")?;
+    spawn(&JsValue::undefined(), &params, &crate::JsString::from(name), ctx)
+}
+pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
+    for (name, len, callback) in [
+        ("getTemplate", 1, get as fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>),
+        ("createTemplate", 2, create),
+        ("removeTemplate", 1, remove),
+        ("deletePages", 2, delete_pages),
+        ("spawnPageFromTemplate", 4, spawn_named),
+    ] {
+        ctx.register_global_callable(crate::JsString::from(name), len, NativeFunction::from_fn_ptr(callback))?;
+    }
+    let get = function(ctx, NativeFunction::from_fn_ptr(all));
+    ctx.global_object().define_property_or_throw(
+        js_string!("templates"),
+        boa_engine::property::PropertyDescriptor::builder().get(get).configurable(true),
+        ctx,
+    )?;
+    Ok(())
+}

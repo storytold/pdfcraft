@@ -41,7 +41,11 @@ pub(crate) fn shell(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         // with them, Home beside the lights and the tabs reading from the right (production 4448ee940).
         .title_follows_lights(true)
         .title_bar(|ui, _, app: &mut PdfCraftApp| title_bar(app, ui))
-        .top(Slot::new("modes").visible(modes_visible), |ui, _, app: &mut PdfCraftApp| mode_bar::show(app, ui))
+        .top(Slot::new("modes").visible(modes_visible), |ui, _, app: &mut PdfCraftApp| {
+            mode_bar::show(app, ui);
+            #[cfg(not(target_arch = "wasm32"))]
+            app.show_document_tool_buttons(ui);
+        })
         .start(
             Slot::new("view-rail-start").visible(fallback_rail && app.rail_side == craft::behavior::DockSide::Start),
             |ui, _, app: &mut PdfCraftApp| view_rail::show(app, ui),

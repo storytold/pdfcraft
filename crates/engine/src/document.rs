@@ -50,6 +50,7 @@ pub struct Document {
     /// What field scripts printed or asked for (see [`Session::take_js_output`]).
     pub(crate) js_output: js::JsOutput,
     pub(crate) js_runtime: js::Runtime,
+    pub(crate) script_tool_buttons: Vec<pdfcraft_js::viewer::ToolButton>,
     pub(crate) js_zoom: f64,
     pub(crate) js_page: usize,
     /// How its page actions and timers show it while it is read (see [`Session::show_page`](crate::Session::show_page)).
@@ -263,6 +264,13 @@ pub(crate) fn undrawn_notices(prev: &pdfcraft_cos::Document, next: &pdfcraft_cos
 }
 
 impl Document {
+    /// Controls the document registered with `app.addToolButton`, scoped to this document.
+    pub fn script_tool_buttons(&self) -> &[pdfcraft_js::viewer::ToolButton] {
+        &self.script_tool_buttons
+    }
+    pub fn page_templates(&self) -> Vec<pdfcraft_organize::Template> {
+        self.editor.as_ref().map(|e| pdfcraft_organize::templates(&e.cos)).unwrap_or_default()
+    }
     /// The places the last edit's applied redactions left that still hold the removed text
     /// ([`EditNotice::RedactionElsewhere`]), or `None` when there are none or the last edit
     /// applied none.
@@ -779,11 +787,6 @@ impl Document {
     /// The custom document properties as they are now (name, text), Document Properties ▸ Custom.
     pub fn custom_info(&self) -> Vec<(String, String)> {
         self.editor.as_ref().map(|e| pdfcraft_organize::custom_info(&e.cos)).unwrap_or_default()
-    }
-
-    /// The page templates as they are now: the hidden ones, then the named visible pages (#1429).
-    pub fn templates(&self) -> Vec<pdfcraft_organize::Template> {
-        self.editor.as_ref().map(|e| pdfcraft_organize::templates(&e.cos)).unwrap_or_default()
     }
 
     /// The name shown on the tab and window: the document title when the document asks for it

@@ -1,5 +1,5 @@
 //! Bounded lexical preflight before entering Boa's recursive parser/compiler.
-use super::{MAX_ARROW_FUNCTIONS, MAX_BRACKET_DEPTH, MAX_CONDITIONALS, MAX_PREFIX_RUN, MAX_RIGHT_ASSOCIATIVE_OPERATORS, MAX_SCRIPT_BYTES};
+use super::{MAX_ARROW_FUNCTIONS, MAX_BRACKET_DEPTH, MAX_CONDITIONALS, MAX_PREFIX_RUN, MAX_RIGHT_ASSOCIATIVE_OPERATORS};
 
 /// Active chains live at bracket depths; literal contents never act as statement boundaries.
 struct Guard<'a> {
@@ -286,17 +286,15 @@ impl<'a> Guard<'a> {
     }
 }
 
-/// Enforce source and active nesting budgets before any parser/compiler work is attempted.
+/// Enforce active nesting budgets before any parser/compiler work is attempted.
 pub(super) fn refuse(source: &str) -> Option<String> {
-    if source.len() > MAX_SCRIPT_BYTES {
-        return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, MAX_SCRIPT_BYTES / 1024));
-    }
+    // The caller has checked its source-size policy: libraries and event handlers differ.
     let mut guard = Guard::new(source.as_bytes());
     while let Some(&c) = guard.bytes.get(guard.i) {
         guard.i = guard.i.saturating_add(1);
         let safe = if guard.template_text { guard.template(c) } else { guard.token(c) };
         if !safe {
-            return Some("the script is nested too deeply to run safely".into());
+            return Some(format!("the script is nested too deeply to run safely (expression chain at byte {})", guard.i));
         }
     }
     None

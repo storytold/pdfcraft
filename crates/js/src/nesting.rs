@@ -27,7 +27,7 @@ pub(crate) const MAX_CONDITIONALS: usize = 4096;
 
 /// Most readings followed at once. Readings that differ only in their counts are merged first,
 /// keeping the larger counts; past this, the script is refused.
-const MAX_READINGS: usize = 16;
+const MAX_READINGS: usize = 64;
 
 /// Where a reading is in the script.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -58,13 +58,26 @@ struct Reading {
     /// the substitution is told from one that closes a block.
     substitutions: Vec<usize>,
     depth: usize,
+    brackets: [u8; MAX_BRACKET_DEPTH + 2],
+    regex_only: bool,
     prefix: usize,
     conditionals: usize,
+    conditional_levels: [usize; MAX_BRACKET_DEPTH + 2],
 }
 
 impl Reading {
     fn in_code() -> Self {
-        Self { mode: Mode::Code, skip: 0, substitutions: Vec::new(), depth: 0, prefix: 0, conditionals: 0 }
+        Self {
+            mode: Mode::Code,
+            skip: 0,
+            substitutions: Vec::new(),
+            depth: 0,
+            brackets: [0; MAX_BRACKET_DEPTH + 2],
+            regex_only: true,
+            prefix: 0,
+            conditionals: 0,
+            conditional_levels: [0; MAX_BRACKET_DEPTH + 2],
+        }
     }
 
     fn with_mode(&self, mode: Mode) -> Self {
@@ -75,12 +88,24 @@ impl Reading {
         self.depth > MAX_BRACKET_DEPTH || self.prefix > MAX_PREFIX_RUN || self.conditionals > MAX_CONDITIONALS
     }
 
-    fn open(&mut self) {
+    fn open(&mut self, kind: u8) {
+        self.regex_only = true;
         self.depth = self.depth.saturating_add(1);
+        if let Some(slot) = self.brackets.get_mut(self.depth) {
+            *slot = kind;
+        }
         self.prefix = 0;
     }
 
     fn close(&mut self) {
+        self.regex_only = false;
+        if let Some(slot) = self.brackets.get_mut(self.depth) {
+            *slot = 0;
+        }
+        if let Some(count) = self.conditional_levels.get_mut(self.depth) {
+            self.conditionals = self.conditionals.saturating_sub(*count);
+            *count = 0;
+        }
         self.depth = self.depth.saturating_sub(1);
         self.prefix = 0;
     }
@@ -95,6 +120,23 @@ impl Reading {
         let Some(&c) = b.get(i) else { return true };
         match self.mode {
             Mode::Code => {
+                // Outside a literal JavaScript only permits a backslash in a Unicode
+                // identifier escape. Prune an impossible division reading at `\(`, etc.;
+                // otherwise escaped regex punctuation falsely accumulates code brackets.
+                if c == b'\\' && !at(b, i + 1, b"u") {
+                    return false;
+                }
+                let expected = match c {
+                    b')' => Some(b'('),
+                    b']' => Some(b'['),
+                    b'}' => Some(b'{'),
+                    _ => None,
+                };
+                if let Some(expected) = expected
+                    && (self.depth == 0 || self.brackets.get(self.depth).copied() != Some(expected))
+                {
+                    return false;
+                }
                 self.code(c, b, i, forks);
                 true
             }
@@ -125,10 +167,12 @@ impl Reading {
     fn code(&mut self, c: u8, b: &[u8], i: usize, forks: &mut Vec<Reading>) {
         match c {
             b'\'' | b'"' => {
+                self.regex_only = false;
                 self.mode = Mode::Str(c);
                 self.prefix = 0;
             }
             b'`' => {
+                self.regex_only = false;
                 self.mode = Mode::Template;
                 self.prefix = 0;
             }
@@ -140,15 +184,22 @@ impl Reading {
             b'/' => {
                 // A division, or the start of a regular expression: the parser decides, so
                 // follow both.
-                forks.push(self.with_mode(Mode::Regex { class: false, groups: 0 }));
+                // At these expression starts a slash cannot be division. Unlike a scan of
+                // preceding bytes, this state survives comments without reading their text
+                // as punctuation. Ambiguous positions still follow both alternatives.
+                if self.regex_only {
+                    self.mode = Mode::Regex { class: false, groups: 0 };
+                } else {
+                    forks.push(self.with_mode(Mode::Regex { class: false, groups: 0 }));
+                }
                 self.prefix = 0;
             }
-            b'(' | b'[' => self.open(),
+            b'(' | b'[' => self.open(c),
             b'{' => {
                 if let Some(open) = self.substitutions.last_mut() {
                     *open = open.saturating_add(1);
                 }
-                self.open();
+                self.open(c);
             }
             b')' | b']' => self.close(),
             b'}' => {
@@ -161,6 +212,7 @@ impl Reading {
                 }
             }
             b'!' | b'~' | b'+' | b'-' => {
+                self.regex_only = matches!(c, b'!' | b'~');
                 // `-->` begins a comment at the start of a line (Annex B); followed anywhere.
                 if c == b'-' && at(b, i + 1, b"->") {
                     forks.push(self.with_mode(Mode::LineComment));
@@ -168,7 +220,25 @@ impl Reading {
                 self.prefix = self.prefix.saturating_add(1);
             }
             b'?' => {
+                self.regex_only = true;
                 self.conditionals = self.conditionals.saturating_add(1);
+                if let Some(count) = self.conditional_levels.get_mut(self.depth) {
+                    *count = count.saturating_add(1);
+                }
+                self.prefix = 0;
+            }
+            // A semicolon cannot occur inside an unfinished conditional at this depth.
+            // Keep outer levels: a function body's statements cannot erase its caller's chain.
+            b';' => {
+                self.regex_only = true;
+                if let Some(count) = self.conditional_levels.get_mut(self.depth) {
+                    self.conditionals = self.conditionals.saturating_sub(*count);
+                    *count = 0;
+                }
+                self.prefix = 0;
+            }
+            b'=' | b':' | b',' => {
+                self.regex_only = true;
                 self.prefix = 0;
             }
             // `<!--` begins a comment (Annex B, in scripts); followed both ways.
@@ -179,7 +249,10 @@ impl Reading {
             // Whitespace and line breaks, and any non-ASCII byte, which may be part of either,
             // leave a run of prefix operators going.
             _ if c.is_ascii_whitespace() || !c.is_ascii() => {}
-            _ => self.prefix = 0,
+            _ => {
+                self.regex_only = false;
+                self.prefix = 0;
+            }
         }
     }
 
@@ -206,7 +279,7 @@ impl Reading {
             self.skip = 1;
         } else if c == b'$' && at(b, i + 1, b"{") {
             self.substitutions.push(0);
-            self.open();
+            self.open(b'{');
             self.mode = Mode::Code;
             self.skip = 1;
         }
@@ -228,6 +301,7 @@ impl Reading {
             (b'/', false) if groups > 0 => return false,
             (b'/', false) => {
                 self.mode = Mode::Code;
+                self.regex_only = false;
                 self.prefix = 0;
             }
             _ => {}
@@ -259,6 +333,9 @@ fn line_break(b: &[u8], i: usize) -> usize {
 /// than [`MAX_PREFIX_RUN`] prefix operators together, or has more than [`MAX_CONDITIONALS`]
 /// conditionals; or the script has more ambiguous readings than the scan follows.
 pub(crate) fn too_deep(source: &str) -> bool {
+    refusal(source).is_some()
+}
+pub(crate) fn refusal(source: &str) -> Option<(usize, &'static str)> {
     let b = source.as_bytes();
     // A leading `#!` is a hashbang comment: boa parses scripts and eval code from a goal that
     // allows one. Read as code it could only be a syntax error (`#` must start a private name).
@@ -283,20 +360,39 @@ pub(crate) fn too_deep(source: &str) -> bool {
             let ended = ended.unwrap_or_else(Reading::in_code);
             next.push(Reading { mode: Mode::Code, skip: 0, ..ended });
         }
-        if next.iter().any(Reading::over_limit) {
-            return true;
+        if let Some(reading) = next.iter().find(|r| r.over_limit()) {
+            return Some((
+                i,
+                if reading.depth > MAX_BRACKET_DEPTH {
+                    "brackets"
+                } else if reading.prefix > MAX_PREFIX_RUN {
+                    "prefix operators"
+                } else {
+                    "conditional expressions"
+                },
+            ));
         }
         if next.len() > 1 && !settle(&mut next) {
-            return true;
+            return Some((i, "ambiguous regular expressions"));
         }
         std::mem::swap(&mut readings, &mut next);
     }
-    false
+    None
 }
 
 /// `a` with the larger of each count in `a` and `b`.
 fn merged(a: Reading, b: &Reading) -> Reading {
-    Reading { depth: a.depth.max(b.depth), prefix: a.prefix.max(b.prefix), conditionals: a.conditionals.max(b.conditionals), ..a }
+    let conditional_levels =
+        std::array::from_fn(|i| a.conditional_levels.get(i).copied().unwrap_or(0).max(b.conditional_levels.get(i).copied().unwrap_or(0)));
+    let conditionals = conditional_levels.iter().copied().fold(0usize, usize::saturating_add);
+    Reading {
+        depth: a.depth.max(b.depth),
+        prefix: a.prefix.max(b.prefix),
+        conditionals,
+        conditional_levels,
+        regex_only: a.regex_only && b.regex_only,
+        ..a
+    }
 }
 
 /// Drop duplicate readings, then merge those in the same place if there are too many. False if
@@ -308,7 +404,7 @@ fn settle(readings: &mut Vec<Reading>) -> bool {
         // Sorted, readings in the same place are next to each other. Merging keeps the larger
         // counts, so it can only refuse more.
         readings.dedup_by(|r, kept| {
-            let same = r.mode == kept.mode && r.skip == kept.skip && r.substitutions == kept.substitutions;
+            let same = r.mode == kept.mode && r.skip == kept.skip && r.substitutions == kept.substitutions && r.brackets == kept.brackets;
             if same {
                 *kept = merged(kept.clone(), r);
             }

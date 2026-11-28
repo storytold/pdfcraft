@@ -1,3 +1,5 @@
+use pdfcraft_engine::js::Answer;
+
 use super::{Args, Automation, Result, ToolError, Value, failed, json, with_warnings, write_atomic};
 
 /// A script's request to the viewer as the JSON that running a script reports (page numbers
@@ -7,6 +9,16 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
     match r {
         R::Reset(n) => json!({ "reset": n }),
         R::Print => json!({ "print": true }),
+        R::PrintWithSettings(settings) => {
+            let mut request = json!({ "print": true });
+            if let Some(pages) = &settings.pages {
+                request["page_numbers"] = json!(pages.iter().map(|page| page + 1).collect::<Vec<_>>());
+            }
+            if let Some(duplex) = settings.duplex {
+                request["duplex"] = json!(duplex.id());
+            }
+            request
+        }
         R::GoToPage(p) => json!({ "page": p + 1 }),
         R::LaunchUrl(u) => json!({ "url": u }),
         R::Submit(u) => json!({ "submit": u }),
@@ -19,27 +31,65 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
         R::OpenDoc(path) => json!({ "open_doc": path }),
         R::OpenAttachment { name, open } => json!({ "attachment": name, "open": open }),
         R::ShowPanel(p) => json!({ "panel": p.id() }),
-        // Applied by the engine with the script's field changes; listed only if one is left over.
-        R::SpawnTemplate { name, page, rename, overlay } => {
-            json!({ "spawn_template": name, "page": page.saturating_add(1), "rename": rename, "overlay": overlay })
-        }
-        R::SetTemplateHidden { name, hidden } => json!({ "template": name, "hidden": hidden }),
     }
 }
 
 /// The optional `answers` argument: the prompts' answers in order (null cancels one).
-fn answers(a: &Args) -> Result<Vec<Option<String>>> {
+fn answers(host: &Automation, a: &Args, allow_pdf: bool) -> Result<Vec<Answer>> {
+    let mut pdf_selected = false;
+    let mut file_budget = 16u64 << 20;
     match a.0.get("answers") {
         None => Ok(Vec::new()),
-        Some(Value::Array(values)) if values.len() <= 32 => values
+        Some(Value::Array(values)) if values.len() <= 128 => values
             .iter()
             .map(|v| match v {
-                Value::Null => Ok(None),
-                Value::String(s) if s.len() <= 4096 => Ok(Some(s.clone())),
-                _ => Err(ToolError::InvalidArgs("answers must contain strings or null".into())),
+                Value::Object(o) if o.len() == 1 && o.get("file").is_some_and(Value::is_string) => {
+                    use std::io::Read;
+                    let path = host.resolve(o.get("file").and_then(Value::as_str).unwrap_or_default(), false)?;
+                    if !std::fs::metadata(&path).map_err(failed)?.is_file() {
+                        return Err(failed(format!("{}: not a regular file", path.display())));
+                    }
+                    let mut text = String::new();
+                    let limit = file_budget.min(8 << 20);
+                    std::fs::File::open(path).and_then(|f| f.take(limit + 1).read_to_string(&mut text)).map_err(failed)?;
+                    if text.len() as u64 > limit {
+                        return Err(ToolError::InvalidArgs("selected text files exceed 8 MiB per file or 16 MiB per invocation".into()));
+                    }
+                    file_budget = file_budget.saturating_sub(text.len() as u64);
+                    Ok(Answer::Text(text))
+                }
+                Value::Object(o) if allow_pdf && !pdf_selected && o.len() == 1 && o.get("pdf").is_some_and(Value::is_string) => {
+                    let path = host.resolve(o.get("pdf").and_then(Value::as_str).unwrap_or_default(), false)?;
+                    pdf_selected = true;
+                    Ok(Answer::Pdf(pdfcraft_engine::js::read_selected_pdf(&path)))
+                }
+                Value::Object(o) if allow_pdf && o.len() == 1 && o.get("form_data").is_some_and(Value::is_string) => {
+                    let path = host.resolve(o["form_data"].as_str().unwrap_or_default(), false)?;
+                    Ok(Answer::FormData(std::sync::Arc::new(move |request| match request {
+                        pdfcraft_engine::js::FormDataPicker::Import(format) => pdfcraft_engine::js::read_selected_form_data(&path, format),
+                        pdfcraft_engine::js::FormDataPicker::Export(_) => Err("an XFDF save picker requires an export destination".into()),
+                    })))
+                }
+                Value::Object(o) if allow_pdf && o.len() == 1 && o.get("export_xfdf").is_some_and(Value::is_string) => {
+                    let path = host.resolve(o["export_xfdf"].as_str().unwrap_or_default(), true)?;
+                    Ok(Answer::FormData(std::sync::Arc::new(move |request| match request {
+                        pdfcraft_engine::js::FormDataPicker::Export(xml) => {
+                            write_atomic(&path, xml.as_bytes()).map(|()| Some(Vec::new())).map_err(|e| e.to_string())
+                        }
+                        pdfcraft_engine::js::FormDataPicker::Import(_) => Err("a form data import picker requires a selected input file".into()),
+                    })))
+                }
+                Value::Null => Ok(Answer::Cancel),
+                Value::String(s) if s.len() <= 8 << 20 && s.len() as u64 <= file_budget => {
+                    file_budget = file_budget.saturating_sub(s.len() as u64);
+                    Ok(Answer::Text(s.clone()))
+                }
+                _ => Err(ToolError::InvalidArgs(
+                    "expected strings, null, selected text files, or document-script PDF, form_data or export_xfdf selections".into(),
+                )),
             })
             .collect(),
-        _ => Err(ToolError::InvalidArgs("answers must be an array of at most 32 strings or null".into())),
+        _ => Err(ToolError::InvalidArgs("answers must be an array of at most 128 strings or null".into())),
     }
 }
 
@@ -73,15 +123,31 @@ pub(crate) fn js_output_json(out: &pdfcraft_engine::js::JsOutput) -> Value {
 }
 
 impl Automation {
+    pub(crate) fn js_tool_buttons(&self, a: &Args) -> Result<Value> {
+        Ok(
+            json!({"buttons":self.doc(a)?.script_tool_buttons().iter().map(|b|json!({"name":b.name,"label":b.label,"tooltip":b.tooltip})).collect::<Vec<_>>()}),
+        )
+    }
+    pub(crate) fn js_tool_button(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let source = self.session.script_tool_button_source(id, a.str("name")?).map_err(failed)?;
+        let mut output = self.js_run(&Args(&json!({"doc":id.0,"script":source,"answers":a.0.get("answers").cloned().unwrap_or(json!([]))})))?;
+        let document = self.doc(a)?;
+        let summary = crate::json::summary(document);
+        for key in ["doc", "pages", "dirty", "undo", "redo"] {
+            output[key] = summary[key].clone();
+        }
+        Ok(output)
+    }
     /// `js_run`: run `script` in the document, or as button `field`'s script, and report its
     /// messages, console lines, requests, error, the failing document scripts' errors and result.
     pub(crate) fn js_run(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
-        let answers = answers(a)?;
+        let answers = answers(self, a, true)?;
         let identity = field_id(a)?;
         let (script, field) = (a.str("script")?, a.opt_str("field")?);
         let (mut o, edit) =
-            self.session.with_own_js_output(id, |s| s.run_javascript_answers_target(id, script, field, identity, &answers)).map_err(failed)?;
+            self.session.with_own_js_output(id, |s| s.run_javascript_prompt_answers(id, script, (field, identity), &answers)).map_err(failed)?;
         o.alerts.extend(edit.alerts);
         o.console.extend(edit.console);
         o.requests.extend(edit.requests);
@@ -97,7 +163,13 @@ impl Automation {
     /// 1-based, as link_list gives them), answering its prompts from `answers`, and report what
     /// it showed and asked for. A failed script commits nothing (#2081).
     pub(crate) fn link_run_javascript(&mut self, a: &Args) -> Result<Value> {
-        let answers = answers(a)?;
+        let answers: Vec<_> = answers(self, a, false)?
+            .into_iter()
+            .map(|reply| match reply {
+                Answer::Text(text) => Some(text),
+                _ => None,
+            })
+            .collect();
         let one_based = |key: &str| -> Result<usize> {
             let n = a.int(key)?;
             usize::try_from(n).ok().and_then(|n| n.checked_sub(1)).ok_or_else(|| ToolError::InvalidArgs(format!("{key} must be 1 or more")))

@@ -62,11 +62,13 @@ pub(crate) struct Copier<'a> {
     /// only kids a copied field keeps (see `fields_on`). `None` keeps every kid. Shared, so the
     /// copiers made for a repeated page or an action don't each copy it.
     pub(super) kept: Option<Rc<HashSet<ObjRef>>>,
+    /// Unrenamed template widgets share the original fields targeted by ResetForm and SubmitForm.
+    pub(super) keep_reset_targets: bool,
 }
 
 impl<'a> Copier<'a> {
     pub(crate) fn new(src: &'a Document, map: HashMap<ObjRef, ObjRef>, pages: HashMap<ObjRef, ObjRef>) -> Self {
-        Copier { src, depth: 0, map, pages, annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new(), kept: None }
+        Copier { src, depth: 0, map, pages, annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new(), kept: None, keep_reset_targets: false }
     }
 
     /// Copy an indirect object (once), returning its destination reference.
@@ -163,7 +165,13 @@ impl<'a> Copier<'a> {
                 let listed = self.src.resolve(v);
                 let entries = listed.as_array().cloned().unwrap_or_else(|| vec![v.clone()]);
                 let entries: Vec<Object> = entries.into_iter().filter(|e| e.as_ref().is_none_or(|r| kept.contains(&r))).collect();
-                out.set(k.clone(), self.copy_value(dst, &Object::Array(entries), None)?);
+                let entries = Object::Array(entries);
+                let entries = if self.keep_reset_targets && matches!(d.name(b"S"), Some(b"ResetForm" | b"SubmitForm")) && k.as_slice() == b"Fields" {
+                    entries
+                } else {
+                    self.copy_value(dst, &entries, None)?
+                };
+                out.set(k.clone(), entries);
                 continue;
             }
             out.set(k.clone(), self.copy_value(dst, v, None)?);
@@ -274,7 +282,11 @@ impl<'a> Copier<'a> {
                         // Other actions (URI, Launch, JavaScript…) carry no page references. The
                         // copier lends its map out and takes it back with the new copies in it,
                         // so actions sharing an object share its one copy.
-                        let mut c = Copier { kept: self.kept.clone(), ..Copier::new(self.src, std::mem::take(&mut self.map), HashMap::new()) };
+                        let mut c = Copier {
+                            kept: self.kept.clone(),
+                            keep_reset_targets: self.keep_reset_targets,
+                            ..Copier::new(self.src, std::mem::take(&mut self.map), HashMap::new())
+                        };
                         let copied = c.copy_value(dst, &Object::Dict(ad.clone()), None);
                         self.map = c.map;
                         d.set(b"A".to_vec(), copied?);

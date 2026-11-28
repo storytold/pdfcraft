@@ -1,5 +1,271 @@
 use super::*;
 
+#[test]
+fn unchanged_field_writes_keep_the_shared_snapshot() {
+    let fields = Arc::new(vec![FieldState::new("value", FieldType::Text, vec!["same".into()])]);
+    let mut ctx = Context::default();
+    let out = crate::run::run_in_context(
+        &mut ctx,
+        "getField('value').value='same';getField('value').userName='';",
+        &Event::doc("Console"),
+        &doc(),
+        fields.clone(),
+        crate::run::ScriptSetup {
+            doc_scripts: &[],
+            skipped: &[],
+            calculations: &[],
+            initialize: true,
+            reset_calls: 0,
+            calculation_evaluations: 0,
+            calculation_limit_exceeded: false,
+            call: None,
+        },
+        Limits::default(),
+    );
+    assert_eq!(out.error, None);
+    assert!(Arc::ptr_eq(&fields, &crate::host::host(&ctx).unwrap().borrow().fields));
+    assert!(out.changed.is_empty());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn large_form_deadlines_remain_bounded() {
+    use std::time::Duration;
+    assert_eq!(crate::session::execution_budget(1024, 1 << 20), Duration::from_secs(10));
+    assert_eq!(crate::session::execution_budget(1025, 0), Duration::from_secs(30));
+    assert_eq!(crate::session::execution_budget(1, (1 << 20) + 1), Duration::from_secs(30));
+    assert_eq!(crate::session::execution_budget(usize::MAX, usize::MAX), Duration::from_secs(30));
+}
+
+#[test]
+fn legacy_replace_callbacks_receive_empty_unmatched_captures() {
+    let out = go(
+        "'Title'.replace(/(Title)( optional)?/,function(m,title,suffix,offset,input){return title.toUpperCase()+suffix.toLowerCase()+':'+offset+':'+input;})",
+        &Event::doc("Console"),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("TITLE:0:Title"));
+    assert_eq!(go("'a'.replace(/(a)(b)?/,'$1-$2')", &Event::doc("Console")).result.as_deref(), Some("a-"));
+}
+
+#[test]
+fn document_state_can_be_restored_with_bounded_dynamic_code() {
+    let mut session = crate::session::ScriptSession::default();
+    let mut job = crate::session::Job {
+        script: "var restored = eval('({score:18})'); Function('n', 'return Math.floor((n-10)/2)')(restored.score)".into(),
+        event: Event::doc("Console"),
+        doc: doc(),
+        fields: Arc::new(vec![]),
+        doc_scripts: vec![].into(),
+        calculations: vec![],
+        timer: None,
+    };
+    let out = session.run(job.clone(), &[]);
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("4"));
+    job.script = "eval('('.repeat(1000)+'1'+')'.repeat(1000))".into();
+    assert!(session.run(job.clone(), &[]).error.as_deref().is_some_and(|e| e.contains("deep")));
+    job.script = "eval('while(true){}')".into();
+    assert!(session.run(job, &[]).error.is_some());
+}
+
+#[test]
+fn serialized_rules_restore_functions_and_regular_expressions() {
+    let mut session = crate::session::ScriptSession::default();
+    let job = crate::session::Job {
+        script: "var rules={match:new RegExp('Elf/Scout','gi'),modifier:function(n){return Math.floor((n-10)/2);}}; var copy=eval(rules.toSource()); copy.match.test('ELF/Scout')+':'+copy.modifier(18)".into(),
+        event: Event::doc("Console"), doc: doc(), fields: Arc::new(vec![]), doc_scripts: vec![].into(), calculations: vec![], timer: None,
+    };
+    let out = session.run(job, &[]);
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("true:4"));
+    for (source, expected) in [
+        ("{modifier(){return (()=>4)();}}", "4"),
+        ("{modifier(){return '=>';}}", "=>"),
+        ("{modifier:()=>4}", "4"),
+        ("{async modifier(){return (()=>4)();}}", "[object Promise]"),
+    ] {
+        let job = crate::session::Job {
+            script: format!("var rules=({source});var copy=eval(rules.toSource());String(copy.modifier())"),
+            event: Event::doc("Console"),
+            doc: doc(),
+            fields: Arc::new(vec![]),
+            doc_scripts: vec![].into(),
+            calculations: vec![],
+            timer: None,
+        };
+        let out = crate::session::ScriptSession::default().run(job, &[]);
+        assert_eq!(out.error, None, "{source}");
+        assert_eq!(out.result.as_deref(), Some(expected));
+    }
+}
+
+#[test]
+fn normalized_defaults_only_charge_retained_text() {
+    let fields = vec![FieldState::new("value", FieldType::Text, vec![])];
+    let out = run(
+        "var f=getField('value'),extra='x';for(var j=0;j<20;j++)extra+=extra;for(var i=0;i<80;i++)f.defaultValue=['x',extra];f.defaultValue",
+        &Event::doc("Console"),
+        &doc(),
+        &fields,
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("x"));
+}
+
+#[test]
+fn initializer_pages_reach_the_first_event() {
+    let job = crate::session::Job {
+        script: "numPages".into(),
+        event: Event::doc("Console"),
+        doc: doc(),
+        fields: Arc::new(vec![]),
+        doc_scripts: vec!["createTemplate('Notes',0);getTemplate('Notes').spawn(0,true,false);".into()].into(),
+        calculations: vec![],
+        timer: None,
+    };
+    let original = job.doc.num_pages;
+    let out = crate::session::ScriptSession::default().run(job, &[]);
+    assert_eq!(out.error, None);
+    assert_eq!(out.result, Some((original + 1).to_string()));
+}
+
+#[test]
+fn initializer_template_calculations_reach_the_first_event() {
+    let mut field = FieldState::new("amount", FieldType::Text, vec!["original".into()]);
+    field.pages = vec![0];
+    let job = crate::session::Job {
+        script: "calculateNow();getField('P1.Notes.amount').value".into(),
+        event: Event::doc("Console"),
+        doc: doc(),
+        fields: Arc::new(vec![field]),
+        doc_scripts: vec!["createTemplate('Notes',0);getTemplate('Notes').spawn(1,true,false);".into()].into(),
+        calculations: vec![(0, "event.value='calculated';".into())],
+        timer: None,
+    };
+    let out = crate::session::ScriptSession::default().run(job, &[]);
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("calculated"));
+}
+
+#[test]
+fn positional_spawn_uses_template_name_first() {
+    let doc = doc();
+    let out = run(
+        "createTemplate('Notes',0);spawnPageFromTemplate('Notes',1,true,false);numPages",
+        &Event::doc("Console"),
+        &doc,
+        &[],
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result, Some((doc.num_pages + 1).to_string()));
+}
+
+#[test]
+fn independent_conditional_statements_do_not_exhaust_the_nesting_budget() {
+    assert_eq!(crate::run::refuse(&format!("var r=/{}/;", "\\(".repeat(100))), None);
+    assert_eq!(crate::run::refuse(&"var x=1?2:3;".repeat(10000)), None);
+    let nested = format!("{}1{}", "1?function(){var x=1;return ".repeat(65), "}:0".repeat(65));
+    assert!(crate::run::refuse(&nested).is_some());
+    let comma = format!("{}1{}", "1?0,".repeat(5000), ":0".repeat(5000));
+    assert!(crate::run::refuse(&comma).is_some());
+}
+
+#[test]
+fn regex_lexical_goals_preserve_hostile_code_checks() {
+    let deep = format!("{}1{}", "(".repeat(100), ")".repeat(100));
+    for prefix in ["1 /* : */ / 1 + ", "1 // :\n / 1 + ", "/x/ / 1 + ", "var a=/'/; "] {
+        assert!(crate::run::refuse(&format!("{prefix}{deep}")).is_some(), "{prefix}");
+    }
+    let flat = "var x={a:/^(?=.*alpha)(?=.*beta).*$/i,b:/\\(literal\\)/};".repeat(2000);
+    assert_eq!(crate::run::refuse(&flat), None);
+}
+
+#[test]
+fn large_serialized_rule_menus_keep_bounded_roundtrip_state() {
+    let out = go("var menu=[];for(var i=0;i<20000;i++)menu.push({name:'Option '+i,value:i});menu.toSource().length>100000", &Event::doc("Console"));
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("true"));
+}
+
+/// Large rule libraries initialize once and remain available to later field events.
+#[test]
+fn character_sheet_libraries_survive_session_events() {
+    let mut session = crate::session::ScriptSession::default();
+    let mut job = crate::session::Job {
+        script: "modifier(18)".into(),
+        event: Event::doc("Test"),
+        doc: doc(),
+        fields: Arc::new(fields()),
+        doc_scripts: vec![
+            format!("/*{}*/ var loads = 1; function modifier(n) {{return Math.floor((n-10)/2);}}", " ".repeat(600_000)),
+            format!("/*{}*/ loads += 1;", " ".repeat(600_000)),
+        ]
+        .into(),
+        calculations: vec![],
+        timer: None,
+    };
+    let first = session.run(job.clone(), &[]);
+    assert_eq!(first.error, None);
+    assert!(first.doc_errors.is_empty(), "{:?}", first.doc_errors);
+    assert_eq!(first.result.as_deref(), Some("4"));
+    job.script = "loads + ':' + modifier(8)".into();
+    let second = session.run(job, &[]);
+    assert_eq!(second.error, None);
+    assert_eq!(second.result.as_deref(), Some("2:-1"));
+}
+
+/// Legacy runners admit the same libraries; ordinary action scripts keep the smaller cap.
+#[test]
+fn character_sheet_libraries_use_a_separate_source_limit() {
+    let library = format!("/*{}*/ function modifier(n) {{return Math.floor((n-10)/2);}}", " ".repeat(600_000));
+    let out = run("modifier(18)", &Event::doc("Test"), &doc(), &[], std::slice::from_ref(&library), Limits::default());
+    assert_eq!(out.error, None);
+    assert!(out.doc_errors.is_empty(), "{:?}", out.doc_errors);
+    assert_eq!(out.result.as_deref(), Some("4"));
+    let action = run(&library, &Event::doc("Test"), &doc(), &[], &[], Limits::default());
+    assert!(action.error.as_deref().is_some_and(|e| e.contains("too long")));
+}
+
+/// Admission checks bound counts, individual libraries and total source on both runners.
+#[test]
+fn character_sheet_library_bounds_keep_parser_guards() {
+    use crate::run::{document_scripts_over_budget, refuse_document_script};
+    assert!(!document_scripts_over_budget(&vec![" ".repeat(1 << 20); 8]));
+    assert!(document_scripts_over_budget(&vec![" ".repeat(1 << 20); 9]));
+    assert!(!document_scripts_over_budget(&vec![String::new(); 1024]));
+    assert!(document_scripts_over_budget(&vec![String::new(); 1025]));
+    assert_eq!(refuse_document_script(&" ".repeat(1 << 20)), None);
+    assert!(refuse_document_script(&" ".repeat((1 << 20) + 1)).unwrap().contains("too long"));
+    let nested = format!("{}0{}", "(".repeat(1000), ")".repeat(1000));
+    assert!(refuse_document_script(&nested).unwrap().contains("deep"));
+    let libraries = vec![" ".repeat((1 << 20) + 1), "var admitted = 42;".into()];
+    let out = run("admitted", &Event::doc("Test"), &doc(), &[], &libraries, Limits::default());
+    assert_eq!(out.result.as_deref(), Some("42"));
+    assert_eq!(out.doc_errors.len(), 1);
+    assert!(out.doc_errors[0].contains("too long"));
+    let libraries = vec![" ".repeat(1 << 20); 9];
+    let out = run("42", &Event::doc("Test"), &doc(), &[], &libraries, Limits::default());
+    assert!(out.error.as_deref().is_some_and(|e| e.contains("budget")));
+    let mut session = crate::session::ScriptSession::default();
+    let job = crate::session::Job {
+        script: "42".into(),
+        event: Event::doc("Test"),
+        doc: doc(),
+        fields: Arc::new(vec![]),
+        doc_scripts: libraries.into(),
+        calculations: vec![],
+        timer: None,
+    };
+    let out = session.run(job, &[]);
+    assert!(out.execution_refused && out.realm_untouched);
+    assert!(out.error.as_deref().is_some_and(|e| e.contains("budget")));
+}
+
 /// The AcroForm fields these tests' scripts read and write: prices, a quantity, a total, a ZIP
 /// code, a check box and a drop-down with shown and saved items.
 fn fields() -> Vec<FieldState> {
@@ -519,7 +785,16 @@ fn app_alert_titles_are_clipped_and_charged() {
     // The title's bytes count against the budget with the text's, and a message the budget
     // has no room for is left out and counted.
     let mut h = Host {
+        last_spawned_field: 0,
+        page_changes: Vec::new(),
+        calculate: true,
+        calculations_current: false,
+        document_changes: Vec::new(),
+        tool_buttons: Vec::new(),
+        compiled_units: 0,
         event_name: "Open".into(),
+        may_change_pages: true,
+        live_event: false,
         icons: Vec::new(),
         objects: Default::default(),
         field_keys: Default::default(),
@@ -540,6 +815,7 @@ fn app_alert_titles_are_clipped_and_charged() {
         reset_limit_exceeded: false,
         kept: 0,
         retained: 0,
+        form_data_work: 0,
         dropped: 0,
         layers_changed: Default::default(),
     };
@@ -608,7 +884,7 @@ fn a_failing_document_script_does_not_stop_the_field_script() {
 fn a_document_script_too_big_to_run_is_skipped_and_reported() {
     let docs = [
         "this.getField('qty').buttonSetIcon(null);".to_string(),
-        format!("var big = 1{};", "+1".repeat(MAX_SCRIPT_BYTES / 2)),
+        format!("/*{}*/ var big = 1;", " ".repeat(crate::run::MAX_DOCUMENT_SCRIPT_BYTES)),
         "function double(x) { return x * 2; }".to_string(),
         format!("var deep = {}1{};", "(".repeat(10_000), ")".repeat(10_000)),
     ];
@@ -2678,11 +2954,23 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
 
 /// A document with a hidden template `More` and a visible named page `Cover` (#1429).
 fn templated() -> DocInfo {
-    DocInfo { templates: vec![("More".into(), true), ("Cover".into(), false)], ..doc() }
+    let templates = [("More", None), ("Cover", Some(0))]
+        .into_iter()
+        .enumerate()
+        .map(|(source, (name, page))| crate::templates::Template {
+            name: name.into(),
+            source: source as u64,
+            page,
+            fields: Default::default(),
+            boxes: [[0.0; 4]; 5],
+            rotation: 0,
+        })
+        .collect();
+    DocInfo { templates, num_pages: 4, ..doc() }
 }
 
 fn run_templated(script: &str) -> Outcome {
-    run(script, &Event::field("Mouse Up", "agree", ""), &templated(), &fields(), &[], Limits::default())
+    run(script, &Event::doc("Console"), &templated(), &fields(), &[], Limits::default())
 }
 
 #[test]
@@ -2698,30 +2986,100 @@ fn templates_are_listed_and_found_by_name() {
 #[test]
 fn spawn_asks_for_a_page_from_the_template() {
     let o = run_templated("getTemplate('More').spawn(2, false, false);");
-    assert_eq!(o.requests, [Request::SpawnTemplate { name: "More".into(), page: 2, rename: false, overlay: false }]);
+    assert_eq!(o.page_changes, [crate::templates::Change::Spawn { name: "More".into(), page: 2, rename: false, overlay: false }]);
     // As in Acrobat: page 0, renamed and laid over unless asked otherwise.
     let o = run_templated("getTemplate('More').spawn();");
-    assert_eq!(o.requests, [Request::SpawnTemplate { name: "More".into(), page: 0, rename: true, overlay: true }]);
+    assert!(o.page_changes.is_empty());
+    assert!(o.console.iter().any(|line| line.contains("bOverlay")));
     // The arguments by name.
     let o = run_templated("getTemplate('More').spawn({ nPage: 1, bOverlay: false });");
-    assert_eq!(o.requests, [Request::SpawnTemplate { name: "More".into(), page: 1, rename: true, overlay: false }]);
+    assert_eq!(o.page_changes, [crate::templates::Change::Spawn { name: "More".into(), page: 1, rename: true, overlay: false }]);
+}
+
+#[test]
+fn spawning_a_template_keeps_its_field_identity_and_pdf_rectangle() {
+    let mut doc = templated();
+    let template = &mut doc.templates[0];
+    template.fields = Arc::new(vec![crate::templates::FieldIdentity::Object(2)]);
+    let crop = [15.0, 30.0, 205.0, 320.0];
+    template.boxes[1] = crop;
+    template.rotation = 90;
+    doc.page_boxes = vec![[[0.0; 4]; 5]; doc.num_pages];
+    doc.page_rotations = vec![0; doc.num_pages];
+    let mut unrelated = FieldState::new("note", FieldType::Text, vec!["unrelated".into()]);
+    unrelated.object_id = Some(1);
+    let mut selected = FieldState::new("note", FieldType::Text, vec!["selected".into()]);
+    selected.object_id = Some(2);
+    selected.page_crop = [0.0, 0.0, 200.0, 300.0];
+    let rect = [20.0, 40.0, 90.0, 60.0];
+    selected.rect = Some(crate::rotate_rect(rect, selected.page_crop, 0));
+    let o = run(
+        "getTemplate('More').spawn(1, true, false);
+         var first = getField('P1.More.note');
+         createTemplate('Copy', 1).spawn(2, true, false);
+         first.value = 'edited';",
+        &Event::doc("Console"),
+        &doc,
+        &[unrelated, selected],
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.changed.len(), 2);
+    assert_eq!(o.changed[0].value, ["edited"]);
+    assert_eq!(o.changed[1].value, ["selected"]);
+    assert_ne!(o.changed[0].instance_id, o.changed[1].instance_id);
+    for field in o.changed {
+        assert_eq!(field.page_crop, crop);
+        assert_eq!(crate::unrotate_rect(field.rect.unwrap(), field.page_crop, field.page_rotation), rect);
+    }
+}
+
+#[test]
+fn template_calls_use_the_page_count_and_lookup_after_argument_conversions() {
+    let o = run_templated("getTemplate('More').spawn({nPage:{valueOf(){deletePages(1, 2); return 100;}}, bOverlay:false});");
+    assert_eq!(
+        o.page_changes,
+        [
+            crate::templates::Change::Delete { start: 1, end: 2 },
+            crate::templates::Change::Spawn { name: "More".into(), page: 2, rename: true, overlay: false },
+        ]
+    );
+    let o = run_templated("getTemplate('More').spawn({get nPage(){removeTemplate('More'); return 0;}, bOverlay:false});");
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("no page template named")), "{o:?}");
+    assert_eq!(o.page_changes, [crate::templates::Change::Remove { name: "More".into() }]);
+}
+
+#[test]
+fn document_initializers_can_edit_pages_during_a_field_event() {
+    let event = Event::field("Validate", "total", "");
+    let o = run(
+        "getTemplate('More').spawn(0, false, false);",
+        &event,
+        &templated(),
+        &fields(),
+        &["getTemplate('More').spawn(1, false, false);".into()],
+        Limits::default(),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.page_changes, [crate::templates::Change::Spawn { name: "More".into(), page: 1, rename: false, overlay: false }]);
 }
 
 #[test]
 fn spawn_page_from_template_takes_its_arguments_both_ways() {
     let o = run_templated("this.spawnPageFromTemplate('More', 3, false, false);");
-    assert_eq!(o.requests, [Request::SpawnTemplate { name: "More".into(), page: 3, rename: false, overlay: false }]);
+    assert_eq!(o.page_changes, [crate::templates::Change::Spawn { name: "More".into(), page: 3, rename: false, overlay: false }]);
     let o = run_templated("this.spawnPageFromTemplate({ cTemplate: 'More', nPage: 1, bRename: false, bOverlay: false });");
-    assert_eq!(o.requests, [Request::SpawnTemplate { name: "More".into(), page: 1, rename: false, overlay: false }]);
+    assert_eq!(o.page_changes, [crate::templates::Change::Spawn { name: "More".into(), page: 1, rename: false, overlay: false }]);
     let o = run_templated("this.spawnPageFromTemplate('Nope', 1);");
     assert!(o.error.as_deref().is_some_and(|e| e.contains("Nope")), "{o:?}");
-    assert!(o.requests.is_empty());
+    assert!(o.page_changes.is_empty());
 }
 
 #[test]
 fn hiding_and_showing_a_template_is_asked_for_and_read_back() {
     let o = run_templated("var t = getTemplate('More'); t.hidden = false; console.println(t.hidden);");
-    assert_eq!(o.requests, [Request::SetTemplateHidden { name: "More".into(), hidden: false }]);
+    assert_eq!(o.page_changes, [crate::templates::Change::Hidden { name: "More".into(), hidden: false }]);
     assert_eq!(o.console, ["false"]);
 }
 
@@ -2729,9 +3087,9 @@ fn hiding_and_showing_a_template_is_asked_for_and_read_back() {
 /// clamps them.
 #[test]
 fn spawn_pages_that_are_not_numbers_are_clamped() {
-    for (arg, page) in [("NaN", 0), ("-5", 0), ("Infinity", usize::MAX), ("-Infinity", 0), ("1e300", usize::MAX), ("'2'", 2)] {
+    for (arg, page) in [("NaN", 0), ("-5", 0), ("Infinity", 4), ("-Infinity", 0), ("1e300", 4), ("'2'", 2)] {
         let o = run_templated(&format!("getTemplate('More').spawn({arg}, true, false);"));
-        assert_eq!(o.requests, [Request::SpawnTemplate { name: "More".into(), page, rename: true, overlay: false }], "{arg}");
+        assert_eq!(o.page_changes, [crate::templates::Change::Spawn { name: "More".into(), page, rename: true, overlay: false }], "{arg}");
     }
 }
 
@@ -2740,15 +3098,16 @@ fn spawn_pages_that_are_not_numbers_are_clamped() {
 #[test]
 fn long_template_names_are_asked_for_whole() {
     let long = "T".repeat(5000);
-    let doc = DocInfo { templates: vec![(long.clone(), true)], ..doc() };
+    let mut doc = templated();
+    doc.templates[0].name = long.clone();
     let script = "var t = this.templates[0]; t.spawn(0, false, false); t.hidden = false;";
-    let o = run(script, &Event::field("Mouse Up", "agree", ""), &doc, &fields(), &[], Limits::default());
+    let o = run(script, &Event::doc("Console"), &doc, &fields(), &[], Limits::default());
     assert_eq!(o.error, None);
     assert_eq!(
-        o.requests,
+        o.page_changes,
         [
-            Request::SpawnTemplate { name: long.clone(), page: 0, rename: false, overlay: false },
-            Request::SetTemplateHidden { name: long, hidden: false },
+            crate::templates::Change::Spawn { name: long.clone(), page: 0, rename: false, overlay: false },
+            crate::templates::Change::Hidden { name: long, hidden: false },
         ]
     );
 }
@@ -2883,7 +3242,7 @@ fn an_empty_popup_menu_answers_null_without_asking() {
         event: Event { kind: "Link".into(), ..Event::doc("Mouse Up") },
         doc: doc(),
         fields: Arc::new(Vec::new()),
-        doc_scripts: Vec::new(),
+        doc_scripts: Default::default(),
         calculations: Vec::new(),
         timer: None,
     };
@@ -2942,16 +3301,14 @@ fn to_source_writes_plain_state_as_a_literal() {
 /// `toSource` refuses what it can't write faithfully or within its bounds, with an error the
 /// script can catch.
 #[test]
-fn to_source_refuses_cycles_functions_and_oversized_state() {
+fn to_source_refuses_cycles_native_functions_and_oversized_state() {
     let event = Event::doc("Console");
     for (script, expected) in [
         ("var v = {}; v.v = v; v.toSource();", "refers to itself"),
-        ("({f: function () {}}).toSource();", "functions"),
+        ("({f: Math.floor}).toSource();", "native functions"),
         ("var v = []; v.length = 1000000; v.toSource();", "too long"),
         ("var v = []; for (var i = 0; i < 100; i++) v = [v]; v.toSource();", "nested too deeply"),
-        ("var s = new Array(4097).join('x'); var v = []; for (var i = 0; i < 300; i++) v.push(s); v.toSource();", "too long"),
-        ("({when: new Date(0)}).toSource();", "only plain objects"),
-        ("[/x/].toSource();", "only plain objects"),
+        ("var s = new Array(8193).join('x'); var v = []; for (var i = 0; i < 1200; i++) v.push(s); v.toSource();", "too long"),
         ("function C() { this.a = 1; } new C().toSource();", "only plain objects"),
         ("var v = JSON.parse('{\"__proto__\": 1}'); v.toSource();", "__proto__"),
     ] {
@@ -2992,4 +3349,28 @@ fn set_items_and_set_action_change_the_field() {
         let out = go(script, &event);
         assert!(out.error.as_deref().is_some_and(|e| e.contains(expected)), "{script}: {out:?}");
     }
+}
+
+#[test]
+fn bookmark_color_accepts_gray_and_cmyk() {
+    let mut info = doc();
+    info.bookmarks.push(crate::bookmarks::Bookmark {
+        object_id: 1,
+        path: vec![0],
+        name: "Notes".into(),
+        open: false,
+        style: 0,
+        color: [0.0; 3],
+        page: None,
+    });
+    let out = run(
+        "var b=bookmarkRoot.children[0];b.color=['G',0.5];var gray=b.color.join(',');b.color=['CMYK',0,0.5,1,0];gray+'|'+b.color.join(',')",
+        &Event::doc("Console"),
+        &info,
+        &[],
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("RGB,0.5,0.5,0.5|RGB,1,0.5,0"));
 }

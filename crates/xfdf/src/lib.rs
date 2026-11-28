@@ -36,7 +36,7 @@ use fdf::{ImportBudget, fdf_body, import_fdf, walk_fdf};
 use fdf::{MAX_FDF_BYTES, MAX_FDF_OBJECTS};
 #[cfg(test)]
 use xfdf::{LOCKED, find_by_name};
-pub use xfdf::{Outline, comment_count, comment_outlines, comments_bounds, export_xfdf, export_xfdf_comments, import_comments};
+pub use xfdf::{Outline, comment_count, comment_outlines, comments_bounds, export_xfdf, export_xfdf_comments, export_xfdf_values, import_comments};
 use xfdf::{apply_values, import_xfdf};
 
 #[cfg(test)]
@@ -161,14 +161,7 @@ pub fn export_data(doc: &Document, format: Format) -> String {
 /// The field values in a form data file (FDF or XFDF) or a filled-in PDF form, in file order.
 pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError> {
     if bytes.starts_with(b"%FDF") {
-        let fdf = Document::open(std::sync::Arc::new(bytes.to_vec())).map_err(|e| DataError::Malformed(e.to_string()))?;
-        let body = fdf_body(&fdf)?;
-        let mut values = Vec::new();
-        let mut budget = ImportBudget::new();
-        if let Some(list) = body.get(b"Fields").map(|f| fdf.resolve(f)).and_then(|f| f.as_array().cloned()) {
-            walk_fdf(&fdf, &list, "", &mut values, 0, &mut Vec::new(), &mut budget)?;
-        }
-        return Ok(values);
+        return fdf_values(bytes);
     }
     if bytes.starts_with(b"%PDF") || bytes.windows(5).take(1024).any(|w| w == b"%PDF-") {
         let doc = Document::open(std::sync::Arc::new(bytes.to_vec())).map_err(|e| DataError::Malformed(e.to_string()))?;
@@ -185,6 +178,26 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
             })
             .collect());
     }
+    xfdf_values(bytes)
+}
+
+/// Decode only field values from FDF, ignoring document actions and annotations.
+pub fn fdf_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError> {
+    if !bytes.starts_with(b"%FDF") {
+        return Err(DataError::UnknownFormat);
+    }
+    let fdf = Document::open(std::sync::Arc::new(bytes.to_vec())).map_err(|e| DataError::Malformed(e.to_string()))?;
+    let body = fdf_body(&fdf)?;
+    let mut values = Vec::new();
+    let mut budget = ImportBudget::new();
+    if let Some(list) = body.get(b"Fields").map(|f| fdf.resolve(f)).and_then(|f| f.as_array().cloned()) {
+        walk_fdf(&fdf, &list, "", &mut values, 0, &mut Vec::new(), &mut budget)?;
+    }
+    Ok(values)
+}
+
+/// Decode only field values from XFDF.
+pub fn xfdf_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError> {
     craft_xfdf::read_fields(bytes).map_err(|error| match error {
         craft_xfdf::Error::UnknownFormat => DataError::UnknownFormat,
         craft_xfdf::Error::Malformed(message) => DataError::Malformed(message),

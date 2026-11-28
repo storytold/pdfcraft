@@ -1,261 +1,661 @@
-//! Page templates (#1429): the name dictionary's `/Templates` tree names pages kept out of the
-//! page tree, and its `/Pages` tree names visible pages (ISO 32000-2 §7.7.4, Table 32). Forms
-//! show more pages from them through JavaScript: `Template.spawn` adds a copy of a template's
-//! page, and `Template.hidden = false` moves the template's own page into the document.
+//! Named page templates (ISO 32000-2 7.7.4), retaining their hidden pages and field graphs.
+use crate::{Dict, Document, ObjRef, Object, OrganizeError, PageWalk, PdfString, rebuild, walk};
+use std::collections::{HashMap, HashSet};
 
-use std::collections::HashSet;
-
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
-
-use crate::{INHERITABLE, OrganizeError, page_count, rebuild, walk};
-
-/// At most this many names are read from one tree: a form has a handful of templates.
 const MAX_NAMES: usize = 4096;
-
-/// Field levels followed up from a widget to its top-level field.
-const MAX_FIELD_DEPTH: usize = 32;
-
-/// A named page a form can add or show.
-#[derive(Clone, Debug, PartialEq, Eq)]
+const MAX_EDITED_NAMES: usize = 100_000;
+#[derive(Clone, Debug, PartialEq)]
+/// A named page, retained even when absent from the visible page tree.
 pub struct Template {
+    /// Decoded name used to look up the template.
     pub name: String,
-    /// Kept out of the page tree (`/Templates`); a visible named page (`/Pages`) is not hidden.
+    /// Whether the template is absent from the visible page tree.
     pub hidden: bool,
+    /// Original page object, including for hidden templates.
+    pub page: ObjRef,
+    /// Zero-based visible page index, or `None` when hidden.
+    pub visible_page: Option<usize>,
 }
 
-/// The document's templates: the hidden ones (`/Templates`), then the named visible pages
-/// (`/Pages`), each in its tree's order.
-pub fn templates(doc: &Document) -> Vec<Template> {
-    let named = |tree: &[u8], hidden: bool| {
-        entries(doc, tree).into_iter().filter(|(_, v)| v.as_ref().is_some()).map(move |(k, _)| Template { name: text(&k), hidden })
-    };
-    named(b"Templates", true).chain(named(b"Pages", false)).collect()
-}
-
-/// Add a copy of template `name`'s page as page `at` (0-based, clamped to the end), as
-/// JavaScript's `Template.spawn(at, rename, false)` does. With `rename`, the copy's fields are
-/// put under `P<at>.<name>`, so they are fields of their own; without it, they are more widgets
-/// of the template's fields and share their values. Returns where the page went.
-pub fn spawn_template(doc: &mut Document, name: &str, at: usize, rename: bool) -> Result<usize, OrganizeError> {
-    let page = template_page(doc, name)?;
-    let at = at.min(page_count(doc)?);
-    // The copy is made from a version of the document whose page tree ends with the template's
-    // page, so the page importer copies it as any page: its content, resources and widgets,
-    // with their fields registered in the form.
-    let mut src = doc.clone();
-    let mut order = walk(&src)?;
-    let index = match order.iter().position(|(r, _)| *r == page) {
-        Some(index) => index,
-        None => {
-            src.update_dict(page, |d| d.set(b"Type".to_vec(), Object::name("Page")))?;
-            order.push((page, fallback_attributes(&order)));
-            rebuild(&mut src, &order)?;
-            order.len().saturating_sub(1)
+fn entries(doc: &Document, kind: &[u8], limit: usize) -> (Vec<(String, ObjRef)>, bool) {
+    let Some(root) = doc.root() else { return (vec![], true) };
+    let root = doc.get(root);
+    let Some(names) = root.as_dict().and_then(|d| d.get(b"Names")) else { return (vec![], true) };
+    let names = doc.resolve(names);
+    let Some(names) = names.as_dict() else { return (vec![], false) };
+    let Some(tree) = names.get(kind) else { return (vec![], true) };
+    let mut stack = vec![(tree.clone(), 0usize)];
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    let mut steps = 0usize;
+    let mut scanned = 0;
+    let mut complete = true;
+    while let Some((node, depth)) = stack.pop() {
+        steps += 1;
+        if steps > 4096 || depth > 32 {
+            return (out, false);
         }
-    };
-    if rename {
-        rename_fields(&mut src, page, &format!("P{at}"), name)?;
-    }
-    let before = crate::import::listed_fields(doc);
-    // Renamed copies are fields of their own: a second copy spawned at the same page, whose
-    // `P<at>` is taken, gets the first free `P<at>-1`… rather than a name the form already has.
-    let conflicts = if rename { crate::import::FieldConflicts::Rename } else { crate::import::FieldConflicts::Merge };
-    let copied = crate::import::import_pages_with(doc, &src, &[index], at, conflicts)?.pages;
-    if !rename && let Some(&copy) = copied.first() {
-        crate::import::share_fields_with_originals(doc, copy, &before)?;
-    }
-    Ok(at)
-}
-
-/// Show (`hidden` false) or hide template `name`, as JavaScript's `Template.hidden` does. A
-/// shown template's page goes at the end of the document and is named in `/Pages`; a hidden
-/// one leaves the page tree, page and all, and is named in `/Templates` again. Showing a
-/// visible page, or hiding a hidden one, changes nothing.
-pub fn set_template_hidden(doc: &mut Document, name: &str, hidden: bool) -> Result<(), OrganizeError> {
-    let (from, to): (&[u8], &[u8]) = if hidden { (b"Pages", b"Templates") } else { (b"Templates", b"Pages") };
-    // Rewritten from every entry, not the listing's first [`MAX_NAMES`], so no name is lost.
-    let mut source = all_entries(doc, from);
-    let Some(k) = source.iter().position(|(key, _)| text(key) == name) else {
-        return if all_entries(doc, to).iter().any(|(key, _)| text(key) == name) {
-            Ok(())
-        } else {
-            Err(OrganizeError::Invalid(format!("the document has no template named {name}")))
-        };
-    };
-    let (key, value) = source.remove(k);
-    let page = value.as_ref().ok_or_else(|| OrganizeError::Invalid(format!("template {name} is not a page")))?;
-    let mut order = walk(doc)?;
-    if hidden {
-        let Some(at) = order.iter().position(|(r, _)| *r == page) else {
-            return Err(OrganizeError::Invalid(format!("template {name} is not a page of the document")));
-        };
-        if order.len() == 1 {
-            return Err(OrganizeError::WouldRemoveAllPages);
-        }
-        // Out of the tree, the page no longer inherits: it keeps what it showed with.
-        let (_, inherited) = order.remove(at);
-        doc.update_dict(page, |d| {
-            for k in INHERITABLE {
-                if !d.contains(k)
-                    && let Some(v) = inherited.get(k)
-                {
-                    d.set(k.to_vec(), v.clone());
-                }
-            }
-            d.remove(b"Parent");
-            d.set(b"Type".to_vec(), Object::name("Template"));
-        })?;
-    } else {
-        if order.iter().any(|(r, _)| *r == page) {
-            return Err(OrganizeError::Invalid(format!("template {name} is already a page of the document")));
-        }
-        doc.update_dict(page, |d| d.set(b"Type".to_vec(), Object::name("Page")))?;
-        let attributes = fallback_attributes(&order);
-        order.push((page, attributes));
-    }
-    rebuild(doc, &order)?;
-    let mut target = all_entries(doc, to);
-    target.push((key, value));
-    write_tree(doc, from, source)?;
-    write_tree(doc, to, target)
-}
-
-/// The page template `name` names, hidden or visible.
-fn template_page(doc: &Document, name: &str) -> Result<ObjRef, OrganizeError> {
-    [&b"Templates"[..], b"Pages"]
-        .iter()
-        .flat_map(|tree| entries(doc, tree))
-        .find(|(key, _)| text(key) == name)
-        .and_then(|(_, v)| v.as_ref())
-        .filter(|r| doc.get(*r).as_dict().is_some())
-        .ok_or_else(|| OrganizeError::Invalid(format!("the document has no template named {name}")))
-}
-
-/// What a page added to the tree inherits when it has no attributes of its own: those of the
-/// first page, so a template written without a media box still has one.
-fn fallback_attributes(order: &[(ObjRef, Dict)]) -> Dict {
-    order.first().map(|(_, inherited)| inherited.clone()).unwrap_or_default()
-}
-
-/// Put the fields of the widgets on `page` under a new field `outer`, holding one named
-/// `inner`: JavaScript's renaming of a spawned page's fields (`P1.Name.Field`).
-fn rename_fields(doc: &mut Document, page: ObjRef, outer: &str, inner: &str) -> Result<(), OrganizeError> {
-    let annots = doc.get(page).as_dict().and_then(|d| d.get(b"Annots").cloned()).map(|a| doc.resolve(&a).as_ref().clone());
-    let mut tops: Vec<ObjRef> = Vec::new();
-    for annot in annots.as_ref().and_then(Object::as_array).into_iter().flatten() {
-        let Some(widget) = annot.as_ref() else { continue };
-        if doc.get(widget).as_dict().is_none_or(|d| d.name(b"Subtype") != Some(b"Widget")) {
+        if node.as_ref().is_some_and(|r| !seen.insert(r)) {
             continue;
         }
-        if let Some(top) = top_field(doc, widget)
-            && !tops.contains(&top)
-        {
-            tops.push(top);
+        let node = doc.resolve(&node);
+        let Some(d) = node.as_dict() else {
+            complete = false;
+            continue;
+        };
+        if let Some(pairs) = d.get(b"Names") {
+            let pairs = doc.resolve(pairs);
+            if let Some(pairs) = pairs.as_array() {
+                complete &= pairs.len() % 2 == 0;
+                for [key, value] in pairs.as_chunks::<2>().0 {
+                    if scanned >= limit {
+                        return (out, false);
+                    }
+                    scanned += 1;
+                    if let Some(page) = value.as_ref() {
+                        if let Some(name) = doc.resolve(key).as_string() {
+                            out.push((name.to_text(), page));
+                        } else {
+                            complete = false;
+                        }
+                    }
+                }
+            } else {
+                complete = false;
+            }
+        }
+        if let Some(kids) = d.get(b"Kids") {
+            let kids = doc.resolve(kids);
+            if let Some(kids) = kids.as_array() {
+                let remaining = 4096usize.saturating_sub(steps + stack.len());
+                complete &= kids.len() <= remaining;
+                for child in kids.iter().rev().take(remaining) {
+                    if child.as_ref().is_some() {
+                        stack.push((child.clone(), depth + 1));
+                    } else {
+                        complete = false;
+                    }
+                }
+            } else {
+                complete = false;
+            }
         }
     }
-    if tops.is_empty() {
+    (out, complete)
+}
+/// List valid named templates with hidden templates first and each group ordered by name.
+pub fn templates(doc: &Document) -> Vec<Template> {
+    let pages: HashMap<_, _> = walk(doc).unwrap_or_default().into_iter().enumerate().map(|(i, (r, _))| (r, i)).collect();
+    let mut out = std::collections::BTreeMap::new();
+    for (name, page) in entries(doc, b"Templates", MAX_NAMES).0.into_iter().chain(entries(doc, b"Pages", MAX_NAMES).0) {
+        if doc.get(page).as_dict().is_some_and(|d| matches!(d.name(b"Type"), Some(b"Page" | b"Template"))) {
+            out.insert(name.clone(), Template { name, page, hidden: !pages.contains_key(&page), visible_page: pages.get(&page).copied() });
+        }
+    }
+    let mut templates: Vec<_> = out.into_values().collect();
+    templates.sort_by_key(|template| !template.hidden);
+    templates
+}
+fn named(doc: &Document, name: &str) -> Result<Template, OrganizeError> {
+    let page = [b"Pages".as_slice(), b"Templates"]
+        .into_iter()
+        .find_map(|kind| {
+            entries(doc, kind, MAX_EDITED_NAMES).0.into_iter().rev().find_map(|(key, page)| {
+                (key == name && doc.get(page).as_dict().is_some_and(|d| matches!(d.name(b"Type"), Some(b"Page" | b"Template")))).then_some(page)
+            })
+        })
+        .ok_or_else(|| OrganizeError::Invalid(format!("there is no page template named {name:?}")))?;
+    let visible_page = walk(doc)?.iter().position(|(r, _)| *r == page);
+    Ok(Template { name: name.into(), page, hidden: visible_page.is_none(), visible_page })
+}
+fn set_entry(doc: &mut Document, kind: &[u8], name: &str, page: Option<ObjRef>) -> Result<(), OrganizeError> {
+    set_entries(doc, kind, &HashSet::from([name]), page)
+}
+
+fn set_entries(doc: &mut Document, kind: &[u8], keys: &HashSet<&str>, page: Option<ObjRef>) -> Result<(), OrganizeError> {
+    let root = doc.root().ok_or(OrganizeError::NoPageTree)?;
+    if doc.get(root).as_dict().and_then(|d| d.get(b"Names")).is_some_and(|v| doc.resolve(v).as_dict().is_none()) {
+        return Err(OrganizeError::Invalid("the catalog Names entry is not a dictionary; its data was preserved".into()));
+    }
+    let names_ref = doc.get(root).as_dict().and_then(|d| d.reference(b"Names"));
+    let mut names = doc.get(root).as_dict().and_then(|d| d.get(b"Names")).and_then(|v| doc.resolve(v).as_dict().cloned()).unwrap_or_default();
+    let old = names.get(kind).cloned();
+    if old.is_none() && page.is_none() {
         return Ok(());
     }
-    let named = |t: &str| {
-        let mut d = Dict::new();
-        d.set(b"T".to_vec(), Object::String(PdfString::text(t)));
-        d
-    };
-    let mut middle = named(inner);
-    middle.set(b"Kids".to_vec(), Object::Array(tops.iter().map(|r| Object::Ref(*r)).collect()));
-    let middle = doc.add(middle);
-    let mut top = named(outer);
-    top.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(middle)]));
-    let top = doc.add(top);
-    doc.update_dict(middle, |d| d.set(b"Parent".to_vec(), Object::Ref(top)))?;
-    for field in tops {
-        doc.update_dict(field, |d| d.set(b"Parent".to_vec(), Object::Ref(middle)))?;
+    if old.as_ref().is_some_and(|v| doc.resolve(v).as_dict().is_none()) {
+        return Err(OrganizeError::Invalid("the template name tree is not a dictionary; its data was preserved".into()));
+    }
+    let mut tree = old.as_ref().and_then(|v| doc.resolve(v).as_dict().cloned()).unwrap_or_default();
+    // Flattening a branched name tree would discard metadata on its children. Keep the
+    // graph intact until this writer can edit those nodes in place.
+    if tree.contains(b"Kids") {
+        return Err(OrganizeError::Invalid("editing a branched template name tree is not supported; its data was preserved".into()));
+    }
+    if tree.get(b"Names").is_some_and(|v| doc.resolve(v).as_array().is_none()) {
+        return Err(OrganizeError::Invalid("the template name list is not an array; its data was preserved".into()));
+    }
+    let array = tree.get(b"Names").map(|v| doc.resolve(v)).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    if array.len() > MAX_EDITED_NAMES * 2 || array.len() % 2 != 0 {
+        return Err(OrganizeError::Invalid("invalid or oversized template name tree".into()));
+    }
+    let mut values = Vec::new();
+    for pair in array.as_chunks::<2>().0 {
+        let [key, value] = pair;
+        let key_text = doc
+            .resolve(key)
+            .as_string()
+            .map(|s| s.to_text())
+            .ok_or_else(|| OrganizeError::Invalid("template name tree has a non-string key".into()))?;
+        if !keys.contains(key_text.as_str()) {
+            let bytes = doc.resolve(key).as_string().map(|s| s.bytes.clone()).unwrap_or_default();
+            values.push((bytes, key.clone(), value.clone()));
+        }
+    }
+    if let Some(page) = page {
+        for name in keys {
+            let key = PdfString::text(name);
+            values.push((key.bytes.clone(), Object::String(key), Object::Ref(page)));
+        }
+    }
+    if values.len() > MAX_EDITED_NAMES {
+        return Err(OrganizeError::Invalid("too many page templates".into()));
+    }
+    values.sort_by(|a, b| a.0.cmp(&b.0));
+    tree.remove(b"Limits");
+    tree.set(b"Names".to_vec(), Object::Array(values.into_iter().flat_map(|(_, key, value)| [key, value]).collect()));
+    if let Some(r) = old.as_ref().and_then(Object::as_ref) {
+        doc.set(r, Object::Dict(tree));
+    } else {
+        names.set(kind.to_vec(), Object::Dict(tree));
+    }
+    if let Some(r) = names_ref {
+        doc.set(r, Object::Dict(names));
+    } else {
+        doc.update_dict(root, |d| d.set(b"Names".to_vec(), Object::Dict(names)))?;
+    }
+    Ok(())
+}
+/// Name a zero-based visible page, replacing any existing template with this name.
+/// Refuses empty/oversized names, missing pages, and malformed or branched name trees.
+/// Like the other template writers, use a working clone to roll back on error.
+pub fn create_template(doc: &mut Document, name: &str, page: usize) -> Result<(), OrganizeError> {
+    if name.is_empty() || name.len() > 4096 {
+        return Err(OrganizeError::Invalid("a template name needs 1 through 4096 bytes".into()));
+    }
+    let page = walk(doc)?.get(page).map(|(r, _)| *r).ok_or(OrganizeError::NoSuchPage(page))?;
+    set_entry(doc, b"Templates", name, None)?;
+    set_entry(doc, b"Pages", name, Some(page))
+}
+/// Remove a name without deleting its page. Refuses missing names or unsupported name trees.
+/// Use a working clone for rollback if either name-tree update fails.
+pub fn remove_template(doc: &mut Document, name: &str) -> Result<(), OrganizeError> {
+    named(doc, name)?;
+    set_entry(doc, b"Templates", name, None)?;
+    set_entry(doc, b"Pages", name, None)
+}
+/// Effective inherited page entries, bounded independently of the page tree walk.
+pub(crate) fn inherited(doc: &Document, page: ObjRef) -> Dict {
+    let mut out = Dict::new();
+    let mut seen = HashSet::new();
+    let mut next = Some(page);
+    while let Some(r) = next
+        && seen.len() < 256
+        && seen.insert(r)
+    {
+        let value = doc.get(r);
+        let Some(d) = value.as_dict() else { break };
+        for key in crate::INHERITABLE {
+            if !out.contains(key)
+                && let Some(value) = d.get(key)
+            {
+                out.set(key.to_vec(), value.clone());
+            }
+        }
+        next = d.reference(b"Parent");
+    }
+    out
+}
+/// Fallback inherited attributes for standalone templates in this document snapshot.
+pub fn template_fallback(doc: &Document) -> Dict {
+    let first = crate::pages_root(doc).ok().and_then(|root| PageWalk::new(doc, root).next());
+    fallback_attributes(doc, first.as_ref().map(|(_, attrs)| attrs))
+}
+
+fn fallback_attributes(doc: &Document, first: Option<&Dict>) -> Dict {
+    let mut attrs = Dict::new();
+    let root = crate::pages_root(doc).ok().map(|r| doc.get(r));
+    for key in crate::INHERITABLE {
+        if let Some(value) = root.as_deref().and_then(Object::as_dict).and_then(|d| d.get(key)).or_else(|| first.and_then(|attrs| attrs.get(key))) {
+            attrs.set(key.to_vec(), value.clone());
+        }
+    }
+    attrs
+}
+
+fn template_attributes(doc: &Document, page: ObjRef, fallback: &Dict) -> Dict {
+    let mut attrs = inherited(doc, page);
+    for (key, value) in fallback.iter() {
+        if !attrs.contains(key) {
+            attrs.set(key.clone(), value.clone());
+        }
+    }
+    attrs
+}
+
+/// Effective inherited page dictionary and boxes (media, crop, bleed, trim, art) of a template.
+pub fn template_geometry(doc: &Document, page: ObjRef) -> (Dict, [[f64; 4]; 5]) {
+    template_geometry_with_fallback(doc, page, &template_fallback(doc))
+}
+
+/// Effective template geometry using fallback attributes from the same document snapshot.
+pub fn template_geometry_with_fallback(doc: &Document, page: ObjRef, fallback: &Dict) -> (Dict, [[f64; 4]; 5]) {
+    let attrs = template_attributes(doc, page, fallback);
+    let original = doc.get(page);
+    let leaf = original.as_dict().cloned().unwrap_or_default();
+    let boxes = crate::boxes::effective_boxes(doc, &leaf, &attrs);
+    (attrs, boxes)
+}
+
+pub(crate) fn preserve_hidden_attributes(doc: &mut Document, order: &[(ObjRef, Dict)]) -> Result<(), OrganizeError> {
+    let visible: HashSet<_> = order.iter().map(|(page, _)| *page).collect();
+    let hidden: HashSet<_> = [b"Templates".as_slice(), b"Pages"]
+        .into_iter()
+        .flat_map(|kind| entries(doc, kind, MAX_EDITED_NAMES).0)
+        .map(|(_, page)| page)
+        .filter(|page| !visible.contains(page) && doc.get(*page).as_dict().is_some_and(|d| matches!(d.name(b"Type"), Some(b"Page" | b"Template"))))
+        .collect();
+    let fallback = fallback_attributes(doc, order.first().map(|(_, attrs)| attrs));
+    for page in hidden {
+        let attrs = template_attributes(doc, page, &fallback);
+        doc.update_dict(page, |d| {
+            for (key, value) in attrs.iter() {
+                if !d.contains(key) {
+                    d.set(key.clone(), value.clone());
+                }
+            }
+        })?;
     }
     Ok(())
 }
 
-/// The top-level field `widget` belongs to (itself, when it is its own field), following
-/// `/Parent` at most [`MAX_FIELD_DEPTH`] levels and never through a node twice.
-fn top_field(doc: &Document, widget: ObjRef) -> Option<ObjRef> {
-    let mut node = widget;
-    let mut seen = HashSet::new();
-    for _ in 0..MAX_FIELD_DEPTH {
-        if !seen.insert(node) {
-            return None;
-        }
-        match doc.get(node).as_dict()?.reference(b"Parent") {
-            Some(parent) => node = parent,
-            None => return Some(node),
-        }
+fn complete_entries(doc: &Document, kind: &[u8]) -> Result<Vec<(String, ObjRef)>, OrganizeError> {
+    let (entries, complete) = entries(doc, kind, MAX_EDITED_NAMES);
+    if !complete {
+        return Err(OrganizeError::Invalid("could not inspect the complete template name tree".into()));
     }
-    None
+    Ok(entries)
 }
 
-/// The (key, value) pairs of the name dictionary's tree `key`, at most [`MAX_NAMES`] (for listing).
-fn entries(doc: &Document, key: &[u8]) -> Vec<(Vec<u8>, Object)> {
-    let mut out = all_entries(doc, key);
-    out.truncate(MAX_NAMES);
-    out
+/// Hide the template's visible page, or append its hidden page to the visible pages.
+/// Already matching visibility is a no-op. Refuses a missing name, hiding the last
+/// page, invalid page trees, or unsupported name trees.
+///
+/// Callers requiring rollback must clone and commit only on success:
+/// ```
+/// # fn update(doc: &mut pdfcraft_cos::Document) -> Result<(), pdfcraft_organize::OrganizeError> {
+/// let mut working = doc.clone();
+/// pdfcraft_organize::set_template_hidden(&mut working, "Notes", true)?;
+/// *doc = working;
+/// # Ok(()) }
+/// ```
+pub fn set_template_hidden(doc: &mut Document, name: &str, hidden: bool) -> Result<(), OrganizeError> {
+    let template = named(doc, name)?;
+    set_page_hidden(doc, template.page, hidden)
 }
 
-/// Every (key, value) pair of the name dictionary's tree `key`, for rewriting it. The walk is
-/// bounded by the tree reader's depth limit and seen-set; the entries are already in memory.
-fn all_entries(doc: &Document, key: &[u8]) -> Vec<(Vec<u8>, Object)> {
-    let Some(tree) = names(doc).and_then(|n| n.get(key).cloned()) else { return Vec::new() };
-    let mut out = Vec::new();
-    crate::import::name_tree_entries(doc, &tree, 0, &mut HashSet::new(), &mut out);
-    out
-}
-
-/// The catalog's name dictionary.
-fn names(doc: &Document) -> Option<Dict> {
-    let catalog = doc.get(doc.root()?).as_dict()?.clone();
-    doc.resolve(catalog.get(b"Names")?).as_dict().cloned()
-}
-
-/// A tree key as text (keys are PDF text strings).
-fn text(key: &[u8]) -> String {
-    PdfString::literal(key.to_vec()).to_text()
-}
-
-/// Write the name dictionary's tree `key` as one sorted leaf holding `entries`, or leave it out
-/// when there are none. The dictionary's other trees stay where they are.
-fn write_tree(doc: &mut Document, key: &[u8], mut entries: Vec<(Vec<u8>, Object)>) -> Result<(), OrganizeError> {
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-    let tree = (!entries.is_empty()).then(|| {
-        let mut names = Vec::with_capacity(entries.len().saturating_mul(2));
-        for (k, v) in entries {
-            names.push(Object::String(PdfString::literal(k)));
-            names.push(v);
-        }
-        let mut leaf = Dict::new();
-        leaf.set(b"Names".to_vec(), Object::Array(names));
-        doc.add(leaf)
-    });
-    let set = |n: &mut Dict| match tree {
-        Some(t) => n.set(key.to_vec(), Object::Ref(t)),
-        None => {
-            n.remove(key);
-        }
-    };
-    let root = doc.root().ok_or(OrganizeError::NoPageTree)?;
-    // `/Names` may be an indirect dictionary: update it where it is.
-    if let Some(Object::Ref(names)) = doc.get(root).as_dict().and_then(|c| c.get(b"Names").cloned())
-        && doc.get(names).as_dict().is_some()
-    {
-        doc.update_dict(names, set)?;
+fn set_page_hidden(doc: &mut Document, page: ObjRef, hidden: bool) -> Result<(), OrganizeError> {
+    let mut pages = walk(doc)?;
+    let visible_page = pages.iter().position(|(r, _)| *r == page);
+    if hidden == visible_page.is_none() {
         return Ok(());
     }
-    doc.update_dict(root, |c| {
-        let mut n = match c.get(b"Names") {
-            Some(Object::Dict(d)) => d.clone(),
-            _ => Dict::new(),
-        };
-        set(&mut n);
-        c.set(b"Names".to_vec(), Object::Dict(n));
-    })?;
+    if hidden && pages.len() <= 1 {
+        return Err(OrganizeError::WouldRemoveAllPages);
+    }
+    let visible_names = complete_entries(doc, b"Pages")?;
+    let hidden_names = complete_entries(doc, b"Templates")?;
+    let entries: Vec<_> = visible_names.iter().chain(&hidden_names).collect();
+    let keys: HashSet<_> = entries.iter().filter(|(_, r)| *r == page).map(|(name, _)| name.as_str()).collect();
+    if entries.iter().any(|(name, r)| *r != page && keys.contains(name.as_str())) {
+        return Err(OrganizeError::Invalid("a template alias also names a different page".into()));
+    }
+    let (source, destination) = if hidden { (b"Pages".as_slice(), b"Templates".as_slice()) } else { (b"Templates".as_slice(), b"Pages".as_slice()) };
+    set_entries(doc, source, &keys, None)?;
+    set_entries(doc, destination, &keys, Some(page))?;
+    if let Some(index) = visible_page {
+        preserve_hidden_attributes(doc, &pages)?;
+        let (_, attrs) = pages.remove(index);
+        doc.update_dict(page, |d| {
+            d.set(b"Type".to_vec(), Object::name("Template"));
+            d.remove(b"Parent");
+            for (key, value) in attrs.iter() {
+                if !d.contains(key) {
+                    d.set(key.clone(), value.clone());
+                }
+            }
+        })?;
+        rebuild(doc, &pages)?;
+        crate::labels::drop_deleted_pages(doc, &[index], pages.len())?;
+    } else {
+        preserve_hidden_attributes(doc, &pages)?;
+        let attrs = template_attributes(doc, page, &fallback_attributes(doc, pages.first().map(|(_, attrs)| attrs)));
+        pages.push((page, attrs));
+        doc.update_dict(page, |d| d.set(b"Type".to_vec(), Object::name("Page")))?;
+        rebuild(doc, &pages)?;
+    }
+    Ok(())
+}
+/// Insert a template copy before zero-based `at`, clamped to the page count (append).
+/// Return its visible index. With renaming, copied fields get a new page namespace.
+/// Without renaming, widgets share the original fields. Use a working clone for rollback.
+pub fn spawn_template(doc: &mut Document, name: &str, at: usize, rename: bool) -> Result<usize, OrganizeError> {
+    let at = at.min(crate::page_count(doc)?);
+    spawn_template_page(doc, name, at, rename)?;
+    Ok(at)
+}
+
+fn spawn_template_page(doc: &mut Document, name: &str, at: usize, rename: bool) -> Result<ObjRef, OrganizeError> {
+    let template = named(doc, name)?;
+    let attrs = template_attributes(doc, template.page, &template_fallback(doc));
+    crate::import::copy_template_page(doc, template.page, attrs, at, rename.then_some(name))
+}
+/// Deleting a visible named template hides it; ordinary spawned pages are removed normally.
+/// Indices are zero-based; duplicates count once. Refuses missing indices or deleting
+/// all visible pages. Use a working clone for rollback on page/name-tree errors.
+pub fn delete_script_pages(doc: &mut Document, pages: &[usize]) -> Result<(), OrganizeError> {
+    let all = walk(doc)?;
+    crate::check(pages, all.len())?;
+    let unique: HashSet<_> = pages.iter().copied().collect();
+    if unique.len() >= all.len() {
+        return Err(OrganizeError::WouldRemoveAllPages);
+    }
+    if unique.is_empty() {
+        return Ok(());
+    }
+    let named_pages: HashSet<_> =
+        complete_entries(doc, b"Templates")?.into_iter().chain(complete_entries(doc, b"Pages")?).map(|(_, page)| page).collect();
+    let (mut named, mut ordinary) = (Vec::new(), Vec::new());
+    for (index, (page, _)) in all.iter().enumerate().rev().filter(|(i, _)| unique.contains(i)) {
+        if named_pages.contains(page) {
+            named.push(*page);
+        } else {
+            ordinary.push(index);
+        }
+    }
+    if !ordinary.is_empty() {
+        preserve_hidden_attributes(doc, &all)?;
+        crate::delete_pages(doc, &ordinary)?;
+    }
+    for page in named {
+        set_page_hidden(doc, page, true)?;
+    }
     Ok(())
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    fn fixture() -> Document {
+        let bodies = [
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /CO [5 0 R] >> /Names << /Templates << /Names [(Notes) 4 0 R] >> >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] /Resources << /Font << /Helv 6 0 R >> >> >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+            "<< /Type /Template /Parent 2 0 R /Annots 8 0 R /Sentinel (retained) /Contents 7 0 R >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /V (original) /Rect [10 10 100 30] /P 4 0 R /DA (/Helv 12 Tf 0 g) /Custom (keep) >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Length 0 >>\nstream\n\nendstream",
+            "[5 0 R]",
+        ];
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut offsets = vec![0];
+        for (i, body) in bodies.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len()).as_bytes());
+        for offset in offsets.iter().skip(1) {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer\n<< /Root 1 0 R /Size {} >>\nstartxref\n{xref}\n%%EOF\n", offsets.len()).as_bytes());
+        Document::open(Arc::new(bytes)).unwrap()
+    }
+    #[test]
+    fn renamed_template_copies_fields_and_shares_resources() {
+        let mut doc = fixture();
+        assert_eq!(templates(&doc)[0].visible_page, None);
+        let page = spawn_template_page(&mut doc, "Notes", 1, true).unwrap();
+        assert_eq!(crate::page_count(&doc).unwrap(), 2);
+        let widget =
+            doc.get(page).as_dict().and_then(|d| d.get(b"Annots")).and_then(|v| doc.resolve(v).as_array().cloned()).unwrap()[0].as_ref().unwrap();
+        assert_eq!(doc.get(widget).as_dict().and_then(|d| d.get(b"T")).and_then(|v| v.as_string().map(|s| s.to_text())).as_deref(), Some("note"));
+        assert_eq!(doc.get(page).as_dict().and_then(|d| d.reference(b"Contents")), Some(ObjRef::new(7, 0)));
+        assert!(doc.get(page).as_dict().unwrap().contains(b"Sentinel"));
+        let saved = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+        let reopened = Document::open(Arc::new(saved)).unwrap();
+        assert_eq!(crate::page_count(&reopened).unwrap(), 2);
+        assert_eq!(templates(&reopened)[0].name, "Notes");
+    }
+    #[test]
+    fn later_spawns_keep_hidden_templates_inherited_page_attributes() {
+        let mut doc = fixture();
+        let first = spawn_template_page(&mut doc, "Notes", 1, true).unwrap();
+        let second = spawn_template_page(&mut doc, "Notes", 2, true).unwrap();
+        for page in [ObjRef::new(4, 0), first, second] {
+            let page = doc.get(page);
+            let page = page.as_dict().unwrap();
+            assert!(page.contains(b"MediaBox"));
+            assert!(page.contains(b"Resources"));
+        }
+    }
+    #[test]
+    fn prepending_preserves_the_hidden_templates_fallback_crop() {
+        let mut doc = fixture();
+        let original = ObjRef::new(3, 0);
+        let hidden = ObjRef::new(4, 0);
+        let crop = Object::Array([10, 20, 180, 260].into_iter().map(Object::Int).collect());
+        doc.update_dict(original, |d| d.set(b"CropBox".to_vec(), crop)).unwrap();
+        doc.update_dict(hidden, |d| {
+            d.remove(b"Parent");
+        })
+        .unwrap();
+        let expected = crate::page_boxes(&doc).unwrap()[0];
+        assert_eq!(template_geometry(&doc, hidden).1[1], expected[1]);
+        spawn_template_page(&mut doc, "Notes", 0, true).unwrap();
+        assert_eq!(template_geometry(&doc, hidden).1[1], expected[1]);
+        spawn_template_page(&mut doc, "Notes", 0, true).unwrap();
+        assert_eq!(crate::page_boxes(&doc).unwrap()[0][1], expected[1]);
+    }
+
+    #[test]
+    fn template_spawns_reset_the_fields_that_own_their_widgets() {
+        let mut doc = fixture();
+        let mut action = Dict::new();
+        action.set(b"S".to_vec(), Object::name("ResetForm"));
+        action.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(5, 0))]));
+        let action = doc.add(Object::Dict(action));
+        let mut aa = Dict::new();
+        aa.set(b"U".to_vec(), Object::Ref(action));
+        let aa = doc.add(Object::Dict(aa));
+        doc.update_dict(ObjRef::new(5, 0), |d| d.set(b"AA".to_vec(), Object::Ref(aa))).unwrap();
+        let page = spawn_template_page(&mut doc, "Notes", 1, true).unwrap();
+        let widget = doc.resolve(doc.get(page).as_dict().unwrap().get(b"Annots").unwrap()).as_array().unwrap()[0].as_ref().unwrap();
+        let copied_aa = doc.get(widget).as_dict().unwrap().reference(b"AA").unwrap();
+        assert_ne!(copied_aa, aa);
+        let copied_action = doc.get(copied_aa).as_dict().unwrap().reference(b"U").unwrap();
+        assert_ne!(copied_action, action);
+        let fields = doc.get(copied_action).as_dict().unwrap().get(b"Fields").unwrap().as_array().unwrap().clone();
+        assert_eq!(fields, vec![Object::Ref(widget)]);
+        assert_eq!(doc.get(action).as_dict().unwrap().get(b"Fields").unwrap().as_array().unwrap(), &vec![Object::Ref(ObjRef::new(5, 0))]);
+
+        for at in [2, 3] {
+            let page = spawn_template_page(&mut doc, "Notes", at, false).unwrap();
+            let widget = doc.resolve(doc.get(page).as_dict().unwrap().get(b"Annots").unwrap()).as_array().unwrap()[0].as_ref().unwrap();
+            let widget = doc.get(widget);
+            let widget = widget.as_dict().unwrap();
+            let parent = widget.reference(b"Parent").unwrap();
+            let aa = doc.resolve(widget.get(b"AA").unwrap());
+            let action = doc.resolve(aa.as_dict().unwrap().get(b"U").unwrap());
+            assert_eq!(action.as_dict().unwrap().get(b"Fields"), Some(&Object::Array(vec![Object::Ref(parent)])));
+        }
+    }
+
+    #[test]
+    fn template_name_tree_sorts_encoded_bytes_including_indirect_keys() {
+        let mut doc = fixture();
+        let encoded = PdfString::literal(vec![0xfe, 0xff, 0, b'A']);
+        let key = doc.add(Object::String(encoded.clone()));
+        let mut tree = Dict::new();
+        tree.set(b"Names".to_vec(), Object::Array(vec![Object::Ref(key), Object::Int(17)]));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |d| {
+            let mut names = Dict::new();
+            names.set(b"Pages".to_vec(), Object::Dict(tree));
+            d.set(b"Names".to_vec(), Object::Dict(names));
+        })
+        .unwrap();
+        create_template(&mut doc, "Z", 0).unwrap();
+        let root = doc.get(root);
+        let pairs = root
+            .as_dict()
+            .unwrap()
+            .get(b"Names")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"Pages")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"Names")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        let bytes: Vec<_> = pairs.as_chunks::<2>().0.iter().map(|p| doc.resolve(&p[0]).as_string().unwrap().bytes.clone()).collect();
+        assert!(bytes.windows(2).all(|p| p[0] < p[1]));
+        assert!(pairs.contains(&Object::Ref(key)));
+    }
+    #[test]
+    fn editing_template_names_keeps_unrecognized_values() {
+        let mut doc = fixture();
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |d| {
+            let mut names = d.get(b"Names").unwrap().as_dict().unwrap().clone();
+            let mut tree = names.get(b"Templates").unwrap().as_dict().unwrap().clone();
+            let mut pairs = tree.get(b"Names").unwrap().as_array().unwrap().clone();
+            pairs.extend([Object::String(PdfString::text("opaque")), Object::Int(17)]);
+            tree.set(b"Names".to_vec(), Object::Array(pairs));
+            names.set(b"Templates".to_vec(), Object::Dict(tree));
+            d.set(b"Names".to_vec(), Object::Dict(names));
+        })
+        .unwrap();
+        remove_template(&mut doc, "Notes").unwrap();
+        let root = doc.get(root);
+        let pairs = root
+            .as_dict()
+            .unwrap()
+            .get(b"Names")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"Templates")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"Names")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(pairs, &vec![Object::String(PdfString::text("opaque")), Object::Int(17)]);
+    }
+    #[test]
+    fn unrenamed_template_keeps_the_field_identity_and_adds_widget_siblings() {
+        let mut doc = fixture();
+        spawn_template_page(&mut doc, "Notes", 1, false).unwrap();
+        spawn_template_page(&mut doc, "Notes", 2, false).unwrap();
+        let field = doc.get(ObjRef::new(5, 0));
+        let field = field.as_dict().unwrap();
+        assert!(!field.contains(b"Subtype"));
+        assert!(field.contains(b"Custom"));
+        let kids = field.get(b"Kids").and_then(Object::as_array).unwrap();
+        assert_eq!(kids.len(), 3);
+        for widget in kids {
+            assert_eq!(doc.resolve(widget).as_dict().and_then(|d| d.reference(b"Parent")), Some(ObjRef::new(5, 0)));
+        }
+    }
+    #[test]
+    fn hiding_a_page_preserves_other_templates_and_moves_all_aliases() {
+        let mut doc = fixture();
+        let root = crate::pages_root(&doc).unwrap();
+        let mut leaf = Dict::new();
+        leaf.set(b"Type".to_vec(), Object::name("Page"));
+        leaf.set(b"Parent".to_vec(), Object::Ref(root));
+        let middle = doc.add(Object::Dict(leaf.clone()));
+        let last = doc.add(Object::Dict(leaf));
+        doc.update_dict(root, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(3, 0)), Object::Ref(middle), Object::Ref(last)]));
+            d.set(b"Count".to_vec(), Object::Int(3));
+        })
+        .unwrap();
+        crate::number_pages(&mut doc, 2, 2, crate::LabelStyle::Decimal, "Last-", 1).unwrap();
+        create_template(&mut doc, "Main", 0).unwrap();
+        create_template(&mut doc, "Alias", 0).unwrap();
+
+        set_template_hidden(&mut doc, "Main", true).unwrap();
+        assert!(entries(&doc, b"Pages", MAX_NAMES).0.is_empty());
+        assert_eq!(named(&doc, "Alias").unwrap().visible_page, None);
+        assert_eq!(crate::page_labels(&doc).unwrap()[1], "Last-1");
+        let retained = named(&doc, "Notes").unwrap();
+        assert!(doc.get(retained.page).as_dict().unwrap().contains(b"Resources"));
+        let copy = spawn_template_page(&mut doc, "Notes", 2, true).unwrap();
+        assert!(doc.get(copy).as_dict().unwrap().contains(b"Resources"));
+
+        set_template_hidden(&mut doc, "Alias", false).unwrap();
+        for name in ["Main", "Alias"] {
+            assert_eq!(named(&doc, name).unwrap().visible_page, Some(3));
+        }
+        assert!(entries(&doc, b"Templates", MAX_NAMES).0.iter().all(|(name, _)| name == "Notes"));
+    }
+
+    #[test]
+    fn deleting_a_template_page_does_not_follow_a_conflicting_visible_name() {
+        let mut doc = fixture();
+        create_template(&mut doc, "Shared", 0).unwrap();
+        let selected = spawn_template_page(&mut doc, "Notes", 1, true).unwrap();
+        set_entry(&mut doc, b"Templates", "Shared", Some(selected)).unwrap();
+        assert!(delete_script_pages(&mut doc, &[1]).is_err());
+        assert_eq!(walk(&doc).unwrap().len(), 2);
+        assert_eq!(walk(&doc).unwrap()[1].0, selected);
+    }
+
+    #[test]
+    fn hiding_a_trailing_template_drops_its_label_range() {
+        let mut doc = fixture();
+        spawn_template_page(&mut doc, "Notes", 1, true).unwrap();
+        create_template(&mut doc, "Last", 1).unwrap();
+        crate::number_pages(&mut doc, 0, 0, crate::LabelStyle::Decimal, "First-", 1).unwrap();
+        crate::number_pages(&mut doc, 1, 1, crate::LabelStyle::Decimal, "Last-", 1).unwrap();
+        delete_script_pages(&mut doc, &[1]).unwrap();
+        assert_eq!(crate::page_labels(&doc).unwrap(), ["First-1"]);
+        assert!(crate::page_label_ranges(&doc).iter().all(|range| range.start < 1));
+    }
+
+    #[test]
+    fn hiding_named_pages_keeps_templates_and_refuses_removing_the_last_page() {
+        let mut doc = fixture();
+        create_template(&mut doc, "Main", 0).unwrap();
+        assert!(set_template_hidden(&mut doc, "Main", true).is_err());
+        spawn_template_page(&mut doc, "Notes", 1, true).unwrap();
+        set_template_hidden(&mut doc, "Main", true).unwrap();
+        assert_eq!(crate::page_count(&doc).unwrap(), 1);
+        set_template_hidden(&mut doc, "Main", false).unwrap();
+        assert_eq!(crate::page_count(&doc).unwrap(), 2);
+        assert!(delete_script_pages(&mut doc, &[0, 1]).is_err());
+    }
+}
+
+#[cfg(test)]
+#[path = "templates/tests.rs"]
+mod upstream_tests;

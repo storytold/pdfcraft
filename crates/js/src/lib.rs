@@ -25,6 +25,9 @@
 //! The engine is a sandbox: no file, network or timer access exists, and loops and recursion
 //! are bounded. Side effects (alerts, field changes, resets, printing, navigation) are returned
 //! in an [`Outcome`] for the caller to apply.
+//! A set exceeding 1,024 document libraries or 8 MiB of combined source is rejected before
+//! the event handler runs. Within an admitted set, an individual library over 1 MiB is skipped.
+//! individual event handlers remain limited to 256 KiB.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -40,13 +43,17 @@ use boa_engine::realm::Realm;
 use boa_engine::{Context, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Source, js_string};
 
 mod document;
+pub mod form_data;
 mod format;
 mod globals;
 mod host;
+mod legacy;
 mod model;
 mod nesting;
 mod run;
+pub mod selected_pdf;
 mod source;
+mod streams;
 
 #[cfg(test)]
 pub(crate) use format::PRINTD_SCANNED;
@@ -55,9 +62,10 @@ pub use format::{set_date_names, with_english_printd};
 pub(crate) use globals::menu_item;
 use globals::platform;
 use host::{arg, as_number, error, function, s, text};
+pub use model::WidgetRect;
 pub use model::{
     DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, DocInfo, Event, FieldState, FieldType, Limits, Message, MessageButtons,
-    MessageIcon, Outcome, Panel, Request,
+    MessageIcon, Outcome, Panel, PrintDuplex, PrintSettings, Request,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use run::SCRIPT_STACK;
@@ -75,12 +83,16 @@ mod tests;
 mod geometry;
 pub use geometry::{rotate_rect, unrotate_rect};
 
+pub mod bookmarks;
 mod icons;
 mod ocg;
+pub mod templates;
+pub mod viewer;
 pub use ocg::Layer;
 mod timers;
 pub use timers::{MAX_TIMERS, MIN_TIMER_MS, Timer};
 
+pub mod dialogs;
 pub mod interaction;
 pub mod session;
 

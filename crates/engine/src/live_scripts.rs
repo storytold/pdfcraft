@@ -209,6 +209,19 @@ impl Session {
     /// into the document win over how page actions and timers showed that field.
     pub(crate) fn after_script(&mut self, id: DocId, o: &Outcome, written: &[String]) {
         let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return };
+        for change in &o.tool_buttons {
+            use pdfcraft_js::viewer::ButtonChange;
+            match change {
+                ButtonChange::Remove(name) => doc.script_tool_buttons.retain(|b| &b.name != name),
+                ButtonChange::Add(button) => {
+                    if let Some(old) = doc.script_tool_buttons.iter_mut().find(|b| b.name == button.name) {
+                        *old = button.clone();
+                    } else if doc.script_tool_buttons.len() < 64 {
+                        doc.script_tool_buttons.push(button.clone());
+                    }
+                }
+            }
+        }
         let runtime = doc.js_runtime.clone();
         doc.live.schedule(&runtime, &o.timers);
         let before = doc.live.shown.len();
@@ -276,13 +289,21 @@ impl Session {
                 }
             }
         }
+        use pdfcraft_js::templates::{Change, LIVE_ADDITION_REFUSAL};
+        if o.page_changes.iter().any(|change| matches!(change, Change::Spawn { .. } | Change::Hidden { hidden: false, .. })) {
+            // Later page changes may refer to the refused additions.
+            o.page_changes.clear();
+            if !o.console.iter().any(|line| line == LIVE_ADDITION_REFUSAL) {
+                o.console.push(LIVE_ADDITION_REFUSAL.into());
+            }
+        }
         let refused = o.execution_refused;
         let generation = self.get(id).map(Document::edit_generation);
         let layers = |s: &Session| s.get(id).map(|d| d.info.layers.iter().map(|l| l.visible).collect::<Vec<_>>());
         let layers_before = layers(self);
         // Page actions and timers run while the document is read: they add or show no template
         // pages (#1429), which would change the document as the reader moves through it.
-        match self.apply_script_outcome(id, &states, o, false, false) {
+        match self.apply_script_outcome(id, &states, o, false) {
             Ok(o) => {
                 run.output.absorb(&o);
                 // Only now: a script whose edits are refused shows nothing it did either.
@@ -290,7 +311,10 @@ impl Session {
                     self.show_view_changes(id, shown, icons, run);
                 }
             }
-            Err(e) => run.output.errors.push(e.to_string()),
+            Err(e) => {
+                run.output.errors.push(e.to_string());
+                self.invalidate_javascript(id);
+            }
         }
         run.edited |= self.get(id).map(Document::edit_generation) != generation;
         run.layers |= layers(self) != layers_before;
