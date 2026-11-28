@@ -2198,3 +2198,56 @@ fn checker_reports_each_untagged_annotation_without_copying_shared_dictionaries(
     let found = content::page_rule(&doc, Rule::TaggedAnnotations, &pages, &[0], &Default::default(), false);
     assert_eq!(found.len(), 2, "the popup is skipped, each listed text annotation reported");
 }
+
+/// A tagged page drawing `content` loose, with image `/Im` and form `/Fm` (which draws `/Im` and
+/// `form_content`); `image` and `form` are extra entries for each XObject's dictionary.
+fn loose_xobject_page(content: &str, image: &str, form: &str, form_content: &str) -> Document {
+    pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 1 \
+             /Resources << /XObject << /Im 6 0 R /Fm 7 0 R >> >> >>"
+                .into(),
+            stream(content),
+            "<< /Type /StructTreeRoot >>".into(),
+            format!(
+                "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 {image} /Length 1 >>\nstream\n\u{0}\nendstream"
+            ),
+            format!(
+                "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {form} /Resources << /XObject << /Im 6 0 R >> >> /Length {} >>\nstream\n{form_content}\nendstream",
+                form_content.len()
+            ),
+        ],
+        "",
+    )
+}
+
+fn untagged_findings(doc: &Document) -> Vec<String> {
+    let r = checked(doc, &[Rule::TaggedContent]);
+    r.result(Rule::TaggedContent).unwrap().findings.iter().map(|f| f.message.clone()).collect()
+}
+
+#[test]
+fn an_image_with_struct_parent_is_tagged_content() {
+    let tagged = loose_xobject_page("q 10 0 0 10 0 0 cm /Im Do Q", "/StructParent 0", "", "");
+    assert_eq!(untagged_findings(&tagged), Vec::<String>::new());
+    let loose = loose_xobject_page("q 10 0 0 10 0 0 cm /Im Do Q", "", "", "");
+    assert_eq!(untagged_findings(&loose), ["Page 1: 1 untagged content item"]);
+}
+
+#[test]
+fn a_form_drawing_an_image_with_struct_parent_is_tagged_content() {
+    let tagged = loose_xobject_page("/Fm Do", "/StructParent 0", "", "/Im Do");
+    assert_eq!(untagged_findings(&tagged), Vec::<String>::new());
+    let loose = loose_xobject_page("/Fm Do", "", "", "/Im Do");
+    assert_eq!(untagged_findings(&loose), ["Page 1: 1 untagged content item"]);
+}
+
+#[test]
+fn a_form_with_struct_parent_is_tagged_content() {
+    let tagged = loose_xobject_page("/Fm Do", "", "/StructParent 0", "/Im Do 0 0 5 5 re f");
+    assert_eq!(untagged_findings(&tagged), Vec::<String>::new());
+    let loose = loose_xobject_page("/Fm Do", "", "", "/Im Do 0 0 5 5 re f");
+    assert_eq!(untagged_findings(&loose), ["Page 1: 2 untagged content items"]);
+}

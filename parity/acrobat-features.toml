@@ -8875,8 +8875,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["a11y.check"]
 tools = ["accessibility_check"]
-evidence = ["crates/a11y/src/tests.rs::page_content_and_annotation_problems_are_found"]
-notes = "rule tagged-content: painting outside MCID or Artifact marked content, through form XObjects; counted per page"
+evidence = ["crates/a11y/src/tests.rs::page_content_and_annotation_problems_are_found", "crates/a11y/src/tests.rs::an_image_with_struct_parent_is_tagged_content"]
+notes = "rule tagged-content: painting outside MCID or Artifact marked content, through form XObjects; an image or form XObject with /StructParent is a content item and counts as tagged; counted per page"
 
 [[feature]]
 id = "a11y.rule-tagged-annotations"
