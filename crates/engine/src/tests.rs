@@ -6899,6 +6899,14 @@ fn recognize_text_makes_a_scanned_page_searchable() {
     assert!(again[0].skipped.is_some());
 }
 
+/// A page's own text for the tests that skip pages with text: a paragraph, which is a text layer.
+/// One short line is a stamp and leaves the scan to read, since a page is judged by how much of
+/// it its text covers, not by whether it has any (`ocr::has_own_text`). It says "invoice" once
+/// and none of the words of the picture the tests read.
+const PAGE_TEXT_LAYER: &str = "Invoice reference 4711. Payment terms are thirty days net from the date of delivery, and late \
+    amounts carry interest at the agreed rate. Questions about this statement go to the accounts office, which answers \
+    within two working days of receipt.";
+
 /// #1028: a page with its own text and a picture of text. By default it is skipped, as before;
 /// with `skip_text_pages: false` the picture is read and the page's own text is not added again.
 #[test]
@@ -6918,7 +6926,7 @@ fn recognize_text_reads_a_picture_on_a_page_that_has_text() {
         let p = &s.get(id).unwrap().info.pages[0];
         (p.width as f64, p.height as f64)
     };
-    let note = AddedText { rect: [w * 0.1, h * 0.75, w * 0.9, h * 0.85], text: "Invoice reference 4711".into(), size: 18.0, ..Default::default() };
+    let note = AddedText { rect: [w * 0.1, h * 0.75, w * 0.9, h * 0.85], text: PAGE_TEXT_LAYER.into(), size: 18.0, ..Default::default() };
     s.apply(id, Edit::AddText { page: 0, text: note }).unwrap();
     let count = |s: &Session, word: &str| page_texts(s, id)[0].to_lowercase().matches(word).count();
     assert_eq!((count(&s, "invoice"), count(&s, "brown")), (1, 0));
@@ -6968,7 +6976,7 @@ fn native_text_only_ignores_comments_but_not_page_text() {
                 page: 0,
                 style: pdfcraft_annot::Style::default_for(&shape),
                 shape,
-                contents: "Invoice reference 4711".into(),
+                contents: PAGE_TEXT_LAYER.into(),
                 author: "Test".into(),
             }),
         )
@@ -6992,7 +7000,7 @@ fn native_text_only_ignores_comments_but_not_page_text() {
         let p = &s.get(id).unwrap().info.pages[0];
         (p.width as f64, p.height as f64)
     };
-    let note = AddedText { rect: [w * 0.1, h * 0.6, w * 0.9, h * 0.7], text: "Page text".into(), size: 18.0, ..Default::default() };
+    let note = AddedText { rect: [w * 0.1, h * 0.6, w * 0.9, h * 0.7], text: PAGE_TEXT_LAYER.into(), size: 18.0, ..Default::default() };
     s.apply(id, Edit::AddText { page: 0, text: note }).unwrap();
     let skipped = s.recognize_text(id, &[], native).unwrap();
     assert!(skipped[0].skipped.is_some(), "{:?}", skipped[0]);
@@ -8111,8 +8119,214 @@ fn exporting_office_files_keeps_images() {
     assert!(String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap().contains("data:image/png;base64,"));
 }
 
-/// #314: a page whose content is drawn through a form XObject exports its text (the file from
-/// the report: no xref table, wrong stream lengths).
+/// One XML part of a DOCX package, decoded with the filters already available to these tests.
+fn docx_part(zip: &[u8], name: &str) -> String {
+    let at = |i: usize, n: usize| zip[i..i + n].iter().rev().fold(0usize, |v, b| v << 8 | *b as usize);
+    let mut i = 0;
+    while zip[i..].starts_with(b"PK\x03\x04") {
+        let (method, size, name_len, extra_len) = (at(i + 8, 2), at(i + 18, 4), at(i + 26, 2), at(i + 28, 2));
+        let data = i + 30 + name_len + extra_len;
+        if &zip[i + 30..i + 30 + name_len] == name.as_bytes() {
+            let body = &zip[data..data + size];
+            let decoded = match method {
+                0 => body.to_vec(),
+                8 => pdfcraft_filters::decode(&[(pdfcraft_filters::Filter::Flate, pdfcraft_filters::Params::default())], body, 16 << 20).unwrap(),
+                other => panic!("unsupported DOCX compression {other}"),
+            };
+            return String::from_utf8(decoded).unwrap();
+        }
+        i = data + size;
+    }
+    panic!("{name} missing")
+}
+
+/// Invisible page text followed by forms nested past the reading limit.
+fn invisible_text_with_deep_forms() -> Vec<u8> {
+    let depth = compare::MAX_FORM_DEPTH + 1;
+    let xobjects: String = (1..=depth).map(|i| format!("/D{i} {} 0 R ", 5 + i)).collect();
+    let content = "BT /F1 12 Tf 3 Tr 20 100 Td (Hidden) Tj ET /D1 Do";
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> /XObject << {xobjects} >> >> >>"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    for i in 1..=depth {
+        let body = if i == depth { "q Q".to_string() } else { format!("/D{} Do", i + 1) };
+        objs.push(format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /XObject << {xobjects} >> >> /Length {} >>\nstream\n{body}\nendstream",
+            body.len()
+        ));
+    }
+    pdfcraft_testkit::Pdf::new().objs(objs).build()
+}
+
+/// The export's OCR provenance comes from the actual invisible text layer, not page geometry.
+#[test]
+fn ocr_office_export_uses_real_invisible_text_provenance() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let (id, size) = synthetic_ocr_scan(&mut s);
+    assert!(!s.get(id).unwrap().export_pages()[0].ocr, "an image-only page has no OCR text");
+    let (w, h) = (f64::from(size[0]), f64::from(size[1]));
+    let word = |text: &str, origin: [f64; 2], across: [f64; 2]| ocr::PlacedWord {
+        text: text.into(),
+        origin,
+        across,
+        up: [0.0, 12.0],
+        confidence: None,
+        source: "ocrs".into(),
+    };
+    // The folio sits in the text block, clear of the page's bottom margin, so the reading-order
+    // assertion below is about body text (a line in the margin becomes the Word footer).
+    let found = [ocr::OcrPage {
+        page: 0,
+        words: vec![word("Body flows", [w / 3.0, h * 0.85], [w / 2.0, 0.0]), word("Folio 7", [20.0, h * 0.2], [20.0, 0.0])],
+        already_on_page: 0,
+        skipped: None,
+        notes: Vec::new(),
+        regions: Vec::new(),
+    }];
+    s.apply_ocr(id, &found).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(doc.export_pages()[0].ocr, "the mode-3 words mark the page as wholly OCR");
+    let docx = doc.export_office(compare::OfficeFormat::Docx);
+    let xml = docx_part(&docx, "word/document.xml");
+    assert!(!xml.contains("<wps:txbx>") && !xml.contains("<v:textbox"), "OCR text flows instead of using text boxes: {xml}");
+    assert!(!docx.windows(b"word/media/".len()).any(|w| w == b"word/media/"), "the redundant scan is not packaged");
+    let body = xml.find("Body flows").expect("body paragraph");
+    let folio = xml.find("Folio 7").expect("folio paragraph");
+    assert!(body < folio, "the omitted scan must not reorder the body and folio: {xml}");
+
+    // More visible characters than the two short invisible lines: the page is mostly visible,
+    // and its layout stays as it was.
+    let visible = AddedText {
+        rect: [20.0, h * 0.5, 520.0, h * 0.5 + 30.0],
+        text: "Visible addition on the page, longer than the short OCR text layer lines".into(),
+        size: 12.0,
+        ..Default::default()
+    };
+    s.apply(id, Edit::AddText { page: 0, text: visible }).unwrap();
+    assert!(!s.get(id).unwrap().export_pages()[0].ocr, "a page whose visible text dominates is not OCR");
+
+    let text = s.create_from_text("visible", "Visible text").unwrap();
+    let visible_id = s.open("visible.pdf", None, text, None).unwrap();
+    assert!(!s.get(visible_id).unwrap().export_pages()[0].ocr, "ordinary visible text is not OCR");
+
+    let deep_id = s.open("deep.pdf", None, Arc::new(invisible_text_with_deep_forms()), None).unwrap();
+    let deep = s.get(deep_id).unwrap();
+    let (pages, truncated) = deep.export_pages_checked(false, 0);
+    assert_eq!(truncated, [0], "the deep forms exercise the truncation safeguard");
+    assert!(!pages[0].ocr, "unread forms prevent a wholly-OCR classification");
+}
+
+/// One page of invisible text lines, each its own text object: the text layer a recognition
+/// leaves over a scan.
+fn invisible_text_page(lines: &[(f32, f32, f32, &str)]) -> Vec<u8> {
+    let content: String = lines.iter().map(|(x, y, size, text)| format!("BT /F1 {size} Tf 3 Tr {x} {y} Td ({text}) Tj ET\n")).collect();
+    let objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}endstream", content.len()),
+    ];
+    pdfcraft_testkit::Pdf::new().objs(objs).build()
+}
+
+/// A scanned page can carry a small visible stamp (a clerk's RECEIVED mark) beside the invisible
+/// OCR layer. The invisible text carries most of the page, so the page is OCR: it flows in Word
+/// whatever the scan's geometry, and the stamp is not exported twice — once by the scan and once
+/// from its own visible text.
+#[test]
+fn a_scanned_page_with_a_small_visible_stamp_is_ocr_and_exports_its_ocr_text() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let (id, size) = synthetic_ocr_scan(&mut s);
+    let (w, h) = (f64::from(size[0]), f64::from(size[1]));
+    let word = |text: &str, origin: [f64; 2], across: [f64; 2]| ocr::PlacedWord {
+        text: text.into(),
+        origin,
+        across,
+        up: [0.0, 11.0],
+        confidence: None,
+        source: "ocrs".into(),
+    };
+    let found = [ocr::OcrPage {
+        page: 0,
+        words: vec![
+            word("Plaintiff submits this memorandum of law in support of the motion", [w * 0.1, h * 0.75], [w * 0.8, 0.0]),
+            word("and asks the Court to grant the relief the complaint requests", [w * 0.1, h * 0.65], [w * 0.8, 0.0]),
+        ],
+        already_on_page: 0,
+        skipped: None,
+        notes: Vec::new(),
+        regions: Vec::new(),
+    }];
+    s.apply_ocr(id, &found).unwrap();
+    let stamp =
+        AddedText { rect: [w - 170.0, h - 26.0, w - 8.0, h - 8.0], text: "RECEIVED NYSCEF: 07/22/2026".into(), size: 9.0, ..Default::default() };
+    s.apply(id, Edit::AddText { page: 0, text: stamp }).unwrap();
+    let doc = s.get(id).unwrap();
+    let page = &doc.export_pages()[0];
+    assert!(page.ocr, "the invisible text carries most of the page's characters");
+    let texts: Vec<&str> = page.blocks.iter().map(|b| b.text.as_str()).collect();
+    assert!(texts.iter().any(|t| t.contains("Plaintiff submits")), "{texts:?}");
+    assert!(!texts.iter().any(|t| t.contains("NYSCEF")), "the stamp is in the OCR layer too: {texts:?}");
+    let xml = docx_part(&doc.export_office(compare::OfficeFormat::Docx), "word/document.xml");
+    assert!(!xml.contains("<wps:txbx>") && !xml.contains("<v:textbox"), "the OCR page flows: {xml}");
+    assert!(!xml.contains("NYSCEF"), "the visible stamp is not printed beside the scan: {xml}");
+}
+
+/// A small invisible block beside a page's visible text does not make the page OCR: its layout
+/// stays, and both the visible and the invisible blocks are exported.
+#[test]
+fn a_page_whose_visible_text_dominates_keeps_its_invisible_block() {
+    let mut s = Session::new();
+    let text = "The plaintiff submits this memorandum of law in support of the motion and asks the Court to grant the relief it requests.";
+    let bytes = s.create_from_text("visible", text).unwrap();
+    let id = s.open("visible.pdf", None, bytes, None).unwrap();
+    let word = ocr::PlacedWord {
+        text: "Hidden".into(),
+        origin: [72.0, 60.0],
+        across: [40.0, 0.0],
+        up: [0.0, 11.0],
+        confidence: None,
+        source: "ocrs".into(),
+    };
+    let found = [ocr::OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new(), regions: Vec::new() }];
+    s.apply_ocr(id, &found).unwrap();
+    let page = &s.get(id).unwrap().export_pages()[0];
+    assert!(!page.ocr, "the visible text carries most of the page's characters");
+    let texts: Vec<&str> = page.blocks.iter().map(|b| b.text.as_str()).collect();
+    assert!(texts.iter().any(|t| t.contains("plaintiff submits")), "{texts:?}");
+    assert!(texts.contains(&"Hidden"), "{texts:?}");
+}
+
+/// A page that is OCR by the invisible-majority rule reaches Word with the structure synthesis
+/// read: numbered lines become a real numbered list, and an all-caps heading takes Heading 2.
+#[test]
+fn ocr_pages_reach_word_with_numbered_items_and_section_headings() {
+    let mut s = Session::new();
+    let pdf = invisible_text_page(&[
+        (150.0, 700.0, 18.0, "THE COMPLAINT FAILS TO STATE A CLAIM"),
+        (72.0, 620.0, 12.0, "1. The defendant failed to appear and answer."),
+        (72.0, 570.0, 12.0, "2. The plaintiff is entitled to judgment."),
+    ]);
+    let id = s.open("ocr.pdf", None, Arc::new(pdf), None).unwrap();
+    let doc = s.get(id).unwrap();
+    let page = &doc.export_pages()[0];
+    assert!(page.ocr, "an all-invisible text layer is OCR");
+    let numbered = pdfcraft_export::ParagraphKind::Numbered(pdfcraft_export::Decimal);
+    assert_eq!(page.blocks.iter().filter(|b| b.kind == numbered).count(), 2, "{:?}", page.blocks);
+    assert_eq!(page.blocks.iter().filter(|b| b.kind == pdfcraft_export::ParagraphKind::SectionHeading { level: 2 }).count(), 1, "{:?}", page.blocks);
+    let xml = docx_part(&doc.export_office(compare::OfficeFormat::Docx), "word/document.xml");
+    assert!(xml.contains("<w:numPr>"), "the numbered items are a real list: {xml}");
+    assert!(xml.contains("<w:pStyle w:val=\"Heading2\"/>"), "the heading takes Heading 2: {xml}");
+    assert!(!xml.contains(">1. </w:t>") && !xml.contains(">2. </w:t>"), "the list regenerates the numbers: {xml}");
+}
+
+/// #314: a page whose content is drawn through a form XObject exports its text (the file from the
+/// report: no xref table, wrong stream lengths).
 #[test]
 fn exporting_office_files_reads_form_xobjects() {
     let pdf = b"%PDF-1.4
@@ -11300,7 +11514,11 @@ fn ocr_words_refresh_only_the_page_content_they_add() {
     take_full_refreshes();
     let word =
         PlacedWord { text: "HELLO".into(), origin: [40.0, 40.0], across: [60.0, 0.0], up: [0.0, 20.0], confidence: None, source: "ocrs".into() };
-    assert_eq!(s.apply_ocr(id, &[OcrPage { page: 1, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() }]).unwrap(), 1);
+    assert_eq!(
+        s.apply_ocr(id, &[OcrPage { regions: Vec::new(), page: 1, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() }])
+            .unwrap(),
+        1
+    );
     assert_eq!(take_full_refreshes(), 0, "applying OCR words doesn't re-inspect the document");
     let after = s.get(id).unwrap();
     assert_eq!(format!("{:?}", (&after.info.pages, &after.info.annotations, &after.info.fields, &after.links, after.marks())), view);

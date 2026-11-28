@@ -90,7 +90,7 @@ fn html_with_mode(pages: &[Page], title: &str, simple: bool, language: Option<&s
     let items: Vec<Item<'_>> = items(pages);
     for it in &items {
         match it {
-            Item::Para(runs, lvl) => {
+            Item::Para(runs, lvl, _) => {
                 blocks.push(HtmlBlock::Para {
                     runs: runs
                         .iter()
@@ -128,7 +128,8 @@ fn html_with_mode(pages: &[Page], title: &str, simple: bool, language: Option<&s
 #[cfg(test)]
 mod tests {
     use super::{html, para_html, table_html};
-    use crate::layout::{Block, Cell, Page, Run, Table};
+    use crate::ParagraphKind;
+    use crate::layout::{Block, Cell, Metrics, Page, Run, Table};
 
     fn block(text: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> Block {
         Block {
@@ -140,6 +141,9 @@ mod tests {
             color: [0.0; 3],
             rotation: 0.0,
             space_around: [false; 2],
+            kind: ParagraphKind::Body,
+            order: 0,
+            metrics: Metrics::default(),
         }
     }
 
@@ -154,6 +158,7 @@ mod tests {
                 Block { bold: true, ..block("\u{0}\u{2}", 72.0, 660.0, 120.0, 672.0) },
             ],
             images: Vec::new(),
+            ocr: false,
             background: None,
             rules: Vec::new(),
         };

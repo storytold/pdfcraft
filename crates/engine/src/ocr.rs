@@ -15,8 +15,9 @@ use pdfcraft_render::text::TextFilter;
 use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
 
 pub use pdfcraft_ocr::{
-    ConfidenceBand, DETECTION_MODEL, LANGUAGES, Line, MergeStrategy, Models, Ocr, OcrError, OcrImage, PlacedWord, RECOGNITION_MODEL, Recognizer,
-    StrategyOutcome, Word, band_for, is_suspect, lines_from_json, low_confidence,
+    ConfidenceBand, DETECTION_MODEL, LANGUAGES, Line, MergeStrategy, Models, Ocr, OcrError, OcrImage, PlacedWord, RECOGNITION_MODEL,
+    RecognizeOptions, Recognizer, Region, RegionKind, StrategyOutcome, UNKNOWN_CONFIDENCE_BAR, Word, analyze_page, band_for, iou, is_suspect,
+    lines_from_json, low_confidence, rover_merge,
 };
 
 use crate::{DocId, Edit, EditError, Session};
@@ -110,9 +111,10 @@ pub struct OcrSettings {
     pub dpi: f32,
     /// Language code from [`LANGUAGES`] (the models read the Latin alphabet, whatever this says).
     pub language: String,
-    /// Leave pages that already have text alone (Acrobat reports "page contains renderable
-    /// text" and skips them). When `false`, such pages are read too (a picture on a page that
-    /// also has text, #1028) and only the words that aren't already there are added.
+    /// Leave pages with substantial existing text alone (Acrobat reports "page contains
+    /// renderable text" and skips them); short isolated clerk stamps do not trigger the skip. When
+    /// `false`, such pages are read too (a picture on a page that also has text, #1028) and only
+    /// the words that aren't already there are added.
     pub skip_text_pages: bool,
     /// What counts as the page's text when `skip_text_pages` is on: only its own (page content
     /// and form fields). Comments and text boxes are left out, and are not drawn into the picture
@@ -159,6 +161,11 @@ pub struct OcrSettings {
 /// text read again, not a word in a picture.
 const ALREADY_ON_PAGE: f32 = 0.5;
 
+/// Preserve the established 13-nonblank-glyph text-page boundary; shorter isolated clerk stamps are read.
+const MIN_SUBSTANTIAL_TEXT_GLYPHS: usize = 13;
+/// Their union must also cover at least this much of the page's area.
+const SUBSTANTIAL_TEXT_COVERAGE: f32 = 0.0015;
+
 /// The long side of an A4 sheet in points (a letter page's, 792, is shorter): "Downsample to"
 /// is a resolution on paper this size or smaller.
 const SHEET: f32 = 842.0;
@@ -169,10 +176,114 @@ pub(crate) fn own_text(r: &mut PageRenderer, page: usize) -> Result<pdfcraft_ren
     r.filtered_text(page, TextFilter { painted: true, ..Default::default() })
 }
 
-/// Whether `page` has text of its own ([`own_text`]). A stamp drawn as outlines on a scan still
-/// leaves the scan to read; its words are not read twice, since they count as already on the page.
-fn has_own_text(r: &mut PageRenderer, page: usize) -> bool {
-    own_text(r, page).is_ok_and(|t| t.glyphs.iter().any(|g| !g.text.trim().is_empty()))
+/// Whether `page` has a substantial text layer of its own ([`own_text`]). A stamp drawn as
+/// outlines on a scan still leaves the scan to read; its words are not read twice, since they
+/// count as already on the page.
+fn has_own_text(r: &mut PageRenderer, page: usize, page_size: [f32; 2]) -> bool {
+    own_text(r, page).is_ok_and(|t| {
+        let glyphs: Vec<[f32; 4]> = t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect();
+        glyphs.len() >= MIN_SUBSTANTIAL_TEXT_GLYPHS && union_coverage(&glyphs, page_size) >= SUBSTANTIAL_TEXT_COVERAGE
+    })
+}
+
+/// The fraction of a page covered by `boxes`, clipped to its edges and counting overlaps once.
+/// X events update a segment tree over compressed y intervals: exact union area in O(n log n)
+/// time and O(n) scratch space.
+fn union_coverage(boxes: &[[f32; 4]], page_size: [f32; 2]) -> f32 {
+    let [width, height] = page_size;
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return 0.0;
+    }
+    let boxes: Vec<[f32; 4]> = boxes
+        .iter()
+        .filter_map(|b| {
+            if !b.iter().all(|v| v.is_finite()) {
+                return None;
+            }
+            let (x0, y0) = (b[0].clamp(0.0, width), b[1].clamp(0.0, height));
+            let (x1, y1) = (b[2].clamp(0.0, width), b[3].clamp(0.0, height));
+            (x1 > x0 && y1 > y0).then_some([x0, y0, x1, y1])
+        })
+        .collect();
+    if boxes.is_empty() {
+        return 0.0;
+    }
+
+    let mut ys: Vec<f32> = boxes.iter().flat_map(|b| [b[1], b[3]]).collect();
+    ys.sort_unstable_by(|a, b| a.total_cmp(b));
+    ys.dedup();
+    let mut events = Vec::with_capacity(boxes.len().saturating_mul(2));
+    for b in &boxes {
+        let y0 = ys.partition_point(|&y| y < b[1]);
+        let y1 = ys.partition_point(|&y| y < b[3]);
+        events.push((b[0], y0, y1, 1));
+        events.push((b[2], y0, y1, -1));
+    }
+    events.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+
+    let mut coverage = YCoverage::new(&ys);
+    let mut previous_x: Option<f32> = None;
+    let mut area = 0.0f64;
+    for (x, y0, y1, delta) in events {
+        if let Some(previous) = previous_x {
+            area += f64::from(x - previous) * f64::from(coverage.covered_length());
+        }
+        coverage.update(y0, y1, delta);
+        previous_x = Some(x);
+    }
+    let page_area = f64::from(width) * f64::from(height);
+    ((area / page_area).min(1.0)) as f32
+}
+
+/// Active rectangle coverage over a sorted list of compressed y coordinates.
+struct YCoverage<'a> {
+    points: &'a [f32],
+    cover: Vec<i32>,
+    length: Vec<f32>,
+}
+
+impl<'a> YCoverage<'a> {
+    fn new(points: &'a [f32]) -> Self {
+        let size = points.len().saturating_mul(4);
+        Self { points, cover: vec![0; size], length: vec![0.0; size] }
+    }
+
+    fn update(&mut self, query_left: usize, query_right: usize, delta: i32) {
+        if query_left >= query_right || self.points.len() < 2 {
+            return;
+        }
+        let intervals = self.points.len() - 1;
+        if query_right > intervals {
+            return;
+        }
+        self.update_at(1, 0, intervals, query_left, query_right, delta);
+    }
+
+    fn update_at(&mut self, node: usize, left: usize, right: usize, query_left: usize, query_right: usize, delta: i32) {
+        if query_left <= left && right <= query_right {
+            self.cover[node] += delta;
+        } else {
+            let middle = left + (right - left) / 2;
+            if query_left < middle {
+                self.update_at(node * 2, left, middle, query_left, query_right, delta);
+            }
+            if query_right > middle {
+                self.update_at(node * 2 + 1, middle, right, query_left, query_right, delta);
+            }
+        }
+        let length = if self.cover[node] > 0 {
+            self.points[right] - self.points[left]
+        } else if right - left == 1 {
+            0.0
+        } else {
+            self.length[node * 2] + self.length[node * 2 + 1]
+        };
+        self.length[node] = length;
+    }
+
+    fn covered_length(&self) -> f32 {
+        self.length.get(1).copied().unwrap_or(0.0)
+    }
 }
 
 /// How much of `word` the `text` boxes cover, from 0 to 1. Boxes are `[x0, y0, x1, y1]` in page
@@ -225,6 +336,11 @@ pub struct OcrPage {
     /// Notes about a partial reading: the words stand, but something on the way did not (an
     /// ensemble partner failed and the page keeps the primary engine's reading alone).
     pub notes: Vec<String>,
+    /// The words recognition found, grouped into typed regions with a reading order
+    /// ([`analyze_page`]), in the pixels it read: the page, or the chosen region of it. This
+    /// includes words left out of `words` because the page already had them. What the page
+    /// writes does not depend on these regions.
+    pub regions: Vec<Region>,
 }
 
 impl OcrPage {
@@ -700,11 +816,16 @@ impl OcrJob {
     pub fn render_scale(&self, page: usize) -> f32 {
         let wanted = self.settings.dpi.clamp(72.0, 600.0) / 72.0;
         let Some(native) = self.native.get(page).copied().flatten() else { return wanted };
-        // A scan whose page is larger than a sheet (often a box given in pixels, one point per
-        // pixel, #1848) is measured as if shrunk to one: otherwise 1 px/pt is already its full
-        // image, and no "Downsample to" choice could ask for less.
-        let fit = self.infos.get(page).map_or(1.0, |i| (SHEET / i.width.max(i.height).max(1e-3)).min(1.0));
+        let fit = self.sheet_fit(page);
         native.clamp(fit, wanted * fit)
+    }
+
+    /// A scan whose page is larger than a sheet (often a box given in pixels, one point per
+    /// pixel, #1848) is measured as if shrunk to one: otherwise 1 px/pt is already its full
+    /// image, and no "Downsample to" choice could ask for less. This is that shrink, 1 for a
+    /// page no larger than a sheet.
+    fn sheet_fit(&self, page: usize) -> f32 {
+        self.infos.get(page).map_or(1.0, |i| (SHEET / i.width.max(i.height).max(1e-3)).min(1.0))
     }
 
     /// Whether any of the job's pages already has text (at least one non-blank run): the
@@ -724,11 +845,16 @@ impl OcrJob {
         let total = self.pages.len();
         let mut steps = self.steps();
         let mut out = Vec::new();
+        let mut previous: Option<Vec<Region>> = None;
         while progress(steps.done(), total) {
             match steps.next_page() {
                 None => break,
                 Some(Err(skipped)) => out.push(skipped),
-                Some(Ok(shot)) => out.push(shot.read(recognizers)),
+                Some(Ok(shot)) => {
+                    let page = shot.read_with_previous(recognizers, previous.as_deref());
+                    previous = Some(page.regions.clone());
+                    out.push(page);
+                }
             }
         }
         progress(total, total);
@@ -784,7 +910,8 @@ impl OcrSteps {
 
     fn prepare(&mut self, page: usize, info: PageInfo) -> Result<OcrShot, OcrPage> {
         let settings = &self.job.settings;
-        let skip = |why: &str| OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()), notes: Vec::new() };
+        let skip =
+            |why: &str| OcrPage { regions: Vec::new(), page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()), notes: Vec::new() };
         let r = &mut self.renderer;
         // The boxes of all text on the page, in view space: an earlier OCR layer's, and words
         // only /ActualText names, so neither is read again.
@@ -793,12 +920,29 @@ impl OcrSteps {
             .text
             .map(|t| t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect())
             .unwrap_or_default();
-        if settings.skip_text_pages && !settings.force_ocr && !existing.is_empty() && has_own_text(r, page) {
+        if settings.skip_text_pages && !settings.force_ocr && !existing.is_empty() && has_own_text(r, page, [info.width, info.height]) {
             return Err(skip("the page already contains text"));
         }
-        // A scan is read at its own resolution (enlarging it only blurs the letters), at
-        // most the chosen one.
+        // A scan is read at its own resolution at most the chosen one, but a low-resolution
+        // page is then ENLARGED before recognition (the Lanczos policy): 72-dpi letters are
+        // too small for the recognisers, and declaring a finer resolution adds no pixels.
         let scale = self.job.render_scale(page);
+        let mut options = pdfcraft_ocr::preprocess::PreprocessOptions {
+            auto_rotate: settings.auto_rotate,
+            deskew: settings.deskew,
+            denoise: settings.denoise,
+            binarize: settings.binarize,
+            resolution: pdfcraft_ocr::resolution::ResolutionPolicy::Native,
+        };
+        // The scan's resolution on paper, measured as render_scale measures it: a page given in
+        // pixels (#1848) renders at 1 px/pt whatever its resolution, so `scale` alone would call
+        // every such scan 72 dpi and enlarge a 300-dpi one past the raster caps. With any step
+        // on, preprocessing already brings the raster to 300 dpi; enlarging it again would only
+        // pass the caps too.
+        let paper_dpi = scale * 72.0 / self.job.sheet_fit(page);
+        if !options.any() && paper_dpi < 150.0 {
+            options.resolution = pdfcraft_ocr::resolution::ResolutionPolicy::UpscaleLanczos { factor: 3 };
+        }
         let shot = r.render(RenderRequest { page, scale, ..Default::default() });
         if let Some(e) = shot.error {
             return Err(skip(&e));
@@ -820,20 +964,12 @@ impl OcrSteps {
         // back in processed coordinates and are mapped to the ORIGINAL raster's before
         // placement. The render dpi is the real one (pixels per point × 72), never a
         // fixed value.
-        let pre = pdfcraft_ocr::preprocess::preprocess(
-            image,
-            scale * 72.0,
-            &pdfcraft_ocr::preprocess::PreprocessOptions {
-                auto_rotate: settings.auto_rotate,
-                deskew: settings.deskew,
-                denoise: settings.denoise,
-                binarize: settings.binarize,
-            },
-        )
-        .map_err(|e| skip(&e.to_string()))?;
+        let pre = pdfcraft_ocr::preprocess::preprocess(image, scale * 72.0, &options).map_err(|e| skip(&e.to_string()))?;
+        let pixels = [pre.image.width() as f32, pre.image.height() as f32];
         Ok(OcrShot {
             page,
             image: Some(pre.image),
+            pixels,
             inverse: pre.inverse_transform,
             offset,
             pixels_per_point: shot.width as f32 / info.width.max(1e-3),
@@ -853,6 +989,9 @@ pub struct OcrShot {
     /// The page's pixels as the engines read them: rendered, cropped to the region and
     /// preprocessed (`None` once [`OcrShot::take_image`] has handed them on).
     image: Option<OcrImage>,
+    /// `image`'s size in pixels, kept when the image is handed on: the word boxes recognised in
+    /// it are measured in these.
+    pixels: [f32; 2],
     /// Processed pixels → the rendered raster's (the exact inverse of preprocessing).
     inverse: pdfcraft_ocr::preprocess::InverseTransform,
     /// Where the region crop starts in the rendered raster.
@@ -881,7 +1020,13 @@ impl OcrShot {
 
     /// Recognise the image with `recognizers` (per the job's strategy) and place the words.
     pub fn read(&self, recognizers: &Recognizers) -> OcrPage {
-        let Some(image) = &self.image else { return self.place(Err("the page's image was handed to another reader".into())) };
+        self.read_with_previous(recognizers, None)
+    }
+
+    /// [`Self::read`], given the regions of the page before ([`OcrPage::regions`]) so a running
+    /// header or footer is told from a heading that happens to sit at the top of this page.
+    pub fn read_with_previous(&self, recognizers: &Recognizers, previous: Option<&[Region]>) -> OcrPage {
+        let Some(image) = &self.image else { return self.place_with_previous(Err("the page's image was handed to another reader".into()), previous) };
         let outcome = pdfcraft_ocr::recognize_with_strategy(
             recognizers.primary.as_ref(),
             recognizers.secondary.as_deref(),
@@ -889,7 +1034,7 @@ impl OcrShot {
             image,
             &self.options,
         );
-        self.place(outcome.map_err(|e| e.to_string()))
+        self.place_with_previous(outcome.map_err(|e| e.to_string()), previous)
     }
 
     /// Put the lines recognised in [`Self::image`] on the page (or skip the page with the
@@ -897,11 +1042,19 @@ impl OcrShot {
     /// `StrategyOutcome { lines, ..Default::default() }`: every strategy reads that way when
     /// there is no second engine.
     pub fn place(&self, outcome: Result<StrategyOutcome, String>) -> OcrPage {
+        self.place_with_previous(outcome, None)
+    }
+
+    /// [`Self::place`], given the regions of the page before for the layout analysis (see
+    /// [`OcrShot::read_with_previous`]).
+    pub fn place_with_previous(&self, outcome: Result<StrategyOutcome, String>, previous: Option<&[Region]>) -> OcrPage {
         let page = self.page;
         let outcome = match outcome {
             Ok(o) => o,
-            Err(e) => return OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(e), notes: Vec::new() },
+            Err(e) => return OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(e), notes: Vec::new(), regions: Vec::new() },
         };
+        let recognised: Vec<Word> = outcome.lines.iter().flat_map(|l| l.words.iter().cloned()).collect();
+        let regions = analyze_page(&recognised, (self.pixels[0], self.pixels[1]), previous);
         let (info, inverse, offset, scale) = (&self.info, self.inverse, self.offset, self.pixels_per_point);
         let to_user = |x: f32, y: f32| {
             // processed pixels → original raster pixels (the exact inverse) → past the
@@ -939,8 +1092,182 @@ impl OcrShot {
                 notes.push(format!("{missing} characters had no font that could show them and appear as ? in the output"));
             }
         }
-        OcrPage { page, words, already_on_page: already.len(), skipped: None, notes }
+        OcrPage { page, words, already_on_page: already.len(), skipped: None, notes, regions }
     }
+}
+
+/// Which engine a region word's reading came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RecognizerId {
+    /// The primary engine ([`Recognizers::primary`]).
+    Primary,
+    /// The secondary engine ([`Recognizers::secondary`]), whose reading won a low-confidence
+    /// word's vote.
+    Secondary,
+}
+
+/// One word of a region's reading: its text and box (image pixels, like [`Word`]), the
+/// confidence the winning reading reports, and the engine that reading came from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VotedWord {
+    pub text: String,
+    pub rect: [f32; 4],
+    /// The winning reading's confidence, 0–100. A word no engine scored is 0: no reported
+    /// confidence is not a confident reading.
+    pub confidence: f32,
+    /// Which engine's reading this is.
+    pub source: RecognizerId,
+}
+
+impl VotedWord {
+    /// One engine's reading of `word`, as the vote records it.
+    fn from_word(word: &Word, source: RecognizerId) -> VotedWord {
+        VotedWord { text: word.text.clone(), rect: word.rect, confidence: word.confidence.unwrap_or(0.0), source }
+    }
+}
+
+/// One region's reading after the vote: the region [`analyze_page`] found, the words the vote
+/// settled — each with the confidence it kept and the engine it came from — and the words still
+/// below [`UNKNOWN_CONFIDENCE_BAR`] for a review report to list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegionReading {
+    pub region: Region,
+    pub words: Vec<VotedWord>,
+    /// The words the vote left below the bar, in reading order.
+    pub low_confidence_words: Vec<VotedWord>,
+}
+
+/// What a page's per-region reading produced: one [`RegionReading`] per region, in reading
+/// order, and notes about a partial reading (a secondary engine that failed leaves the
+/// low-confidence words with the primary reading alone).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegionOutcome {
+    pub regions: Vec<RegionReading>,
+    pub notes: Vec<String>,
+}
+
+/// One engine's reading of a word's box, as the per-word vote asks for it. The page engines
+/// ([`Recognizer`]) read whole images; the vote asks only about the boxes the primary scored
+/// low, so its input is that narrow.
+trait WordReader {
+    /// This engine's reading of `word`'s box and the confidence it reports for it (0–100;
+    /// `None` when it reports none, as ocrs does). `None` when it has no reading of that box.
+    fn read_word(&self, word: &Word) -> Option<Word>;
+}
+
+/// The primary's words, which the caller has already read.
+struct AlreadyRead;
+
+impl WordReader for AlreadyRead {
+    fn read_word(&self, word: &Word) -> Option<Word> {
+        Some(word.clone())
+    }
+}
+
+/// A whole-page engine's reading, as the vote asks for it: the word it read in the box being
+/// voted is the best-overlapping one, when their boxes agree on the physical word.
+struct SecondaryReading<'a> {
+    words: &'a [Word],
+}
+
+impl WordReader for SecondaryReading<'_> {
+    fn read_word(&self, word: &Word) -> Option<Word> {
+        self.words
+            .iter()
+            .filter(|w| iou(&word.rect, &w.rect) >= 0.5)
+            .max_by(|a, b| iou(&word.rect, &a.rect).total_cmp(&iou(&word.rect, &b.rect)))
+            .cloned()
+    }
+}
+
+/// Whether a reading is weak enough for the vote: below [`UNKNOWN_CONFIDENCE_BAR`], or of
+/// unknown confidence (an engine that reports none has no confidence signal, which is not the
+/// same as a confident one).
+fn below_bar(word: &Word) -> bool {
+    word.confidence.is_none_or(|c| c < UNKNOWN_CONFIDENCE_BAR)
+}
+
+/// Offer a primary reading's weak words to the second engine, word by word: a word below
+/// [`UNKNOWN_CONFIDENCE_BAR`], or of unknown confidence, is voted on, and the secondary's
+/// reading replaces it only when the secondary is itself sure of it (at or above the bar).
+/// Confident words are never offered — they are not re-read, merged or slowed down — and the
+/// result has exactly one word per input word, in the input's order: the vote changes readings,
+/// it never adds text.
+fn recognize_with_vote(primary: &dyn WordReader, secondary: &dyn WordReader, words: &[Word]) -> Vec<VotedWord> {
+    let read: Vec<Word> = words.iter().map(|w| primary.read_word(w).unwrap_or_else(|| w.clone())).collect();
+    let mut voted: Vec<VotedWord> = read.iter().map(|w| VotedWord::from_word(w, RecognizerId::Primary)).collect();
+    let low: Vec<usize> = read.iter().enumerate().filter(|(_, w)| below_bar(w)).map(|(i, _)| i).collect();
+    if low.is_empty() {
+        return voted;
+    }
+    // Only a reading the second engine is itself sure of can win a vote: a weak second opinion
+    // replaces nothing.
+    let claims: Vec<Word> = low
+        .iter()
+        .filter_map(|&i| read.get(i))
+        .filter_map(|word| secondary.read_word(word))
+        .filter(|claim| claim.confidence.is_some_and(|c| c >= UNKNOWN_CONFIDENCE_BAR))
+        .collect();
+    if claims.is_empty() {
+        return voted;
+    }
+    // The weak words and the secondary's readings meet in the merge path, which keeps one
+    // reading per physical word: alternative readings of one word are consumed once, never
+    // appended as duplicates. Words only the secondary read are appended by the merge; they are
+    // not readings of the primary's words, so the vote takes only the primary side (the first
+    // line) and drops them.
+    let primary_side: Vec<Word> = low.iter().filter_map(|&i| read.get(i).cloned()).collect();
+    let merged = rover_merge(vec![Line { words: primary_side }], vec![Line { words: claims }], "secondary");
+    let Some(Line { words: voted_low }) = merged.into_iter().next() else { return voted };
+    for (slot, word) in low.iter().zip(voted_low) {
+        // Every claim was kept at or above the bar, so a low-side word now carrying such a
+        // confidence is the secondary's reading: the merge replaced the primary's.
+        if word.confidence.is_some_and(|c| c >= UNKNOWN_CONFIDENCE_BAR)
+            && let Some(voted) = voted.get_mut(*slot)
+        {
+            *voted = VotedWord::from_word(&word, RecognizerId::Secondary);
+        }
+    }
+    voted
+}
+
+/// Read `image` region by region: the primary engine reads the page, [`analyze_page`] types and
+/// orders its regions, and each region's words get the second-engine vote. The secondary reads
+/// the page once, and only when some word is below the bar (a page with nothing to vote on
+/// starts no second reading). A failing secondary degrades to the primary reading with a note,
+/// like the ensemble strategies' own degradation.
+pub fn recognize_regions(
+    recognizers: &Recognizers,
+    image: &OcrImage,
+    options: &RecognizeOptions,
+    page_size: (f32, f32),
+    previous: Option<&[Region]>,
+) -> Result<RegionOutcome, OcrError> {
+    let primary = recognizers.primary.recognize(image, options)?;
+    let recognised: Vec<Word> = primary.iter().flat_map(|l| l.words.iter().cloned()).collect();
+    let regions = analyze_page(&recognised, page_size, previous);
+    let mut notes = Vec::new();
+    let secondary_words: Vec<Word> = match &recognizers.secondary {
+        Some(secondary) if recognised.iter().any(below_bar) => match secondary.recognize(image, options) {
+            Ok(lines) => lines.iter().flat_map(|l| l.words.iter().cloned()).collect(),
+            Err(e) => {
+                notes.push(format!("the {} engine failed ({e}) — low-confidence words keep the primary reading alone", secondary.id()));
+                Vec::new()
+            }
+        },
+        _ => Vec::new(),
+    };
+    let secondary = SecondaryReading { words: &secondary_words };
+    let regions = regions
+        .into_iter()
+        .map(|region| {
+            let words: Vec<Word> = region.lines.iter().flat_map(|l| l.words.iter().cloned()).collect();
+            let words = recognize_with_vote(&AlreadyRead, &secondary, &words);
+            let low_confidence_words = words.iter().filter(|w| w.confidence < UNKNOWN_CONFIDENCE_BAR).cloned().collect();
+            RegionReading { region, words, low_confidence_words }
+        })
+        .collect();
+    Ok(RegionOutcome { regions, notes })
 }
 
 /// Whether a word's pixel box may reach the content stream: width and height (right − left,
@@ -1256,6 +1583,7 @@ impl FileJob {
                 .pages
                 .iter()
                 .map(|&page| OcrPage {
+                    regions: Vec::new(),
                     already_on_page: 0,
                     page,
                     words: Vec::new(),
@@ -1312,11 +1640,18 @@ mod tests {
         assert_eq!(qty(true), ["2"], "the initialize script did not run with JavaScript on");
     }
 
+    const BODY_TEXT: &str = "BT /F1 12 Tf 40 700 Td (The quick brown fox jumps over the lazy dog.) Tj ET BT /F1 12 Tf 40 680 Td (Pack my box with five dozen liquor jugs.) Tj ET";
+
     /// One 300 × 300 page drawing `content`, with Helvetica as `/F1`.
     fn page(content: &str) -> Arc<Vec<u8>> {
+        page_with_size(content, [300; 2])
+    }
+
+    fn page_with_size(content: &str, size: [u32; 2]) -> Arc<Vec<u8>> {
+        let [width, height] = size;
         let pdf = format!(
             "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
-             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
              4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
              5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
             content.len()
@@ -1324,11 +1659,60 @@ mod tests {
         Arc::new(pdf.into_bytes())
     }
 
+    fn prepare_page(content: &str, size: [u32; 2]) -> Result<OcrShot, OcrPage> {
+        let (s, id) = open_file("page.pdf", page_with_size(content, size), None, false).unwrap();
+        let settings = OcrSettings { dpi: 72.0, ..Default::default() };
+        let mut steps = s.ocr_job(id, &[], settings).unwrap().steps();
+        steps.next_page().unwrap()
+    }
+
+    fn summed_own_text_coverage(content: &str, size: [u32; 2]) -> (usize, f32) {
+        let mut r = PageRenderer::new(page_with_size(content, size), RenderConfig::default());
+        let text = own_text(&mut r, 0).unwrap();
+        let glyphs: Vec<[f32; 4]> = text.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect();
+        let coverage = covered([0.0, 0.0, size[0] as f32, size[1] as f32], &glyphs);
+        (glyphs.len(), coverage)
+    }
+
+    /// The Lanczos enlargement is for scans whose letters are too small. A 72-dpi letter scan is
+    /// enlarged; a 300-dpi scan whose page is given in pixels (#1848) is read as rendered, not
+    /// judged 72 dpi and enlarged past the raster caps; and with a cleanup step on, which brings
+    /// the raster to 300 dpi itself, nothing is enlarged a second time. No page is skipped.
+    #[test]
+    fn only_scans_below_legible_resolution_are_enlarged() {
+        let s = Session::new();
+        let text = s.create_from_text("t", "The quick brown fox jumps over the lazy dog.").unwrap();
+        let mut viewer = Session::new();
+        let id = viewer.open("text.pdf", None, text, None).unwrap();
+        let scan = |dpi: f64| {
+            let png = export::Exporter::new(viewer.get(id).unwrap()).png(0, dpi).unwrap();
+            s.create_from_images(&[("scan.png".into(), png)]).unwrap()
+        };
+        let (low, fine) = (scan(72.0), scan(300.0));
+        let prepare = |bytes: Arc<Vec<u8>>, settings: OcrSettings| {
+            let mut reader = Session::new();
+            let id = reader.open("scan.pdf", None, bytes, None).unwrap();
+            let width = reader.get(id).unwrap().info.pages[0].width;
+            let shot = reader.ocr_job(id, &[0], settings).unwrap().steps().next_page().unwrap();
+            let shot = shot.unwrap_or_else(|page| panic!("the page was skipped: {:?}", page.skipped));
+            (shot.image().unwrap().width() as f32, width)
+        };
+
+        let (read, page) = prepare(low.clone(), OcrSettings::default());
+        assert!(read > 2.0 * page, "a 72-dpi scan is enlarged: {read} px for a {page} pt page");
+        let (read, page) = prepare(fine, OcrSettings::default());
+        assert!(page > SHEET, "the PNG says no resolution, so its page is given in pixels: {page} pt");
+        assert!(read <= page, "a 300-dpi scan is read as rendered: {read} px for a {page} pt page");
+        let (read, page) = prepare(low, OcrSettings { binarize: true, ..Default::default() });
+        let normalized = page * 300.0 / 72.0;
+        assert!(read < 2.0 * normalized, "normalized to 300 dpi once, not enlarged again: {read} px");
+    }
+
     #[test]
     fn a_stamp_drawn_as_outlines_leaves_a_scan_to_read() {
         let stamp = page("/Span <</ActualText (APPROVED)>> BDC 100 40 60 20 re f EMC");
         let mut r = PageRenderer::new(stamp, RenderConfig::default());
-        assert!(!has_own_text(&mut r, 0), "words only /ActualText names are no text of the page's own");
+        assert!(!has_own_text(&mut r, 0, [300.0; 2]), "words only /ActualText names are no text of the page's own");
         // They still count as on the page, so reading the scan doesn't add them twice.
         let text = r.render(RenderRequest { page: 0, kind: RequestKind::Text, scale: 1.0, ..Default::default() }).text.unwrap();
         assert_eq!(text.plain_text(), "APPROVED");
@@ -1336,8 +1720,57 @@ mod tests {
 
     #[test]
     fn printed_glyphs_count_as_own_text() {
-        let mut r = PageRenderer::new(page("BT /F1 12 Tf 20 150 Td (Total) Tj ET"), RenderConfig::default());
-        assert!(has_own_text(&mut r, 0));
+        let mut r = PageRenderer::new(page_with_size(BODY_TEXT, [612, 792]), RenderConfig::default());
+        assert!(has_own_text(&mut r, 0, [612.0, 792.0]));
+    }
+
+    #[test]
+    fn stamp_only_page_is_prepared_for_recognition() {
+        let text = prepare_page(BODY_TEXT, [612, 792]);
+        assert!(text.is_err(), "a substantial text layer still skips recognition");
+        let shot = prepare_page("BT /F1 8 Tf 250 20 Td (OK) Tj ET", [300; 2]).unwrap();
+        assert!(shot.image().is_some());
+    }
+
+    #[test]
+    fn approved_stamp_on_letter_is_prepared_for_recognition() {
+        let content = "BT /F1 12 Tf 40 700 Td (APPROVED) Tj ET";
+        let (glyph_count, summed) = summed_own_text_coverage(content, [612, 792]);
+        assert!(glyph_count < MIN_SUBSTANTIAL_TEXT_GLYPHS, "the fixture must catch an area-only rule");
+        assert!(summed > SUBSTANTIAL_TEXT_COVERAGE, "the fixture must catch an area-only rule: {summed}");
+        let shot = prepare_page(content, [612, 792]).unwrap();
+        assert!(shot.image().is_some());
+    }
+
+    #[test]
+    fn not_approved_stamp_on_letter_is_prepared_for_recognition() {
+        let content = "BT /F1 12 Tf 40 700 Td (NOT APPROVED) Tj ET";
+        let (glyph_count, summed) = summed_own_text_coverage(content, [612, 792]);
+        assert!(glyph_count < 13, "the stamp must stay below the established text-page boundary");
+        assert!(summed > SUBSTANTIAL_TEXT_COVERAGE, "the fixture must catch an area-only rule: {summed}");
+        let shot = prepare_page(content, [612, 792]).unwrap();
+        assert!(shot.image().is_some());
+    }
+
+    #[test]
+    fn confidential_stamp_on_letter_is_prepared_for_recognition() {
+        let content = "BT /F1 12 Tf 40 700 Td (CONFIDENTIAL) Tj ET";
+        let (glyph_count, summed) = summed_own_text_coverage(content, [612, 792]);
+        assert!(glyph_count < 13, "the stamp must stay below the established text-page boundary");
+        assert!(summed > SUBSTANTIAL_TEXT_COVERAGE, "the fixture must catch an area-only rule: {summed}");
+        let shot = prepare_page(content, [612, 792]).unwrap();
+        assert!(shot.image().is_some());
+    }
+
+    #[test]
+    fn overlapping_stamp_boxes_do_not_trigger_text_page_skip() {
+        let content = "BT /F1 12 Tf 40 700 Td (STAMP) Tj ET BT /F1 12 Tf 41 700 Td (STAMP) Tj ET BT /F1 12 Tf 42 700 Td (STAMP) Tj ET BT /F1 12 Tf 43 700 Td (STAMP) Tj ET BT /F1 12 Tf 44 700 Td (STAMP) Tj ET BT /F1 12 Tf 45 700 Td (STAMP) Tj ET BT /F1 12 Tf 46 700 Td (STAMP) Tj ET BT /F1 12 Tf 47 700 Td (STAMP) Tj ET";
+        let (glyph_count, summed) = summed_own_text_coverage(content, [612, 792]);
+        assert!(glyph_count >= MIN_SUBSTANTIAL_TEXT_GLYPHS, "the count gate must not rescue this fixture");
+        assert!(summed > SUBSTANTIAL_TEXT_COVERAGE, "the fixture must catch double-counted boxes: {summed}");
+        // Only their union keeps these overlapping glyph boxes below the coverage threshold.
+        let shot = prepare_page(content, [612, 792]).unwrap();
+        assert!(shot.image().is_some());
     }
 
     /// #1028: a recognised word over the page's own text is that text again; one in an empty
@@ -1369,6 +1802,29 @@ mod tests {
         let broken = [[f32::NAN; 4], [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY]];
         let c = covered([0.0, 0.0, 10.0, 10.0], &broken);
         assert!((0.0..=1.0).contains(&c), "{c}");
+    }
+
+    #[test]
+    fn union_coverage_clips_and_counts_each_region_once() {
+        let boxes = [
+            [-10.0, -10.0, 50.0, 50.0],
+            [25.0, 25.0, 75.0, 75.0],
+            [50.0, 0.0, 60.0, 10.0],
+            [80.0, 80.0, 90.0, 90.0],
+            [150.0, 150.0, 200.0, 200.0],
+            [40.0, 40.0, 40.0, 90.0],
+        ];
+        // 2,500 + 2,500 - 625 overlap + 100 disjoint + 100 separate = 4,575 / 10,000.
+        let coverage = union_coverage(&boxes, [100.0; 2]);
+        assert!((coverage - 0.4575).abs() < 1e-6, "{coverage}");
+    }
+
+    #[test]
+    fn union_coverage_handles_extreme_and_degenerate_boxes() {
+        assert_eq!(union_coverage(&[[f32::MIN, f32::MIN, f32::MAX, f32::MAX]], [100.0; 2]), 1.0);
+        let empty = [[0.0, 0.0, 0.0, 10.0], [10.0, 0.0, 0.0, 10.0], [f32::NAN, 0.0, 10.0, 10.0], [0.0, 0.0, f32::INFINITY, 10.0]];
+        assert_eq!(union_coverage(&empty, [100.0; 2]), 0.0);
+        assert_eq!(union_coverage(&[], [100.0; 2]), 0.0);
     }
     use crate::tests::fixture;
     use pdfcraft_render::TextGlyph;
@@ -1540,6 +1996,7 @@ mod tests {
             source: "ocrs".into(),
         };
         let page = OcrPage {
+            regions: Vec::new(),
             already_on_page: 0,
             page: 0,
             words: vec![word("a", Some(95.0)), word("b", Some(50.0)), word("c", None), word("d", Some(69.0))],
@@ -1760,6 +2217,178 @@ mod tests {
         (Recognizers { primary: fake.clone(), secondary: None }, fake)
     }
 
+    /// A fake engine for the per-word vote: it reads every box as the word it is given, with
+    /// one confidence, and counts the boxes it was asked to read.
+    struct FakeRecognizer {
+        confidence: f32,
+        reads: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FakeRecognizer {
+        fn new() -> FakeRecognizer {
+            FakeRecognizer { confidence: 0.0, reads: std::sync::atomic::AtomicUsize::new(0) }
+        }
+
+        fn with_confidence(mut self, confidence: f32) -> FakeRecognizer {
+            self.confidence = confidence;
+            self
+        }
+
+        fn reads(&self) -> usize {
+            self.reads.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl WordReader for FakeRecognizer {
+        fn read_word(&self, word: &Word) -> Option<Word> {
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(Word { confidence: Some(self.confidence), ..word.clone() })
+        }
+    }
+
+    /// The page the vote reads: three words on one line, in the pixels the fakes read.
+    fn page_words() -> Vec<Word> {
+        (0..3).map(|i| Word::new(format!("word{i}"), [i as f32 * 44.0, 0.0, i as f32 * 44.0 + 40.0, 12.0], "fixture")).collect()
+    }
+
+    /// A low-confidence reading is offered to the second engine and its confident vote wins;
+    /// no word ends up below the bar in the second engine's name.
+    #[test]
+    fn low_confidence_words_get_a_second_engine_vote() {
+        let primary = FakeRecognizer::new().with_confidence(40.0);
+        let secondary = FakeRecognizer::new().with_confidence(90.0);
+        let words = recognize_with_vote(&primary, &secondary, &page_words());
+        assert!(words.iter().all(|w| w.confidence >= 70.0 || w.source == RecognizerId::Primary));
+        assert!(words.iter().any(|w| w.source == RecognizerId::Secondary));
+    }
+
+    /// A confident word is never offered to the second engine: no re-read, no merge, and the
+    /// reading keeps the primary's text and confidence.
+    #[test]
+    fn confident_words_are_not_offered_to_the_secondary() {
+        let primary = FakeRecognizer::new().with_confidence(95.0);
+        let secondary = FakeRecognizer::new().with_confidence(99.0);
+        let words = recognize_with_vote(&primary, &secondary, &page_words());
+        assert_eq!(secondary.reads(), 0, "nothing below the bar has a vote to cast");
+        assert!(words.iter().all(|w| w.source == RecognizerId::Primary && w.confidence == 95.0));
+    }
+
+    /// The second engine is asked about a weak word, but its own weak reading does not win:
+    /// a low-confidence vote is not an improvement.
+    #[test]
+    fn a_secondary_reading_below_the_bar_does_not_win_the_vote() {
+        let primary = FakeRecognizer::new().with_confidence(40.0);
+        let secondary = FakeRecognizer::new().with_confidence(65.0);
+        let words = recognize_with_vote(&primary, &secondary, &page_words());
+        assert_eq!(secondary.reads(), 3, "every weak word was offered");
+        assert!(words.iter().all(|w| w.source == RecognizerId::Primary && w.confidence == 40.0));
+    }
+
+    /// A fake page engine for the region path: it returns canned lines, counts its runs, and
+    /// fails when told to.
+    struct RiggedEngine {
+        id: &'static str,
+        lines: Vec<Line>,
+        calls: std::sync::atomic::AtomicUsize,
+        fail: bool,
+    }
+
+    impl RiggedEngine {
+        fn new(id: &'static str, words: &[(&str, [f32; 4], f32)]) -> RiggedEngine {
+            RiggedEngine {
+                id,
+                lines: vec![Line { words: words.iter().map(|(text, rect, c)| Word::new(*text, *rect, id).with_confidence(*c)).collect() }],
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                fail: false,
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl Recognizer for RiggedEngine {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+        fn available(&self) -> bool {
+            true
+        }
+        fn languages(&self) -> Vec<(String, String)> {
+            vec![("en".into(), "English".into())]
+        }
+        fn recognize(&self, _image: &OcrImage, _options: &RecognizeOptions) -> Result<Vec<Line>, OcrError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.fail {
+                return Err(OcrError::Recognize("the rigged engine failed".into()));
+            }
+            Ok(self.lines.clone())
+        }
+    }
+
+    /// A white page the rigged engines read; only its size matters.
+    fn page_image() -> OcrImage {
+        OcrImage::new(200, 100, vec![255; 200 * 100 * 4]).unwrap()
+    }
+
+    /// The region path reads the page with the primary, types its regions, and votes only the
+    /// weak words: the confident word keeps the primary's text even though the secondary read
+    /// it differently, and nothing is left to report.
+    #[test]
+    fn regions_are_read_with_the_vote_and_keep_the_confident_words() {
+        let primary = RiggedEngine::new("ocrs", &[("weak", [10.0, 10.0, 50.0, 22.0], 40.0), ("strong", [54.0, 10.0, 94.0, 22.0], 95.0)]);
+        let secondary = RiggedEngine::new("tesseract", &[("better", [10.0, 10.0, 50.0, 22.0], 90.0), ("STRONG", [54.0, 10.0, 94.0, 22.0], 99.0)]);
+        let recognizers = Recognizers { primary: Arc::new(primary), secondary: Some(Arc::new(secondary)) };
+        let out = recognize_regions(&recognizers, &page_image(), &RecognizeOptions::default(), (200.0, 100.0), None).unwrap();
+        let words: Vec<&VotedWord> = out.regions.iter().flat_map(|r| &r.words).collect();
+        assert_eq!(words.len(), 2);
+        assert_eq!((words[0].text.as_str(), words[0].source), ("better", RecognizerId::Secondary));
+        assert_eq!((words[1].text.as_str(), words[1].source), ("strong", RecognizerId::Primary));
+        assert!(out.regions.iter().all(|r| r.low_confidence_words.is_empty()), "the vote left nothing below the bar");
+        assert!(out.notes.is_empty());
+    }
+
+    /// A weak word the second engine cannot improve stays the primary's and is listed for the
+    /// report, with the engine and confidence the vote kept.
+    #[test]
+    fn low_confidence_words_list_what_the_vote_could_not_settle() {
+        let primary = RiggedEngine::new("ocrs", &[("weak", [10.0, 10.0, 50.0, 22.0], 40.0)]);
+        let secondary = RiggedEngine::new("tesseract", &[("worse", [10.0, 10.0, 50.0, 22.0], 65.0)]);
+        let recognizers = Recognizers { primary: Arc::new(primary), secondary: Some(Arc::new(secondary)) };
+        let out = recognize_regions(&recognizers, &page_image(), &RecognizeOptions::default(), (200.0, 100.0), None).unwrap();
+        let reading = &out.regions[0];
+        assert_eq!((reading.words[0].text.as_str(), reading.words[0].source), ("weak", RecognizerId::Primary));
+        assert_eq!(reading.low_confidence_words.len(), 1);
+        assert_eq!((reading.low_confidence_words[0].text.as_str(), reading.low_confidence_words[0].confidence), ("weak", 40.0));
+    }
+
+    /// A page whose reading is confident starts no second recognition at all: the vote costs
+    /// nothing when there is nothing to vote on.
+    #[test]
+    fn a_confident_page_does_not_run_the_secondary() {
+        let primary = RiggedEngine::new("ocrs", &[("strong", [10.0, 10.0, 50.0, 22.0], 95.0)]);
+        let secondary = Arc::new(RiggedEngine::new("tesseract", &[]));
+        let recognizers = Recognizers { primary: Arc::new(primary), secondary: Some(secondary.clone()) };
+        let _ = recognize_regions(&recognizers, &page_image(), &RecognizeOptions::default(), (200.0, 100.0), None).unwrap();
+        assert_eq!(secondary.calls(), 0);
+    }
+
+    /// A secondary that fails leaves the primary reading, names the failure in a note, and still
+    /// lists the weak word: a partner's failure never becomes a silent or skipped page.
+    #[test]
+    fn a_failing_secondary_keeps_the_primary_reading_with_a_note() {
+        let primary = RiggedEngine::new("ocrs", &[("weak", [10.0, 10.0, 50.0, 22.0], 40.0)]);
+        let mut secondary = RiggedEngine::new("tesseract", &[]);
+        secondary.fail = true;
+        let recognizers = Recognizers { primary: Arc::new(primary), secondary: Some(Arc::new(secondary)) };
+        let out = recognize_regions(&recognizers, &page_image(), &RecognizeOptions::default(), (200.0, 100.0), None).unwrap();
+        assert_eq!(out.notes.len(), 1);
+        assert!(out.notes[0].contains("tesseract"), "{:?}", out.notes[0]);
+        assert_eq!(out.regions[0].words[0].source, RecognizerId::Primary);
+        assert_eq!(out.regions[0].low_confidence_words.len(), 1);
+    }
+
     /// Skip-files: a file that already has text is passed over entirely — the engine never
     /// runs, the original bytes come back, and the result is its own skipped bucket.
     #[test]
@@ -1923,6 +2552,7 @@ mod tests {
             source: "ocrs".into(),
         };
         let page = |n: usize, confs: &[f32], skipped: Option<&str>| OcrPage {
+            regions: Vec::new(),
             already_on_page: 0,
             page: n,
             words: confs.iter().map(|c| word(*c)).collect(),
@@ -1949,7 +2579,11 @@ mod tests {
         let mut s = Session::new();
         let id = s.open("src.pdf", None, Arc::new(fixture(2)), None).unwrap();
         assert!(
-            s.editable_ocr_bytes(id, &[OcrPage { already_on_page: 0, page: 0, words: vec![], skipped: None, notes: Vec::new() }]).is_err(),
+            s.editable_ocr_bytes(
+                id,
+                &[OcrPage { regions: Vec::new(), already_on_page: 0, page: 0, words: vec![], skipped: None, notes: Vec::new() }]
+            )
+            .is_err(),
             "zero words are refused"
         );
         let info = s.get(id).unwrap().info.pages[0].clone();
@@ -1964,8 +2598,8 @@ mod tests {
             source: "ocrs".into(),
         };
         let found = vec![
-            OcrPage { already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() },
-            OcrPage { already_on_page: 0, page: 1, words: vec![], skipped: None, notes: Vec::new() },
+            OcrPage { regions: Vec::new(), already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() },
+            OcrPage { regions: Vec::new(), already_on_page: 0, page: 1, words: vec![], skipped: None, notes: Vec::new() },
         ];
         let before = s.get(id).unwrap().bytes.clone();
         let bytes = s.editable_ocr_bytes(id, &found).unwrap();
@@ -2004,7 +2638,9 @@ mod tests {
             confidence: None,
             source: "ocrs".into(),
         };
-        let bytes = s.editable_ocr_bytes(id, &[OcrPage { already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() }]).unwrap();
+        let bytes = s
+            .editable_ocr_bytes(id, &[OcrPage { regions: Vec::new(), already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() }])
+            .unwrap();
         let mut out = Session::new();
         let oid = out.open("ocr.pdf", None, bytes, None).unwrap();
         let otext = crate::tests::page_texts(&out, oid)[0].clone();
@@ -2101,7 +2737,7 @@ mod tests {
         let before = s.save_bytes(id).unwrap();
         let word =
             PlacedWord { text: "word".into(), origin: [20.0, 80.0], across: [30.0, 0.0], up: [0.0, 5.0], confidence: None, source: "test".into() };
-        let page = |page, words| OcrPage { already_on_page: 0, page, words, skipped: None, notes: Vec::new() };
+        let page = |page, words| OcrPage { regions: Vec::new(), already_on_page: 0, page, words, skipped: None, notes: Vec::new() };
         let mut invalid = word.clone();
         invalid.origin[0] = f64::INFINITY;
         let mut long = word.clone();
@@ -2130,7 +2766,9 @@ mod tests {
             confidence: None,
             source: "ocrs".into(),
         };
-        let bytes = s.editable_ocr_bytes(id, &[OcrPage { already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() }]).unwrap();
+        let bytes = s
+            .editable_ocr_bytes(id, &[OcrPage { regions: Vec::new(), already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() }])
+            .unwrap();
         let mut out = Session::new();
         let oid = out.open("ocr.pdf", None, bytes, None).unwrap();
         let text = crate::tests::page_texts(&out, oid)[0].clone();
@@ -2162,7 +2800,9 @@ mod tests {
             source: "ocrs".into(),
         };
         let words = vec![word("Привет", 250.0, 80.0), word("Hello", 100.0, 50.0)];
-        let bytes = s.editable_ocr_bytes(id, &[OcrPage { already_on_page: 0, page: 0, words, skipped: None, notes: Vec::new() }]).unwrap();
+        let bytes = s
+            .editable_ocr_bytes(id, &[OcrPage { regions: Vec::new(), already_on_page: 0, page: 0, words, skipped: None, notes: Vec::new() }])
+            .unwrap();
         let mut out = Session::new().with_clock(|| 1_700_000_000);
         let oid = out.open("ocr.pdf", None, bytes, None).unwrap();
         let before = crate::tests::page_texts(&out, oid)[0].clone();
@@ -2214,8 +2854,8 @@ mod tests {
         // Different scripts, so each page's words live in different planned fonts (and page 2
         // would inherit page 1's codes under page-local indexing into the shared plan).
         let found = vec![
-            OcrPage { already_on_page: 0, page: 0, words: vec![word("日本語")], skipped: None, notes: Vec::new() },
-            OcrPage { already_on_page: 0, page: 1, words: vec![word("Привет")], skipped: None, notes: Vec::new() },
+            OcrPage { regions: Vec::new(), already_on_page: 0, page: 0, words: vec![word("日本語")], skipped: None, notes: Vec::new() },
+            OcrPage { regions: Vec::new(), already_on_page: 0, page: 1, words: vec![word("Привет")], skipped: None, notes: Vec::new() },
         ];
         let bytes = s.editable_ocr_bytes(id, &found).unwrap();
         let mut out = Session::new();

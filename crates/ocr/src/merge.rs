@@ -117,20 +117,32 @@ pub fn rover_merge(primary: Vec<Line>, secondary: Vec<Line>, secondary_id: &str)
     let mut unused: Vec<Vec<Option<Word>>> = secondary.into_iter().map(|l| l.words.into_iter().map(Some).collect()).collect();
     for line in &mut primary {
         for word in &mut line.words {
-            // The best-overlapping unused secondary word, if any beats IoU 0.5.
+            // The best-overlapping unused secondary word, if any beats IoU 0.5. Every candidate
+            // over that bar is an alternative reading of this physical word, so all are consumed:
+            // leaving the non-best ones unused would append them as duplicate words below.
             let mut best: Option<(f64, usize, usize)> = None;
+            let mut overlapping = Vec::new();
             for (li, words) in unused.iter().enumerate() {
                 for (wi, slot) in words.iter().enumerate() {
                     let Some(w) = slot else { continue };
                     let score = iou(&word.rect, &w.rect);
-                    if score >= 0.5 && best.is_none_or(|(b, _, _)| score > b) {
-                        best = Some((score, li, wi));
+                    if score >= 0.5 {
+                        overlapping.push((li, wi));
+                        if best.is_none_or(|(b, _, _)| score > b) {
+                            best = Some((score, li, wi));
+                        }
                     }
                 }
             }
-            let Some((_, li, wi)) = best else { continue };
-            let claimed = unused.get_mut(li).and_then(|l| l.get_mut(wi)).and_then(|slot| slot.take());
-            let Some(claim) = claimed else { continue };
+            let Some((_, best_li, best_wi)) = best else { continue };
+            let mut claim = None;
+            for (li, wi) in overlapping {
+                let candidate = unused.get_mut(li).and_then(|l| l.get_mut(wi)).and_then(|slot| slot.take());
+                if (li, wi) == (best_li, best_wi) {
+                    claim = candidate;
+                }
+            }
+            let Some(claim) = claim else { continue };
             if higher(claim.confidence, word.confidence) {
                 *word = Word { source: "ROVER".into(), ..claim };
             } else {
@@ -351,6 +363,22 @@ mod tests {
         assert_eq!(w[0].rect, [1.0, 0.0, 11.0, 10.0]);
         assert_eq!(w[0].confidence, Some(95.0));
         assert_eq!(w[0].source, "ROVER");
+    }
+
+    /// Alternative secondary readings that meet one primary word's overlap bar are not new
+    /// physical words. Both ensemble strategies keep the best-overlapping reading once rather
+    /// than appending every candidate the primary did not select.
+    #[test]
+    fn ensemble_strategies_do_not_append_alternative_readings_of_one_word() {
+        let mut merged_text = Vec::new();
+        for strategy in [MergeStrategy::ConfidenceWeighted, MergeStrategy::RoverVote] {
+            let primary = Fake::new("ocrs", &[("helo", [0.0, 0.0, 10.0, 10.0], 40.0)]);
+            let secondary = Fake::new("tesseract", &[("hello", [0.0, 0.0, 10.0, 10.0], 95.0), ("hellos", [1.0, 0.0, 11.0, 10.0], 90.0)]);
+            let outcome = recognize_with_strategy(&primary, Some(&secondary), strategy, &image(), &RecognizeOptions::default()).unwrap();
+            assert!(outcome.secondary_ran, "{strategy:?}");
+            merged_text.push((strategy, outcome.lines.iter().map(Line::text).collect::<Vec<_>>().join(" | ")));
+        }
+        assert_eq!(merged_text, vec![(MergeStrategy::ConfidenceWeighted, "hello".into()), (MergeStrategy::RoverVote, "hello".into())]);
     }
 
     /// A tie keeps the primary word (still named ROVER, as an agreed reading).

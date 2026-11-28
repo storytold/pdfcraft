@@ -1,5 +1,29 @@
 use std::collections::HashMap;
 
+use pdfcraft_ocr::ParagraphKind;
+
+/// A paragraph's geometry as its producer measured it: how far its text is indented from the
+/// page's body margin, its first line's extra indent, and the multiple of single line spacing it
+/// is set at. The writers apply them as paragraph properties; a block that comes without them (a
+/// PDF's own text, which its boxes already place) is set at the body margin, single spaced.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Metrics {
+    /// Left indent in points from the page's body left edge.
+    pub indent_left: f32,
+    /// The first line's extra indent on top of [`Metrics::indent_left`]; negative for a hanging
+    /// indent (a list marker outdented from the wrapped text).
+    pub indent_first: f32,
+    /// The distance between the paragraph's line tops divided by its line height: 1.0 is single
+    /// spacing and 2.0 double.
+    pub line_spacing: f32,
+}
+
+impl Default for Metrics {
+    fn default() -> Self {
+        Metrics { indent_left: 0.0, indent_first: 0.0, line_spacing: 1.0 }
+    }
+}
+
 /// A paragraph of a page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Block {
@@ -18,6 +42,16 @@ pub struct Block {
     /// which `text` leaves out. A block that continues this one on its line is a run of the same
     /// paragraph, and these say whether a space separates them (#4158).
     pub space_around: [bool; 2],
+    /// What the block is in the document's structure ([`ParagraphKind`]), as a synthesizer read
+    /// it: a numbered item, a point label or heading, a section heading, a caption, a signature,
+    /// an exhibit label or a running header/footer line. Body text unless one said otherwise.
+    pub kind: ParagraphKind,
+    /// The block's index in the reading order its producer gave the page (0 for a page that
+    /// comes without one). Paragraphs whose boxes put them at one place keep this order, so a
+    /// synthesized document's own order survives the geometric one.
+    pub order: usize,
+    /// The producer's measurement of the paragraph's geometry.
+    pub metrics: Metrics,
 }
 
 /// An image of a page.
@@ -40,6 +74,10 @@ pub struct Page {
     pub height: f64,
     pub blocks: Vec<Block>,
     pub images: Vec<Image>,
+    /// The page is a scan's OCR text: its invisible text layer carries most of the page's
+    /// characters (or all of them), with no unread forms. Word flows that text without the
+    /// redundant page-sized scan; visible and mostly-visible pages keep their layout.
+    pub ocr: bool,
     /// The colour the whole page is painted before its content (a page background), as sRGB
     /// components in 0..=1; `None` for a page with no background of its own.
     pub background: Option<[f64; 3]>,
@@ -76,8 +114,9 @@ pub struct Table {
 
 /// What goes into the output, in order.
 pub(crate) enum Item<'a> {
-    /// A paragraph's runs (at least one) and its heading level.
-    Para(Vec<Run<'a>>, u8),
+    /// A paragraph's runs (at least one), its heading level, and what the document's structure
+    /// makes it (a numbered item, a point heading, a header/footer line, body text).
+    Para(Vec<Run<'a>>, u8, ParagraphKind),
     /// Owned: tables are detected per page inside [`items`], so they cannot borrow.
     Table(Table),
     Img(&'a Image),
@@ -696,6 +735,11 @@ pub(crate) fn reading_order<T>(page: &Page, parts: Vec<([f64; 4], f64, T)>) -> V
 }
 
 pub(crate) fn items(pages: &[Page]) -> Vec<Item<'_>> {
+    items_filtered(pages, |_, _| true)
+}
+
+/// The pages' items with images `keep_image` rejects left out before reading order is computed.
+pub(crate) fn items_filtered(pages: &[Page], keep_image: impl Fn(&Page, &Image) -> bool) -> Vec<Item<'_>> {
     let body = body_size(pages);
     let mut out = Vec::new();
     for (i, p) in pages.iter().enumerate() {
@@ -705,18 +749,28 @@ pub(crate) fn items(pages: &[Page]) -> Vec<Item<'_>> {
         let (tables, consumed) = tables(&p.blocks, &p.rules);
         // A paragraph sits where its first run does: its other runs follow along its line and the
         // lines it wraps onto.
-        let mut parts: Vec<([f64; 4], f64, Item)> = flowing_paragraphs(&p.blocks, &consumed, body)
+        // A synthesizer's reading order decides between paragraphs whose boxes sit at one place
+        // (`order`); the geometry decides everything else.
+        let mut paras = flowing_paragraphs(&p.blocks, &consumed, body);
+        paras.sort_by_key(|runs| runs.first().map_or(0, |r| r.block.order));
+        let mut parts: Vec<([f64; 4], f64, Item)> = paras
             .into_iter()
             .filter_map(|runs| {
                 let first = runs.first()?.block;
                 let x1 = runs.iter().map(|r| r.block.rect[2]).fold(first.rect[2], f64::max);
                 let lvl = para_level(&runs, body);
-                Some(([first.rect[0], first.rect[1], x1, first.rect[3]], first.size, Item::Para(runs, lvl)))
+                Some(([first.rect[0], first.rect[1], x1, first.rect[3]], first.size, Item::Para(runs, lvl, first.kind)))
             })
             .collect();
         parts.extend(tables.into_iter().map(|t| (t.rect, body, Item::Table(t))));
-        parts.extend(p.images.iter().map(|im| (im.rect, (im.rect[3] - im.rect[1]).max(body), Item::Img(im))));
-        out.extend(reading_order(p, parts));
+        parts.extend(p.images.iter().filter(|im| keep_image(p, im)).map(|im| (im.rect, (im.rect[3] - im.rect[1]).max(body), Item::Img(im))));
+        // A synthesized page's paragraphs already carry the engine's reading order: keep it,
+        // because geometric re-sorting interleaves caption columns and centered openings.
+        if p.ocr {
+            out.extend(parts.into_iter().map(|(_, _, item)| item));
+        } else {
+            out.extend(reading_order(p, parts));
+        }
     }
     out
 }

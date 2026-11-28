@@ -6370,6 +6370,7 @@ dependencies = [
  "pdfcraft-xfa",
  "pdfcraft-xfdf",
  "rustix 1.1.6",
+ "serde_json",
  "thiserror 2.0.21",
  "unicode-segmentation",
  "url",
@@ -6390,6 +6391,7 @@ dependencies = [
  "craft-zip",
  "flate2",
  "image",
+ "pdfcraft-ocr",
 ]
 
 [[package]]

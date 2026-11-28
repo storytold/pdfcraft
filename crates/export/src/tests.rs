@@ -12,9 +12,12 @@ fn varied_page(n: usize) -> Page {
             color: [(i % 256) as f64 / 255.0, (i / 256 % 256) as f64 / 255.0, 0.5],
             rotation: 0.0,
             space_around: [false; 2],
+            kind: ParagraphKind::Body,
+            order: 0,
+            metrics: Metrics::default(),
         })
         .collect();
-    Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() }
+    Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ocr: false, background: None, rules: Vec::new() }
 }
 
 fn lookup_steps(f: impl FnOnce()) -> usize {
@@ -53,6 +56,9 @@ fn page() -> Page {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     Page {
         width: 612.0,
@@ -70,6 +76,7 @@ fn page() -> Page {
             size: [200.0, 150.0],
             rotation: 0.0,
         }],
+        ocr: false,
         background: None,
         rules: Vec::new(),
     }
@@ -212,6 +219,71 @@ fn word_keeps_a_page_with_a_clear_image_and_big_title_in_flow() {
     assert!(body_objects(&doc).iter().any(|o| matches!(o, craft_wordmodel::InlineObject::Shape { .. })), "an image over text floats the page");
 }
 
+fn page_sized_image_with_text() -> Page {
+    Page {
+        width: 612.0,
+        height: 792.0,
+        blocks: vec![
+            block("Recognized text flows", 72.0, 700.0, 500.0, 712.0),
+            block("into Word paragraphs", 72.0, 688.0, 250.0, 700.0),
+            block("Another paragraph follows", 72.0, 670.0, 260.0, 682.0),
+        ],
+        images: vec![Image { rect: [0.0, 0.0, 612.0, 792.0], size: [612.0, 792.0], ..page().images[0].clone() }],
+        ocr: false,
+        background: None,
+        rules: Vec::new(),
+    }
+}
+
+#[test]
+fn word_flows_ocr_text_over_a_page_sized_scan() {
+    let scan = Page { ocr: true, ..page_sized_image_with_text() };
+    let doc = craft_docx::read(&docx(&[scan], "Scan")).unwrap();
+    let objects = body_objects(&doc);
+    assert!(
+        objects.iter().all(|o| !matches!(o, craft_wordmodel::InlineObject::Shape { .. })),
+        "OCR text must not be trapped in text boxes: {objects:?}"
+    );
+    assert!(
+        objects.iter().all(|o| !matches!(o, craft_wordmodel::InlineObject::Image { .. })),
+        "the redundant scan must not consume flow space: {objects:?}"
+    );
+    let paragraphs: Vec<String> = body_paragraphs(&doc).into_iter().map(|p| p.plain_text()).filter(|t| !t.is_empty()).collect();
+    assert_eq!(paragraphs, ["Recognized text flows into Word paragraphs", "Another paragraph follows"]);
+}
+
+#[test]
+fn word_keeps_visible_text_over_full_page_art_positioned() {
+    let doc = craft_docx::read(&docx(&[page_sized_image_with_text()], "Visible overlay")).unwrap();
+    let objects = body_objects(&doc);
+    assert!(
+        objects.iter().any(|o| matches!(o, craft_wordmodel::InlineObject::Shape { .. })),
+        "visible text over full-page art stays positioned: {objects:?}"
+    );
+    assert!(objects.iter().any(|o| matches!(o, craft_wordmodel::InlineObject::Image { .. })), "the visible page's art is retained");
+}
+
+#[test]
+fn word_ocr_scan_does_not_change_paragraph_order() {
+    let with_scan = Page {
+        width: 612.0,
+        height: 792.0,
+        blocks: vec![block("Body text", 200.0, 700.0, 500.0, 712.0), block("7", 20.0, 20.0, 40.0, 32.0)],
+        images: vec![Image { rect: [0.0, 0.0, 612.0, 792.0], size: [612.0, 792.0], ..page().images[0].clone() }],
+        ocr: true,
+        background: None,
+        rules: Vec::new(),
+    };
+    let without_scan = Page { images: Vec::new(), ..with_scan.clone() };
+    let paragraphs = |page| {
+        let doc = craft_docx::read(&docx(&[page], "Order")).unwrap();
+        body_paragraphs(&doc).into_iter().map(|p| p.plain_text()).filter(|t| !t.is_empty()).collect::<Vec<_>>()
+    };
+    let expected = paragraphs(without_scan);
+    assert_eq!(expected, ["Body text", "7"]);
+    assert_eq!(paragraphs(with_scan), expected, "the omitted scan must not influence reading order");
+}
+
 #[test]
 fn word_overlap_does_not_consume_invoice_body_space() {
     let mut p = table_page();
@@ -224,6 +296,9 @@ fn word_overlap_does_not_consume_invoice_body_space() {
         color: [0.8; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     });
     p.images = page().images;
     let d = docx(&[p], "Invoice");
@@ -382,6 +457,9 @@ fn word_opens_text_with_control_characters_and_long_pages() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     });
     let d = docx(&[p.clone()], "Receipt\u{1}");
     let xml = part(&d, "word/document.xml");
@@ -452,6 +530,9 @@ fn rtf_escapes_and_sizes() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     });
     let r = rtf(&[p]);
     assert!(r.starts_with("{\\rtf1") && r.trim_end().ends_with('}'));
@@ -547,6 +628,9 @@ fn table_page() -> Page {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     Page {
         width: 612.0,
@@ -571,9 +655,13 @@ fn table_page() -> Page {
                 color: [0.0; 3],
                 rotation: 0.0,
                 space_around: [false; 2],
+                kind: ParagraphKind::Body,
+                order: 0,
+                metrics: Metrics::default(),
             },
         ],
         images: Vec::new(),
+        ocr: false,
         background: None,
         rules: Vec::new(),
     }
@@ -645,6 +733,9 @@ fn a_staircase_of_blocks_is_not_a_huge_table() {
                 color: [0.0; 3],
                 rotation: 0.0,
                 space_around: [false; 2],
+                kind: ParagraphKind::Body,
+                order: 0,
+                metrics: Metrics::default(),
             }
         })
         .collect();
@@ -673,11 +764,15 @@ fn word_opens_tables_up_to_its_column_limit() {
                         color: [0.0; 3],
                         rotation: 0.0,
                         space_around: [false; 2],
+                        kind: ParagraphKind::Body,
+                        order: 0,
+                        metrics: Metrics::default(),
                     }
                 })
             })
             .collect(),
         images: Vec::new(),
+        ocr: false,
         background: None,
         rules: Vec::new(),
     };
@@ -688,7 +783,19 @@ fn word_opens_tables_up_to_its_column_limit() {
 }
 
 fn block(t: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> Block {
-    Block { text: t.into(), rect: [x0, y0, x1, y1], size: 12.0, bold: false, italic: false, color: [0.0; 3], rotation: 0.0, space_around: [false; 2] }
+    Block {
+        text: t.into(),
+        rect: [x0, y0, x1, y1],
+        size: 12.0,
+        bold: false,
+        italic: false,
+        color: [0.0; 3],
+        rotation: 0.0,
+        space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
+    }
 }
 
 /// #2806: a sentence whose link is set in another colour or font runs on as separate blocks
@@ -714,6 +821,7 @@ fn a_link_inside_a_sentence_is_not_a_table_column() {
             block("conducted during a WGP tournament.", 164.3, 502.0, 352.5, 516.6),
         ],
         images: Vec::new(),
+        ocr: false,
         background: None,
         rules: Vec::new(),
     };
@@ -737,7 +845,7 @@ fn sentences_that_run_on_into_links_are_not_a_table() {
         blocks.push(block(lead, 72.0, y, 211.0, y + 12.0));
         blocks.push(blue("https://example.org/event", 212.5, y, 360.0, y + 12.0));
     }
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ocr: false, background: None, rules: Vec::new() };
     let h = html(std::slice::from_ref(&p), "Event");
     assert!(!h.contains("<table>"), "sentences became a table: {h}");
     assert_eq!(h.matches("https://example.org/event").count(), 3, "{h}");
@@ -788,7 +896,7 @@ fn a_superscript_beside_a_number_keeps_its_table() {
         blocks.push(Block { size: 8.0, ..block(sup, 106.0, y + 5.0, 113.0, y + 13.0) });
         blocks.push(block(&format!("{},000", 30 - 5 * n), 300.0, y, 340.0, y + 12.0));
     }
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ocr: false, background: None, rules: Vec::new() };
     let h = html(std::slice::from_ref(&p), "Prizes");
     assert!(h.contains("<table>"), "the prize table was lost: {h}");
     assert!(h.contains("30,000") && h.contains("15,000"), "{h}");
@@ -809,6 +917,9 @@ fn two_column_body_text_is_not_mistaken_for_a_table() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     let p = Page {
         width: 612.0,
@@ -820,6 +931,7 @@ fn two_column_body_text_is_not_mistaken_for_a_table() {
             para("Second right block, still a tall flowing paragraph rather than a cell.", 320.0, 400.0),
         ],
         images: Vec::new(),
+        ocr: false,
         background: None,
         rules: Vec::new(),
     };
@@ -906,7 +1018,7 @@ fn italic_sentence() -> Vec<Block> {
 fn an_italic_word_stays_in_its_sentence() {
     let mut blocks = italic_sentence();
     blocks.push(block("The next line is a paragraph of its own.", 72.0, 684.0, 300.0, 696.0));
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ocr: false, background: None, rules: Vec::new() };
     let xml = part(&docx(std::slice::from_ref(&p), "Opinion"), "word/document.xml");
     assert_eq!(
         word_paragraphs(&xml),
@@ -946,7 +1058,7 @@ fn an_italic_word_stays_in_its_sentence() {
 fn a_sentence_keeps_its_reading_order() {
     let mut blocks = vec![block("Then the next line.", 72.0, 684.0, 200.0, 696.0)];
     blocks.extend(italic_sentence().into_iter().rev());
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ocr: false, background: None, rules: Vec::new() };
     let xml = part(&docx(std::slice::from_ref(&p), "Opinion"), "word/document.xml");
     assert_eq!(
         word_paragraphs(&xml),
@@ -967,7 +1079,7 @@ fn runs_keep_the_spaces_the_source_had_between_them() {
         block("E = mc", 72.0, 660.0, 110.0, 672.0),
         Block { size: 8.0, ..block("2", 110.0, 665.0, 115.0, 673.0) },
     ];
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ocr: false, background: None, rules: Vec::new() };
     let xml = part(&docx(std::slice::from_ref(&p), "Spaces"), "word/document.xml");
     assert_eq!(
         word_paragraphs(&xml),
@@ -979,7 +1091,7 @@ fn runs_keep_the_spaces_the_source_had_between_them() {
 #[test]
 fn turned_text_is_not_a_run_of_the_line_beside_it() {
     let blocks = vec![block("Before", 72.0, 700.0, 110.0, 712.0), Block { rotation: 90.0, ..block("SIDE", 111.0, 690.0, 123.0, 720.0) }];
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ocr: false, background: None, rules: Vec::new() };
     let h = html(std::slice::from_ref(&p), "Turned");
     assert!(h.contains("<p>Before</p>") && h.contains("<p>SIDE</p>"), "{h}");
 }
@@ -990,7 +1102,7 @@ fn a_block_on_the_next_line_starts_a_paragraph() {
         block("The first line ends here", 72.0, 700.0, 190.0, 712.0),
         Block { italic: true, ..block("and the next starts there.", 190.5, 690.0, 320.0, 702.0) },
     ];
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ocr: false, background: None, rules: Vec::new() };
     let xml = part(&docx(std::slice::from_ref(&p), "Lines"), "word/document.xml");
     assert_eq!(word_paragraphs(&xml), vec![runs(&[("The first line ends here", false)]), runs(&[("and the next starts there.", true)])], "{xml}");
 }
@@ -1007,7 +1119,7 @@ fn table_cells_are_not_runs_of_a_paragraph() {
         blocks.push(block(&format!("{},000", 30 - 5 * n), 300.0, y, 340.0, y + 12.0));
     }
     blocks.extend(italic_sentence().into_iter().map(|b| Block { rect: [b.rect[0], b.rect[1] - 200.0, b.rect[2], b.rect[3] - 200.0], ..b }));
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ocr: false, background: None, rules: Vec::new() };
     let xml = part(&docx(std::slice::from_ref(&p), "Prizes"), "word/document.xml");
     assert_eq!(xml.matches("<w:tbl>").count(), 1, "{xml}");
     for cell in ["st", "nd", "rd", "30,000"] {
@@ -1027,11 +1139,106 @@ fn a_paragraph_is_a_heading_only_when_its_text_is() {
         Block { bold: true, ..block("Summary", 72.0, 700.0, 125.0, 712.0) },
         block("the year closed with more members than it opened with, and fewer debts.", 128.0, 700.0, 540.0, 712.0),
     ];
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ocr: false, background: None, rules: Vec::new() };
     let xml = part(&docx(std::slice::from_ref(&p), "Report"), "word/document.xml");
     assert_eq!(xml.matches("<w:pStyle w:val=\"Heading1\"/>").count(), 1, "{xml}");
     assert!(!xml.contains("Heading2"), "the lead-in made its paragraph a heading: {xml}");
     assert_eq!(word_paragraphs(&xml).len(), 2, "{xml}");
+}
+
+/// A one-line block of `text` at the body size on a US Letter page, of the structure a synthesizer
+/// read it as.
+fn typed_block(kind: ParagraphKind, text: &str, y: f64) -> Block {
+    Block {
+        text: text.into(),
+        rect: [72.0, y, 500.0, y + 12.0],
+        size: 12.0,
+        bold: false,
+        italic: false,
+        color: [0.0; 3],
+        rotation: 0.0,
+        space_around: [false; 2],
+        kind,
+        order: 0,
+        metrics: Metrics::default(),
+    }
+}
+
+/// A US Letter page holding `blocks`.
+fn typed_page(blocks: Vec<Block>) -> Page {
+    Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ocr: false, background: None, rules: Vec::new() }
+}
+
+/// A numbered item reaches Word as a list paragraph, not as text with a typed number: Word
+/// regenerates the number from the list's own definition. The point headings are a lettered list
+/// of their own, so the two schemes each keep their own sequence (ECMA-376 §17.9).
+#[test]
+fn numbered_paragraphs_are_real_word_lists() {
+    let p = typed_page(vec![
+        typed_block(ParagraphKind::Numbered(Decimal), "1. The first numbered item", 700.0),
+        typed_block(ParagraphKind::Numbered(Decimal), "2. The second numbered item", 680.0),
+        typed_block(ParagraphKind::PointHeading { letter: 'A' }, "THE COMPLAINT FAILS TO STATE A CLAIM", 660.0),
+    ]);
+    let bytes = docx(std::slice::from_ref(&p), "Points");
+    let xml = part(&bytes, "word/document.xml");
+    assert!(xml.contains("<w:numPr>"), "{xml}");
+    assert!(!xml.contains(">1. </w:t>") && !xml.contains(">2. </w:t>"), "the number belongs to the list: {xml}");
+    assert!(xml.contains(">The first numbered item</w:t>"), "the item's text stays: {xml}");
+    let doc = craft_docx::read(&bytes).unwrap();
+    let lists: Vec<u32> = body_paragraphs(&doc).iter().filter_map(|p| p.props.numbering.map(|n| n.num)).collect();
+    assert_eq!(lists.len(), 3, "every paragraph is in a list");
+    assert_eq!(lists[0], lists[1], "the numbered items run in one list");
+    assert_ne!(lists[0], lists[2], "the lettered point headings keep a list of their own");
+    assert!(doc.numbering.num(lists[2]).is_some(), "the package defines both lists");
+}
+
+/// A section heading takes the sheet's named Heading 2 style, whose definition keeps it with the
+/// text below and puts it at outline level 1, and the stamp line over a filing becomes the
+/// section's real header part rather than body text: what an assembler maps onto its own outline
+/// and running headers.
+#[test]
+fn heading_styles_and_header_footer_blocks_are_assembly_ready() {
+    let stamped = typed_page(vec![
+        typed_block(ParagraphKind::HeaderFooterBlock, "FILED: NEW YORK COUNTY CLERK 01/01/2026", 740.0),
+        typed_block(ParagraphKind::SectionHeading { level: 2 }, "ARGUMENT", 700.0),
+        typed_block(ParagraphKind::Body, "Plaintiff submits this memorandum of law.", 680.0),
+    ]);
+    let next = typed_page(vec![typed_block(ParagraphKind::Body, "The second page carries the argument on.", 700.0)]);
+    let bytes = docx(&[stamped, next], "Motion");
+    let doc = craft_docx::read(&bytes).unwrap();
+    let heading = doc.styles.styles.iter().find(|s| s.id == "Heading2").expect("the sheet names Heading 2");
+    assert_eq!(heading.para.keep_next, Some(true), "a heading stays with the text below it");
+    assert_eq!(heading.para.outline_level, Some(1), "Heading 2 sits at outline level 1");
+    let xml = part(&bytes, "word/document.xml");
+    assert!(xml.contains("<w:pStyle w:val=\"Heading2\"/>"), "the section heading takes the style: {xml}");
+    let header = part(&bytes, "word/header1.xml");
+    assert!(header.contains("FILED: NEW YORK COUNTY CLERK"), "{header}");
+    assert!(!xml.contains("FILED:"), "the running header is not repeated in the body: {xml}");
+    assert_eq!(xml.matches("<w:headerReference").count(), 1, "only the page whose line it is has that header: {xml}");
+}
+
+/// A caption the synthesis measured keeps its geometry: the indent, the first line's hanging
+/// indent and the line spacing reach Word as paragraph properties, not as loose runs.
+#[test]
+fn caption_indents_and_line_spacing_survive_the_export() {
+    let caption = Block {
+        text: "Exhibit A to the moving papers".into(),
+        rect: [144.0, 700.0, 480.0, 712.0],
+        size: 12.0,
+        bold: false,
+        italic: false,
+        color: [0.0; 3],
+        rotation: 0.0,
+        space_around: [false; 2],
+        kind: ParagraphKind::Caption,
+        order: 0,
+        metrics: Metrics { indent_left: 72.0, indent_first: -18.0, line_spacing: 1.5 },
+    };
+    let doc = craft_docx::read(&docx(&[typed_page(vec![caption])], "Caption")).unwrap();
+    let para = body_paragraphs(&doc).first().copied().expect("the caption is one paragraph");
+    assert_eq!(para.props.indent_left, Some(72.0), "the caption keeps its indent");
+    assert_eq!(para.props.indent_first, Some(-18.0), "and its hanging first line");
+    assert_eq!(para.props.line_spacing, Some(craft_wordmodel::props::LineSpacing::Multiple(1.5)), "and its spacing");
 }
 
 /// #1595: Markdown gets the headings, paragraphs and a rule between pages, in reading order;
@@ -1063,6 +1270,9 @@ fn markdown_escapes_markup_and_keeps_emphasis_and_tables() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     let p = Page {
         width: 612.0,
@@ -1075,6 +1285,7 @@ fn markdown_escapes_markup_and_keeps_emphasis_and_tables() {
             b("slanted", 500.0, false, true),
         ],
         images: Vec::new(),
+        ocr: false,
         background: None,
         rules: Vec::new(),
     };
@@ -1121,6 +1332,9 @@ fn two_column_and_turned_text_export_in_reading_order() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     let columns = Page {
         width: 595.0,
@@ -1134,6 +1348,7 @@ fn two_column_and_turned_text_export_in_reading_order() {
         ],
         images: Vec::new(),
         rules: Vec::new(),
+        ocr: false,
         background: None,
     };
     let expected_cols = ["Two columns", "A1 first paragraph", "B1 second paragraph", "B3 second paragraph", "C1 third paragraph"];
@@ -1159,6 +1374,9 @@ fn two_column_and_turned_text_export_in_reading_order() {
         color: [0.0; 3],
         rotation: -90.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     let rotated = Page {
         width: 792.0,
@@ -1171,6 +1389,7 @@ fn two_column_and_turned_text_export_in_reading_order() {
         ],
         images: Vec::new(),
         rules: Vec::new(),
+        ocr: false,
         background: None,
     };
     let expected_lines = ["Line one", "Line two", "Line three", "Line four"];
@@ -1694,6 +1913,9 @@ fn word_rotated_text_is_a_turned_line() {
         color: [0.0; 3],
         rotation: 90.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     });
     let doc = craft_docx::read(&docx(&[p], "Draft")).unwrap();
     let objects = body_objects(&doc);
@@ -1740,4 +1962,13 @@ fn checked_rtf_reports_omitted_pictures_once_per_page_without_dropping_text() {
     assert_eq!(omitted, [0, 2]);
     assert!(output.contains("Surviving last-page text"));
     assert_eq!(output, crate::rtf_with_title(&pages, "Partial"));
+}
+
+#[test]
+fn ocr_sections_carry_a_page_field_in_a_real_footer() {
+    let mut page = typed_page(vec![typed_block(ParagraphKind::Body, "Body text.", 700.0)]);
+    page.ocr = true;
+    let bytes = docx(std::slice::from_ref(&page), "Fields");
+    let footer = part(&bytes, "word/footer1.xml");
+    assert!(footer.contains("PAGE"), "no PAGE field in the footer part: {footer}");
 }

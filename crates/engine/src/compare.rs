@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use pdfcraft_cos::ObjRef;
+use pdfcraft_ocr::{Line, Rect, Region, RegionKind, Word, analyze_page, synthesize_with_rects};
 
 pub use pdfcraft_compare::{Change, Comparison, Kind, Side};
 // How far Office export reads into form XObjects; `OfficeExport::truncated_pages` lists the pages
@@ -223,6 +224,120 @@ pub(crate) fn weight_and_slant(base_font: &str) -> (bool, bool) {
     (f.contains("bold") || f.contains("black") || f.contains("heavy"), f.contains("italic") || f.contains("oblique"))
 }
 
+/// One OCR page's reading as exported paragraphs: the recognized words go through page layout
+/// and synthesis, and the **synthesized paragraphs themselves** are the page's blocks — the
+/// paragraph model, not the per-word text-layer boxes. Geometry is read in display coordinates
+/// (`visible_rect`), so cropped or rotated scans synthesize against the page as shown. Paragraph
+/// boxes come from their regions where the two line up; a paragraph whose regions merged keeps
+/// the first region's box rather than the page losing its synthesis.
+fn synthesized_page(
+    blocks: &[pdfcraft_edit::TextBlock],
+    info: &pdfcraft_render::PageInfo,
+    visible_rect: &dyn Fn([f64; 4]) -> [f64; 4],
+    unit: f64,
+) -> Vec<pdfcraft_export::Block> {
+    let usable = |b: &pdfcraft_edit::TextBlock| {
+        let r = b.rect;
+        !b.text.trim().is_empty() && r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1]
+    };
+    // The engine's own reading order is kept, not re-derived: layout re-sorts words by their
+    // boxes, which interleaves justified lines and caption columns. analyze_page is used for
+    // CLASSIFICATION only (which region kind each word belongs to).
+    let words: Vec<Word> = blocks
+        .iter()
+        .filter(|b| usable(b))
+        .map(|b| {
+            let r = visible_rect(b.rect);
+            Word::new(b.text.clone(), [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32], "text layer")
+        })
+        .collect();
+    if words.is_empty() {
+        return Vec::new();
+    }
+    let classified = analyze_page(&words, (info.width, info.height), None);
+    let mut kind = vec![RegionKind::Text; words.len()];
+    let mut free: Vec<usize> = (0..words.len()).rev().collect();
+    for region in &classified {
+        for line in &region.lines {
+            for word in &line.words {
+                if let Some(at) = free.iter().position(|i| words.get(*i) == Some(word)) {
+                    let i = free.remove(at);
+                    if let Some(slot) = kind.get_mut(i) {
+                        *slot = region.kind;
+                    }
+                }
+            }
+        }
+    }
+    // Lines are formed in the ORIGINAL block order: a new line starts when the next word's
+    // baseline leaves the current one (not when layout feels like re-ordering the page).
+    let mut lines: Vec<Line> = Vec::new();
+    let mut kinds: Vec<RegionKind> = Vec::new();
+    for (i, word) in words.iter().enumerate() {
+        let centre = |r: [f32; 4]| (r[1] + r[3]) / 2.0;
+        let new_line = match lines.last() {
+            None => true,
+            Some(line) => match line.words.first() {
+                None => true,
+                Some(first) => {
+                    let height = (word.rect[3] - word.rect[1]).max(1.0);
+                    (centre(word.rect) - centre(first.rect)).abs() > 0.6 * height
+                }
+            },
+        };
+        if new_line {
+            lines.push(Line { words: vec![word.clone()] });
+            kinds.push(kind[i]);
+        } else if let Some(line) = lines.last_mut() {
+            line.words.push(word.clone());
+        }
+    }
+    // Consecutive lines of one kind form a region, in that same original order.
+    let mut regions: Vec<Region> = Vec::new();
+    for (line, kind) in lines.into_iter().zip(kinds) {
+        let rect = line_rect(&line);
+        match regions.last_mut() {
+            Some(region) if region.kind == kind => {
+                region.rect = region.rect.union(rect);
+                region.lines.push(line);
+            }
+            _ => {
+                let order = regions.len();
+                regions.push(Region { kind, rect, lines: vec![line], order });
+            }
+        }
+    }
+    let paragraphs = synthesize_with_rects(&regions);
+    let mut sizes: Vec<f64> = blocks.iter().filter(|b| usable(b)).map(|b| b.size * unit).collect();
+    sizes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let body = sizes.get(sizes.len() / 2).copied().unwrap_or(12.0).max(1.0);
+    paragraphs
+        .iter()
+        .enumerate()
+        .map(|(order, (paragraph, rect))| pdfcraft_export::Block {
+            text: paragraph.text.clone(),
+            rect: [f64::from(rect.left), f64::from(rect.top), f64::from(rect.right), f64::from(rect.bottom)],
+            size: body,
+            bold: paragraph.bold,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            space_around: [false, false],
+            kind: paragraph.kind,
+            order,
+            metrics: pdfcraft_export::Metrics {
+                indent_left: paragraph.indent_left,
+                indent_first: paragraph.indent_first,
+                line_spacing: paragraph.line_spacing,
+            },
+        })
+        .collect()
+}
+
+fn line_rect(line: &Line) -> Rect {
+    line.words.iter().map(|w| Rect::new(w.rect[0], w.rect[1], w.rect[2], w.rect[3])).reduce(Rect::union).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0))
+}
+
 impl crate::Document {
     /// The pages as paragraphs and images (for Word, HTML and RTF export), including what
     /// form XObjects draw.
@@ -267,27 +382,52 @@ impl crate::Document {
                 let unit = display_unit(info);
                 let reading = pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default();
                 let forms_unread = reading.truncated;
-                let blocks = reading
-                    .blocks
-                    .into_iter()
-                    .filter(|b| !b.text.trim().is_empty())
-                    .map(|b| {
-                        let (bold, italic) = weight_and_slant(&b.base_font);
-                        // `text` is trimmed; the editor text keeps the source's own spaces.
-                        let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
-                        pdfcraft_export::Block {
-                            space_around,
-                            text: b.text,
-                            rect: visible_rect(b.rect),
-                            size: b.size * unit,
-                            bold,
-                            italic,
-                            color: b.color,
-                            rotation: b.rotation - f64::from(info.rotation),
-                        }
-                    })
-                    .collect();
+                let text: Vec<pdfcraft_edit::TextBlock> = reading.blocks.into_iter().filter(|b| !b.text.trim().is_empty()).collect();
+                let chars = |invisible: bool| text.iter().filter(|b| b.invisible == invisible).map(|b| b.text.chars().count()).sum::<usize>();
+                let (invisible_chars, visible_chars) = (chars(true), chars(false));
+                // A scan's OCR layer can sit beside a small visible stamp (a clerk's RECEIVED mark,
+                // a bates number): the page is OCR when the invisible text carries most of its
+                // characters, not only when it carries all of them. A wholly invisible page is
+                // this rule's own special case.
+                // A born-digital PDF that was later OCR'd keeps its exact native layer: only a
+                // page with a page-covering scan (or no visible text at all) takes the OCR reading.
                 let placed = if images { pdfcraft_edit::reading_images(cos, i).unwrap_or_default() } else { Vec::new() };
+                let scan_present = placed.iter().any(|im| {
+                    let r = visible_rect(im.rect);
+                    r[0] <= 3.0 && r[1] <= 3.0 && r[2] >= f64::from(info.width) - 3.0 && r[3] >= f64::from(info.height) - 3.0
+                });
+                // The invisible layer carries the reading when it holds at least half of what the
+                // visible layer holds (a slip sheet's stamp can outweigh its few OCR'd words).
+                let ocr = !forms_unread && invisible_chars > 0 && (visible_chars == 0 || (scan_present && invisible_chars * 2 >= visible_chars));
+                // The stamp is in the OCR layer too, so exporting the visible blocks beside it
+                // would print it twice.
+                let text: Vec<pdfcraft_edit::TextBlock> = text.into_iter().filter(|b| !ocr || b.invisible).collect();
+                let blocks = if ocr {
+                    synthesized_page(&text, info, &visible_rect, unit)
+                } else {
+                    text.into_iter()
+                        .map(|b| {
+                            let (bold, italic) = weight_and_slant(&b.base_font);
+                            // `text` is trimmed; the editor text keeps the source's own spaces.
+                            let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
+                            pdfcraft_export::Block {
+                                space_around,
+                                text: b.text,
+                                rect: visible_rect(b.rect),
+                                size: b.size * unit,
+                                bold,
+                                italic,
+                                color: b.color,
+                                rotation: b.rotation - f64::from(info.rotation),
+                                // A PDF's own visible text stays plain body text (text-PDF
+                                // synthesis is a later step of the intake plan).
+                                kind: pdfcraft_export::ParagraphKind::Body,
+                                order: 0,
+                                metrics: pdfcraft_export::Metrics::default(),
+                            }
+                        })
+                        .collect()
+                };
                 let mut over_budget = false;
                 let images = placed
                     .iter()
@@ -318,7 +458,7 @@ impl crate::Document {
                 let background = pdfcraft_edit::page_background(cos, i).ok().flatten();
                 // The ruled lines tell a drawn table from text that merely lines up (#5149).
                 let rules = pdfcraft_edit::page_rules(cos, i).unwrap_or_default().into_iter().map(visible_rect).collect();
-                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background, rules }
+                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, ocr, background, rules }
             })
             .collect();
         (pages, truncated)

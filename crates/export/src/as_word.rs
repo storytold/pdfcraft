@@ -8,10 +8,12 @@ mod pictures;
 
 use super::as_docx::{rgb8, room_for};
 use super::as_html::{allowed, language_tag};
-use super::layout::{Image, Item, Page, Table, body_size, items, reading_order};
+use super::layout::{Image, Item, Page, Run, Table, body_size, items, items_filtered, reading_order};
+use craft_wordmodel::numbering::ListKind;
 use craft_wordmodel::para::{Anchor, Float, ShapeKind, Wrap};
-use craft_wordmodel::props::{Border, BorderStyle, Borders, CellProps, LineSpacing, TableProps};
+use craft_wordmodel::props::{Border, BorderStyle, Borders, CellProps, LineSpacing, NumRef, TableProps};
 use craft_wordmodel::{Block, CharProps, Document, InlineObject, ParaProps, Paragraph, PartKind, Rgb, SectionProps, Style, StyleSheet, TextColor};
+use pdfcraft_ocr::ParagraphKind;
 
 /// A run's formatting: its size, bold, italic and colour (none for black, the default).
 fn chr(size: f64, bold: bool, italic: bool, color: [f64; 3]) -> CharProps {
@@ -36,6 +38,17 @@ fn push_text(p: &mut Paragraph, text: &str, props: CharProps) {
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
     let text: String = text.chars().filter(|c| allowed(*c)).collect();
     p.push_text(&text, &props);
+}
+
+/// A footer paragraph whose only content is the page-number field.
+fn page_number_paragraph() -> Paragraph {
+    let mut p = Paragraph::new();
+    // push_object appends the U+FFFC placeholder AND the object (push_text would strip it).
+    p.push_object(
+        InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+        &CharProps::default(),
+    );
+    p
 }
 
 /// A table: its grid from the column edges, ruled where the PDF draws rules, one paragraph per
@@ -177,6 +190,19 @@ struct Builder<'a> {
     /// For RTF, which repeats a picture's data at every placement and doesn't turn pictures: what
     /// its pictures may still cost, and the rotations baked into them ([`pictures::Budget`]).
     rtf: Option<pictures::Budget>,
+    /// Whether a running header/footer line becomes the page's own section part (the Word path).
+    /// The RTF writer has no section header of its own, so there the line stays body text.
+    sections: bool,
+    /// The `num` id of the decimal list numbered items share, and of the lettered list point
+    /// headings share (`None`: the document has neither kind, so no numbering part is written).
+    numbered: Option<u32>,
+    points: Option<u32>,
+    /// The header and footer parts the page being built has opened; its section gets them when
+    /// the page ends.
+    header: Option<u32>,
+    footer: Option<u32>,
+    /// Synthesized (OCR) pages get a real page-number field in a footer part.
+    page_fields: bool,
     /// The page (0-based) being built, and the pages that lost a picture to a limit or to a
     /// picture that couldn't be prepared.
     page: usize,
@@ -184,7 +210,7 @@ struct Builder<'a> {
 }
 
 impl<'a> Builder<'a> {
-    fn new(pages: &[Page], meta: &Meta, rtf: Option<pictures::Budget>) -> Self {
+    fn new(pages: &[Page], meta: &Meta, rtf: Option<pictures::Budget>, sections: bool) -> Self {
         let mut doc = Document::new();
         doc.styles = std::sync::Arc::new(styles(meta.font, meta.language));
         doc.core.title = meta.title.to_string();
@@ -194,7 +220,27 @@ impl<'a> Builder<'a> {
         if let Some(c) = shared.filter(|c| *c != [255; 3] && pages.iter().all(|p| p.background.map(rgb8) == Some(*c))) {
             doc.settings.page_color = Some(Rgb(c[0], c[1], c[2]));
         }
-        Builder { doc, body: Vec::new(), media: Vec::new(), rtf, page: 0, omitted: Vec::new() }
+        // Real lists: the numbered items share one decimal list and the point headings a lettered
+        // one, so each scheme keeps its own sequence (ECMA-376 §17.9). A document with neither
+        // kind gets no numbering part at all.
+        let numbered = has_kind(pages, |k| matches!(k, ParagraphKind::Numbered(_)))
+            .then(|| std::sync::Arc::make_mut(&mut doc.numbering).add_list(ListKind::Numbered));
+        let points = has_kind(pages, |k| matches!(k, ParagraphKind::PointHeading { .. }))
+            .then(|| std::sync::Arc::make_mut(&mut doc.numbering).add_list(ListKind::UpperLetter));
+        Builder {
+            doc,
+            body: Vec::new(),
+            media: Vec::new(),
+            rtf,
+            sections,
+            numbered,
+            points,
+            header: None,
+            footer: None,
+            page_fields: pages.iter().any(|page| page.ocr),
+            page: 0,
+            omitted: Vec::new(),
+        }
     }
 
     /// The media key for `im`, or `None` for an empty picture, and past the limits or for one that
@@ -225,16 +271,7 @@ impl<'a> Builder<'a> {
     /// `sec`.
     fn flow(&mut self, it: Item<'a>, sec: &SectionProps) {
         match it {
-            Item::Para(runs, lvl) => {
-                let mut p = Paragraph::new();
-                if matches!(lvl, 1 | 2) {
-                    p.props.style = Some(format!("Heading{lvl}"));
-                }
-                for r in &runs {
-                    push_text(&mut p, &r.text, chr(r.block.size, r.block.bold, r.block.italic, r.block.color));
-                }
-                self.body.push(Block::Para(p));
-            }
+            Item::Para(runs, lvl, kind) => self.paragraph(&runs, lvl, kind, sec),
             Item::Table(t) => {
                 // Tables that touch become one table: a paragraph keeps them apart.
                 if matches!(self.body.last(), Some(Block::Table(_))) {
@@ -250,20 +287,154 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// End a page: its section ends here, and the next page's starts on a new page.
-    fn end_page(&mut self, sec: SectionProps) {
+    /// One paragraph, by what the document's structure makes it: a numbered item or a point
+    /// heading is a real list paragraph (Word regenerates the number, so it is not in the text), a
+    /// section heading takes its named style, a running header/footer line is the page's own
+    /// section part, and everything else is body text at the geometry its producer measured.
+    fn paragraph(&mut self, runs: &[Run<'a>], lvl: u8, kind: ParagraphKind, sec: &SectionProps) {
+        let mut p = Paragraph::new();
+        p.props = match kind {
+            ParagraphKind::HeaderFooterBlock if self.sections => return self.header_footer(runs, sec),
+            ParagraphKind::Numbered(_) => list_props(self.numbered, runs),
+            ParagraphKind::PointHeading { .. } => list_props(self.points, runs),
+            ParagraphKind::SectionHeading { level } => ParaProps { style: Some(heading_style(level)), ..ParaProps::default() },
+            _ => {
+                let mut props = block_props(runs);
+                // Only body text takes the font-size heading guess: a synthesized paragraph's
+                // kind already says what it is.
+                if kind == ParagraphKind::Body && matches!(lvl, 1 | 2) {
+                    props.style = Some(format!("Heading{lvl}"));
+                }
+                props
+            }
+        };
+        // A numbered item's typed number is the list's to regenerate (synthesis strips it already;
+        // a producer that left it in gets the same real list).
+        for (i, r) in runs.iter().enumerate() {
+            let text = match (i, kind) {
+                (0, ParagraphKind::Numbered(_)) => without_typed_number(&r.text),
+                _ => r.text.as_str(),
+            };
+            push_text(&mut p, text, chr(r.block.size, r.block.bold, r.block.italic, r.block.color));
+        }
+        self.body.push(Block::Para(p));
+    }
+
+    /// A running header or footer line: the page's own header (in its top half) or footer (in its
+    /// bottom half), written as a part of the section rather than as body text.
+    fn header_footer(&mut self, runs: &[Run<'a>], sec: &SectionProps) {
+        let mut p = Paragraph::new();
+        for r in runs {
+            push_text(&mut p, &r.text, chr(r.block.size, r.block.bold, r.block.italic, r.block.color));
+        }
+        // A running line above the middle of the page is its header, below it its footer.
+        let header = runs.first().is_some_and(|r| (r.block.rect[1] + r.block.rect[3]) / 2.0 >= f64::from(sec.page_h) / 2.0);
+        if let Some(part) = if header { self.header } else { self.footer } {
+            if let Some(stored) = self.doc.parts.get_mut(&part) {
+                stored.blocks.push(craft_wordmodel::para_block(p));
+            }
+            return;
+        }
+        // One part per page: a line of the page joins the part its page opened.
+        let kind = if header { PartKind::Header } else { PartKind::Footer };
+        let part = self.doc.add_part(kind, vec![craft_wordmodel::para_block(p)]);
+        if header {
+            self.header = Some(part);
+        } else {
+            self.footer = Some(part);
+        }
+    }
+
+    /// End a page: its section ends here, with the header and footer its own lines made, and the
+    /// next page's starts on a new page.
+    fn end_page(&mut self, mut sec: SectionProps) {
+        if self.sections && self.page_fields {
+            match self.footer {
+                Some(part) => {
+                    if let Some(stored) = self.doc.parts.get_mut(&part) {
+                        stored.blocks.push(craft_wordmodel::para_block(page_number_paragraph()));
+                    }
+                }
+                None => {
+                    self.footer = Some(self.doc.add_part(PartKind::Footer, vec![craft_wordmodel::para_block(page_number_paragraph())]));
+                }
+            }
+        }
+        sec.headers.default = self.header.take();
+        sec.footers.default = self.footer.take();
         let mut p = Paragraph::new();
         p.props = exact_1pt();
         p.section = Some(Box::new(sec));
         self.body.push(Block::Para(p));
     }
 
-    fn finish(mut self, last: SectionProps) -> Document {
+    fn finish(mut self, mut last: SectionProps) -> Document {
+        if self.sections && self.page_fields && self.footer.is_none() {
+            self.footer = Some(self.doc.add_part(PartKind::Footer, vec![craft_wordmodel::para_block(page_number_paragraph())]));
+        }
+        last.headers.default = self.header.take();
+        last.footers.default = self.footer.take();
         self.doc.last_section = last;
         self.doc.body = self.body.into_iter().map(std::sync::Arc::new).collect();
         self.doc.ensure_nonempty();
         self.doc
     }
+}
+
+/// Whether any block of `pages` is of the structure `matches` accepts.
+fn has_kind(pages: &[Page], matches: fn(&ParagraphKind) -> bool) -> bool {
+    pages.iter().flat_map(|p| &p.blocks).any(|b| matches(&b.kind))
+}
+
+/// The style a section heading of `level` takes: the sheet names Heading 1 and Heading 2 (each
+/// keeping with the text below it and carrying its outline level), and Heading 2 is the deepest
+/// the legal exemplars use, so a deeper level is set as one.
+fn heading_style(level: u8) -> String {
+    format!("Heading{}", level.clamp(1, 2))
+}
+
+/// A list paragraph's properties: the `num` of its list at the list's first level, with the
+/// geometry its producer measured. `num` 0 is the model's "no list", so it is never referenced.
+fn list_props(num: Option<u32>, runs: &[Run]) -> ParaProps {
+    let mut props = block_props(runs);
+    props.numbering = num.filter(|n| *n != 0).map(|num| NumRef { num, level: 0 });
+    props
+}
+
+/// The paragraph properties a block's measured geometry asks for: its indents in points and its
+/// line spacing, each left unset when it is the body's own. A hostile measurement (not finite,
+/// past Word's limits) is clamped rather than written through.
+fn block_props(runs: &[Run]) -> ParaProps {
+    let Some(m) = runs.first().map(|r| r.block.metrics) else { return ParaProps::default() };
+    // A point or less is no indent; 22 inches is Word's own limit for one.
+    let indent = |v: f32| (v.is_finite() && v.abs() > 0.5).then(|| v.clamp(-1584.0, 1584.0));
+    let spacing = m.line_spacing.is_finite().then(|| m.line_spacing.clamp(0.5, 5.0)).filter(|s| (*s - 1.0).abs() > 0.01);
+    ParaProps {
+        indent_left: indent(m.indent_left),
+        indent_first: indent(m.indent_first),
+        line_spacing: spacing.map(LineSpacing::Multiple),
+        ..ParaProps::default()
+    }
+}
+
+/// `text` without a typed list number at its start ("1. ", "12) "), which a real list regenerates;
+/// a number that runs into the text ("1.5 kg") stays.
+fn without_typed_number(text: &str) -> &str {
+    let t = text.trim_start();
+    let digits = t.chars().take_while(char::is_ascii_digit).count();
+    if !(1..=3).contains(&digits) {
+        return text;
+    }
+    let Some(rest) = t.get(digits..) else { return text };
+    let mut after = rest.chars();
+    if !matches!(after.next(), Some('.') | Some(')')) {
+        return text;
+    }
+    let after = after.as_str();
+    if after.is_empty() {
+        return "";
+    }
+    if after.starts_with(char::is_whitespace) { after.trim_start() } else { text }
 }
 
 /// A paragraph holding the picture `media`, scaled down to fit between the margins of `sec`, side
@@ -303,7 +474,7 @@ pub(crate) fn flow_doc(pages: &[Page], meta: &Meta) -> (Document, Vec<usize>) {
 }
 
 fn flow_doc_with_budget(pages: &[Page], meta: &Meta, budget: pictures::Budget) -> (Document, Vec<usize>) {
-    let mut b = Builder::new(pages, meta, Some(budget));
+    let mut b = Builder::new(pages, meta, Some(budget), false);
     let mut sec = pages.first().map(section).unwrap_or_default();
     for it in items(pages) {
         if matches!(it, Item::PageBreak) {
@@ -330,6 +501,9 @@ pub(crate) fn positioned(page: &Page) -> bool {
     let overlays = page
         .images
         .iter()
+        // Only an OCR page's scan is exempt: on visible and mostly-visible pages a full-page
+        // image remains artwork whose overlap with text must keep the page positioned.
+        .filter(|im| !page.ocr || !covers_page(im.rect, page))
         .map(|im| (im.rect, None))
         .chain(page.blocks.iter().enumerate().filter(|(_, b)| b.size >= 2.0 * body).map(|(i, b)| (b.rect, Some(i))));
     // Bound the pairwise test on hostile pages (many overlays times many blocks): past the
@@ -347,6 +521,14 @@ pub(crate) fn positioned(page: &Page) -> bool {
         }
     }
     false
+}
+
+/// Whether `r` covers the whole displayed page, as a scan beneath an OCR text layer does.
+fn covers_page(r: [f64; 4], page: &Page) -> bool {
+    // A scan placed by a producer rarely lands on the exact MediaBox: allow a few points of
+    // inset/overshoot (72-dpi scans sit ~1-2 pt inside it) before calling the picture an overlay.
+    let tolerance = 3.0;
+    r[0] <= tolerance && r[1] <= tolerance && r[2] >= page.width - tolerance && r[3] >= page.height - tolerance
 }
 
 /// Whether two [x0, y0, x1, y1] boxes share more than a hairline (0.5 pt each way); boxes that
@@ -458,7 +640,7 @@ fn positioned_page<'a>(b: &mut Builder<'a>, page: &'a Page) {
 /// positioned text boxes and pictures, and the others flow as paragraphs, tables and pictures.
 /// Each page is a section of its own size, and its headings are told from its own body size.
 pub(crate) fn word_doc(pages: &[Page], meta: &Meta) -> Document {
-    let mut b = Builder::new(pages, meta, None);
+    let mut b = Builder::new(pages, meta, None, true);
     let mut last = SectionProps::default();
     for (i, page) in pages.iter().enumerate() {
         b.page = i;
@@ -466,7 +648,9 @@ pub(crate) fn word_doc(pages: &[Page], meta: &Meta) -> Document {
         if positioned(page) {
             positioned_page(&mut b, page);
         } else {
-            for it in items(std::slice::from_ref(page)) {
+            // Excluding an OCR scan before reading order keeps its geometry from moving an
+            // isolated folio ahead of the body, as well as keeping the picture out of flow.
+            for it in items_filtered(std::slice::from_ref(page), |page, im| !page.ocr || !covers_page(im.rect, page)) {
                 b.flow(it, &sec);
             }
         }

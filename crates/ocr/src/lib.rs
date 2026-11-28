@@ -23,20 +23,25 @@
 pub mod confidence;
 pub mod merge;
 mod ocrs;
+pub mod page_layout;
 mod pitch;
 pub mod preprocess;
+pub mod resolution;
+pub mod synthesis;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tesseract;
 mod tiles;
 
 pub use confidence::{ConfidenceBand, band_for, is_suspect, low_confidence};
-pub use merge::{MergeStrategy, StrategyOutcome, mean_confidence, recognize_with_strategy, rover_merge};
+pub use merge::{MergeStrategy, StrategyOutcome, UNKNOWN_CONFIDENCE_BAR, iou, mean_confidence, recognize_with_strategy, rover_merge};
 pub use ocrs::{
     ALPHABET, DETECTION_MODEL, DETECTION_MODEL_SHA256, LANGUAGES, Models, Ocr, OcrsRecognizer, RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256,
 };
 
+pub use page_layout::{Rect, Region, RegionKind, analyze_page};
 pub use pdfcraft_fonts::TextPlan;
 pub use pdfcraft_fonts::helvetica_width;
+pub use synthesis::{Decimal, Paragraph, ParagraphKind, synthesize, synthesize_with_rects};
 
 /// Hard cap on either side of an image any code in this crate will touch, in pixels; larger
 /// images are rejected with [`OcrError::ImageTooLarge`] instead of being processed.
