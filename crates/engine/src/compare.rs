@@ -230,7 +230,12 @@ pub(crate) fn weight_and_slant(base_font: &str) -> (bool, bool) {
 /// (`visible_rect`), so cropped or rotated scans synthesize against the page as shown. Paragraph
 /// boxes come from their regions where the two line up; a paragraph whose regions merged keeps
 /// the first region's box rather than the page losing its synthesis.
-fn synthesized_page(blocks: &[pdfcraft_edit::TextBlock], info: &pdfcraft_render::PageInfo, visible_rect: &dyn Fn([f64; 4]) -> [f64; 4], unit: f64) -> Vec<pdfcraft_export::Block> {
+fn synthesized_page(
+    blocks: &[pdfcraft_edit::TextBlock],
+    info: &pdfcraft_render::PageInfo,
+    visible_rect: &dyn Fn([f64; 4]) -> [f64; 4],
+    unit: f64,
+) -> Vec<pdfcraft_export::Block> {
     let usable = |b: &pdfcraft_edit::TextBlock| {
         let r = b.rect;
         !b.text.trim().is_empty() && r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1]
@@ -278,7 +283,7 @@ fn synthesized_page(blocks: &[pdfcraft_edit::TextBlock], info: &pdfcraft_render:
                     let height = (word.rect[3] - word.rect[1]).max(1.0);
                     (centre(word.rect) - centre(first.rect)).abs() > 0.6 * height
                 }
-            }
+            },
         };
         if new_line {
             lines.push(Line { words: vec![word.clone()] });
@@ -309,24 +314,22 @@ fn synthesized_page(blocks: &[pdfcraft_edit::TextBlock], info: &pdfcraft_render:
     paragraphs
         .iter()
         .enumerate()
-        .map(|(order, (paragraph, rect))| {
-            pdfcraft_export::Block {
-                text: paragraph.text.clone(),
-                rect: [f64::from(rect.left), f64::from(rect.top), f64::from(rect.right), f64::from(rect.bottom)],
-                size: body,
-                bold: paragraph.bold,
-                italic: false,
-                color: [0.0, 0.0, 0.0],
-                rotation: 0.0,
-                space_around: [false, false],
-                kind: paragraph.kind,
-                order,
-                metrics: pdfcraft_export::Metrics {
-                    indent_left: paragraph.indent_left,
-                    indent_first: paragraph.indent_first,
-                    line_spacing: paragraph.line_spacing,
-                },
-            }
+        .map(|(order, (paragraph, rect))| pdfcraft_export::Block {
+            text: paragraph.text.clone(),
+            rect: [f64::from(rect.left), f64::from(rect.top), f64::from(rect.right), f64::from(rect.bottom)],
+            size: body,
+            bold: paragraph.bold,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            space_around: [false, false],
+            kind: paragraph.kind,
+            order,
+            metrics: pdfcraft_export::Metrics {
+                indent_left: paragraph.indent_left,
+                indent_first: paragraph.indent_first,
+                line_spacing: paragraph.line_spacing,
+            },
         })
         .collect()
 }
@@ -334,7 +337,6 @@ fn synthesized_page(blocks: &[pdfcraft_edit::TextBlock], info: &pdfcraft_render:
 fn line_rect(line: &Line) -> Rect {
     line.words.iter().map(|w| Rect::new(w.rect[0], w.rect[1], w.rect[2], w.rect[3])).reduce(Rect::union).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0))
 }
-
 
 impl crate::Document {
     /// The pages as paragraphs and images (for Word, HTML and RTF export), including what
