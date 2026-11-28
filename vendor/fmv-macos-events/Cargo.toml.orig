@@ -1,0 +1,18 @@
+[package]
+name = "fmv-macos-events"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+description = "Main-thread macOS Apple event adapter for FastMarkdownViewer"
+repository = "https://github.com/Quetzalcohuatl/fastmarkdownviewer"
+readme = "README.md"
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE-*"]
+
+[package.metadata.docs.rs]
+default-target = "aarch64-apple-darwin"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSResponder", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSURL", "NSNotification", "NSAppleEventDescriptor", "NSAppleEventManager"] }
