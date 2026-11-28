@@ -6325,8 +6325,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.certify", "sign.certify_invisible"]
 tools = ["sign_document"]
-evidence = ["crates/sign/tests/it/pdf.rs::later_changes_are_classified_under_the_signature_permissions", "crates/ui-egui/tests/it/signing.rs::certifying_without_a_visible_signature"]
-notes = ""
+evidence = ["crates/sign/tests/it/pdf.rs::later_changes_are_classified_under_the_signature_permissions", "crates/ui-egui/tests/it/signing.rs::certifying_without_a_visible_signature", "crates/sign/tests/it/certify_first.rs::a_document_with_an_approval_signature_cannot_be_certified", "crates/sign/tests/it/certify_first.rs::a_certified_document_cannot_be_certified_again", "crates/automation/tests/it/sign_certify_first.rs::sign_document_certifies_only_a_document_with_no_signature"]
+notes = "Only a document with no signature yet (approval, certification or document timestamp) can be certified (ISO 32000-2 12.8.1, 12.8.2.2.1); signing refuses otherwise and writes nothing, and sign_document reports the same error. The Certify commands stay enabled on a signed document and report the refusal when used."
 
 [[feature]]
 id = "sign.certify-permissions"
