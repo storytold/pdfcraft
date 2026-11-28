@@ -66,6 +66,11 @@ getrandom = "0.4"
 # Create ▸ Clipboard (images; already in the tree through egui-winit).
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
 
+[target.'cfg(unix)'.dependencies]
+# O_NONBLOCK, so opening a pasted path that turned out to be a named pipe doesn't wait for a
+# writer (already in the tree through getrandom and winit).
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Safe AppKit calls for drag coordinates and repairing an existing per-file PDFCraft binding.
 # The Objective-C wrappers and block support are already in the tree through arboard and rfd.

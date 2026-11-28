@@ -211,6 +211,14 @@ impl PdfCraftApp {
             self.paste_objects(ctx, i);
             return;
         }
+        // Image files copied in Explorer, Finder or a file manager (#1289) come before the picture
+        // and the text: Finder puts the file's icon and name beside it, and those are what the
+        // window delivers. Objects copied in Edit a PDF since come first (a copy of shapes alone
+        // writes nothing to the system clipboard, so the file list there is older).
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.paste_copied_files(i, page) {
+            return;
+        }
         if let Some(image) = image {
             match color_image(&image) {
                 // PLAN: assumed `paste_received_image(page, &egui::ColorImage) -> bool` (pdf-edit-w7)

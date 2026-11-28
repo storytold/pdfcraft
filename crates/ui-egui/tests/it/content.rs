@@ -365,6 +365,138 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     assert_eq!(images(&h), 2, "Prepare Form pastes fields");
 }
 
+/// #1289: ⌘V / Ctrl+V with image files copied in Explorer or Finder places them on the current
+/// page in their own format; copied files that aren't pictures are left alone.
+#[test]
+fn image_files_on_the_clipboard_are_pasted_onto_the_page() {
+    use craft::ui::runtime::env::WindowKey;
+    use craft::ui::runtime::toast;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-paste-image-files-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("folder.png")).unwrap();
+    let img = craft_image_codecs::Image::from_u8(30, 20, craft_image_codecs::ChannelLayout::Rgb, vec![90u8; 1800]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
+    std::fs::write(dir.join("Copied.PNG"), &png).unwrap();
+    std::fs::write(dir.join("second.png"), &png).unwrap();
+    std::fs::write(dir.join("broken.png"), b"not a picture").unwrap();
+    std::fs::write(dir.join("notes.pdf"), include_bytes!("../data/form.pdf")).unwrap();
+    let clipboard = crate::support::RecordingClipboard::default();
+    let held = clipboard.clone();
+    // The copied files are read by jobs the test runs, so two pastes can be read at once.
+    let jobs = std::sync::Arc::new(craft::host::ManualJobs::new());
+    let app_jobs = jobs.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(0.25).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::support::held_app_with_clipboard(app_jobs, clipboard);
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app
+    });
+    crate::support::settle_held(&mut h, &jobs);
+    let notices = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> {
+        toast::cards(&h.ctx, &WindowKey::main())
+            .iter()
+            .map(|card| card.toast.title.as_ref().unwrap_or(&card.toast.message).as_str().to_owned())
+            .collect()
+    };
+    let wait = |h: &mut Harness<'static, PdfCraftApp>| {
+        // The files are read off the UI thread and placed on a later frame.
+        for _ in 0..20 {
+            if !h.state().paste_reading() {
+                break;
+            }
+            jobs.run_all();
+            h.run_steps(1);
+        }
+        assert!(!h.state().paste_reading(), "the copied files were read");
+        h.run_steps(2);
+    };
+    // Pastes `files` and returns the notices the paste added.
+    let paste = |h: &mut Harness<'static, PdfCraftApp>, files: &[&str]| -> Vec<String> {
+        let before = notices(h);
+        held.hold_files(files.iter().map(|f| dir.join(f)).collect());
+        // The window delivers the picture beside the files: Finder's icon of the file. The files
+        // take the paste, and the icon is never placed.
+        let icon = egui::ColorImage::filled([4, 4], egui::Color32::BLUE);
+        h.event(egui::Event::PasteImage(std::sync::Arc::new(icon)));
+        h.run_steps(3);
+        wait(h);
+        // The notices the paste added: each one shown more often than before it (one shown
+        // again counts too).
+        let mut left = before;
+        notices(h)
+            .into_iter()
+            .filter(|n| match left.iter().position(|b| b == n) {
+                Some(at) => {
+                    left.remove(at);
+                    false
+                }
+                None => true,
+            })
+            .collect()
+    };
+    let says = |new: &[String], start: &str| new.iter().any(|n| n.starts_with(start));
+    // A PDF and a folder (even one named like a picture) are not pictures for the page.
+    let new = paste(&mut h, &["notes.pdf", "folder.png"]);
+    assert!(added(&h).is_empty(), "the icon beside the files isn't placed");
+    assert_eq!(h.state().views.len(), 1, "nothing opens");
+    assert!(says(&new, "None of the copied files is a picture"), "{new:?}");
+    // A copied file that is gone says so, and that isn't hidden by the PDF beside it.
+    let new = paste(&mut h, &["notes.pdf", "missing.png"]);
+    assert!(added(&h).is_empty());
+    assert!(says(&new, "Couldn't read") && !says(&new, "None of the copied files"), "{new:?}");
+    let new = paste(&mut h, &["notes.pdf", "Copied.PNG"]);
+    let a = added(&h);
+    assert_eq!(a.len(), 1, "only the image file: {new:?}");
+    let pdfcraft_engine::AddedContent::Image(img) = &a[0].content else { panic!("an image was added") };
+    assert_eq!(img.rect, [135.0, 190.0, 165.0, 210.0], "in the middle of the page, at its own size");
+    assert_eq!(h.state().views[0].session.content.selected, Some((0, 0)));
+    // Three at once, the first not the picture its name says: the other two are still placed,
+    // the last one selected.
+    paste(&mut h, &["broken.png", "Copied.PNG", "second.png"]);
+    assert_eq!(added(&h).len(), 3);
+    assert_eq!(h.state().views[0].session.content.selected, Some((0, 2)));
+    // Two pastes in a row, the second one sent before the first one's file is placed: the
+    // first one's own edit doesn't count as the document changing under the second.
+    held.hold_files(vec![dir.join("second.png")]);
+    for _ in 0..2 {
+        h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([4, 4], egui::Color32::BLUE))));
+        h.run_steps(2);
+    }
+    assert!(h.state().paste_reading() && added(&h).len() == 3, "both reads wait");
+    wait(&mut h);
+    assert_eq!(added(&h).len(), 5, "{:?}", notices(&h));
+    // A document that doesn't allow changes says so, and that isn't hidden by the notice for a
+    // paste with no pictures.
+    {
+        let ctx = egui::Context::default();
+        let app = h.state_mut();
+        let protected = app.session.create_from_text("restricted", "no changes").unwrap();
+        app.open_bytes(&ctx, "restricted.pdf", None, protected.to_vec()).unwrap();
+        let id = app.views[1].id;
+        app.session
+            .apply(
+                id,
+                pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection {
+                    permissions_password: Some("owner".into()),
+                    changes: pdfcraft_engine::Changes::None,
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let bytes = app.session.save_bytes(id).unwrap();
+        app.open_bytes(&ctx, "restricted-saved.pdf", None, bytes.as_ref().clone()).unwrap();
+    }
+    h.run_steps(3);
+    let restricted = h.state().views[2].id;
+    assert!(!h.state().session.get(restricted).unwrap().allows_modification());
+    let new = paste(&mut h, &["Copied.PNG", "second.png"]);
+    assert!(h.state().session.get(restricted).unwrap().added().is_empty());
+    assert!(says(&new, "The document's security settings don't allow") && !says(&new, "None of the copied files"), "{new:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(added(&h).len(), 5, "the first document is untouched");
+}
+
 /// #125: text the standard fonts can't draw stays in the editor with a warning instead of being
 /// written to the page as `?` (or lost).
 #[test]
