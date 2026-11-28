@@ -1637,6 +1637,33 @@ fn a_date_is_read_from_the_data_in_its_data_picture() {
     assert_eq!(by("when").value.as_deref(), Some("10/18/2026"), "no data picture: the data holds ISO");
 }
 
+/// A non-interactive field is drawn as text, but it is still bound: it shows its data, not
+/// the template's default, and a date in its display pattern. It used to draw the default.
+#[test]
+fn a_non_interactive_field_draws_its_data() {
+    let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb"><pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="total" access="nonInteractive" w="2in" h="0.3in"><ui><textEdit/></ui><value><text>placeholder</text></value></field>
+ <field name="due" access="nonInteractive" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{MM/DD/YYYY}</picture></ui><value><date/></value><bind match="once"><picture>date{YYYYMMDD}</picture></bind></field>
+ <field name="kept" access="nonInteractive" w="2in" h="0.3in"><ui><textEdit/></ui><value><text>fallback</text></value></field>
+ <field name="photo" access="nonInteractive" w="1in" h="1in"><ui><imageEdit/></ui></field>
+ <field name="pin" access="nonInteractive" w="2in" h="0.3in"><ui><passwordEdit/></ui></field>
+ <field name="verdict" access="nonInteractive" w="2in" h="0.3in"><ui><choiceList/></ui><items><text>Approved</text><text>Rejected</text></items><items save="1" presence="hidden"><text>APR</text><text>REJ</text></items></field>
+</subform></template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><total>42</total><due>20261018</due><photo>GIF_DATA</photo><pin>s3cret</pin><verdict>REJ</verdict></form></xfa:data></xfa:datasets></xdp:xdp>"#;
+    use base64::Engine;
+    let gif = base64::engine::general_purpose::STANDARD.encode(TINY_GIF);
+    let xdp = xdp.replace("GIF_DATA", &gif);
+    let form = layout_xml(&xdp).unwrap();
+    let shown: Vec<String> = form.pages.iter().flat_map(texts).collect();
+    assert!(shown.iter().any(|t| t.contains("42")), "the data's value is drawn: {shown:?}");
+    assert!(!shown.iter().any(|t| t.contains("placeholder")), "the default gives way to the data: {shown:?}");
+    assert!(shown.iter().any(|t| t.contains("10/18/2026")), "a date shows in its display pattern: {shown:?}");
+    assert!(shown.iter().any(|t| t.contains("fallback")), "with no data the default is drawn: {shown:?}");
+    assert!(!shown.iter().any(|t| t.contains(&gif[..8])), "an image field's data is a picture, not text: {shown:?}");
+    assert!(!shown.iter().any(|t| t.contains("s3cret")), "a password's data is not drawn in the clear: {shown:?}");
+    assert!(shown.iter().any(|t| t.contains("Rejected")), "a list shows the label its saved value names: {shown:?}");
+    assert!(!shown.iter().any(|t| t.contains("REJ")), "a list's saved value is not drawn as its label: {shown:?}");
+}
+
 /// A SOM path names the template field its segment numbers count to, repeating rows included.
 #[test]
 fn som_paths_name_the_template_field_their_numbers_count_to() {

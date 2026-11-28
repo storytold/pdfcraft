@@ -124,8 +124,34 @@ impl Layouter<'_> {
             _ => {}
         }
         if f.access == Access::NonInteractive && f.ui != Ui::Button {
-            // Shown as text, not as a field.
-            return self.draw_value_text(&f.value, ui.inset(&f.ui_margin), &fctx.font, &fctx.para, &fctx.som);
+            // Shown as text, not as a field, but still bound to the data: the data's value wins
+            // over the template's default, and a date shows in the field's pattern as its widget
+            // would show it, and a list shows the label of the item its saved value names. Other
+            // kinds keep the template's value: an image field's data is the picture drawn above,
+            // and a password's data must not be drawn in the clear.
+            let data_value = matches!(f.ui, Ui::TextEdit | Ui::NumericEdit | Ui::DateTimeEdit | Ui::ChoiceList)
+                .then(|| self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som_path()))))
+                .flatten()
+                .filter(|t| !t.trim().is_empty())
+                .map(|v| match f.ui {
+                    Ui::DateTimeEdit => {
+                        Value::Text(iso_to_pattern(&data_to_iso(v.trim(), data_date_letters(f).as_deref()), &date_pattern(f.picture.as_deref())))
+                    }
+                    Ui::ChoiceList => Value::Text(
+                        v.lines()
+                            .map(|one| {
+                                // A saved value that matches as written wins over one that
+                                // matches only once the spaces around the data are dropped.
+                                let at = f.item_values.iter().position(|s| s == one).or_else(|| f.item_values.iter().position(|s| s == one.trim()));
+                                at.and_then(|i| f.items.get(i)).map_or(one, String::as_str)
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    ),
+                    _ => Value::Text(v.to_string()),
+                });
+            let value = data_value.as_ref().unwrap_or(&f.value);
+            return self.draw_value_text(value, ui.inset(&f.ui_margin), &fctx.font, &fctx.para, &fctx.som);
         }
         // A text field that grew past what a content area holds can't be one widget: its text
         // is drawn as lines the page breaks fall between, and stays what the data holds.
