@@ -1711,6 +1711,42 @@ fn glyph_component(part: &str) -> Option<String> {
     u32::from_str_radix(hex, 16).ok().and_then(char::from_u32).map(String::from)
 }
 
+/// The numbers a glyph name outside the glyph list may give its glyph: one to three letters, then
+/// one to six digits, read in decimal and in hexadecimal (`G92`, `C174`), ignoring a `.` suffix.
+fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
+    let stem = name.split('.').next().unwrap_or_default();
+    (1..=3).flat_map(move |letters| {
+        let digits = stem.get(..letters).zip(stem.get(letters..)).and_then(|(l, d)| {
+            let ok = l.bytes().all(|b| b.is_ascii_alphabetic()) && (1..=6).contains(&d.len()) && d.bytes().all(|b| b.is_ascii_hexdigit());
+            ok.then_some(d)
+        });
+        digits.into_iter().flat_map(|d| [10, 16].into_iter().filter_map(move |radix| u32::from_str_radix(d, radix).ok()))
+    })
+}
+
+/// Text for the `/Differences` names [`glyph_text`] cannot read that only number their glyph
+/// (`/G41` … `/GFF`, as the Windows PostScript driver names the fonts it converts). This mirrors
+/// the renderer's text layer, so the editor and extraction agree.
+///
+/// Only when every such name in `unread` sits at the code it numbers, at 0x20 or above: a font
+/// whose names count its glyphs (`/C1` at 1, `/C70` at 2) says nothing about characters. A code
+/// then reads as its character in `named`, the base encoding the font names. With none named it
+/// reads as its Latin-1 character, not Standard's, as the text layer does; a control reads as
+/// nothing.
+fn numbered_name_texts(unread: &[(u32, String)], named: Option<&[u32; 256]>) -> Vec<(u32, String)> {
+    let numbered = || unread.iter().filter(|(code, name)| *code <= 0xFF && glyph_name_numbers(name).next().is_some());
+    if !numbered().all(|(code, name)| *code >= 0x20 && glyph_name_numbers(name).any(|n| n == *code)) {
+        return Vec::new();
+    }
+    numbered()
+        .filter_map(|(code, _)| {
+            let base = named.and_then(|t| t.get(usize::try_from(*code).ok()?)).copied().filter(|u| *u != 0);
+            let c = char::from_u32(base.unwrap_or(*code)).filter(|c| !c.is_control())?;
+            Some((*code, c.to_string()))
+        })
+        .collect()
+}
+
 /// [`glyph_text`] for names that stand for exactly one character.
 pub fn glyph_unicode(name: &str) -> Option<char> {
     let mut chars = glyph_text(name)?.chars().collect::<Vec<_>>().into_iter();
@@ -1826,6 +1862,16 @@ fn post_name<'a>(post: &skrifa::raw::tables::post::Post<'a>, custom: &[&'a str],
     }
 }
 
+/// The table of a Latin base encoding a simple font names.
+fn named_base_table(name: Option<&[u8]>) -> Option<&'static [u32; 256]> {
+    match name? {
+        b"WinAnsiEncoding" => Some(&crate::encodings::WIN_ANSI),
+        b"MacRomanEncoding" => Some(&crate::encodings::MAC_ROMAN),
+        b"StandardEncoding" => Some(&crate::encodings::STANDARD),
+        _ => None,
+    }
+}
+
 /// Code → Unicode for a font: its ToUnicode CMap (for a composite font, also the name
 /// `/Identity-H` or `/Identity-V`, read as code = Unicode), else (simple fonts) its encoding.
 fn unicode_map(doc: &Document, font: &Dict, composite: bool, reads: &mut Reads<'_>) -> Unicode {
@@ -1852,10 +1898,9 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool, reads: &mut Reads<'
             font.name(b"BaseFont").map(|b| crate::Std14::from_base_font(&String::from_utf8_lossy(b))),
             Some(Some(crate::Std14::Symbol | crate::Std14::ZapfDingbats))
         );
+        let named = named_base_table(base_name.as_deref());
         let table: Option<&[u32; 256]> = match base_name.as_deref() {
-            Some(b"WinAnsiEncoding") => Some(&crate::encodings::WIN_ANSI),
-            Some(b"MacRomanEncoding") => Some(&crate::encodings::MAC_ROMAN),
-            Some(b"StandardEncoding") => Some(&crate::encodings::STANDARD),
+            _ if named.is_some() => named,
             // MacExpert is small caps, oldstyle figures and fractions, not Latin at these codes,
             // and we hold no table for it either.
             Some(b"MacExpertEncoding") => None,
@@ -1880,6 +1925,7 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool, reads: &mut Reads<'
             && let Some(diffs) = d.get(b"Differences").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned())
         {
             let mut code = 0u32;
+            let mut unread = Vec::new();
             for item in diffs {
                 match &item {
                     // Out-of-range codes map nothing a simple font can show.
@@ -1887,14 +1933,23 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool, reads: &mut Reads<'
                     Object::Name(n) => {
                         // A name we cannot read removes any inherited meaning for that code,
                         // rather than leaving the base encoding's letter standing in for it.
-                        match glyph_text(&String::from_utf8_lossy(n)) {
+                        let name = String::from_utf8_lossy(n);
+                        match glyph_text(&name) {
                             Some(t) => out.encoding.insert(code, t),
-                            None => out.encoding.remove(&code),
+                            None => {
+                                unread.push((code, name.into_owned()));
+                                out.encoding.remove(&code)
+                            }
                         };
                         code = code.saturating_add(1);
                     }
                     _ => {}
                 }
+            }
+            // Symbol and ZapfDingbats with no Latin base named stay unread, as above.
+            let latin = named.is_some() || !symbolic_builtin;
+            if latin && matches!(font.name(b"Subtype"), Some(b"Type1" | b"MMType1" | b"Type3")) {
+                out.encoding.extend(numbered_name_texts(&unread, named));
             }
         }
     }
@@ -2107,6 +2162,49 @@ mod encoding_tests {
         let m = Metrics::from_dict(&doc, &d);
         assert_eq!(m.text_of(65), None);
         assert_eq!(m.text_of(66).as_deref(), Some("B"), "neighbouring codes keep their meaning");
+    }
+
+    /// The Windows PostScript driver names its converted fonts' glyphs `/G41` … `/GFF`, with no
+    /// `/ToUnicode`: each reads as its code's character in the base encoding, as the renderer's
+    /// text layer reads it, so the editor, find and redaction see the same text as copy does.
+    #[test]
+    fn numbered_glyph_names_at_their_own_codes_read_through_the_base_encoding() {
+        let names = |base: Option<&str>, items: &[(i64, &str)]| {
+            let mut enc = Dict::new();
+            if let Some(b) = base {
+                enc.set(b"BaseEncoding".to_vec(), Object::name(b));
+            }
+            let diffs = items.iter().flat_map(|(c, n)| [Object::Int(*c), Object::name(n)]).collect();
+            enc.set(b"Differences".to_vec(), Object::Array(diffs));
+            let (doc, d) = simple("MSTT31c5f0", None, Some(Object::Dict(enc)));
+            Metrics::from_dict(&doc, &d)
+        };
+        let driver = [(0x41, "G41"), (0x92, "G92"), (0x96, "G96"), (0xE9, "GE9")];
+        let m = names(Some("WinAnsiEncoding"), &driver);
+        assert_eq!(m.decode(b"A\x92\x96\xe9"), "A\u{2019}\u{2013}\u{e9}");
+        let m = names(Some("MacRomanEncoding"), &[(0x8A, "G8A")]);
+        assert_eq!(m.text_of(0x8A).as_deref(), Some("\u{e4}"));
+        // With no base encoding named, Latin-1, whose 0x80-0x9F are controls and read as nothing.
+        let m = names(None, &driver);
+        assert_eq!(m.decode(b"A\x92\x96\xe9"), "A\u{e9}");
+        // A name numbering another code makes every numbered name in the font a count, not a code.
+        let m = names(Some("WinAnsiEncoding"), &[(0x41, "G41"), (0x42, "G01")]);
+        assert_eq!((m.text_of(0x41), m.text_of(0x42)), (None, None));
+        // So does one at a control code, as a glyph counter from 1 has.
+        let m = names(Some("WinAnsiEncoding"), &[(0x01, "C1"), (0x41, "G41")]);
+        assert_eq!(m.text_of(0x41), None);
+        // A TrueType font's names are its `post` names, which the renderer doesn't read this way.
+        let mut enc = Dict::new();
+        enc.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
+        enc.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(0x92), Object::name("G92")]));
+        let (doc, mut d) = simple("Arial", None, Some(Object::Dict(enc)));
+        d.set(b"Subtype".to_vec(), Object::name("TrueType"));
+        assert_eq!(Metrics::from_dict(&doc, &d).text_of(0x92), None);
+        // Symbol's codes aren't Latin, so its numbered names stay unread with no base named.
+        let mut enc = Dict::new();
+        enc.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(0x61), Object::name("G61")]));
+        let (doc, d) = simple("Symbol", None, Some(Object::Dict(enc)));
+        assert_eq!(Metrics::from_dict(&doc, &d).text_of(0x61), None);
     }
 
     #[test]
