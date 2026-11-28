@@ -3,8 +3,8 @@
 //! showing a placeholder page.
 
 use craft::ui::runtime::{env::WindowKey, toast};
-use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use egui_kittest::Harness;
 // PLAN: assumed `pdfcraft_ui_egui::JsDialog` with `Console` (pdf-forms-w17)
 use pdfcraft_ui_egui::{JsDialog, PdfCraftApp};
 
@@ -234,7 +234,7 @@ fn a_change_script_rewrites_what_is_typed_in_the_app() {
         let s = h.state();
         s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).and_then(|f| f.value.first().cloned()).unwrap_or_default()
     };
-    let editor = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone()).unwrap_or_default();
+    let editor = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].session.forms.focus.as_ref().map(|f| f.text.clone()).unwrap_or_default();
     click_field(&mut h, "digits");
     h.event(egui::Event::Text("a1b2".into()));
     h.run_steps(3);
@@ -257,10 +257,10 @@ fn a_change_script_rewrites_what_is_typed_in_the_app() {
 fn a_keystroke_that_leaves_the_text_unchanged_still_runs_the_change_script() {
     let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::keystroke_template()));
     crate::support::settle(&mut h);
-    let editor = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone()).unwrap_or_default();
+    let editor = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].session.forms.focus.as_ref().map(|f| f.text.clone()).unwrap_or_default();
     click_field(&mut h, "upper");
     {
-        let fx = h.state_mut().views[0].forms.focus.as_mut().unwrap();
+        let fx = h.state_mut().views[0].session.forms.focus.as_mut().unwrap();
         fx.text = "a".into();
         fx.select_all = true;
         fx.request_focus = true;

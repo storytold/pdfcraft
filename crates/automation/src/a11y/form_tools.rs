@@ -1,4 +1,4 @@
-use super::{Args, Automation, Result, ToolError, Value, failed, json, with_warnings, write_atomic};
+use super::{failed, json, with_warnings, write_atomic, Args, Automation, Result, ToolError, Value};
 
 /// A script's request to the viewer as the JSON that running a script reports (page numbers
 /// 1-based); a side panel goes by its fixed id.
@@ -299,7 +299,8 @@ impl Automation {
             self.session.with_own_js_output(id, |s| s.field_trigger_target(id, name, Some(object), widget, trigger)).map_err(failed)?;
         let mut result = js_output_json(&out);
         result["changed"] = json!(changed);
-        Ok(result)    }
+        Ok(result)
+    }
 
     /// `form_merge_data`: merge the form data files at `paths` into one CSV at `path`, a row per
     /// file; returns the path and the row and column counts.
