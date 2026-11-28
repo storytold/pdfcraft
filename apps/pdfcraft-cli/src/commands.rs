@@ -375,7 +375,12 @@ pub(crate) fn parse_dpi(value: &str) -> Result<f32, String> {
 
 pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
     validate_options("render", args, RENDER_OPTIONS)?;
-    let path = *positional(args, RENDER_OPTIONS).first().ok_or("render: missing file")?;
+    let inputs = positional(args, RENDER_OPTIONS);
+    let path = match inputs.as_slice() {
+        [] => return Err("render: missing file".into()),
+        [path] => *path,
+        [_, extra, ..] => return Err(format!("render: unexpected argument {extra:?} (one input file)").into()),
+    };
     let page: usize =
         flag(args, "--page").unwrap_or("1").parse().ok().filter(|page| *page > 0).ok_or("bad --page: expected a positive page number")?;
     let page_index = page - 1;
