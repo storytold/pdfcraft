@@ -46,7 +46,7 @@ add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../R
 | Simplified Chinese | `zh-hans` | 2,560 (88.4%) | dialogs and tooltips through `tl!`; no help | CJK text and IME work; native craft-fonts builds embed the **LXGW WenKai Lite** Hans face, while the web build has no Hans face beyond BIZ UDPGothic, and missing-glyph reports (#826, #688, #728, #758; Flatpak #689) predate the native face | no | partial | yes | 6–12 |
 | Spanish | `es` | 2,851 (98.4%) | dialogs and tooltips; no help | Latin | no | partial | yes | 2–4 |
 | Hindi | `hi` | 2,825 (97.5%) | dialogs and tooltips; no help | Devanagari not tested (egui shapes Telugu conjuncts, so shaping is likely workable); the pinned craft-fonts manifest has Noto Sans Devanagari Regular; rendering remains unqualified | no | partial | no | 10–18 |
-| Arabic | `ar` | 2,836 (97.9%) | dialogs and tooltips; no help | Logical-order catalog; egui 0.37's epaint reorders with UAX #9, Arabic, Kurdish and Persian labels use an explicit right-to-left paragraph direction, and stock chrome is mirrored. Native/browser RTL input and IME, and complex bidirectional workflows, are not yet qualified (`localization.md` §Arabic) | no | partial | yes (Middle East edition) | 25–45 |
+| Arabic | `ar` | 2,836 (97.9%) | dialogs and tooltips; no help | Logical-order catalog; egui 0.37's epaint reorders with UAX #9, Hebrew, Arabic, Kurdish and Persian labels use an explicit right-to-left paragraph direction, and stock chrome is mirrored. Native/browser RTL input and IME, and complex bidirectional workflows, are not yet qualified (`localization.md` §Arabic) | no | partial | yes (Middle East edition) | 25–45 |
 | French | `fr` | 2,851 (98.4%) | dialogs and tooltips; no help | Latin | no | partial | yes | 1–2 |
 | Portuguese (Brazil) | `pt-br` | 2,851 (98.4%) | dialogs and tooltips; no help | Latin | community (#288) | partial | yes | 1–2 |
 | Indonesian | `id` | 2,825 (97.5%) | dialogs and tooltips; no help | Latin | no | partial | no | 3–5 |
@@ -92,14 +92,15 @@ help/docs polish: their script work is done, and each catalog lacks 46 strings o
 | Catalan | `ca` | 2,849 (98.3%) | partial: no translated help, engine error details in English; native-speaker review by the contributor | no |
 | Romanian | `ro` | 2,849 (98.3%) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
 | Norwegian Bokmål | `nb` | 2,758 (95.2%) | partial; native-speaker terminology review by the contributor ([#1836](https://github.com/storytold/pdfcraft/pull/1836)), not yet line by line | yes |
+| Hebrew | `he` | not yet measured (2,710 PdfCraft catalog rows) | partial; RTL and embedded Hebrew face; reviewed by Hebrew-speaking community; no translated help; Fill & Sign date-language list and date formats remain unchanged | yes (Middle East edition) |
 | Persian | `fa` | 2,801 (96.7%) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
 | Central Kurdish (Sorani) | `ckb` | 2,754 (95.1%) | partial; right-to-left like Arabic | no |
 | Thai | `th` | 2,751 (95.0%) | partial | no |
 | Lao | `lo` | 2,504 (86.4%) | partial | no |
 
-**24 other languages** ship (35 catalogs plus English = **36** interface languages in Preferences).
+**25 other languages** ship (36 catalogs plus English = **37** interface languages in Preferences).
 Their presence does not imply a detailed linguistic or runtime review.
-Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
+Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish. Vietnamese is shipped here but not by Acrobat.
 
 ## Revision history
 
