@@ -4985,6 +4985,98 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     assert!(attachments(&all));
 }
 
+/// One signature widget listed in the /Annots of every page, the shape a signature placed on
+/// all pages has: deleting pages that list it, including the page its /P names, keeps the
+/// field in the form while a kept page still shows it, and moves /P to that page (as for any
+/// annotation a kept page lists).
+#[test]
+fn deleting_pages_keeps_a_widget_a_kept_page_still_lists() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /SigFlags 3 >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>".into(),       // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 8 0 R] >>".into(),                               // 3
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 8 0 R] >>".into(),                               // 4
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),                               // 5
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /F 132 /Rect [0 0 0 0] /P 3 0 R >>".into(), // 6
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (only_last) /Rect [10 10 90 30] /P 5 0 R >>".into(), // 7
+        "<< /Type /Annot /Subtype /Text /Contents (note) /Rect [10 40 30 60] /P 3 0 R >>".into(),     // 8
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    assert_eq!(form_field_names(&doc), ["Signature1", "only_last"]);
+    delete_pages(&mut doc, &[0, 2]).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(form_field_names(&doc), ["Signature1"], "the shared widget stays; the last page's own field goes");
+    let kept = pages(&doc).unwrap()[0].obj;
+    let widget = doc.get(ObjRef::new(6, 0)).as_dict().cloned().unwrap();
+    assert_eq!(widget.reference(b"P"), Some(kept), "/P names the page that still shows it");
+    let note = doc.get(ObjRef::new(8, 0)).as_dict().cloned().unwrap();
+    assert_eq!(note.reference(b"P"), Some(kept), "so does any other annotation the kept page lists");
+
+    // Deleting the last page alone (the sweep's case) keeps the field too, and its /P.
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[2]).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(form_field_names(&doc), ["Signature1"]);
+    let widget = doc.get(ObjRef::new(6, 0)).as_dict().cloned().unwrap();
+    assert_eq!(widget.reference(b"P"), Some(ObjRef::new(3, 0)));
+}
+
+/// The same with reference chains (ISO 32000-2 §7.3.10): the kept page lists the signature
+/// widget through `9 0 R` (whose body is `6 0 R`) while the deleted page lists it directly, and
+/// its /P reaches the deleted page through `10 0 R`. The widget stays, its /P moves to the kept
+/// page, and the deleted page's own field still goes.
+#[test]
+fn deleting_pages_follows_reference_chains_to_annotations_and_pages() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /SigFlags 3 >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>".into(),       // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [9 0 R] >>".into(),                                     // 3
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),                               // 4
+        "<< /Type /Page /Parent 2 0 R >>".into(),                                                     // 5
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /F 132 /Rect [0 0 0 0] /P 10 0 R >>".into(), // 6
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (only_gone) /Rect [10 10 90 30] /P 4 0 R >>".into(), // 7
+        "<< /Type /Annot /Subtype /Text /Contents (unused) /Rect [10 40 30 60] >>".into(),            // 8
+        "6 0 R".into(),                                                                               // 9
+        "4 0 R".into(),                                                                               // 10
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    assert_eq!(form_field_names(&doc), ["Signature1", "only_gone"]);
+    delete_pages(&mut doc, &[1]).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(form_field_names(&doc), ["Signature1"], "the chained widget stays; the deleted page's own field goes");
+    let widget = doc.get(ObjRef::new(6, 0)).as_dict().cloned().unwrap();
+    assert_eq!(widget.reference(b"P"), Some(ObjRef::new(3, 0)), "/P reached the deleted page through a chain");
+}
+
+/// Reference chains on the other lists too (ISO 32000-2 §7.3.10): the deleted page and /Fields
+/// both list its widget through `9 0 R` (whose body is `7 0 R`), and the kept page lists a Link
+/// to the deleted page through `11 0 R` (whose body is `12 0 R`). The field leaves the form and
+/// the Link loses its destination, as they do when listed directly.
+#[test]
+fn deleting_pages_follows_reference_chains_in_fields_and_links() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 9 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 11 0 R] >>".into(),                  // 3
+        "<< /Type /Page /Parent 2 0 R /Annots [9 0 R] >>".into(),                         // 4
+        "<< /Type /Page /Parent 2 0 R >>".into(),                                         // 5 (unused)
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (kept) /Rect [10 10 90 30] /P 3 0 R >>".into(), // 6
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (gone) /Rect [10 10 90 30] /P 4 0 R >>".into(), // 7
+        "<< /Type /Annot /Subtype /Text /Contents (unused) /Rect [10 40 30 60] >>".into(), // 8
+        "7 0 R".into(),                                                                   // 9
+        "<< /Type /Annot /Subtype /Text /Contents (unused) /Rect [10 40 30 60] >>".into(), // 10
+        "12 0 R".into(),                                                                  // 11
+        "<< /Type /Annot /Subtype /Link /Rect [10 40 90 60] /Dest [4 0 R /Fit] >>".into(), // 12
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    assert_eq!(form_field_names(&doc), ["kept", "gone"]);
+    delete_pages(&mut doc, &[1]).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(form_field_names(&doc), ["kept"], "/Fields listed the deleted page's widget through a chain");
+    let link = doc.get(ObjRef::new(12, 0)).as_dict().cloned().unwrap();
+    assert!(link.get(b"Dest").is_none(), "the kept page listed the Link through a chain");
+}
+
 /// #7687: a watermark source must clip and size the same visible area as the page.
 #[test]
 fn page_form_clips_crop_to_media_before_rotation() {
