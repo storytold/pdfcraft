@@ -507,6 +507,18 @@ fn turkish_keeps_its_dotted_and_dotless_i_when_changing_case() {
     assert_eq!(in_sentence("Image"), "image");
 }
 
+#[test]
+fn georgian_titles_stay_uncapitalised() {
+    needs_catalogs!();
+    set_current(Lang::from_code("ka").expect("ka registered"));
+    assert_eq!(upper_label("Advanced"), "დამატებითი");
+    // Section titles arrive already translated (`section_title(ui, tl!(…))`).
+    assert_eq!(upper_label("დამატებითი"), "დამატებითი");
+    // A label with no Georgian row is still English and keeps the English rule.
+    assert_eq!(upper_label("Untranslated title"), "UNTRANSLATED TITLE");
+    set_current(Lang::EN);
+}
+
 fn arabic() -> Lang {
     Lang::from_code("ar").expect("ar registered")
 }
