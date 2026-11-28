@@ -3148,8 +3148,8 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/organize/src/tests.rs::layers_are_registered_with_their_default_state"]
-notes = ""
+evidence = ["crates/organize/src/tests.rs::layers_are_registered_with_their_default_state", "crates/organize/src/tests.rs::extracted_layers_keep_their_auto_state_radio_groups_and_lock", "crates/organize/src/tests.rs::copied_layers_are_presented_in_the_source_order", "crates/organize/src/tests.rs::copied_layer_auto_state_names_its_categories", "crates/organize/src/tests.rs::inserting_layers_leaves_the_destinations_own_unlisted", "crates/organize/src/tests.rs::a_page_copied_twice_keeps_its_layer_settings_on_both_copies", "crates/organize/src/tests.rs::extracting_from_a_source_without_order_writes_none", "crates/organize/src/tests.rs::inserting_from_a_source_without_order_leaves_the_destination_order"]
+notes = "Copied layers keep, from the source's default configuration, their on/off state, the view/print/export auto state (/AS), radio-button groups, lock, and their presence in an explicit /Order (nesting and labels are not kept: copied layers are listed flat, in the source /Order's sequence). A source without /Order (a null one counts as none) presents none of its layers (ISO 32000-2 Table 99: the default is an empty array), so none is added to the destination's /Order and an extract into a new document writes no /Order; PdfCraft's own Layers panel follows /Order, so it lists no layers for such a source or for its extract. Each copy of a layer copied twice (a page extracted twice) keeps those settings. A destination with no /Order of its own presents none of its own layers (ISO 32000-2 Table 99: the default is an empty array) and still presents none after the copy; only the copied ones the source lists are added. Other configurations (/Configs), /ListMode and /Intent are not copied."
 
 [[feature]]
 id = "organize.preserve-inherited"
