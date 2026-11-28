@@ -108,12 +108,19 @@ fn tags_map_to_languages() {
     assert_eq!(lang_from_tag("lo_LA.UTF-8"), Lang::from_code("lo"));
     assert_eq!(lang_from_tag("lo-LA"), Lang::from_code("lo"));
     assert_eq!(lang_from_tag("lo"), Lang::from_code("lo"));
+    // European Portuguese has its own catalog; `pt` and `pt-BR` stay Brazilian.
+    assert_eq!(lang_from_tag("pt-PT"), Lang::from_code("pt-pt"));
+    assert_eq!(lang_from_tag("pt_PT.UTF-8"), Lang::from_code("pt-pt"));
+    assert_eq!(lang_from_tag("pt-PT@euro"), Lang::from_code("pt-pt"));
+    assert_eq!(lang_from_tag("pt-BR"), Lang::from_code("pt-br"));
+    assert_eq!(lang_from_tag("pt"), Lang::from_code("pt-br"));
 }
 
 #[test]
 fn candidates_walk_from_specific_to_general() {
     assert_eq!(candidates("pt_BR.UTF-8"), ["pt-br", "pt"]);
     assert_eq!(candidates("pt_PT.UTF-8"), ["pt-pt", "pt-br", "pt"]);
+    assert_eq!(candidates("pt-PT@euro"), ["pt-pt", "pt-br", "pt"]);
     assert_eq!(candidates("pt"), ["pt-br", "pt"]);
     assert_eq!(candidates("zh_TW"), ["zh-tw", "zh-hant", "zh"]);
     assert_eq!(candidates("zh-CN"), ["zh-cn", "zh-hans", "zh"]);
@@ -137,7 +144,7 @@ fn locale_variables_pick_the_language_with_pdfcraft_mappings() {
     let nb = Lang::from_code("nb");
     assert_eq!(env_lang(env(&[("LC_MESSAGES", "nn_NO.UTF-8"), ("LANG", "en_US.UTF-8")])), nb);
     assert_eq!(env_lang(env(&[("LANG", "no_NO.UTF-8")])), nb);
-    assert_eq!(env_lang(env(&[("LC_ALL", "pt_PT.UTF-8"), ("LANG", "ja_JP.UTF-8")])), Lang::from_code("pt-br"));
+    assert_eq!(env_lang(env(&[("LC_ALL", "pt_PT.UTF-8"), ("LANG", "ja_JP.UTF-8")])), Lang::from_code("pt-pt"));
     assert_eq!(env_lang(env(&[("LC_ALL", "xx_YY.UTF-8"), ("LC_MESSAGES", "zh_HK.UTF-8")])), Lang::from_code("zh-hant"));
     if cfg!(not(target_os = "windows")) {
         // Outside Windows a neutral locale means English and ends the search.
@@ -146,7 +153,7 @@ fn locale_variables_pick_the_language_with_pdfcraft_mappings() {
 }
 
 /// The macOS preferred-languages list (`defaults read -g AppleLanguages`), the second step, with
-/// the mappings it relies on: Chinese by region, other Portuguese to Brazilian, Norwegian.
+/// the mappings it relies on: Chinese by region, Portuguese by region, Norwegian.
 #[test]
 fn macos_language_list_is_parsed() {
     assert_eq!(first_supported("("), None);
@@ -154,7 +161,7 @@ fn macos_language_list_is_parsed() {
     assert_eq!(first_supported("(\n    \"ja-JP\",\n    \"en-US\"\n)\n"), Some(JA()));
     assert_eq!(first_supported("(\n    \"fr-FR\",\n    \"en-US\"\n)\n"), Lang::from_code("fr"));
     assert_eq!(first_supported("(\n    \"xx-YY\",\n    \"zh-HK\"\n)\n"), Lang::from_code("zh-hant"));
-    assert_eq!(first_supported("(\n    \"pt-PT\",\n    \"en-US\"\n)\n"), Lang::from_code("pt-br"));
+    assert_eq!(first_supported("(\n    \"pt-PT\",\n    \"en-US\"\n)\n"), Lang::from_code("pt-pt"));
     assert_eq!(first_supported("(\n    \"nn-NO\",\n    \"en-US\"\n)\n"), Lang::from_code("nb"));
 }
 
@@ -169,7 +176,7 @@ fn browser_language_list_is_followed_in_order() {
     assert_eq!(first_supported_tag(["xx-YY", "ja", "fr-FR"]), Some(JA()));
     assert_eq!(first_supported_tag(["zh-TW"]), Lang::from_code("zh-hant"));
     assert_eq!(first_supported_tag(["en-GB", "fr-FR"]), Some(Lang::EN));
-    assert_eq!(first_supported_tag([" pt-PT "]), Lang::from_code("pt-br"));
+    assert_eq!(first_supported_tag([" pt-PT "]), Lang::from_code("pt-pt"));
     let long = std::iter::repeat_n("xx", 10_000).chain(["fr"]);
     assert_eq!(first_supported_tag(long), None, "only the first tags are read");
 }
@@ -189,7 +196,7 @@ fn windows_display_language_resolves_chinese_scripts() {
     assert_eq!(first_supported("en-US\r\n"), Some(Lang::EN));
     assert_eq!(first_supported("fr-FR\r\n"), Lang::from_code("fr"));
     assert_eq!(first_supported("lo-LA\r\n"), Lang::from_code("lo"));
-    assert_eq!(first_supported("pt-PT\r\nen-US\r\n"), Lang::from_code("pt-br"));
+    assert_eq!(first_supported("pt-PT\r\nen-US\r\n"), Lang::from_code("pt-pt"));
     assert_eq!(first_supported("no-NO\r\nen-US\r\n"), Lang::from_code("nb"));
 }
 
@@ -441,6 +448,21 @@ fn language_persists_and_invalid_input_keeps_current_language() {
     assert_eq!(restored.language, "ja");
     app.set_option(&ctx, "language", AUTO).unwrap();
     assert_eq!(app.language, AUTO);
+}
+
+#[test]
+fn european_portuguese_is_registered() {
+    needs_catalogs!();
+    let pt = Lang::from_code("pt-pt").expect("pt-pt registered");
+    assert_eq!(pt.name(), "Português (Portugal)");
+    assert_eq!(pt.english_name(), "Portuguese (Portugal)");
+    assert_eq!(Lang::from_code("PT-PT"), Some(pt));
+    assert_eq!(normalize_pref("pt-PT"), Some("pt-pt"));
+    assert_eq!(normalize_pref("pt"), None, "only exact codes are preferences");
+    assert_eq!(lang_from_tag("pt_PT.UTF-8"), Some(pt));
+    assert_eq!(lang_from_tag("pt-PT@euro"), Some(pt));
+    // A bare `pt` and the regions without a catalog of their own stay Brazilian.
+    assert_eq!(lang_from_tag("pt-AO"), Lang::from_code("pt-br"));
 }
 
 /// `{}` would read as a sentence about nothing in particular.

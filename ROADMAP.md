@@ -226,7 +226,7 @@ What's strong and missing in each: [target-app-parity.md](docs/target-app-parity
 
 ## Languages
 
-Twelve key languages: the share of the 2,897 strings in the i18n report's denominator (the interface's strings plus every catalog key), from
+Thirteen key languages: the share of the 2,897 strings in the i18n report's denominator (the interface's strings plus every catalog key), from
 `cargo xtask i18n-report` on 2026-11-03. Detail and script notes: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Strings | Status |
@@ -238,6 +238,7 @@ Twelve key languages: the share of the 2,897 strings in the i18n report's denomi
 | Arabic | `ar` | 97.9% | partial (logical catalog, explicit RTL labels, mirrored stock chrome; native/browser/IME workflows unqualified) |
 | French | `fr` | 98.4% | partial |
 | Portuguese (Brazil) | `pt-br` | 98.4% | partial |
+| Portuguese (Portugal) | `pt-pt` | 28.0% (810 strings, the visible core) | partial |
 | Indonesian | `id` | 97.5% | partial |
 | Japanese | `ja` | 89.6% | partial |
 | German | `de` | 89.7% | partial |
@@ -246,8 +247,8 @@ Twelve key languages: the share of the 2,897 strings in the i18n report's denomi
 
 Also shipped: Traditional Chinese, Russian, Bulgarian, Telugu, Hungarian, Ukrainian, Italian,
 Kazakh, Polish, Slovenian, Greek, Turkish, Lithuanian, Finnish, Albanian, Catalan, Romanian,
-Norwegian Bokmål, Persian, Central Kurdish, Thai, Lao and Czech: **23 more catalogs**
-(35 interface languages including English).
+Norwegian Bokmål, Persian, Central Kurdish, Thai, Lao, Czech and Bosnian: **24 more catalogs**
+(37 interface languages including English).
 
 ## Upcoming
 
@@ -271,7 +272,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-11-18 (M7, #7687):** PDF-page watermarks clip the source CropBox to MediaBox before sizing and rotating the imported form. Synthetic geometry and save/reopen render regressions cover oversized and partially overlapping crops; estimates unchanged.
 
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
+- **2026-11-13 (M14, European Portuguese):** Added the `pt-pt` interface catalog (810 strings: dialogs, panels, tools, menus, status and chrome), `LANGUAGES` and the macOS localization list; `pt-PT` resolves to it while `pt` and `pt-BR` stay Brazilian. The rest of the interface falls back to English and can follow catalog-only. No native-speaker review yet.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
+
 
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
@@ -922,6 +925,7 @@ Estimates unchanged.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-16 | patch | M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged. |
+| 2026-11-13 | minor | M14: European Portuguese interface (`pt-pt`), 810 strings; 37 interface languages with Bosnian |
 | 2026-11-09 | patch | M10 #5130: Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514/#636: retain main's public GDI Git revision (64e7afd4) to preserve downstream Rust type identity, update the internal PDF loader independently, and refresh the application dependency/lockfile. New-graph CI pending; estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514: refresh the craft-print and winprint/GDI pins after #605 merged; retain the Direct2D crash fix and stream-test cleanup repairs, record single-page HUAWEI output with its diagnostic limits, and rerun CI for the new dependency graph. Estimates unchanged. |
