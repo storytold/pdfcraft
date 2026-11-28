@@ -6570,7 +6570,9 @@ name = "pdfcraft-redact"
 version = "0.22.0"
 dependencies = [
  "aho-corasick",
+ "craft-image-codecs",
  "craft-xml",
+ "image",
  "pdfcraft-annot",
  "pdfcraft-content",
  "pdfcraft-cos",
