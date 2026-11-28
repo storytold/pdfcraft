@@ -504,9 +504,10 @@ fn printer_papers_internal(printer: &str) -> Vec<Paper> {
     let Ok(devices) = winprint::printer::PrinterDevice::all() else { return Vec::new() };
     let Some(device) = devices.into_iter().find(|d| d.name() == printer) else { return Vec::new() };
     let Ok(capabilities) = winprint::ticket::PrintCapabilities::fetch(&device) else { return Vec::new() };
+    let default_media = default_page_media_size(&device);
     let mut papers = Vec::new();
     for media in capabilities.page_media_sizes() {
-        let size = media.size();
+        let Some(size) = listed_size(&media, default_media.as_ref()) else { continue };
         let w_pts = (size.width_in_micron() as f64) * 72.0 / 25_400.0;
         let h_pts = (size.height_in_micron() as f64) * 72.0 / 25_400.0;
         if w_pts.is_finite() && h_pts.is_finite() && w_pts >= 72.0 && h_pts >= 72.0 && w_pts <= 14400.0 && h_pts <= 14400.0 {
@@ -521,6 +522,44 @@ fn printer_papers_internal(printer: &str) -> Vec<Paper> {
         }
     }
     papers
+}
+
+/// The size a driver's paper is listed at, `None` to leave it out. A paper sized by parameters
+/// (the driver's own custom size, `psk:CustomMediaSize`) comes from the capabilities with their
+/// default parameters, which need not be any paper the printer holds: an Epson L3250's is
+/// 210 × 297 mm, listed beside A4 under the driver's name for its custom size. It is listed only
+/// when the printer's default ticket chooses it (`default`), at that ticket's size: a Zebra
+/// ZD500R's driver lists no other paper, and its ticket holds the stock (4.09 × 3.00 in).
+#[cfg(windows)]
+pub(crate) fn listed_size(
+    media: &winprint::ticket::PageMediaSize,
+    default: Option<&winprint::ticket::PageMediaSize>,
+) -> Option<winprint::ticket::MediaSizeTuple> {
+    use winprint::ticket::FeatureOptionPack as _;
+    if media.parameters().is_empty() {
+        return Some(media.size());
+    }
+    let default = default?;
+    let name = media.option().name.as_ref()?;
+    let chosen = default.option().name.as_ref()?;
+    // The same option by namespace and local name: the ticket and the capabilities may bind the
+    // namespace to different prefixes.
+    (chosen.local_name == name.local_name && chosen.namespace_ref() == name.namespace_ref()).then(|| default.size())
+}
+
+/// The PageMediaSize the driver puts in a new job's ticket (the printer's Printing Defaults), with
+/// the ticket's parameters, so a custom size reads at the size it is set to.
+#[cfg(windows)]
+fn default_page_media_size(device: &winprint::printer::PrinterDevice) -> Option<winprint::ticket::PageMediaSize> {
+    use winprint::ticket::FeatureOptionPack as _;
+    use winprint::ticket::document::{NS_PSK, PrintTicketDocument, reader::ParsableXmlDocument as _};
+    let mut builder = winprint::ticket::PrintTicketBuilder::new(device).ok()?;
+    builder.merge(winprint::ticket::PrintTicket::from_xml(winprint::ticket::DEFAULT_PRINT_TICKET_XML)).ok()?;
+    let ticket = builder.build().ok()?;
+    let document = PrintTicketDocument::parse_from_bytes(ticket.get_xml()).ok()?;
+    let feature = document.features.into_iter().find(|f| f.name.local_name == "PageMediaSize" && f.name.namespace_ref() == Some(NS_PSK))?;
+    let option = feature.options.into_iter().next()?;
+    Some(winprint::ticket::PageMediaSize::new(option, document.parameter_inits))
 }
 
 /// The paper sizes supported by `printer` on CUPS: its PPD's (see [`cups_paper_info`]); none on

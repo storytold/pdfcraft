@@ -1992,3 +1992,45 @@ fn texts_read_up_answers_many_pages_from_one_walk() {
     assert!(up.iter().all(|u| !u), "upright text, and no page 3000");
     assert_eq!(up[1], text_reads_up(&doc, 1));
 }
+
+/// A driver's own custom size (`psk:CustomMediaSize`) is listed only when the printer's default
+/// ticket chooses it, at that ticket's size, never at the capabilities' default parameters (an
+/// Epson L3250's 210 × 297 mm beside A4). Fixed papers are listed at their size.
+#[cfg(windows)]
+#[test]
+fn a_custom_size_is_listed_only_when_the_default_ticket_chooses_it() {
+    use winprint::ticket::document::{PrintTicketDocument, reader::ParsableXmlDocument as _};
+    use winprint::ticket::{FeatureOptionPack as _, PageMediaSize};
+    const HEAD: &str = r#"<psf:PrintTicket version="1" xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework" xmlns:psk="http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">"#;
+    let media = |xml: String| {
+        let document = PrintTicketDocument::parse_from_bytes(xml).unwrap();
+        let feature = document.features.into_iter().next().unwrap();
+        PageMediaSize::new(feature.options.into_iter().next().unwrap(), document.parameter_inits)
+    };
+    let a4 = media(format!(
+        r#"{HEAD}<psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:ISOA4"><psf:ScoredProperty name="psk:MediaSizeWidth"><psf:Value xsi:type="xsd:integer">210000</psf:Value></psf:ScoredProperty><psf:ScoredProperty name="psk:MediaSizeHeight"><psf:Value xsi:type="xsd:integer">297000</psf:Value></psf:ScoredProperty></psf:Option></psf:Feature></psf:PrintTicket>"#
+    ));
+    let custom = |w: u32, h: u32| {
+        media(format!(
+            r#"{HEAD}<psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:CustomMediaSize"><psf:ScoredProperty name="psk:MediaSizeWidth"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeWidth"/></psf:ScoredProperty><psf:ScoredProperty name="psk:MediaSizeHeight"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeHeight"/></psf:ScoredProperty></psf:Option></psf:Feature><psf:ParameterInit name="psk:PageMediaSizeMediaSizeWidth"><psf:Value xsi:type="xsd:integer">{w}</psf:Value></psf:ParameterInit><psf:ParameterInit name="psk:PageMediaSizeMediaSizeHeight"><psf:Value xsi:type="xsd:integer">{h}</psf:Value></psf:ParameterInit></psf:PrintTicket>"#
+        ))
+    };
+    let size = |listed: Option<winprint::ticket::MediaSizeTuple>| listed.map(|s| (s.width_in_micron(), s.height_in_micron()));
+    // The capabilities' custom size at its default parameters, the Epson's A4-sized one.
+    let offered = custom(210_000, 297_000);
+    assert_eq!(size(spool::listed_size(&a4, None)), Some((210_000, 297_000)), "a fixed paper");
+    assert_eq!(size(spool::listed_size(&offered, Some(&a4))), None, "the default is A4, not the custom size");
+    assert_eq!(size(spool::listed_size(&offered, None)), None, "no default ticket");
+    // The Zebra's: the default ticket chooses the custom size, at the stock it is set to.
+    assert_eq!(size(spool::listed_size(&offered, Some(&custom(103_886, 76_200)))), Some((103_886, 76_200)));
+    // The same option under another prefix for the same namespace, and the same local name in
+    // another namespace.
+    let custom_as = |prefix: &str, namespace: &str| {
+        media(format!(
+            r#"{HEAD}<psf:Feature name="psk:PageMediaSize"><psf:Option xmlns:{prefix}="{namespace}" name="{prefix}:CustomMediaSize"><psf:ScoredProperty name="psk:MediaSizeWidth"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeWidth"/></psf:ScoredProperty><psf:ScoredProperty name="psk:MediaSizeHeight"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeHeight"/></psf:ScoredProperty></psf:Option></psf:Feature><psf:ParameterInit name="psk:PageMediaSizeMediaSizeWidth"><psf:Value xsi:type="xsd:integer">103886</psf:Value></psf:ParameterInit><psf:ParameterInit name="psk:PageMediaSizeMediaSizeHeight"><psf:Value xsi:type="xsd:integer">76200</psf:Value></psf:ParameterInit></psf:PrintTicket>"#
+        ))
+    };
+    let keywords = "http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords";
+    assert_eq!(size(spool::listed_size(&offered, Some(&custom_as("k", keywords)))), Some((103_886, 76_200)), "another prefix");
+    assert_eq!(size(spool::listed_size(&offered, Some(&custom_as("ns0000", "http://example.com/vendor")))), None, "another namespace");
+}
