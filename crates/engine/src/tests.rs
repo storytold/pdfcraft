@@ -6897,6 +6897,14 @@ fn recognize_text_makes_a_scanned_page_searchable() {
     assert!(again[0].skipped.is_some());
 }
 
+/// A page's own text for the tests that skip pages with text: a paragraph, which is a text layer.
+/// One short line is a stamp and leaves the scan to read, since a page is judged by how much of
+/// it its text covers, not by whether it has any (`ocr::has_own_text`). It says "invoice" once
+/// and none of the words of the picture the tests read.
+const PAGE_TEXT_LAYER: &str = "Invoice reference 4711. Payment terms are thirty days net from the date of delivery, and late \
+    amounts carry interest at the agreed rate. Questions about this statement go to the accounts office, which answers \
+    within two working days of receipt.";
+
 /// #1028: a page with its own text and a picture of text. By default it is skipped, as before;
 /// with `skip_text_pages: false` the picture is read and the page's own text is not added again.
 #[test]
@@ -6916,7 +6924,7 @@ fn recognize_text_reads_a_picture_on_a_page_that_has_text() {
         let p = &s.get(id).unwrap().info.pages[0];
         (p.width as f64, p.height as f64)
     };
-    let note = AddedText { rect: [w * 0.1, h * 0.75, w * 0.9, h * 0.85], text: "Invoice reference 4711".into(), size: 18.0, ..Default::default() };
+    let note = AddedText { rect: [w * 0.1, h * 0.75, w * 0.9, h * 0.85], text: PAGE_TEXT_LAYER.into(), size: 18.0, ..Default::default() };
     s.apply(id, Edit::AddText { page: 0, text: note }).unwrap();
     let count = |s: &Session, word: &str| page_texts(s, id)[0].to_lowercase().matches(word).count();
     assert_eq!((count(&s, "invoice"), count(&s, "brown")), (1, 0));
@@ -6966,7 +6974,7 @@ fn native_text_only_ignores_comments_but_not_page_text() {
                 page: 0,
                 style: pdfcraft_annot::Style::default_for(&shape),
                 shape,
-                contents: "Invoice reference 4711".into(),
+                contents: PAGE_TEXT_LAYER.into(),
                 author: "Test".into(),
             }),
         )
@@ -6990,7 +6998,7 @@ fn native_text_only_ignores_comments_but_not_page_text() {
         let p = &s.get(id).unwrap().info.pages[0];
         (p.width as f64, p.height as f64)
     };
-    let note = AddedText { rect: [w * 0.1, h * 0.6, w * 0.9, h * 0.7], text: "Page text".into(), size: 18.0, ..Default::default() };
+    let note = AddedText { rect: [w * 0.1, h * 0.6, w * 0.9, h * 0.7], text: PAGE_TEXT_LAYER.into(), size: 18.0, ..Default::default() };
     s.apply(id, Edit::AddText { page: 0, text: note }).unwrap();
     let skipped = s.recognize_text(id, &[], native).unwrap();
     assert!(skipped[0].skipped.is_some(), "{:?}", skipped[0]);

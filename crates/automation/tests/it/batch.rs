@@ -186,7 +186,12 @@ fn directory_links_are_not_followed_and_output_links_cannot_escape() {
 #[test]
 fn batch_ocr_uses_existing_models_or_reports_the_missing_models_per_file() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("page.pdf"), pdf()).unwrap();
+    // A page with a text layer, which OCR skips: a paragraph, since one short line is read as a
+    // stamp would be (a page is judged by how much of it its text covers).
+    let text = "The quarterly statement lists every payment received, every invoice still open and the balance \
+        carried forward to the next period, with the dates on which each amount fell due.";
+    let page = Session::new().create_from_text("Original", text).unwrap();
+    std::fs::write(dir.path().join("page.pdf"), page.as_ref()).unwrap();
     let mut auto = Automation::new().with_root(dir.path()).unwrap();
     let report = result(&mut auto, json!({"paths":["page.pdf"],"steps":["ocr","optimize"],"out_dir":"out"}));
     if pdfcraft_engine::ocr::available() {
