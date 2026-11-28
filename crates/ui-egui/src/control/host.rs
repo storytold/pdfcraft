@@ -52,8 +52,16 @@ impl crate::PdfCraftApp {
         let cards = craft::ui::runtime::toast::cards(ctx, &craft::ui::runtime::env::WindowKey::main());
         // A plain notice carries its text as the card's title; a notice with a body has the title above it.
         let notice = cards.last().map(|card| {
-            let title = card.toast.title.as_ref().map(|t| t.as_str().to_owned());
-            [title, Some(card.toast.message.as_str().to_owned())].into_iter().flatten().filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n")
+            let toast = &card.toast;
+            toast
+                .title
+                .iter()
+                .chain(std::iter::once(&toast.message))
+                .chain(&toast.lines)
+                .map(|part| part.as_str())
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
         });
         let progress =
             cards.iter().rev().find_map(|card| card.toast.progress.map(|f| json!({ "label": card.toast.message.as_str(), "fraction": f })));
