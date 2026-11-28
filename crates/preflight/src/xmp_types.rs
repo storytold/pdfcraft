@@ -703,6 +703,33 @@ fn named(ty: Ty) -> String {
     }
 }
 
+/// Whether `ns` is the namespace of a predefined schema, whose properties have the types the XMP
+/// Specification gives them.
+pub(crate) fn is_predefined(ns: &str) -> bool {
+    SCHEMAS.iter().any(|s| s.uri == ns)
+}
+
+/// Whether `ns` and `local` name a field of the structure type the XMP Specification defines
+/// under the name `type_name` (Part 2: Dimensions, Font, ResourceRef and the others its schemas
+/// use). `None` when it defines no structure of that name.
+pub(crate) fn predefined_field(type_name: &str, ns: Option<&str>, local: &str) -> Option<bool> {
+    fn find(t: Ty, name: &str, depth: usize) -> Option<&'static [Field]> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let next = depth.saturating_add(1);
+        match t {
+            Ty::Struct(n, fields) if n == name => Some(fields),
+            Ty::Struct(_, fields) => fields.iter().find_map(|(_, _, t)| find(*t, name, next)),
+            Ty::Seq(t) | Ty::Bag(t) | Ty::Alt(t) => find(*t, name, next),
+            Ty::OneOf(types) => types.iter().find_map(|t| find(*t, name, next)),
+            _ => None,
+        }
+    }
+    let fields = SCHEMAS.iter().flat_map(|s| s.properties.iter()).find_map(|(_, t)| find(*t, type_name, 0))?;
+    Some(fields.iter().any(|(field_ns, field, _)| Some(*field_ns) == ns && *field == local))
+}
+
 fn property(ns: &str, name: &str) -> Option<(&'static Schema, Ty)> {
     let schema = SCHEMAS.iter().find(|s| s.uri == ns)?;
     schema.properties.iter().find(|(n, _)| *n == name).map(|(_, t)| (schema, *t))
