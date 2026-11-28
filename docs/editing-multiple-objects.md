@@ -33,9 +33,11 @@ target page's resources under names that don't clash, as Ungroup merges them. Wi
 same font and image objects are drawn again. Into another document they are copied with what they
 refer to, each once whatever the cycles, sharing objects it already holds; a paste whose resources
 take more than 20,000 objects or 256 MB is refused with that reason. Pasted items are ordinary page
-content: an added text box comes as page text, untagged and in no layer. The system clipboard gets
-the copied text (or, without text, the first picture) for other applications; a newer copy there,
-here or in another application, wins ⌘V. Text drawn as a clipping path before the selection is
+content: an added text box comes as page text, untagged and in no layer. Copy also sends selected
+text to the system clipboard. On desktop, copying a selection without text can put an existing
+raster image from the PDF page on the system clipboard. The full selection stays available for
+pasting within the same PdfCraft session, including in the browser. Newer clipboard contents
+can take precedence when you paste. Text drawn as a clipping path before the selection is
 refused, as is artwork without resources of its own that names one, where a paste would change it.
 
 The supported items are the existing paragraph boxes, raster Image XObjects, whole Form artwork,
