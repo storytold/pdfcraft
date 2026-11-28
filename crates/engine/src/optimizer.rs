@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use pdfcraft_cos::{SaveOptions, write_full};
 
-use crate::{DocId, EditError, Hidden, OptimizeReport, Session, guard, optimize};
+use crate::{DocId, EditError, Hidden, OptimizeReport, Session, check_reopens, guard, optimize};
 
 /// Where an optimization is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +61,11 @@ pub struct OptimizeJob {
     settings: optimize::Settings,
     discard: Vec<Hidden>,
     opts: SaveOptions,
+    /// What the copy must reopen as before anyone writes it, like a save: the passwords that
+    /// open the document now (object reader, renderer) and its page count.
+    password: Option<String>,
+    render_password: Option<String>,
+    pages: usize,
 }
 
 impl Session {
@@ -81,6 +86,9 @@ impl Session {
                 object_streams: settings.effective_object_streams(),
                 ..SaveOptions::default()
             },
+            password: editor.keys.reopen.clone(),
+            render_password: doc.password.clone(),
+            pages: doc.info.pages.len(),
         })
     }
 }
@@ -94,7 +102,7 @@ impl OptimizeJob {
     }
 
     fn work(self, progress: &mut dyn FnMut(OptimizeStage) -> bool) -> Result<Optimized, EditError> {
-        let OptimizeJob { mut cos, settings, discard, opts } = self;
+        let OptimizeJob { mut cos, settings, discard, opts, password, render_password, pages } = self;
         // Like every file written, without the values of Password-flag fields (#3926, #3944).
         pdfcraft_forms::clear_password_values(&mut cos).map_err(|e| EditError::Write(e.to_string()))?;
         pdfcraft_xfa::clear_password_values(&mut cos).map_err(|e| EditError::Write(e.to_string()))?;
@@ -135,7 +143,10 @@ impl OptimizeJob {
         let all: Vec<pdfcraft_cos::ObjRef> = cos.object_numbers().into_iter().map(|n| pdfcraft_cos::ObjRef::new(n, cos.generation(n))).collect();
         let merged = pdfcraft_organize::dedupe_resources(&mut cos, &all, false);
         step(OptimizeStage::Writing)?;
-        let bytes = write_full(&cos, &opts).map_err(|e| EditError::Write(e.to_string()))?;
-        Ok((Arc::new(bytes), OptimizeReport { optimize: report, merged, discarded }))
+        let bytes = Arc::new(write_full(&cos, &opts).map_err(|e| EditError::Write(e.to_string()))?);
+        // Checked like a save (#1698): a copy that doesn't reopen, or shows a different number of
+        // pages, is refused rather than written.
+        check_reopens(&bytes, password.as_deref(), render_password.as_deref(), Some(pages))?;
+        Ok((bytes, OptimizeReport { optimize: report, merged, discarded }))
     }
 }

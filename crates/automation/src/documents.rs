@@ -455,7 +455,8 @@ impl Automation {
         if let Some(t) = target {
             // Stronger image settings, one rung per attempt, until the copy fits. Every attempt
             // starts from the open document, so a failed one changes nothing; the number of
-            // attempts is fixed. The smallest copy is kept if none fits.
+            // attempts is fixed. The smallest copy is kept if none fits. An attempt that fails
+            // (a copy that does not reopen among them) ends the request before anything is written.
             for (k, &(ppi, quality)) in TARGET_LADDER.iter().enumerate() {
                 if bytes.len() <= t {
                     break;
