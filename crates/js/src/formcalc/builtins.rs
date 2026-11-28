@@ -21,7 +21,6 @@ impl Interp<'_> {
 
     fn builtin_inner(&mut self, name: &str, args: &[Expr]) -> R<Val> {
         let lower = name.to_ascii_lowercase();
-        let n = |v: f64| Ok(Val::Num(v));
         if let Some(value) = self.date_builtin(&lower, args)? {
             return Ok(value);
         }
@@ -33,18 +32,26 @@ impl Interp<'_> {
         }
         Ok(match lower.as_str() {
             // ── arithmetic
-            "abs" => return n(self.arg_num(args, 0)?.abs()),
-            "ceil" => return n(self.arg_num(args, 0)?.ceil()),
-            "floor" => return n(self.arg_num(args, 0)?.floor()),
+            // A null argument (an empty field) gives null, so the field showing it stays empty.
+            "abs" => return Ok(self.arg_num_or_null(args, 0)?.map_or(Val::Null, |a| Val::Num(a.abs()))),
+            "ceil" => return Ok(self.arg_num_or_null(args, 0)?.map_or(Val::Null, |a| Val::Num(a.ceil()))),
+            "floor" => return Ok(self.arg_num_or_null(args, 0)?.map_or(Val::Null, |a| Val::Num(a.floor()))),
             "mod" => {
-                let (a, b) = (self.arg_num(args, 0)?, self.arg_num(args, 1)?);
+                let (a, b) = (self.arg_num_or_null(args, 0)?, self.arg_num_or_null(args, 1)?);
+                let (Some(a), Some(b)) = (a, b) else { return Ok(Val::Null) };
                 if b == 0.0 {
                     return Err("division by zero".into());
                 }
                 Val::Num(a - b * (a / b).trunc())
             }
             "round" => {
-                let a = self.arg_num(args, 0)?;
+                let Some(a) = self.arg_num_or_null(args, 0)? else {
+                    // The places are still evaluated, for what they do.
+                    if args.len() > 1 {
+                        self.arg(args, 1)?;
+                    }
+                    return Ok(Val::Null);
+                };
                 let places = if args.len() > 1 { self.arg_num(args, 1)?.clamp(0.0, 12.0) as i32 } else { 0 };
                 let k = 10f64.powi(places);
                 let scaled = a * k;
@@ -60,10 +67,17 @@ impl Interp<'_> {
                 Val::Num(vals.iter().filter(|v| counts(v)).count() as f64)
             }
             "sum" | "avg" | "max" | "min" => {
+                // Nulls are left out; with nothing left the result is null, not 0.
                 let vals = self.arg_values(args)?;
                 let nums: Vec<f64> = vals.iter().map(|v| self.to_num(v)).collect();
                 match lower.as_str() {
-                    "sum" => Val::Num(nums.iter().sum()),
+                    "sum" => {
+                        if nums.is_empty() {
+                            Val::Null
+                        } else {
+                            Val::Num(nums.iter().sum())
+                        }
+                    }
                     "avg" => {
                         if nums.is_empty() {
                             Val::Null
