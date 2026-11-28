@@ -1,6 +1,8 @@
 //! A page that paints the same content over and over runs out of rasterizer coverage: what is
 //! past it is left out and said to be, rather than panicking once a strip's alpha index no longer
-//! fits (PDFBOX-5415's map page drew one form 2^22 times and panicked at 7 GB).
+//! fits (PDFBOX-5415's map page drew one form 2^22 times and panicked at 7 GB). Every scene is
+//! kept to a coverage budget well below that index's limit, and drawing stops once it is spent
+//! (the same page then held 5.4 GB for 76 s; it now holds about 240 MB for 4 s).
 
 use super::*;
 use std::sync::Mutex;
@@ -17,14 +19,19 @@ fn doubling_forms(levels: usize) -> Vec<u8> {
 /// [`doubling_forms`] with the last form painting `leaf` instead, and the page painting `after`
 /// once the forms are done.
 fn doubling_forms_then(levels: usize, leaf: &str, after: &str) -> Vec<u8> {
+    doubling_forms_page(levels, leaf, &format!("/F0 Do {after}"), "/XObject << /F0 5 0 R >>")
+}
+
+/// A page with `content` and `resources` (inside its resource dictionary), and the forms of
+/// [`doubling_forms`] from object 5 (`F0`) on, the last one painting `leaf`.
+fn doubling_forms_page(levels: usize, leaf: &str, content: &str, resources: &str) -> Vec<u8> {
     let mut objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
         // Object 4 is the page's content; forms start at 5.
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /XObject << /F0 5 0 R >> >> >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << {resources} >> >>"),
         String::new(),
     ];
-    let content = format!("/F0 Do {after}");
     objs[3] = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
     for level in 0..=levels {
         let (body, resources) = if level == levels {
@@ -34,6 +41,11 @@ fn doubling_forms_then(levels: usize, leaf: &str, after: &str) -> Vec<u8> {
         };
         objs.push(format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] {resources} /Length {} >>\nstream\n{body}\nendstream", body.len()));
     }
+    pdf_of(&objs)
+}
+
+/// A PDF of the objects `objs`, numbered from 1, with a cross-reference table.
+fn pdf_of(objs: &[String]) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -180,6 +192,240 @@ fn a_layer_clip_past_the_coverage_is_itself_left_out() {
     ctx.push_clip_layer(&Circle::new((50.0, 50.0), 40.0).to_path(0.1));
     assert!(ctx.coverage_full(), "the clip, past the limit, is left out and that is said");
     ctx.pop_layer();
+}
+
+/// A fill of a hundred stripes one unit wide across the 200 x 200 page, two units apart. Every
+/// tile of the canvas holds an edge of one, so one fill stores coverage for the whole canvas
+/// (40,000 values at 72 dpi).
+fn stripes() -> String {
+    let stripes: Vec<String> = (0..100).map(|i| format!("{}.5 0 1 200 re", i * 2)).collect();
+    format!("0 g {} f", stripes.join(" "))
+}
+
+/// Renders page 1 of `pdf` at 72 dpi with the default settings, returning the paths the
+/// renderer was asked to draw (`hayro::paths_drawn`), whether the page said content was left
+/// out, and the share of its pixels that are not white.
+fn render_counted(pdf: Vec<u8>) -> (u64, bool, f64) {
+    let parsed = Pdf::new(Arc::new(pdf)).unwrap();
+    let truncated = Arc::new(Mutex::new(false));
+    let seen = truncated.clone();
+    let settings = InterpreterSettings {
+        warning_sink: Arc::new(move |w| {
+            if matches!(w, InterpreterWarning::ContentTruncated) {
+                *seen.lock().unwrap() = true;
+            }
+        }),
+        ..Default::default()
+    };
+    let before = hayro::paths_drawn();
+    let pixmap = hayro::render(&parsed.pages()[0], &RenderCache::new(), &settings, &RenderSettings { bg_color: WHITE, ..Default::default() });
+    let drawn = hayro::paths_drawn() - before;
+    let cut = *truncated.lock().unwrap();
+    let px = pixmap.data_as_u8_slice().as_chunks::<4>().0;
+    let inked = px.iter().filter(|p| p[0] < 250).count() as f64 / px.len() as f64;
+    (drawn, cut, inked)
+}
+
+/// The leaves a page of forms drawing the next form twice, thirteen deep, paints: 2^13 fills of
+/// [`stripes`], each storing coverage for the whole canvas.
+const BOMB_LEAVES: u64 = 1 << 13;
+
+/// About how many fills of [`stripes`] the default coverage budget of a 200 x 200 canvas holds,
+/// at the 40,000 values each stores (vello_cpu patch 1 also keeps room for twice the canvas, so
+/// a couple fewer fit).
+fn stripes_within_the_budget() -> u64 {
+    let budget = hayro::coverage_budget(200, 200) as u64;
+    budget / 40_000
+}
+
+/// Forms that draw the next form twice (PDFBOX-5415 drew one twenty deep, under soft masks) fill
+/// the rasterizer's coverage long before the page's nested-paint budget runs out. Each path's
+/// coverage stays in memory until the page is rasterized, so the page grew to the 2^31 values a
+/// strip can index (5.4 GB, 76 s) before what came after was left out. The page now stops at its
+/// default coverage budget (hayro patch 34), and the interpreter stops drawing once the renderer
+/// has no room (hayro-interpret patch 112): the fills drawn are those the budget holds, not
+/// every leaf, what fitted is drawn, and the page says the rest was left out.
+#[test]
+fn forms_drawing_the_next_twice_stop_at_the_default_coverage_budget() {
+    assert_eq!(hayro::coverage_budget(200, 200), 1 << 26, "a small canvas gets the floor");
+    let held = stripes_within_the_budget();
+    assert!(held < BOMB_LEAVES / 4, "the page is past its budget: {held} of {BOMB_LEAVES} leaves fit");
+
+    let (drawn, cut, inked) = render_counted(doubling_forms_then(13, &stripes(), ""));
+    assert!(cut, "the page says content was left out");
+    assert!(drawn <= held + 1, "drawing stops at the budget: {drawn} paths drawn, {held} fit, {BOMB_LEAVES} leaves");
+    assert!(drawn + 2 >= held, "what the budget holds is drawn: {drawn} paths drawn, {held} fit");
+    assert!(inked > 0.4, "the stripes that fitted show: {inked}");
+}
+
+/// The same forms as a page's soft mask: the mask is drawn as a scene of its own, which has the
+/// same budget, and drawing it stops there too, keeping what fitted. Its stripes are white, so
+/// the mask lets the page's blue fill through where they are drawn.
+#[test]
+fn forms_drawing_the_next_twice_in_a_soft_mask_stop_at_its_coverage_budget() {
+    let white_stripes = stripes().replacen("0 g", "1 g", 1);
+    let pdf =
+        doubling_forms_page(13, &white_stripes, "/M gs 0 0 1 rg 0 0 200 200 re f", "/ExtGState << /M << /SMask << /S /Luminosity /G 5 0 R >> >> >>");
+    let held = stripes_within_the_budget();
+    let (drawn, cut, inked) = render_counted(pdf);
+    assert!(cut, "the page says content was left out");
+    // The mask's fills, and the page's own fill under it.
+    assert!(drawn <= held + 2, "drawing the mask stops at its budget: {drawn} paths drawn, {held} fit, {BOMB_LEAVES} leaves");
+    assert!(drawn + 2 >= held, "what the mask's budget holds is drawn: {drawn} paths drawn, {held} fit");
+    assert!(inked > 0.4, "the fill shows through the stripes that fitted: {inked}");
+}
+
+/// Nested forms within the budget draw every leaf and say nothing was left out.
+#[test]
+fn nested_forms_within_the_budget_draw_every_leaf() {
+    let (drawn, cut, inked) = render_counted(doubling_forms(6));
+    assert!(!cut, "nothing is left out");
+    assert_eq!(drawn, 64, "every leaf is drawn");
+    assert!(inked > 0.1, "the circle shows: {inked}");
+    let (drawn, cut, _) = render_counted(doubling_forms_then(8, &stripes(), ""));
+    assert!(!cut, "256 canvas-wide fills fit");
+    assert_eq!(drawn, 256, "every leaf is drawn");
+}
+
+/// The coverage budget is the floor for a small canvas and grows with a large one.
+#[test]
+fn the_coverage_budget_grows_with_the_canvas() {
+    assert_eq!(hayro::coverage_budget(1, 1), 1 << 26);
+    assert_eq!(hayro::coverage_budget(2048, 2048), 1 << 26, "16 values a pixel is the floor here");
+    assert_eq!(hayro::coverage_budget(4096, 4096), 16 * 4096 * 4096);
+    assert!(hayro::coverage_budget(u16::MAX, u16::MAX) > 1 << 31, "vello_cpu keeps it to 2^31");
+}
+
+/// A device with room for `room` paths, counting those it is handed.
+struct Room {
+    room: usize,
+    paths: usize,
+}
+
+impl<'a> hayro::hayro_interpret::Device<'a> for Room {
+    fn set_soft_mask(&mut self, _: Option<hayro::hayro_interpret::SoftMask<'a>>) {}
+    fn set_blend_mode(&mut self, _: hayro::hayro_interpret::BlendMode) {}
+    fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &hayro::hayro_interpret::Paint<'a>, _: &hayro::hayro_interpret::PathDrawMode) {
+        self.paths += 1;
+    }
+    fn push_clip_path(&mut self, _: &hayro::hayro_interpret::ClipPath) {}
+    fn push_transparency_group(&mut self, _: f32, _: Option<hayro::hayro_interpret::SoftMask<'a>>, _: hayro::hayro_interpret::BlendMode) {}
+    fn draw_glyph(
+        &mut self,
+        _: &hayro::hayro_interpret::font::Glyph<'a>,
+        _: kurbo::Affine,
+        _: kurbo::Affine,
+        _: &hayro::hayro_interpret::Paint<'a>,
+        _: &hayro::hayro_interpret::GlyphDrawMode,
+    ) {
+    }
+    fn draw_image(&mut self, _: hayro::hayro_interpret::Image<'a, '_>, _: kurbo::Affine) {}
+    fn pop_clip_path(&mut self) {}
+    fn pop_transparency_group(&mut self) {}
+    fn out_of_room(&self) -> bool {
+        self.paths >= self.room
+    }
+}
+
+/// The interpreter stops drawing once its device has no room left (hayro-interpret patch 112),
+/// as it does when cancelled, and says content was left out: 2^12 leaves, room for 100.
+#[test]
+fn the_interpreter_stops_when_its_device_has_no_room() {
+    use hayro::hayro_interpret::{Context, InterpreterCache, interpret_page};
+    let pdf = Pdf::new(Arc::new(doubling_forms(12))).unwrap();
+    let page = &pdf.pages()[0];
+    let truncated = Arc::new(Mutex::new(false));
+    let seen = truncated.clone();
+    let settings = InterpreterSettings {
+        warning_sink: Arc::new(move |w| {
+            if matches!(w, InterpreterWarning::ContentTruncated) {
+                *seen.lock().unwrap() = true;
+            }
+        }),
+        ..Default::default()
+    };
+    let cache = InterpreterCache::new();
+    let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 200.0, 200.0), &cache, page.xref(), settings);
+    let mut device = Room { room: 100, paths: 0 };
+    interpret_page(page, &mut ctx, &mut device);
+    assert_eq!(device.paths, 100, "nothing is drawn past the device's room");
+    assert!(*truncated.lock().unwrap(), "the page says content was left out");
+
+    let mut ctx =
+        Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 200.0, 200.0), &cache, page.xref(), InterpreterSettings::default());
+    let mut device = Room { room: usize::MAX, paths: 0 };
+    interpret_page(page, &mut ctx, &mut device);
+    assert_eq!(device.paths, 1 << 12, "with room, every leaf is drawn");
+}
+
+/// A device with no room from the start stops before reading the page and says content was left
+/// out: the page's first window holds no operator yet, so only the check after it saw the device
+/// full, and it stopped without marking the page truncated.
+#[test]
+fn a_device_with_no_room_from_the_start_says_the_page_was_left_out() {
+    use hayro::hayro_interpret::{Context, InterpreterCache, interpret_page};
+    let pdf = Pdf::new(Arc::new(doubling_forms(2))).unwrap();
+    let page = &pdf.pages()[0];
+    let truncated = Arc::new(Mutex::new(false));
+    let seen = truncated.clone();
+    let settings = InterpreterSettings {
+        warning_sink: Arc::new(move |w| {
+            if matches!(w, InterpreterWarning::ContentTruncated) {
+                *seen.lock().unwrap() = true;
+            }
+        }),
+        ..Default::default()
+    };
+    let cache = InterpreterCache::new();
+    let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 200.0, 200.0), &cache, page.xref(), settings);
+    let mut device = Room { room: 0, paths: 0 };
+    interpret_page(page, &mut ctx, &mut device);
+    assert_eq!(device.paths, 0, "nothing is drawn");
+    assert!(*truncated.lock().unwrap(), "the page says content was left out");
+}
+
+/// A page filled with a 200 x 200 tiling pattern whose cell paints `fills - 1` black fills of
+/// [`stripes`] and then fills the whole cell red (the rasterizer asks the same room of every
+/// path, a canvas' worth): its pixels and whether it said content was left out.
+fn stripes_cell(fills: usize) -> (Vec<u8>, bool) {
+    let black = stripes();
+    let mut cell: Vec<&str> = vec![black.as_str(); fills.saturating_sub(1)];
+    cell.push("1 0 0 rg 0 0 200 200 re f");
+    let cell = cell.join("\n");
+    let content = "/Pattern cs /P0 scn 0 0 200 200 re f";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Pattern << /P0 5 0 R >> >> >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        format!(
+            "<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 200 200] /XStep 200 /YStep 200 /Resources << >> /Length {} >>\nstream\n{cell}\nendstream",
+            cell.len()
+        ),
+    ];
+    render_kept_to(pdf_of(&objs), None)
+}
+
+/// A tiling cell whose last fill is the first its coverage budget leaves out says the page was
+/// left out. Every other fill past the budget is caught by the check before the next operator;
+/// after the last one there was none, so the cell was drawn without it and nothing was said.
+/// The cell's fills are counted to the one the budget first refuses, by its colour: the red
+/// last fill covers the cell until the cell has one fill too many.
+#[test]
+fn a_tiling_cell_whose_last_fill_is_left_out_says_so() {
+    let held = stripes_within_the_budget() as usize;
+    let mut first_refused = None;
+    for fills in held.saturating_sub(4)..held + 4 {
+        let (pixels, cut) = stripes_cell(fills);
+        if red(&pixels) == 0 {
+            first_refused = Some((fills, cut));
+            break;
+        }
+        assert!(!cut, "{fills} fills fit and nothing is said to be left out");
+    }
+    let (fills, cut) = first_refused.expect("the budget refuses a fill near the estimate");
+    assert!(fills > held.saturating_sub(4), "the cell with the fewest fills, {fills}, draws its last one");
+    assert!(cut, "the cell's last fill, the {fills}th, is left out and the page says so");
 }
 
 #[test]
