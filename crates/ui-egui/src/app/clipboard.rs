@@ -126,11 +126,17 @@ impl PdfCraftApp {
         self.text_copies.reprioritize(|doc, priority| (!copied && open(views, doc)).then_some(priority));
     }
 
-    /// Copy on the canvas: with objects selected in Edit a PDF, those; with no text selected, the
-    /// selected comments with their replies; else the text; else the selected image.
+    /// Copy on the canvas: while preparing a form, the selected fields; with objects selected in
+    /// Edit a PDF, those; with no text selected, the selected comments with their replies; else
+    /// the text; else the selected image.
     pub(crate) fn copy_from_canvas(&mut self, ctx: &egui::Context, i: usize) -> bool {
         if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
             return false;
+        }
+        if self.is_preparing()
+            && let Some(names) = self.views.get_mut(i).and_then(|v| crate::prepare::copy_selected(&mut v.session.prepare))
+        {
+            return self.put_text(&names);
         }
         // Objects selected together in Edit a PDF take the copy.
         if self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.session.objects.count() > 0) {
@@ -207,6 +213,11 @@ impl PdfCraftApp {
         let text = delivered_text
             .or_else(|| if self.clipboard.has(&[TEXT]) { self.clipboard.read_text().ok().flatten().filter(|t| !t.is_empty()) } else { None });
         let image = delivered_image.or_else(|| self.clipboard.read_image().ok().flatten());
+        // Prepare a form keeps Paste for its fields: anything else on the clipboard pastes nothing.
+        if self.is_preparing() {
+            self.paste_fields(i, text.as_deref());
+            return;
+        }
         if self.quick_tool == QuickTool::EditText && self.object_clipboard.is_some() && self.pastes_objects(text.as_deref(), image.as_ref()) {
             self.paste_objects(ctx, i);
             return;
@@ -234,6 +245,19 @@ impl PdfCraftApp {
             }
         }
         self.paste_image(ctx, page, None);
+    }
+
+    /// Paste while preparing a form: the fields Copy took, when the clipboard still holds their
+    /// copy (`text`), they still exist, and the document may be changed.
+    fn paste_fields(&mut self, i: usize, text: Option<&str>) {
+        let Some(view) = self.views.get_mut(i) else { return };
+        let Some(doc) = self.session.get(view.id) else { return };
+        if !crate::prepare::pastes_fields(&view.session.prepare, text) || !doc.allows_modification() {
+            return;
+        }
+        if let Some(edit) = crate::prepare::paste_copied(view, &doc.form, &doc.info.pages) {
+            view.session.pending_edit = Some(edit);
+        }
     }
 
     /// Copy in Edit a PDF with objects selected together: copy them for Paste in any open

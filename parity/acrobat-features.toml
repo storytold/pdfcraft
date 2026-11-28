@@ -5248,6 +5248,18 @@ evidence = ["crates/forms/src/tests.rs::duplicating_a_field_across_pages_shares_
 notes = "right-click a field ▸ Duplicate: all pages or a range; one field, shared value"
 
 [[feature]]
+id = "form.copy-paste-fields"
+title = "Copy and paste fields"
+area = "F"
+tier = "P1"
+milestone = "M6"
+status = "shipped"
+commands = ["form.prepare", "edit.copy"]
+tools = ["form_copy_field"]
+evidence = ["crates/forms/src/tests.rs::copying_a_field_makes_an_independent_field", "crates/forms/src/tests.rs::a_pasted_field_does_not_share_its_look_with_the_source", "crates/forms/src/tests.rs::a_transparent_borderless_multiline_field_pastes_onto_another_page_as_it_was", "crates/ui-egui/tests/it/prepare.rs::copying_and_pasting_the_selected_fields", "crates/ui-egui/tests/it/prepare.rs::pasting_other_text_does_not_paste_the_copied_fields", "crates/ui-egui/tests/it/prepare.rs::a_paste_on_a_turned_page_moves_right_and_down_as_shown", "crates/automation/tests/it/automation.rs::copying_a_field_through_tools"]
+notes = "Prepare a form: Copy (Edit menu or ⌘C) takes the selected fields, Paste (⌘V) adds them on the current page as fields of their own (next free name, own value, own appearance streams, flags and look kept), one step right and down as shown on their own page, in place on another (#1571). Paste brings the fields back only while the clipboard still holds their copy. Copies are taken at paste time, by name, and only within the same document: no Cut, and pasting into another PDF is not supported yet (#2543)"
+
+[[feature]]
 id = "form.multiple-copies"
 title = "Create multiple copies of a field in a grid"
 area = "F"

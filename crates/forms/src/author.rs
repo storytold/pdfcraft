@@ -10,6 +10,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 use crate::{Field, FieldKind, FormError, Widget, appearance, fields, flags, page_refs};
 
+mod copy;
 mod edit;
 mod join;
 mod lifecycle;
@@ -18,6 +19,7 @@ mod tree;
 
 pub(crate) use tree::ancestor_sets;
 
+pub use copy::copy_field;
 pub use edit::set_props;
 pub(crate) use edit::set_props_object;
 pub use lifecycle::{add_field, delete_field, delete_field_object, delete_widget, duplicate_field};

@@ -113,7 +113,7 @@ impl PdfCraftApp {
             crate::menus::PASTE => Some("page.paste"),
             _ => None,
         };
-        if !organize && !self.is_preparing() && id == crate::menus::PASTE && fired.pasted.is_some() {
+        if !organize && id == crate::menus::PASTE && fired.pasted.is_some() {
             if let Some(i) = self.active.filter(|&i| i < self.views.len()) {
                 self.paste_from_clipboard_at(ctx, i, fired.pasted.as_ref(), fired.paste_at);
             }
@@ -288,7 +288,8 @@ impl PdfCraftApp {
                 || self.active.and_then(|i| self.views.get(i)).is_some_and(|v| {
                     // Selected text, or a picked picture, which Copy takes in its original format.
                     !v.organize
-                        && (v.session.all_text
+                        && (self.is_preparing() && v.session.prepare.selected.is_some()
+                            || v.session.all_text
                             || v.selection_waits_for_text().is_some()
                             || v.selected_text().is_some_and(|t| !t.is_empty())
                             || v.session.picked_image.is_some()

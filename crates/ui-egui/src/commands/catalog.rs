@@ -201,6 +201,8 @@ fn enabled(app: &PdfCraftApp, ctx: &egui::Context, command: &CommandRef) -> bool
         "file.close" if !has_doc && super::mac_shortcuts(ctx) && !cfg!(target_arch = "wasm32") => true,
         "edit.copy" if organize => enabled_id("page.copy"),
         "edit.copy" if view.is_some_and(|v| v.session.picked_image.is_some()) => doc.is_some_and(|d| d.allows_copying()),
+        // Copy takes the fields selected while preparing a form.
+        "edit.copy" if app.is_preparing() && view.is_some_and(|v| v.session.prepare.selected.is_some()) => true,
         "edit.copy"
             if app.is_preparing()
                 && view.is_some_and(|v| v.session.comments.primary().is_some() && v.selected_text().is_none_or(|t| t.is_empty())) =>

@@ -363,6 +363,14 @@ pub enum Edit {
         name: String,
         pages: Vec<usize>,
     },
+    /// Copy and paste a field: a new, independent field made of copies of its widgets
+    /// `widgets` (all when empty), on `page`, moved by `offset` (user space).
+    CopyField {
+        name: String,
+        widgets: Vec<usize>,
+        page: usize,
+        offset: [f64; 2],
+    },
     DeleteField {
         name: String,
     },

@@ -861,6 +861,24 @@ impl Automation {
         Ok(json!(names))
     }
 
+    pub(crate) fn form_copy_field(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let doc = self.doc(a)?;
+        let name = a.str("field")?.to_owned();
+        if !doc.form.iter().any(|f| f.name == name) {
+            return Err(failed(format!("there is no field named {name:?} (see form_fields)")));
+        }
+        let (dx, dy) = (a.opt_num("dx")?.unwrap_or(0.0), a.opt_num("dy")?.unwrap_or(0.0));
+        // Points right and down on the displayed page → a move in user space.
+        let p = doc.info.pages.get(page).ok_or_else(|| failed(format!("page {} does not exist", page + 1)))?;
+        let (o, m) = (p.view_to_user_f64(0.0, 0.0), p.view_to_user_f64(dx, dy));
+        let offset = [m[0] - o[0], m[1] - o[1]];
+        let before: Vec<String> = doc.form.iter().map(|f| f.name.clone()).collect();
+        let mut out = self.apply(a, Edit::CopyField { name, widgets: Vec::new(), page, offset })?;
+        out["field"] = json!(self.doc(a)?.form.iter().map(|f| &f.name).find(|n| !before.contains(n)));
+        Ok(out)
+    }
+
     pub(crate) fn form_delete_field(&mut self, a: &Args) -> Result<Value> {
         let name = a.str("field")?.to_owned();
         if !self.doc(a)?.form.iter().any(|f| f.name == name) {

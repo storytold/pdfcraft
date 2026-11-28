@@ -7767,3 +7767,259 @@ fn page_scripts_are_the_pages_own_then_each_annotations_in_order() {
     assert_eq!(got, [(None, "close()"), (Some("anim"), "stop();")], "a URI action is not a script");
     assert!(page_scripts(&doc, 1, PageEvent::Open).is_empty(), "no such page");
 }
+
+#[test]
+fn copying_a_field_makes_an_independent_field() {
+    let mut doc = fixture();
+    // address.city takes its value and read-only flag from its parent.
+    let address = ObjRef::new(15, 0);
+    doc.update_dict(address, |d| {
+        d.set(b"V".to_vec(), PdfString::text("Paris"));
+        d.set(b"Ff".to_vec(), Object::Int(flags::READ_ONLY as i64));
+    })
+    .unwrap();
+    let city = copy_field(&mut doc, "address.city", &[], 0, [0.0, -40.0]).unwrap();
+    assert_eq!(city, "city1", "a top-level field named after the original's own name");
+    set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into()))).unwrap();
+    // One button of a radio group: the selected one stays behind, so the copy has no choice.
+    let small = copy_field(&mut doc, "size", &[0], 0, [0.0, -40.0]).unwrap();
+    let both = copy_field(&mut doc, "size", &[], 0, [0.0, -80.0]).unwrap();
+    assert_eq!((small.as_str(), both.as_str()), ("size1", "size2"));
+    set_value(&mut doc, &both, &FieldValue::Radio(Some("S".into()))).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let copy = field(&all, "city1");
+    assert_eq!((copy.kind, copy.value.as_slice(), copy.quadding), (FieldKind::Text, &["Paris".to_string()][..], 1));
+    assert!(copy.read_only(), "inherited flags come along");
+    assert_eq!(copy.widgets[0].rect, [50.0, 430.0, 250.0, 450.0]);
+    let small = field(&all, "size1");
+    assert_eq!(small.widgets.iter().map(|w| w.on_state.clone().unwrap()).collect::<Vec<_>>(), ["S"]);
+    assert!(small.value.is_empty(), "{:?}", small.value);
+    let both = field(&all, "size2");
+    assert_eq!(both.widgets.iter().map(|w| (w.on_state.clone().unwrap(), w.rect[1])).collect::<Vec<_>>(), [("S".into(), 570.0), ("L".into(), 570.0)]);
+    assert_eq!(
+        (both.value.as_slice(), field(&all, "size").value.as_slice()),
+        (&["S".to_string()][..], &["L".to_string()][..]),
+        "values are separate"
+    );
+    assert_eq!(field(&all, "size").widgets.len(), 2, "the original keeps its buttons");
+    assert!(copy_field(&mut doc.clone(), "size", &[2], 0, [0.0, 0.0]).is_err());
+    assert!(copy_field(&mut doc.clone(), "size", &[], 3, [0.0, 0.0]).is_err());
+}
+
+#[test]
+fn copying_a_field_keeps_an_inherited_character_limit() {
+    let mut doc = fixture();
+    doc.update_dict(ObjRef::new(15, 0), |d| {
+        d.set(b"FT".to_vec(), Object::name("Tx"));
+        d.set(b"Ff".to_vec(), Object::Int(flags::COMB as i64));
+        d.set(b"MaxLen".to_vec(), Object::Int(5));
+    })
+    .unwrap();
+    assert_eq!(field(&fields(&doc), "address.city").max_len, Some(5), "pdfcraft reads MaxLen as inherited");
+    let copy = copy_field(&mut doc, "address.city", &[], 0, [0.0, -40.0]).unwrap();
+    let all = fields(&doc);
+    let c = field(&all, &copy);
+    assert!(c.has(flags::COMB), "the comb flag came along");
+    assert_eq!(c.max_len, Some(5), "the inherited MaxLen came along");
+}
+
+#[test]
+fn copying_one_radio_button_keeps_its_export_value() {
+    let mut doc = fixture();
+    doc.update_dict(ObjRef::new(20, 0), |d| {
+        d.set(b"Opt".to_vec(), Object::Array(vec![Object::String(PdfString::text("Small")), Object::String(PdfString::text("Large"))]));
+    })
+    .unwrap();
+    assert_eq!(field(&fields(&doc), "size").export_of(1), Some("Large"));
+    let copy = copy_field(&mut doc, "size", &[1], 0, [0.0, -40.0]).unwrap();
+    let all = fields(&doc);
+    let c = field(&all, &copy);
+    assert_eq!(c.widgets.len(), 1);
+    assert_eq!(c.options.len(), 1, "one /Opt entry per copied widget: {:?}", c.options);
+    assert_eq!(c.export_of(0), Some("Large"));
+}
+
+#[test]
+fn copying_a_radio_button_keeps_an_inherited_export_value() {
+    let mut doc = fixture();
+    let opt = Object::Array(vec![Object::String(PdfString::text("Small")), Object::String(PdfString::text("Large"))]);
+    let group = doc.add(Object::Dict({
+        let mut d = Dict::new();
+        d.set(b"T".to_vec(), PdfString::text("sizes"));
+        d.set(b"Opt".to_vec(), opt);
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(20, 0))]));
+        d
+    }));
+    doc.update_dict(ObjRef::new(20, 0), |d| d.set(b"Parent".to_vec(), Object::Ref(group))).unwrap();
+    doc.update_dict(ObjRef::new(4, 0), |d| {
+        let listed = d.get(b"Fields").and_then(|f| f.as_array().cloned()).unwrap_or_default();
+        let listed = listed.into_iter().map(|f| if f.as_ref() == Some(ObjRef::new(20, 0)) { Object::Ref(group) } else { f }).collect();
+        d.set(b"Fields".to_vec(), Object::Array(listed));
+    })
+    .unwrap();
+    let copy = copy_field(&mut doc, "sizes.size", &[1], 0, [0.0, -40.0]).unwrap();
+    let all = fields(&doc);
+    let c = field(&all, &copy);
+    assert_eq!(c.options, [("Large".to_string(), "Large".to_string())], "the parent's /Opt, cut to the copied button");
+    assert_eq!(c.export_of(0), Some("Large"));
+}
+
+/// A radio group whose on states are positions in its `/Opt` (`/0`, `/1`, `/2`), as ISO 32000-2
+/// allows for buttons with `/Opt`, with the third button selected.
+fn numbered_radio() -> Document {
+    let widget = |i: usize, on: bool| {
+        let (x, state) = (50 + 30 * i, if on { format!("/{i}") } else { "/Off".into() });
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS {state} /Rect [{x} 700 {} 715] /P 3 0 R /AP << /N << /{i} 9 0 R /Off 9 0 R >> /D << /{i} 9 0 R /Off 9 0 R >> >> >>",
+            x + 15
+        )
+    };
+    document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /FT /Btn /T (pick) /Ff 49152 /V /2 /DV /2 /Opt [(first) (second) (third)] /Kids [6 0 R 7 0 R 8 0 R] >>".into(),
+        widget(0, false),
+        widget(1, false),
+        widget(2, true),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ])
+}
+
+#[test]
+fn copying_a_numbered_radio_button_renumbers_its_state() {
+    let mut doc = numbered_radio();
+    let copy = copy_field(&mut doc, "pick", &[2], 0, [0.0, -40.0]).unwrap();
+    let all = fields(&doc);
+    let c = field(&all, &copy);
+    assert_eq!(c.widgets.len(), 1);
+    assert_eq!(c.widgets[0].on_state.as_deref(), Some("0"), "the only button is position 0 in the copy's /Opt");
+    assert_eq!(c.widgets[0].state.as_deref(), Some("0"));
+    assert_eq!((c.value.as_slice(), c.default.as_slice()), (&["0".to_string()][..], &["0".to_string()][..]));
+    assert_eq!(c.options, [("third".to_string(), "third".to_string())]);
+    let w = doc.get(c.widgets[0].obj).as_dict().cloned().unwrap();
+    let down = w.get(b"AP").and_then(|a| a.as_dict().and_then(|a| a.get(b"D").cloned())).unwrap();
+    let mut down: Vec<String> = down.as_dict().unwrap().iter().map(|(k, _)| name_text(k)).collect();
+    down.sort();
+    assert_eq!(down, ["0", "Off"], "the down appearance is renamed too");
+    assert_eq!(field(&all, "pick").widgets[2].on_state.as_deref(), Some("2"), "the original is untouched");
+}
+
+#[test]
+fn copying_an_unselected_numbered_radio_button_copies_it_off() {
+    let mut doc = numbered_radio();
+    let copy = copy_field(&mut doc, "pick", &[1], 0, [0.0, -40.0]).unwrap();
+    let c = doc.get(field(&fields(&doc), &copy).obj).as_dict().cloned().unwrap();
+    assert_eq!((c.name(b"V"), c.name(b"DV")), (Some(&b"Off"[..]), Some(&b"Off"[..])), "/2 isn't one of the copied buttons");
+    assert_eq!(c.name(b"AS"), Some(&b"Off"[..]));
+}
+
+#[test]
+fn a_copied_signed_signature_field_is_drawn_blank() {
+    let mut doc = fixture();
+    let name = add_field(&mut doc, 0, [50.0, 220.0, 250.0, 270.0], &NewField::Signature, None).unwrap();
+    let sig = field(&fields(&doc), &name).obj;
+    // Signed: a value and the signer's visible appearance (object 7 stands in for it).
+    doc.update_dict(sig, |d| {
+        d.set(b"V".to_vec(), Object::Ref(ObjRef::new(8, 0)));
+        d.set(
+            b"AP".to_vec(),
+            Object::Dict({
+                let mut ap = Dict::new();
+                ap.set(b"N".to_vec(), Object::Ref(ObjRef::new(7, 0)));
+                ap
+            }),
+        );
+    })
+    .unwrap();
+    let copy = copy_field(&mut doc, &name, &[], 0, [0.0, -60.0]).unwrap();
+    let all = fields(&doc);
+    let c = field(&all, &copy);
+    let w = doc.get(c.widgets[0].obj).as_dict().cloned().unwrap();
+    assert!(!w.contains(b"V"), "no signature value");
+    let n = w.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.get(b"N").cloned()));
+    assert_ne!(n, Some(Object::Ref(ObjRef::new(7, 0))), "the copy must not show the signer's appearance");
+}
+
+/// The widget's `/AP /N` stream, when it is one stream.
+fn normal_look(doc: &Document, f: &Field) -> Option<ObjRef> {
+    let w = doc.get(f.widgets.first()?.obj);
+    let ap = doc.resolve(w.as_dict()?.get(b"AP")?);
+    ap.as_dict()?.reference(b"N")
+}
+
+#[test]
+fn a_pasted_field_does_not_share_its_look_with_the_source() {
+    let mut doc = fixture();
+    // The source's border and background dictionaries are indirect: shared, they would be
+    // restyled in place for both.
+    let source = field(&fields(&doc), "name").obj;
+    let mk = doc.add(doc.get(source).as_dict().unwrap().get(b"MK").unwrap().clone());
+    let mut bs = pdfcraft_cos::Dict::new();
+    bs.set(b"W".to_vec(), Object::Real(1.0));
+    let bs = doc.add(Object::Dict(bs));
+    doc.update_dict(source, |d| {
+        d.set(b"MK".to_vec(), Object::Ref(mk));
+        d.set(b"BS".to_vec(), Object::Ref(bs));
+    })
+    .unwrap();
+    let copy = copy_field(&mut doc, "name", &[], 0, [0.0, -300.0]).unwrap();
+    let before = look(&doc, field(&fields(&doc), "name"));
+    assert_eq!(look(&doc, field(&fields(&doc), &copy)), before, "the copy looks like the source");
+    let props = FieldProps {
+        appearance: Some(LookPatch { fill: Some(Some([0.0, 0.0, 1.0])), width: Some(3.0), ..Default::default() }),
+        ..Default::default()
+    };
+    set_props(&mut doc, &copy, &props).unwrap();
+    let all = fields(&doc);
+    assert_eq!(look(&doc, field(&all, "name")), before, "restyling the copy left the source alone");
+    assert_ne!(look(&doc, field(&all, &copy)), before);
+
+    // A password field's appearance is redrawn in place when its value changes.
+    set_value(&mut doc, "pin", &FieldValue::Text("12".into())).unwrap();
+    let pin = copy_field(&mut doc, "pin", &[], 0, [0.0, -300.0]).unwrap();
+    let all = fields(&doc);
+    let (source, copied) = (normal_look(&doc, field(&all, "pin")).unwrap(), normal_look(&doc, field(&all, &pin)).unwrap());
+    assert_ne!(source, copied, "the copy has an appearance stream of its own");
+    assert_eq!(doc.get(source), doc.get(copied), "with the source's content");
+    let before = doc.get(source);
+    set_value(&mut doc, &pin, &FieldValue::Text("123456".into())).unwrap();
+    assert_eq!(doc.get(source), before, "filling in the copy left the source's look as it was");
+}
+
+#[test]
+fn a_transparent_borderless_multiline_field_pastes_onto_another_page_as_it_was() {
+    // A calendar day: a multiline text field with no background or border.
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 8 0 R] /Count 2 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Mon1) /Ff 4096 /DA (/Helv 8 Tf 0 g) /F 4 /MK << >> /BS << /W 0 >> \
+         /Rect [40 600 120 680] /P 3 0 R /AP << /N 7 0 R >> >>"
+            .into(),
+        "<< /Length 4 /BBox [0 0 80 80] >>\nstream\n/Tx \nendstream".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let copy = copy_field(&mut doc, "Mon1", &[], 1, [0.0, 0.0]).unwrap();
+    assert_eq!(copy, "Mon2", "the next free name");
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let (s, c) = (field(&all, "Mon1"), field(&all, &copy));
+    assert!(c.has(flags::MULTILINE), "still multiline");
+    assert_eq!(look(&doc, c), look(&doc, s), "same look");
+    let l = look(&doc, c);
+    assert_eq!((l.fill, l.border), (None, None), "still transparent with no border");
+    assert_eq!((c.widgets[0].page, c.widgets[0].rect), (Some(1), s.widgets[0].rect), "on page 2, in the same place");
+    assert_eq!((s.widgets[0].page, all.len()), (Some(0), 2), "the source stays on page 1");
+    let w = doc.get(c.widgets[0].obj);
+    let w = w.as_dict().unwrap();
+    assert_eq!(w.get(b"F").and_then(Object::as_int), Some(4), "printable, as the source");
+    let (sa, ca) = (normal_look(&doc, s).unwrap(), normal_look(&doc, c).unwrap());
+    assert_ne!(sa, ca);
+    assert_eq!(doc.get(sa), doc.get(ca), "the source's appearance, not a redrawn one");
+}

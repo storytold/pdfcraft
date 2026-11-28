@@ -15,11 +15,13 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageBoxDrag, PageSession, PageXform};
 
+mod clip;
 pub(crate) mod dialog;
 mod draft;
 mod properties;
 mod tabs;
 pub(crate) mod tool;
+pub(crate) use clip::{copy_selected, paste_copied, pastes_fields};
 pub use dialog::FieldPropsDialog;
 
 pub use draft::{ACTION_KINDS, ActionDraft, FieldDraft, FieldTab};
@@ -167,6 +169,14 @@ pub struct PrepareView {
     pub also: Vec<(String, usize)>,
     /// Select the field an Add field edit creates (the form's length before it).
     pub select_added: Option<usize>,
+    /// Select every field a Paste creates (the form's length before it).
+    select_pasted: Option<usize>,
+    /// The widgets Copy took, as they were selected.
+    copied: Vec<(String, usize)>,
+    /// The text Copy put on the clipboard.
+    clip: String,
+    /// How many times the copied fields have been pasted: each paste lands one step further.
+    pastes: u32,
     gesture: Gesture,
     outcome: PrepareOutcome,
 }
@@ -418,9 +428,15 @@ pub(crate) fn select_all(view: &mut DocView, form: &[FormField]) {
     view.session.prepare.also = selected.collect();
 }
 
-/// After an Add field edit: select the new field (the form's last).
+/// After an Add field edit: select the new field (the form's last); after a Paste, every
+/// widget of the pasted fields.
 pub(crate) fn after_refresh(session: &mut PageSession, form: &[FormField]) {
     session.prepare.also.retain(|(name, wi)| form.iter().any(|f| &f.name == name && *wi < f.widgets.len()));
+    if let Some(added) = session.prepare.select_pasted.take().and_then(|n| form.get(n..)).filter(|a| !a.is_empty()) {
+        let mut keys = added.iter().flat_map(|f| (0..f.widgets.len()).map(|wi| (f.name.clone(), wi)));
+        session.prepare.selected = keys.next();
+        session.prepare.also = keys.collect();
+    }
     if let Some(n) = session.prepare.select_added.take() {
         if form.len() > n
             && let Some(f) = form.last()
