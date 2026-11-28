@@ -1126,6 +1126,57 @@ fn character_encoding_rejects_unknown_cmaps_and_foreign_collections() {
     assert_eq!(status(&checked(&doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding), Status::Passed, "ToUnicode is still sufficient");
 }
 
+/// Issue #8211: a font selected by `gs` (ExtGState `/Font`) is text the page draws, so the
+/// character-encoding rule checks it the same way it checks a font selected by `Tf`.
+#[test]
+fn character_encoding_checks_a_font_set_by_a_graphics_state() {
+    let bad = "<< /Type /Font /Subtype /Type0 /BaseFont /Custom /Encoding /Identity-H /DescendantFonts [6 0 R] >>";
+    let cid = "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Custom /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >>";
+    let via_gs = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /ExtGState << /GS1 << /Font [5 0 R 12] >> >> >> >>"
+                .into(),
+            stream("/GS1 gs BT 20 300 Td (abc) Tj ET"),
+            bad.into(),
+            cid.into(),
+        ],
+        "",
+    );
+    let report = checked(&via_gs, &[Rule::CharacterEncoding]);
+    assert_eq!(status(&report, Rule::CharacterEncoding), Status::Failed);
+    assert!(report.result(Rule::CharacterEncoding).unwrap().findings[0].message.contains("Custom"));
+
+    let via_tf = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+            stream("BT /F1 12 Tf 20 300 Td (abc) Tj ET"),
+            bad.into(),
+            cid.into(),
+        ],
+        "",
+    );
+    assert_eq!(status(&checked(&via_tf, &[Rule::CharacterEncoding]), Rule::CharacterEncoding), Status::Failed);
+
+    // A graphics state with no font leaves the text's own font to `Tf`. One that selects a font
+    // with a Unicode route does not fail the rule.
+    let fine = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+    let clear = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS0 << /LW 1 >> /GS1 << /Font [5 0 R 12] >> >> >> >>".into(),
+            stream("/GS0 gs BT /F1 12 Tf (ok) Tj ET /GS1 gs (also) Tj"),
+            fine.into(),
+        ],
+        "",
+    );
+    assert_eq!(status(&checked(&clear, &[Rule::CharacterEncoding]), Rule::CharacterEncoding), Status::Passed);
+}
+
 #[test]
 fn character_encoding_resolves_indirect_cid_metadata() {
     use pdfcraft_cos::{Dict, ObjRef, PdfString};

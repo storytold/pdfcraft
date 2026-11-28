@@ -53,6 +53,14 @@ struct Walk<'a> {
     budget: DecodeBudget,
 }
 
+/// The font a `gs` operator selects: the first entry of that graphics state's `/Font` array,
+/// when it names an indirect font. A state with no `/Font` selects none.
+fn extgstate_font(doc: &Document, states: &Dict, name: Option<&[u8]>) -> Option<ObjRef> {
+    let state = doc.resolve(states.get(name?)?);
+    let font = doc.resolve(state.as_dict()?.get(b"Font")?);
+    font.as_array()?.first().and_then(Object::as_ref)
+}
+
 fn bdc_marks(doc: &Document, op: &pdfcraft_content::Op, props: &Dict) -> bool {
     op.name(0) == Some(b"Artifact")
         || match op.operands.get(1) {
@@ -88,6 +96,13 @@ impl Walk<'_> {
                 }
                 b"Tf" => {
                     if let Some(r) = op.name(0).and_then(|n| fonts.get(n)).and_then(Object::as_ref) {
+                        self.scan.fonts.entry(self.page).or_default().insert(r);
+                    }
+                }
+                // A graphics state can select a font too (`/Font [font size]`, ISO 32000-2 Table 57).
+                b"gs" => {
+                    let states = self.sub(res, b"ExtGState");
+                    if let Some(r) = extgstate_font(self.doc, &states, op.name(0)) {
                         self.scan.fonts.entry(self.page).or_default().insert(r);
                     }
                 }
