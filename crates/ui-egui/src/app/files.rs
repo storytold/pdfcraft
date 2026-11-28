@@ -58,7 +58,10 @@ impl PdfCraftApp {
             return;
         }
         let target = target.to_string_lossy().into_owned();
-        self.open_path(&target);
+        // A failed open has told the user why; no success notice after it.
+        if matches!(self.open_path(&target), OpenOutcome::Failed(_)) {
+            return;
+        }
         self.notify(if signed {
             tl!("Opened an editable copy. The original is unchanged; its digital signature isn't valid in the copy.").to_string()
         } else {
