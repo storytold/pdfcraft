@@ -23,6 +23,8 @@ pub(crate) struct OpenPrompts {
     pub(crate) sanitize: Option<DialogId>,
     /// The question about locking placed signatures into the page before a save (`pending_lock`).
     pub(crate) lock_signatures: Option<DialogId>,
+    /// The confirmation question before deleting pages.
+    pub(crate) delete_pages: Option<DialogId>,
 }
 
 /// `name` cut to at most `max` characters by replacing its middle with "…", keeping the start and
@@ -130,6 +132,23 @@ impl PdfCraftApp {
         self.prompts.remote_link = Some(self.dialogs.open(prompt));
     }
 
+    /// Ask before deleting pages.
+    pub(crate) fn ask_delete_pages(&mut self, pages: &[usize]) {
+        let n = pages.len();
+        let message = if n == 1 {
+            tl!("Are you Sure you want to delete this page?").to_string()
+        } else {
+            crate::i18n::fmt(tl!("Are you Sure you want to delete these {n} pages?"), &[("n", &n.to_string())])
+        };
+        let prompt = StandardPrompt::custom(message)
+            .title(tl!("Delete page?"))
+            .button(PromptChoice::Proceed, tl!("Delete"))
+            .button(PromptChoice::Cancel, tl!("Cancel"))
+            .default_choice(PromptChoice::Proceed)
+            .instance("delete-pages");
+        self.prompts.delete_pages = Some(self.dialogs.open(prompt));
+    }
+
     /// One pass over the document prompts: takes each open prompt's answer, cancels a prompt whose question is
     /// gone, then opens the prompts that are pending. An answer is taken once, so a second pass in a frame
     /// applies nothing twice.
@@ -194,6 +213,20 @@ impl PdfCraftApp {
             match result {
                 DialogResult::Ok(answer) => super::signature::finish_lock(ctx, self, answer),
                 _ => self.pending_lock = None,
+            }
+        }
+        if let Some(dialog) = self.prompts.delete_pages {
+            if let Some(go) = proceeded(self.dialogs.take_by_id::<StandardPrompt>(dialog)) {
+                self.prompts.delete_pages = None;
+                if go {
+                    self.confirm_delete_pages(ctx);
+                } else {
+                    self.delete_pages_draft = None;
+                }
+            } else if self.delete_pages_draft.as_ref().is_none_or(|d| self.session.get(d.doc).is_none()) {
+                self.dialogs.cancel_by_id(ctx, dialog);
+                self.prompts.delete_pages = None;
+                self.delete_pages_draft = None;
             }
         }
         if self.pending_link.is_some() && self.prompts.link.is_none() {
