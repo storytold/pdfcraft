@@ -17,6 +17,7 @@ use crate::{
 pub struct OpenContext {
     now: Option<i64>,
     js_off: bool,
+    inspection: bool,
     trust: Arc<TrustStore>,
     highlight: bool,
     captions: Arc<StatusCaptions>,
@@ -70,6 +71,7 @@ impl Session {
         OpenContext {
             now: self.now(),
             js_off: self.js_off,
+            inspection: self.inspection,
             trust: self.trust.clone(),
             highlight: self.field_highlight,
             captions: self.captions.clone(),
@@ -105,6 +107,15 @@ impl Session {
         self.docs.push(document);
         self.run_open_scripts(id);
         id
+    }
+
+    /// Open documents only to inspect them (`pdfcraft-cli info`): what they hold and the notes
+    /// about damage repaired while opening them, as the app reads them, but with no signature
+    /// validated and no display copy drawn (the comments and fields the file leaves to the viewer
+    /// to draw, and signature states). Such a document is not for showing: its pages render
+    /// without those, and it lists no signatures. Off by default.
+    pub fn set_inspection(&mut self, on: bool) {
+        self.inspection = on;
     }
 
     /// Synchronous convenience API used by the CLI and automation.
@@ -336,7 +347,14 @@ impl Session {
             Err(_) => (None, Some("the document structure could not be read for editing".into())),
         };
         let sig_cache = Arc::new(pdfcraft_sign::DigestCache::default());
-        let mut signatures = editor.as_ref().map(|e| editor_signatures(e, &bytes, &context.trust, &sig_cache)).unwrap_or_default();
+        // A document opened only to be inspected validates no signature and draws no display copy:
+        // neither adds to what it reports (its repair notes, standards and form), and on a large
+        // file they took most of the time `info` spends (see [`Session::set_inspection`]).
+        let mut signatures = if context.inspection {
+            Vec::new()
+        } else {
+            editor.as_ref().map(|e| editor_signatures(e, &bytes, &context.trust, &sig_cache)).unwrap_or_default()
+        };
         // Only a signed file needs keeping as it was read.
         if !signatures.iter().any(|s| s.signed)
             && let Some(e) = editor.as_mut()
@@ -354,7 +372,7 @@ impl Session {
         }
         // The print preview draws the layers as they print.
         config.print_layers = print_preview_layers(editor.as_ref().map(|e| &e.cos), &info.layers);
-        let display = display_bytes(editor.as_mut(), &bytes, &mut signatures, &context.captions);
+        let display = if context.inspection { bytes.clone() } else { display_bytes(editor.as_mut(), &bytes, &mut signatures, &context.captions) };
         let renderer = RenderPool::new(display.clone(), render_threads(), display_config(&config));
         let (form, adopted) = editor
             .as_ref()
