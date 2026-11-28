@@ -371,3 +371,59 @@ fn a_blank_page_is_on_the_system_regions_paper() {
         );
     }
 }
+
+/// Opening an imported image and closing its tab without making any changes does not
+/// trigger a "save changes" confirmation prompt (#4942).
+#[test]
+fn unmodified_imported_image_closes_without_save_prompt() {
+    let ctx = egui::Context::default();
+    let mut app = crate::control::new_app();
+    app.set_option(&ctx, "language", "en").unwrap();
+    app.open_bytes(&ctx, "photo.png", None, png()).unwrap();
+    assert_eq!(app.views.len(), 1);
+    app.request_close_tab(&ctx, 0);
+    assert!(!app.dialogs.is_open::<craft::ui::dialog::UnsavedChangesDialog>(), "no save confirmation prompt asked on close");
+    assert!(app.views.is_empty(), "tab closed cleanly");
+}
+
+/// An imported image that receives a user edit prompts to save on tab close (#4942).
+#[test]
+fn modified_imported_image_prompts_to_save_on_close() {
+    let ctx = egui::Context::default();
+    let mut app = crate::control::new_app();
+    app.set_option(&ctx, "language", "en").unwrap();
+    app.open_bytes(&ctx, "photo.png", None, png()).unwrap();
+    assert_eq!(app.views.len(), 1);
+    app.apply_edit(&ctx, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    app.request_close_tab(&ctx, 0);
+    assert!(app.dialogs.is_open::<craft::ui::dialog::UnsavedChangesDialog>(), "save prompt is presented when closing edited image");
+    assert_eq!(app.views.len(), 1, "tab stays open pending user decision");
+}
+
+/// Close prompts for an imported image follow edit, undo and redo: an edit makes it unsaved,
+/// undoing back to the imported bytes makes it clean again, and redo makes it unsaved (#4942).
+#[test]
+fn imported_image_close_prompt_follows_edit_undo_and_redo() {
+    let ctx = egui::Context::default();
+    let mut app = crate::control::new_app();
+    app.set_option(&ctx, "language", "en").unwrap();
+    app.open_bytes(&ctx, "photo.png", None, png()).unwrap();
+    let prompts_on_close = |app: &mut PdfCraftApp| {
+        app.request_close_tab(&ctx, 0);
+        let asked = app.dialogs.is_open::<craft::ui::dialog::UnsavedChangesDialog>();
+        if asked {
+            app.dialogs.cancel::<craft::ui::dialog::UnsavedChangesDialog>(&ctx);
+            let _ = app.dialogs.take::<craft::ui::dialog::UnsavedChangesDialog>();
+        }
+        assert_eq!(app.views.len(), if asked { 1 } else { 0 });
+        asked
+    };
+
+    app.apply_edit(&ctx, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    assert!(prompts_on_close(&mut app), "an edited image prompts to save");
+    app.undo(&ctx);
+    app.redo(&ctx);
+    assert!(prompts_on_close(&mut app), "redoing the edit makes the image unsaved again");
+    app.undo(&ctx);
+    assert!(!prompts_on_close(&mut app), "undone back to the imported image, Close does not prompt");
+}

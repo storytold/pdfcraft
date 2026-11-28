@@ -95,17 +95,24 @@ impl PdfCraftApp {
     /// worker instead ([`Self::open_converted_pdf`]), leaving this for startup and inline opens.
     pub(crate) fn open_converted(&mut self, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
         use pdfcraft_engine::SourceKind;
-        if !matches!(pdfcraft_engine::source_kind(name, bytes), Some(SourceKind::Image | SourceKind::Text | SourceKind::Office)) {
+        let kind = pdfcraft_engine::source_kind(name, bytes);
+        if !matches!(kind, Some(SourceKind::Image | SourceKind::Text | SourceKind::Office)) {
             return None;
         }
+        let is_image = matches!(kind, Some(SourceKind::Image));
         let created = self.session.convert_to_pdf(name, &Arc::new(bytes.to_vec())).map(|(_, pdf)| pdf);
-        Some(self.open_converted_pdf(name, created.map_err(|e| e.to_string())))
+        Some(self.open_converted_pdf(name, created.map_err(|e| e.to_string()), is_image))
     }
 
     /// Open `created`, the PDF converted from the file `name`, as a new, unsaved tab named after
     /// it (`Report.docx` → `Report.pdf`).
-    pub(crate) fn open_converted_pdf(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {
-        created.and_then(|bytes| self.open_new_document(&format!("{}.pdf", stem(name)), bytes))
+    pub(crate) fn open_converted_pdf(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>, is_image: bool) -> Result<(), String> {
+        let bytes = created?;
+        self.open_new_document(&format!("{}.pdf", stem(name)), bytes)?;
+        if is_image && let Some(view) = self.views.last_mut() {
+            view.imported_image_baseline = self.session.get(view.id).map(|d| d.bytes.clone());
+        }
+        Ok(())
     }
 
     /// Open `bytes`, a PDF the app just made, as a new, unsaved tab called `name`.

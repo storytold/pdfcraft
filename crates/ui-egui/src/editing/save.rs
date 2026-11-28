@@ -546,6 +546,8 @@ impl PdfCraftApp {
                 // Saving over a version that changed on disk keeps this one: nothing to ask.
                 for view in self.views.iter_mut().filter(|v| v.id == id) {
                     view.disk_changed = false;
+                    view.imported_image_baseline = None;
+                    view.imported_image_dirty.set(None);
                     view.redactions_applied = 0;
                     view.redactions_undone_after_save = 0;
                     view.saved_redactions_cut_off = false;
