@@ -5118,6 +5118,40 @@ fn the_format_panel_restyles_the_paragraph_being_edited() {
     assert!(s.views[0].session.line_editor.as_ref().is_some_and(|e| e.extras.underline));
 }
 
+/// Bold on a selected word keeps the word selected, as Acrobat does, so the next letter typed
+/// replaces it rather than landing after the paragraph's last character.
+#[test]
+fn bold_keeps_the_selection_it_was_applied_to() {
+    let mut h = harness(1, |_| {});
+    assert!(h.execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let at = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(3);
+    let selected = craft::text::ui::editor::TextSelection::new(0, 4);
+    let ed = h.state_mut().views[0].session.line_editor.as_mut().expect("editing");
+    assert_eq!(ed.text, "Page 1");
+    ed.selection = Some(selected);
+    ed.focus = true;
+    h.run_steps(1);
+
+    h.get_by_label("Bold").click();
+    h.run_steps(4);
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().text_blocks(0)[0].base_font, "Helvetica-Bold");
+    let ed = s.views[0].session.line_editor.as_ref().expect("still editing");
+    assert_eq!(ed.selection, Some(selected), "the word stays selected after Bold");
+
+    h.event(egui::Event::Text("X".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].session.line_editor.as_ref().expect("still editing").text, "X 1", "typing replaces the selected word");
+}
+
 #[test]
 fn the_format_panel_toggles_superscript_and_subscript_on_selection() {
     let mut h = harness(1, |_| {});
@@ -10434,7 +10468,14 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
     h.query_all_by_label("Times").next().expect("the Times row").click();
     h.run_steps(4);
 
-    // Font combo box for the whole block is now Mixed because Heading is Helvetica and Paragraph is Times
+    // The word stays selected, so the panel shows its new font.
+    let font_node = h.get_by_role_and_label(Role::ComboBox, "Font family");
+    assert_eq!(font_node.value().as_deref(), Some("Times"), "the selected word is Times");
+
+    // With the selection collapsed to a caret the panel shows the whole block: Mixed, because
+    // Heading is Helvetica and Paragraph is Times.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowRight);
+    h.run_steps(2);
     let font_node = h.get_by_role_and_label(Role::ComboBox, "Font family");
     assert_eq!(font_node.value().as_deref(), Some("Mixed"), "whole block has mixed fonts");
 
