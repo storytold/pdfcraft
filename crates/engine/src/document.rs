@@ -401,6 +401,11 @@ impl Document {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
         measure::user_to_view(&e.cos, page, point).map_err(|e| e.to_string())
     }
+    /// The measured viewports of `page`, with the geospatial registration of map viewports.
+    pub fn geo_page(&self, page: usize) -> Result<measure::geo::GeoPage, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        measure::geo::GeoPage::read(&e.cos, page).map_err(|e| e.to_string())
+    }
     pub fn measurement_paths(&self, page: usize) -> Result<measure::snap::Geometry, String> {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
         measure::snap::geometry(&e.cos, page).map_err(|e| e.to_string())

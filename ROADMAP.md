@@ -270,6 +270,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-11-18 (M7, #7687):** PDF-page watermarks clip the source CropBox to MediaBox before sizing and rotating the imported form. Synthetic geometry and save/reopen render regressions cover oversized and partially overlapping crops; estimates unchanged.
 
+- **2026-11-17 (M12):** Geospatial location: a map viewport's geospatial measure dictionary (GPTS/LPTS/Bounds, GCS by EPSG or WKT) gives the latitude and longitude under the pointer (Geospatial location tool, kept and copied from the Measure panel) and both ways through `measure_geo`. Transverse Mercator, Lambert Conformal Conic and Web Mercator are fitted in the projected plane; other projections are approximated and say so. `comment.geospatial` planned → partial (no geospatial measuring); estimates unchanged.
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
 

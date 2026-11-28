@@ -48,6 +48,7 @@ mod find_replace;
 mod folders;
 mod fonts;
 mod forms;
+mod geo_location;
 mod identity;
 mod javascript;
 mod layer_actions;
