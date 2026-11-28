@@ -1058,6 +1058,47 @@ trailer << /Root 1 0 R >>
     assert!(h.query_all_by_label("Repair log").next().is_some(), "the repair log shows");
 }
 
+/// A `/Perms` whose byte 8 disagrees with `/EncryptMetadata` is noted in the repair log, but
+/// nothing read changes, so the file is not said to have been repaired.
+#[test]
+fn a_perms_note_alone_does_not_say_the_file_was_repaired() {
+    use pdfcraft_cos::{Algorithm, NewEncryption, SaveOptions, write_full};
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(pdf.to_vec())).unwrap();
+    let params = NewEncryption {
+        algorithm: Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: false,
+        seed: [5; 32],
+    };
+    doc.set_encryption(&params).unwrap();
+    let saved = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    // `/Perms` says F; the dictionary now says true, in as many bytes.
+    let at = saved.windows(21).position(|w| w == b"/EncryptMetadata fals").expect("/EncryptMetadata false");
+    let mut edited = saved.clone();
+    edited.splice(at..at + 22, b"/EncryptMetadata true ".iter().copied());
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "perms.pdf", None, edited.clone()).unwrap();
+            app
+        }
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().repair_log().len(), 1, "the note is kept");
+    assert!(h.query_by_label_contains("This file was damaged and has been repaired.").is_none());
+}
+
 #[test]
 fn initial_view_is_edited_and_honoured_on_open() {
     use pdfcraft_engine::{InitialLayout, Navigation};

@@ -815,6 +815,13 @@ impl Document {
         self.editor.as_ref().map(|e| e.cos.repair_log().to_vec()).unwrap_or_default()
     }
 
+    /// Whether the repair log records something read other than the file says
+    /// ([`pdfcraft_cos::Document::structure_repaired`]): every note but the one that `/Perms`
+    /// disagrees with `/EncryptMetadata`, which changes nothing read.
+    pub fn structure_repaired(&self) -> bool {
+        self.editor.as_ref().is_some_and(|e| e.cos.structure_repaired())
+    }
+
     /// Objects of the file that could not be read and read as null, one line each (see
     /// [`pdfcraft_cos::Document::unreadable_objects`]): only those read so far.
     pub fn unreadable_objects(&self) -> Vec<String> {
