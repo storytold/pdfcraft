@@ -97,6 +97,13 @@ impl Automation {
             "fonts_not_embedded": report.fonts_not_embedded,
             "pdfa_issues": pdfa,
             "resolution_unknown": report.resolution_unknown,
+            "overprint": {
+                "asks": report.overprint.asks(),
+                "proven": report.overprint.proven(),
+                "page": report.overprint.page,
+                "object": report.overprint.object,
+                "unwalked": report.overprint.unwalked,
+            },
         }))
     }
 

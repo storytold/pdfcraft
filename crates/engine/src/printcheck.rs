@@ -2,15 +2,18 @@
 //!
 //! Measures what a press looks at and changes nothing: effective image resolution where each
 //! image is drawn, the page boxes (media, crop, trim, bleed), the output intent, fonts that
-//! aren't embedded, and the existing PDF/A-2b result. There is no fixup and no generated colour
-//! profile. A screen profile such as sRGB is reported as a screen profile, not accepted as a
-//! press condition.
+//! aren't embedded, the existing PDF/A-2b result, and whether anything drawn turns overprint on.
+//! There is no fixup and no generated colour profile. A screen profile such as sRGB is reported
+//! as a screen profile, not accepted as a press condition.
 
 use pdfcraft_cos::Document;
 use pdfcraft_edit::PageImage;
 use pdfcraft_preflight::{Issue, Level};
 
 use crate::Document as OpenDocument;
+
+mod overprint;
+pub use overprint::Overprint;
 
 /// Below this, ordinary sheet printing cannot hold the picture. Large-format work sometimes can.
 const FAIL_PPI: f64 = 150.0;
@@ -62,6 +65,8 @@ pub struct PrintReadiness {
     /// Image placements whose resolution couldn't be measured (a degenerate or non-finite
     /// placement matrix). They are neither passed nor failed.
     pub resolution_unknown: usize,
+    /// Whether anything drawn turns overprint on, and where first; or why that isn't proven.
+    pub overprint: Overprint,
 }
 
 impl PrintReadiness {
@@ -106,6 +111,7 @@ impl PrintReadiness {
         } else {
             out.push_str(&format!("Fonts not embedded: {}\n", self.fonts_not_embedded.join(", ")));
         }
+        out.push_str(&overprint_line(&self.overprint));
         let level = Level::A2b.label();
         if self.pdfa_issues.is_empty() {
             out.push_str(&format!("{level}: no problems found by the structural check\n"));
@@ -126,7 +132,11 @@ impl PrintReadiness {
                 out.push_str(&format!("- [{}] {}\n", finding.severity, finding.message));
             }
         }
-        out.push_str("Not checked: PDF/X, overprint, total area coverage, spot colours, transparency flattening.\n");
+        if self.overprint.proven() {
+            out.push_str("Not checked: PDF/X, total area coverage, spot colours, transparency flattening.\n");
+        } else {
+            out.push_str("Not checked: PDF/X, overprint, total area coverage, spot colours, transparency flattening.\n");
+        }
         out
     }
 }
@@ -143,6 +153,7 @@ impl OpenDocument {
                 fonts_not_embedded: Vec::new(),
                 pdfa_issues: Vec::new(),
                 resolution_unknown: 0,
+                overprint: Overprint { unwalked: vec!["the document has no object graph".into()], ..Overprint::default() },
                 findings: vec![Finding {
                     id: "document",
                     severity: "info",
@@ -165,7 +176,8 @@ fn inspect(doc: &Document) -> PrintReadiness {
     let model_pages = pdfcraft_model::pages(doc);
     let pages = page_reports(doc, &model_pages);
     let (images, resolution_unknown) = image_reports(doc, &model_pages);
-    let mut findings = Vec::new();
+    let overprint = overprint::overprint_use(doc, &model_pages);
+    let mut findings: Vec<Finding> = overprint_finding(&overprint).into_iter().collect();
     // Without a TrimBox the trim, the bleed and the crop are the same box, so there is no bleed to
     // measure. That is a property of the document, not a fault on every page: report it once.
     let untrimmed = pages.iter().filter(|page| !page.trim_set).count();
@@ -244,7 +256,47 @@ fn inspect(doc: &Document) -> PrintReadiness {
         });
     }
     findings.sort_by(|a, b| a.page.cmp(&b.page).then(a.id.cmp(b.id)).then(a.message.cmp(&b.message)));
-    PrintReadiness { pages, images, output_intents: declared.output_intents, fonts_not_embedded, pdfa_issues, findings, resolution_unknown }
+    PrintReadiness {
+        pages,
+        images,
+        output_intents: declared.output_intents,
+        fonts_not_embedded,
+        pdfa_issues,
+        findings,
+        resolution_unknown,
+        overprint,
+    }
+}
+
+/// The report line for [`Overprint`].
+fn overprint_line(overprint: &Overprint) -> String {
+    match (overprint.page, &overprint.object) {
+        (Some(page), Some(object)) => format!("Overprint: turned on first on page {page}, in {object}\n"),
+        (Some(page), None) => format!("Overprint: turned on first on page {page}\n"),
+        _ if overprint.proven() => "Overprint: nothing drawn turns it on\n".to_string(),
+        _ => format!("Overprint: not proven ({})\n", overprint.unwalked.join("; ")),
+    }
+}
+
+/// A finding when something drawn turns overprint on, or when the walk couldn't say.
+fn overprint_finding(overprint: &Overprint) -> Option<Finding> {
+    if let Some(page) = overprint.page {
+        let place = overprint.object.as_ref().map(|o| format!(", in {o}")).unwrap_or_default();
+        return Some(Finding {
+            id: "overprint",
+            severity: "info",
+            message: format!(
+                "Page {page} turns overprint on{place}: where it applies, ink prints over what is beneath instead of knocking it out. Check that it is meant."
+            ),
+            page: Some(page),
+        });
+    }
+    (!overprint.proven()).then(|| Finding {
+        id: "overprint",
+        severity: "info",
+        message: format!("Whether the document asks for overprint isn't proven: {}.", overprint.unwalked.join("; ")),
+        page: None,
+    })
 }
 
 fn page_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> Vec<PageBoxes> {

@@ -8520,11 +8520,11 @@ title = "Overprint and rich-black warnings"
 area = "L"
 tier = "P1"
 milestone = "M11"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["print_readiness"]
+evidence = ["crates/engine/src/printcheck/overprint_tests.rs::overprint_in_a_form_xobject_is_found_on_the_page_that_draws_it", "crates/engine/src/printcheck/overprint_tests.rs::a_false_or_uninvoked_graphics_state_asks_for_nothing", "crates/engine/src/printcheck/overprint_tests.rs::a_walk_cut_short_is_not_proven", "crates/engine/src/printcheck/overprint_tests.rs::requests_in_patterns_glyphs_masks_and_appearances_are_found", "crates/automation/tests/it/automation.rs::print_readiness_through_tools"]
+notes = "Print readiness names the first page whose drawing turns overprint on (a gs invoking /OP or /op true, or a shading pattern's graphics state; page content, form XObjects, tiling patterns, soft-mask groups, Type 3 glyphs and annotation appearances), and says the answer isn't proven when its bounded walk stopped short; a graphics state that is listed but never invoked doesn't count. Still missing against Acrobat: per-object warnings with their place on the page, overprint of white or of a rich black, rich-black warnings, and a panel in the app."
 
 [[feature]]
 id = "print.object-inspector"
