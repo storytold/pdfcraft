@@ -66,6 +66,8 @@ pub enum PanelAction {
     Validate,
     GoTo(usize),
     Trust(Box<Certificate>),
+    /// Import certificates…: pick certificate files to trust from.
+    Import,
     ViewSigned {
         len: usize,
         revision: usize,
@@ -261,6 +263,11 @@ pub(crate) fn panel(ui: &mut egui::Ui, sigs: &[SignatureInfo], open: &mut OpenSe
     Stack::new().show(ui, |ui, _| {
         if Button::new(tl!("Validate all")).show(ui).clicked() {
             *action.borrow_mut() = Some(PanelAction::Validate);
+        }
+        // The web build has no file to read certificates from.
+        #[cfg(not(target_arch = "wasm32"))]
+        if Button::new(tl!("Import certificates…")).show(ui).clicked() {
+            *action.borrow_mut() = Some(PanelAction::Import);
         }
         if sigs.is_empty() {
             Notice::new(Tone::Info, tl!("This document has no signatures.")).show(ui);
