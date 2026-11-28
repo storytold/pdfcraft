@@ -510,6 +510,10 @@ pub(super) fn selection_bar(
     can_comment: bool,
     can_copy: bool,
 ) -> bool {
+    let Some(selection) = session.text.selection else {
+        session.actions_dismissed = None;
+        return false;
+    };
     // Switched by the `view.selection_bar` command (a hotbar button or the command palette).
     if !crate::commands::SELECTION_BAR_ON.load(Ordering::Relaxed) {
         return false;
@@ -517,10 +521,6 @@ pub(super) fn selection_bar(
     if body.pass.is_some_and(|p| p.press.phase.button_down()) {
         return false;
     }
-    let Some(selection) = session.text.selection else {
-        session.actions_dismissed = None;
-        return false;
-    };
     if session.actions_dismissed == Some(selection) {
         return false;
     }
