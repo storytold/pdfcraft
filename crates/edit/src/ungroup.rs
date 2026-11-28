@@ -623,7 +623,10 @@ fn inherited_names_of(
         // A shading pattern has no content of its own.
         _ => int_of(doc, dict, b"PatternType") == Some(1),
     };
-    if !drawn || dict.get(b"Resources").is_some() {
+    // Only a dictionary is resources of its own: a renderer draws an item whose `/Resources` is
+    // `null` (or names nothing) with the resources it is drawn with, as `blends_inside` reads it.
+    let own = dict.get(b"Resources").map(|r| doc.resolve(r)).is_some_and(|r| r.as_dict().is_some());
+    if !drawn || own {
         return false;
     }
     if depth >= MAX_NESTING {

@@ -260,6 +260,29 @@ fn type3_text_pastes_under_renamed_resources_unless_its_glyphs_name_them() {
     }
 }
 
+/// A Type 3 font whose `/Resources` is `null` has none of its own: the renderer draws its glyphs
+/// with the page's, so a glyph that names a renamed resource is refused, as with no entry at all.
+#[test]
+fn type3_text_with_null_resources_inherits_the_pages() {
+    let mut doc = pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> /ExtGState << /GS0 << /ca 0.5 >> >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 8 0 R >> /ExtGState << /GS0 << /ca 1 >> >> >> >>".into(),
+        stream("BT /F1 20 Tf 20 200 Td (aaa) Tj ET"),
+        stream(""),
+        "<< /Type /Font /Subtype /Type3 /Resources null /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 9 0 R >> \
+         /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] >>"
+            .into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".into(),
+        stream("1000 0 0 0 1000 1000 d1 /GS0 gs 0 0 1000 1000 re f"),
+    ]);
+    let all: Vec<_> = editable_objects(&doc, 0).unwrap().into_iter().map(|o| o.target).collect();
+    let copied = copy_objects(&doc, 0, &all).unwrap();
+    let pasted = paste_objects(&mut doc, 1, &copied, [0.0, 0.0]);
+    assert!(matches!(&pasted, Err(EditError::Invalid(why)) if why.contains("uses its resources")), "{pasted:?}");
+}
+
 /// Artwork without resources of its own, copied without any text that names its font: the copy
 /// still brings the font the artwork looks up in the page's resources. Pasted onto a page that
 /// shares that font as /F1, only the artwork's own entry is renamed, which its content doesn't
