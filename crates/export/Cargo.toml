@@ -16,7 +16,7 @@ craft-mime.workspace = true
 craft-rtf = { workspace = true, features = ["doc"] }
 craft-wordmodel.workspace = true
 craft-docx.workspace = true
-craft-html = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0", features = ["standalone"] }
+craft-html = { git = "https://github.com/storytold/craft-libs", rev = "b747fcad867400d6f82c744a77050e1cd1422f24", version = "0.1.0", features = ["standalone"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 craft-pptx.workspace = true
 craft-xml.workspace = true
