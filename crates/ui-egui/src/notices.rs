@@ -179,7 +179,7 @@ fn show_opening(app: &PdfCraftApp, ui: &mut egui::Ui) {
     let toast_count = craft::ui::runtime::toast::cards(&ctx, &window).len();
     let lift = (28.0 + toast_count as f32 * 120.0).min((screen.height() - 72.0).max(28.0));
 
-    let _ = egui::Area::new(egui::Id::new("opening-notice"))
+    let _ = egui::Area::new(egui::Id::unique("opening-notice"))
         .order(egui::Order::Tooltip)
         .pivot(egui::Align2::CENTER_BOTTOM)
         .fixed_pos(screen.center_bottom() - egui::vec2(0.0, lift))

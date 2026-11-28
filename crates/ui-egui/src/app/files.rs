@@ -8,6 +8,8 @@ use craft::host::{FileFilter, PickRequest, Picked};
 #[cfg(not(target_arch = "wasm32"))]
 use craft::platform::watch::FileStamp;
 use craft::ui::patterns::form_dialogs::{PasswordDialog, PasswordPurpose};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::OpeningNotice;
 
 /// Whether an open's reply asks for a password: the file is encrypted and none, or a wrong one,
 /// was given.
