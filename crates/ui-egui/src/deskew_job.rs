@@ -1,6 +1,5 @@
 //! Scan & OCR ▸ Straighten all pages: the run's state. Measuring and rotating happen on a worker
-//! thread (they are the whole cost), and the pages are put back one per frame so the dialog can
-//! show progress while it runs.
+//! thread; the pages are put back one per frame, so progress shows as the run goes.
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, TryRecvError};

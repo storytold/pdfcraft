@@ -841,8 +841,8 @@ impl PdfCraftApp {
             "export.html" => self.export_office_dialog(ctx, pdfcraft_engine::compare::OfficeFormat::Html),
             "export.rtf" => self.export_office_dialog(ctx, pdfcraft_engine::compare::OfficeFormat::Rtf),
             "ocr.deskew" => {
-                // A dialog, not a toast: the angle is small enough that the page's change is hard
-                // to see, and a toast is gone before it can be read.
+                // The angle is small enough that the page's change is hard to see, so the
+                // result is worth a dialog rather than a passing notice.
                 let target = self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id, v.current())));
                 if let Some((i, id, page)) = target {
                     let text = match self.session.deskew_page_report(id, page, 0.15) {

@@ -1,7 +1,5 @@
-//! Scan & OCR ▸ Straighten page / Straighten all pages: the report of what was straightened and what needs
-//! looking at by hand. The batch runs behind it: [`PdfCraftApp::deskew_pass`] puts one measured page back per
-//! pass and writes the report the dialog shows, so the window keeps painting (and the dialog can be closed)
-//! while the pages are worked through.
+//! Scan & OCR ▸ Straighten page / Straighten all pages: what was straightened, and what needs looking at by
+//! hand. [`PdfCraftApp::deskew_pass`] puts one measured page back per pass and writes the text shown here.
 
 use std::sync::{Arc, Mutex};
 
