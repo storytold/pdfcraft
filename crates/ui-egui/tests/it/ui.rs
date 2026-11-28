@@ -1776,6 +1776,121 @@ fn the_combine_tab_does_not_move_and_documents_stay_in_order() {
     assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), ids);
 }
 
+#[test]
+fn tab_group_collapsing_and_expanding_harness() {
+    use egui::accesskit::Role;
+    let mut h = three_tab_harness();
+    let gid = h.state_mut().create_tab_group("Project".into(), pdfcraft_ui_egui::TabGroupColor::Cyan);
+    h.state_mut().add_tab_to_group(0, gid);
+    h.state_mut().add_tab_to_group(1, gid);
+    h.run_steps(3);
+
+    // Both grouped tabs and last tab are visible
+    assert!(h.query_by_role_and_label(Role::Tab, "first.pdf").is_some());
+    assert!(h.query_by_role_and_label(Role::Tab, "middle.pdf").is_some());
+    assert!(h.query_by_role_and_label(Role::Tab, "last.pdf").is_some());
+
+    // Collapse the group
+    h.state_mut().toggle_group_collapsed(gid);
+    h.run_steps(3);
+
+    // Grouped tabs are collapsed into the pill
+    assert!(h.query_by_role_and_label(Role::Tab, "first.pdf").is_none());
+    assert!(h.query_by_role_and_label(Role::Tab, "middle.pdf").is_none());
+    assert!(h.query_by_role_and_label(Role::Tab, "last.pdf").is_some());
+
+    // Expand the group again
+    h.state_mut().toggle_group_collapsed(gid);
+    h.run_steps(3);
+
+    assert!(h.query_by_role_and_label(Role::Tab, "first.pdf").is_some());
+    assert!(h.query_by_role_and_label(Role::Tab, "middle.pdf").is_some());
+    assert!(h.query_by_role_and_label(Role::Tab, "last.pdf").is_some());
+
+    // Clicking the group pill collapses and expands the group
+    h.get_by_role_and_label(Role::Tab, "Project").click();
+    h.run_steps(3);
+    assert!(h.query_by_role_and_label(Role::Tab, "first.pdf").is_none());
+    assert!(h.query_by_role_and_label(Role::Tab, "middle.pdf").is_none());
+
+    h.get_by_role_and_label(Role::Tab, "Project").click();
+    h.run_steps(3);
+    assert!(h.query_by_role_and_label(Role::Tab, "first.pdf").is_some());
+    assert!(h.query_by_role_and_label(Role::Tab, "middle.pdf").is_some());
+
+    // Secondary-clicking the group pill opens the group editor popover
+    h.get_by_role_and_label(Role::Tab, "Project").click_secondary();
+    h.run_steps(3);
+    assert!(h.query_by_role_and_label(Role::TextInput, "Group name").is_some());
+    assert!(h.query_by_label("New tab in group").is_some());
+    assert!(h.query_by_label("Ungroup").is_some());
+    assert!(h.query_by_label("Close group").is_some());
+
+    // Clicking Ungroup disbands the group and closes the editor popover
+    h.get_by_role_and_label(Role::Button, "Ungroup").click();
+    h.run_steps(3);
+    assert!(h.state().tab_groups.is_empty());
+    assert_eq!(h.state().views[0].group, None);
+    assert_eq!(h.state().views[1].group, None);
+    assert!(h.query_by_role_and_label(Role::TextInput, "Group name").is_none());
+}
+
+#[test]
+fn tab_dragging_between_grouped_tabs_adopts_group() {
+    let mut h = three_tab_harness();
+    let gid = h.state_mut().create_tab_group("Work".into(), pdfcraft_ui_egui::TabGroupColor::Green);
+    h.state_mut().add_tab_to_group(0, gid);
+    h.state_mut().add_tab_to_group(1, gid);
+    h.run_steps(3);
+
+    // doc 0 and 1 are in group, doc 2 is ungrouped
+    assert_eq!(h.state().views[0].group, Some(gid));
+    assert_eq!(h.state().views[1].group, Some(gid));
+    assert_eq!(h.state().views[2].group, None);
+
+    // Drag last.pdf between doc 0 and doc 1
+    let last_key = h.state().views[2].view_key();
+    let tab = |h: &Harness<'static, PdfCraftApp>, name: &str| h.get_by_role_and_label(egui::accesskit::Role::Tab, name).rect();
+    let to = tab(&h, "first.pdf").right_center() + egui::vec2(2.0, 0.0);
+    drag_named_tab(&mut h, "last.pdf", to, true);
+
+    // last.pdf was dropped between two members of the group, so it adopted the group!
+    assert_eq!(h.state().views[1].view_key(), last_key);
+    assert_eq!(h.state().views[1].group, Some(gid));
+}
+
+#[test]
+fn pinned_tabs_cannot_be_closed_with_middle_click() {
+    let mut h = three_tab_harness();
+    h.state_mut().set_tab_pinned(0, true);
+    h.run_steps(3);
+
+    assert!(h.state().views[0].pinned);
+    let initial_count = h.state().views.len();
+
+    // Middle click on pinned tab
+    let pinned_rect = h.get_by_role_and_label(egui::accesskit::Role::Tab, "first.pdf (pinned)").rect();
+    h.event(egui::Event::PointerMoved(pinned_rect.center()));
+    h.event(egui::Event::PointerButton {
+        pos: pinned_rect.center(),
+        button: egui::PointerButton::Middle,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton {
+        pos: pinned_rect.center(),
+        button: egui::PointerButton::Middle,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(3);
+
+    // Tab was NOT closed because pinned tabs stay protected
+    assert_eq!(h.state().views.len(), initial_count);
+    assert!(h.state().views[0].pinned);
+}
+
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
 #[test]

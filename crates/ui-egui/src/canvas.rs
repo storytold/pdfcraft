@@ -155,6 +155,10 @@ pub struct DocView {
     /// Where the tab shows (split view's panes) and the key that tells two
     /// views of one document apart (`crate::panes`).
     pub(crate) pane: crate::panes::ViewPane,
+    /// Browser tab group this document belongs to, if any.
+    pub group: Option<crate::tab_group::TabGroupId>,
+    /// Whether this tab is pinned to the beginning of the tab strip.
+    pub pinned: bool,
     pub id: DocId,
     /// The document and attached file this tab was opened from, when a form or the Attachments
     /// panel opened it: asking for that attachment again comes back to this tab.
@@ -592,6 +596,8 @@ impl DocView {
     pub fn new(id: DocId, info: &DocInfo, defaults: ViewDefaults, highlight_fields: bool) -> Self {
         Self {
             pane: Default::default(),
+            group: None,
+            pinned: false,
             id,
             from_attachment: None,
             view: PageViewState::from_defaults(&defaults),
@@ -704,6 +710,8 @@ impl DocView {
         // The revision stamps carry on, so the pictures on screen stay until their replacements land.
         fresh.revisions = std::mem::take(&mut self.revisions);
         fresh.viewport = self.viewport;
+        fresh.group = self.group;
+        fresh.pinned = self.pinned;
         // Same view key (`pane`): the page view's remembered state and the grid's press id are still this view's.
         fresh.pane = self.pane.clone();
         *self = fresh;
@@ -727,6 +735,8 @@ impl DocView {
         let mut v = Self::new(self.id, info, ViewDefaults::default(), self.session.highlight_fields);
         v.view = self.view.clone();
         v.view.go_to(self.view.current);
+        v.group = self.group;
+        v.pinned = self.pinned;
         v.page_input = self.page_input.clone();
         v.notice_dismissed = self.notice_dismissed;
         v.scripts_off_noted = self.scripts_off_noted;
