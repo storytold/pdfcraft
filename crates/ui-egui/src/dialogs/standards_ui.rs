@@ -1,5 +1,5 @@
-//! Standards ▸ PDF/A: what the document declares, verifying it against PDF/A-2b or 3b, and
-//! fixing what can be fixed (Save as PDF/A).
+//! Standards ▸ PDF/A: what the document declares, verifying it against PDF/A-2b, 3b, 4, 4e or 4f,
+//! and fixing what can be fixed for PDF/A-2b and 3b (Save as PDF/A).
 
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Entry, Show as _, ShowCollection as _, ShowContainer as _, WordSetCx as _};
@@ -19,12 +19,22 @@ use crate::PdfCraftApp;
 #[derive(Clone, Debug, PartialEq)]
 pub struct PdfaState {
     pub level: Level,
+    /// The document `level` was chosen for ([`PdfCraftApp::pdfa_choose_level`]).
+    pub chosen_for: Option<pdfcraft_engine::DocId>,
 }
 
 impl Default for PdfaState {
     fn default() -> Self {
-        PdfaState { level: Level::A2b }
+        PdfaState { level: Level::A2b, chosen_for: None }
     }
+}
+
+/// The levels the dialog verifies against. Save as PDF/A makes only the PDF/A-2b and 3b ones.
+const LEVELS: [Level; 5] = [Level::A2b, Level::A3b, Level::A4, Level::A4e, Level::A4f];
+
+/// Whether Save as PDF/A makes files of `level`: PDF/A-2b and 3b, not the PDF/A-4 levels.
+fn convertible(level: Level) -> bool {
+    level.part() != 4
 }
 
 /// The level as the value the form binds, which a form needs a default for.
@@ -82,8 +92,26 @@ impl PdfCraftApp {
         Shown { declared: text, remove, intents: declared.output_intents.clone(), issues: None }
     }
 
-    /// Opens the PDF/A dialog on the remembered level, with nothing verified yet.
+    /// Chooses the level for the active document once, when the dialog opens or another document
+    /// becomes active: the level the document declares when the dialog verifies it, PDF/A-2b
+    /// otherwise. A level picked by hand stays while the same document is active. Returns whether
+    /// it chose.
+    fn pdfa_choose_level(&mut self) -> bool {
+        let id = self.active_ids().map(|(_, id)| id);
+        if self.pdfa.chosen_for == id {
+            return false;
+        }
+        let declared = id.and_then(|id| self.session.get(id)).and_then(|d| d.standards().pdfa);
+        let level = declared.and_then(|(part, conformance)| Level::from_declared(part, &conformance)).filter(|l| LEVELS.contains(l));
+        self.pdfa = PdfaState { level: level.unwrap_or(PdfaState::default().level), chosen_for: id };
+        true
+    }
+
+    /// Opens the PDF/A dialog on the level the active document declares, with nothing verified yet.
     pub(crate) fn open_pdfa(&mut self) {
+        // Opening the dialog chooses the level again, from what the document declares.
+        self.pdfa.chosen_for = None;
+        self.pdfa_choose_level();
         let dialog = PdfaDialog { id: dialog_id("pdfa"), form: LevelForm { level: self.pdfa.level }, shown: self.pdfa_declared(), action: None };
         // PLAN: assumed `fn open<D: StackDialog>(app: &mut PdfCraftApp, dialog: D)` (pdf-hub-w2)
         crate::dialogs::host::open(self, dialog);
@@ -99,7 +127,7 @@ impl PdfCraftApp {
     /// Converts, then what is left to fix; `None` when the conversion did not apply.
     fn pdfa_convert(&mut self, ctx: &egui::Context) -> Option<Vec<Issue>> {
         let level = self.pdfa.level;
-        if !self.apply_edit(ctx, pdfcraft_engine::Edit::ConvertPdfA { level }) {
+        if !convertible(level) || !self.apply_edit(ctx, pdfcraft_engine::Edit::ConvertPdfA { level }) {
             return None;
         }
         let issues = self.pdfa_verify().unwrap_or_default();
@@ -121,7 +149,19 @@ impl PdfCraftApp {
     pub(crate) fn pdfa_pass(&mut self, ctx: &egui::Context) {
         // PLAN: assumed `self.dialogs: DialogHost` with `fn get_mut<D: StackDialog>(&mut self) -> Option<&mut D>` (pdf-hub-w1 field, pdf-hub-w2 host)
         let Some((level, action)) = self.dialogs.get_mut::<PdfaDialog>().map(|d| (d.form.level, d.action.take())) else { return };
-        self.pdfa.level = level;
+        let action = if self.pdfa_choose_level() {
+            // Another document became active: the dialog takes its level and forgets the last result,
+            // and what was asked of the last document is not done to this one.
+            let chosen = self.pdfa.level;
+            if let Some(d) = self.dialogs.get_mut::<PdfaDialog>() {
+                d.form.level = chosen;
+                d.shown.issues = None;
+            }
+            None
+        } else {
+            self.pdfa.level = level;
+            action
+        };
         // `Some(x)` replaces the shown issues with `x`.
         let issues = match action {
             Some(Action::Verify) => Some(self.pdfa_verify()),
@@ -149,6 +189,7 @@ impl StackDialog for PdfaDialog {
         let before = form.level;
         let out = FormDialog::new("PDF/A", Bind::bound(&mut *form))
             .ok_label(tl!("Save as PDF/A").to_string())
+            .ok_enabled(convertible(before))
             .accept_stays_open(true)
             .cancel_label(tl!("Close").to_string())
             .alt_resets(false)
@@ -164,7 +205,7 @@ impl StackDialog for PdfaDialog {
                     let list = shown.intents.join(", ");
                     Text::new(crate::i18n::fmt(tl!("Output intent: {list}"), &[("list", &list)])).shade(Shade::Muted).show(ui);
                 }
-                let levels = [Level::A2b, Level::A3b].map(|l| Entry::new(l, l.label().to_string()));
+                let levels = LEVELS.map(|l| Entry::new(l, l.label().to_string()));
                 let caption = tl!("Conformance level:").to_string();
                 Field::new(caption.clone()).show(ui, |ui, _| {
                     if let Some(l) = Select::new(caption.clone(), Bind::given(f.level), &levels).show(ui).value().copied() {
@@ -193,7 +234,13 @@ impl StackDialog for PdfaDialog {
                         );
                     }
                 }
-                true
+                let can_convert = convertible(f.level);
+                if !can_convert {
+                    Text::new(tl!("PDF/A-4 levels are verified only: Save as PDF/A makes PDF/A-2b and 3b files.").to_string())
+                        .shade(Shade::Muted)
+                        .show(ui);
+                }
+                can_convert
             });
         if form.level != before {
             shown.issues = None;
