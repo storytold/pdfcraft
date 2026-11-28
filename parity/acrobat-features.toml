@@ -757,8 +757,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster/tests.rs::self_referencing_tiling_pattern_terminates", "crates/render/tests/it/tiling_cell_placement.rs::far_cells_of_a_fill_sit_at_whole_steps", "crates/render/tests/it/tiling_cell_placement.rs::far_cells_sit_at_whole_steps_under_a_turned_scaled_matrix", "crates/render/tests/it/tiling_cell_placement.rs::far_cells_of_a_stroke_sit_at_whole_steps"]
-notes = "via hayro bootstrap. Tiling pattern cells sit at whole multiples of /XStep and /YStep at any zoom, filled or stroked, under any pattern matrix. Missing: a cell is cut at its step, so content reaching past the step into the next cell is lost; a cell pixmap is capped at 3000 pixels a side, so very large steps draw at reduced resolution"
+evidence = ["crates/render/src/raster/tests.rs::self_referencing_tiling_pattern_terminates", "crates/render/tests/it/tiling_cell_placement.rs::far_cells_of_a_fill_sit_at_whole_steps", "crates/render/tests/it/tiling_cell_placement.rs::far_cells_sit_at_whole_steps_under_a_turned_scaled_matrix", "crates/render/tests/it/tiling_cell_placement.rs::far_cells_of_a_stroke_sit_at_whole_steps", "crates/render/src/raster/tests/large_drawing_cost.rs::small_mesh_shadings_paint_only_around_their_triangles"]
+notes = "via hayro bootstrap. Tiling pattern cells sit at whole multiples of /XStep and /YStep at any zoom, filled or stroked, under any pattern matrix. A mesh shading (Types 4 to 7) is painted only around its triangles, so a plan with 84 small ones draws in 0.3 s instead of 3.2 s, the same pixels. Missing: a cell is cut at its step, so content reaching past the step into the next cell is lost; a cell pixmap is capped at 3000 pixels a side, so very large steps draw at reduced resolution"
 
 [[feature]]
 id = "view.render-transparency"
@@ -817,8 +817,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster/tests.rs::group4_fax_with_rows_zero_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_below_its_height_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_past_its_height_decodes_to_the_image_height"]
-notes = "hayro bootstrap; a CCITT fax image is decoded to its /Height whatever its /DecodeParms /Rows says (0, fewer or more rows)"
+evidence = ["crates/render/src/raster/tests.rs::group4_fax_with_rows_zero_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_below_its_height_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_past_its_height_decodes_to_the_image_height", "crates/render/src/raster/tests/large_drawing_cost.rs::calrgb_8bit_images_convert_as_each_pixel_did"]
+notes = "hayro bootstrap; a CCITT fax image is decoded to its /Height whatever its /DecodeParms /Rows says (0, fewer or more rows). An 8-bit CalRGB image converts its samples through tables, to the colours each pixel converted alone gets: an 8000 × 5333 photo draws in 0.3 s instead of 4.2 s"
 
 [[feature]]
 id = "view.render-annotation-appearances"
