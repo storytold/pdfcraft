@@ -1,6 +1,6 @@
 use super::dispatch::Content;
 use super::error::{Result, ToolError, failed};
-use super::json::{Args, one_based, summary};
+use super::json::{Args, one_based, parse_style_ranges, summary};
 use super::{Arc, Automation, DocId, HashMap, PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind, Value, commands, json, tools};
 
 /// Default and maximum resolution for `page_render`.
@@ -81,10 +81,25 @@ impl Automation {
         let scale = (dpi / 72.0) as f32;
         let block = a.opt_int("hide_text_block")?;
         let added = a.opt_int("hide_added_text")?;
-        if block.is_some() && added.is_some() {
-            return Err(ToolError::InvalidArgs("choose only one of hide_text_block and hide_added_text".into()));
+        let draft = a.opt_int("draft_paragraph")?;
+        if [block.is_some(), added.is_some(), draft.is_some()].into_iter().filter(|v| *v).count() > 1 {
+            return Err(ToolError::InvalidArgs("choose only one of hide_text_block, hide_added_text and draft_paragraph".into()));
         }
-        let out = if let Some(block) = block {
+        let out = if let Some(paragraph) = draft {
+            let doc = self.doc(a)?;
+            let blocks = doc.text_blocks(page);
+            let index = self.paragraph_index(doc.id, page, paragraph, &blocks)?;
+            let source = blocks.get(index).ok_or_else(|| ToolError::InvalidArgs("paragraph is out of range".into()))?;
+            let text = super::dispatch::draft_text(a, source)?;
+            let style = pdfcraft_engine::BlockStyle {
+                size: a.opt_num("size")?,
+                width: a.opt_num("width")?,
+                resource: a.opt_str("font_resource")?.map(str::to_owned),
+                ranges: parse_style_ranges(a.get("ranges"))?,
+                ..Default::default()
+            };
+            doc.text_edit_draft_preview(page, index, text, &style).map_err(failed)?.render_background(scale).map_err(failed)?
+        } else if let Some(block) = block {
             if block < 1 {
                 return Err(ToolError::InvalidArgs("hide_text_block must be a positive paragraph index from text_paragraphs".into()));
             }

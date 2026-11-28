@@ -52,6 +52,12 @@ impl TextSession {
         layout_draft(&self.base, self.page, &self.lines, &self.source, self.block, text, style)
     }
 
+    /// The rewritten snapshot and its measured layout, prepared in one pass. Neither this
+    /// session nor the live document changes; callers may serialize the snapshot for preview.
+    pub fn prepare(&self, text: &str, style: &BlockStyle) -> Result<(Document, TextEditLayout), EditError> {
+        super::editor::prepare_draft(&self.base, self.page, &self.lines, &self.source, self.block, text, style)
+    }
+
     /// Writes the draft into `doc`, which must still be the document the session was opened on.
     pub fn commit(&self, doc: &mut Document, text: Option<&str>, style: &BlockStyle) -> Result<LineEdit, EditError> {
         self.commit_with_limit(doc, text, style, MAX_TYPE3_GLYPHS)

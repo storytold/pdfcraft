@@ -12,7 +12,7 @@ use craft::ui::style::{ComponentStyle, Metrics, StyleCx};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Shape, Vec2, vec2};
 
 use super::LineEditor;
-use super::layout::{color32, editor_fill, editor_galley, editor_job, source_faces};
+use super::layout::{color32, draft_galley, editor_fill, editor_job, source_faces};
 
 /// The style of the paragraph's paint: it paints the document's own colours and nothing of the theme.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -20,6 +20,11 @@ use super::layout::{color32, editor_fill, editor_galley, editor_job, source_face
 pub struct ParagraphPaintStyle {
     #[style(metrics)]
     metrics: Metrics,
+}
+
+/// The box that hides the page's own text under the draft `live` covers: the whole source box, with the draft.
+pub(super) fn cover_rect(ed: &LineEditor, live: Rect) -> Rect {
+    ed.rect.expand(1.0).union(live)
 }
 
 /// The open paragraph laid out for this pass.
@@ -67,13 +72,23 @@ pub(super) struct ParagraphCover<'a> {
     room: f32,
     /// The measured extent of this paragraph's draft on screen, once the textless page has measured it.
     draft_rect: Option<Rect>,
+    /// The draft as Apply writes it, when its PDF geometry places the text.
+    layout: Option<&'a pdfcraft_engine::TextEditLayout>,
     cover: bool,
     laid: Option<Laid>,
 }
 
 impl<'a> ParagraphCover<'a> {
-    pub(super) fn new(doc: &'a pdfcraft_engine::Document, ed: &'a LineEditor, scale: f32, room: f32, draft_rect: Option<Rect>, cover: bool) -> Self {
-        ParagraphCover { common: Common::new(), doc, ed, scale, room, draft_rect, cover, laid: None }
+    pub(super) fn new(
+        doc: &'a pdfcraft_engine::Document,
+        ed: &'a LineEditor,
+        scale: f32,
+        room: f32,
+        draft_rect: Option<Rect>,
+        layout: Option<&'a pdfcraft_engine::TextEditLayout>,
+        cover: bool,
+    ) -> Self {
+        ParagraphCover { common: Common::new(), doc, ed, scale, room, draft_rect, layout, cover, laid: None }
     }
 
     /// The paragraph laid out for the pass: by paint, which keeps it for finish, or by finish when no paint ran.
@@ -91,7 +106,7 @@ impl<'a> ParagraphCover<'a> {
         } else {
             ed.rect.width().max(1.0)
         };
-        let measured = editor_galley(ctx, ed, &faces, &ed.text, scale, width);
+        let measured = draft_galley(ctx, ed, &faces, &ed.text, scale, width, self.layout);
         let overflow = ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5);
         let visible = Rect::from_min_size(ed.rect.min, measured.rect.size().max(vec2(1.0, 1.0)));
         // Unsupported source programs use an interface fallback whose glyph advances can differ from the PDF's. Keep
@@ -137,7 +152,7 @@ impl Component for ParagraphCover<'_> {
         // that is ready, a cover over the entire source box, including lines the draft no longer occupies, so
         // shrinking the text never exposes a copy.
         let fill = editor_fill(color32(self.ed.look.color));
-        ui.content_painter(cx).data_shapes([Shape::rect_filled(self.ed.rect.expand(1.0).union(live), CornerRadius::ZERO, fill)]);
+        ui.content_painter(cx).data_shapes([Shape::rect_filled(cover_rect(self.ed, live), CornerRadius::ZERO, fill)]);
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {

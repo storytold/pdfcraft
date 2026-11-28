@@ -1,5 +1,5 @@
-//! The page beneath an inline text editor, with the source glyphs removed on a COS clone; and,
-//! the same way, the page beneath a dragged added item or the marks an Update replaces.
+//! Read-only PDF previews on COS clones: inline paragraph drafts, textless editing backgrounds,
+//! and the page beneath a dragged added item or the marks an Update replaces.
 
 use std::sync::Arc;
 
@@ -11,6 +11,65 @@ pub struct TextEditPreview {
     page: usize,
     bytes: Arc<Vec<u8>>,
     config: RenderConfig,
+}
+
+/// A read-only snapshot that can be sent to the draft worker without parsing the page on
+/// the UI thread. Its session is opened on the worker and reused across keystrokes.
+pub struct TextDraftSource {
+    cos: pdfcraft_cos::Document,
+    page: usize,
+    block: usize,
+    config: RenderConfig,
+    /// The page's size and turn, to sample an OCR paragraph's scan colours on the worker.
+    info: Option<pdfcraft_render::PageInfo>,
+}
+
+pub struct TextDraftSession {
+    session: pdfcraft_edit::TextSession,
+    config: RenderConfig,
+    /// The paper and ink colours of an OCR paragraph's scan, which Apply covers it with.
+    ocr: Option<([f64; 3], [f64; 3])>,
+}
+
+pub struct PreparedTextDraft {
+    pub layout: crate::TextEditLayout,
+    pub preview: TextEditPreview,
+}
+
+impl TextDraftSource {
+    pub fn open(&self) -> Result<TextDraftSession, String> {
+        guard(|| {
+            let session = pdfcraft_edit::TextSession::open(&self.cos, self.page, self.block).map_err(|e| e.to_string())?;
+            let ocr = self.info.as_ref().and_then(|info| crate::scan_colours::sample(&self.cos, info, self.page, session.source()));
+            Ok(TextDraftSession { session, config: self.config.clone(), ocr })
+        })?
+    }
+}
+
+impl TextDraftSession {
+    pub fn prepare(&self, text: &str, style: &pdfcraft_edit::BlockStyle) -> Result<PreparedTextDraft, String> {
+        guard(|| {
+            // An OCR paragraph is drafted as Apply writes it: over a cover of the scan's paper,
+            // in its ink, and only the changed words (`ocr_text_style`).
+            let source = self.session.source();
+            let (cos, layout) = match self.ocr.filter(|_| style.cover.is_none()) {
+                Some(colours) => match crate::session::ocr_text_style(colours, source, text, style.clone()) {
+                    Some(style) => self.session.prepare(text, &style),
+                    // The same words: Apply leaves the page as it is.
+                    None => {
+                        let plain = pdfcraft_edit::BlockStyle::default();
+                        let (cos, unchanged) = self.session.prepare(&source.editor_text, &plain).map_err(|e| e.to_string())?;
+                        let layout = if text == source.editor_text { Ok(unchanged) } else { self.session.layout(text, &plain) };
+                        layout.map(|layout| (cos, layout))
+                    }
+                },
+                None => self.session.prepare(text, style),
+            }
+            .map_err(|e| e.to_string())?;
+            let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
+            Ok(PreparedTextDraft { layout, preview: TextEditPreview { page: self.session.page(), bytes, config: self.config.clone() } })
+        })?
+    }
 }
 
 impl TextEditPreview {
@@ -115,6 +174,14 @@ impl Document {
     ) -> Result<pdfcraft_edit::text::TextEditLayout, String> {
         guard(|| {
             let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+            // Measure the rewrite Apply makes, as the draft preview draws it: an OCR paragraph's
+            // scan cover, ink and changed words only. A draft Apply leaves as it is keeps its input.
+            let edit = crate::Edit::EditTextBlock { page, block, text: text.to_owned(), style: style.clone() };
+            let prepared = crate::session::prepare_ocr_text_edit(editor, &self.info, edit);
+            let style = match &prepared {
+                Some(crate::Edit::EditTextBlock { style, .. }) => style,
+                _ => style,
+            };
             pdfcraft_edit::text::text_edit_layout(&editor.cos, page, block, text, style).map_err(|e| e.to_string())
         })?
     }
@@ -123,6 +190,26 @@ impl Document {
     /// This is read-only; no source font is installed or exported.
     pub fn text_editor_fonts(&self, page: usize) -> Vec<pdfcraft_edit::text::TextEditorFont> {
         self.editor.as_ref().and_then(|e| pdfcraft_edit::text::text_editor_fonts(&e.cos, page).ok()).unwrap_or_default()
+    }
+
+    /// Capture the current editing state without extracting or rewriting page text.
+    pub fn text_draft_source(&self, page: usize, block: usize) -> Result<TextDraftSource, String> {
+        guard(|| {
+            let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+            Ok(TextDraftSource { cos: editor.cos.clone(), page, block, config: self.config.clone(), info: self.info.pages.get(page).cloned() })
+        })?
+    }
+
+    /// Render a paragraph draft with the same PDF fonts and rewrite as Apply, on a copy.
+    /// The live document, its dirty state and undo history are untouched.
+    pub fn text_edit_draft_preview(
+        &self,
+        page: usize,
+        block: usize,
+        text: &str,
+        style: &pdfcraft_edit::BlockStyle,
+    ) -> Result<TextEditPreview, String> {
+        Ok(self.text_draft_source(page, block)?.open()?.prepare(text, style)?.preview)
     }
 
     /// Preparing the background never changes working bytes, dirty state or undo history.
@@ -186,5 +273,68 @@ impl Document {
             let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
             Ok(TextEditPreview { page, bytes, config: RenderConfig { transparent: true, ..self.config.clone() } })
         })?
+    }
+}
+
+#[cfg(test)]
+mod draft_tests {
+    use super::*;
+
+    fn document() -> (crate::Session, crate::DocId) {
+        let mut session = crate::Session::new();
+        let text = (0..30).map(|n| format!("Paragraph {n}: wide W and narrow i characters share the same PDF fonts.\n\n")).collect::<String>();
+        let bytes = session.create_from_text("Draft", &text).unwrap();
+        let id = session.open("draft.pdf", None, bytes, None).unwrap();
+        (session, id)
+    }
+
+    #[test]
+    fn prepared_draft_layout_and_pixels_match_apply_without_changing_the_document() {
+        let (mut session, id) = document();
+        let doc = session.get(id).unwrap();
+        let bytes = doc.bytes.clone();
+        let source = doc.text_draft_source(0, 0).unwrap();
+        let worker_session = source.open().unwrap();
+        let text = "A changed heading with WiWi";
+        let style = pdfcraft_edit::BlockStyle::default();
+        let draft = worker_session.prepare(text, &style).unwrap();
+        assert_eq!(draft.layout, doc.text_edit_layout(0, 0, text, &style).unwrap());
+        let preview = draft.preview.render_background(1.0).unwrap();
+        assert_eq!(doc.bytes, bytes);
+        assert!(!doc.dirty && doc.can_undo().is_none());
+        session.apply(id, crate::Edit::EditTextBlock { page: 0, block: 0, text: text.into(), style }).unwrap();
+        let applied = session.get(id).unwrap();
+        let mut renderer = PageRenderer::new(applied.display.clone(), applied.config.clone());
+        let applied = renderer.render(RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(applied.error.is_none());
+        assert_eq!(preview.rgba, applied.rgba);
+        let second = worker_session.prepare("Another heading", &Default::default()).unwrap();
+        assert_eq!(second.layout, source.open().unwrap().prepare("Another heading", &Default::default()).unwrap().layout);
+    }
+
+    #[test]
+    #[ignore = "manual timing comparison, no machine-dependent speed assertion"]
+    fn compare_separate_and_combined_draft_preparation() {
+        let (session, id) = document();
+        let doc = session.get(id).unwrap();
+        let base = &doc.editor.as_ref().unwrap().cos;
+        let style = pdfcraft_edit::BlockStyle::default();
+        let drafts: Vec<_> = (0..30).map(|n| format!("Typing a changed heading {n}")).collect();
+        let start = std::time::Instant::now();
+        for text in &drafts {
+            std::hint::black_box(doc.text_edit_layout(0, 0, text, &style).unwrap());
+            // The previous UI prepared layout, then independently rewrote/serialized a preview.
+            let mut cos = base.clone();
+            pdfcraft_edit::rewrite_block(&mut cos, 0, 0, Some(text), &style).unwrap();
+            std::hint::black_box(pdfcraft_cos::write_incremental(&cos, &Default::default()).unwrap());
+        }
+        let separate = start.elapsed();
+        let start = std::time::Instant::now();
+        let worker_session = doc.text_draft_source(0, 0).unwrap().open().unwrap();
+        for text in &drafts {
+            std::hint::black_box(worker_session.prepare(text, &style).unwrap());
+        }
+        let combined = start.elapsed();
+        eprintln!("30 drafts, preparation only: separate={separate:?}, combined/session={combined:?}");
     }
 }

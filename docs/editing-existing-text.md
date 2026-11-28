@@ -26,8 +26,20 @@ and the repair log records both preparation and map recovery.
 
 Click a text region in **Edit a PDF → Edit text and images**. One editor contains its
 source rows and mixed styles. Embedded TrueType and OpenType/CFF faces are used in memory;
-source font programs, colour, size and baseline anchors stay intact. A textless preview
-prevents a second copy underneath. The frame shows the live extent as text grows or shrinks.
+source font programs, colour, size and baseline anchors stay intact. A PDF-rendered draft
+supplies the visible text, while the editor draws the caret and selection over it. For upright,
+logically ordered text, caret positions and line breaks use the draft's PDF character advances,
+including character spacing, horizontal scaling and kerning. Ligature advances are divided
+between their Unicode scalars. Vertical, rotated or ambiguous reading-order mappings retain
+the existing editor geometry. The frame shows the live extent as text grows or shrinks.
+On desktop, one worker per view prepares and renders drafts outside the UI thread. It keeps
+only the latest queued text/style/zoom and reuses the opened paragraph session. Layout and
+preview share one rewrite and arrive together; obsolete results are discarded. While a draft
+is pending, the last completed raster stays visible, and the caret and selection are hidden while
+that raster is of other text. They show over the page's own text (a paragraph not changed yet),
+over the editor's own drawing of a draft and over a raster of the same draft, at provisional
+places until that draft's PDF geometry arrives. The web build uses the same combined preparation
+synchronously. The whole page is still rasterized; unchanged-region rendering is not implemented.
 Rows a text edit doesn't reach keep their original operators, so their kerning, `TJ` word
 gaps and glyph widths stay exactly as they were. Only rows whose characters changed, or that
 moved because an earlier row wrapped, are rewritten, and formatting a selection rewrites
@@ -160,6 +172,11 @@ left-aligned.
 For headless editing, use `text_font_files` → `text_font_import` → `text_fonts` and pass a
 resource to `text_edit.font_resource`. `text_edit.ranges` holds selected range formatting.
 `text_edit_layout` accepts resource/ranges too and measures a draft without applying it.
+`page_render` with `draft_paragraph` renders the same draft without applying it. The inline
+editor uses this PDF rendering while typing, so fonts unavailable to the interface renderer
+keep their PDF appearance. While a new raster is pending, the last preview stays visible.
+Caret and selection use PDF character positions when the draft has an unambiguous upright
+mapping; unsupported mappings retain the editor's font metrics.
 All file inputs respect CLI root confinement; importing a font and applying text are undoable.
 
 On a scanned page, recognised text (Scan & OCR) is an invisible layer over the picture. Edit
@@ -184,7 +201,7 @@ merge into multi-line paragraphs, and words split at gaps of 0.6 em or more.
 Explicit marked paragraph/heading scopes prevent unrelated tagged regions from merging.
 Compatible geometry groups untagged content, including runs split across content streams
 or equivalent graphics transforms. Geometry cannot infer author intent in every untagged
-PDF. Semantic structure-tree preservation, legacy Type 1/Type 3 inline font preview,
+PDF. Semantic structure-tree preservation, legacy Type 1/Type 3 caret metrics,
 font collections/variable-font instances, mixed-font/style contextual runs and complete rotated
 layout fidelity still need broader coverage. Do not interpret the passing real-file checks
 as a guarantee for every PDF.

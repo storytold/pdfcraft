@@ -192,6 +192,91 @@ pub(super) fn editor_job(
     job
 }
 
+/// `galley` drawn in no colour: its rows still place the caret and the selection.
+pub(super) fn unseen(mut galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
+    for placed in &mut Arc::make_mut(&mut galley).rows {
+        for vertex in &mut Arc::make_mut(&mut placed.row).visuals.mesh.vertices {
+            vertex.color = Color32::TRANSPARENT;
+        }
+    }
+    galley
+}
+
+/// PDF row breaks and character advances drive the invisible editor geometry. A PDF's
+/// source font can differ from every interface font, even inside a single word.
+pub(super) fn draft_galley(
+    ctx: &egui::Context,
+    ed: &LineEditor,
+    faces: &BTreeMap<String, FontRef>,
+    text: &str,
+    scale: f32,
+    width: f32,
+    layout: Option<&pdfcraft_engine::TextEditLayout>,
+) -> Arc<egui::Galley> {
+    let fallback = || editor_galley(ctx, ed, faces, text, scale, width);
+    let Some(layout) = layout.filter(|l| !l.rows.is_empty()) else { return fallback() };
+    let mut job = editor_job(ctx, ed, faces, text, scale, f32::INFINITY);
+    job.halign = egui::Align::LEFT;
+    let mut galley = ctx.fonts_mut(|f| f.layout_job(job.clone()));
+    let mut rows = Vec::new();
+    for draft in &layout.rows {
+        let Some(content) = text.get(draft.range.clone()) else { return fallback() };
+        let mut part = egui::text::LayoutJob { text: content.to_owned(), ..Default::default() };
+        let first = job.sections.partition_point(|section| usize::from(section.byte_range.end) <= draft.range.start);
+        part.sections = job
+            .sections
+            .iter()
+            .skip(first)
+            .take_while(|section| usize::from(section.byte_range.start) < draft.range.end)
+            .filter_map(|section| {
+                let start = usize::from(section.byte_range.start).max(draft.range.start);
+                let end = usize::from(section.byte_range.end).min(draft.range.end);
+                if start >= end {
+                    return None;
+                }
+                let mut section = section.clone();
+                section.byte_range = (start - draft.range.start).into()..(end - draft.range.start).into();
+                Some(section)
+            })
+            .collect();
+        let piece = ctx.fonts_mut(|f| f.layout_job(part));
+        let Some(mut placed) = piece.rows.first().cloned() else { return fallback() };
+        let row = Arc::make_mut(&mut placed.row);
+        if row.glyphs.len() != draft.characters.len() || !row.glyphs.iter().map(|g| g.chr).eq(content.chars()) {
+            return fallback();
+        }
+        placed.pos = egui::pos2(
+            ((draft.rect[0] - layout.source_rect[0]) * f64::from(scale)) as f32,
+            ((layout.source_rect[3] - draft.rect[3]) * f64::from(scale)) as f32,
+        );
+        placed.ends_with_newline = draft.ends_with_newline;
+        let ascent = ((draft.rect[3] - draft.baseline) * f64::from(scale)) as f32;
+        let height = ((draft.rect[3] - draft.rect[1]) * f64::from(scale)) as f32;
+        for (glyph, span) in row.glyphs.iter_mut().zip(&draft.characters) {
+            glyph.pos = egui::pos2(((span[0] - draft.rect[0]) * f64::from(scale)) as f32, ascent);
+            glyph.advance_width = ((span[1] - span[0]) * f64::from(scale)) as f32;
+            glyph.font_ascent = ascent;
+            glyph.font_height = height;
+            glyph.line_height = height;
+            // The glyph mesh is removed below, so every glyph's vertex range must be empty.
+            glyph.first_vertex = 0;
+        }
+        row.size = egui::vec2(((draft.rect[2] - draft.rect[0]) * f64::from(scale)) as f32, height.max(1.0));
+        // The page raster supplies the ink. Only glyph metrics are used by the editor.
+        row.visuals = Default::default();
+        rows.push(placed);
+    }
+    let g = Arc::make_mut(&mut galley);
+    g.rows = rows;
+    let bounds = g.rows.iter().fold(Rect::NOTHING, |r, row| r.union(Rect::from_min_size(row.pos, row.size)));
+    g.rect = Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(bounds.right().max(0.0), bounds.bottom().max(0.0)));
+    // Keep the rows' logical area visible to culling.
+    g.mesh_bounds = bounds;
+    g.num_vertices = 0;
+    g.num_indices = 0;
+    galley
+}
+
 /// Align the editable galley's baselines to the source rows instead of egui's interface
 /// leading. Glyphs, meshes, caret and selection receive the same transform.
 pub(super) fn editor_galley(
