@@ -30,8 +30,13 @@ fn print_category(name: &[u8]) -> Option<(&'static [u8], &'static [u8])> {
 /// (`/AS` entry) whose `/Event` is `/Print` recommends, for each group in its `/OCGs` and each of
 /// its categories ([`print_category`]), the state the group's usage dictionary gives (for the
 /// Print category, `/Usage /Print /PrintState`). A group with recommendations is on only if all
-/// of them, in all the entries naming it, are ON; other groups keep their state. `/Category` is
-/// an array; a single name is read as one. `None` when no `/AS` entry is for printing.
+/// of them, in all the entries naming it, are ON; other groups keep their state.
+///
+/// Precedence: a layer the user explicitly toggled away from its initial visibility
+/// (`l.visible != l.initial`, via the Layers panel, a `SetOCGState` action, or script) keeps its
+/// user-chosen state even if a Print auto-state entry recommends otherwise; untouched layers
+/// (`l.visible == l.initial`) follow the Print auto state. `/Category` is an array; a single name
+/// is read as one. `None` when no `/AS` entry is for printing.
 pub(crate) fn print_layer_states(cos: &pdfcraft_cos::Document, layers: &[Layer]) -> Option<Vec<Layer>> {
     use pdfcraft_cos::Object;
     let root = cos.trailer().get(b"Root").map(|r| cos.resolve(r))?;
@@ -93,7 +98,32 @@ pub(crate) fn print_layer_states(cos: &pdfcraft_cos::Document, layers: &[Layer])
             }
         }
     }
-    printing.then(|| layers.iter().map(|l| Layer { visible: recommended.get(&l.id).copied().unwrap_or(l.visible), ..l.clone() }).collect())
+    printing.then(|| {
+        layers
+            .iter()
+            .map(|l| {
+                let visible = if l.visible != l.initial { l.visible } else { recommended.get(&l.id).copied().unwrap_or(l.visible) };
+                Layer { visible, ..l.clone() }
+            })
+            .collect()
+    })
+}
+
+/// Strip content belonging to optional-content layers that are OFF in an imposed print-ready
+/// PDF's default configuration (`/OCProperties /D`), leaving `/OCProperties` intact.
+///
+/// Spoolers and RIPs such as macOS CoreGraphics / CUPS (`cgpdftoraster`, `cgpdftops`),
+/// Preview.app, and AirPrint / IPP Everywhere printers ignore `/OCProperties` and paint every
+/// layer present in the content stream; stripping hidden-layer content ensures hidden layers do
+/// not appear on paper. Returns `None` when nothing needed stripping or the copy could not be
+/// rewritten cleanly (leaving `/OCProperties /D` as a fallback without failing the print).
+pub(crate) fn strip_print_hidden_layers(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(bytes.to_vec())).ok()?;
+    let removed = pdfcraft_redact::sanitize::strip_off_layer_content(&mut doc).ok()?;
+    if removed == 0 {
+        return None;
+    }
+    pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).ok()
 }
 
 /// Write `layers`' visibility into the default optional-content configuration of `cos` (a copy
@@ -166,4 +196,255 @@ pub(crate) fn apply_layer_state(layers: &mut [Layer], groups: &[Vec<(u32, u16)>]
         }
     }
     layers.iter().zip(before).any(|(l, was)| l.visible != was)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use pdfcraft_cos::{Document as CosDoc, Object, SaveOptions, write_full};
+    use pdfcraft_render::{PRINT_TAG, PageRenderer, RenderConfig, RenderRequest};
+
+    use crate::{Session, display_config, print};
+
+    /// Build a minimal valid PDF from numbered indirect object bodies (1-based; object 1 is Catalog).
+    fn pdf_of(objs: &[&[u8]]) -> Vec<u8> {
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::with_capacity(objs.len());
+        for (i, body) in objs.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            pdf.extend_from_slice(body);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for off in offsets {
+            pdf.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        pdf
+    }
+
+    /// Remove `/OCProperties` from `bytes` to simulate a spooler/RIP that ignores PDF layers
+    /// (e.g. macOS CoreGraphics `cgpdftoraster`/`cgpdftops`, Preview.app, AirPrint RIPs).
+    fn ignoring_oc_properties(bytes: &[u8]) -> Vec<u8> {
+        let mut cos = CosDoc::open(Arc::new(bytes.to_vec())).unwrap();
+        let root = cos.root().unwrap();
+        cos.update_dict(root, |d| {
+            d.remove(b"OCProperties");
+        })
+        .unwrap();
+        write_full(&cos, &SaveOptions::default()).unwrap()
+    }
+
+    /// Count `(red, green, blue, yellow)` pixels on page 0 of `bytes` rendered with `config` and `tag`.
+    fn colour_counts(bytes: Arc<Vec<u8>>, config: RenderConfig, tag: u64) -> (usize, usize, usize, usize) {
+        let mut renderer = PageRenderer::new(bytes, config);
+        let page = renderer.render(RenderRequest { page: 0, scale: 1.0, tag, ..Default::default() });
+        assert_eq!(page.error, None);
+        let px = page.rgba.as_chunks::<4>().0;
+        let red = px.iter().filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60).count();
+        let green = px.iter().filter(|p| p[1] > 200 && p[0] < 60 && p[2] < 60).count();
+        let blue = px.iter().filter(|p| p[2] > 200 && p[0] < 60 && p[1] < 60).count();
+        let yellow = px.iter().filter(|p| p[0] > 200 && p[1] > 200 && p[2] < 60).count();
+        (red, green, blue, yellow)
+    }
+
+    /// Names of OCGs listed in `/OCProperties /D /OFF` of `bytes`.
+    fn off_layer_names(bytes: &[u8]) -> Vec<String> {
+        let cos = CosDoc::open(Arc::new(bytes.to_vec())).unwrap();
+        let root = cos.get(cos.root().unwrap());
+        let props = cos.resolve(root.as_dict().unwrap().get(b"OCProperties").unwrap());
+        let d = cos.resolve(props.as_dict().unwrap().get(b"D").unwrap());
+        let Some(off) = d.as_dict().and_then(|d| d.get(b"OFF")).map(|o| cos.resolve(o)) else {
+            return Vec::new();
+        };
+        off.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| cos.resolve(r).as_dict().and_then(|g| g.get(b"Name")).and_then(Object::as_string).map(|s| s.to_text()))
+            .collect()
+    }
+
+    /// #8226: hiding a layer via the Layers panel API (`set_layer_visible`) must exclude its
+    /// marked content, `/OC` Form XObjects, `/OC` annotations, and `/OCMD` (`/VE`) content from
+    /// both vector print (even when the spooler/RIP ignores `/OCProperties`, as macOS CUPS /
+    /// CoreGraphics does) and Print as image, while keeping the visible layer present.
+    #[test]
+    fn hidden_layer_content_is_absent_from_printed_pdf_even_when_oc_properties_are_ignored() {
+        let content = b"/OC /S BDC 1 0 0 rg 10 10 40 40 re f EMC \
+                        /OC /M BDC 0 1 0 rg 60 10 40 40 re f EMC \
+                        /OC /Both BDC 0 0 1 rg 110 10 40 40 re f EMC \
+                        /FmS Do";
+        let form_s = b"1 0 0 rg 10 60 40 30 re f";
+        let annot_ap = b"1 0 0 rg 0 0 40 30 re f";
+        let content_obj = [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat();
+        let form_obj = [
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 100] /OC 5 0 R /Length {} >>\nstream\n", form_s.len()).as_bytes(),
+            form_s,
+            b"\nendstream",
+        ]
+        .concat();
+        let ap_obj = [
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 40 30] /Length {} >>\nstream\n", annot_ap.len()).as_bytes(),
+            annot_ap,
+            b"\nendstream",
+        ]
+        .concat();
+        let pdf = pdf_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R] /D << /Order [5 0 R 6 0 R] >> >> >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Annots [10 0 R] \
+              /Resources << /Properties << /S 5 0 R /M 6 0 R /Both 7 0 R >> /XObject << /FmS 8 0 R >> >> >>",
+            &content_obj,
+            b"<< /Type /OCG /Name (Size S) >>",
+            b"<< /Type /OCG /Name (Size M) >>",
+            b"<< /Type /OCMD /VE [/And 5 0 R 6 0 R] >>",
+            &form_obj,
+            &ap_obj,
+            b"<< /Type /Annot /Subtype /Square /F 4 /Rect [110 60 150 90] /OC 5 0 R /AP << /N 9 0 R >> >>",
+        ]);
+
+        let mut s = Session::new();
+        let id = s.open("pattern.pdf", None, Arc::new(pdf), None).unwrap();
+        let size_s = s.get(id).unwrap().info.layers.iter().position(|l| l.name == "Size S").unwrap();
+        assert!(s.set_layer_visible(id, size_s, false));
+
+        // Vector print (default Size layout and Booklet/Multiple imposition).
+        for layout in [print::Layout::Size(print::SizeMode::Actual), print::Layout::multiple(2)] {
+            let settings = print::Settings { pages: vec![0], paper: (200.0, 100.0), layout, ..Default::default() };
+            let printed = s.print_pdf(id, &settings).unwrap();
+            assert_eq!(off_layer_names(&printed), vec!["Size S"]);
+
+            // Even with `/OCProperties` stripped (simulating macOS CoreGraphics/CUPS), the hidden
+            // layer's marked content, Form XObject, annotation, and OCMD content are gone.
+            let no_oc = ignoring_oc_properties(&printed);
+            let (red, green, blue, _) = colour_counts(Arc::new(no_oc), RenderConfig::default(), 0);
+            assert_eq!(red, 0, "hidden layer Size S (marked content + Form + annot) must not print");
+            assert_eq!(blue, 0, "OCMD [/And SizeS SizeM] must not print when Size S is hidden");
+            assert!(green > 100, "visible layer Size M must still print: {green} green");
+        }
+
+        // Print as image (raster path).
+        let raster_settings = print::Settings {
+            pages: vec![0],
+            paper: (200.0, 100.0),
+            layout: print::Layout::Size(print::SizeMode::Actual),
+            raster: Some(print::Raster { dpi: 72.0, grayscale: false, colour: None }),
+            ..Default::default()
+        };
+        let raster_pdf = s.print_pdf(id, &raster_settings).unwrap();
+        let (red, green, blue, _) = colour_counts(Arc::new(raster_pdf), RenderConfig::default(), 0);
+        assert_eq!(red, 0, "hidden layer must be absent from Print as image");
+        assert_eq!(blue, 0, "OCMD must be absent from Print as image");
+        assert!(green > 100, "visible layer must be present in Print as image: {green} green");
+    }
+
+    /// #8226: an explicit user hide in the Layers panel wins over a `/AS` `/Event /Print` entry
+    /// recommending `/PrintState /ON`, while untouched layers still follow the document's Print
+    /// auto state (ISO 32000-2 §8.11.4.4).
+    #[test]
+    fn explicit_user_hide_wins_over_print_auto_state_on() {
+        let content = b"/OC /S BDC 1 0 0 rg 10 10 40 80 re f EMC \
+                        /OC /M BDC 0 1 0 rg 60 10 40 80 re f EMC \
+                        /OC /P BDC 0 0 1 rg 110 10 40 80 re f EMC \
+                        /OC /V BDC 1 1 0 rg 160 10 40 80 re f EMC";
+        let content_obj = [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat();
+        let pdf = pdf_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R 8 0 R] \
+              /D << /OFF [7 0 R] /Order [5 0 R 6 0 R 7 0 R 8 0 R] \
+              /AS [<< /Event /Print /OCGs [5 0 R 6 0 R 7 0 R 8 0 R] /Category [/Print] >>] >> >> >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 210 100] /Contents 4 0 R \
+              /Resources << /Properties << /S 5 0 R /M 6 0 R /P 7 0 R /V 8 0 R >> >> >>",
+            &content_obj,
+            b"<< /Type /OCG /Name (Size S) /Usage << /Print << /PrintState /ON >> >> >>",
+            b"<< /Type /OCG /Name (Size M) /Usage << /Print << /PrintState /ON >> >> >>",
+            b"<< /Type /OCG /Name (Print only) /Usage << /Print << /PrintState /ON >> >> >>",
+            b"<< /Type /OCG /Name (View only) /Usage << /Print << /PrintState /OFF >> >> >>",
+        ]);
+
+        let mut s = Session::new();
+        let id = s.open("pattern-as.pdf", None, Arc::new(pdf), None).unwrap();
+        let size_s = s.get(id).unwrap().info.layers.iter().position(|l| l.name == "Size S").unwrap();
+        assert!(s.set_layer_visible(id, size_s, false));
+
+        // Print preview matches: user-hidden Size S and untouched View only are absent;
+        // Size M and untouched Print only are present.
+        let doc = s.get(id).unwrap();
+        let (red, green, blue, yellow) = colour_counts(doc.display.clone(), display_config(&doc.config), PRINT_TAG);
+        assert_eq!((red, yellow), (0, 0), "preview must hide user-hidden Size S and View only");
+        assert!(green > 100 && blue > 100, "preview must show Size M ({green}) and Print only ({blue})");
+
+        // Vector print (checked with `/OCProperties` stripped) and Print as image both agree.
+        for raster in [None, Some(print::Raster { dpi: 72.0, grayscale: false, colour: None })] {
+            let settings = print::Settings {
+                pages: vec![0],
+                paper: (210.0, 100.0),
+                layout: print::Layout::Size(print::SizeMode::Actual),
+                raster: raster.clone(),
+                ..Default::default()
+            };
+            let printed = s.print_pdf(id, &settings).unwrap();
+            let check_bytes = if raster.is_none() {
+                assert_eq!(off_layer_names(&printed), vec!["Size S", "View only"]);
+                ignoring_oc_properties(&printed)
+            } else {
+                printed
+            };
+            let (red, green, blue, yellow) = colour_counts(Arc::new(check_bytes), RenderConfig::default(), 0);
+            assert_eq!(red, 0, "user-hidden Size S must stay hidden even with /PrintState /ON (raster={})", raster.is_some());
+            assert_eq!(yellow, 0, "untouched View only must follow /PrintState /OFF (raster={})", raster.is_some());
+            assert!(green > 100, "Size M must print (raster={}): {green}", raster.is_some());
+            assert!(blue > 100, "untouched Print only must follow /PrintState /ON (raster={}): {blue}", raster.is_some());
+        }
+
+        // Resetting layers restores Size S so it prints again.
+        assert!(s.reset_layers(id));
+        let printed = s
+            .print_pdf(
+                id,
+                &print::Settings {
+                    pages: vec![0],
+                    paper: (210.0, 100.0),
+                    layout: print::Layout::Size(print::SizeMode::Actual),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let (red, green, blue, yellow) = colour_counts(Arc::new(ignoring_oc_properties(&printed)), RenderConfig::default(), 0);
+        assert!(red > 100 && green > 100 && blue > 100 && yellow == 0, "after reset: ({red}, {green}, {blue}, {yellow})");
+    }
+
+    /// Stripping hidden layers for print must not apply `/AS` `/Event /View`: an untouched layer
+    /// hidden on screen only by `/ViewState /OFF` keeps its `/D` (ON) state on paper.
+    #[test]
+    fn view_only_auto_state_layer_is_not_stripped_when_printing() {
+        let content = b"/OC /L1 BDC 1 0 0 rg 10 10 80 80 re f EMC";
+        let content_obj = [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat();
+        let pdf = pdf_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] \
+              /D << /Order [5 0 R] /AS [<< /Event /View /OCGs [5 0 R] /Category [/View] >>] >> >> >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Properties << /L1 5 0 R >> >> >>",
+            &content_obj,
+            b"<< /Type /OCG /Name (Screen hidden) /Usage << /View << /ViewState /OFF >> >> >>",
+        ]);
+        let mut s = Session::new();
+        let id = s.open("view-auto.pdf", None, Arc::new(pdf), None).unwrap();
+        let printed = s
+            .print_pdf(
+                id,
+                &print::Settings {
+                    pages: vec![0],
+                    paper: (100.0, 100.0),
+                    layout: print::Layout::Size(print::SizeMode::Actual),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let (red, _, _, _) = colour_counts(Arc::new(ignoring_oc_properties(&printed)), RenderConfig::default(), 0);
+        assert!(red > 100, "untouched layer hidden only by /Event /View must still print: {red} red");
+    }
 }

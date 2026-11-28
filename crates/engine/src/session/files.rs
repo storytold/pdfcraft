@@ -1,7 +1,7 @@
 use super::{
     Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hairlines, HairlinesFixed, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI,
     OptimizeReport, SaveOptions, Session, SourceKind, SplitPart, decode_text, guard, office_to_pdf, open_source, open_source_with, optimize, print,
-    print_layer_states, print_raster, set_default_layer_state, source_kind, writable, write_full,
+    print_layer_states, print_raster, set_default_layer_state, source_kind, strip_print_hidden_layers, writable, write_full,
 };
 
 /// Why printer's marks were refused for a print that goes as pictures.
@@ -338,7 +338,12 @@ impl Session {
             pages.dedup();
             pdfcraft_edit::add_printer_marks(&mut cos, &pages, marks, true)?;
         }
-        pdfcraft_print::impose(&cos, settings).map_err(|e| EditError::Print(e.to_string()))
+        let has_layers = cos.trailer().get(b"Root").and_then(|r| cos.resolve(r).as_dict().and_then(|d| d.get(b"OCProperties").cloned())).is_some();
+        let bytes = pdfcraft_print::impose(&cos, settings).map_err(|e| EditError::Print(e.to_string()))?;
+        if has_layers && let Ok(Some(stripped)) = guard(|| strip_print_hidden_layers(&bytes)) {
+            return Ok(stripped);
+        }
+        Ok(bytes)
     }
 
     /// For each page, whether its text mostly runs bottom-to-top ([`pdfcraft_print::text_reads_up`]);

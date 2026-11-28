@@ -78,6 +78,12 @@ pub enum RedactError {
     UnreadableAnnotation { page: usize, annotation: usize },
     #[error("redaction could not be verified: {0} item(s) were still found under the marks, so nothing was changed")]
     Residue(usize),
+    /// Removing a hidden layer for printing would move visible text: a text-showing operator in the
+    /// hidden block advances the text position that later text in the same text object starts from.
+    #[error(
+        "page {0} has text in a hidden layer that later visible text is positioned after, so the layer can't be left out without moving that text"
+    )]
+    HiddenLayerAdvance(usize),
     /// A mark's overlay text has a character Helvetica can't draw; nothing was redacted.
     #[error("page {page} cannot be redacted safely: {reason}; nothing was changed")]
     Pattern { page: usize, reason: PatternProblem },

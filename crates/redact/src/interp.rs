@@ -174,6 +174,13 @@ pub(crate) struct Scope<'a> {
     /// Whether this pass is evaluating optional-content rules. An empty off set is meaningful:
     /// policies such as `/AllOff` can still hide content when every group is on.
     pub layers_enabled: bool,
+    /// Printing: inside a hidden layer's block, keep what changes the graphics or text state
+    /// (`cm`, `gs`, clips, text positioning) and leave out only what paints, since content after
+    /// the block depends on that state. Removal for privacy drops it all.
+    pub keep_hidden_state: bool,
+    /// Set when [`Scope::keep_hidden_state`] could not keep visible text in place: a text-showing
+    /// operator left out of a hidden block moved the start of later text in the same text object.
+    pub hidden_advance_lost: bool,
     /// Off groups referenced by optional content that remains visible and therefore still needs
     /// its original default state after sanitization.
     pub retained_off_layers: HashSet<ObjRef>,
@@ -224,6 +231,8 @@ impl<'a> Scope<'a> {
             hidden_text: None,
             hidden_layers: HashSet::new(),
             layers_enabled: false,
+            keep_hidden_state: false,
+            hidden_advance_lost: false,
             retained_off_layers: HashSet::new(),
             ocmd_cache: HashMap::new(),
             xobject_oc_cache: HashMap::new(),

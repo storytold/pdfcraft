@@ -7363,3 +7363,149 @@ fn a_layer_a_view_rule_turns_off_is_hidden() {
     let c = content(&doc, 0);
     assert!(!c.contains("ScreenOff") && c.contains("(PrintOff)"), "{c}");
 }
+
+/// One page whose `content` names the off layer 7 as `/H` and the on layer 8 as `/V`.
+fn layered_page(content: &[u8]) -> Document {
+    pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R 8 0 R] /D << /OFF [7 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /Properties << /H 7 0 R /V 8 0 R >> >> >>"
+            .to_vec(),
+        stream("", content),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        b"<< /Type /OCG /Name (Hidden) >>".to_vec(),
+        b"<< /Type /OCG /Name (Shown) >>".to_vec(),
+    ])
+}
+
+/// The operator keywords of page 0, in order, each with its operands.
+fn page_ops(doc: &Document) -> Vec<String> {
+    pdfcraft_content::parse(content(doc, 0).as_bytes())
+        .ops
+        .iter()
+        .map(|op| {
+            String::from_utf8_lossy(&pdfcraft_content::serialize_ops(std::slice::from_ref(op))).split_whitespace().collect::<Vec<_>>().join(" ")
+        })
+        .collect()
+}
+
+/// #8226 review: leaving a hidden layer off the paper keeps the state its block sets for what
+/// follows. The `cm` inside the hidden block still scales the visible rectangle after it, a clip
+/// set there still clips, and `'` and `"` keep their line move and spacing; only painting goes.
+#[test]
+fn print_stripping_keeps_the_state_a_hidden_block_sets() {
+    use crate::sanitize::strip_off_layer_content;
+    let mut doc = layered_page(
+        b"q /OC /H BDC 2 0 0 2 0 0 cm 0 0 5 5 re f /GS1 gs 1 0 0 rg EMC 20 20 10 10 re f Q \
+          q /OC /H BDC 0 0 50 50 re W f EMC 0 0 300 300 re f Q \
+          BT /F1 10 Tf 12 TL /OC /H BDC 9 1 2 (x) \" EMC 1 0 0 1 10 100 Tm (shown) Tj ET \
+          /OC /H BDC 0 0 1 rg BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI /Sh0 sh /Fm0 Do EMC /OC /V BDC 9 9 9 9 re S EMC",
+    );
+    assert_eq!(strip_off_layer_content(&mut doc).unwrap(), 4);
+    let ops = page_ops(&doc);
+    let expected = [
+        "q",
+        "2 0 0 2 0 0 cm",
+        "0 0 5 5 re",
+        "n",
+        "/GS1 gs",
+        "1 0 0 rg",
+        "20 20 10 10 re",
+        "f",
+        "Q",
+        "q",
+        "0 0 50 50 re",
+        "W",
+        "n",
+        "0 0 300 300 re",
+        "f",
+        "Q",
+        "BT",
+        "/F1 10 Tf",
+        "12 TL",
+        "1 Tw",
+        "2 Tc",
+        "T*",
+        "1 0 0 1 10 100 Tm",
+        "(shown) Tj",
+        "ET",
+        "0 0 1 rg",
+        "/OC /V BDC",
+        "9 9 9 9 re",
+        "S",
+        "EMC",
+    ];
+    assert_eq!(ops, expected);
+}
+
+/// Hidden text whose advance a later visible string in the same text object starts from can't
+/// be left out without moving that string, so printing refuses and keeps the layers in the file.
+/// After a valid `Tm`, a new text object, or a line move (`Td`, `TD`, `T*`, `'`, `"`, which start
+/// from the text line matrix that showing glyphs never changes), the visible text starts where it
+/// says and stripping goes on. A `Tm` or `Td` with too few numbers changes nothing, so it is no
+/// such boundary.
+#[test]
+fn print_stripping_refuses_to_move_visible_text_after_hidden_text() {
+    use crate::{RedactError, sanitize::strip_off_layer_content};
+    for moved in [
+        b"BT /F1 10 Tf 10 100 Td /OC /H BDC (secret) Tj EMC (shown) Tj ET".as_slice(),
+        b"BT /F1 10 Tf 10 100 Td /OC /H BDC (secret) Tj EMC 10 80 Tm (shown) Tj ET",
+        b"BT /F1 10 Tf 10 100 Td /OC /H BDC [(secret)] TJ EMC -12 Td (shown) Tj ET",
+        // `Q` restores the text matrices the hidden string advanced, undoing the line move.
+        b"BT /F1 10 Tf 10 100 Td /OC /H BDC (secret) Tj EMC q 0 -12 Td Q (shown) Tj ET",
+        b"BT /F1 10 Tf 10 100 Td /OC /H BDC (secret) Tj EMC q q 0 -12 Td Q 1 0 0 1 0 0 Tm Q (shown) Tj ET",
+    ] {
+        let mut doc = layered_page(moved);
+        assert!(matches!(strip_off_layer_content(&mut doc), Err(RedactError::HiddenLayerAdvance(1))), "{}", String::from_utf8_lossy(moved));
+    }
+    for safe in [
+        b"BT /F1 10 Tf 10 100 Td /OC /H BDC (secret) Tj EMC 1 0 0 1 10 80 Tm (shown) Tj ET".as_slice(),
+        b"BT /F1 10 Tf 10 100 Td /OC /H BDC (secret) Tj EMC ET BT /F1 10 Tf 10 80 Td (shown) Tj ET",
+        b"BT /F1 10 Tf 10 100 Td (shown) Tj /OC /H BDC (secret) Tj EMC ET",
+        b"BT /F1 10 Tf 12 TL 10 100 Td /OC /H BDC [(secret)] TJ EMC 0 -12 Td (shown) Tj ET",
+        b"BT /F1 10 Tf 12 TL 10 100 Td /OC /H BDC (secret) Tj EMC 0 -12 TD (shown) Tj ET",
+        b"BT /F1 10 Tf 12 TL 10 100 Td /OC /H BDC (secret) Tj EMC T* (shown) Tj ET",
+        b"BT /F1 10 Tf 12 TL 10 100 Td /OC /H BDC (secret) Tj EMC (shown) ' ET",
+        b"BT /F1 10 Tf 12 TL 10 100 Td /OC /H BDC (secret) Tj EMC 0 0 (shown) \" ET",
+        b"BT /F1 10 Tf 12 TL 10 100 Td /OC /H BDC (secret) Tj 0 -12 Td EMC (shown) Tj ET",
+        // A hidden advance inside `q`/`Q` is undone by the `Q`.
+        b"BT /F1 10 Tf 10 100 Td q /OC /H BDC (secret) Tj EMC Q (shown) Tj ET",
+    ] {
+        let mut doc = layered_page(safe);
+        assert_eq!(strip_off_layer_content(&mut doc).unwrap(), 1, "{}", String::from_utf8_lossy(safe));
+        assert!(!content(&doc, 0).contains("secret"), "{}", String::from_utf8_lossy(safe));
+    }
+}
+
+/// A membership dictionary listed among `/OCGs` (non-conforming, as in PDFium's optional-content
+/// test files) is evaluated by its policy, as viewers do, even though `/D` names it in `/OFF`:
+/// `/AllOff` over an off group is visible, so printing keeps what it marks.
+#[test]
+fn print_stripping_evaluates_a_membership_dictionary_listed_as_a_group() {
+    use crate::sanitize::strip_off_layer_content;
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R 8 0 R 9 0 R] /D << /OFF [7 0 R 9 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /Properties << /H 7 0 R /M 9 0 R >> >> >>"
+            .to_vec(),
+        stream("", b"/OC /M BDC 1 1 8 8 re f EMC /OC /H BDC 20 20 8 8 re f EMC"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        b"<< /Type /OCG /Name (Hidden) >>".to_vec(),
+        b"<< /Type /OCG /Name (Shown) >>".to_vec(),
+        b"<< /Type /OCMD /OCGs [7 0 R] /P /AllOff >>".to_vec(),
+    ]);
+    assert_eq!(strip_off_layer_content(&mut doc).unwrap(), 1);
+    // The membership dictionary's block is drawn; the off group's block only keeps its path state.
+    assert_eq!(page_ops(&doc), ["/OC /M BDC", "1 1 8 8 re", "f", "EMC", "20 20 8 8 re", "n"]);
+}
+
+/// Remove Hidden Information still drops everything in a hidden block, state included.
+#[test]
+fn removing_hidden_layers_still_drops_the_whole_block() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = layered_page(b"q /OC /H BDC 2 0 0 2 0 0 cm 0 0 5 5 re f EMC 20 20 10 10 re f Q");
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    assert_eq!(page_ops(&doc), ["q", "20 20 10 10 re", "f", "Q"]);
+}

@@ -2,7 +2,7 @@ use super::{Dict, Document, HashSet, ObjRef, Object, Op, Scope};
 
 impl<'a> Scope<'a> {
     /// Is this optional-content reference (an OCG or OCMD) hidden?
-    fn layer_hidden(&mut self, doc: &Document, o: &Object) -> bool {
+    pub(crate) fn layer_hidden(&mut self, doc: &Document, o: &Object) -> bool {
         if !self.layers_enabled {
             return false;
         }
@@ -11,7 +11,10 @@ impl<'a> Scope<'a> {
             if let Some(hidden) = self.ocmd_cache.get(&r) {
                 return *hidden;
             }
-            if self.hidden_layers.contains(&r) {
+            // A membership dictionary listed among the groups (a non-conforming `/OCGs` entry) is
+            // still evaluated by its policy, as viewers do, not hidden because `/D` names it off.
+            let listed_ocmd = doc.resolve(o).as_dict().is_some_and(|d| has_type(doc, d, b"OCMD"));
+            if !listed_ocmd && self.hidden_layers.contains(&r) {
                 self.ocmd_cache.insert(r, true);
                 return true;
             }
@@ -223,13 +226,34 @@ impl<'a> Scope<'a> {
 
 /// Remove marked-content blocks of hidden layers (`/OC /name BDC … EMC`, nested blocks
 /// included). Returns the remaining operators and how many blocks went.
+///
+/// With [`Scope::keep_hidden_state`] (printing) a hidden block keeps every operator that changes
+/// the graphics or text state and loses only what paints ([`kept_state`]); a text-showing
+/// operator whose advance later text in the same text object starts from sets
+/// [`Scope::hidden_advance_lost`].
 pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Vec<Op>, props: &Dict) -> (Vec<Op>, usize) {
     let mut out = Vec::with_capacity(ops.len());
     // For each open marked-content block: does it hide its contents?
     let mut stack: Vec<bool> = Vec::new();
     let mut removed = 0;
+    // Printing: a hidden block left out a text advance, and the text object is still open.
+    let mut advance_dropped = false;
+    // The flag as it stood at each open `q`. The interpreter saves the text matrices with the
+    // graphics state (`Walk::graphics_state`), so the matching `Q` brings the flag back too:
+    // a line move between them is undone, and a hidden advance between them is undone as well.
+    // One entry per `q` operator already parsed, so it grows no faster than `ops`.
+    let mut saved_dropped: Vec<bool> = Vec::new();
     for op in ops {
         let hidden_now = stack.last().copied().unwrap_or(false);
+        match op.op.as_slice() {
+            b"q" => saved_dropped.push(advance_dropped),
+            b"Q" => {
+                if let Some(dropped) = saved_dropped.pop() {
+                    advance_dropped = dropped;
+                }
+            }
+            _ => {}
+        }
         match op.op.as_slice() {
             b"BDC" | b"BMC" => {
                 let this = op.is("BDC")
@@ -255,14 +279,76 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
                     out.push(op);
                 }
             }
+            _ if hidden_now && scope.keep_hidden_state => {
+                if starts_from_line(&op) {
+                    advance_dropped = false;
+                }
+                let (kept, dropped_advance) = kept_state(op);
+                advance_dropped |= dropped_advance;
+                out.extend(kept);
+            }
             _ => {
                 if !hidden_now {
+                    if starts_from_line(&op) {
+                        advance_dropped = false;
+                    } else if advance_dropped && matches!(op.op.as_slice(), b"Tj" | b"TJ") {
+                        scope.hidden_advance_lost = true;
+                    }
                     out.push(op);
                 }
             }
         }
     }
     (out, removed)
+}
+
+/// Does `op` place the text matrix without reading the advance of the glyphs shown before it?
+/// A new text object and a valid `Tm` start where they say. `Td`, `TD`, `T*`, `'` and `"` move
+/// from the text line matrix, which showing glyphs never changes, so a hidden string's advance
+/// left out before them moves nothing. A `Tm` without six numbers, or a `Td` or `TD` without
+/// two, changes nothing, as the interpreter reads it, so it is no boundary.
+fn starts_from_line(op: &Op) -> bool {
+    match op.op.as_slice() {
+        b"BT" | b"ET" | b"T*" | b"'" | b"\"" => true,
+        b"Td" | b"TD" => op.nums::<2>().is_some(),
+        b"Tm" => op.nums::<6>().is_some(),
+        _ => false,
+    }
+}
+
+/// What a hidden block keeps of `op` when printing, and whether it left out a text advance.
+/// Painting a path becomes `n`, which still ends the path and applies a pending clip. Text, shadings,
+/// XObjects and inline images go; `'` and `"` keep their move to the next line and their spacing.
+/// Every other operator changes state that content after the block may depend on, and stays.
+fn kept_state(mut op: Op) -> (Vec<Op>, bool) {
+    match op.op.as_slice() {
+        b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
+            op.op = b"n".to_vec();
+            op.operands.clear();
+            (vec![op], false)
+        }
+        b"sh" | b"Do" | b"BI" => (Vec::new(), false),
+        b"Tj" | b"TJ" => (Vec::new(), true),
+        b"'" => {
+            op.op = b"T*".to_vec();
+            op.operands.clear();
+            (vec![op], true)
+        }
+        b"\"" => {
+            // `aw ac string "` is `aw Tw ac Tc string '`. The two numbers are the ones just before
+            // the string, whatever surplus precedes them, as the interpreter reads them.
+            let operands = std::mem::take(&mut op.operands);
+            let from_end = |back: usize| operands.len().checked_sub(back).and_then(|i| operands.get(i)).cloned();
+            let (Some(aw), Some(ac)) = (from_end(3), from_end(2)) else { return (Vec::new(), true) };
+            let at = |name: &str, operands: Vec<Object>| {
+                let mut o = Op::new(name, operands);
+                o.span = op.span.clone();
+                o
+            };
+            (vec![at("Tw", vec![aw]), at("Tc", vec![ac]), at("T*", Vec::new())], true)
+        }
+        _ => (vec![op], false),
+    }
 }
 
 /// Is this dictionary's `/Type` the given name? An indirect `/Type` is followed, as a viewer
