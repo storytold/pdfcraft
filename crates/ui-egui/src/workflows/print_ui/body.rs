@@ -254,10 +254,7 @@ fn paper_section(d: &PrintDraft, sizes: &[(f64, f64)], units: Unit, no_printers:
     // The spooler answered with no printer at all (#160): say so, rather than leaving Save as PDF looking like the only
     // thing PdfCraft can do.
     if no_printers {
-        params.push(note(
-            "note.no_printers",
-            tl!("No printers were found. Check that the printer is installed and the print spooler is running, then open Print again."),
-        ));
+        params.push(note("note.no_printers", super::no_printers_message(spool::missing_print_dll())));
     }
     PrintSection::new(lbl(tl!("Paper")), params).untitled()
 }
