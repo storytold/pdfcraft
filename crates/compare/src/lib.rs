@@ -166,11 +166,9 @@ fn myers(a: &[u64], b: &[u64]) -> Vec<Op> {
     let max = n + m;
     let off = max as isize + 1;
     let mut v = vec![0usize; 2 * max + 3];
-    // Frontier d only spans diagonals -d..=d: save just that slice.
     let mut trace: Vec<Vec<usize>> = Vec::new();
     let mut found = false;
     'outer: for d in 0..=max as isize {
-        trace.push(v[(off - d - 1).max(0) as usize..=(off + d + 1) as usize].to_vec());
         let mut k = -d;
         while k <= d {
             let i = (k + off) as usize;
@@ -187,33 +185,34 @@ fn myers(a: &[u64], b: &[u64]) -> Vec<Op> {
             }
             k += 2;
         }
+        // Only every other diagonal belongs to this frontier.
+        trace.push(v[(off - d) as usize..=(off + d) as usize].iter().step_by(2).copied().collect());
     }
     if !found {
         // Too different: replace everything.
         return std::iter::repeat_n(Op::Delete, n).chain(std::iter::repeat_n(Op::Insert, m)).collect();
     }
-    // Walk back through the saved frontiers.
+    // Walk back one edit per saved frontier, then keep the initial matching run.
     let mut ops = Vec::new();
     let (mut x, mut y) = (n as isize, m as isize);
-    for d in (0..trace.len() as isize).rev() {
-        let v = &trace[d as usize];
+    for (layer, frontier) in trace.iter().enumerate().rev() {
+        let layer = layer as isize;
+        let d = layer + 1;
         let k = x - y;
-        let base = (off - d - 1).max(0);
-        let i = |k: isize| (k + off - base) as usize;
-        let prev_k = if k == -d || (k != d && v[i(k - 1)] < v[i(k + 1)]) { k + 1 } else { k - 1 };
-        let prev_x = v[i(prev_k)] as isize;
+        let at = |k: isize| frontier[((k + layer) / 2) as usize];
+        let prev_k = if k == -d || (k != d && at(k - 1) < at(k + 1)) { k + 1 } else { k - 1 };
+        let prev_x = at(prev_k) as isize;
         let prev_y = prev_x - prev_k;
         while x > prev_x && y > prev_y {
             ops.push(Op::Equal);
             x -= 1;
             y -= 1;
         }
-        if d > 0 {
-            ops.push(if x == prev_x { Op::Insert } else { Op::Delete });
-        }
+        ops.push(if x == prev_x { Op::Insert } else { Op::Delete });
         x = prev_x;
         y = prev_y;
     }
+    ops.extend(std::iter::repeat_n(Op::Equal, x as usize));
     ops.reverse();
     ops
 }
@@ -399,6 +398,17 @@ mod tests {
         let c = compare(&old, &new);
         assert_eq!(c.changes.len(), 5, "{:?}", c.changes.iter().map(|x| (x.kind, &x.old.text, &x.new.text)).collect::<Vec<_>>());
         assert_eq!(c.count(Kind::Replaced), 4);
+    }
+
+    #[test]
+    fn large_replacements_keep_shared_words_between_them() {
+        let replaced = DIRECT / 4 - 1;
+        let [draft, obsolete, revised, current] = ["draft ", "obsolete ", "revised ", "current "].map(|s| s.repeat(replaced));
+        let old = words(&format!("{draft}terms terms {obsolete}"), 0);
+        let new = words(&format!("{revised}terms terms {current}"), 0);
+        let c = compare(&old, &new);
+        let got: Vec<_> = c.changes.iter().map(|change| (change.kind, change.old.text.as_str(), change.new.text.as_str())).collect();
+        assert_eq!(got, [(Kind::Replaced, draft.trim_end(), revised.trim_end()), (Kind::Replaced, obsolete.trim_end(), current.trim_end()),]);
     }
 
     #[test]
