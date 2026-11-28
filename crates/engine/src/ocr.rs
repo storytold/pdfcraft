@@ -129,8 +129,10 @@ pub struct OcrSettings {
     pub engine: EngineChoice,
     /// How the engines' readings combine (see [`MergeStrategy`]).
     pub strategy: MergeStrategy,
-    /// Preprocessing, all off by default (a scan is passed through as rendered):
-    /// straighten pages scanned at 90°/180°/270°.
+    /// Preprocessing (a scan is passed through as rendered unless a step is on): straighten
+    /// pages scanned at 90°/180°/270°. On by default where the job's engine judges the turns
+    /// ([`OcrJob::run`], the desktop); off in the web build, whose steps take no judge and
+    /// where the ink's profile alone would turn a ruled form wrongly (#8484).
     pub auto_rotate: bool,
     /// Preprocessing: straighten skewed text lines.
     pub deskew: bool,
@@ -201,7 +203,7 @@ impl Default for OcrSettings {
             force_ocr: false,
             engine: EngineChoice::default(),
             strategy: MergeStrategy::default(),
-            auto_rotate: false,
+            auto_rotate: cfg!(not(target_arch = "wasm32")),
             deskew: false,
             denoise: false,
             binarize: false,
@@ -722,7 +724,7 @@ impl OcrJob {
     /// stops (the pages read so far are returned).
     pub fn run(self, recognizers: &Recognizers, mut progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
         let total = self.pages.len();
-        let mut steps = self.steps();
+        let mut steps = self.steps_judged_by(Some(recognizers.primary.clone()));
         let mut out = Vec::new();
         while progress(steps.done(), total) {
             match steps.next_page() {
@@ -738,10 +740,18 @@ impl OcrJob {
     /// Read the pages one at a time, preparing each page's image and recognising it separately:
     /// the web build prepares pages on the page and recognises them in Web Workers.
     pub fn steps(self) -> OcrSteps {
+        self.steps_judged_by(None)
+    }
+
+    /// [`OcrJob::steps`], with an engine at hand while pages are prepared: with auto-rotate on,
+    /// it settles the orientation of a page the ink's profile can't place, or would turn
+    /// wrongly, by reading the page turned each way (#8484). The web build's workers hold the
+    /// engines, so its steps go without.
+    pub fn steps_judged_by(self, judge: Option<Arc<dyn Recognizer>>) -> OcrSteps {
         let config =
             RenderConfig { password: self.password.as_deref().map(Arc::from), hide_comments: self.settings.native_text_only, ..Default::default() };
         let renderer = PageRenderer::new(self.bytes.clone(), config);
-        OcrSteps { job: self, renderer, next: 0 }
+        OcrSteps { job: self, renderer, next: 0, judge }
     }
 }
 
@@ -752,6 +762,8 @@ pub struct OcrSteps {
     job: OcrJob,
     renderer: PageRenderer,
     next: usize,
+    /// An engine that judges a page's orientation while it is prepared, when there is one.
+    judge: Option<Arc<dyn Recognizer>>,
 }
 
 impl OcrSteps {
@@ -820,7 +832,15 @@ impl OcrSteps {
         // back in processed coordinates and are mapped to the ORIGINAL raster's before
         // placement. The render dpi is the real one (pixels per point × 72), never a
         // fixed value.
-        let pre = pdfcraft_ocr::preprocess::preprocess(
+        // With auto-rotate on and an engine at hand, the engine judges the turns the ink's
+        // profile can't settle: how many readable words it finds in the page turned each way.
+        let options = pdfcraft_ocr::RecognizeOptions { language: settings.language.clone() };
+        let judge = self
+            .judge
+            .as_ref()
+            .filter(|_| settings.auto_rotate)
+            .map(|engine| move |turned: &OcrImage| engine.recognize(turned, &options).ok().map(|lines| pdfcraft_ocr::readable_words(&lines)));
+        let pre = pdfcraft_ocr::preprocess::preprocess_with_judge(
             image,
             scale * 72.0,
             &pdfcraft_ocr::preprocess::PreprocessOptions {
@@ -829,6 +849,7 @@ impl OcrSteps {
                 denoise: settings.denoise,
                 binarize: settings.binarize,
             },
+            judge.as_ref().map(|j| j as &dyn Fn(&OcrImage) -> Option<usize>),
         )
         .map_err(|e| skip(&e.to_string()))?;
         Ok(OcrShot {
@@ -1417,14 +1438,17 @@ mod tests {
         assert_eq!(EngineChoice::Tesseract.default_strategy(), MergeStrategy::PrimaryOnly);
     }
 
-    /// Settings default to today's behavior: ocrs, PrimaryOnly, no preprocessing, searchable.
+    /// Settings default to today's behavior: ocrs, PrimaryOnly, searchable, and no preprocessing
+    /// but auto-rotate, which is on where the engine judges the turns (the desktop) and off in
+    /// the web build, whose steps take no judge.
     #[test]
     fn settings_default_to_the_ocrs_status_quo() {
         let s = OcrSettings::default();
         assert_eq!(s.engine, EngineChoice::Ocrs);
         assert_eq!(s.strategy, MergeStrategy::PrimaryOnly);
         assert_eq!(s.output_mode, OutputMode::Searchable);
-        assert!(!s.auto_rotate && !s.deskew && !s.denoise && !s.binarize);
+        assert_eq!(s.auto_rotate, cfg!(not(target_arch = "wasm32")), "auto-rotate is on by default only where the engine judges the turns");
+        assert!(!s.deskew && !s.denoise && !s.binarize);
         assert_eq!(s.region, None);
         assert_eq!(s.low_confidence_threshold, 60.0);
         assert_eq!(s.tesseract_path, None, "no configured tesseract path by default: the PATH decides");
@@ -1760,6 +1784,68 @@ mod tests {
         (Recognizers { primary: fake.clone(), secondary: None }, fake)
     }
 
+    /// A fake engine that reads words only from a page turned one way: portrait or landscape.
+    struct ReadsWhen {
+        portrait: bool,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Recognizer for ReadsWhen {
+        fn id(&self) -> &'static str {
+            "fake"
+        }
+        fn available(&self) -> bool {
+            true
+        }
+        fn languages(&self) -> Vec<(String, String)> {
+            vec![("en".into(), "English".into())]
+        }
+        fn recognize(&self, image: &pdfcraft_ocr::OcrImage, _options: &pdfcraft_ocr::RecognizeOptions) -> Result<Vec<pdfcraft_ocr::Line>, OcrError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let reads = (image.height() > image.width()) == self.portrait;
+            let words = if reads { vec!["SHEET", "ONE", "TITLE", "BRACKET", "SCALE"] } else { vec!["T", "I"] };
+            Ok(vec![pdfcraft_ocr::Line { words: words.into_iter().map(|w| pdfcraft_ocr::Word::new(w, [1.0, 1.0, 9.0, 9.0], "fake")).collect() }])
+        }
+    }
+
+    /// A page of ruled lines both ways, as a form or line art: the ink's profile can't tell its
+    /// orientation, so an engine at hand reads the page turned each way and the turn it reads
+    /// best is made (#8484). Without an engine at hand the page is left as it stands.
+    #[test]
+    fn a_page_the_profile_cannot_place_is_turned_the_way_the_engine_reads() {
+        let (w, h) = (400u32, 300u32);
+        let mut rgba = vec![255u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                if (y + 20) % 40 < 2 || (x + 20) % 40 < 2 {
+                    let i = ((y * w + x) * 4) as usize;
+                    rgba[i..i + 3].copy_from_slice(&[0, 0, 0]);
+                }
+            }
+        }
+        let png = crate::export::encode_png(w, h, &rgba).unwrap();
+        let settings = OcrSettings { auto_rotate: true, force_ocr: true, ..Default::default() };
+        let shot = |judge: Option<Arc<dyn Recognizer>>| {
+            let mut s = Session::new();
+            let bytes = s.create_from_images(&[("grid.png".into(), png.clone())]).unwrap();
+            let id = s.open("grid.pdf", None, bytes, None).unwrap();
+            let job = s.ocr_job(id, &[0], settings.clone()).unwrap();
+            let mut steps = job.steps_judged_by(judge);
+            let shot = steps.next_page().unwrap().unwrap();
+            let image = shot.image().unwrap();
+            (image.width(), image.height())
+        };
+        let portrait = Arc::new(ReadsWhen { portrait: true, calls: std::sync::atomic::AtomicUsize::new(0) });
+        let (tw, th) = shot(Some(portrait.clone()));
+        assert!(th > tw, "turned to the way the engine reads: {tw}x{th}");
+        assert_eq!(portrait.calls.load(std::sync::atomic::Ordering::SeqCst), 4, "the four turns were judged");
+        let landscape = Arc::new(ReadsWhen { portrait: false, calls: std::sync::atomic::AtomicUsize::new(0) });
+        let (lw, lh) = shot(Some(landscape));
+        assert!(lw > lh, "left as it stands when that reads best: {lw}x{lh}");
+        let (nw, nh) = shot(None);
+        assert!(nw > nh, "no engine at hand: left as it stands: {nw}x{nh}");
+    }
+
     /// Skip-files: a file that already has text is passed over entirely — the engine never
     /// runs, the original bytes come back, and the result is its own skipped bucket.
     #[test]
@@ -1782,7 +1868,8 @@ mod tests {
         let s = Session::new();
         let bytes = s.create_from_text("t", "Already typed here").unwrap();
         let (r, fake) = fake_recognizers();
-        let settings = OcrSettings { skip_text_files: true, force_ocr: true, ..Default::default() };
+        // Auto-rotate off: the judge's readings of the turned page (#8484) would count as calls.
+        let settings = OcrSettings { skip_text_files: true, force_ocr: true, auto_rotate: false, ..Default::default() };
         let out = recognize_file("t.pdf", bytes, None, settings, &r, true, |_, _| true).unwrap();
         assert_eq!(fake.calls(), 1);
         assert_eq!(out.file_skipped, None);
@@ -1796,7 +1883,7 @@ mod tests {
         let s = Session::new();
         let bytes = s.create_from_text("t", "A page with text").unwrap();
         let (r, fake) = fake_recognizers();
-        let settings = OcrSettings { force_ocr: true, ..Default::default() };
+        let settings = OcrSettings { force_ocr: true, auto_rotate: false, ..Default::default() };
         let out = recognize_file("t.pdf", bytes, None, settings, &r, true, |_, _| true).unwrap();
         assert_eq!(fake.calls(), 1, "the page's own text did not stop the run");
         assert_eq!(out.pages[0].skipped, None);
@@ -1892,7 +1979,7 @@ mod tests {
         let skip = OcrSettings { skip_text_files: true, ..Default::default() };
         let Ok(Opened::Skipped(out)) = FileJob::open("t.pdf", bytes.clone(), None, skip, true) else { panic!("the file should be skipped") };
         assert_eq!(out.file_skipped.as_deref(), Some("the file already contains text"));
-        let force = OcrSettings { force_ocr: true, ..Default::default() };
+        let force = OcrSettings { force_ocr: true, auto_rotate: false, ..Default::default() };
         let Ok(Opened::Read(mut file)) = FileJob::open("t.pdf", bytes.clone(), None, force.clone(), true) else { panic!("the file should be read") };
         let pages = file.job.take().unwrap().run(&r, |_, _| true);
         let out = file.finish(pages).unwrap();

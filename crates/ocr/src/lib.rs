@@ -201,6 +201,23 @@ impl Default for RecognizeOptions {
     }
 }
 
+/// How many of the words in `lines` read as words: three or more characters of letters,
+/// digits and the punctuation a drawing or a form carries, with a vowel or a digit among them.
+/// Line art read as lettering comes out as single letters and consonant strings; a page turned
+/// the wrong way reads as little else. The measure an [`preprocess::OrientationJudge`] gives.
+pub fn readable_words(lines: &[Line]) -> usize {
+    lines
+        .iter()
+        .flat_map(|line| line.words.iter())
+        .flat_map(|word| word.text.split_whitespace())
+        .filter(|word| {
+            word.chars().count() >= 3
+                && word.chars().all(|c| c.is_alphanumeric() || "./-#\"':,()&%+±Ø°".contains(c))
+                && word.chars().any(|c| c.is_ascii_digit() || "AEIOUaeiou".contains(c))
+        })
+        .count()
+}
+
 /// One text-recognition engine. Implementations are shared across threads
 /// (`Arc<dyn Recognizer>`); `available` and `recognize` may spawn processes only off the web
 /// build (see the `tesseract` module).
@@ -1067,5 +1084,19 @@ mod tests {
             }
             px
         }
+    }
+}
+
+#[cfg(test)]
+mod readability_tests {
+    use super::*;
+
+    #[test]
+    fn readable_words_are_three_characters_or_more_with_a_vowel_or_a_digit() {
+        let line = |words: &[&str]| Line { words: words.iter().map(|w| Word::new(*w, [0.0, 0.0, 1.0, 1.0], "test")).collect() };
+        // A title block, a dimension, lettering read from line art, and a page read upside down.
+        let lines = [line(&["SHEET", "2", "OF", "TEST"]), line(&["D1.250", "THRU", "T", "I", "A"]), line(&["diyS", "TNNNS", "HTTTTTT---"])];
+        assert_eq!(readable_words(&lines), 5, "SHEET, TEST, D1.250, THRU, diyS: not 2, OF, T, I, A, TNNNS or HTTTTTT---");
+        assert_eq!(readable_words(&[]), 0);
     }
 }
