@@ -174,7 +174,17 @@ pub fn decode_pgm(bytes: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
 /// rather than the usual `mix`. A page is normally opaque, but a transparent one must not come out
 /// darker here than it looks on screen, or the comparison blames the renderer for the harness.
 pub fn decode_pam_gray(bytes: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
-    let header_end = find(bytes, b"ENDHDR\n")?.checked_add(b"ENDHDR\n".len())?;
+    // A header type is the first token of an LF-terminated line, never text inside a comment.
+    let mut offset = 0usize;
+    let header_end = loop {
+        let line_len = find(bytes.get(offset..)?, b"\n")?.checked_add(1)?;
+        let end = offset.checked_add(line_len)?;
+        let line = bytes.get(offset..end)?;
+        offset = end;
+        if line.split(u8::is_ascii_whitespace).find(|token| !token.is_empty()) == Some(b"ENDHDR".as_slice()) {
+            break offset;
+        }
+    };
     let header = std::str::from_utf8(bytes.get(..header_end)?).ok()?;
     if !header.starts_with("P7") {
         return None;
@@ -251,6 +261,34 @@ mod tests {
         let (_, _, g) = decode_pam_gray(&pam(2, 1, &px)).expect("a P7 image");
         assert_eq!(g.first().copied(), Some(255), "fully transparent is white");
         assert_eq!(g.get(1).copied(), Some(127), "half-transparent black over white is mid grey");
+    }
+
+    #[test]
+    fn endhdr_in_a_pam_comment_does_not_end_the_header() {
+        let mut bytes = b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\n# ENDHDR\nENDHDR\n".to_vec();
+        bytes.extend_from_slice(&[0, 0, 0, 255]);
+        assert_eq!(decode_pam_gray(&bytes), Some((1, 1, vec![0])));
+    }
+
+    #[test]
+    fn a_pam_comment_cannot_replace_the_endhdr_line() {
+        let mut bytes = b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\n# ENDHDR\n".to_vec();
+        bytes.extend_from_slice(&[0, 0, 0, 255]);
+        assert!(decode_pam_gray(&bytes).is_none());
+    }
+
+    #[test]
+    fn pam_terminator_allows_leading_whitespace() {
+        let header = b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\n";
+        for marker in [" ENDHDR\n", "\tENDHDR\n", " \tENDHDR\n"] {
+            let mut bytes = header.to_vec();
+            bytes.extend_from_slice(marker.as_bytes());
+            bytes.extend_from_slice(&[0, 0, 0, 255]);
+            assert_eq!(decode_pam_gray(&bytes), Some((1, 1, vec![0])), "{marker:?}");
+        }
+        let mut unterminated = header.to_vec();
+        unterminated.extend_from_slice(b"ENDHDR");
+        assert!(decode_pam_gray(&unterminated).is_none());
     }
 
     #[test]
