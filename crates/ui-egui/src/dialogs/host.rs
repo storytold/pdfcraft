@@ -61,6 +61,7 @@ fn results(app: &mut PdfCraftApp, ctx: &egui::Context) {
     app.about_pass(ctx);
     app.pin_tools_pass(ctx);
     app.marks_pass(ctx);
+    app.bates_files_pass(ctx);
     app.printer_marks_pass(ctx);
     app.convert_colours_pass(ctx);
     app.fix_hairlines_pass(ctx);

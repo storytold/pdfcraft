@@ -145,7 +145,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                     menu_item("Header and footer", "heading", &["edit.header_footer", "edit.header_footer.update", "edit.header_footer.remove"]),
                     menu_item("Watermark", "stamp", &["edit.watermark", "edit.watermark.update", "edit.watermark.remove"]),
                     item("Link", "link", "edit.link", Ready),
-                    item("Bates numbering", "hash", "edit.bates", Ready),
+                    menu_item("Bates numbering", "hash", &["edit.bates", "edit.bates_files"]),
                     menu_item("Background", "palette", &["edit.background", "edit.background.update", "edit.background.remove"]),
                     item("Attach file", "paperclip", "edit.attach", Ready),
                 ],

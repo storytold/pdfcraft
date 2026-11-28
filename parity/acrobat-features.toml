@@ -2614,10 +2614,15 @@ area = "C"
 tier = "P1"
 milestone = "M7"
 status = "partial"
-commands = []
+commands = ["edit.bates_files"]
 tools = ["doc_bates_multi"]
-evidence = ["crates/automation/tests/it/automation.rs::bates_numbers_continue_across_files_and_report_preflight_and_permission_failures"]
-notes = "The headless batch tool allocates inclusive intervals in input order and reports per-file failures; it refuses existing output paths. Missing: a GUI batch dialog (Acrobat sets this up from Header & Footer ▸ Add Bates numbering with a file list), so it is reachable only through `doc_bates_multi`."
+evidence = [
+    "crates/automation/tests/it/automation.rs::bates_numbers_continue_across_files_and_report_preflight_and_permission_failures",
+    "crates/ui-egui/tests/it/bates_files.rs::each_copy_continues_the_numbers_of_the_one_before_and_the_originals_stay",
+    "crates/ui-egui/tests/it/bates_files.rs::a_copy_that_exists_already_means_nothing_is_written",
+    "crates/ui-egui/tests/it/bates_files.rs::two_copies_that_would_share_a_name_mean_nothing_is_written",
+]
+notes = "Bates numbering ▸ Add to files… numbers a list of files as one run, in list order, each file starting after the last number of the one before, with the prefix, suffix, digits, start and box of the single-file token. It writes numbered copies (`<name>_Bates.pdf` beside each original, or in a chosen folder) and never changes the originals. Before writing anything it refuses a copy that would land on another copy (names compared without letter case) or on any file that exists, an original included, and a file that can't be read or numbered. A write that fails partway leaves the copies already written and says how many. `doc_bates_multi` numbers the same way headless, with explicit output paths and a password per file. Missing: the dialog can't number password-protected or signed files (it says so and writes nothing), and it numbers on the frame thread, so a long list holds the window until it is done."
 
 [[feature]]
 id = "edit.bates-remove"

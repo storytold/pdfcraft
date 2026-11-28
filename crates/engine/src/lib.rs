@@ -14,6 +14,8 @@
 
 pub mod actions;
 pub mod autotag;
+mod bates_files;
+pub use bates_files::{BATES_AFFIX_CHARS, BATES_MAX_BYTES, BATES_MAX_DIGITS, BATES_MAX_FILES, BatesError, BatesFormat, BatesSpan};
 mod bookmarks;
 pub mod build_info;
 pub mod camera;
