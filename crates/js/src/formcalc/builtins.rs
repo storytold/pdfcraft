@@ -1,5 +1,5 @@
 use super::ast::Expr;
-use super::dates::{MAX_DAYS, civil_from_days, days_from_civil, format_date, parse_date};
+use super::dates::{MAX_DAYS, civil_from_days, days_from_civil, format_date, parse_date, parse_iso_date};
 use super::parser::parse;
 use super::value::{Val, fixed, is_numeric_text, parse_num};
 use super::words::{decode_entities, word_num};
@@ -325,6 +325,8 @@ impl Interp<'_> {
                 let s = self.arg_str(args, 0)?;
                 let pic = if lower == "isodate2num" || args.len() < 2 { "YYYY-MM-DD".to_string() } else { self.arg_str(args, 1)? };
                 let parsed = parse_date(&s, &pic).or_else(|| parse_date(&s, "YYYYMMDD")).or_else(|| parse_date(&s, "YYYY-MM-DD"));
+                // IsoDate2Num also reads a year alone or a year and month (`1900`, `1900-01`).
+                let parsed = if lower == "isodate2num" { parsed.or_else(|| parse_iso_date(&s)) } else { parsed };
                 parsed.map_or(Val::Num(0.0), |(y, m, d)| Val::Num(days_from_civil(y, m, d) as f64))
             }
             "num2date" => {

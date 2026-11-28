@@ -1654,6 +1654,24 @@ mod formcalc {
         assert_eq!(calc(r#"Format("99", 12345)"#), "12345");
     }
 
+    /// IsoDate2Num reads the shorter ISO 8601 forms the XFA spec lists (`YYYY[MM[DD]]` and
+    /// `YYYY[-MM[-DD]]`): a month or day left out is the first. The spec's example gives 1 for
+    /// `1900` and `1900-01`, the same as for `1900-01-01`.
+    #[test]
+    fn isodate2num_reads_a_year_alone_or_a_year_and_month() {
+        for text in ["1900", "1900-01", "190001", "1900-01-01", "19000101"] {
+            assert_eq!(calc(&format!(r#"IsoDate2Num("{text}")"#)), "1", "{text}");
+        }
+        assert_eq!(calc(r#"IsoDate2Num("1996")"#), calc(r#"IsoDate2Num("1996-01-01")"#));
+        assert_eq!(calc(r#"IsoDate2Num("1996-03")"#), calc(r#"IsoDate2Num("1996-03-01")"#));
+        assert_eq!(calc(r#"IsoDate2Num("199603")"#), calc(r#"IsoDate2Num("1996-03-01")"#));
+        assert_eq!(calc(r#"IsoDate2Num("1996-03T10:00:00")"#), calc(r#"IsoDate2Num("1996-03-01")"#));
+        // Still not dates: a month past 12, too few digits, a mixed form.
+        for text in ["1900-13", "190", "1996-0301", "1996-3"] {
+            assert_eq!(calc(&format!(r#"IsoDate2Num("{text}")"#)), "0", "{text}");
+        }
+    }
+
     #[test]
     fn date2num_rejects_days_past_the_end_of_the_month() {
         // A month name is read from the text's next few characters only, whatever follows.

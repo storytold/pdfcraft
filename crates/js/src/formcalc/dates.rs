@@ -114,6 +114,24 @@ pub(super) fn parse_date(text: &str, picture: &str) -> Option<(i64, u32, u32)> {
     ((-200_000..=200_000).contains(&y) && (1..=12).contains(&m) && (1..=days_in(y, m)).contains(&d)).then_some((y, m, d))
 }
 
+/// An ISO 8601 calendar date in one of the forms `IsoDate2Num` reads (XFA 3.3, ch. 25,
+/// IsoDate2Num): `YYYY[MM[DD]]` or `YYYY[-MM[-DD]]`, alone or as the date half of a date-time
+/// (`1997-07-16T20:20:20`). A month or day left out is the first one.
+pub(super) fn parse_iso_date(text: &str) -> Option<(i64, u32, u32)> {
+    let text = text.trim();
+    let date = text.split_once('T').map_or(text, |(date, _)| date);
+    let shape: String = date.chars().map(|c| if c.is_ascii_digit() { '9' } else { c }).collect();
+    let picture = match shape.as_str() {
+        "9999" => "YYYY",
+        "999999" => "YYYYMM",
+        "99999999" => "YYYYMMDD",
+        "9999-99" => "YYYY-MM",
+        "9999-99-99" => "YYYY-MM-DD",
+        _ => return None,
+    };
+    parse_date(date, picture)
+}
+
 /// Number of days in month `m` (1-12) of year `y`, leap years included.
 pub(crate) fn days_in(y: i64, m: u32) -> u32 {
     // The length of the month from chrono (the first of the next month, less the first of this
