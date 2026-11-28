@@ -164,6 +164,20 @@ pub fn register_all_mice_and_keyboards_for_raw_input(
     register_raw_input_devices(&devices)
 }
 
+/// Register the mouse as an input sink so vertical and horizontal wheel input is
+/// delivered while the app is in the background. Window wheel events are filtered
+/// by the caller to windows that are not the foreground window.
+pub fn register_mouse_for_inactive_windows(window_handle: HWND) -> bool {
+    let device = RAWINPUTDEVICE {
+        usUsagePage: HID_USAGE_PAGE_GENERIC,
+        usUsage: HID_USAGE_GENERIC_MOUSE,
+        dwFlags: RIDEV_DEVNOTIFY | RIDEV_INPUTSINK,
+        hwndTarget: window_handle,
+    };
+
+    register_raw_input_devices(&[device])
+}
+
 pub fn get_raw_input_data(handle: HRAWINPUT) -> Option<RAWINPUT> {
     let mut data: RAWINPUT = unsafe { mem::zeroed() };
     let mut data_size = size_of::<RAWINPUT>() as u32;
