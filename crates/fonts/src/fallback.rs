@@ -1,18 +1,8 @@
-//! The one chain PdfCraft follows when a document does not embed a font program, and a record of
-//! what it chose and why.
+//! Font substitution shared by inspection and rendering.
 //!
-//! Substitution used to be decided per caller and never written down: `edit` picked a craft face
-//! by the script of the text it was drawing, `Std14::from_base_font` matched Latin names, and the
-//! renderer did its own thing. Nothing told the *user* that the glyphs they are looking at are not
-//! the ones the document asked for, which is the difference between "PdfCraft shows nothing for my
-//! Chinese PDF" being a mystery and being a sentence.
-//!
-//! This module answers the *dictionary* question — "the document does not carry this program; what
-//! will stand in for it, and why?" — which is what inspection and reporting need, and the renderer
-//! asks it too ([`stand_in`]), so what a report names is what is drawn. For the characters a
-//! stand-in has no glyph for, [`further_faces`] gives every face in the order to try them; it
-//! still does not answer the *text* question ("which face has a glyph for こ?"), because that
-//! depends on the string being drawn and is handled where the drawing happens.
+//! [`substitute`] selects the stand-in for an unembedded font from its name, descriptor, CID
+//! collection, and available `craft-fonts` faces. [`stand_in`] gives the renderer that face;
+//! [`further_faces`] ranks additional faces for per-character fallback when it draws Type 0 text.
 //!
 //! The chain is tried in order, and the first step that yields a face wins:
 //!
@@ -34,7 +24,7 @@
 //! 6. Otherwise, the nearest of the standard 14 by `/FontDescriptor /Flags` — serif, fixed pitch,
 //!    bold and italic. This step always succeeds, so a simple font is never left without a face.
 
-use crate::{CraftFont, Std14};
+use crate::{EmbeddedFace, Std14};
 
 /// What a font dictionary asks for, as far as the dictionary alone can say.
 #[derive(Clone, Copy, Debug, Default)]
@@ -53,7 +43,7 @@ pub struct Request<'a> {
 
 /// The face the chain picked.
 ///
-/// `Debug`, `PartialEq` and `Eq` are written by hand rather than derived, because [`CraftFont`]
+/// `Debug`, `PartialEq` and `Eq` are written by hand rather than derived, because [`EmbeddedFace`]
 /// carries a whole font program: deriving would print megabytes and compare font files.
 #[derive(Clone, Copy)]
 pub enum Face {
@@ -62,7 +52,7 @@ pub enum Face {
     /// One of the standard 14, whose metrics are exact.
     Standard14(Std14),
     /// A face from the optional craft-fonts build input.
-    Craft(&'static CraftFont),
+    Craft(&'static EmbeddedFace),
     /// No face at all. The caller must draw nothing rather than draw the wrong glyphs.
     None,
 }
@@ -176,21 +166,19 @@ pub fn substitute(req: &Request<'_>) -> Substitution {
     let cjk_face = if scripts.is_empty() { None } else { cjk_stand_in(req) };
     if let Some((f, how)) = Std14::recognise(req.base_font) {
         match how {
-            crate::std14::Match::Alias => return at(Face::Standard14(f), Why::NamedStandard14),
-            // A CJK font whose name only hints at a family (`MonotypeSung-Light` holds "mono")
-            // takes its stand-in when there is one, as the renderer does (hayro-interpret patch
-            // 72); without one the hint stands.
-            crate::std14::Match::FamilyHint if cjk_face.is_none() => return at(Face::Standard14(f), Why::NameHintedStandard14),
-            crate::std14::Match::FamilyHint => {}
+            crate::Std14Match::Alias => return at(Face::Standard14(f), Why::NamedStandard14),
+            crate::Std14Match::FamilyHint if cjk_face.is_none() => {
+                return at(Face::Standard14(f), Why::NameHintedStandard14);
+            }
+            crate::Std14Match::FamilyHint => {}
         }
     }
     if let Some(f) = crate::embedding::matching_faces(req.base_font).first() {
         return at(Face::Craft(f), Why::ExactCraftFamily);
     }
     if !scripts.is_empty() {
-        // A Han face stands in; without one there is no honest substitute to offer.
         return match cjk_face {
-            Some(f) if scripts.iter().any(|s| f.covers(s)) => at(Face::Craft(f), Why::ScriptFace),
+            Some(f) if scripts.iter().any(|s| f.has_script(s)) => at(Face::Craft(f), Why::ScriptFace),
             Some(f) => at(Face::Craft(f), Why::NearestScriptFace),
             None => at(Face::None, Why::NoFaceForScript),
         };
@@ -221,7 +209,7 @@ fn style_matched(flags: u32) -> Std14 {
 /// The face that draws a composite font the document doesn't embed: the craft-fonts face of the
 /// exact family it names (step 3 of the chain), else its [`cjk_stand_in`] (step 4). `None` when
 /// there is neither, and the standard substitute stays.
-pub fn stand_in(req: &Request<'_>) -> Option<&'static CraftFont> {
+pub fn stand_in(req: &Request<'_>) -> Option<&'static EmbeddedFace> {
     crate::embedding::matching_faces(req.base_font).into_iter().next().or_else(|| cjk_stand_in(req))
 }
 
@@ -231,7 +219,7 @@ pub fn stand_in(req: &Request<'_>) -> Option<&'static CraftFont> {
 ///
 /// Faces are found by Unicode, never by CID: no face here has Adobe's glyph order (Noto CJK is
 /// CID-keyed as Adobe-Identity-0), so a CID taken as a glyph index would draw another glyph.
-pub fn cjk_stand_in(req: &Request<'_>) -> Option<&'static CraftFont> {
+pub fn cjk_stand_in(req: &Request<'_>) -> Option<&'static EmbeddedFace> {
     stand_in_from(req, &candidates())
 }
 
@@ -245,18 +233,18 @@ pub fn cjk_stand_in(req: &Request<'_>) -> Option<&'static CraftFont> {
 /// complete) before the Han ones. Within each, the faces of the font's design (Mincho/Song,
 /// Gothic/Hei or Kai, by its name or else its Serif flag) and weight come first. Never empty:
 /// craft-fonts is optional, but the bundled Inter is in every build.
-pub fn further_faces(req: &Request<'_>) -> Vec<&'static CraftFont> {
+pub fn further_faces(req: &Request<'_>) -> Vec<&'static EmbeddedFace> {
     ranked_from(req, &candidates())
 }
 
 /// craft-fonts' faces (none without it), then the bundled Inter faces.
-fn candidates() -> Vec<&'static CraftFont> {
+fn candidates() -> Vec<&'static EmbeddedFace> {
     crate::CRAFT_FONTS.iter().chain(crate::document_latin_fonts(false)).chain(crate::document_latin_fonts(true)).collect()
 }
 
-fn stand_in_from<'a>(req: &Request<'_>, faces: &[&'a CraftFont]) -> Option<&'a CraftFont> {
+fn stand_in_from<'a>(req: &Request<'_>, faces: &[&'a EmbeddedFace]) -> Option<&'a EmbeddedFace> {
     req.ordering.map(collection_scripts).filter(|s| !s.is_empty())?;
-    ranked_from(req, faces).into_iter().next().filter(|face| HAN.iter().any(|s| face.covers(s)))
+    ranked_from(req, faces).into_iter().next().filter(|face| HAN.iter().any(|s| face.has_script(s)))
 }
 
 /// The design of a face, or the one a font's name or flags ask for.
@@ -279,36 +267,36 @@ const HAN: [&str; 4] = ["Hans", "Hant", "Jpan", "Kore"];
 const BROAD_COVERAGE: [&str; 2] = ["BIZ UDMincho", "BIZ UDPGothic"];
 
 /// `faces`, best first for `req` (a stable sort, so equal faces keep their order).
-fn ranked_from<'a>(req: &Request<'_>, faces: &[&'a CraftFont]) -> Vec<&'a CraftFont> {
+fn ranked_from<'a>(req: &Request<'_>, faces: &[&'a EmbeddedFace]) -> Vec<&'a EmbeddedFace> {
     let name = crate::embedding::face_key(req.base_font);
     let preferred = req.ordering.map(collection_scripts).filter(|s| !s.is_empty()).unwrap_or_else(|| name_scripts(&name));
     let cjk = preferred.iter().any(|s| HAN.contains(s));
     let han_order = han_order(preferred);
     let design = name_design(&name).unwrap_or(if req.flags & 0b10 != 0 { Design::Serif } else { Design::Sans });
     let bold = name.contains("bold") || req.flags & 0x4_0000 != 0 || req.weight >= 600;
-    let exact: Vec<&CraftFont> = crate::embedding::matching_faces(req.base_font);
-    let tier = |face: &CraftFont| {
+    let exact: Vec<&EmbeddedFace> = crate::embedding::matching_faces(req.base_font);
+    let tier = |face: &EmbeddedFace| {
         if exact.iter().any(|e| std::ptr::eq(*e, face)) {
             return 0;
         }
-        if let Some(i) = preferred.iter().position(|s| face.covers(s)) {
+        if let Some(i) = preferred.iter().position(|s| face.has_script(s)) {
             return 1 + i;
         }
         let after = 1 + preferred.len();
-        match (han_order.iter().position(|s| face.covers(s)), cjk) {
+        match (han_order.iter().position(|s| face.has_script(s)), cjk) {
             (Some(i), true) => after + i,
             (None, true) => after + HAN.len(),
             (None, false) => after,
             (Some(i), false) => after + 1 + i,
         }
     };
-    let design_rank = |face: &CraftFont| match name_design(&crate::embedding::face_key(face.family)) {
+    let design_rank = |face: &EmbeddedFace| match name_design(&crate::embedding::face_key(face.family)) {
         Some(d) if d == design => 0,
         None => 1,
         Some(_) => 2,
     };
-    let weight_rank = |face: &CraftFont| usize::from((face.style == "Bold") != bold);
-    let coverage_rank = |face: &CraftFont| usize::from(!BROAD_COVERAGE.contains(&face.family));
+    let weight_rank = |face: &EmbeddedFace| usize::from((face.style == "Bold") != bold);
+    let coverage_rank = |face: &EmbeddedFace| usize::from(!BROAD_COVERAGE.contains(&face.family));
     let mut out = faces.to_vec();
     out.sort_by_key(|face| (tier(face), design_rank(face), weight_rank(face), coverage_rank(face)));
     out
@@ -505,12 +493,12 @@ mod tests {
     fn a_cjk_collection_without_a_han_face_reports_none_rather_than_latin() {
         // Without a Han face a Chinese or Korean PDF draws nothing. The point of this is that we
         // can say so, instead of quietly standing Helvetica in and showing the wrong glyphs.
-        let han = crate::CRAFT_FONTS.iter().any(|f| HAN.iter().any(|s| f.covers(s)));
+        let han = crate::CRAFT_FONTS.iter().any(|f| HAN.iter().any(|s| f.has_script(s)));
         for ordering in ["GB1", "CNS1", "Korea1", "KR", "Japan1"] {
             let s = substitute(&req("SomeCJKFont", false, 0, Some(ordering)));
             assert!(!s.why.is_faithful());
             if han {
-                assert!(matches!(s.face, Face::Craft(f) if HAN.iter().any(|s| f.covers(s))), "{ordering}: {s:?}");
+                assert!(matches!(s.face, Face::Craft(f) if HAN.iter().any(|s| f.has_script(s))), "{ordering}: {s:?}");
                 assert!(matches!(s.why, Why::ScriptFace | Why::NearestScriptFace), "{ordering}: {s:?}");
                 continue;
             }
@@ -556,7 +544,7 @@ mod tests {
             match cjk_stand_in(&r) {
                 Some(f) => {
                     assert_eq!(s.face, Face::Craft(f), "{ordering}");
-                    let own = collection_scripts(ordering).iter().any(|script| f.covers(script));
+                    let own = collection_scripts(ordering).iter().any(|script| f.has_script(script));
                     assert_eq!(s.why, if own { Why::ScriptFace } else { Why::NearestScriptFace }, "{ordering}");
                 }
                 None => assert_eq!(s.why, Why::NoFaceForScript, "{ordering}"),
@@ -580,7 +568,7 @@ mod tests {
         // craft-fonts is an optional build input, so both outcomes are correct -- but they must be
         // distinguishable, and neither may be a silent Latin stand-in.
         let s = substitute(&req("SomeJapaneseFont", false, 0, Some("Japan1")));
-        if crate::CRAFT_FONTS.iter().any(|f| f.covers("Jpan")) {
+        if crate::CRAFT_FONTS.iter().any(|f| f.has_script("Jpan")) {
             assert_eq!(s.why, Why::ScriptFace);
             assert!(matches!(s.face, Face::Craft(_)));
             assert!(s.face_name().is_some_and(|n| !n.is_empty()));
@@ -629,13 +617,13 @@ mod tests {
         }
     }
 
-    const fn face(family: &'static str, style: &'static str, scripts: &'static [&'static str]) -> CraftFont {
-        CraftFont { family, style, scripts, bytes: &[] }
+    const fn face(family: &'static str, style: &'static str, scripts: &'static [&'static str]) -> EmbeddedFace {
+        EmbeddedFace { family, style, scripts, index: 0, bytes: &[], role: None }
     }
 
     /// The faces of the pinned craft-fonts revision in a native build (Noto Sans CJK SC is over
     /// the embedding cap), in manifest order, then the bundled Inter.
-    static PINNED: [CraftFont; 15] = [
+    static PINNED: [EmbeddedFace; 15] = [
         face("Shippori Mincho", "Regular", &["Jpan", "Latn"]),
         face("BIZ UDPGothic", "Regular", &["Jpan", "Latn"]),
         face("BIZ UDPGothic", "Bold", &["Jpan", "Latn"]),
@@ -653,7 +641,7 @@ mod tests {
         face("Inter", "SemiBold", &["Latn", "Cyrl", "Grek"]),
     ];
 
-    fn pinned() -> Vec<&'static CraftFont> {
+    fn pinned() -> Vec<&'static EmbeddedFace> {
         PINNED.iter().collect()
     }
 
@@ -663,12 +651,12 @@ mod tests {
         Request { base_font: name, embedded: false, flags: if serif { 0b10 } else { 0 }, ordering, weight }
     }
 
-    fn stand_in(r: &Request<'_>, faces: &[&'static CraftFont]) -> Option<String> {
-        stand_in_from(r, faces).map(CraftFont::name)
+    fn stand_in(r: &Request<'_>, faces: &[&'static EmbeddedFace]) -> Option<String> {
+        stand_in_from(r, faces).map(EmbeddedFace::name)
     }
 
-    fn ranked(r: &Request<'_>, faces: &[&'static CraftFont]) -> Vec<String> {
-        ranked_from(r, faces).into_iter().map(CraftFont::name).collect()
+    fn ranked(r: &Request<'_>, faces: &[&'static EmbeddedFace]) -> Vec<String> {
+        ranked_from(r, faces).into_iter().map(EmbeddedFace::name).collect()
     }
 
     /// The Japanese stand-ins are the ones the renderer chose before (#260): Mincho names the BIZ
@@ -733,7 +721,7 @@ mod tests {
         assert_eq!(stand_in(&r, &pinned()), None);
         let faces = ranked_from(&r, &pinned());
         assert_eq!(faces.len(), PINNED.len());
-        let first_han = faces.iter().position(|f| HAN.iter().any(|s| f.covers(s)));
+        let first_han = faces.iter().position(|f| HAN.iter().any(|s| f.has_script(s)));
         let inter = faces.iter().position(|f| f.family == "Inter");
         assert!(inter < first_han, "{:?}", faces.iter().map(|f| f.name()).collect::<Vec<_>>());
         assert_eq!(ranked(&cid("SimSun", Some("Identity"), false, 0), &pinned()).first().map(String::as_str), Some("LXGW WenKai Lite Regular"));

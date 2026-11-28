@@ -212,17 +212,72 @@ mod tests {
 
     #[test]
     fn function_limits_stitching_depth_is_bounded() {
-        let data = function_limits_stitching(64);
+        // Each enclosing function contributes a dictionary and /Functions array;
+        // the leaf contributes a dictionary and its /Domain (or /C0, /C1) array.
+        // Thus 32 function levels reach exactly 64 direct containers, while 33
+        // reach 66 and are rejected by syntax before function construction.
+        let data = function_limits_stitching(32);
         let object = Object::from_bytes(data.as_bytes()).unwrap();
         assert_eq!(
             Function::new(&object).unwrap().eval(smallvec![0.5]),
             Some(smallvec![0.5])
         );
-        let data = function_limits_stitching(65);
-        // Direct nesting beyond the hayro-syntax cap (PdfCraft patch) is refused while parsing,
-        // before this guard; the guard is tested with indirect references in pdfcraft-render
-        // (`function_limits_depth_guard_refuses_a_chain_of_references`).
+        let data = function_limits_stitching(33);
         assert!(Object::from_bytes(data.as_bytes()).is_none());
+    }
+
+    fn function_limits_indirect_stitching(levels: usize) -> hayro_syntax::Pdf {
+        use std::fmt::Write;
+
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] >>".to_owned(),
+        ];
+        for level in 0..levels {
+            objects.push(if level + 1 == levels {
+                "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>".to_owned()
+            } else {
+                format!(
+                    "<< /FunctionType 3 /Domain [0 1] /Functions [{} 0 R] /Bounds [] /Encode [0 1] >>",
+                    level + 5
+                )
+            });
+        }
+        let mut data = String::from("%PDF-1.7\n");
+        let mut offsets = vec![0];
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(data.len());
+            writeln!(data, "{} 0 obj\n{object}\nendobj", index + 1).unwrap();
+        }
+        let xref = data.len();
+        writeln!(data, "xref\n0 {}\n0000000000 65535 f ", offsets.len()).unwrap();
+        for offset in offsets.iter().skip(1) {
+            writeln!(data, "{offset:010} 00000 n ").unwrap();
+        }
+        writeln!(data, "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF", offsets.len()).unwrap();
+        hayro_syntax::Pdf::new(data.into_bytes()).unwrap()
+    }
+
+    #[test]
+    fn function_limits_indirect_stitching_depth_is_bounded() {
+        use hayro_syntax::object::ObjectIdentifier;
+
+        // Indirect functions stay at two direct containers each, so the parser's
+        // limit cannot mask a regression in the separate 64-function depth guard.
+        for levels in [64, 65] {
+            let pdf = function_limits_indirect_stitching(levels);
+            for index in 0..levels {
+                assert!(pdf.xref().get::<Object<'_>>(ObjectIdentifier::new((index + 4) as i32, 0)).is_some());
+            }
+            let object = pdf.xref().get::<Object<'_>>(ObjectIdentifier::new(4, 0)).unwrap();
+            let function = Function::new(&object);
+            if levels == 64 {
+                assert_eq!(function.unwrap().eval(smallvec![0.5]), Some(smallvec![0.5]));
+            } else {
+                assert!(function.is_none());
+            }
+        }
     }
 
     fn function_limits_fanout(children: usize) -> String {

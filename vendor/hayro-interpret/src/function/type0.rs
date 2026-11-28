@@ -218,3 +218,24 @@ impl Type0 {
 /// values, 17^5 points with 4 outputs 5.7 million values.
 const MAX_SAMPLE_VALUES: usize = 1 << 23;
 const MAX_SAMPLE_ENTRIES: usize = 1 << 21;
+
+#[cfg(test)]
+mod tests {
+    use crate::function::Function;
+    use hayro_syntax::object::{FromBytes, Object};
+    use smallvec::smallvec;
+
+    /// PdfCraft patch (31): 32-bit samples scale by `2^32 - 1` without overflowing (adapted from
+    /// PdfCraft's `raster::tests::sampled_functions_interpolate_their_grid_as_before`).
+    #[test]
+    fn thirty_two_bit_samples_do_not_overflow() {
+        let mut data = b"<< /FunctionType 0 /Domain [0 1] /Range [0 1] /Size [2] /BitsPerSample 32 /Length 8 >>\nstream\n".to_vec();
+        data.extend_from_slice(&[0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff]);
+        data.extend_from_slice(b"\nendstream");
+
+        let object = Object::from_bytes(&data).unwrap();
+        let function = Function::new(&object).unwrap();
+        assert_eq!(function.eval(smallvec![0.0]).unwrap().as_slice(), &[0.0]);
+        assert_eq!(function.eval(smallvec![1.0]).unwrap().as_slice(), &[1.0]);
+    }
+}

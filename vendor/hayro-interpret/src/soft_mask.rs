@@ -1,4 +1,4 @@
-use crate::color::{Color, ColorComponents, ColorSpace, DeviceFamily, device_cmyk_to_gray};
+use crate::color::{CmykSimulation, Color, ColorComponents, ColorSpace, DeviceFamily, Ink, Plate, device_cmyk_to_gray};
 use crate::context::{Context, InterpreterCache};
 use crate::device::Device;
 use crate::function::Function;
@@ -33,6 +33,21 @@ pub enum MaskType {
 pub struct TransferFunction(Function);
 
 impl TransferFunction {
+    /// Apply the transfer function to byte opacity values.
+    ///
+    /// Inputs and outputs use the same rounded 8-bit samples as the renderer. A function
+    /// that cannot evaluate a sample leaves it unchanged.
+    pub fn apply_to(&self, values: &mut [u8]) {
+        for value in values {
+            if let Some(output) = self.0.eval(smallvec![f32::from(*value) / 255.0])
+                .and_then(|v| v.first().copied())
+                .filter(|output| output.is_finite())
+            {
+                *value = (output.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+            }
+        }
+    }
+
     /// Apply the transfer function to the given value.
     ///
     /// The input value needs to be between 0 and 1 and the return value is
@@ -64,6 +79,10 @@ struct Repr<'a> {
     luminosity_in_device_cmyk: bool,
     xref: &'a XRef,
     nesting_depth: u32,
+    /// Craft patch (CMYK masks): the group's `/CS` is DeviceCMYK.
+    device_cmyk: bool,
+    /// Craft patch (CMYK masks): the page plate's printing condition, for [`SoftMask::plate`].
+    simulation: Option<CmykSimulation>,
 }
 
 impl Hash for Repr<'_> {
@@ -123,6 +142,7 @@ impl<'a> SoftMask<'a> {
         let cs = cs_object
             .and_then(|o| ColorSpace::new(o, &context.interpreter_cache.object_cache))
             .unwrap_or_else(ColorSpace::device_rgb);
+        let device_cmyk = cs.is_device_cmyk();
         let transfer_function = dict
             .get::<Object<'_>>(TR)
             .and_then(|o| Function::new(&o))
@@ -159,7 +179,13 @@ impl<'a> SoftMask<'a> {
         let root_transform = context.get().ctm;
         let bbox = context.bbox();
         let resources_key = resources_cache_key(&parent_resources);
+        let simulation = context
+            .settings
+            .plate
+            .as_ref()
+            .and_then(|p| p.simulation.clone());
         let cache_key = hash128(&(
+            simulation.as_ref().map(|s| s.digest()),
             dict.cache_key(),
             root_transform.cache_key(),
             [bbox.x0.to_bits(), bbox.y0.to_bits(), bbox.x1.to_bits(), bbox.y1.to_bits()],
@@ -176,13 +202,61 @@ impl<'a> SoftMask<'a> {
             transfer_function,
             bbox: context.bbox(),
             interpreter_cache: context.interpreter_cache.clone(),
-            settings: context.settings.clone(),
+            // PdfCraft patch (35): a mask's luminosity comes from its group's colours, never
+            // from the page's plate, and the inks it uses are never printed.
+            settings: InterpreterSettings {
+                plate: None,
+                ink_sink: None,
+                ..context.settings.clone()
+            },
             xref: context.xref,
             background,
             luminosity_in_device_cmyk: group_in_device_cmyk && mask_type == MaskType::Luminosity,
             parent_resources,
             nesting_depth,
+            device_cmyk,
+            simulation,
         })))
+    }
+
+    /// Craft patch (CMYK masks): whether the mask group's color space is DeviceCMYK. A
+    /// luminosity mask then takes its values from the group's CMYK by the ISO 32000-2 §10.4.2.2
+    /// formula, `1 - min(1, 0.3c + 0.59m + 0.11y + k)`, rather than from its colors as drawn:
+    /// drawn through a CMYK profile, K 100% is not black.
+    pub fn is_device_cmyk(&self) -> bool {
+        self.0.device_cmyk
+    }
+
+    /// Craft patch (CMYK masks): the plate of process `ink` that the mask group composites on a
+    /// CMYK device, for [`Self::interpret_plate`] and [`Plate::tint`] of the backdrop. Spot
+    /// colorants paint through their alternate space, and nothing overprints.
+    pub fn plate(&self, ink: Ink) -> Plate {
+        Plate {
+            ink,
+            overprint: false,
+            simulation: self.0.simulation.clone(),
+            spots_as_process: true,
+        }
+    }
+
+    /// Craft patch (CMYK masks): interpret the mask's contents as the film of `plate`'s ink
+    /// (see [`Self::plate`]).
+    pub fn interpret_plate(&self, device: &mut impl Device<'a>, plate: Plate) {
+        let state = State::new(self.0.root_transform);
+        let settings = InterpreterSettings {
+            plate: Some(plate),
+            ..self.0.settings.clone()
+        };
+        let mut ctx = Context::new_with(
+            self.0.root_transform,
+            self.0.bbox,
+            &self.0.interpreter_cache,
+            self.0.xref,
+            settings,
+            state,
+            self.0.nesting_depth,
+        );
+        draw_form_xobject(&self.0.parent_resources, &self.0.group, &mut ctx, device);
     }
 
     /// Interpret the contents of the mask into the given device.
@@ -235,4 +309,58 @@ fn resources_cache_key(resources: &Resources<'_>) -> u128 {
         resources.shadings.obj_id(),
     );
     hash128(&(local, resources.parent().map(resources_cache_key)))
+}
+
+#[cfg(test)]
+mod transfer_tests {
+    use super::*;
+    use hayro_syntax::object::FromBytes;
+
+    fn transfer(bytes: &[u8]) -> TransferFunction {
+        let dict = Dict::from_bytes(bytes).expect("synthetic function dictionary");
+        TransferFunction(Function::new(&Object::Dict(dict)).expect("synthetic function"))
+    }
+
+    #[test]
+    fn byte_transfer_rounds_near_equal_endpoints() {
+        let function = transfer(b"<< /FunctionType 2 /Domain [0 1] /C0 [0.5001] /C1 [0.5] /N 1 >>");
+        assert!(function.apply(0.0) > function.apply(1.0));
+        let mut ends = [0, 255];
+        function.apply_to(&mut ends);
+        assert_eq!(ends, [128, 128], "sub-byte differences do not invert a byte mask");
+    }
+
+    #[test]
+    fn byte_transfer_preserves_identity_and_maps_inversion() {
+        for (function, expected) in [
+            (b"<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>".as_slice(), [0, 1, 127, 128, 254, 255]),
+            (b"<< /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >>".as_slice(), [255, 254, 128, 127, 1, 0]),
+        ] {
+            let mut values = [0, 1, 127, 128, 254, 255];
+            transfer(function).apply_to(&mut values);
+            assert_eq!(values, expected);
+        }
+    }
+
+    #[test]
+    fn byte_transfer_keeps_a_sample_when_the_function_has_no_output() {
+        let function = transfer(b"<< /FunctionType 2 /Domain [0 1] /C0 [] /C1 [] /N 1 >>");
+        let mut values = [0, 17, 127, 255];
+        function.apply_to(&mut values);
+        assert_eq!(values, [0, 17, 127, 255]);
+    }
+
+    #[test]
+    fn byte_transfer_keeps_samples_when_malformed_functions_are_not_finite() {
+        // Fractional powers of a negative domain produce NaN; finite coefficients can
+        // also overflow during interpolation. Neither is a byte opacity value.
+        for bytes in [
+            b"<< /FunctionType 2 /Domain [-1 -0.5] /C0 [0] /C1 [1] /N 0.5 >>".as_slice(),
+            b"<< /FunctionType 2 /Domain [0 1] /C0 [-300000000000000000000000000000000000000] /C1 [300000000000000000000000000000000000000] /N 1 >>",
+        ] {
+            let mut values = [0, 17, 127, 255];
+            transfer(bytes).apply_to(&mut values);
+            assert_eq!(values, [0, 17, 127, 255]);
+        }
+    }
 }

@@ -15,6 +15,11 @@ pub struct OutlineFontData {
     pub data: crate::font::FontData,
     /// Cache key for font deduplication.
     pub cache_key: u128,
+    /// Craft patch (flatten): the face index of `data` in a font collection.
+    pub index: u32,
+    /// Craft patch (flatten): true when `data` comes from the PDF (`FontFile*`); false when it
+    /// is the font resolver's substitute for a font the PDF doesn't embed.
+    pub embedded: bool,
     /// PostScript name (e.g., "TimesNewRomanPS-BoldMT").
     pub postscript_name: Option<String>,
     /// Font weight (100-900, 400=normal, 700=bold).
@@ -108,9 +113,8 @@ impl OutlineFont {
         }
     }
 
-    /// PdfCraft patch: whether `glyph` is drawn by a further face of a Type 0 font's substitute.
     pub(crate) fn is_further_glyph(&self, glyph: GlyphId) -> bool {
-        matches!(self, Self::Type0(t) if t.is_further_glyph(glyph))
+        matches!(self, Self::Type0(font) if font.is_further_glyph(glyph))
     }
 
     /// Get the advance width for a glyph by character code.
@@ -124,13 +128,28 @@ impl OutlineFont {
 
     /// Get raw font bytes and metadata.
     ///
-    /// Returns None for Type1 fonts and non-embedded TrueType fonts.
+    /// Returns None for Type1 (`FontFile`), standard and non-embedded simple fonts.
     pub(crate) fn font_data(&self) -> Option<OutlineFontData> {
         match self {
-            Self::Type1(_) => None,
+            // Craft patch (flatten): Type1C (`FontFile3`) fonts hand out their bare CFF bytes.
+            // The font dictionary's descriptive fields are not read.
+            Self::Type1(t) => Some(OutlineFontData {
+                data: t.font_data()?,
+                cache_key: t.cache_key(),
+                index: 0,
+                embedded: true,
+                postscript_name: None,
+                weight: None,
+                is_italic: false,
+                is_serif: false,
+                is_monospace: false,
+            }),
             Self::TrueType(t) => Some(OutlineFontData {
                 data: t.font_data()?,
                 cache_key: t.cache_key(),
+                // Craft patch (flatten): only an embedded `FontFile2`, read as face 0, has bytes.
+                index: 0,
+                embedded: true,
                 postscript_name: t.postscript_name().map(|s| s.to_string()),
                 weight: t.weight(),
                 is_italic: t.is_italic(),
@@ -140,6 +159,9 @@ impl OutlineFont {
             Self::Type0(t) => Some(OutlineFontData {
                 data: t.font_data()?,
                 cache_key: t.cache_key(),
+                // Craft patch (flatten): a substitute from the resolver is not embedded.
+                index: t.font_index(),
+                embedded: t.is_embedded(),
                 postscript_name: t.postscript_name().map(|s| s.to_string()),
                 weight: t.weight(),
                 is_italic: t.is_italic(),

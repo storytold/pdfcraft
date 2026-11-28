@@ -59,7 +59,7 @@ version = "0.1.0"
 default-features = false
 
 [dependencies.hayro-syntax]
-version = "0.7.0"
+version = "0.7.2"
 features = [
     "std",
     "images",

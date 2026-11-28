@@ -1,7 +1,7 @@
 //! PDF patterns.
 
 use crate::cache::Cache;
-use crate::color::{Color, ColorSpace, DefaultColorSpaces};
+use crate::color::{Color, ColorSpace, DefaultColorSpaces, Plate};
 use crate::context::{Context, InterpreterCache};
 use crate::device::Device;
 use crate::font::Glyph;
@@ -23,6 +23,10 @@ use hayro_syntax::xref::XRef;
 use kurbo::{Affine, BezPath, Rect, Shape};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// PdfCraft patch (78): the source of [`TilingPattern::instance`].
+static NEXT_TILING_INSTANCE: AtomicU64 = AtomicU64::new(0);
 
 /// A PDF pattern.
 #[derive(Debug, Clone)]
@@ -34,8 +38,8 @@ pub enum Pattern<'a> {
 }
 
 impl<'a> Pattern<'a> {
-    /// PdfCraft patch (38): `defaults` are those of the resources the pattern is selected with,
-    /// for a shading pattern's shading in a device space.
+    /// PdfCraft patch (#3018): `defaults` are those of the resources the pattern is selected
+    /// with, for a shading pattern's shading in a device space.
     pub(crate) fn new(
         object: Object<'a>,
         ctx: &Context<'a>,
@@ -80,8 +84,9 @@ impl<'a> Pattern<'a> {
         self
     }
 
-    /// PdfCraft patch: set the alpha of the graphics state in effect when the pattern is painted. The `gs` operator
-    /// can come after `scn`/`SCN`, so the alpha must not be captured when the pattern is selected.
+    /// PdfCraft patch (#3246): set the alpha of the graphics state in effect when the pattern is
+    /// painted. A `gs` can come after `scn`/`SCN`, so the alpha must not be captured when the
+    /// pattern is selected.
     pub(crate) fn set_alpha(&mut self, alpha: f32) {
         if let Self::Shading(p) = self {
             p.opacity = alpha;
@@ -139,6 +144,7 @@ impl ShadingPattern {
 
         Some(Self {
             shading: Arc::new(shading),
+            // PdfCraft patch (#3246): `get_paint` sets the alpha current at paint time.
             opacity: 1.0,
             matrix,
             transfer_function: None,
@@ -156,6 +162,8 @@ impl CacheKey for ShadingPattern {
 #[derive(Clone)]
 pub struct TilingPattern<'a> {
     cache_key: u128,
+    /// PdfCraft patch (78): see [`Self::instance`].
+    instance: u64,
     ctx_bbox: Rect,
     /// The bbox of the tiling pattern.
     pub bbox: Rect,
@@ -174,6 +182,30 @@ pub struct TilingPattern<'a> {
     pub(crate) settings: InterpreterSettings,
     pub(crate) xref: &'a XRef,
     nesting_depth: u32,
+}
+
+impl TilingPattern<'_> {
+    /// PdfCraft patch (35): an uncoloured pattern draws its cell in the colour it is used
+    /// with, so on a plate it draws that colour's film. A coloured pattern's cell is separated
+    /// as it is drawn.
+    pub(crate) fn for_plate(&mut self, plate: &Plate, overprint: bool, overprint_mode: u8) {
+        if !self.is_color {
+            self.stroke_paint = self
+                .stroke_paint
+                .for_plate(plate, overprint, overprint_mode);
+            self.non_stroking_paint =
+                self.non_stroking_paint
+                    .for_plate(plate, overprint, overprint_mode);
+        }
+        let simulation = plate.simulation.as_ref().map(|s| s.digest());
+        self.cache_key = hash128(&(
+            self.cache_key,
+            &plate.ink,
+            plate.overprint,
+            overprint,
+            simulation,
+        ));
+    }
 }
 
 impl Debug for TilingPattern<'_> {
@@ -233,6 +265,7 @@ impl<'a> TilingPattern<'a> {
 
         Some(Self {
             cache_key,
+            instance: NEXT_TILING_INSTANCE.fetch_add(1, Ordering::Relaxed),
             bbox,
             x_step,
             y_step,
@@ -279,8 +312,10 @@ impl<'a> TilingPattern<'a> {
 
         // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
         let decoded = crate::context::decode_content(&self.stream)?;
-        let resources = Resources::from_parent(
-            self.stream.dict().get(RESOURCES).unwrap_or_default(),
+        // Tiling patterns have their own required resource scope, even when malformed
+        // input omits the dictionary. They never borrow names from their caller.
+        let resources = Resources::from_scope(
+            Some(self.stream.dict().get(RESOURCES).unwrap_or_default()),
             self.parent_resources.clone(),
         );
         let iter = TypedIter::new(decoded.as_ref());
@@ -307,6 +342,23 @@ impl<'a> TilingPattern<'a> {
         device.pop_clip_path();
 
         Some(())
+    }
+}
+
+impl TilingPattern<'_> {
+    /// PdfCraft patch (78): which setting of the pattern (`scn`/`SCN`) this is. Each setting is
+    /// numbered apart, and its copies keep the number. A coloured pattern's cell depends only on
+    /// what the setting captured (its stream, resources, settings and the bounding box then in
+    /// effect) and on the scale it is drawn at, so a renderer can draw the cell once per number
+    /// and scale for every fill of that setting. An uncoloured pattern's cell also takes the
+    /// colour and opacity of the paint, which copies can change.
+    pub fn instance(&self) -> u64 {
+        self.instance
+    }
+
+    /// Whether the pattern is coloured (`/PaintType 1`).
+    pub fn is_coloured(&self) -> bool {
+        self.is_color
     }
 }
 

@@ -9,9 +9,9 @@
 
 use std::sync::Arc;
 
-use hayro::hayro_interpret::font::{FallbackFontQuery, FontData, FontQuery};
-use hayro::hayro_interpret::hayro_cmap::CidFamily;
-use pdfcraft_fonts::CraftFont;
+use craft_pdf::interpret::font::{FallbackFontQuery, FontData, FontQuery};
+use craft_pdf::interpret::hayro_cmap::CidFamily;
+use pdfcraft_fonts::EmbeddedFace;
 use pdfcraft_fonts::fallback::{self, Request};
 
 /// The face that draws a CID font the document doesn't embed: the chain's stand-in (the exact
@@ -30,7 +30,7 @@ pub(super) fn further_faces(query: &FallbackFontQuery) -> Vec<(FontData, u32)> {
     with_request(query, fallback::further_faces).into_iter().map(face_data).collect()
 }
 
-fn face_data(face: &'static CraftFont) -> (FontData, u32) {
+fn face_data(face: &'static EmbeddedFace) -> (FontData, u32) {
     (Arc::new(face.bytes), 0)
 }
 

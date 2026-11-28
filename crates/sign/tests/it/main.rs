@@ -6,5 +6,8 @@ mod chain;
 mod cms;
 mod crypto;
 mod encrypted_signing;
+mod field_locks;
 mod pdf;
+mod revision_classification;
+mod signed_structure;
 mod store_keys;

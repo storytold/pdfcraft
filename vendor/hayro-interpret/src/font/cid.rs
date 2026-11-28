@@ -2,9 +2,10 @@ use crate::font::blob::{CffFontBlob, OpenTypeFontBlob, Type1FontBlob};
 use crate::font::generated::glyph_names;
 use crate::font::standard_font::select_standard_font;
 use crate::font::{
-    FallbackFontQuery, FontFlags, FontQuery, read_to_unicode, stretch_glyph, strip_subset_prefix,
+    FallbackFontQuery, FontData, FontFlags, FontQuery, read_to_unicode, stretch_glyph,
+    strip_subset_prefix,
 };
-use crate::{CMapResolverFn, CacheKey, FontResolverFn};
+use crate::{CMapResolverFn, CacheKey, FontResolverFn, FurtherFacesFn};
 use hayro_cmap::{BfString, CMap, CharacterCollection, CidFamily, WritingMode};
 use hayro_syntax::object;
 use hayro_syntax::object::Dict;
@@ -16,14 +17,22 @@ use kurbo::{BezPath, Vec2};
 use skrifa::attribute::Style;
 use skrifa::charmap::MapVariant;
 use skrifa::raw::collections::int_set::Domain;
+use skrifa::raw::tables::post::DEFAULT_GLYPH_NAMES;
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 use std::collections::HashMap;
+use std::cell::RefCell;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::sync::OnceLock;
+
+const FACE_SHIFT: u32 = 16;
+const GLYPH_MASK: u32 = u16::MAX as u32;
+const MAX_FURTHER_FACES: usize = 64;
 
 #[derive(Debug)]
 pub(crate) struct Type0Font {
     font_type: FontType,
+    further_faces: RefCell<Vec<FurtherFace>>,
     horizontal: bool,
     cache_key: u128,
     dw: f32,
@@ -42,14 +51,22 @@ pub(crate) struct Type0Font {
     /// Whether the `to_unicode` map is a UCS2 `CMap` (CID-indexed) rather than
     /// a `ToUnicode` `CMap` (code-indexed).
     to_unicode_is_cid_indexed: bool,
+    /// PdfCraft patch (84): the character collection's UCS2 CMap (by CID), for the codes the
+    /// font's own `/ToUnicode` gives nothing for, whether or not its program is embedded.
+    ucs2: Option<Ucs2>,
     /// PdfCraft patch: whether the CIDs belong to an Adobe character collection (Japan1, GB1,
-    /// CNS1, Korea1, KR), whose glyph numbering no substitute other than a CID-keyed CFF font shares.
+    /// CNS1, Korea1), whose glyph numbering no substitute other than a CID-keyed CFF font shares.
     adobe_collection: bool,
     /// PdfCraft patch: `/ToUnicode /Identity-H` (a name, not a CMap stream), which CAD exporters
     /// such as WSCAD write for fonts whose two-byte codes are UTF-16 code units. Acrobat shows
     /// such text as the code's Unicode value; the identity CMap the name resolves to maps codes
     /// to CIDs only and gave no text at all.
     identity_to_unicode: bool,
+    /// PdfCraft patch: an Arial or a Times New Roman the PDF doesn't embed, as a TrueType CID
+    /// font (`CIDFontType2`) whose CIDs aren't of an Adobe character collection. Its CIDToGIDMap
+    /// gives glyph indexes in the author's font, which numbers its first 258 glyphs in the
+    /// standard Macintosh order of the TrueType `post` table (#5889, #6449).
+    mac_glyph_order: bool,
 }
 
 impl Type0Font {
@@ -58,6 +75,7 @@ impl Type0Font {
     pub(crate) fn new(
         dict: &Dict<'_>,
         font_resolver: &FontResolverFn,
+        further_faces: &FurtherFacesFn,
         cmap_resolver: &CMapResolverFn,
     ) -> Option<Self> {
         let cmap = read_encoding(&dict.get::<Object<'_>>(ENCODING)?, cmap_resolver)?;
@@ -79,15 +97,14 @@ impl Type0Font {
             .filter(|cc| cc.family != CidFamily::AdobeIdentity)
             .or_else(|| read_cid_system_info(&descendant_font));
 
-        let (font_type, fallback, _is_standard_fallback) = match FontType::new(&font_descriptor) {
-            Some(ft) => (ft, false, false),
+        let mut fallback_query =
+            FallbackFontQuery::with_descriptor(dict, Some(font_descriptor.clone()));
+        fallback_query.character_collection = character_collection.clone();
+
+        let (font_type, fallback, _is_standard_fallback, fallback_data) = match FontType::new(&font_descriptor) {
+            Some(ft) => (ft, false, false, None),
             None => {
-                // PdfCraft patch: the style comes from the descendant's descriptor.
-                let mut fallback_query =
-                    FallbackFontQuery::with_descriptor(dict, Some(font_descriptor.clone()));
-                fallback_query.character_collection = character_collection.clone();
                 let (query, is_standard) = match select_standard_font(dict, &font_descriptor) {
-                    // CJK names that only hint at a standard family still use the collection's stand-in.
                     Some((standard, false))
                         if is_adobe_cjk(character_collection.as_ref())
                             && !names_standard_family(&fallback_query) =>
@@ -107,12 +124,24 @@ impl Type0Font {
                 };
 
                 let (data, index) = font_resolver(&query)?;
-                let blob = OpenTypeFontBlob::new(data.clone(), index)
-                    .map(FontType::OpenType)
-                    .or_else(|| CffFontBlob::new(data).map(FontType::Cff))?;
-                (blob, true, is_standard)
+                let blob = FontType::from_data(data.clone(), index)?;
+                (blob, true, is_standard, Some((data, index)))
             }
         };
+
+        let further_faces = fallback_data
+            .as_ref()
+            .map(|(substitute, substitute_index)| {
+                further_faces(&fallback_query)
+                    .into_iter()
+                    .take(MAX_FURTHER_FACES)
+                    .filter(|(data, index)| {
+                        *index != *substitute_index || data.as_ref().as_ref() != substitute.as_ref().as_ref()
+                    })
+                    .map(|(data, index)| FurtherFace { data, index, font_type: None })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let default_width = descendant_font.get::<f32>(DW).unwrap_or(1000.0);
         let dw2 = descendant_font
@@ -137,26 +166,42 @@ impl Type0Font {
             .is_some_and(|n| matches!(n.as_ref(), b"Identity-H" | b"Identity-V"));
         let mut to_unicode_is_cid_indexed = false;
 
+        // PdfCraft patch (84): the character collection's UCS2 CMap (ISO 32000-2 §9.10.2), CID
+        // to Unicode, for a font of an Adobe collection whether or not its program is embedded.
+        let mut ucs2 = character_collection
+            .as_ref()
+            .and_then(|cc| cc.family.ucs2_cmap())
+            .and_then(|name| (cmap_resolver)(name))
+            .map(|data| Ucs2 {
+                data,
+                resolver: cmap_resolver.clone(),
+                map: OnceLock::new(),
+            });
         // If there is no ToUnicode map, try to get the UCS2 CMap.
         if fallback
             && to_unicode.is_none()
-            && let Some(cc) = character_collection.as_ref()
-            && let Some(ucs2_name) = cc.family.ucs2_cmap()
-            && let Some(data) = (cmap_resolver)(ucs2_name)
+            && let Some(ucs2_cmap) = ucs2.take().and_then(|u| u.parse())
         {
-            let resolver = cmap_resolver.clone();
-            if let Some(ucs2_cmap) = CMap::parse(data, move |n| (resolver)(n)) {
-                to_unicode = Some(ucs2_cmap);
-                to_unicode_is_cid_indexed = true;
-            }
+            to_unicode = Some(ucs2_cmap);
+            to_unicode_is_cid_indexed = true;
         }
 
-        // Adobe-KR has no predefined UCS2 CMap, so it counts by registry and ordering.
         let adobe_collection = is_adobe_cjk(character_collection.as_ref());
 
         let postscript_name = dict
             .get::<Name<'_>>(BASE_FONT)
             .map(|n| strip_subset_prefix(n.as_str()).to_string());
+
+        // PdfCraft patch: the descendant names the font program itself; a Type 0 font's own
+        // `/BaseFont` may carry the CMap's name after it.
+        let mac_glyph_order = fallback
+            && !adobe_collection
+            && descendant_font
+                .get::<Name<'_>>(SUBTYPE)
+                .is_some_and(|s| s.deref() == CID_FONT_TYPE2)
+            && descendant_font
+                .get::<Name<'_>>(BASE_FONT)
+                .is_some_and(|n| numbers_glyphs_in_mac_order(strip_subset_prefix(n.as_str())));
 
         // Extract font flags from descriptor
         let font_flags = font_descriptor
@@ -165,6 +210,7 @@ impl Type0Font {
 
         Some(Self {
             cache_key,
+            further_faces: RefCell::new(further_faces),
             horizontal,
             encoding: cmap,
             to_unicode,
@@ -178,8 +224,10 @@ impl Type0Font {
             font_flags,
             fallback,
             to_unicode_is_cid_indexed,
+            ucs2,
             adobe_collection,
             identity_to_unicode,
+            mac_glyph_order,
         })
     }
 
@@ -200,6 +248,16 @@ impl Type0Font {
             && let Some(glyph) = self.map_via_unicode(to_unicode_key)
         {
             // Yay, Unicode worked!
+            return glyph;
+        }
+
+        // PdfCraft patch: the CID of an Arial or a Times New Roman the PDF doesn't embed names
+        // one of that font's glyphs, which the substitute draws by that name. Taken as the
+        // substitute's own glyph index it drew an unrelated glyph: "Low Power" as
+        // "@ck 'Dck Yf" (#5889), "Salarié(e) du régime" as "Salari²*g+f w't²i lo" (#6449).
+        if self.mac_glyph_order
+            && let Some(glyph) = self.map_via_mac_glyph_name(cid)
+        {
             return glyph;
         }
 
@@ -243,7 +301,6 @@ impl Type0Font {
     /// font's cmap.
     fn map_via_unicode(&self, key: u32) -> Option<GlyphId> {
         let to_unicode = self.to_unicode.as_ref()?;
-
         let (character, selector) = to_unicode
             .lookup_bf_string(key)
             .or_else(|| {
@@ -254,15 +311,10 @@ impl Type0Font {
                         return Some(BfString::Char(code));
                     }
                 }
-
                 None
             })
             .and_then(|bf| match bf {
                 BfString::Char(c) => Some((c, None)),
-                // PdfCraft patch: a character and a variation selector is that character in a
-                // given form, as Adobe-Japan1 maps the JIS X 0208 forms of the kanji that
-                // JIS X 0213:2004 redrew (噂 is U+5642 U+E0100). Other strings (ligatures) still
-                // have no glyph.
                 BfString::String(s) => {
                     let mut chars = s.chars();
                     let character = chars.next()?;
@@ -271,45 +323,41 @@ impl Type0Font {
                 }
             })?;
 
-        match &self.font_type {
-            FontType::OpenType(t) => {
-                let charmap = t.font_ref().charmap();
-                // PdfCraft patch: the face's glyph for that form when its `cmap` has one, else its
-                // glyph for the character, as when a form isn't supported (Unicode FAQ on
-                // variation sequences).
-                if let Some(selector) = selector
-                    && let Some(MapVariant::Variant(glyph)) = charmap.map_variant(character, selector)
-                {
-                    return Some(glyph);
-                }
-                // PdfCraft patch: a substitute may lack a spacing character (#3601; e.g.
-                // Adobe-Japan1's U+2002). Draw its ordinary space instead of .notdef;
-                // the PDF's widths and Unicode mapping still determine advance and text.
-                charmap.map(character).or_else(|| match character {
-                    '\u{00a0}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}' => charmap.map(' '),
-                    _ => None,
-                })
-            }
-            FontType::Cff(c) => {
-                // Map codepoint to glyph name via AFL, and then look it up.
-                let by_name = |character: char| {
-                    glyph_names::get_reverse(character).and_then(|name| c.glyph_index_by_name(name))
-                };
-                // PdfCraft patch: a soft hyphen the substitute has no glyph for is its hyphen
-                // (#5888). Windows exporters map the hyphen glyph of a font they don't embed to
-                // U+00AD, which ISO 32000-2 Annex D.2 calls typographically the same as the
-                // hyphen; without this the CID, taken as a glyph index, drew an unrelated glyph.
-                by_name(character).or_else(|| (character == '\u{00ad}').then(|| by_name('-')).flatten())
-            }
-            FontType::Type1(_) => {
-                // We could in theory map to a glyph via AFL and then look up
-                // the glyph index in the encoding, but since skrifa doesn't have
-                // an API for that and this is only really necessary for fallback
-                // fonts (which currently only supports OpenType and CFF as fallback),
-                // so we don't support this for now.
-                None
+        if let Some(glyph) = map_character(&self.font_type, character, selector) {
+            return Some(glyph);
+        }
+
+        let mut faces = self.further_faces.borrow_mut();
+        for (position, face) in faces.iter_mut().enumerate() {
+            let Some(font_type) = face.parsed() else { continue };
+            if let Some(glyph) = map_character(font_type, character, selector)
+                && let Some(tagged) = tag_further_glyph(position, glyph)
+            {
+                return Some(tagged);
             }
         }
+        None
+    }
+
+    /// PdfCraft patch: the substitute's glyph for the author's glyph that `cid` gives, found by
+    /// that glyph's name in the standard Macintosh order. `None` past the 258 glyphs the order
+    /// names, and for a substitute that isn't a name-keyed CFF font (the standard substitutes
+    /// are); .notdef for a name the substitute has no glyph for.
+    fn map_via_mac_glyph_name(&self, cid: u32) -> Option<GlyphId> {
+        let FontType::Cff(c) = &self.font_type else {
+            return None;
+        };
+        if c.is_cid() {
+            return None;
+        }
+        let gid = self.cid_to_gid_map.map(u16::try_from(cid).ok()?);
+        let name = *DEFAULT_GLYPH_NAMES.get(usize::try_from(gid.to_u32()).ok()?)?;
+        // `.null` and `nonmarkingreturn` draw nothing, and `nonbreakingspace` is a space.
+        let name = match name {
+            ".null" | "nonmarkingreturn" | "nonbreakingspace" => "space",
+            name => name,
+        };
+        Some(c.glyph_index_by_name(name).unwrap_or(GlyphId::NOTDEF))
     }
 
     fn code_to_cid(&self, code: u32) -> Option<u32> {
@@ -323,24 +371,30 @@ impl Type0Font {
     }
 
     pub(crate) fn outline_glyph(&self, glyph: GlyphId, code: u32) -> BezPath {
-        let path = match &self.font_type {
-            FontType::OpenType(t) => t.outline_glyph(glyph),
-            FontType::Cff(c) => c.outline_glyph(glyph),
-            FontType::Type1(t) => t.outline_glyph(glyph),
+        let face_number = glyph.to_u32() >> FACE_SHIFT;
+        let raw = untag_glyph(glyph);
+        let (path, actual_width) = if face_number == 0 {
+            (self.font_type.outline(raw), self.font_type.advance_width(raw))
+        } else {
+            let Some(position) = usize::try_from(face_number - 1).ok() else { return BezPath::new() };
+            let mut faces = self.further_faces.borrow_mut();
+            let Some(face) = faces.get_mut(position) else { return BezPath::new() };
+            let Some(font_type) = face.parsed() else { return BezPath::new() };
+            (font_type.outline(raw), font_type.advance_width(raw))
         };
 
         if self.fallback
-            && let FontType::OpenType(t) = &self.font_type
             && let Some(cid) = self.code_to_cid(code)
-            && let Some(actual_width) = t.glyph_metrics().advance_width(glyph)
-            // Only use an expected width if there is an explicit /W array,
-            // not the default width, as it leads to weird results from my testing.
+            && let Some(actual_width) = actual_width
             && let Some(expected_width) = self.widths.get(&cid).copied()
         {
             return stretch_glyph(path, expected_width, actual_width);
         }
-
         path
+    }
+
+    pub(crate) fn is_further_glyph(&self, glyph: GlyphId) -> bool {
+        glyph.to_u32() >> FACE_SHIFT != 0
     }
 
     pub(crate) fn font_data(&self) -> Option<crate::font::FontData> {
@@ -349,6 +403,20 @@ impl Type0Font {
             FontType::Cff(c) => Some(c.font_data()),
             FontType::Type1(_) => None,
         }
+    }
+
+    /// Craft patch (flatten): the face index of `font_data`.
+    pub(crate) fn font_index(&self) -> u32 {
+        match &self.font_type {
+            FontType::OpenType(t) => t.index(),
+            FontType::Cff(_) | FontType::Type1(_) => 0,
+        }
+    }
+
+    /// Craft patch (flatten): whether `font_data` comes from the file rather than the font
+    /// resolver.
+    pub(crate) fn is_embedded(&self) -> bool {
+        !self.fallback
     }
 
     /// Get the PostScript name.
@@ -420,6 +488,13 @@ impl Type0Font {
         }
     }
 
+    /// PdfCraft patch: the code's width w0 (its horizontal displacement, from `/W` or `/DW`)
+    /// in either writing mode. In vertical writing it is the glyph's extent across the column
+    /// (ISO 32000-2 §9.7.4.3).
+    pub(crate) fn code_horizontal_width(&self, code: u32) -> f32 {
+        self.horizontal_width(self.code_to_cid(code).unwrap_or(0))
+    }
+
     fn horizontal_width(&self, cid: u32) -> f32 {
         self.widths.get(&cid).copied().unwrap_or(self.dw)
     }
@@ -471,10 +546,60 @@ impl Type0Font {
             } else {
                 code
             };
-            return to_unicode.lookup_bf_string(key);
+            // PdfCraft patch (85): a `/ToUnicode` written as a CID CMap (`begincidrange` /
+            // `begincidchar`, whose destinations are numbers) gives the code's Unicode value as
+            // that number, as glyph lookup already reads it (`map_via_unicode`) and as pdftotext
+            // and PDFium extract it. ISO 32000-2 §9.10.3 has `beginbfrange` / `beginbfchar` here;
+            // Word writes CID ranges, and such text extracted nothing.
+            if let Some(s) = to_unicode.lookup_bf_string(key).or_else(|| {
+                (1..=4)
+                    .find_map(|len| {
+                        to_unicode
+                            .lookup_cid_code(key, len)
+                            .and_then(|cid| char::from_u32(cid.to_u32()))
+                    })
+                    .map(BfString::Char)
+            }) {
+                return Some(s);
+            }
+        }
+        // PdfCraft patch (84): then the collection's UCS2 CMap, by the code's CID.
+        if let Some(ucs2) = self.ucs2.as_ref().and_then(Ucs2::cmap)
+            && let Some(s) = self
+                .code_to_cid(code)
+                .and_then(|cid| ucs2.lookup_bf_string(cid))
+        {
+            return Some(s);
         }
 
         None
+    }
+}
+
+/// PdfCraft patch (84): a collection's UCS2 CMap, parsed the first time a code needs it: a font
+/// whose `/ToUnicode` maps every code it shows never parses it.
+struct Ucs2 {
+    data: &'static [u8],
+    resolver: CMapResolverFn,
+    map: OnceLock<Option<CMap>>,
+}
+
+impl Ucs2 {
+    fn parse(&self) -> Option<CMap> {
+        let resolver = self.resolver.clone();
+        CMap::parse(self.data, move |n| (resolver)(n))
+    }
+
+    fn cmap(&self) -> Option<&CMap> {
+        self.map.get_or_init(|| self.parse()).as_ref()
+    }
+}
+
+impl std::fmt::Debug for Ucs2 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ucs2")
+            .field("bytes", &self.data.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -496,6 +621,28 @@ enum FontType {
 }
 
 impl FontType {
+    fn from_data(data: FontData, index: u32) -> Option<Self> {
+        OpenTypeFontBlob::new(data.clone(), index)
+            .map(Self::OpenType)
+            .or_else(|| CffFontBlob::new(data).map(Self::Cff))
+    }
+
+    fn outline(&self, glyph: GlyphId) -> BezPath {
+        match self {
+            Self::OpenType(font) => font.outline_glyph(glyph),
+            Self::Cff(font) => font.outline_glyph(glyph),
+            Self::Type1(font) => font.outline_glyph(glyph),
+        }
+    }
+
+    fn advance_width(&self, glyph: GlyphId) -> Option<f32> {
+        match self {
+            Self::OpenType(font) => font.glyph_metrics().advance_width(glyph),
+            Self::Cff(font) => font.advance_width(glyph),
+            Self::Type1(_) => None,
+        }
+    }
+
     fn new(descriptor: &Dict<'_>) -> Option<Self> {
         // PDF has a distinction between CIDFontType0 and CIDFontType 2, with
         // specific requirements what font type can appear where. However, some
@@ -527,6 +674,81 @@ impl FontType {
 
         Some(parsed)
     }
+}
+
+struct FurtherFace {
+    data: FontData,
+    index: u32,
+    font_type: Option<FontType>,
+}
+
+impl std::fmt::Debug for FurtherFace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FurtherFace").field("index", &self.index).finish_non_exhaustive()
+    }
+}
+
+impl FurtherFace {
+    fn parsed(&mut self) -> Option<&FontType> {
+        if self.font_type.is_none() {
+            self.font_type = FontType::from_data(self.data.clone(), self.index);
+        }
+        self.font_type.as_ref()
+    }
+}
+
+fn map_character(font: &FontType, character: char, selector: Option<char>) -> Option<GlyphId> {
+    let glyph = match font {
+        FontType::OpenType(font) => {
+            let charmap = font.font_ref().charmap();
+            selector
+                .and_then(|selector| match charmap.map_variant(character, selector) {
+                    Some(MapVariant::Variant(glyph)) => Some(glyph),
+                    _ => None,
+                })
+                .or_else(|| charmap.map(character))
+                .or_else(|| match character {
+                    '\u{00a0}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}' => charmap.map(' '),
+                    _ => None,
+                })
+        }
+        FontType::Cff(font) => {
+            let by_name = |character: char| {
+                glyph_names::get_reverse(character).and_then(|name| font.glyph_index_by_name(name))
+            };
+            by_name(character).or_else(|| (character == '\u{00ad}').then(|| by_name('-')).flatten())
+        }
+        FontType::Type1(_) => None,
+    }?;
+    (glyph != GlyphId::NOTDEF).then_some(glyph)
+}
+
+fn tag_further_glyph(position: usize, glyph: GlyphId) -> Option<GlyphId> {
+    let face = u32::try_from(position).ok()?.checked_add(1)?;
+    let glyph = glyph.to_u32();
+    if face > MAX_FURTHER_FACES as u32 || glyph > GLYPH_MASK {
+        return None;
+    }
+    Some(GlyphId::new((face << FACE_SHIFT) | glyph))
+}
+
+fn untag_glyph(glyph: GlyphId) -> GlyphId {
+    GlyphId::new(glyph.to_u32() & GLYPH_MASK)
+}
+
+fn is_adobe_cjk(collection: Option<&CharacterCollection>) -> bool {
+    collection.is_some_and(|collection| {
+        collection.family.ucs2_cmap().is_some()
+            || matches!(&collection.family, CidFamily::Custom { registry, ordering }
+                if registry.as_slice() == b"Adobe" && ordering.as_slice() == b"KR")
+    })
+}
+
+fn names_standard_family(query: &FallbackFontQuery) -> bool {
+    query.post_script_name.as_deref().is_some_and(|name| {
+        let name = name.to_ascii_lowercase();
+        ["arial", "zapf", "dingbat"].iter().any(|family| name.contains(family))
+    })
 }
 
 #[derive(Debug, Default)]
@@ -582,29 +804,40 @@ impl CidToGIdMap {
     }
 }
 
-/// PdfCraft patch (72): whether `collection` is one of Adobe's CJK character collections
-/// (Japan1, GB1, CNS1, Korea1, KR).
-fn is_adobe_cjk(collection: Option<&CharacterCollection>) -> bool {
-    collection.is_some_and(|c| {
-        c.family.ucs2_cmap().is_some()
-            || matches!(&c.family, CidFamily::Custom { registry, ordering }
-                if registry.as_slice() == b"Adobe" && ordering.as_slice() == b"KR")
-    })
-}
-
-/// PdfCraft patch (72): whether the font's name names a standard family outright although
-/// `select_standard_font` calls the match inexact.
-fn names_standard_family(query: &FallbackFontQuery) -> bool {
-    query.post_script_name.as_deref().is_some_and(|name| {
-        let name = name.to_ascii_lowercase();
-        ["arial", "zapf", "dingbat"].iter().any(|family| name.contains(family))
-    })
-}
-
-
 /// PdfCraft patch: Variation Selectors (U+FE00–U+FE0F) and their supplement (U+E0100–U+E01EF).
 fn is_variation_selector(c: char) -> bool {
     matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
+}
+
+/// PdfCraft patch: whether `name`, a `/BaseFont` without its subset tag, is one of the four
+/// faces of Arial or Times New Roman as exporters name them: `ArialMT`, `Arial-BoldMT`,
+/// `Arial-ItalicMT`, `Arial-BoldItalicMT`, `TimesNewRomanPSMT`, `TimesNewRomanPS-BoldMT` and so
+/// on, or `Arial` or `TimesNewRoman` followed by `,Bold`, `,Italic` or `,BoldItalic`. Both
+/// number their first 258 glyphs in the standard Macintosh order. Arial Narrow, Arial Black,
+/// Arial Unicode MS and Arial Rounded are other fonts, numbered their own way. Letter case
+/// doesn't matter, `MT` included.
+fn numbers_glyphs_in_mac_order(name: &str) -> bool {
+    let (family, style) = name.split_once([',', '-', ' ']).unwrap_or((name, ""));
+    let style: String = style
+        .chars()
+        .filter(|c| !matches!(c, ',' | '-' | ' '))
+        .collect();
+    ["Arial", "TimesNewRoman", "TimesNewRomanPS"]
+        .iter()
+        .any(|f| without_mt(family).eq_ignore_ascii_case(f))
+        && ["", "Regular", "Bold", "Italic", "BoldItalic"]
+            .iter()
+            .any(|s| without_mt(&style).eq_ignore_ascii_case(s))
+}
+
+/// PdfCraft patch: `name` without a trailing `MT` in any letter case (Monotype's mark in
+/// PostScript names such as `ArialMT`).
+fn without_mt(name: &str) -> &str {
+    name.len()
+        .checked_sub(2)
+        .and_then(|stem| Some((name.get(..stem)?, name.get(stem..)?)))
+        .filter(|(_, suffix)| suffix.eq_ignore_ascii_case("MT"))
+        .map_or(name, |(stem, _)| stem)
 }
 
 /// PdfCraft patch: the largest CID (ISO 32000-2 §9.7.2; CIDs are at most two bytes).

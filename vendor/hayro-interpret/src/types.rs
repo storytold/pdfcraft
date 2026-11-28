@@ -106,6 +106,39 @@ impl RasterImage<'_> {
     }
 }
 
+impl RasterImage<'_> {
+    /// Craft patch (flatten): the image's samples as inks, in its own color space (see
+    /// [`InkImage`]); process colour converts through `simulation` where plate mode converts it.
+    pub fn with_inks(
+        &self,
+        simulation: Option<&crate::color::CmykSimulation>,
+        func: impl FnOnce(InkImage),
+    ) {
+        if let Some(image) = crate::x_object::decode_inks(&self.0, simulation) {
+            func(image);
+        }
+    }
+}
+
+/// Craft patch (flatten): a raster image decoded into inks rather than RGB.
+#[derive(Clone)]
+pub struct InkImage {
+    /// The width in samples.
+    pub width: u32,
+    /// The height in samples.
+    pub height: u32,
+    /// What each sample's values are.
+    pub space: crate::color::InkSpace,
+    /// The image's color space (an Indexed space itself, not its base).
+    pub color_space: crate::color::ColorSpace,
+    /// `space.len()` bytes per sample, rows top to bottom, 255 = 1.0.
+    pub samples: Vec<u8>,
+    /// The `/SMask`, `/Mask` or `/SMaskInData` alpha, at its own size.
+    pub alpha: Option<LumaData>,
+    /// As [`RgbData::scale_factors`].
+    pub scale_factors: (f32, f32),
+}
+
 impl CacheKey for RasterImage<'_> {
     fn cache_key(&self) -> u128 {
         self.0.cache_key()
@@ -305,6 +338,24 @@ pub struct StrokeProps {
     pub dash_array: SmallVec<[f32; 4]>,
     /// The dash offset.
     pub dash_offset: f32,
+}
+
+/// PdfCraft patch: longest dash array kept. A longer one strokes solid; it is copied by every
+/// saved graphics state, and real dash patterns have a handful of entries.
+pub(crate) const MAX_DASH_ENTRIES: usize = 256;
+
+/// PdfCraft patch: the dash array a `d` operator or `/D` entry sets, from its numbers.
+pub(crate) fn dash_array(values: impl Iterator<Item = f32>) -> SmallVec<[f32; 4]> {
+    // kurbo apparently cannot properly deal with offsets that are exactly 0.
+    let dashes: SmallVec<[f32; 4]> = values
+        .take(MAX_DASH_ENTRIES + 1)
+        .map(|n| if n == 0.0 { 0.01 } else { n })
+        .collect();
+    if dashes.len() > MAX_DASH_ENTRIES {
+        warn!("dash array is too long; stroking solid");
+        return smallvec![];
+    }
+    dashes
 }
 
 impl Default for StrokeProps {

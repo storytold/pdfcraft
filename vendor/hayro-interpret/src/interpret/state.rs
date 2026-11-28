@@ -1,7 +1,7 @@
 use crate::StrokeProps;
 use crate::color::{AlphaColor, ColorComponents, ColorSpace};
 use crate::context::Context;
-use crate::convert::{convert_line_cap, convert_line_join};
+use crate::convert::{convert_dash_array, convert_line_cap, convert_line_join, convert_line_width};
 use crate::font::{Font, UNITS_PER_EM};
 use crate::function::Function;
 use crate::interpret::text::TextRenderingMode;
@@ -149,6 +149,15 @@ pub(crate) struct TextState<'a> {
     // When setting the text rendering mode to `clip`, the glyphs should instead be collected
     // as paths and then applied as 1 single clip path. This field stores those clip paths.
     pub(crate) clip_paths: BezPath,
+    /// PdfCraft patch: whether a glyph was shown in a clipping render mode (4 to 7) in this text
+    /// object, so `ET` knows to apply the clip even when none of them contributed an outline: the
+    /// clip is then empty and nothing paints through it. A text object that shows no glyph at all
+    /// leaves the clipping path alone, which is what readers do with it.
+    pub(crate) clip_shown: bool,
+    /// PdfCraft patch: whether a glyph in a clipping mode could not be turned into an outline
+    /// (a Type 3 glyph, which `clip_glyph` does not implement). The real clip is then unknown, so
+    /// `ET` leaves what follows unclipped rather than hiding it.
+    pub(crate) clip_unsupported: bool,
 }
 
 impl<'a> TextState<'a> {
@@ -245,6 +254,8 @@ impl Default for TextState<'_> {
             text_line_matrix: Affine::IDENTITY,
             rise: 0.0,
             clip_paths: BezPath::default(),
+            clip_shown: false,
+            clip_unsupported: false,
         }
     }
 }
@@ -269,6 +280,12 @@ pub(crate) struct GraphicsState<'a> {
     pub(crate) soft_mask: Option<SoftMask<'a>>,
     pub(crate) transfer_function: Option<ActiveTransferFunction>,
     pub(crate) blend_mode: BlendMode,
+
+    // PdfCraft patch (35): the overprint parameters (ISO 32000-2 §8.6.7, `OP`, `op` and `OPM`
+    // in a graphics state parameter dictionary). They only matter when drawing separations.
+    pub(crate) overprint_stroke: bool,
+    pub(crate) overprint_fill: bool,
+    pub(crate) overprint_mode: u8,
 }
 
 impl Default for GraphicsState<'_> {
@@ -286,6 +303,9 @@ impl Default for GraphicsState<'_> {
             soft_mask: None,
             transfer_function: None,
             blend_mode: BlendMode::default(),
+            overprint_stroke: false,
+            overprint_fill: false,
+            overprint_mode: 0,
         }
     }
 }
@@ -319,7 +339,11 @@ pub(crate) fn handle_gs_single<'a>(
 ) -> Option<()> {
     // TODO Can we use constants here somehow?
     match key.as_str() {
-        "LW" => context.get_mut().graphics_state.stroke_props.line_width = dict.get::<f32>(key)?,
+        // PdfCraft patch (61): see `convert_line_width`.
+        "LW" => {
+            context.get_mut().graphics_state.stroke_props.line_width =
+                convert_line_width(dict.get::<f32>(key)?);
+        }
         "LC" => {
             context.get_mut().graphics_state.stroke_props.line_cap =
                 convert_line_cap(LineCap(dict.get::<Number>(key)?));
@@ -402,11 +426,24 @@ pub(crate) fn handle_gs_single<'a>(
             let dash_phase = iter.next()?.into_number()?.as_f32();
 
             context.get_mut().graphics_state.stroke_props.dash_offset = dash_phase;
-            context.get_mut().graphics_state.stroke_props.dash_array = dash_array
-                .iter::<f32>()
-                // kurbo apparently cannot properly deal with offsets that are exactly 0.
-                .map(|n| if n == 0.0 { 0.01 } else { n })
-                .collect();
+            // PdfCraft patch (61): see `convert_dash_array`.
+            context.get_mut().graphics_state.stroke_props.dash_array =
+                convert_dash_array(dash_array.iter::<f32>());
+        }
+        // PdfCraft patch (35): `OP` sets stroking overprint, and non-stroking overprint too when
+        // the dictionary has no `op` of its own; `OPM` is 0 or 1 (§8.6.7).
+        "OP" => {
+            let overprint = dict.get::<bool>(key)?;
+            let state = &mut context.get_mut().graphics_state;
+            state.overprint_stroke = overprint;
+            if !dict.contains_key("op") {
+                state.overprint_fill = overprint;
+            }
+        }
+        "op" => context.get_mut().graphics_state.overprint_fill = dict.get::<bool>(key)?,
+        "OPM" => {
+            let mode = dict.get::<u8>(key)?;
+            context.get_mut().graphics_state.overprint_mode = u8::from(mode == 1);
         }
         "Type" => {}
         _ => {}

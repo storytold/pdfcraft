@@ -33,6 +33,7 @@ mod log;
 
 mod cache;
 mod cmyk_group;
+mod cmyk_inverse;
 mod context;
 mod convert;
 mod device;

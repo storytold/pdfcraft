@@ -139,7 +139,20 @@ pub struct Shading {
 }
 
 impl Shading {
-    /// PdfCraft patch (38): a shading in a device space is drawn in its default colour space
+    /// PdfCraft patch (35): the shading drawn as `plate`'s plate, through its simulation
+    /// (patch 36).
+    pub(crate) fn for_plate(&mut self, plate: &crate::color::Plate) {
+        self.color_space = self.color_space.plate(plate);
+        let simulation = plate.simulation.as_ref().map(|s| s.digest());
+        self.cache_key = hash128(&(
+            self.cache_key,
+            &plate.ink,
+            simulation,
+            plate.spots_as_process,
+        ));
+    }
+
+    /// PdfCraft patch (#3018): a shading in a device space is drawn in its default color space
     /// from `defaults`, the resources it is painted with (ISO 32000-2 §8.6.5.6), and keyed by
     /// it as an image is.
     pub(crate) fn new(
@@ -387,8 +400,8 @@ impl Triangle {
         self.kurbo_tri.winding(pos) != 0
     }
 
-    /// PdfCraft patch (36): whether the point is inside the triangle or on one of its edges.
-    /// Two triangles of a mesh share an edge; a sample on it belongs to both (their colours
+    /// PdfCraft patch (#3035): whether the point is inside the triangle or on one of its edges.
+    /// Two triangles of a mesh share an edge; a sample on it belongs to both (their colors
     /// agree there), where `contains_point` can give it to neither and leave a seam. A
     /// degenerate triangle covers nothing.
     pub fn covers(&self, pos: Point) -> bool {
@@ -815,13 +828,22 @@ where
 
             // Converting to triangles is lossy and can lead to gaps. To make this a bit better,
             // we slightly inflate the triangles.
-            let inflate = |mut triangle: Triangle| {
+            // Craft patch: the inflated triangle is built anew, so its stored dot products
+            // (and `kurbo_tri`) match its vertices; moving the points alone skewed the
+            // barycentric coordinates by about 5 %.
+            let inflate = |triangle: Triangle| {
                 let mid = triangle.kurbo_tri.centroid();
-                triangle.p0.point = inflate_point(triangle.p0.point, mid);
-                triangle.p1.point = inflate_point(triangle.p1.point, mid);
-                triangle.p2.point = inflate_point(triangle.p2.point, mid);
+                let Triangle {
+                    mut p0,
+                    mut p1,
+                    mut p2,
+                    ..
+                } = triangle;
+                p0.point = inflate_point(p0.point, mid);
+                p1.point = inflate_point(p1.point, mid);
+                p2.point = inflate_point(p2.point, mid);
 
-                triangle
+                Triangle::new(p0, p1, p2)
             };
 
             // PdfCraft patch (33): the second triangle takes the vertices the first copied.

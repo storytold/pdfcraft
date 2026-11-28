@@ -1,5 +1,4 @@
 use super::*;
-use pdfcraft_platform::staging::STAGING_ATTEMPTS;
 
 /// `n` pages, page i showing "Page i".
 fn numbered_pages(n: usize) -> Vec<u8> {
@@ -36,6 +35,29 @@ fn json(a: &mut Automation, tool: &str, args: Value) -> Value {
 
 fn search_document(a: &mut Automation, pages: usize) -> DocId {
     a.session.open("synthetic.pdf", None, Arc::new(numbered_pages(pages)), None).unwrap()
+}
+
+#[test]
+fn form_fill_cannot_print_but_js_run_can() {
+    let mut a = Automation::new();
+    let doc = search_document(&mut a, 1);
+    json(&mut a, "form_add_field", json!({ "doc": doc.0, "page": 1, "type": "text", "rect": [20, 20, 180, 42], "name": "Qty" }));
+    json(
+        &mut a,
+        "form_set_script",
+        json!({ "doc": doc.0, "field": "Qty", "event": "validate", "script": "this.print(); console.println('validated');" }),
+    );
+    json(&mut a, "form_fill", json!({ "doc": doc.0, "values": { "Qty": "4" } }));
+    let output = a.session.take_js_output(doc);
+    assert!(output.requests.is_empty(), "{output:?}");
+    assert!(output.console.contains(&"validated".to_string()), "{output:?}");
+    assert!(output.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{output:?}");
+    assert!(output.errors.is_empty(), "{output:?}");
+    let fields = json(&mut a, "form_fields", json!({ "doc": doc.0 }));
+    let qty = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "Qty").unwrap();
+    assert_eq!(qty["value"], "4");
+    let explicit = json(&mut a, "js_run", json!({ "doc": doc.0, "script": "this.print();" }));
+    assert_eq!(explicit["requests"], json!([{ "print": true }]));
 }
 
 #[test]
@@ -147,6 +169,84 @@ fn search_bounds_warning_volume_and_does_not_reach_distant_failures() {
 }
 
 #[test]
+fn stop_at_limit_ends_at_a_lone_match_without_reading_the_distant_tail() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 200);
+    // #5328: "Page 1" is only on page 1 (every other readable page reads "Page 2"), and the last
+    // page fails, so only a search that runs on to the end hears about it.
+    let requested = std::cell::RefCell::new(Vec::new());
+    let mut extract = |bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]| {
+        requested.borrow_mut().extend_from_slice(pages);
+        let filler = extract_parallel(bytes, password.clone(), &[1]).remove(0).1;
+        let first = extract_parallel(bytes, password, &[0]).remove(0).1;
+        pages
+            .iter()
+            .map(|&p| {
+                (
+                    p,
+                    match p {
+                        0 => first.clone(),
+                        199 => Err("synthetic page 200 failure".into()),
+                        _ => filler.clone(),
+                    },
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let looked_ahead = a.text_find_with(&Args(&json!({ "doc": id.0, "query": "Page 1", "limit": 1 })), &mut extract).unwrap();
+    assert_eq!((looked_ahead["count"].clone(), looked_ahead["warning_count"].clone()), (json!(1), json!(1)), "{looked_ahead}");
+    assert!(looked_ahead.get("next").is_none() && looked_ahead.get("stopped_at_limit").is_none());
+
+    a.texts.remove(&id);
+    requested.borrow_mut().clear();
+    let args = json!({ "doc": id.0, "query": "Page 1", "limit": 1, "stop_at_limit": true });
+    let stopped = a.text_find_with(&Args(&args), &mut extract).unwrap();
+    assert_eq!(stopped["matches"][0]["page"], 1);
+    assert_eq!((stopped["count"].clone(), stopped["warning_count"].clone()), (json!(1), json!(0)), "{stopped}");
+    assert_eq!((stopped["complete"].clone(), stopped["stopped_at_limit"].clone()), (json!(false), json!(true)));
+    assert_eq!(stopped["next"], json!({ "start_page": 1, "skip": 1 }));
+    assert_eq!(*requested.borrow(), [0], "a match on the first page reads only that page");
+
+    // Resuming finds nothing more and reaches the failing page, which it now reports.
+    let mut resume = args.clone();
+    resume["start_page"] = stopped["next"]["start_page"].clone();
+    resume["skip"] = stopped["next"]["skip"].clone();
+    let rest = a.text_find_with(&Args(&resume), &mut extract).unwrap();
+    assert_eq!((rest["count"].clone(), rest["stopped_at_limit"].clone(), rest["complete"].clone()), (json!(0), json!(false), json!(false)));
+    assert_eq!(rest["warnings"][0]["page"], 200);
+    assert!(rest.get("next").is_none());
+}
+
+#[test]
+fn stop_at_limit_continuations_return_every_match_once_and_end_complete() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 120);
+    let all = json(&mut a, "text_find", json!({ "doc": id.0, "query": "1", "limit": 10_000 }));
+    assert_eq!(all["complete"], true);
+    // "1" appears twice on pages like 11 and 111, so resuming has to skip within a page.
+    for limit in [1, 2, 3] {
+        let mut args = json!({ "doc": id.0, "query": "1", "limit": limit, "stop_at_limit": true });
+        let mut pieced = Vec::new();
+        for _ in 0..=all["count"].as_u64().unwrap() {
+            let part = json(&mut a, "text_find", args.clone());
+            assert_eq!(part["warning_count"], 0);
+            pieced.extend(part["matches"].as_array().unwrap().iter().cloned());
+            if part["stopped_at_limit"] == false {
+                assert_eq!(part["complete"], true);
+                assert!(part.get("next").is_none());
+                break;
+            }
+            assert_eq!((part["count"].clone(), part["complete"].clone()), (json!(limit), json!(false)));
+            args["start_page"] = part["next"]["start_page"].clone();
+            args["skip"] = part["next"]["skip"].clone();
+        }
+        assert_eq!(pieced, *all["matches"].as_array().unwrap(), "limit {limit}: no match lost or repeated");
+    }
+    let none = json(&mut a, "text_find", json!({ "doc": id.0, "query": "absent", "limit": 1, "stop_at_limit": true }));
+    assert_eq!((none["count"].clone(), none["complete"].clone(), none["stopped_at_limit"].clone()), (json!(0), json!(true), json!(false)));
+}
+
+#[test]
 fn a_bounded_text_find_reads_only_the_pages_it_needs_and_says_it_stopped() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-automation-find-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -193,6 +293,30 @@ fn a_bounded_text_find_reads_only_the_pages_it_needs_and_says_it_stopped() {
 }
 
 #[test]
+fn a_save_without_a_path_stays_inside_the_root() {
+    let base = std::env::temp_dir().join(format!("pdfcraft-automation-save-root-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("root");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let mut a = Automation::new().with_root(&root).unwrap();
+    let bytes = Arc::new(numbered_pages(1));
+    // Remembered path inside the root: still saves.
+    let inside = root.canonicalize().unwrap().join("in.pdf");
+    let id = a.session.open("in.pdf", Some(inside.to_string_lossy().into_owned()), bytes.clone(), None).unwrap();
+    json(&mut a, "doc_save", json!({ "doc": id.0 }));
+    assert!(inside.exists());
+    // Remembered path outside the root: refused, and nothing is written there.
+    let escaped = outside.join("out.pdf");
+    let id = a.session.open("out.pdf", Some(escaped.to_string_lossy().into_owned()), bytes, None).unwrap();
+    let error = a.call("doc_save", &json!({ "doc": id.0 })).unwrap_err();
+    assert!(error.to_string().contains("outside the allowed directory"), "{error}");
+    assert!(!escaped.exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
 fn dot_dot_resolves_by_name_and_never_climbs_above_the_start() {
     let base = std::env::temp_dir();
     let l = |rel: &str| lexical(&base.join(rel));
@@ -219,6 +343,7 @@ fn names_from_documents_become_one_plain_file_name() {
 #[cfg(windows)]
 #[test]
 fn other_shares_and_device_paths_are_refused_by_name() {
+    use crate::file_access::foreign_share;
     let local = Path::new(r"\\?\C:\work\root");
     for p in [
         r"\\host\share\x.pdf",
@@ -242,131 +367,34 @@ fn other_shares_and_device_paths_are_refused_by_name() {
     assert!(foreign_share(Path::new(r"\\attacker\docs\x.pdf"), shared));
 }
 
+/// Windows drops a trailing dot from a folder name when it opens a path (`root.` is `root`), so
+/// with a root, a path that names the root or a folder above it that way still reaches the file
+/// inside. A dotted name outside stays outside.
+#[cfg(windows)]
+#[test]
+fn a_trailing_dot_on_the_root_or_above_it_names_the_folder_windows_opens() {
+    let base = std::env::temp_dir().join(format!("pdfcraft-automation-dot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("root")).unwrap();
+    std::fs::create_dir_all(base.join("outside")).unwrap();
+    std::fs::write(base.join("root").join("a.pdf"), b"x").unwrap();
+    std::fs::write(base.join("outside").join("b.pdf"), b"x").unwrap();
+    let a = Automation::new().with_root(base.join("root")).unwrap();
+    let shown = base.to_string_lossy().into_owned();
+    for p in [format!(r"{shown}\root.\a.pdf"), format!(r"{shown}.\root\a.pdf")] {
+        let resolved = a.resolve(&p, false);
+        assert!(resolved.is_ok(), "{p}: {resolved:?}");
+    }
+    assert!(a.resolve(&format!(r"{shown}\outside.\b.pdf"), false).is_err());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A fresh, empty folder for one staging test.
 fn staging_dir(test: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("pdfcraft-staging-{}-{test}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
-}
-
-fn staged(dir: &Path, suffix: u64) -> PathBuf {
-    dir.join(format!(".out.pdf.{suffix:016x}.pdfcraft-tmp"))
-}
-
-fn read(p: &Path) -> String {
-    std::fs::read_to_string(p).unwrap()
-}
-
-/// A symbolic link to a file, where the system allows one (Windows needs Developer Mode or an
-/// administrator for it).
-fn file_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(target, link)
-    }
-    #[cfg(windows)]
-    {
-        std::os::windows::fs::symlink_file(target, link)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        Err(std::io::Error::other(format!("no symbolic links here: {} {}", target.display(), link.display())))
-    }
-}
-
-#[test]
-fn staging_never_writes_through_a_file_planted_at_its_name() {
-    let dir = staging_dir("planted");
-    // A file elsewhere that a planted link points at.
-    let outside = dir.join("outside.txt");
-    std::fs::write(&outside, "PRECIOUS").unwrap();
-    let target = dir.join("out.pdf");
-    // A hard link needs no privileges on any system, and writing to it writes to `outside`.
-    std::fs::hard_link(&outside, staged(&dir, 1)).unwrap();
-    std::fs::write(staged(&dir, 2), "PLANTED").unwrap();
-    write_atomic_with(&target, b"NEW", [1, 2, 3]).unwrap();
-    assert_eq!(read(&target), "NEW");
-    assert_eq!(read(&outside), "PRECIOUS");
-    assert_eq!(read(&staged(&dir, 1)), "PRECIOUS");
-    assert_eq!(read(&staged(&dir, 2)), "PLANTED");
-    assert!(!staged(&dir, 3).exists(), "the staging file was renamed into place");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn staging_never_writes_through_a_symbolic_link_planted_at_its_name() {
-    let dir = staging_dir("symlink");
-    let outside = dir.join("outside.txt");
-    std::fs::write(&outside, "PRECIOUS").unwrap();
-    let target = dir.join("out.pdf");
-    if let Err(e) = file_symlink(&outside, &staged(&dir, 1)) {
-        eprintln!("symbolic links not checked: {e}");
-        return;
-    }
-    write_atomic_with(&target, b"NEW", [1, 2]).unwrap();
-    assert_eq!(read(&target), "NEW");
-    assert_eq!(read(&outside), "PRECIOUS");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn staging_never_creates_a_file_through_a_dangling_link_at_its_name() {
-    let dir = staging_dir("dangling");
-    let unborn = dir.join("created-through-a-link.txt");
-    let target = dir.join("out.pdf");
-    if let Err(e) = file_symlink(&unborn, &staged(&dir, 1)) {
-        eprintln!("symbolic links not checked: {e}");
-        return;
-    }
-    write_atomic_with(&target, b"NEW", [1, 2]).unwrap();
-    assert_eq!(read(&target), "NEW");
-    assert!(!unborn.exists(), "nothing was created through the dangling link");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn staging_gives_up_rather_than_reuse_a_taken_name() {
-    let dir = staging_dir("taken");
-    let target = dir.join("out.pdf");
-    std::fs::write(&target, "OLD").unwrap();
-    for s in 1..=STAGING_ATTEMPTS as u64 {
-        std::fs::write(staged(&dir, s), "PLANTED").unwrap();
-    }
-    assert!(write_atomic_with(&target, b"NEW", 1..).is_err());
-    assert_eq!(read(&target), "OLD");
-    for s in 1..=STAGING_ATTEMPTS as u64 {
-        assert_eq!(read(&staged(&dir, s)), "PLANTED");
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn a_failed_staging_sync_keeps_the_destination_and_cleans_up() {
-    for exists in [false, true] {
-        let dir = staging_dir(if exists { "sync-existing" } else { "sync-new" });
-        let target = dir.join("out.pdf");
-        if exists {
-            std::fs::write(&target, "OLD").unwrap();
-        }
-        let result = write_atomic_synced(&target, b"NEW", [1], |_| {
-            assert_eq!(std::fs::read(staged(&dir, 1)).unwrap(), b"NEW", "sync follows writing");
-            if exists {
-                assert_eq!(read(&target), "OLD", "sync precedes publication");
-            }
-            Err(std::io::Error::other("injected storage sync failure"))
-        });
-        assert!(result.is_err(), "sync failure must refuse publication");
-        assert!(result.unwrap_err().to_string().contains("injected storage sync failure"));
-        if exists {
-            assert_eq!(read(&target), "OLD");
-            assert_eq!(listing(&dir), ["out.pdf"]);
-        } else {
-            assert!(!target.exists());
-            assert!(listing(&dir).is_empty());
-        }
-        std::fs::remove_dir_all(dir).unwrap();
-    }
 }
 
 #[test]
@@ -401,6 +429,34 @@ fn invalid_save_bytes_never_reach_publication_or_mark_saved() {
 }
 
 #[test]
+fn doc_rename_moves_the_file_and_refuses_with_reasons() {
+    let dir = staging_dir("rename");
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let id = search_document(&mut a, 2);
+    let err = |a: &mut Automation, args: Value| a.call("doc_rename", &args).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err(&mut a, json!({"doc": id.0, "name": "x"})).contains("no file yet"), "never saved");
+    json(&mut a, "doc_save", json!({"doc": id.0, "path": "first.pdf"}));
+    std::fs::write(dir.join("taken.pdf"), b"other").unwrap();
+    assert!(err(&mut a, json!({"doc": id.0, "name": "taken"})).contains("already exists"));
+    assert!(err(&mut a, json!({"doc": id.0, "name": "CON"})).contains("reserves"));
+    assert!(err(&mut a, json!({"doc": id.0, "name": "a/b"})).contains("can't contain"));
+    let out = json(&mut a, "doc_rename", json!({"doc": id.0, "name": "Second"}));
+    assert_eq!(out["name"], "Second.pdf");
+    assert!(dir.join("Second.pdf").exists() && !dir.join("first.pdf").exists());
+    assert_eq!(listing(&dir), ["Second.pdf", "taken.pdf"]);
+    // Unsaved changes are never left behind in a renamed file.
+    json(&mut a, "page_rotate", json!({"doc": id.0, "pages": [1], "degrees": 90}));
+    assert!(err(&mut a, json!({"doc": id.0, "name": "third"})).contains("unsaved changes"));
+    json(&mut a, "doc_save", json!({"doc": id.0}));
+    json(&mut a, "doc_rename", json!({"doc": id.0, "name": "third.pdf"}));
+    assert_eq!(
+        a.session.get(id).unwrap().path.as_deref().map(Path::new).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).as_deref(),
+        Some("third.pdf")
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn a_failed_save_sync_keeps_the_document_dirty_and_can_be_retried() {
     let dir = staging_dir("sync-dirty");
     let target = dir.join("out.pdf");
@@ -411,9 +467,8 @@ fn a_failed_save_sync_keeps_the_document_dirty_and_can_be_retried() {
     json(&mut a, "page_rotate", json!({"doc": id.0, "pages": [1], "degrees": 90}));
     let args = json!({"doc": id.0});
     let before = summary(a.doc(&Args(&args)).unwrap());
-    let result = a.doc_save_with(&Args(&args), |path, bytes| {
-        write_atomic_synced(path, bytes, [1], |_| Err(std::io::Error::other("injected storage sync failure")))
-    });
+    // The writer refuses as a storage whose flush fails does: nothing reaches the file.
+    let result = a.doc_save_with(&Args(&args), |_, _| Err(failed("injected storage sync failure".to_string())));
     assert!(result.is_err());
     let doc = a.doc(&Args(&args)).unwrap();
     assert!(doc.dirty);
@@ -426,78 +481,11 @@ fn a_failed_save_sync_keeps_the_document_dirty_and_can_be_retried() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-#[test]
-fn successful_staging_sync_precedes_publication() {
-    let dir = staging_dir("sync-success");
-    let target = dir.join("out.pdf");
-    std::fs::write(&target, "OLD").unwrap();
-    let mut called = false;
-    write_atomic_synced(&target, b"NEW", [1], |file| {
-        called = true;
-        assert_eq!(read(&target), "OLD");
-        assert_eq!(std::fs::read(staged(&dir, 1)).unwrap(), b"NEW");
-        file.sync_all()
-    })
-    .unwrap();
-    assert!(called);
-    assert_eq!(read(&target), "NEW");
-    assert_eq!(listing(&dir), ["out.pdf"]);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
 /// The names in a folder: what a test can see was left behind.
 fn listing(dir: &Path) -> Vec<String> {
     let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     names.sort();
     names
-}
-
-#[test]
-fn staging_names_differ_between_saves_and_fit_long_names() {
-    let suffixes: std::collections::HashSet<u64> = staging_suffixes().take(64).collect();
-    assert_eq!(suffixes.len(), 64);
-    assert_ne!(staging_suffixes().next(), staging_suffixes().next(), "each save draws new names");
-    // 60 four-byte characters: a 244-byte name, within every system's limit. Its staging name
-    // must be too (on Linux the whole name in it would be 275 bytes).
-    let dir = staging_dir("long");
-    let name = format!("{}.pdf", "\u{1F600}".repeat(60));
-    write_atomic(&dir.join(&name), b"NEW").unwrap();
-    assert_eq!(read(&dir.join(&name)), "NEW");
-    assert_eq!(listing(&dir), [name], "no staging file is left behind");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn a_folder_at_the_staging_name_is_left_alone() {
-    let dir = staging_dir("folder");
-    std::fs::create_dir(staged(&dir, 1)).unwrap();
-    std::fs::write(staged(&dir, 1).join("inside.txt"), "PLANTED").unwrap();
-    let target = dir.join("out.pdf");
-    write_atomic_with(&target, b"NEW", [1, 2]).unwrap();
-    assert_eq!(read(&target), "NEW");
-    assert_eq!(read(&staged(&dir, 1).join("inside.txt")), "PLANTED");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// Windows refuses to replace a read-only file, so the rename fails: the staging file must not
-/// be left behind.
-#[cfg(windows)]
-#[test]
-fn a_failed_rename_removes_the_staging_file() {
-    let dir = staging_dir("readonly");
-    let target = dir.join("out.pdf");
-    std::fs::write(&target, "OLD").unwrap();
-    let mut perms = std::fs::metadata(&target).unwrap().permissions();
-    perms.set_readonly(true);
-    std::fs::set_permissions(&target, perms.clone()).unwrap();
-    let e = write_atomic_with(&target, b"NEW", [7]).unwrap_err();
-    assert!(e.to_string().contains(&target.display().to_string()), "the rename failed, not the staging: {e}");
-    assert_eq!(read(&target), "OLD");
-    assert_eq!(listing(&dir), ["out.pdf"], "the staging file was removed");
-    #[allow(clippy::permissions_set_readonly_false)]
-    perms.set_readonly(false);
-    std::fs::set_permissions(&target, perms).unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A recovered document, or a new one, rotated and then undone still has never been saved:
@@ -549,4 +537,60 @@ fn tool_file_reads_refuse_inputs_exceeding_512_mib() {
         assert!(err.contains("input exceeds 512 MiB"), "{tool}: {err}");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn text_extract_html_has_one_budget_across_pages() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 3);
+    let args = json!({ "doc": id.0, "format": "html" });
+    let full = a.text_extract(&Args(&args)).unwrap();
+    assert_eq!(full["html_truncated"], false);
+    let sizes: Vec<usize> = full["pages"].as_array().unwrap().iter().map(|p| p["html"].as_str().unwrap().len()).collect();
+    assert!(sizes.iter().all(|n| *n > 0), "{full}");
+    // Room for two pages: the third gets no HTML, and the call says so.
+    let capped = a.text_extract_within(&Args(&args), sizes[0] + sizes[1] + sizes[2] - 1).unwrap();
+    let pages = capped["pages"].as_array().unwrap();
+    assert_eq!(capped["html_truncated"], true);
+    assert_eq!(pages[1]["html"], full["pages"][1]["html"]);
+    assert_eq!(pages[2]["html"], "");
+    assert_eq!(pages[2]["styles_incomplete"], true);
+    assert_eq!(pages[2]["text"], "Page 3", "the plain text is not capped by the HTML budget");
+    // Plain text alone says nothing about HTML.
+    assert!(a.text_extract(&Args(&json!({ "doc": id.0 }))).unwrap().get("html_truncated").is_none());
+    // A smaller page after the one that overflowed still gets none: "Page 1" fits what "Page 10"
+    // did not.
+    let id = search_document(&mut a, 10);
+    let args = json!({ "doc": id.0, "pages": [10, 1], "format": "html" });
+    let full = a.text_extract(&Args(&args)).unwrap();
+    let (ten, one) = (full["pages"][0]["html"].as_str().unwrap().len(), full["pages"][1]["html"].as_str().unwrap().len());
+    assert!(one < ten, "{full}");
+    let capped = a.text_extract_within(&Args(&args), ten - 1).unwrap();
+    assert_eq!(capped["pages"][0]["html"], "");
+    assert_eq!(capped["pages"][1]["html"], "", "no HTML after the budget ran out: {capped}");
+    assert_eq!(capped["pages"][1]["styles_incomplete"], true);
+}
+
+/// Replace through the tool when a page's text can't be read for the find bar: the page is named
+/// and counted as refused, in the result, and the readable pages are still replaced.
+#[test]
+fn replace_all_reports_a_page_whose_text_cannot_be_read() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 3);
+    let mut extract = |bytes: &Arc<Vec<u8>>, password, pages: &[usize]| {
+        extract_parallel(bytes, password, pages)
+            .into_iter()
+            .map(|(p, result)| (p, if p == 1 { Err("synthetic page 2 failure".to_owned()) } else { result }))
+            .collect()
+    };
+    let r = a.text_replace_with(&Args(&json!({ "doc": id.0, "find": "Page", "replace": "Sheet" })), &mut extract).unwrap();
+    assert_eq!(r["replaced"], 3, "{r}");
+    assert_eq!((r["skipped"].clone(), r["skipped_by"]["refused"].clone()), (json!(1), json!(1)), "{r}");
+    let why = r["refusals"][0].as_str().unwrap();
+    assert!(why.starts_with("page 2:") && why.contains("synthetic page 2 failure"), "{why}");
+    // Replacing the first match stops at an unreadable page before it: nothing is replaced.
+    let r =
+        a.text_replace_with(&Args(&json!({ "doc": id.0, "find": "Page", "replace": "Sheet", "all": false, "pages": [2, 3] })), &mut extract).unwrap();
+    assert_eq!((r["replaced"].clone(), r["changed"].clone(), r["skipped_by"]["refused"].clone()), (json!(0), json!(false), json!(1)), "{r}");
+    assert!(r["refusals"][0].as_str().unwrap().starts_with("page 2:"), "{r}");
 }

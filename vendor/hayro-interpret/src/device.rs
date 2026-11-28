@@ -132,6 +132,14 @@ pub trait Device<'a> {
     /// other than `DeviceCMYK` is about to be drawn. A device drawing an enclosing group in CMYK
     /// can no longer draw that group right, since this one blends in its own space.
     fn group_blends_outside_device_cmyk(&mut self) {}
+    /// Craft patch (flatten): the overprint parameters for the paints that follow, until the
+    /// next call: `op` (`fill`, for fills, glyph fills and images), `OP` (`stroke`) and `OPM`
+    /// (`mode`, 0 or 1; ISO 32000-2 §8.6.7). Called where `set_blend_mode` is called for a
+    /// paint.
+    fn set_overprint(&mut self, _fill: bool, _stroke: bool, _mode: u8) {}
+    /// Craft patch (flatten): the transparency group just pushed is isolated (`/I true`), until
+    /// the matching `pop_transparency_group`.
+    fn set_isolated(&mut self) {}
 }
 
 /// A device that discards all drawing operations.
