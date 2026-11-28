@@ -15,6 +15,8 @@
     <string>zh-Hans</string>
     <string>zh-Hant</string>
     <string>cs</string>
+    <!-- Include the base language so pt-PT can use the Brazilian catalog in AppKit. -->
+    <string>pt</string>
     <string>pt-BR</string>
     <string>de</string>
     <string>es</string>
