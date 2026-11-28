@@ -193,7 +193,10 @@ pub(crate) fn check(args: &[String]) -> Result<(), CliError> {
     if let Some(out) = flag(args, "--json") {
         std::fs::write(out, serde_json::to_string_pretty(&results).unwrap_or_default()).map_err(|e| e.to_string())?;
     }
-    Ok(())
+    // Any file that isn't `ok` fails the run, after the summary and report are written, so a
+    // script can gate on the exit status (#8533).
+    let failed = files.len() - counts.get("ok").copied().unwrap_or(0);
+    if failed == 0 { Ok(()) } else { Err(format!("check: {failed} of {} files failed", files.len()).into()) }
 }
 
 fn run_child(exe: &Path, file: &Path, dpi: &str, timeout: Duration) -> serde_json::Value {

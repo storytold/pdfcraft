@@ -144,3 +144,21 @@ fn a_file_name_cannot_forge_a_stderr_record() {
     assert_eq!(records.len(), 1, "{stderr}");
     assert!(records[0].contains("bad\\n[9] ok forged.pdf"), "{stderr}");
 }
+
+/// #8533: a file that doesn't open fails the run, so a script can gate on the exit status. The
+/// summary and the JSON report still cover every file, the good ones included.
+#[test]
+fn a_file_that_does_not_open_fails_the_run() {
+    let dir = Workdir::new("failing");
+    std::fs::write(dir.0.join("input/bad.pdf"), b"not a pdf").unwrap();
+    let report = dir.0.join("report.json");
+    let out =
+        Command::new(BIN).arg("check").arg(dir.0.join("input")).args(["--dpi", "36", "--timeout", "5", "--json"]).arg(&report).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("1 of 3 files failed"), "{stderr}");
+    let results: Vec<serde_json::Value> = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    let statuses: Vec<&str> = results.iter().map(|r| r["status"].as_str().unwrap().split(':').next().unwrap()).collect();
+    assert_eq!(statuses.iter().filter(|s| **s == "ok").count(), 2, "{results:?}");
+    assert!(statuses.contains(&"open-error"), "{results:?}");
+}
