@@ -257,8 +257,10 @@ pub(crate) fn ungroup_ops(
     // A nested form, Type 3 font or tiling pattern without resources of its own looks its names
     // up in the form's (the renderer chains them to whatever draws it). Drawn from the page, it
     // would find the page's, which differ wherever a name was renamed (every form resource that
-    // isn't already the page's, the nested item's own entry included).
-    if !renames.is_empty() && ops.iter().any(|op| inherits_resources(doc, &form_res, op, budget)) {
+    // isn't already the page's). Names that weren't renamed find the same resource either way.
+    let mut is_renamed = |cat: &'static [u8], name: &[u8]| renamed(cat, name).is_some();
+    let mut reads = 0usize;
+    if !renames.is_empty() && ops.iter().any(|op| inherited_names(doc, &form_res, op, &mut is_renamed, budget, &mut reads, 0)) {
         return Err(Refusal { renaming: true, ..refuse("it draws a nested form, Type 3 font or pattern that uses its resources") });
     }
     let mut depth = 0usize;
@@ -552,45 +554,137 @@ pub(crate) fn resource_operand(op: &Op) -> Result<Option<(&'static [u8], usize)>
     }
 }
 
-/// Whether `op` draws a Form XObject (`Do`), Type 3 font (`Tf`) or tiling pattern (`scn`/`SCN`) from
-/// `resources` that has no `/Resources` of its own, and so inherits the ones it is drawn with. A
-/// form or pattern whose content names no resource inherits nothing (a filled shape, say), so it
-/// needs no renaming; its content is read within `budget`. A Type 3 font's glyphs are not read,
-/// and always count.
-fn inherits_resources(doc: &Document, resources: &Dict, op: &Op, budget: &mut DecodeBudget) -> bool {
-    let Ok(Some((cat @ (b"XObject" | b"Font" | b"Pattern"), i))) = resource_operand(op) else { return false };
+/// The names a nested item that `op` draws from `resources` looks up there: a Form XObject
+/// (`Do`), Type 3 font (`Tf`), tiling pattern (`scn`/`SCN`) or a graphics state's soft-mask
+/// group form or Type 3 `/Font` (`gs`) without `/Resources` of its own, which the renderer gives the resources it
+/// is drawn with. Each name its content selects
+/// (a form's or pattern's content, each glyph of a Type 3 font, and those of nested items of
+/// theirs that inherit the same resources) is passed to `visit`, which returns `true` to stop.
+/// Returns `true` when `visit` did, or when content can't be read within `budget`, is nested
+/// past [`MAX_NESTING`] or past [`MAX_NESTED_READS`] streams in all (`reads`): a caller that
+/// must know every name refuses rather than guesses.
+pub(crate) fn inherited_names(
+    doc: &Document,
+    resources: &Dict,
+    op: &Op,
+    visit: &mut dyn FnMut(&'static [u8], &[u8]) -> bool,
+    budget: &mut DecodeBudget,
+    reads: &mut usize,
+    depth: usize,
+) -> bool {
+    let Ok(Some((cat @ (b"XObject" | b"Font" | b"Pattern" | b"ExtGState"), i))) = resource_operand(op) else { return false };
     let Some(Object::Name(name)) = op.operands.get(i) else { return false };
     let Some(entry) = resources.get(cat).map(|d| doc.resolve(d)).and_then(|d| d.as_dict().and_then(|d| d.get(name).cloned())) else {
         return false;
     };
     let entry = doc.resolve(&entry);
-    let (dict, stream) = match &*entry {
+    if cat != b"ExtGState" {
+        return inherited_names_of(doc, resources, cat, &entry, visit, budget, reads, depth);
+    }
+    // A graphics state's soft mask draws its group form (ISO 32000-2 §11.6.5.2), and its `/Font
+    // [font size]` selects a font as `Tf` does (§8.4.5): each uses the resources of the content
+    // that selects the state when it has none of its own.
+    let Some(gs) = entry.as_dict() else { return false };
+    let mask = gs.get(b"SMask").map(|m| doc.resolve(m));
+    if let Some(group) = mask.as_deref().and_then(Object::as_dict).and_then(|m| m.get(b"G")).map(|g| doc.resolve(g))
+        && inherited_names_of(doc, resources, b"XObject", &group, visit, budget, reads, depth)
+    {
+        return true;
+    }
+    let font = gs.get(b"Font").map(|f| doc.resolve(f));
+    font.as_deref()
+        .and_then(Object::as_array)
+        .and_then(|f| f.first())
+        .map(|f| doc.resolve(f))
+        .is_some_and(|font| inherited_names_of(doc, resources, b"Font", &font, visit, budget, reads, depth))
+}
+
+/// [`inherited_names`] for the item `entry` that a `cat` operator draws: a Form XObject, Type 3
+/// font or tiling pattern.
+#[allow(clippy::too_many_arguments)]
+fn inherited_names_of(
+    doc: &Document,
+    resources: &Dict,
+    cat: &'static [u8],
+    entry: &Object,
+    visit: &mut dyn FnMut(&'static [u8], &[u8]) -> bool,
+    budget: &mut DecodeBudget,
+    reads: &mut usize,
+    depth: usize,
+) -> bool {
+    let (dict, stream) = match entry {
         Object::Stream(s) => (&s.dict, Some(s)),
         Object::Dict(d) => (d, None),
         _ => return false,
     };
     let drawn = match cat {
-        b"XObject" => is_name(doc, dict, b"Subtype", b"Form"),
+        b"XObject" => stream.is_some() && is_name(doc, dict, b"Subtype", b"Form"),
         b"Font" => is_name(doc, dict, b"Subtype", b"Type3"),
         // A shading pattern has no content of its own.
         _ => int_of(doc, dict, b"PatternType") == Some(1),
     };
-    drawn && dict.get(b"Resources").is_none() && (cat == b"Font" || stream.is_none_or(|s| names_resources(doc, s, budget)))
-}
-
-/// Whether content stream `s` names a resource (or can't be read within `budget` to tell): device
-/// colour spaces are not resources; an inline image counts, as its colour space may be one.
-fn names_resources(doc: &Document, s: &pdfcraft_cos::Stream, budget: &mut DecodeBudget) -> bool {
-    let Ok(data) = budget.decode_strict(doc, s) else { return true };
-    let parsed = parse(&data);
-    parsed.skipped > 0
-        || parsed.ops.iter().any(|op| match resource_operand(op) {
-            Ok(None) => op.inline.is_some(),
-            Ok(Some((b"ColorSpace", i))) => {
-                !matches!(op.operands.get(i), Some(Object::Name(n)) if [&b"DeviceGray"[..], b"DeviceRGB", b"DeviceCMYK", b"Pattern"].contains(&n.as_slice()))
+    // Only a dictionary is resources of its own: a renderer draws an item whose `/Resources` is
+    // `null` (or names nothing) with the resources it is drawn with, as `blends_inside` reads it.
+    let own = dict.get(b"Resources").map(|r| doc.resolve(r)).is_some_and(|r| r.as_dict().is_some());
+    if !drawn || own {
+        return false;
+    }
+    if depth >= MAX_NESTING {
+        return true;
+    }
+    // A Type 3 font draws its glyph procedures (ISO 32000-2 §9.6.4); an entry that isn't a
+    // stream draws nothing.
+    let streams: Vec<pdfcraft_cos::Stream> = if cat == b"Font" {
+        let Some(procs) = dict.get(b"CharProcs").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) else { return false };
+        procs
+            .iter()
+            .filter_map(|(_, g)| match &*doc.resolve(g) {
+                Object::Stream(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect()
+    } else {
+        stream.into_iter().cloned().collect()
+    };
+    for s in &streams {
+        *reads = reads.saturating_add(1);
+        if *reads > MAX_NESTED_READS {
+            return true;
+        }
+        let Ok(data) = budget.decode_strict(doc, s) else { return true };
+        let parsed = parse(&data);
+        if parsed.skipped > 0 {
+            return true;
+        }
+        for op in &parsed.ops {
+            match resource_operand(op) {
+                Err(Unreadable) => return true,
+                // An inline image's colour space may be a resource.
+                Ok(None) => {
+                    if let Some((d, _)) = &op.inline {
+                        for key in [&b"CS"[..], b"ColorSpace"] {
+                            if let Some(Object::Name(n)) = d.get(key)
+                                && visit(b"ColorSpace", n)
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                Ok(Some((cat, i))) => {
+                    if let Some(Object::Name(n)) = op.operands.get(i)
+                        && visit(cat, n)
+                    {
+                        return true;
+                    }
+                    if inherited_names(doc, resources, op, visit, budget, reads, depth + 1) {
+                        return true;
+                    }
+                }
             }
-            _ => true,
-        })
+        }
+    }
+    false
 }
 
 /// Whether `ops` (drawn with `resources`) blend with something other than Normal, which counts

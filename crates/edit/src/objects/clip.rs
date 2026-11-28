@@ -23,7 +23,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 use super::{EditableObject, MAX_COORDINATE, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, checked_streams, editable_objects, valid_rect};
 use crate::EditError;
-use crate::ungroup::{CATEGORIES, DEFAULT_SPACES, MAX_FORM_BYTES, Ungrouped, page_blend_space, resource_operand, ungroup_ops};
+use crate::ungroup::{CATEGORIES, DEFAULT_SPACES, MAX_FORM_BYTES, Ungrouped, inherited_names, page_blend_space, resource_operand, ungroup_ops};
 
 /// How deep the copied graphics state may nest (`q`), as the page's own may.
 const MAX_NESTING: usize = 1024;
@@ -190,23 +190,46 @@ fn replay(ops: &[Op], keep: &BTreeSet<usize>, shows: &HashMap<usize, (Matrix, i6
     Ok(out)
 }
 
-/// The entries of the page's resources `res` that `ops` name, and the default colour spaces,
-/// which remap the device colours they paint (ISO 32000-2 §8.6.5.6).
+/// The entries of the page's resources `res` that `ops` name, those that the forms, Type 3
+/// fonts, tiling patterns and soft masks they draw without resources of their own look up in the
+/// page's ([`inherited_names`]), and the default colour spaces, which remap the device colours
+/// they paint (ISO 32000-2 §8.6.5.6). When what those items name can't all be read, every entry.
 fn used_resources(doc: &Document, res: &Dict, ops: &[Op]) -> Dict {
-    let mut used: BTreeMap<&[u8], BTreeSet<&[u8]>> = BTreeMap::new();
+    let mut used: BTreeMap<&[u8], BTreeSet<Vec<u8>>> = BTreeMap::new();
+    let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_FORM_BYTES, 0);
+    let mut reads = 0usize;
+    // Whether what an inheriting item names couldn't all be read: the copy then takes every
+    // resource of the page, so none it looks up is left behind.
+    let mut unread = false;
     for op in ops {
         if let Ok(Some((cat, i))) = resource_operand(op)
             && let Some(Object::Name(name)) = op.operands.get(i)
         {
-            used.entry(cat).or_default().insert(name.as_slice());
+            used.entry(cat).or_default().insert(name.clone());
         }
+        unread |= !unread
+            && inherited_names(
+                doc,
+                res,
+                op,
+                &mut |cat, name| {
+                    used.entry(cat).or_default().insert(name.to_vec());
+                    false
+                },
+                &mut budget,
+                &mut reads,
+                0,
+            );
     }
     let mut out = Dict::new();
     for cat in CATEGORIES {
         let Some(all) = res.get(cat).map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()) else { continue };
         let mut mine = Dict::new();
         for (key, value) in all.iter() {
-            if used.get(cat).is_some_and(|u| u.contains(key.as_slice())) || (cat == b"ColorSpace" && DEFAULT_SPACES.contains(&key.as_slice())) {
+            if unread
+                || used.get(cat).is_some_and(|u| u.contains(key.as_slice()))
+                || (cat == b"ColorSpace" && DEFAULT_SPACES.contains(&key.as_slice()))
+            {
                 mine.set(key.clone(), value.clone());
             }
         }
