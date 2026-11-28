@@ -62,7 +62,7 @@ pub(crate) struct Copier<'a> {
     /// only kids a copied field keeps (see `fields_on`). `None` keeps every kid. Shared, so the
     /// copiers made for a repeated page or an action don't each copy it.
     pub(super) kept: Option<Rc<HashSet<ObjRef>>>,
-    /// Unrenamed template widgets share the original fields targeted by ResetForm.
+    /// Unrenamed template widgets share the original fields targeted by ResetForm and SubmitForm.
     pub(super) keep_reset_targets: bool,
 }
 
@@ -166,7 +166,7 @@ impl<'a> Copier<'a> {
                 let entries = listed.as_array().cloned().unwrap_or_else(|| vec![v.clone()]);
                 let entries: Vec<Object> = entries.into_iter().filter(|e| e.as_ref().is_none_or(|r| kept.contains(&r))).collect();
                 let entries = Object::Array(entries);
-                let entries = if self.keep_reset_targets && d.name(b"S") == Some(b"ResetForm") && k.as_slice() == b"Fields" {
+                let entries = if self.keep_reset_targets && matches!(d.name(b"S"), Some(b"ResetForm" | b"SubmitForm")) && k.as_slice() == b"Fields" {
                     entries
                 } else {
                     self.copy_value(dst, &entries, None)?
