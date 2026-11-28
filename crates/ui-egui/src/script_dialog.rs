@@ -506,6 +506,8 @@ mod review13_ui_tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    const CREATED_AT: i64 = 1_700_000_000;
+
     /// Create a native app over `files` with a visible synthetic blank document and no renderer.
     fn app_over(ctx: &egui::Context, files: Arc<ScriptedFiles>) -> (PdfCraftApp, DocId) {
         let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files).build();
@@ -513,6 +515,7 @@ mod review13_ui_tests {
         let clipboard = Clipboard::new(EventClipboard::new(|| 0, |_| Ok(0)));
         let services = crate::AppServices::new(Wake::none(), clipboard, None, None, intake, FileWatch::new(Wake::none()).inline());
         let mut app = PdfCraftApp::with_host(Arc::new(host), services);
+        app.session = std::mem::take(&mut app.session).with_clock(|| CREATED_AT);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         let bytes = app.session.create_blank(200.0, 300.0, 2).unwrap();
         app.open_bytes(ctx, "synthetic.pdf", None, bytes.to_vec()).unwrap();
@@ -554,7 +557,7 @@ mod review13_ui_tests {
             }
         }
     }
-    /// Comparison completion preserves globals and sends Save As/Print to its source document.
+    /// Script completion keeps globals in the source realm. Its Save As and Print requests target the source document.
     #[test]
     fn non_active_comparison_document_completes_native_script() {
         let ctx = &egui::Context::default();
@@ -572,6 +575,9 @@ mod review13_ui_tests {
             app.run_compare(&egui::Context::default());
             assert!(app.compare.as_ref().unwrap().side_by_side);
             app.printer_source = Some(std::sync::Arc::new(Vec::new));
+            let source_before = app.session.get(old).unwrap().saved_bytes();
+            // Make Save As write a different /ModDate even when the test finishes within one second.
+            app.session = std::mem::take(&mut app.session).with_clock(|| CREATED_AT + 1);
             app.start_ui_script(old, &format!("var comparisonKept=42;{request}"), None, None);
             let ctx = egui::Context::default();
             let deadline = Instant::now() + Duration::from_secs(12);
@@ -580,16 +586,22 @@ mod review13_ui_tests {
                 std::thread::sleep(Duration::from_millis(5));
             }
             assert!(app.script_pending.is_none());
-            // The Save As the script asked for takes the queued answer on this pass.
+            assert_eq!(
+                app.session.run_javascript(old, "comparisonKept", None).unwrap().result.as_deref(),
+                Some("42"),
+                "script completion for {request:?} keeps the source's global"
+            );
+            // The Save As answer triggers a full rewrite, which may reset the document's script realm.
             app.save_flow_pass(&ctx);
-            assert_eq!(app.session.run_javascript(old, "comparisonKept", None).unwrap().result.as_deref(), Some("42"));
             assert_eq!(app.session.save_bytes(new).unwrap(), new_before);
             assert!(app.session.get(new).unwrap().path.is_none());
             if request.contains("SaveAs") {
                 assert_eq!(app.active_ids().unwrap().1, new, "Save As need not change the comparison tab");
                 assert_eq!(app.session.get(old).unwrap().path.as_deref(), saved.to_str());
+                let written = files.file(&saved).unwrap();
+                assert!(!written.starts_with(source_before.as_slice()), "Save As replaces the original byte prefix");
                 let mut reopened = pdfcraft_engine::Session::new();
-                let id = reopened.open("saved.pdf", None, std::sync::Arc::new(files.file(&saved).unwrap()), None).unwrap();
+                let id = reopened.open("saved.pdf", None, std::sync::Arc::new(written), None).unwrap();
                 assert_eq!(reopened.get(id).unwrap().info.pages.len(), 2, "the saved file is the two-page source, not the one-page active file");
             } else if request == "print();" {
                 assert_eq!(app.active_ids().unwrap().1, old, "Print must retain its source as the active document");
