@@ -201,6 +201,9 @@ struct FieldHost<'a> {
     /// The caret as the editor last had it, which the layout keeps in view.
     caret: usize,
     laid: Option<FieldLayout>,
+    /// The keystroke this replace produced, for XFA change scripts; skipped once the field has none.
+    keystroke: &'a mut Option<pdfcraft_engine::xfa::Keystroke>,
+    no_keystroke_scripts: bool,
 }
 
 impl FieldHost<'_> {
@@ -243,6 +246,9 @@ impl TextEditorHost for FieldHost<'_> {
         }
         // The editor puts the caret after the chars kept, not after the whole `text` it gave.
         let kept = after.chars().count().saturating_sub(len - range.len()).min(text.chars().count());
+        if !self.no_keystroke_scripts {
+            *self.keystroke = Some(super::keystroke_from(&before, &after, Some((range.start, range.end)), false));
+        }
         *self.text = after;
         self.laid = None;
         Some(kept)
@@ -379,8 +385,21 @@ pub(crate) fn show(
     if types {
         let room = (f.kind == FormFieldKind::Text && f.has(field_flags::DO_NOT_SCROLL)).then(|| doc.field_text_box(&focus.name, widget)).flatten();
         let focus = session.forms.focus.as_mut()?;
-        let Focus { text, selection, .. } = focus;
-        let mut host = FieldHost { ctx: ui.ctx().clone(), view: body.view, field: f, widget: w, geo, room, text, caret: selection.caret, laid: None };
+        let no_keystroke_scripts = focus.no_keystroke_scripts;
+        let Focus { text, selection, keystroke, .. } = focus;
+        let mut host = FieldHost {
+            ctx: ui.ctx().clone(),
+            view: body.view,
+            field: f,
+            widget: w,
+            geo,
+            room,
+            text,
+            caret: selection.caret,
+            laid: None,
+            keystroke,
+            no_keystroke_scripts,
+        };
         // PLAN: paints through an egui `Painter` with black text, as pdf-forms-w7's `paint_page` does; both move to the `Draw` tokens and the field's `/DA` colour together.
         let painter = ui.painter_at(rect.intersect(body.rect));
         painter.rect_filled(rect, CornerRadius::ZERO, FIELD_FILL);

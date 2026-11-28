@@ -1002,6 +1002,13 @@ impl<'a, 'b> Runner<'a, 'b> {
     /// Run one event script against the form as it is now. `None`: it was skipped (the
     /// event's budget is spent).
     fn run(&mut self, ev: &ScriptEvent, new_text: &str) -> Result<Option<pdfcraft_js::xfa::XfaOutcome>, String> {
+        let event = XfaEvent { activity: ev.activity.clone(), target: ev.som.clone(), new_text: new_text.to_string(), ..XfaEvent::default() };
+        self.run_event(ev, event)
+    }
+
+    /// [`Runner::run`] with the whole event the script sees: a keystroke's `change` and selection
+    /// too.
+    fn run_event(&mut self, ev: &ScriptEvent, event: XfaEvent) -> Result<Option<pdfcraft_js::xfa::XfaOutcome>, String> {
         if self.runs >= MAX_SCRIPTS_PER_EVENT || self.clock.spent() || self.run.ran_away {
             self.skipped += 1;
             return Ok(None);
@@ -1015,7 +1022,6 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.runs += 1;
         #[cfg(test)]
         self.check_live();
-        let event = XfaEvent { activity: ev.activity.clone(), target: ev.som.clone(), new_text: new_text.to_string(), prev_text: String::new() };
         let tpl = self.tpl;
         let root = match &self.js_root {
             Some(r) => Arc::clone(r),
@@ -1520,6 +1526,69 @@ pub(crate) fn typed_date(
         }
     };
     pdfcraft_xfa::typed_date(tpl, &som, text).map(pdfcraft_forms::FieldValue::Text)
+}
+
+/// A keystroke in a text field: `change` typed or pasted (empty for a deletion) in place of the
+/// characters `sel_start..sel_end` of `prev`, the field's text before it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Keystroke {
+    pub prev: String,
+    pub change: String,
+    pub sel_start: usize,
+    pub sel_end: usize,
+}
+
+impl Keystroke {
+    /// The field's text once the keystroke enters `change`: `prev` with `change` in place of its
+    /// selection (character positions, clamped to `prev`).
+    pub fn applied(&self, change: &str) -> String {
+        let n = self.prev.chars().count();
+        let (start, end) = (self.sel_start.min(n), self.sel_end.clamp(self.sel_start.min(n), n));
+        self.prev.chars().take(start).chain(change.chars()).chain(self.prev.chars().skip(end)).collect()
+    }
+}
+
+/// The longest text, in characters, a field's change scripts are shown (the field's text and what
+/// was typed or pasted into it): as long as a value a script may set. Longer text is kept as
+/// typed, without them.
+const KEYSTROKE_TEXT_MAX: usize = 65_536;
+
+/// A keystroke in the laid-out field at `som`: its change scripts run, each seeing what the one
+/// before it left in `xfa.event.change`, as another viewer runs them for every keystroke. Returns
+/// what the keystroke enters once they ran, `None` when the field has none or the text is too
+/// long for them ([`KEYSTROKE_TEXT_MAX`]; the console says so). The scripts run on a copy of
+/// `doc`: only what they enter, and what they show or ask for (`run`'s output), is kept. Their
+/// other changes come when the value is committed, which runs the change scripts again.
+pub(crate) fn keystroke(doc: &pdfcraft_cos::Document, tpl: &Template, som: &str, ks: &Keystroke, run: &mut XfaRun) -> Result<Option<String>, String> {
+    if ks.prev.chars().count().saturating_add(ks.change.chars().count()) > KEYSTROKE_TEXT_MAX {
+        run.out
+            .console
+            .push(format!("{som}: the field's change scripts were not run: its text would be longer than {KEYSTROKE_TEXT_MAX} characters"));
+        return Ok(None);
+    }
+    let mut scratch = doc.clone();
+    let mut r = Runner::new(&mut scratch, tpl, run, EVENT_BUDGET_MS);
+    let events = r.events_of(som, "change");
+    if events.is_empty() {
+        return Ok(None);
+    }
+    let mut change = ks.change.clone();
+    for ev in &events {
+        let event = XfaEvent {
+            activity: "change".into(),
+            target: som.to_string(),
+            new_text: ks.applied(&change),
+            prev_text: ks.prev.clone(),
+            change: change.clone(),
+            sel_start: ks.sel_start,
+            sel_end: ks.sel_end,
+        };
+        if let Some(entered) = r.run_event(ev, event)?.and_then(|o| o.change) {
+            change = entered;
+        }
+    }
+    r.finish()?;
+    Ok(Some(change))
 }
 
 /// A button's click script (or any event, by SOM path and activity), then calculations.

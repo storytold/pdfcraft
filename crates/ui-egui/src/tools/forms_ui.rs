@@ -14,7 +14,7 @@ use craft::behavior::hit::HitShape;
 use craft::behavior::intent::{Intent, NavMove};
 use craft::behavior::press::PressPhase;
 use craft::keymap::Mods;
-use craft::text::ui::editor::TextSelection;
+pub use craft::text::ui::editor::TextSelection;
 use craft::ui::primitives::{Draw, PaintShape, StrokeWidth};
 use craft::ui::style::{Corners, DataColor, SurfaceKind};
 use egui::{Color32, CornerRadius, Pos2, Rect, vec2};
@@ -60,6 +60,11 @@ pub struct Focus {
     pub list_open: bool,
     /// Date fields: whether the calendar is open.
     pub calendar_open: bool,
+    /// What was typed this frame, for the field's XFA change scripts to see
+    /// (`PdfCraftApp::run_keystroke_scripts`); taken once they ran.
+    pub(crate) keystroke: Option<pdfcraft_engine::xfa::Keystroke>,
+    /// The field has no change scripts: its keystrokes stand as typed.
+    pub(crate) no_keystroke_scripts: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -272,6 +277,65 @@ pub(crate) fn open_focus(f: &FormField, widget: usize) -> Focus {
         selection: TextSelection::caret_at(0),
         list_open: f.kind == FormFieldKind::Combo,
         calendar_open: matches!(f.actions.format, pdfcraft_engine::form_scripts::Format::Date(_)),
+        keystroke: None,
+        no_keystroke_scripts: false,
+    }
+}
+
+/// The keystroke that turned `before` into `after`, with `sel` the editor's selection (or caret)
+/// just before it, as character positions either way round. Typing or pasting replaces the
+/// selection; with only a caret, a deletion is taken from before it (Backspace) or, when
+/// `forward` (Delete was pressed), after it. Read this way, typing or deleting in a run of the
+/// same letter is placed where the caret was, which the text alone can't tell. When the selection
+/// doesn't explain the change, the text does ([`keystroke_between`]).
+pub(crate) fn keystroke_from(before: &str, after: &str, sel: Option<(usize, usize)>, forward: bool) -> pdfcraft_engine::xfa::Keystroke {
+    let (b, a): (Vec<char>, Vec<char>) = (before.chars().collect(), after.chars().collect());
+    // `b[start..end]` replaced gives `a`: the keystroke, when it does.
+    let fits = |start: usize, end: usize| -> Option<pdfcraft_engine::xfa::Keystroke> {
+        let tail = b.len().checked_sub(end)?;
+        let kept = a.len().checked_sub(tail)?;
+        if start > end || start > kept || b.get(..start)? != a.get(..start)? || b.get(end..)? != a.get(kept..)? {
+            return None;
+        }
+        Some(pdfcraft_engine::xfa::Keystroke {
+            prev: before.to_string(),
+            change: a.get(start..kept)?.iter().collect(),
+            sel_start: start,
+            sel_end: end,
+        })
+    };
+    if let Some((p, q)) = sel {
+        let (start, end) = (p.min(q).min(b.len()), p.max(q).min(b.len()));
+        if let Some(k) = fits(start, end) {
+            return k;
+        }
+        if start == end
+            && let Some(gone) = b.len().checked_sub(a.len()).filter(|n| *n > 0)
+        {
+            let backward = || start.checked_sub(gone).and_then(|from| fits(from, start));
+            let ahead = || fits(start, start.saturating_add(gone));
+            if let Some(k) = if forward { ahead().or_else(backward) } else { backward().or_else(ahead) } {
+                return k;
+            }
+        }
+    }
+    keystroke_between(before, after)
+}
+
+/// The keystroke that turned `before` into `after`: the shortest stretch of `before` that was
+/// replaced (character positions) and what replaced it. Typing `b` after `a` replaces nothing at
+/// 1 with `b`; a backspace there replaces 1..2 with nothing; select-all and typing replaces it all.
+pub(crate) fn keystroke_between(before: &str, after: &str) -> pdfcraft_engine::xfa::Keystroke {
+    let (b, a): (Vec<char>, Vec<char>) = (before.chars().collect(), after.chars().collect());
+    let prefix = b.iter().zip(&a).take_while(|(x, y)| x == y).count();
+    // At most what is left of the shorter text once the prefix is taken: the two never overlap.
+    let room = b.len().min(a.len()).saturating_sub(prefix);
+    let suffix = b.iter().rev().zip(a.iter().rev()).take(room).take_while(|(x, y)| x == y).count();
+    pdfcraft_engine::xfa::Keystroke {
+        prev: before.to_string(),
+        change: a.get(prefix..a.len().saturating_sub(suffix)).unwrap_or_default().iter().collect(),
+        sel_start: prefix,
+        sel_end: b.len().saturating_sub(suffix),
     }
 }
 
@@ -984,7 +1048,53 @@ mod tests {
             selection: TextSelection::caret_at(0),
             list_open: false,
             calendar_open: false,
+            keystroke: None,
+            no_keystroke_scripts: false,
         }
+    }
+
+    /// A keystroke is read off the text before and after it as another viewer reports it to a
+    /// change script: typing, a deletion, a replaced selection, a paste in the middle.
+    #[test]
+    fn a_keystroke_is_the_shortest_replaced_stretch() {
+        let k = |b: &str, a: &str| {
+            let k = keystroke_between(b, a);
+            (k.change, k.sel_start, k.sel_end)
+        };
+        assert_eq!(k("", "a"), ("a".into(), 0, 0));
+        assert_eq!(k("a", "ab"), ("b".into(), 1, 1));
+        assert_eq!(k("ab", "a"), ("".into(), 1, 2), "backspace");
+        assert_eq!(k("a", "q"), ("q".into(), 0, 1), "select all, then type");
+        assert_eq!(k("abcd", "abXYcd"), ("XY".into(), 2, 2), "a paste in the middle");
+        assert_eq!(k("aa", "aaa"), ("a".into(), 2, 2), "a repeated letter");
+        assert_eq!(k("héllo", "héllö"), ("ö".into(), 4, 5), "characters, not bytes");
+        // With the editor's caret or selection, a keystroke in a run of one letter is placed where
+        // it happened, which the text alone can't tell.
+        let at = |b: &str, a: &str, sel: (usize, usize)| {
+            let k = keystroke_from(b, a, Some(sel), false);
+            (k.change, k.sel_start, k.sel_end)
+        };
+        // Delete pressed: in a run of one letter the deletion is the one after the caret.
+        let k = keystroke_from("aaa", "aa", Some((1, 1)), true);
+        assert_eq!((k.change.as_str(), k.sel_start, k.sel_end), ("", 1, 2), "Delete in a run");
+        let k = keystroke_from("aaa", "aa", Some((1, 1)), false);
+        assert_eq!((k.sel_start, k.sel_end), (0, 1), "Backspace in a run");
+        // Typed over the same letter: the text is unchanged, the keystroke still replaces it.
+        let k = keystroke_from("a", "a", Some((0, 1)), false);
+        assert_eq!((k.change.as_str(), k.sel_start, k.sel_end), ("a", 0, 1));
+        assert_eq!(at("aaa", "aaaa", (1, 1)), ("a".into(), 1, 1), "typed after the first a");
+        assert_eq!(at("aaa", "aa", (2, 2)), ("".into(), 1, 2), "Backspace takes the one before the caret");
+        assert_eq!(at("abc", "ac", (2, 2)), ("".into(), 1, 2), "Backspace");
+        assert_eq!(at("abc", "ac", (1, 1)), ("".into(), 1, 2), "Delete takes the one after the caret");
+        assert_eq!(at("abcd", "aXd", (3, 1)), ("X".into(), 1, 3), "typed over a selection made backwards");
+        assert_eq!(at("abc", "abcZ", (9, 9)), ("Z".into(), 3, 3), "a caret past the end is the end");
+        // A selection that doesn't explain the change (an input method's composition, say) leaves
+        // it to the text.
+        assert_eq!(at("abc", "xbc", (3, 3)), ("x".into(), 0, 1));
+        // What the keystroke enters, put back, gives the text after it.
+        let ks = keystroke_between("abcd", "abXYcd");
+        assert_eq!(ks.applied(&ks.change), "abXYcd");
+        assert_eq!(ks.applied("Z"), "abZcd");
     }
 
     /// An untouched draft takes the value a script gave the field; typing is kept.

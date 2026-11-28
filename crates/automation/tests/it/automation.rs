@@ -10840,6 +10840,39 @@ fn links_in_xfa_rich_text_are_listed_through_tools() {
     assert_eq!(urls(&mut a, doc), ["mailto:forms@example.com"], "one link after a save and a fresh open, not two");
 }
 
+/// A keystroke through the tools runs a dynamic XFA field's change scripts, which see it (what was
+/// typed, the text before and after, the selection it replaces) and may rewrite what it enters; a
+/// field without change scripts takes it as typed, and bad positions are refused.
+#[test]
+fn xfa_change_scripts_run_for_a_keystroke_through_tools() {
+    let dir = workdir("xfa-keystrokes");
+    std::fs::write(dir.join("keys.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::keystroke_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "keys.pdf" }))["doc"].as_u64().unwrap();
+    let digits = ok(&mut a, "form_keystroke", json!({ "doc": doc, "field": "digits", "prev": "12", "change": "a3b" }));
+    assert_eq!((digits["entered"].clone(), digits["text"].clone()), (json!("3"), json!("123")), "{digits}");
+    let upper = ok(&mut a, "form_keystroke", json!({ "doc": doc, "field": "upper", "prev": "xyz", "change": "q", "sel_start": 1, "sel_end": 2 }));
+    assert_eq!((upper["entered"].clone(), upper["text"].clone()), (json!("Q"), json!("xQz")), "the selection it replaces: {upper}");
+    let seen = ok(&mut a, "form_keystroke", json!({ "doc": doc, "field": "seen", "prev": "ab", "change": "", "sel_start": 1, "sel_end": 2 }));
+    assert_eq!(
+        seen["alerts"],
+        json!([{ "message": "change=[] new=[a] prev=[ab] sel=1-2", "title": null, "icon": "error", "buttons": "ok" }]),
+        "{seen}"
+    );
+    let plain = ok(&mut a, "form_keystroke", json!({ "doc": doc, "field": "plain", "prev": "a", "change": "1" }));
+    assert_eq!((plain["entered"].clone(), plain["text"].clone()), (Value::Null, json!("a1")), "{plain}");
+    for bad in [json!({ "sel_start": 3 }), json!({ "sel_start": 1, "sel_end": 0 })] {
+        let mut args = json!({ "doc": doc, "field": "digits", "prev": "12", "change": "1" });
+        for (k, v) in bad.as_object().unwrap() {
+            args[k] = v.clone();
+        }
+        assert!(a.call("form_keystroke", &args).is_err(), "{bad} is refused");
+    }
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["document"]["dirty"], json!(false), "keystrokes change nothing in the document");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// What a date typed into an XFA date field leaves in the form's data, for each kind of picture:
 /// what another viewer kept for the same typing on a synthetic form. A date one of the edit
 /// picture's patterns reads is kept as an ISO date; anything else, ISO text included, as typed,
@@ -11487,7 +11520,6 @@ fn form_focus_refuses_a_field_with_no_widget() {
         "a field with a widget still takes it"
     );
 }
-
 /// A dynamic XFA form's scripts run on open, on fills and for buttons through the tools, with undo,
 /// and `js_run` reports their messages.
 #[test]

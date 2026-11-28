@@ -225,6 +225,50 @@ impl Automation {
         )
     }
 
+    /// `form_keystroke`: one keystroke in text field `field` (its 1-based `widget`): `change`
+    /// typed or pasted (empty for a deletion) in place of the characters `sel_start..sel_end` of
+    /// `prev`, the field's text before it (by default the keystroke goes at the end). On a dynamic
+    /// XFA form the field's change scripts run for it and may rewrite what it enters. Returns
+    /// `entered` (null when the field has no change scripts: the keystroke stands), `text` (`prev`
+    /// with what was entered) and what the scripts showed or asked for. Nothing in the document
+    /// changes; `form_fill` commits a value.
+    pub(crate) fn form_keystroke(&mut self, a: &Args) -> Result<Value> {
+        let name = a.str("field")?;
+        let doc = self.doc(a)?;
+        let field = doc.form.iter().find(|f| f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;
+        let widget = a.opt_int("widget")?.unwrap_or(1);
+        let widget = usize::try_from(widget)
+            .ok()
+            .and_then(|w| w.checked_sub(1))
+            .filter(|w| *w < field.widgets.len().max(1))
+            .ok_or_else(|| ToolError::InvalidArgs(format!("widget must be 1 to {} for {name:?}", field.widgets.len().max(1))))?;
+        let prev = a.opt_str("prev")?.unwrap_or_default().to_string();
+        let len = prev.chars().count();
+        let position = |key: &str, default: usize| -> Result<usize> {
+            match a.opt_int(key)? {
+                None => Ok(default),
+                Some(n) => usize::try_from(n)
+                    .ok()
+                    .filter(|n| *n <= len)
+                    .ok_or_else(|| ToolError::InvalidArgs(format!("{key} must be 0 to {len}, a character position in prev"))),
+            }
+        };
+        let sel_start = position("sel_start", len)?;
+        let sel_end = position("sel_end", sel_start)?;
+        if sel_end < sel_start {
+            return Err(ToolError::InvalidArgs("sel_end must not come before sel_start".into()));
+        }
+        let ks = pdfcraft_engine::xfa::Keystroke { prev, change: a.str("change")?.to_string(), sel_start, sel_end };
+        let id = doc.id;
+        let entered = self.session.field_keystroke(id, name, widget, &ks).map_err(failed)?;
+        let text = ks.applied(entered.as_deref().unwrap_or(&ks.change));
+        let out = self.session.take_js_output(id);
+        let reqs: Vec<Value> = out.requests.iter().map(request_json).collect();
+        Ok(
+            json!({ "entered": entered, "text": text, "alerts": out.alerts.iter().map(alert_json).collect::<Vec<_>>(), "console": out.console, "requests": reqs, "errors": out.errors }),
+        )
+    }
+
     /// `js_event`: run the JavaScript widget `widget` (1-based) of field `field` has for `event`
     /// (a trigger id: mouse_enter, mouse_exit, mouse_down, mouse_up, on_focus, on_blur); returns
     /// whether the form changed and what the script showed or asked for.

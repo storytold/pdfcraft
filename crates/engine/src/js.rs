@@ -968,6 +968,54 @@ impl Session {
         Ok(self.get(id).is_some_and(|d| d.generation != before))
     }
 
+    /// A keystroke in widget `widget` of text field `name` in document `id` (`ks`: the field's text
+    /// before it, what was typed or pasted and the selection it replaces): on a laid-out XFA form,
+    /// the field's change scripts run, as another viewer runs them for every keystroke, and may
+    /// rewrite what it enters (a field that takes only digits drops the rest). Returns what the
+    /// keystroke enters then, or `None` when the field has no change scripts (the keystroke
+    /// stands). Nothing in the document changes; what the scripts showed or asked for is in
+    /// [`Session::take_js_output`].
+    pub fn field_keystroke(&mut self, id: DocId, name: &str, widget: usize, ks: &crate::xfa::Keystroke) -> Result<Option<String>, EditError> {
+        if self.js_off {
+            return Ok(None);
+        }
+        let time_scale = self.xfa_time_scale.unwrap_or(1);
+        let highlight = self.field_highlight;
+        let doc = self.doc_mut(id)?;
+        let Some(tpl) = doc.xfa_template.clone() else { return Ok(None) };
+        let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Ok(None) };
+        let Some(som) = doc.form.iter().find(|f| f.name == name).and_then(|f| crate::xfa::widget_som(cos, f, widget)) else { return Ok(None) };
+        if !crate::xfa::has_event(cos, &tpl, &som, "change") {
+            return Ok(None);
+        }
+        let mut out = JsOutput::default();
+        let mut run = crate::xfa::XfaRun {
+            page_count: doc.info.pages.len(),
+            out: &mut out,
+            datasets: None,
+            ran_away: false,
+            highlight,
+            time_scale,
+            relaid: false,
+        };
+        let entered = crate::guard(|| crate::xfa::keystroke(cos, &tpl, &som, ks, &mut run))
+            .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
+        let ran_away = run.ran_away;
+        doc.js_output.append(out);
+        if ran_away {
+            doc.xfa_template = None;
+            doc.xfa_scripts_off = true;
+            doc.js_output.errors.push(crate::XFA_SCRIPTS_OFF.into());
+        }
+        match entered {
+            Ok(entered) => Ok(entered),
+            Err(e) => {
+                doc.js_output.errors.push(e);
+                Ok(None)
+            }
+        }
+    }
+
     /// Widget `widget` (0-based) of AcroForm field `name` in document `id` saw `trigger`: the
     /// pointer entered, left, pressed or released it, or it gained or lost the focus. Run that
     /// widget's JavaScript action for the trigger, if it has one, in the document's realm, with

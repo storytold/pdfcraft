@@ -511,6 +511,9 @@ impl PdfCraftApp {
         let generation = |app: &Self| app.views.get(i).and_then(|v| app.session.get(v.id)).map(|d| d.edit_generation());
         let before = generation(self);
         let queued = self.views.get(i).is_some_and(|v| v.session.pending_edit.is_some());
+        // What was typed this frame goes through the field's change scripts before anything
+        // commits it.
+        self.run_keystroke_scripts(ctx, i);
         let applied = self.apply_queued_edit(ctx, i) && other_applied;
         // A click's Mouse Up waits on the edit it queued (a check box's toggle, a list's pick):
         // when that was refused, the click did nothing and its Mouse Up doesn't run either.
@@ -829,6 +832,9 @@ impl PdfCraftApp {
     /// saved, printed or exported without it.
     pub(crate) fn commit_form_typing(&mut self, ctx: &egui::Context) -> bool {
         let Some((i, id)) = self.active_ids() else { return true };
+        // A keystroke this frame hasn't run yet goes through the field's change scripts first,
+        // as it does before a queued edit is applied in the frame.
+        self.run_keystroke_scripts(ctx, i);
         if !self.apply_queued_edit(ctx, i) {
             return false;
         }
@@ -854,6 +860,52 @@ impl PdfCraftApp {
             view.session.forms.focus = Some(draft);
         }
         false
+    }
+
+    /// The keystroke typed this frame in the focused text field of tab `i`: on a laid-out XFA
+    /// form its change scripts run ([`pdfcraft_engine::Session::field_keystroke`]) and may rewrite
+    /// what it enters, which the editor then shows, caret after it, from the next frame. A field
+    /// without change scripts is asked once: its later keystrokes stand as typed.
+    fn run_keystroke_scripts(&mut self, ctx: &egui::Context, i: usize) {
+        let Some(view) = self.views.get_mut(i) else { return };
+        let id = view.id;
+        // Typing that Enter, Tab or a click away committed in the same frame is in the committed
+        // draft, its edit queued (the focus may be on the next field by now): the scripts see it
+        // first, and the edit takes what they enter.
+        let take = |f: &mut crate::forms_ui::Focus| f.keystroke.take().map(|k| (f.name.clone(), f.widget, k));
+        let (committed, found) = match view.session.forms.focus.as_mut().and_then(take) {
+            Some(k) => (false, Some(k)),
+            None => (true, view.session.forms.committed.as_mut().and_then(take)),
+        };
+        let Some((name, widget, ks)) = found else { return };
+        match self.session.field_keystroke(id, &name, widget, &ks) {
+            Ok(entered) => {
+                let form = self.session.get(id).map(|d| d.form.clone()).unwrap_or_default();
+                if let Some(view) = self.views.get_mut(i) {
+                    let draft = if committed { view.session.forms.committed.as_mut() } else { view.session.forms.focus.as_mut() };
+                    if let Some(fx) = draft.filter(|f| f.name == name && f.widget == widget) {
+                        match entered {
+                            None => fx.no_keystroke_scripts = true,
+                            Some(entered) if entered != ks.change => {
+                                fx.text = ks.applied(&entered);
+                                let caret = ks.sel_start.saturating_add(entered.chars().count());
+                                fx.selection = crate::forms_ui::TextSelection::caret_at(caret);
+                                if committed {
+                                    view.session.pending_edit = crate::forms_ui::draft_edit(fx, &form);
+                                    if view.session.pending_edit.is_none() {
+                                        view.session.forms.committed = None;
+                                    }
+                                }
+                            }
+                            Some(_) => {}
+                        }
+                    }
+                }
+                let out = self.session.take_js_output(id);
+                self.handle_js(ctx, id, out);
+            }
+            Err(e) => self.notify_error(e),
+        }
     }
 
     /// XFA enter and exit scripts for where the focus went on tab `i` since it was last looked at,
@@ -1481,6 +1533,55 @@ mod revert_draft_tests {
             selection: Default::default(),
             list_open: false,
             calendar_open: false,
+            keystroke: None,
+            no_keystroke_scripts: false,
+        }
+    }
+
+    /// A keystroke whose editor Enter, Tab or a click away committed in the same frame (its
+    /// draft already queued as an edit) still runs through the field's change scripts, and the
+    /// queued edit takes what they enter: letters typed into a digits-only field are dropped.
+    #[test]
+    fn a_keystroke_committed_in_its_frame_still_runs_the_change_scripts() {
+        let ctx = egui::Context::default();
+        let mut app = PdfCraftApp::for_unit_tests();
+        app.open_bytes(&ctx, "keys.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::keystroke_template())).unwrap();
+        let i = app.active.unwrap();
+        let id = app.views[i].id;
+        let mut draft = focus("a1b2");
+        draft.name = "digits".into();
+        draft.keystroke = Some(crate::forms_ui::keystroke_from("", "a1b2", Some((0, 0)), false));
+        app.views[i].session.forms.focus = Some(draft);
+        let form = app.session.get(id).unwrap().form.clone();
+        crate::forms_ui::commit(&mut app.views[i].session, &form);
+        assert!(app.views[i].session.forms.focus.is_none(), "the editor closed this frame");
+        assert!(app.process_pending_edits(&ctx));
+        let value = app.session.get(id).unwrap().form.iter().find(|f| f.name == "digits").map(|f| f.value.clone()).unwrap_or_default();
+        assert_eq!(value, vec!["12".to_string()]);
+    }
+
+    /// Save, Print and the other commands that commit the form first run a keystroke still
+    /// pending, as the frame would: letters typed into a digits-only field are dropped, whether
+    /// its editor is still open or closed this frame.
+    #[test]
+    fn committing_the_form_runs_a_pending_keystrokes_change_scripts() {
+        for closed in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = PdfCraftApp::for_unit_tests();
+            app.open_bytes(&ctx, "keys.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::keystroke_template())).unwrap();
+            let i = app.active.unwrap();
+            let id = app.views[i].id;
+            let mut draft = focus("a1b2");
+            draft.name = "digits".into();
+            draft.keystroke = Some(crate::forms_ui::keystroke_from("", "a1b2", Some((0, 0)), false));
+            app.views[i].session.forms.focus = Some(draft);
+            if closed {
+                let form = app.session.get(id).unwrap().form.clone();
+                crate::forms_ui::commit(&mut app.views[i].session, &form);
+            }
+            assert!(app.commit_form_typing(&ctx));
+            let value = app.session.get(id).unwrap().form.iter().find(|f| f.name == "digits").map(|f| f.value.clone()).unwrap_or_default();
+            assert_eq!(value, vec!["12".to_string()], "editor closed this frame: {closed}");
         }
     }
 

@@ -222,6 +222,54 @@ fn xfa_enter_and_exit_scripts_run_whenever_the_focus_moves() {
     assert!(h.query_by_label_contains("left quiet").is_some(), "console: {:?}", h.state().js_console.log);
 }
 
+/// Typing into a field whose change script keeps only digits enters only the digits: the editor
+/// shows them as the script rewrote them, and they are what the field takes on Tab. A field
+/// without a change script takes the typing as it is.
+#[test]
+fn a_change_script_rewrites_what_is_typed_in_the_app() {
+    use egui::{Key, Modifiers};
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::keystroke_template()));
+    crate::support::settle(&mut h);
+    let value = |h: &Harness<'static, PdfCraftApp>, name: &str| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).and_then(|f| f.value.first().cloned()).unwrap_or_default()
+    };
+    let editor = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].session.forms.focus.as_ref().map(|f| f.text.clone()).unwrap_or_default();
+    click_field(&mut h, "digits");
+    h.event(egui::Event::Text("a1b2".into()));
+    h.run_steps(3);
+    assert_eq!(editor(&h), "12", "the script dropped the letters");
+    h.event(egui::Event::Text("x3".into()));
+    h.run_steps(3);
+    assert_eq!(editor(&h), "123");
+    h.key_press_modifiers(Modifiers::NONE, Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h, "digits"), "123");
+    click_field(&mut h, "plain");
+    h.event(egui::Event::Text("a1".into()));
+    h.run_steps(3);
+    assert_eq!(editor(&h), "a1");
+}
+
+/// A letter typed over the same letter, selected, leaves the text as it was, but it is still a
+/// keystroke for the field's change script: one that puts what is typed in capitals enters `A`.
+#[test]
+fn a_keystroke_that_leaves_the_text_unchanged_still_runs_the_change_script() {
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::keystroke_template()));
+    crate::support::settle(&mut h);
+    let editor = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].session.forms.focus.as_ref().map(|f| f.text.clone()).unwrap_or_default();
+    click_field(&mut h, "upper");
+    {
+        let fx = h.state_mut().views[0].session.forms.focus.as_mut().unwrap();
+        fx.text = "a".into();
+        fx.selection = craft::text::ui::editor::TextSelection::new(0, fx.text.chars().count());
+    }
+    h.run_steps(3);
+    h.event(egui::Event::Text("a".into()));
+    h.run_steps(3);
+    assert_eq!(editor(&h), "A");
+}
+
 /// An enter script that changes the field it enters (clearing a "Type here") shows in the editor,
 /// so leaving the field keeps the script's value rather than writing the old one back; typing
 /// after it is kept as usual. When the exit of the field left changed it first (`relay` puts the

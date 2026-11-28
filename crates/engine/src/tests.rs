@@ -8590,6 +8590,43 @@ fn an_xfa_form_without_a_template_opens_with_its_placeholder_and_a_warning() {
     assert!(doc.info.warnings.iter().any(|w| w.contains("could not be laid out") && w.contains("no template")), "{:?}", doc.info.warnings);
 }
 
+/// Each keystroke in a laid-out text field runs the field's change scripts, which see it as another
+/// viewer gives it (what was typed, the text before and after, the selection it replaced) and may
+/// rewrite what it enters: digits only, capitals in FormCalc. A field without change scripts says
+/// so, and nothing in the document changes. Text longer than a value a script may set is kept as
+/// typed, without them.
+#[test]
+fn xfa_change_scripts_see_and_rewrite_each_keystroke() {
+    use crate::xfa::Keystroke;
+    let mut s = Session::new();
+    let id = s.open("keys.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::keystroke_template())), None).expect("opens");
+    let generation = s.get(id).unwrap().generation;
+    let ks = |prev: &str, change: &str, sel_start: usize, sel_end: usize| Keystroke { prev: prev.into(), change: change.into(), sel_start, sel_end };
+    assert_eq!(s.field_keystroke(id, "digits", 0, &ks("", "a1b2", 0, 0)).unwrap().as_deref(), Some("12"));
+    assert_eq!(s.field_keystroke(id, "upper", 0, &ks("", "abc", 0, 0)).unwrap().as_deref(), Some("ABC"));
+    assert_eq!(s.field_keystroke(id, "plain", 0, &ks("", "x", 0, 0)).unwrap(), None);
+    // As another viewer showed them for the same typing: `a`, `b`, a backspace, select-all and `q`.
+    for (k, want) in [
+        (ks("", "a", 0, 0), "change=[a] new=[a] prev=[] sel=0-0"),
+        (ks("a", "b", 1, 1), "change=[b] new=[ab] prev=[a] sel=1-1"),
+        (ks("ab", "", 1, 2), "change=[] new=[a] prev=[ab] sel=1-2"),
+        (ks("a", "q", 0, 1), "change=[q] new=[q] prev=[a] sel=0-1"),
+    ] {
+        assert_eq!(s.field_keystroke(id, "seen", 0, &k).unwrap().as_deref(), Some(k.change.as_str()));
+        assert_eq!(s.take_js_output(id).alerts, vec![crate::js::Message::plain(want)]);
+    }
+    assert_eq!(s.get(id).unwrap().generation, generation, "keystrokes change nothing in the document");
+    // Text longer than a value a script may set is kept as typed: the change scripts don't see it
+    // (they would turn it upper case), and the console says why.
+    let long = "a".repeat(70_000);
+    for k in [ks("", &long, 0, 0), ks(&long, "b", 70_000, 70_000)] {
+        let entered = s.field_keystroke(id, "upper", 0, &k).unwrap();
+        assert!(entered.is_none(), "{} characters: the scripts ran", k.prev.len() + k.change.len());
+        let out = s.take_js_output(id);
+        assert!(out.console.iter().any(|c| c.contains("change scripts were not run")), "{:?}", out.console);
+    }
+}
+
 /// A dynamic form opens laid out with the values its datasets hold, and with the rows its data
 /// adds to a repeating table row.
 #[test]

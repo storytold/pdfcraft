@@ -568,6 +568,23 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "field", "event"],
         )),
+        t(
+            "form_keystroke",
+            "Type a keystroke into a field",
+            "One keystroke in a text field, as when someone types or pastes into it: change (empty for a deletion) replaces the characters sel_start..sel_end of prev, the field's text before it (character positions; by default the keystroke goes at the end of prev). On a dynamic XFA form the field's change scripts run for the keystroke, as for each one typed in the app, and may rewrite what it enters (a field that takes only digits drops letters). Returns entered (what the keystroke enters once the scripts ran, null when the field has none), text (prev with it entered), and the scripts' alerts, console output, requests and errors. Nothing in the document changes: commit a value with form_fill.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "field": { "type": "string", "description": "Field name (from form_fields)." },
+                "change": { "type": "string", "description": "What was typed or pasted; empty for a deletion." },
+                "prev": { "type": "string", "description": "The field's text before the keystroke (default empty)." },
+                "sel_start": { "type": "integer", "minimum": 0, "description": "First character of prev the keystroke replaces (default: the end of prev)." },
+                "sel_end": { "type": "integer", "minimum": 0, "description": "Character after the last one it replaces (default sel_start: an insertion)." },
+                "widget": { "type": "integer", "minimum": 1, "description": "Widget of the field (1-based, default 1)." },
+            }),
+            &["doc", "field", "change"],
+        )),
         t("form_reset", "Clear form", "Reset fields to their default values: all of them, or only those listed. Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "fields": { "type": "array", "items": { "type": "string" } } }), &["doc"])),
