@@ -10468,7 +10468,14 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
     h.query_all_by_label("Times").next().expect("the Times row").click();
     h.run_steps(4);
 
-    // Font combo box for the whole block is now Mixed because Heading is Helvetica and Paragraph is Times
+    // The word stays selected, so the panel shows its new font.
+    let font_node = h.get_by_role_and_label(Role::ComboBox, "Font family");
+    assert_eq!(font_node.value().as_deref(), Some("Times"), "the selected word is Times");
+
+    // With the selection collapsed to a caret the panel shows the whole block: Mixed, because
+    // Heading is Helvetica and Paragraph is Times.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowRight);
+    h.run_steps(2);
     let font_node = h.get_by_role_and_label(Role::ComboBox, "Font family");
     assert_eq!(font_node.value().as_deref(), Some("Mixed"), "whole block has mixed fonts");
 
