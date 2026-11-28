@@ -35,13 +35,20 @@ only the rows it covers. Changing the whole paragraph's formatting, width or pos
 every row.
 
 Add Text also opens existing text when it is clicked; a blank-space click starts a new item.
-Both text tools retype an added text item with one click. Draft boxes grow to the page edge
+Both text tools retype an added text item with one click. Native builds with the pinned Hans
+font also accept mixed English and Simplified Chinese in Add Text. Western text keeps its
+standard font; CJK glyphs use bounded Type 3 outlines with ToUnicode, using the same advances
+for validation, wrapping and writing. Added items retain their existing persistence format,
+with at most 2400 distinct CJK glyphs per box. Missing glyphs keep the draft open and leave
+the document intact. This does not qualify all CJK, emoji, complex scripts or native IME input. Draft boxes grow to the page edge
 before wrapping, and the saved item uses that width. A single visual source row grows across font/style boundaries;
 multi-row paragraphs retain their existing wrap width. Retyping uses a preview with only
 that added item's old drawing removed, so deleted draft characters do not show underneath.
 
 A subset font contains only some of the original face's glyphs. A new character cannot be
-reconstructed from a glyph the PDF does not contain. **Load font…** imports an openly licensed,
+reconstructed from a glyph the PDF does not contain. A readable TrueType subset can retain
+width and Unicode entries after dropping an outline; such entries are not accepted as proof
+that a visible glyph can be reused. Spaces keep their existing rules. **Load font…** imports an openly licensed,
 embeddable standalone `.ttf` or `.otf` face. **Installed fonts…** discovers eligible user-installed
 faces on request, off the UI thread; the document-font menu selects resources already on the
 page. Select **Keep source fonts** to preserve each run's original face. A matching full face
@@ -50,16 +57,18 @@ the complete program of a paragraph's font (not a subset) and its licence allows
 embedding, a character the font's encoding can't show is drawn with that same program. A
 character no available face has is refused with an error that names it, and a CJK character
 without a craft-fonts build says so. Replacement text takes the craft-fonts Japanese faces when
-they can draw all of it, and the bundled Inter face (`assets/fonts`) for the Latin, Greek and
+they can draw all of it, then the native craft-fonts Hans face (LXGW WenKai Lite) for missing
+Simplified Chinese glyphs, and the bundled Inter face (`assets/fonts`) for the Latin, Greek and
 Cyrillic letters they lack (Uzbek `қизил`, Kazakh `әже`): that face needs no build input, so
 these work in every build, the web one included. Choosing another face
 is explicit. Fonts with restricted embedding, unsupported collections, excluded families or
-no open-licence declaration are refused. Interface fallback fonts are never exported.
+no open-licence declaration are refused. Installed interface fallback fonts are never exported. Bundled, openly licensed craft-fonts
+faces may supply PDF glyph outlines independently of interface fallback.
 
 The full selected program, glyph mappings, widths and Unicode text are embedded in the PDF.
 Saving and reopening therefore needs no locally installed font. Editing the same text again
 reuses the font resource the page already has, and every resource made from one program
-shares a single copy of it. The Type 3 fonts generated for Japanese or Hebrew characters the
+shares a single copy of it. The Type 3 fonts generated for Chinese, Japanese or Hebrew characters the
 page's fonts lack are made anew by each edit; after an edit, those nothing on the page shows any
 more leave the page's resources, unless some content that could name them can't be read.
 Original subset bytes are

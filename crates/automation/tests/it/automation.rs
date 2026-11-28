@@ -7,6 +7,9 @@ use pdfcraft_automation::mcp::McpServer;
 use pdfcraft_automation::{Automation, Content, ToolError, tools};
 use serde_json::{Value, json};
 
+#[path = "mixed_text.rs"]
+mod mixed_text;
+
 fn encode_png(w: u32, h: u32, layout: craft_image_codecs::ChannelLayout, data: Vec<u8>) -> Vec<u8> {
     let img = craft_image_codecs::Image::from_u8(w, h, layout, data).unwrap();
     craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()

@@ -266,13 +266,14 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-11-13 (M7, English/Simplified Chinese local candidate):** Add Text writes bounded Type 3 CJK outlines and reuses their advances for measurement, preserving its persistence format. Existing text can fall back to the pinned native Hans face while retaining available source runs. Synthetic edit, automation and UI regressions cover retyping, rejection, resource ownership and save/reopen. Marked soft wraps stay in one paragraph across mixed-font scale changes; subset encoding refuses known missing outlines even when widths and Unicode mappings remain. General CJK/RTL and real IME qualification remain partial. Estimates unchanged.
+
 - **2026-10-16 (M4, Insert from File):** Catalog attachments come along with inserted pages in the same undo step. Existing attachments and destination name trees stay; duplicate UTF-16 keys keep their encoding. Generated engine regressions cover save/undo/redo and failed-batch rollback. Estimates unchanged.
 
 - **2026-11-18 (M7, #7687):** PDF-page watermarks clip the source CropBox to MediaBox before sizing and rotating the imported form. Synthetic geometry and save/reopen render regressions cover oversized and partially overlapping crops; estimates unchanged.
 
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
-
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
 - **2026-10-27 (M10, #5005):** Vector printing retains each annotation's optional-content membership when drawing its appearance.
