@@ -194,9 +194,37 @@ fn pdfa_dialog_verifies_and_converts() {
     assert!(h.query_all_by_label_contains("The document has no XMP metadata").next().is_some(), "the missing XMP is a finding");
     h.get_by_label("Save as PDF/A").click();
     h.run_steps(3);
-    h.get_by_label("Declared conformance: PDF/A-2b");
-    // The issues are the dialog's findings: the one left over is shown as not fixable here.
+    // The issues are the dialog's findings: the one left over (the text's font isn't embedded)
+    // is shown as not fixable here, and a file that doesn't conform isn't identified as PDF/A
+    // (#8535), so there is still nothing to remove.
     assert!(!h.query_all_by_label_contains("not fixable here").collect::<Vec<_>>().is_empty(), "the remaining finding says it is not fixable");
+    h.get_by_label("Declared conformance: none");
+    assert!(h.query_by_label("Remove PDF/A identification").is_none(), "an unidentified file has nothing to remove");
+    let id = h.state().active_ids().unwrap().1;
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Save as PDF/A-2b"));
+}
+
+/// A document with nothing left after conversion is identified, and the identification can be
+/// removed again.
+#[test]
+fn pdfa_dialog_identifies_a_conforming_file_and_removes_the_identification() {
+    let doc = Session::new().create_blank(300.0, 300.0, 1).unwrap().to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "blank.pdf", None, doc.clone()).unwrap();
+            app
+        }
+    });
+    h.run_steps(4);
+    assert!(h.execute("standards.pdfa"));
+    h.run_steps(2);
+    h.get_by_label("Declared conformance: none");
+    h.get_by_label("Save as PDF/A").click();
+    h.run_steps(3);
+    h.get_by_label("Declared conformance: PDF/A-2b");
     let id = h.state().active_ids().unwrap().1;
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Save as PDF/A-2b"));
     h.get_by_label("Remove PDF/A identification").click();

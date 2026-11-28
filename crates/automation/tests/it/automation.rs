@@ -10254,14 +10254,26 @@ fn pdfa_through_tools() {
     let r = ok(&mut a, "pdfa_verify", json!({ "doc": doc }));
     assert_eq!(r["compliant"], false);
     assert!(r["issues"].as_array().unwrap().iter().any(|i| i["clause"] == "6.6.2.1"), "{r}");
+    // The text's font isn't embedded, so the file doesn't conform and isn't identified as PDF/A
+    // (#8535): what remains is the font, not fixable here, and the identification it was left
+    // without; the output intent stays.
     let r = ok(&mut a, "pdfa_convert", json!({ "doc": doc, "level": "3b" }));
-    assert_eq!(r["declared"]["pdfa"], "PDF/A-3b", "{r}");
-    assert!(r["issues"].as_array().unwrap().iter().all(|i| i["fixable"] == false), "{r}");
+    assert!(r["declared"]["pdfa"].is_null(), "{r}");
+    let issues = r["issues"].as_array().unwrap();
+    assert!(issues.iter().any(|i| i["clause"] == "6.2.11.4" && i["fixable"] == false), "{r}");
+    assert!(issues.iter().any(|i| i["clause"] == "6.6.4"), "{r}");
+    assert!(!r["declared"]["output_intents"].as_array().unwrap().is_empty(), "{r}");
     assert!(a.call("pdfa_verify", &json!({ "doc": doc, "level": "9z" })).is_err());
-    ok(&mut a, "standards_remove_id", json!({ "doc": doc, "standard": "pdfa" }));
-    let r = ok(&mut a, "pdfa_verify", json!({ "doc": doc }));
+    assert!(matches!(a.call("standards_remove_id", &json!({ "doc": doc, "standard": "pdfa" })), Err(ToolError::Failed(_))), "nothing to remove");
+    // A blank page has nothing left after conversion: it is identified, and the identification
+    // can be removed again, the output intent staying.
+    let blank = ok(&mut a, "doc_create", json!({ "from": "blank" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "pdfa_convert", json!({ "doc": blank, "level": "3b" }));
+    assert_eq!((r["declared"]["pdfa"].as_str(), r["compliant"].as_bool()), (Some("PDF/A-3b"), Some(true)), "{r}");
+    ok(&mut a, "standards_remove_id", json!({ "doc": blank, "standard": "pdfa" }));
+    let r = ok(&mut a, "pdfa_verify", json!({ "doc": blank }));
     assert!(r["declared"]["pdfa"].is_null() && !r["declared"]["output_intents"].as_array().unwrap().is_empty(), "{r}");
-    assert!(matches!(a.call("standards_remove_id", &json!({ "doc": doc, "standard": "pdfa" })), Err(ToolError::Failed(_))), "nothing left");
+    assert!(matches!(a.call("standards_remove_id", &json!({ "doc": blank, "standard": "pdfa" })), Err(ToolError::Failed(_))), "nothing left");
 }
 
 #[test]

@@ -19,7 +19,9 @@
 //!
 //! [`convert`] fixes what can be fixed without changing how pages look (XMP, the sRGB output
 //! intent, forbidden actions, annotation flags, Interpolate, NeedAppearances, encryption) and
-//! returns what remains. Fonts that aren't embedded can't be fixed here.
+//! returns what remains. Fonts that aren't embedded can't be fixed here, and a file with anything
+//! remaining is left without the PDF/A identification: it doesn't conform, so it mustn't say it
+//! does (#8535).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -1241,7 +1243,8 @@ fn info(doc: &Document, key: &str) -> Option<String> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Report {
     pub fixed: Vec<String>,
-    /// Problems left (the document isn't conforming while any remain).
+    /// Problems left (the document isn't conforming while any remain, and is then left without
+    /// the identification, which isn't listed here: [`verify`] reports it afterwards).
     pub remaining: Vec<Issue>,
 }
 
@@ -1463,7 +1466,9 @@ fn convert_direct_page_annots(
     Ok(())
 }
 
-/// Make `doc` conform to `level` as far as possible, then re-check it.
+/// Make `doc` conform to `level` as far as possible, then re-check it. The file is identified as
+/// `level` only when nothing remains: with problems left it keeps its new metadata but no PDF/A
+/// identification (#8535).
 pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos::CosError> {
     let mut fixed = Vec::new();
     if doc.trailer().get(b"Encrypt").is_some() {
@@ -1523,13 +1528,16 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         cat.set(b"OutputIntents".to_vec(), Object::Array(list));
         fixed.push("Added an sRGB output intent".into());
     }
-    let x = xmp::packet(doc, level);
-    let mut md = Dict::new();
-    md.set(b"Type".to_vec(), Object::name("Metadata"));
-    md.set(b"Subtype".to_vec(), Object::name("XML"));
     // Metadata stays uncompressed so other tools can find it.
-    let m = doc.add(Object::Stream(Stream::from_raw(md, x.into_bytes())));
+    let metadata_stream = |x: String| {
+        let mut md = Dict::new();
+        md.set(b"Type".to_vec(), Object::name("Metadata"));
+        md.set(b"Subtype".to_vec(), Object::name("XML"));
+        Object::Stream(Stream::from_raw(md, x.into_bytes()))
+    };
+    let m = doc.add(metadata_stream(xmp::packet(doc, Some(level))));
     cat.set(b"Metadata".to_vec(), Object::Ref(m));
+    let identified = fixed.len();
     fixed.push(format!("Identified the file as {} in its XMP metadata", level.label()));
     doc.update_dict(root, |c| *c = cat)?;
 
@@ -1617,6 +1625,22 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         }
     }
     let remaining = verify(doc, level);
+    if !remaining.is_empty() {
+        // A file that doesn't conform mustn't say it does (#8535): its metadata keeps the
+        // document information, and the identification waits until what remains is fixed and
+        // the file is converted again.
+        doc.set_existing(m, metadata_stream(xmp::packet(doc, None)))?;
+        let left = match remaining.len() {
+            1 => "1 problem remains".to_string(),
+            n => format!("{n} problems remain"),
+        };
+        if let Some(line) = fixed.get_mut(identified) {
+            *line = format!(
+                "Wrote the document information to its XMP metadata, with no {} identification: the file doesn't conform while {left}",
+                level.label()
+            );
+        }
+    }
     Ok(Report { fixed, remaining })
 }
 
