@@ -6408,6 +6408,7 @@ mod operands_from_the_end;
 mod property_retirement;
 mod refusal_pages;
 mod surviving_references;
+mod templates;
 mod text_state;
 mod unparsed;
 

@@ -19,7 +19,8 @@ pub enum Hidden {
     Attachments,
     /// Comments and markup annotations (with their pop-ups).
     Comments,
-    /// Interactive form fields (flattened: their appearance stays as page content).
+    /// Interactive form fields (flattened: their appearance stays as page content), and the page
+    /// templates a form keeps out of the page tree to add pages from.
     FormFields,
     /// Text drawn invisibly (render modes 3 and 7) or wholly off the page.
     HiddenText,
@@ -143,6 +144,87 @@ fn name_tree_len_seen(doc: &Document, node: &Dict, depth: usize, seen: &mut std:
         }
     }
     n
+}
+
+/// Calls `f` on each value of a name tree, within the budget of [`name_tree_len`]: each value
+/// costs a step as each node does, so kids sharing one long `/Names` array can't make the walk
+/// read more values than the budget. Returns whether the walk was cut short (so the tree may hold
+/// more than was read).
+fn name_tree_values(doc: &Document, node: &Dict, f: &mut impl FnMut(&Object)) -> bool {
+    let (mut seen, mut visited) = (std::collections::HashSet::new(), 0);
+    name_tree_values_seen(doc, node, 0, &mut seen, &mut visited, f)
+}
+
+fn name_tree_values_seen(
+    doc: &Document,
+    node: &Dict,
+    depth: usize,
+    seen: &mut std::collections::HashSet<ObjRef>,
+    visited: &mut usize,
+    f: &mut impl FnMut(&Object),
+) -> bool {
+    *visited = visited.saturating_add(1);
+    if depth > 32 || *visited > NAME_TREE_NODE_BUDGET {
+        return true;
+    }
+    if let Some(names) = node.get(b"Names").map(|n| doc.resolve(n))
+        && let Some(names) = names.as_array()
+    {
+        for value in names.iter().skip(1).step_by(2) {
+            *visited = visited.saturating_add(1);
+            if *visited > NAME_TREE_NODE_BUDGET {
+                return true;
+            }
+            f(value);
+        }
+    }
+    let mut cut = false;
+    let kids = node.get(b"Kids").map(|k| doc.resolve(k));
+    for k in kids.as_deref().and_then(Object::as_array).map_or(&[][..], Vec::as_slice) {
+        if *visited > NAME_TREE_NODE_BUDGET {
+            return true;
+        }
+        let held;
+        let kid = match k {
+            Object::Ref(r) if !seen.insert(*r) => None,
+            Object::Ref(r) => {
+                held = doc.get(*r);
+                held.as_dict()
+            }
+            other => other.as_dict(),
+        };
+        match kid {
+            Some(kid) => cut |= name_tree_values_seen(doc, kid, depth + 1, seen, visited, f),
+            None => *visited = visited.saturating_add(1),
+        }
+    }
+    cut
+}
+
+/// Pages a form keeps out of the page tree (ISO 32000-2 §7.7.4, §12.7.7): every page the
+/// catalog's `/Names /Templates` tree names, and each page its `/Names /Pages` tree names that the
+/// page tree doesn't hold. Nothing that walks the pages reaches them, yet a full save writes them
+/// with whatever they hold (#7919). Returns how many there are (a tree too large to read whole
+/// counts one more), and whether the `/Pages` tree names any.
+pub(crate) fn hidden_templates(doc: &Document) -> (usize, bool) {
+    let Some(names) = catalog(doc).and_then(|(_, cat)| sub(doc, &cat, b"Names")) else { return (0, false) };
+    // A value written in place is read where it is, not copied.
+    let is_page = |v: &Object| match v {
+        Object::Ref(r) => doc.get(*r).as_dict().is_some(),
+        other => other.as_dict().is_some(),
+    };
+    let templates = sub(doc, &names, b"Templates").map_or(0, |t| {
+        let mut n = 0usize;
+        let cut = name_tree_values(doc, &t, &mut |v| n += usize::from(is_page(v)));
+        n + usize::from(cut)
+    });
+    let outside = sub(doc, &names, b"Pages").map_or(0, |t| {
+        let tree: std::collections::HashSet<ObjRef> = pdfcraft_model::pages(doc).into_iter().map(|p| p.obj).collect();
+        let mut n = 0usize;
+        let cut = name_tree_values(doc, &t, &mut |v| n += usize::from(is_page(v) && !v.as_ref().is_some_and(|r| tree.contains(&r))));
+        n + usize::from(cut)
+    });
+    (templates + outside, outside > 0)
 }
 
 /// The most distinct outline items one count reads, over all levels together.
@@ -797,13 +879,14 @@ pub fn scan_only(doc: &Document, which: &[Hidden]) -> Vec<(Hidden, usize)> {
                 Hidden::Comments => annots().iter().filter(|a| is_comment(a.name(b"Subtype").unwrap_or(b""))).count(),
                 Hidden::FormFields => {
                     let n = pdfcraft_forms::fields(doc).len();
-                    if n > 0 {
+                    let form = if n > 0 {
                         n
                     } else if cat.contains(b"AcroForm") {
                         1
                     } else {
                         0
-                    }
+                    };
+                    form + hidden_templates(doc).0
                 }
                 Hidden::HiddenText => content_pass(&mut doc2, true, false, false).map(|(n, _)| n).unwrap_or(0),
                 Hidden::HiddenLayers => {
@@ -986,6 +1069,7 @@ pub(crate) fn remove_counted(
         crate::tags::drop_object_refs(doc, &gone)?;
     }
     let off = hidden_layers(doc);
+    let pages_outside = which.contains(&Hidden::FormFields) && hidden_templates(doc).1;
     let mut cat = doc.get(root).as_dict().cloned().unwrap_or_default();
     let mut names = sub(doc, &cat, b"Names");
     for &h in which {
@@ -1042,6 +1126,15 @@ pub(crate) fn remove_counted(
             }
             Hidden::FormFields => {
                 cat.remove(b"AcroForm");
+                // Page templates go with the form: nothing above flattened or cleaned them, and
+                // their fields' values (a Password field's included) stay on them (#7919). Named
+                // visible pages keep their names unless one of the names is a hidden page.
+                if let Some(n) = names.as_mut() {
+                    n.remove(b"Templates");
+                    if pages_outside {
+                        n.remove(b"Pages");
+                    }
+                }
             }
             _ => {}
         }
