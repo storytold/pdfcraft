@@ -1,9 +1,9 @@
 use super::{Arc, DocInfo, DocView, Edit, PageGeometry, PageSession, PageText, Pos2, Range, Rect, comments};
 use crate::QuickTool;
-use craft::behavior::Selection;
 use craft::behavior::kurbo::{self, Point};
+use craft::behavior::{IconId, Selection};
 use craft::pages::ui::{PageBody, PageTextSource, PageTexts, TextSelection, TextSpan as FwSpan};
-use craft::ui::buttons::Button;
+use craft::ui::buttons::IconButton;
 use craft::ui::canvas_controls::TaskBar;
 use craft::ui::contract::{Props as _, Show as _};
 use std::collections::{HashMap, HashSet};
@@ -474,13 +474,14 @@ pub(crate) fn one_undo_step(mut edits: Vec<Edit>) -> Option<Edit> {
 }
 
 /// Where the selection bar goes: next to the selected text where the drag ended, which is on
-/// screen, as a rectangle of the page as shown. Forward, the last rectangle on the head's page; backward across pages,
-/// the first one there. Otherwise (a column, or nothing selected on the head's page) the last rectangle on the
-/// last page with text selected.
+/// screen, as a rectangle of the page as shown. Forward, the last rectangle on the head's page;
+/// backward (the head is earlier in reading order than the anchor, on the same page or across
+/// pages), the first one on the head's page. Otherwise (a column, or nothing selected on the
+/// head's page) the last rectangle on the last page with text selected.
 pub(super) fn bar_anchor(selection: &TextSelection, texts: &dyn PageTexts) -> Option<(usize, kurbo::Rect)> {
     let at_head = || {
-        let FwSpan::Run { head_page, .. } = selection.span else { return None };
-        let backward = head_page < selection.page;
+        let FwSpan::Run { anchor, head, head_page, .. } = selection.span else { return None };
+        let backward = (head_page, head) < (selection.page, anchor);
         let rects = selection.rects_on(head_page, texts.page(head_page)?);
         let rect = if backward { rects.first() } else { rects.last() };
         rect.map(|r| (head_page, *r))
@@ -509,7 +510,11 @@ pub(super) fn selection_bar(
     can_comment: bool,
     can_copy: bool,
 ) -> bool {
-    if body.pass.is_some_and(|p| p.press.phase.button_down()) {
+    if body.pass.is_some_and(|p| p.press.phase.button_down())
+        || ui.ctx().text_edit_focused()
+        || session.comments.composer.is_some()
+        || session.comments.panel.editing.is_some()
+    {
         return false;
     }
     let Some(selection) = session.text.selection else {
@@ -537,20 +542,21 @@ pub(super) fn selection_bar(
     // A comment or a replacement sits on one page: across pages, only markup and Copy.
     let across_pages = selection.pages().start() != selection.pages().end();
     let mut chosen = None;
-    TaskBar::fixed(tl!("Selection"), &anchor).show(ui, body.rect, |ui, _| {
-        for (label, action) in [
-            (tl!("Add comment"), SelectionAction::Note),
-            (tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
-            (tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
-            (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
-            (tl!("Replace text"), SelectionAction::Replace),
+    TaskBar::fixed(tl!("Selection"), &anchor).compact(true).show(ui, body.rect, |ui, _| {
+        for (icon, label, action) in [
+            (comments::CommentTool::Note.icon(), tl!("Add comment"), SelectionAction::Note),
+            (comments::CommentTool::Highlight.icon(), tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
+            (comments::CommentTool::Underline.icon(), tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
+            (comments::CommentTool::StrikeOut.icon(), tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
+            (comments::CommentTool::ReplaceText.icon(), tl!("Replace text"), SelectionAction::Replace),
         ] {
             let one_page_only = matches!(action, SelectionAction::Note | SelectionAction::Replace);
-            if Button::new(label).enabled(can_comment && !(across_pages && one_page_only)).show(ui).clicked() {
+            let enabled = can_comment && !(across_pages && one_page_only);
+            if IconButton::new(IconId::new(icon)).label(label).enabled(enabled).show(ui).clicked() {
                 chosen = Some(action);
             }
         }
-        if Button::new(tl!("Copy")).enabled(can_copy).show(ui).clicked() {
+        if IconButton::new(IconId::new("copy")).label(tl!("Copy")).enabled(can_copy).show(ui).clicked() {
             chosen = Some(SelectionAction::Copy);
         }
     });
