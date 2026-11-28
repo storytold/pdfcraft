@@ -541,10 +541,14 @@ fn document_info_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<
 /// Install the host API once; live document properties continue reading each job's snapshot.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
     crate::selected_pdf::install(ctx)?;
-    let globals: [(&str, usize, NativeFunction); 14] = [
+    let globals: [(&str, usize, NativeFunction); 18] = [
         ("bringToFront", 0, NativeFunction::from_fn_ptr(noop)),
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
+        ("importAnFDF", 1, NativeFunction::from_fn_ptr(crate::form_data::import_fdf)),
+        ("importAnXFDF", 1, NativeFunction::from_fn_ptr(crate::form_data::import_xfdf)),
+        ("exportAsXFDF", 5, NativeFunction::from_fn_ptr(crate::form_data::export_file)),
+        ("exportAsXFDFStr", 5, NativeFunction::from_fn_ptr(crate::form_data::export_string)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
         ("print", 1, NativeFunction::from_fn_ptr(print)),
         ("submitForm", 1, NativeFunction::from_fn_ptr(submit_form)),

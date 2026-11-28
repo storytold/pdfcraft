@@ -53,13 +53,29 @@ fn answers(host: &Automation, a: &Args, allow_pdf: bool) -> Result<Vec<Answer>> 
                     pdf_selected = true;
                     Ok(Answer::Pdf(pdfcraft_engine::js::read_selected_pdf(&path)))
                 }
+                Value::Object(o) if allow_pdf && o.len() == 1 && o.get("form_data").is_some_and(Value::is_string) => {
+                    let path = host.resolve(o["form_data"].as_str().unwrap_or_default(), false)?;
+                    Ok(Answer::FormData(std::sync::Arc::new(move |request| match request {
+                        pdfcraft_engine::js::FormDataPicker::Import(format) => pdfcraft_engine::js::read_selected_form_data(&path, format),
+                        pdfcraft_engine::js::FormDataPicker::Export(_) => Err("an XFDF save picker requires an export destination".into()),
+                    })))
+                }
+                Value::Object(o) if allow_pdf && o.len() == 1 && o.get("export_xfdf").is_some_and(Value::is_string) => {
+                    let path = host.resolve(o["export_xfdf"].as_str().unwrap_or_default(), true)?;
+                    Ok(Answer::FormData(std::sync::Arc::new(move |request| match request {
+                        pdfcraft_engine::js::FormDataPicker::Export(xml) => {
+                            write_atomic(&path, xml.as_bytes()).map(|()| Some(Vec::new())).map_err(|e| e.to_string())
+                        }
+                        pdfcraft_engine::js::FormDataPicker::Import(_) => Err("a form data import picker requires a selected input file".into()),
+                    })))
+                }
                 Value::Null => Ok(Answer::Cancel),
                 Value::String(s) if s.len() <= 8 << 20 && s.len() as u64 <= file_budget => {
                     file_budget = file_budget.saturating_sub(s.len() as u64);
                     Ok(Answer::Text(s.clone()))
                 }
                 _ => Err(ToolError::InvalidArgs(
-                    "answers must contain strings, null, selected text files, or at most one selected PDF for a document script".into(),
+                    "expected strings, null, selected text files, or document-script PDF, form_data or export_xfdf selections".into(),
                 )),
             })
             .collect(),

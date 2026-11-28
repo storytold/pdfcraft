@@ -329,6 +329,19 @@ pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field, geometry: &pdfcraft_
     s.default_known = pdfcraft_forms::default_value_known(doc, f);
     s.readonly = f.read_only();
     s.required = f.has(pdfcraft_forms::flags::REQUIRED);
+    s.password = f.kind == FieldKind::Text && f.has(pdfcraft_forms::flags::PASSWORD);
+    if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
+        s.button_exports = f
+            .widgets
+            .iter()
+            .enumerate()
+            .filter_map(|(i, widget)| {
+                let state = widget.on_state.as_ref()?;
+                let export = f.export_of(i)?;
+                (export != state).then(|| (state.clone(), export.to_owned()))
+            })
+            .collect();
+    }
     s.display = display(doc, f);
     let look = pdfcraft_forms::look(doc, f);
     s.text_color = Some(std::iter::once("RGB".to_string()).chain(look.text.map(|v| v.to_string())).collect());
@@ -770,6 +783,10 @@ impl JsRunner {
                 })
                 .collect(),
             file_name: file_name.to_string(),
+            form_data: Some(pdfcraft_js::form_data::Codec {
+                may_copy: cos.permissions().is_none_or(|p| p.copy()),
+                write_xfdf: pdfcraft_xfdf::export_xfdf_values,
+            }),
             num_pages: pages.len(),
             page: 0,
             info: info(cos),
@@ -2150,7 +2167,29 @@ impl Session {
         result
     }
 }
+pub use pdfcraft_js::form_data::{Format as FormDataFormat, PickResult as FormDataPickResult, Picker as FormDataPicker, Values as FormDataValues};
 pub use pdfcraft_js::selected_pdf::SelectedPdf;
+
+/// Decode only form values from a file explicitly selected by the host.
+pub fn read_selected_form_data(path: &std::path::Path, format: FormDataFormat) -> FormDataPickResult {
+    use std::io::Read;
+    let limit = pdfcraft_js::form_data::MAX_BYTES;
+    if !std::fs::metadata(path).map_err(|e| e.to_string())?.is_file() {
+        return Err("the selected form data is not a regular file".into());
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).and_then(|file| file.take(limit as u64 + 1).read_to_end(&mut bytes)).map_err(|e| e.to_string())?;
+    if bytes.len() > limit {
+        return Err("the selected form data exceeds 8 MiB".into());
+    }
+    crate::doc_state::guard(|| match format {
+        FormDataFormat::Fdf => pdfcraft_xfdf::fdf_values(&bytes),
+        FormDataFormat::Xfdf => pdfcraft_xfdf::xfdf_values(&bytes),
+    })?
+    .map(Some)
+    .map_err(|e| e.to_string())
+}
+
 pub use pdfcraft_js::session::Answer;
 
 /// Read a file explicitly picked by the host. Keep the source off the session and never save it.

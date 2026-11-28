@@ -24,6 +24,7 @@ pub enum Prompt {
 #[allow(clippy::large_enum_variant)]
 pub enum InteractiveEvent {
     Progress(Progress),
+    FormData(crate::form_data::Picker, Sender<crate::form_data::PickResult>),
     SelectPdf(Sender<Result<Option<crate::selected_pdf::SelectedPdf>, String>>),
     Prompt(Prompt, Sender<Option<String>>),
     Complete(Outcome),
@@ -111,6 +112,13 @@ pub(crate) fn select_pdf() -> JsResult<Option<crate::selected_pdf::SelectedPdf>>
     let Some(sender) = reserve()? else { return Ok(None) };
     let (tx, rx) = mpsc::channel();
     sender.send(InteractiveEvent::SelectPdf(tx)).map_err(|_| error("interactive host closed"))?;
+    rx.recv_timeout(std::time::Duration::from_secs(300)).unwrap_or(Ok(None)).map_err(error)
+}
+
+pub(crate) fn form_data(request: crate::form_data::Picker) -> JsResult<Option<crate::form_data::Values>> {
+    let Some(sender) = reserve()? else { return Err(error("form data selection requires an interactive host")) };
+    let (tx, rx) = mpsc::channel();
+    sender.send(InteractiveEvent::FormData(request, tx)).map_err(|_| error("interactive host closed"))?;
     rx.recv_timeout(std::time::Duration::from_secs(300)).unwrap_or(Ok(None)).map_err(error)
 }
 

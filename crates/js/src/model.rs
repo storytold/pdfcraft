@@ -61,6 +61,9 @@ pub struct FieldState {
     pub default_known: bool,
     pub readonly: bool,
     pub required: bool,
+    pub password: bool,
+    /// Appearance state to export value for buttons with explicit /Opt entries.
+    pub button_exports: Vec<(String, String)>,
     pub display: i32,
     /// Live display before the first write or template copy in this run.
     pub display_before_write: Option<i32>,
@@ -111,6 +114,8 @@ impl FieldState {
             default_known: true,
             readonly: false,
             required: false,
+            password: false,
+            button_exports: Vec::new(),
             display: DISPLAY_VISIBLE,
             display_before_write: None,
             options: Vec::new(),
@@ -196,6 +201,7 @@ pub struct DocInfo {
     /// Revisions of referenced icons that can change independently across history.
     pub icon_versions: std::sync::Arc<std::collections::BTreeMap<u64, u64>>,
     pub file_name: String,
+    pub form_data: Option<crate::form_data::Codec>,
     pub num_pages: usize,
     /// The current page, 0-based.
     pub page: usize,

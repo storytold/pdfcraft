@@ -301,11 +301,45 @@ impl Drop for FileReaderSlot {
     }
 }
 
-type PdfPickResult = Result<Option<pdfcraft_engine::js::SelectedPdf>, String>;
+struct ScriptPick<T> {
+    reply: Sender<Result<Option<T>, String>>,
+    result: std::sync::mpsc::Receiver<Result<Option<T>, String>>,
+}
 
-struct PdfPick {
-    reply: Sender<PdfPickResult>,
-    result: std::sync::mpsc::Receiver<PdfPickResult>,
+fn finish_pick<T>(slot: &mut Option<ScriptPick<T>>) -> Option<Option<String>> {
+    let picked = match slot.as_ref()?.result.try_recv() {
+        Ok(answer) => answer,
+        Err(TryRecvError::Disconnected) => Ok(None),
+        Err(TryRecvError::Empty) => return None,
+    };
+    let error = picked.as_ref().err().cloned();
+    let _ = slot.take()?.reply.send(picked);
+    Some(error)
+}
+
+/// Keep selected-file decoding off the UI thread and inside the shared reader limit.
+fn read_script_pick<T: Send + 'static>(
+    ctx: &egui::Context,
+    send: Sender<Result<Option<T>, String>>,
+    read: impl FnOnce() -> Result<Option<T>, String> + Send + 'static,
+) {
+    let Some(slot) = FileReaderSlot::acquire() else {
+        let _ = send.send(Err("The selected-file reader is busy".into()));
+        return;
+    };
+    let wake = ctx.clone();
+    let report = send.clone();
+    if std::thread::Builder::new()
+        .name("pdfcraft-script-file".into())
+        .spawn(move || {
+            let _slot = slot;
+            let _ = send.send(read());
+            wake.request_repaint();
+        })
+        .is_err()
+    {
+        let _ = report.send(Err("Couldn't start the selected-file reader".into()));
+    }
 }
 
 pub(crate) struct Pending {
@@ -317,7 +351,8 @@ pub(crate) struct Pending {
     dialog_state: DialogState,
     progress: Option<pdfcraft_engine::js::Progress>,
     token: std::sync::Arc<()>,
-    pdf_pick: Option<PdfPick>,
+    pdf_pick: Option<ScriptPick<pdfcraft_engine::js::SelectedPdf>>,
+    form_data_pick: Option<ScriptPick<pdfcraft_engine::js::FormDataValues>>,
     file_read: Option<(u32, std::sync::mpsc::Receiver<Result<String, String>>)>,
     dialog: Option<DialogId>,
     asked: Option<Asked>,
@@ -337,7 +372,7 @@ impl Pending {
     }
     /// Whether this invocation is waiting for an explicit user reply rather than worker execution.
     pub(crate) fn has_prompt(&self) -> bool {
-        self.reply.is_some() || self.pdf_pick.is_some()
+        self.reply.is_some() || self.pdf_pick.is_some() || self.form_data_pick.is_some()
     }
 }
 
@@ -677,6 +712,7 @@ impl PdfCraftApp {
                     token: std::sync::Arc::new(()),
                     file_read: None,
                     pdf_pick: None,
+                    form_data_pick: None,
                 });
             }
             Err(e) => self.notify(e.to_string()),
@@ -719,6 +755,36 @@ impl PdfCraftApp {
         Some((crate::dialogs::host::open_over(self, dialog), Asked::Dialog))
     }
 
+    fn pick_script_path<T: 'static>(
+        &mut self,
+        pending: &mut Pending,
+        request: craft::host::PickRequest,
+        reply: Sender<Result<Option<T>, String>>,
+        on_pick: impl FnOnce(&mut Self, &egui::Context, std::path::PathBuf, Sender<Result<Option<T>, String>>) + 'static,
+    ) -> ScriptPick<T> {
+        let target = self.pick_target(Some(pending.run.id));
+        let (send, result) = std::sync::mpsc::channel();
+        pending.started = Instant::now();
+        let token = pending.token.clone();
+        self.pick_file(request, target, move |app, ctx, picked| {
+            if !app.script_pending.as_ref().is_some_and(|pending| {
+                std::sync::Arc::ptr_eq(&pending.token, &token)
+                    && pending.has_prompt()
+                    && pending.started.elapsed() < PROMPT_TIMEOUT
+                    && app.session.script_pending_current(&pending.run)
+            }) {
+                return;
+            }
+            match picked.first_path() {
+                Some(path) => on_pick(app, ctx, path, send),
+                None => {
+                    let _ = send.send(Ok(None));
+                }
+            }
+        });
+        ScriptPick { reply, result }
+    }
+
     /// Receive worker prompts/results and invalidate stale or timed-out interactions before applying their edits.
     pub(crate) fn poll_script_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut pending) = self.script_pending.take() else { return };
@@ -741,21 +807,11 @@ impl PdfCraftApp {
             self.notify("The form script timed out; its result was discarded");
             return;
         }
-        if let Some(pick) = pending.pdf_pick.as_ref() {
-            let result = match pick.result.try_recv() {
-                Ok(answer) => Some(answer),
-                Err(TryRecvError::Disconnected) => Some(Ok(None)),
-                Err(TryRecvError::Empty) => None,
-            };
-            if let Some(result) = result
-                && let Some(pick) = pending.pdf_pick.take()
-            {
-                if let Err(error) = &result {
-                    self.notify(tl!(error));
-                }
-                pending.started = Instant::now();
-                let _ = pick.reply.send(result);
+        if let Some(result) = finish_pick(&mut pending.pdf_pick).or_else(|| finish_pick(&mut pending.form_data_pick)) {
+            if let Some(error) = result {
+                self.notify(tl!(&error));
             }
+            pending.started = Instant::now();
         }
         if let Some((serial, read)) = pending.file_read.as_ref() {
             let serial = *serial;
@@ -793,44 +849,45 @@ impl PdfCraftApp {
                     pending.progress = Some(progress);
                     ctx.request_repaint();
                 }
+                Ok(InteractiveEvent::FormData(..)) if pending.started.elapsed() >= pending.run.timeout => break,
+                Ok(InteractiveEvent::FormData(operation, reply)) => {
+                    use pdfcraft_engine::js::{FormDataFormat, FormDataPicker};
+                    let request = match operation {
+                        FormDataPicker::Import(FormDataFormat::Fdf) => {
+                            craft::host::PickRequest::open("script-form-data").title(tl!("Import form data")).filter("FDF", &["fdf"])
+                        }
+                        FormDataPicker::Import(FormDataFormat::Xfdf) => {
+                            craft::host::PickRequest::open("script-form-data").title(tl!("Import form data")).filter("XFDF", &["xfdf"])
+                        }
+                        FormDataPicker::Export(_) => craft::host::PickRequest::save("script-form-data")
+                            .title(tl!("Export form data"))
+                            .file_name("form-data.xfdf")
+                            .suggested_extension("xfdf")
+                            .filter("XFDF", &["xfdf"]),
+                    };
+                    pending.form_data_pick = Some(self.pick_script_path(&mut pending, request, reply, move |app, ctx, path, send| match operation {
+                        FormDataPicker::Import(format) => {
+                            read_script_pick(ctx, send, move || pdfcraft_engine::js::read_selected_form_data(&path, format))
+                        }
+                        FormDataPicker::Export(xml) => {
+                            let result = app
+                                .host
+                                .files()
+                                .write(&path, xml.as_bytes(), craft::host::WriteIntent::SaveAs)
+                                .map(|_| Some(Vec::new()))
+                                .map_err(|e| e.to_string());
+                            let _ = send.send(result);
+                        }
+                    }));
+                }
                 Ok(InteractiveEvent::SelectPdf(_)) if pending.started.elapsed() >= pending.run.timeout => break,
                 Ok(InteractiveEvent::SelectPdf(reply)) => {
-                    let target = self.pick_target(Some(pending.run.id));
-                    let (send, result) = std::sync::mpsc::channel();
-                    pending.started = Instant::now();
-                    pending.pdf_pick = Some(PdfPick { reply, result });
                     let request = craft::host::PickRequest::open("script-source-pdf")
                         .title(tl!("Select a source PDF for this document"))
                         .filter(tl!("PDF documents"), &["pdf"]);
-                    let token = pending.token.clone();
-                    self.pick_file(request, target, move |app, ctx, picked| {
-                        if !app.script_pending.as_ref().is_some_and(|pending| {
-                            std::sync::Arc::ptr_eq(&pending.token, &token) && pending.pdf_pick.is_some() && pending.started.elapsed() < PROMPT_TIMEOUT
-                        }) {
-                            return;
-                        }
-                        let Some(path) = picked.first_path() else {
-                            let _ = send.send(Ok(None));
-                            return;
-                        };
-                        let Some(slot) = FileReaderSlot::acquire() else {
-                            let _ = send.send(Err("The selected-file reader is busy".into()));
-                            return;
-                        };
-                        let wake = ctx.clone();
-                        let report = send.clone();
-                        if std::thread::Builder::new()
-                            .name("pdfcraft-script-source".into())
-                            .spawn(move || {
-                                let _slot = slot;
-                                let _ = send.send(pdfcraft_engine::js::read_selected_pdf(&path).map(Some));
-                                wake.request_repaint();
-                            })
-                            .is_err()
-                        {
-                            let _ = report.send(Err("Couldn't start the selected-file reader".into()));
-                        }
-                    });
+                    pending.pdf_pick = Some(self.pick_script_path(&mut pending, request, reply, |_, ctx, path, send| {
+                        read_script_pick(ctx, send, move || pdfcraft_engine::js::read_selected_pdf(&path).map(Some));
+                    }));
                 }
                 Ok(InteractiveEvent::Prompt(_, _)) if pending.started.elapsed() >= pending.run.timeout => break,
                 Ok(InteractiveEvent::Prompt(prompt @ (ScriptPrompt::Dialog(_) | ScriptPrompt::File), reply)) => {
@@ -903,7 +960,11 @@ impl PdfCraftApp {
         // Input events wake egui immediately; idle prompts only need a coarse timeout check.
         frame::request_repaint_after(
             ctx,
-            if pending.has_prompt() && pending.file_read.is_none() && pending.pdf_pick.is_none() { 1.0 } else { 0.016 },
+            if pending.has_prompt() && pending.file_read.is_none() && pending.pdf_pick.is_none() && pending.form_data_pick.is_none() {
+                1.0
+            } else {
+                0.016
+            },
         );
         self.script_pending = Some(pending);
     }
@@ -1375,6 +1436,7 @@ mod link_script_tests {
         let (prompt, reply) = loop {
             match app.script_pending.as_ref().unwrap().run.receiver.try_recv() {
                 Ok(InteractiveEvent::Prompt(prompt, reply)) => break (prompt, reply),
+                Ok(InteractiveEvent::FormData(..)) => panic!("the script requested unexpected form data"),
                 Ok(InteractiveEvent::SelectPdf(_)) => panic!("the script requested an unexpected PDF"),
                 Ok(InteractiveEvent::Complete(_)) | Err(TryRecvError::Disconnected) => panic!("the script ended without asking"),
                 Ok(InteractiveEvent::Progress(_)) | Err(TryRecvError::Empty) => {

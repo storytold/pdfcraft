@@ -815,6 +815,7 @@ fn app_alert_titles_are_clipped_and_charged() {
         reset_limit_exceeded: false,
         kept: 0,
         retained: 0,
+        form_data_work: 0,
         dropped: 0,
         layers_changed: Default::default(),
     };

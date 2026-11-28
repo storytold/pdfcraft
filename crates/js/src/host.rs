@@ -41,6 +41,7 @@ pub(crate) struct Host {
     /// replaced, against [`xfa::MAX_PAYLOAD`]: each assignment alone is capped, so without this
     /// many fields could each hold a maximal array.
     pub(crate) retained: usize,
+    pub(crate) form_data_work: usize,
     /// Alerts, console lines and requests the limits left out.
     pub(crate) dropped: usize,
     /// Layers a script turned on or off (`ocg.state`), by their places in [`DocInfo::layers`].

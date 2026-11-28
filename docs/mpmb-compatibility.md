@@ -128,3 +128,38 @@ The version rejection and permission-denied writeback cases use synthetic forms.
 Custom-image import uses cross-document button icons and, for some paths,
 temporary source form edits and saves. Those operations are outside this
 workflow. Leave the sheet's custom-image option off.
+
+## Importing and exporting form data
+
+The sheet can select an FDF or XFDF file through `importAnFDF()` or
+`importAnXFDF()`. Imported values are visible to the rest of the script
+immediately. The import and the sheet's follow-up field edits commit together
+through the engine's existing permission checks and undo history. Cancelling
+the picker discards the invocation's staged form edits.
+
+`exportAsXFDF()` opens a save picker. `exportAsXFDFStr()` returns the same field
+encoding directly. Both read the live form values, accept an `aFields` selection
+including field groups, and honor `bAllFields` and `bNoPassword`. These calls
+exchange form values only. Imports ignore annotations and embedded actions.
+
+For `js_run` and `js_tool_button`, supply `{"form_data":"input.fdf"}` or
+`{"form_data":"input.xfdf"}` at the import picker position in `answers`.
+Use `{"export_xfdf":"output.xfdf"}` at the save picker position. These selections
+are checked against the respective automation read and write roots. The sheet
+asks for confirmation before import. Answer `"4"` (Yes) before the picker
+answer. A null answer at the picker cancels it. Scripts must omit `cPath`.
+A string export can use `cHRef` to set the XML's file reference. A selected input
+or exported XFDF may be up to 8 MiB.
+
+Local verification used temporary copies of v13.2.3+241220 Colorful A4. The
+sheet exported all fields, equipment, and description after synthetic text
+was entered. The equipment and description files contained strict subsets of
+the all-fields export. The string API also accepted the settings the sheet
+built for each mode. The sheet's FDF and XFDF import workflows computed a
+derived modifier that was omitted from the selected input. Answering the
+sheet's confirmation and then cancelling either picker preserved the checked
+values. The imported values and modifier survived saving and reopening separate
+PDF copies. One undo restored the pre-import values after importing the full
+XFDF field set. A repeat import into that copy survived saving, closing, and
+reopening. The synthetic regression also covers undo, rejected writeback, and
+read and write selections outside the permitted root.

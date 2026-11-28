@@ -43,6 +43,7 @@ use boa_engine::realm::Realm;
 use boa_engine::{Context, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Source, js_string};
 
 mod document;
+pub mod form_data;
 mod format;
 mod globals;
 mod host;

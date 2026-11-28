@@ -352,6 +352,7 @@ pub(crate) fn run_in_context(
         reset_limit_exceeded: false,
         kept: 0,
         retained: 0,
+        form_data_work: 0,
         dropped: 0,
         layers_changed: BTreeSet::new(),
     }));

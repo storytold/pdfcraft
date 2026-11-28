@@ -15650,3 +15650,73 @@ fn selected_pdf_import_is_confined_and_commits_only_destination_edits() {
     assert!(refusal["error"].is_string(), "{refusal}");
     assert_eq!(std::fs::read(dir.join("source.pdf")).unwrap(), bytes);
 }
+
+#[test]
+fn scripted_form_data_round_trips_and_rolls_back_failed_imports() {
+    let parent = workdir("script-form-data");
+    let dir = parent.join("root");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("blank.pdf"), fixture(1)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"blank.pdf"}))["doc"].as_u64().unwrap();
+    for name in ["gear.item", "description", "empty", "summary"] {
+        ok(&mut a, "form_add_field", json!({"doc":doc,"page":1,"name":name,"type":"text","rect":[10,10,140,32]}));
+    }
+
+    let read = "getField('gear.item').value+':'+getField('description').value+':'+getField('summary').value";
+    let run = |a: &mut Automation, script: &str, answers: Value| ok(a, "js_run", json!({"doc":doc,"script":script,"answers":answers}));
+    let stamp = "getField('gear.item').value='Compass';getField('description').value='North & east';";
+    let result = run(
+        &mut a,
+        &format!("{stamp} exportAsXFDF({{bAllFields:true}}); exportAsXFDFStr({{aFields:['gear','description'],cHRef:'ref & file'}});"),
+        json!([{"export_xfdf":"all.xfdf"}]),
+    );
+    assert_eq!(result["error"], Value::Null, "{result}");
+    let selected = result["result"].as_str().unwrap();
+    assert!(selected.contains("Compass") && selected.contains("North &amp; east") && selected.contains("ref &amp; file"), "{selected}");
+    assert!(!selected.contains("empty") && !selected.contains("summary"), "{selected}");
+    let all = std::fs::read_to_string(dir.join("all.xfdf")).unwrap();
+    assert!(all.contains("Compass") && all.contains("<field name=\"empty\"><value></value>"), "{all}");
+    std::fs::write(dir.join("selected.xfdf"), selected).unwrap();
+    ok(&mut a, "doc_export_data", json!({"doc":doc,"path":"all.fdf","what":"fields"}));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(run(&mut a, read, json!([]))["result"], "::");
+
+    for (method, file) in [("importAnXFDF", "selected.xfdf"), ("importAnFDF", "all.fdf")] {
+        let script = format!("getField('summary').value='before'; {method}(); getField('summary').value='Imported '+getField('gear.item').value;");
+        let cancelled = run(&mut a, &script, json!([null]));
+        assert_eq!(cancelled["error"], Value::Null, "{cancelled}");
+        assert_eq!(run(&mut a, read, json!([]))["result"], "::");
+        let result = run(&mut a, &script, json!([{"form_data":file}]));
+        assert_eq!(result["error"], Value::Null, "{result}");
+        assert_eq!(run(&mut a, read, json!([]))["result"], "Compass:North & east:Imported Compass");
+        ok(&mut a, "edit_undo", json!({"doc":doc}));
+        assert_eq!(run(&mut a, read, json!([]))["result"], "::");
+    }
+
+    let wrong_format = run(&mut a, "importAnFDF();", json!([{"form_data":"selected.xfdf"}]));
+    assert!(wrong_format["error"].is_string(), "{wrong_format}");
+    let script_path = run(&mut a, "importAnXFDF('selected.xfdf');", json!([]));
+    assert!(script_path["error"].as_str().unwrap().contains("omit cPath"), "{script_path}");
+    std::fs::write(parent.join("outside.xfdf"), &all).unwrap();
+    for (script, answer) in
+        [("importAnXFDF();", json!({"form_data":"../outside.xfdf"})), ("exportAsXFDF();", json!({"export_xfdf":"../outside.xfdf"}))]
+    {
+        assert!(a.call("js_run", &json!({"doc":doc,"script":script,"answers":[answer]})).is_err());
+    }
+    assert_eq!(std::fs::read_to_string(parent.join("outside.xfdf")).unwrap(), all);
+    let cancelled = run(&mut a, &format!("{stamp} exportAsXFDF();"), json!([null]));
+    assert_eq!(cancelled["result"], "false");
+    let failed = run(&mut a, &format!("{stamp} exportAsXFDF();"), json!([{"export_xfdf":"."}]));
+    assert!(failed["error"].is_string(), "{failed}");
+    assert_eq!(run(&mut a, read, json!([]))["result"], "::");
+
+    ok(&mut a, "doc_protect", json!({"doc":doc,"permissions_password":"owner","changes":"none","copy":false}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"restricted.pdf"}));
+    let restricted = ok(&mut a, "doc_open", json!({"path":"restricted.pdf"}))["doc"].as_u64().unwrap();
+    let denied = a.call("js_run", &json!({"doc":restricted,"script":"importAnXFDF();", "answers":[{"form_data":"selected.xfdf"}]})).unwrap_err();
+    assert!(denied.to_string().contains("filling in form fields"), "{denied}");
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":restricted,"script":read}))["result"], "::");
+    let denied = ok(&mut a, "js_run", json!({"doc":restricted,"script":"exportAsXFDFStr({bAllFields:true});"}));
+    assert!(denied["error"].as_str().unwrap().contains("prohibit exporting"), "{denied}");
+}

@@ -27,6 +27,7 @@ pub struct Job {
 pub enum Answer {
     Text(String),
     Pdf(Result<crate::selected_pdf::SelectedPdf, String>),
+    FormData(crate::form_data::Selection),
     Cancel,
 }
 
@@ -156,6 +157,7 @@ impl Realm {
         // The realm keeps its globals and field objects, not the job's field snapshot: the engine
         // keeps that snapshot and patches it in place for the next callback.
         if let Some(ctx) = self.context.as_mut() {
+            crate::form_data::finish(ctx, &mut out);
             crate::selected_pdf::finish(ctx, &mut out);
             crate::run::release_fields(ctx);
         }
@@ -217,6 +219,7 @@ impl Realm {
         let link = job.event.kind == "Link";
         let Some(ctx) = self.context.as_mut() else { return failed("script realm unavailable".into()) };
         crate::selected_pdf::begin(ctx);
+        ctx.remove_data::<crate::form_data::Transaction>();
         let (mut out, saved) = if initialize {
             let mut initial = crate::run::run_in_context(
                 ctx,
@@ -649,10 +652,18 @@ impl ScriptSession {
             match rx.recv_timeout(remaining) {
                 Ok(InteractiveEvent::Complete(out)) => return Some(out),
                 Ok(InteractiveEvent::Progress(_)) => {}
+                Ok(InteractiveEvent::FormData(request, reply)) => {
+                    let answer = match answers.next() {
+                        Some(Answer::FormData(select)) => select(request),
+                        Some(Answer::Cancel) | None => Ok(None),
+                        _ => Err("a form data picker requires a selected form data file or export destination".into()),
+                    };
+                    let _ = reply.send(answer);
+                }
                 Ok(InteractiveEvent::SelectPdf(reply)) => {
                     let answer = match answers.next() {
                         Some(Answer::Pdf(pdf)) => pdf.clone().map(Some),
-                        Some(Answer::Text(_)) => Err("a PDF picker requires a selected PDF answer".into()),
+                        Some(Answer::Text(_) | Answer::FormData(_)) => Err("a PDF picker requires a selected PDF answer".into()),
                         Some(Answer::Cancel) | None => Ok(None),
                     };
                     let _ = reply.send(answer);
