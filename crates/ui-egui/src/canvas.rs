@@ -159,11 +159,6 @@ pub struct DocView {
     pub group: Option<crate::tab_group::TabGroupId>,
     /// Whether this tab is pinned to the beginning of the tab strip.
     pub pinned: bool,
-    /// Smooth opening animation progress (0.0 = just opened, 1.0 = fully open).
-    pub open_progress: f32,
-    /// Smooth closing animation flag and progress (1.0 = normal, 0.0 = closed).
-    pub closing: bool,
-    pub close_progress: f32,
     pub id: DocId,
     /// The document and attached file this tab was opened from, when a form or the Attachments
     /// panel opened it: asking for that attachment again comes back to this tab.
@@ -592,9 +587,6 @@ impl DocView {
             pane: Default::default(),
             group: None,
             pinned: false,
-            open_progress: 0.0,
-            closing: false,
-            close_progress: 1.0,
             id,
             from_attachment: None,
             view: PageViewState::from_defaults(&defaults),
@@ -709,6 +701,7 @@ impl DocView {
         fresh.viewport = self.viewport;
         fresh.group = self.group;
         fresh.pinned = self.pinned;
+        // Same view key (`pane`): the page view's remembered state and the grid's press id are still this view's.
         fresh.pane = self.pane.clone();
         *self = fresh;
         // Marks the kept pictures out of date and clamps the page to the new page count.
@@ -733,9 +726,6 @@ impl DocView {
         v.view.go_to(self.view.current);
         v.group = self.group;
         v.pinned = self.pinned;
-        v.open_progress = 0.0;
-        v.closing = false;
-        v.close_progress = 1.0;
         v.page_input = self.page_input.clone();
         v.notice_dismissed = self.notice_dismissed;
         v.scripts_off_noted = self.scripts_off_noted;

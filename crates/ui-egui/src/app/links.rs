@@ -53,6 +53,7 @@ impl PdfCraftApp {
             recovered: None,
             then: None,
             priority: craft::host::queue::Priority::NEAR,
+            target_group: None,
         });
     }
 

@@ -238,6 +238,8 @@ pub struct PasswordPrompt {
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
     /// A launch-time display override, applied only after this PDF is unlocked.
     pub(crate) display_override: Option<(craft::pages::PageDisplay, bool)>,
+    /// Optional tab group to join once unlocked ("New tab in group").
+    pub(crate) target_group: Option<crate::tab_group::TabGroupId>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -254,6 +256,8 @@ pub(crate) struct OpenRequest {
     /// Where the open waits in the worker's queue: a file the user named goes before files
     /// reopened from the last session.
     pub(crate) priority: craft::host::queue::Priority,
+    /// Optional tab group to join once opened ("New tab in group").
+    pub(crate) target_group: Option<crate::tab_group::TabGroupId>,
 }
 
 /// Asks for the permissions password of an open document whose security restricts it, which

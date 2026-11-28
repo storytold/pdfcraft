@@ -231,6 +231,7 @@ impl PdfCraftApp {
                 recovered: Some(entry.clone()),
                 then: None,
                 priority: craft::host::queue::Priority::VISIBLE,
+                target_group: None,
             });
         }
         #[cfg(target_arch = "wasm32")]

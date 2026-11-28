@@ -1,6 +1,13 @@
 //! Microsoft Edge-styled tab grouping and management for document tabs.
 
-use egui::{Color32, CornerRadius, Rect, Response, Sense, Stroke, vec2};
+use craft::theme::Variant;
+use craft::ui::buttons::Button;
+use craft::ui::choice::{Swatch, SwatchShape};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::display::Text;
+use craft::ui::layout_components::Stack;
+use craft::ui::text::TextField;
+use egui::{Color32, CornerRadius, Rect, Stroke, pos2, vec2};
 
 use crate::PdfCraftApp;
 
@@ -45,8 +52,8 @@ impl TabGroupColor {
             Self::Blue => Color32::from_rgb(26, 115, 232),
             Self::Red => Color32::from_rgb(217, 48, 37),
             Self::Yellow => Color32::from_rgb(249, 171, 0),
-            Self::Green => Color32::from_rgb(30, 142, 62),
-            Self::Pink => Color32::from_rgb(229, 37, 146),
+            Self::Green => Color32::from_rgb(24, 128, 56),
+            Self::Pink => Color32::from_rgb(208, 24, 130),
             Self::Purple => Color32::from_rgb(147, 52, 230),
             Self::Cyan => Color32::from_rgb(18, 181, 203),
             Self::Orange => Color32::from_rgb(250, 123, 23),
@@ -55,7 +62,7 @@ impl TabGroupColor {
 
     pub fn text_color(self) -> Color32 {
         match self {
-            Self::Yellow => Color32::from_rgb(32, 33, 36),
+            Self::Yellow | Self::Cyan | Self::Orange => Color32::from_rgb(32, 33, 36),
             _ => Color32::WHITE,
         }
     }
@@ -104,41 +111,54 @@ impl PdfCraftApp {
     }
 
     /// Add tab at `tab_index` to group `group_id`.
-    /// Tabs in a group are contiguous: moves the tab adjacent to the group if needed.
+    /// Tabs in a group are contiguous within their pane: moves the tab adjacent to the group if needed.
     pub fn add_tab_to_group(&mut self, tab_index: usize, group_id: TabGroupId) {
         if tab_index >= self.views.len() {
             return;
         }
+        let active = self.active_key();
+        let place = self.views[tab_index].pane.place;
         let prev_group = self.views[tab_index].group;
         let was_pinned = self.views[tab_index].pinned;
         self.views[tab_index].group = Some(group_id);
         self.views[tab_index].pinned = false;
 
-        // Position this tab contiguous with other tabs of the group
-        let group_tab_indices: Vec<usize> =
-            self.views.iter().enumerate().filter(|(i, v)| *i != tab_index && v.group == Some(group_id)).map(|(i, _)| i).collect();
+        // Position this tab contiguous with other tabs of the group in the same pane.
+        let group_tab_indices: Vec<usize> = self
+            .views
+            .iter()
+            .enumerate()
+            .filter(|(i, v)| *i != tab_index && v.pane.place == place && v.group == Some(group_id))
+            .map(|(i, _)| i)
+            .collect();
 
         if let Some(&last_idx) = group_tab_indices.last() {
             if tab_index > last_idx + 1 {
                 let view = self.views.remove(tab_index);
                 let target = last_idx + 1;
                 self.views.insert(target.min(self.views.len()), view);
-                self.active = Some(target.min(self.views.len().saturating_sub(1)));
             } else if tab_index < group_tab_indices[0] {
                 let view = self.views.remove(tab_index);
                 let target = group_tab_indices[0];
                 self.views.insert(target.min(self.views.len()), view);
-                self.active = Some(target.min(self.views.len().saturating_sub(1)));
             }
         } else if was_pinned {
-            // Destination group had no other members. Move the newly unpinned tab after all remaining pinned tabs.
-            let pinned_count = self.views.iter().enumerate().filter(|(i, v)| *i != tab_index && v.pinned).count();
-            if tab_index < pinned_count {
+            // Destination group had no other members. Move the newly unpinned tab after all remaining pinned tabs in this pane.
+            let after_pinned = self
+                .views
+                .iter()
+                .enumerate()
+                .filter(|(i, v)| *i != tab_index && v.pane.place == place && v.pinned)
+                .map(|(i, _)| if i > tab_index { i } else { i + 1 })
+                .max()
+                .unwrap_or(0);
+            if tab_index < after_pinned {
                 let view = self.views.remove(tab_index);
-                self.views.insert(pinned_count.min(self.views.len()), view);
-                self.active = Some(pinned_count.min(self.views.len().saturating_sub(1)));
+                self.views.insert(after_pinned.min(self.views.len()), view);
             }
         }
+
+        self.active = active.and_then(|k| self.tab_with_key(k));
 
         if let Some(og) = prev_group
             && og != group_id
@@ -169,24 +189,38 @@ impl PdfCraftApp {
         }
     }
 
-    /// Close all tabs in a group.
-    pub fn close_tab_group(&mut self, ctx: &egui::Context, group_id: TabGroupId) {
-        let mut dirty = Vec::new();
-        for i in (0..self.views.len()).rev() {
-            if self.views[i].group == Some(group_id) {
-                if !self.has_unsaved_work(i) {
-                    self.close_tab(i);
-                } else if let Some(v) = self.views.get(i)
-                    && !dirty.contains(&v.id)
-                {
-                    dirty.push(v.id);
-                }
+    /// Close tabs identified by `keys`: clean tabs go through `request_close_tab`, and
+    /// dirty tabs are queued in strip order for `begin_close`.
+    fn close_tab_keys(&mut self, ctx: &egui::Context, keys: Vec<u64>) {
+        for &key in keys.iter().rev() {
+            let Some(i) = self.tab_with_key(key) else { continue };
+            if !self.asks_before_closing(i) {
+                self.request_close_tab(ctx, i);
             }
         }
-        self.cleanup_empty_group(group_id);
+        let mut dirty = Vec::new();
+        for key in keys {
+            let Some(i) = self.tab_with_key(key) else { continue };
+            if self.hold_close_for_ocr_review(i) {
+                continue;
+            }
+            if self.asks_before_closing(i)
+                && let Some(v) = self.views.get(i)
+                && !dirty.contains(&v.id)
+            {
+                dirty.push(v.id);
+            }
+        }
         if !dirty.is_empty() {
             self.begin_close(ctx, craft::quit::CloseScope::Close, dirty);
         }
+    }
+
+    /// Close all tabs in a group.
+    pub fn close_tab_group(&mut self, ctx: &egui::Context, group_id: TabGroupId) {
+        let keys: Vec<u64> = self.views.iter().filter(|v| v.group == Some(group_id)).map(|v| v.pane.key).collect();
+        self.close_tab_keys(ctx, keys);
+        self.cleanup_empty_group(group_id);
     }
 
     /// Toggle collapsed state of a group.
@@ -196,11 +230,13 @@ impl PdfCraftApp {
         }
     }
 
-    /// Pin or unpin a tab. Pinned tabs sit on the far left.
+    /// Pin or unpin a tab. Pinned tabs sit at the start of their strip.
     pub fn set_tab_pinned(&mut self, tab_index: usize, pinned: bool) {
         if tab_index >= self.views.len() {
             return;
         }
+        let active = self.active_key();
+        let place = self.views[tab_index].pane.place;
         self.views[tab_index].pinned = pinned;
         if pinned {
             // Pinned tabs cannot be in a group
@@ -208,37 +244,54 @@ impl PdfCraftApp {
             if let Some(gid) = prev_group {
                 self.cleanup_empty_group(gid);
             }
-            // Move to end of pinned tabs section
-            let target = self.views.iter().take(tab_index).filter(|v| v.pinned).count();
-            if target != tab_index {
+            // Move to end of pinned tabs in this pane
+            let target = self
+                .views
+                .iter()
+                .enumerate()
+                .filter(|(i, v)| *i < tab_index && v.pane.place == place && v.pinned)
+                .map(|(i, _)| i + 1)
+                .max()
+                .or_else(|| self.tabs_in(place).first().copied())
+                .unwrap_or(0);
+            if target < tab_index {
                 let view = self.views.remove(tab_index);
                 self.views.insert(target.min(self.views.len()), view);
-                self.active = Some(target.min(self.views.len().saturating_sub(1)));
             }
         } else {
-            // Move to beginning of unpinned tabs section
-            let pinned_count = self.views.iter().filter(|v| v.pinned).count();
-            if tab_index < pinned_count {
+            // Move after all pinned tabs in this pane
+            let after_pinned = self
+                .views
+                .iter()
+                .enumerate()
+                .filter(|(i, v)| *i != tab_index && v.pane.place == place && v.pinned)
+                .map(|(i, _)| if i > tab_index { i } else { i + 1 })
+                .max()
+                .unwrap_or(0);
+            if tab_index < after_pinned {
                 let view = self.views.remove(tab_index);
-                self.views.insert(pinned_count.min(self.views.len()), view);
-                self.active = Some(pinned_count.min(self.views.len().saturating_sub(1)));
+                self.views.insert(after_pinned.min(self.views.len()), view);
             }
         }
+        self.active = active.and_then(|k| self.tab_with_key(k));
     }
 
-    /// Duplicate a tab (creates a second twin view of the document).
+    /// Duplicate a tab (creates a second twin view of the document in the same pane).
     pub fn duplicate_tab(&mut self, tab_index: usize) {
         let Some(view) = self.views.get(tab_index) else { return };
         let id = view.id;
         let group = view.group;
         let is_pinned = view.pinned;
+        let place = view.pane.place;
         let Some(doc) = self.session.get(id) else { return };
         let mut twin = view.twin(&doc.info);
+        twin.pane.place = place;
+        twin.pane.placed = true;
         twin.group = group;
         twin.pinned = false;
         let at = if is_pinned {
-            // Unpinned duplicate sits at the start of the unpinned section, preserving the pinned section
-            self.views.iter().filter(|v| v.pinned).count()
+            // Unpinned duplicate sits at the start of the unpinned section in this pane, preserving the pinned section
+            self.views.iter().enumerate().filter(|(_, v)| v.pane.place == place && v.pinned).map(|(i, _)| i + 1).max().unwrap_or(0)
         } else {
             (tab_index + 1).min(self.views.len())
         };
@@ -246,40 +299,28 @@ impl PdfCraftApp {
         self.active = Some(at);
     }
 
-    /// Close all tabs except `keep_index`.
+    /// Close all unpinned tabs in the same pane except `keep_index`.
     pub fn close_other_tabs(&mut self, ctx: &egui::Context, keep_index: usize) {
-        let mut dirty = Vec::new();
-        for i in (0..self.views.len()).rev() {
-            if i != keep_index {
-                if !self.has_unsaved_work(i) {
-                    self.close_tab(i);
-                } else if let Some(v) = self.views.get(i)
-                    && !dirty.contains(&v.id)
-                {
-                    dirty.push(v.id);
-                }
-            }
-        }
-        if !dirty.is_empty() {
-            self.begin_close(ctx, craft::quit::CloseScope::Close, dirty);
-        }
+        let Some(view) = self.views.get(keep_index) else { return };
+        let keep_key = view.pane.key;
+        let place = view.pane.place;
+        let keys: Vec<u64> = self
+            .tabs_in(place)
+            .into_iter()
+            .filter_map(|i| self.views.get(i))
+            .filter(|v| v.pane.key != keep_key && !v.pinned)
+            .map(|v| v.pane.key)
+            .collect();
+        self.close_tab_keys(ctx, keys);
     }
 
-    /// Close all tabs to the right of `from_index`.
+    /// Close all unpinned tabs to the right of `from_index` in its pane's strip order.
     pub fn close_tabs_to_right(&mut self, ctx: &egui::Context, from_index: usize) {
-        let mut dirty = Vec::new();
-        for i in (from_index + 1..self.views.len()).rev() {
-            if !self.has_unsaved_work(i) {
-                self.close_tab(i);
-            } else if let Some(v) = self.views.get(i)
-                && !dirty.contains(&v.id)
-            {
-                dirty.push(v.id);
-            }
-        }
-        if !dirty.is_empty() {
-            self.begin_close(ctx, craft::quit::CloseScope::Close, dirty);
-        }
+        let Some(place) = self.views.get(from_index).map(|v| v.pane.place) else { return };
+        let strip_tabs = self.tabs_in(place);
+        let Some(pos) = strip_tabs.iter().position(|&i| i == from_index) else { return };
+        let keys: Vec<u64> = strip_tabs[pos + 1..].iter().filter_map(|&i| self.views.get(i)).filter(|v| !v.pinned).map(|v| v.pane.key).collect();
+        self.close_tab_keys(ctx, keys);
     }
 
     /// Remove a group if it has no member tabs remaining.
@@ -294,69 +335,43 @@ impl PdfCraftApp {
     }
 }
 
-/// Natural width required by a group header pill.
-pub fn group_pill_natural_width(ui: &egui::Ui, title: &str) -> f32 {
-    if title.trim().is_empty() {
-        24.0
-    } else {
-        let font = egui::FontId::proportional(11.0);
-        let text_w = ui.fonts_mut(|f| f.layout_no_wrap(title.to_string(), font, Color32::WHITE).size().x);
-        text_w + 16.0
-    }
-}
-
-/// Render an Edge-styled group header pill.
-pub fn group_pill(ui: &mut egui::Ui, group: &TabGroup, height: f32, on_edit: &mut Option<TabGroupId>) -> Response {
-    let font = egui::FontId::proportional(11.0);
+/// Paint an Edge-styled group header pill (dot, title, and collapse/expand chevron) over `rect`.
+pub fn paint_group_pill(ui: &egui::Ui, group: &TabGroup, rect: Rect, hovered: bool) {
+    let font = egui::FontId::proportional(11.5);
     let title = group.title.trim();
+    let label = if title.is_empty() { tl!("Tab group") } else { title };
     let text_color = group.color.text_color();
     let bg_color = group.color.color32();
+    let fill = if hovered { bg_color.lerp_to_gamma(Color32::WHITE, 0.15) } else { bg_color };
 
-    let width = if title.is_empty() {
-        22.0
-    } else {
-        let text_w = ui.fonts_mut(|f| f.layout_no_wrap(title.to_string(), font.clone(), text_color).size().x);
-        (text_w + 16.0).max(24.0)
-    };
-
-    let pill_height = 20.0f32.min(height - 4.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
-    let pill_rect = Rect::from_center_size(rect.center(), vec2(width, pill_height));
-
-    let is_hovered = response.hovered();
-    let fill = if is_hovered { bg_color.lerp_to_gamma(Color32::WHITE, 0.15) } else { bg_color };
-
+    let pill_rect = rect.shrink2(vec2(2.0, 2.0));
     ui.painter().rect_filled(pill_rect, CornerRadius::same(5), fill);
 
-    if title.is_empty() {
-        // Draw a neat indicator dot if untitled
-        ui.painter().circle_filled(pill_rect.center(), 4.0, text_color);
+    let dot_center = pos2(pill_rect.left() + 10.0, pill_rect.center().y);
+    ui.painter().circle_filled(dot_center, 3.0, text_color);
+
+    let chevron_center = pos2(pill_rect.right() - 10.0, pill_rect.center().y);
+    let chevron_stroke = Stroke::new(1.5, text_color);
+    let open = group.open_progress.clamp(0.0, 1.0);
+    if group.collapsed && open < 0.5 {
+        // Right-pointing chevron (collapsed)
+        ui.painter().line_segment([chevron_center + vec2(-2.0, -3.5), chevron_center + vec2(2.0, 0.0)], chevron_stroke);
+        ui.painter().line_segment([chevron_center + vec2(2.0, 0.0), chevron_center + vec2(-2.0, 3.5)], chevron_stroke);
     } else {
-        let galley = ui.painter().layout_no_wrap(title.to_string(), font, text_color);
-        let text_pos = pill_rect.min + vec2((pill_rect.width() - galley.size().x) / 2.0, (pill_rect.height() - galley.size().y) / 2.0);
-        ui.painter().galley(text_pos, galley, text_color);
+        // Down-pointing chevron (expanded)
+        ui.painter().line_segment([chevron_center + vec2(-3.5, -1.5), chevron_center + vec2(0.0, 2.0)], chevron_stroke);
+        ui.painter().line_segment([chevron_center + vec2(0.0, 2.0), chevron_center + vec2(3.5, -1.5)], chevron_stroke);
     }
 
-    // Collapse indicator badge when collapsed or collapsing
-    if group.collapsed || group.open_progress < 0.99 {
-        let alpha = (1.0 - group.open_progress).clamp(0.0, 1.0);
-        let icon_rect = Rect::from_center_size(pill_rect.right_center() - vec2(4.0, 0.0), vec2(8.0, 8.0));
-        ui.painter().circle_filled(icon_rect.center(), (2.0 * alpha).max(0.5), text_color.linear_multiply(alpha));
-    }
-
-    if response.secondary_clicked() {
-        *on_edit = Some(group.id);
-    }
-
-    let tooltip = if group.collapsed {
-        format!("{}: Click to expand", if title.is_empty() { "Tab group" } else { title })
-    } else {
-        format!("{}: Click to collapse, right-click to edit", if title.is_empty() { "Tab group" } else { title })
-    };
-    response.on_hover_text(tooltip)
+    let text_left = pill_rect.left() + 18.0;
+    let text_right = (pill_rect.right() - 18.0).max(text_left);
+    let text_clip = Rect::from_min_max(pos2(text_left, pill_rect.top()), pos2(text_right, pill_rect.bottom()));
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font, text_color);
+    let text_pos = pos2(text_left, pill_rect.center().y - galley.size().y * 0.5);
+    ui.painter().with_clip_rect(text_clip).galley(text_pos, galley, text_color);
 }
 
-/// Render the Group Edit Popup / Context Menu (Edge standard: name input, color swatches, actions).
+/// Render the Group Edit Popover (name input, color swatches, new tab in group, ungroup, close group).
 pub fn group_editor_popup(app: &mut PdfCraftApp, ui: &mut egui::Ui, group_id: TabGroupId, close_popup: &mut bool) {
     let Some(group) = app.group(group_id).cloned() else {
         *close_popup = true;
@@ -364,59 +379,49 @@ pub fn group_editor_popup(app: &mut PdfCraftApp, ui: &mut egui::Ui, group_id: Ta
     };
 
     ui.set_min_width(220.0);
-    ui.vertical(|ui| {
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new(tl!("Group name")).font(egui::FontId::proportional(12.0)));
+    Stack::new().show(ui, |ui, _| {
+        Text::new(tl!("Group name")).show(ui);
         let mut title_buf = app.group_title_draft.clone();
-        let edit = ui.text_edit_singleline(&mut title_buf);
-        if edit.changed() {
+        let edit = TextField::new(tl!("Group name"), Bind::bound(&mut title_buf)).submits().show(ui);
+        if title_buf != app.group_title_draft {
             app.group_title_draft = title_buf.clone();
             if let Some(g) = app.group_mut(group_id) {
                 g.title = title_buf;
             }
         }
+        if edit.submitted {
+            *close_popup = true;
+        }
 
-        ui.add_space(8.0);
-        ui.label(egui::RichText::new(tl!("Color")).font(egui::FontId::proportional(12.0)));
+        Text::new(tl!("Color")).show(ui);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
             for &color in &TabGroupColor::ALL {
-                let col = color.color32();
+                let [r, g, b, _] = color.color32().to_srgba_unmultiplied();
+                let srgba = craft::theme::Srgba::rgb(f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0);
                 let selected = group.color == color;
-                let (swatch_rect, swatch_resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
-                if swatch_resp.hovered() {
-                    ui.painter().circle_filled(swatch_rect.center(), 10.0, col.lerp_to_gamma(Color32::WHITE, 0.2));
-                } else {
-                    ui.painter().circle_filled(swatch_rect.center(), 9.0, col);
-                }
-                if selected {
-                    ui.painter().circle_stroke(swatch_rect.center(), 8.0, Stroke::new(2.0, Color32::WHITE));
-                }
-                if swatch_resp.clicked()
+                if Swatch::new(tl!(color.name()), srgba).shape(SwatchShape::Round).cell().selected(selected).show(ui).clicked
                     && let Some(g) = app.group_mut(group_id)
                 {
                     g.color = color;
                 }
-                swatch_resp.on_hover_text(color.name());
             }
         });
 
-        ui.add_space(8.0);
         ui.separator();
-        ui.add_space(4.0);
 
-        if ui.button(tl!("New tab in group")).clicked() {
-            app.open_dialog();
+        if Button::new(tl!("New tab in group")).variant(Variant::GHOST).show(ui).clicked() {
+            app.open_dialog_in_group(Some(group_id));
             *close_popup = true;
         }
 
-        if ui.button(tl!("Ungroup")).clicked() {
-            app.ungroup(group_id);
+        if Button::new(tl!("Ungroup")).variant(Variant::GHOST).show(ui).clicked() {
+            app.tab_action(ui.ctx(), crate::tab_context::Action::Ungroup(group_id));
             *close_popup = true;
         }
 
-        if ui.button(tl!("Close group")).clicked() {
-            app.close_tab_group(ui.ctx(), group_id);
+        if Button::new(tl!("Close group")).variant(Variant::GHOST).show(ui).clicked() {
+            app.tab_action(ui.ctx(), crate::tab_context::Action::CloseGroup(group_id));
             *close_popup = true;
         }
     });
@@ -598,5 +603,62 @@ mod tests {
         // Dirty tabs held by close_guard
         assert!(app.close_guard.is_some());
         assert_eq!(app.views.len(), 3);
+    }
+
+    #[test]
+    fn close_other_and_to_right_respect_pane_strip_order_and_keep_pinned() {
+        let mut app = PdfCraftApp::for_unit_tests();
+        let ctx = egui::Context::default();
+        app.open_bytes(&ctx, "pinned.pdf", Some("/tmp/pinned.pdf".into()), FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "main_a.pdf", Some("/tmp/main_a.pdf".into()), FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "main_b.pdf", Some("/tmp/main_b.pdf".into()), FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "second.pdf", Some("/tmp/second.pdf".into()), FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "main_c.pdf", Some("/tmp/main_c.pdf".into()), FIXTURE.to_vec()).unwrap();
+
+        app.set_tab_pinned(0, true);
+        // Move second.pdf (index 3) to the second pane, leaving Main tabs interleaved around it in `views`.
+        app.move_tab_to(3, crate::panes::Place::Second);
+        assert_eq!(app.views[3].place(), crate::panes::Place::Second);
+        assert_eq!(app.views[4].place(), crate::panes::Place::Main);
+
+        // Close tabs to the right of main_a.pdf (index 1) in Place::Main.
+        app.close_tabs_to_right(&ctx, 1);
+        let remaining: Vec<String> = app.views.iter().map(|v| app.session.get(v.id).unwrap().name.clone()).collect();
+        assert_eq!(remaining, ["pinned.pdf", "main_a.pdf", "second.pdf"]);
+
+        // Reopen another main tab and run close_other_tabs on it: pinned.pdf and second.pdf stay open.
+        app.open_bytes(&ctx, "main_d.pdf", None, FIXTURE.to_vec()).unwrap();
+        let keep_idx = app.views.len() - 1;
+        app.close_other_tabs(&ctx, keep_idx);
+        let remaining: Vec<String> = app.views.iter().map(|v| app.session.get(v.id).unwrap().name.clone()).collect();
+        assert_eq!(remaining, ["pinned.pdf", "second.pdf", "main_d.pdf"]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn open_path_in_group_adds_opened_tab_to_group() {
+        use std::io::Write as _;
+        use std::sync::Arc;
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!("pdfcraft-group-open-{}-{nonce}.pdf", std::process::id()));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+        file.write_all(FIXTURE).unwrap();
+        drop(file);
+
+        let jobs = Arc::new(craft::host::ManualJobs::new());
+        let host = craft::host::Host::builder(crate::APP_INFO).jobs(jobs.clone()).build();
+        let mut app = PdfCraftApp::for_unit_tests_on(Arc::new(host));
+        let ctx = egui::Context::default();
+        app.open_bytes(&ctx, "first.pdf", None, FIXTURE.to_vec()).unwrap();
+        let gid = app.create_tab_group("Bundle".into(), TabGroupColor::Purple);
+        app.add_tab_to_group(0, gid);
+
+        app.open_path_in_group(path.to_str().unwrap(), Some(gid));
+        jobs.run_all();
+        app.poll_pending_opens(&ctx);
+
+        assert_eq!(app.views.len(), 2);
+        assert_eq!(app.views[1].group, Some(gid));
+        std::fs::remove_file(path).unwrap();
     }
 }

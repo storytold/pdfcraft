@@ -1806,6 +1806,33 @@ fn tab_group_collapsing_and_expanding_harness() {
     assert!(h.query_by_role_and_label(Role::Tab, "first.pdf").is_some());
     assert!(h.query_by_role_and_label(Role::Tab, "middle.pdf").is_some());
     assert!(h.query_by_role_and_label(Role::Tab, "last.pdf").is_some());
+
+    // Clicking the group pill collapses and expands the group
+    h.get_by_role_and_label(Role::Tab, "Project").click();
+    h.run_steps(3);
+    assert!(h.query_by_role_and_label(Role::Tab, "first.pdf").is_none());
+    assert!(h.query_by_role_and_label(Role::Tab, "middle.pdf").is_none());
+
+    h.get_by_role_and_label(Role::Tab, "Project").click();
+    h.run_steps(3);
+    assert!(h.query_by_role_and_label(Role::Tab, "first.pdf").is_some());
+    assert!(h.query_by_role_and_label(Role::Tab, "middle.pdf").is_some());
+
+    // Secondary-clicking the group pill opens the group editor popover
+    h.get_by_role_and_label(Role::Tab, "Project").click_secondary();
+    h.run_steps(3);
+    assert!(h.query_by_role_and_label(Role::TextInput, "Group name").is_some());
+    assert!(h.query_by_label("New tab in group").is_some());
+    assert!(h.query_by_label("Ungroup").is_some());
+    assert!(h.query_by_label("Close group").is_some());
+
+    // Clicking Ungroup disbands the group and closes the editor popover
+    h.get_by_role_and_label(Role::Button, "Ungroup").click();
+    h.run_steps(3);
+    assert!(h.state().tab_groups.is_empty());
+    assert_eq!(h.state().views[0].group, None);
+    assert_eq!(h.state().views[1].group, None);
+    assert!(h.query_by_role_and_label(Role::TextInput, "Group name").is_none());
 }
 
 #[test]

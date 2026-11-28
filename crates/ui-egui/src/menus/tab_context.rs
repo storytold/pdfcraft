@@ -27,10 +27,8 @@ pub(crate) enum Action {
     /// Remove this tab from its current group.
     RemoveFromGroup(u64),
     /// Ungroup all tabs in a group.
-    #[allow(dead_code)]
     Ungroup(crate::tab_group::TabGroupId),
     /// Close all tabs in a group.
-    #[allow(dead_code)]
     CloseGroup(crate::tab_group::TabGroupId),
     Reopen,
     Reveal(DocId),
