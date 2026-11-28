@@ -1042,6 +1042,60 @@ fn duplicating_a_field_onto_every_page() {
     assert_eq!(doc.can_undo(), Some("Duplicate field"));
 }
 
+/// Copy into Grid from a field's menu: a calendar day styled once (multi-line, no background, no
+/// border) is repeated, and every copy looks and behaves as the day does.
+#[test]
+fn copying_a_field_into_a_grid_from_its_context_menu() {
+    use pdfcraft_engine::{Edit, FieldLookPatch, FieldProps};
+    let mut h = harness();
+    let bare = FieldLookPatch { fill: Some(None), border: Some(None), width: Some(0.0), ..Default::default() };
+    let props = FieldProps { multiline: Some(true), appearance: Some(bare), ..Default::default() };
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, Edit::SetFieldProps { name: "city".into(), props: Box::new(props) }));
+    h.execute("form.prepare");
+    h.run_steps(3);
+    let before = names(&h);
+    let (styled, p) = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "city").unwrap();
+        let on_screen = pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen");
+        ((f.flags, doc.field_look("city").unwrap()), on_screen.center())
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    h.get_by_label("Copy into Grid…").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Dialog, "Copy into Grid");
+    assert!(table_open(&h));
+    assert_eq!(table(&h)["source"], "city");
+    assert!(table(&h).get("reason").is_none(), "the starting grid can be added: {}", table(&h));
+    // A column added in the window is named as the first one is.
+    h.get_by_role_and_label(Role::SpinButton, "Columns").focus();
+    h.run_steps(1);
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    let after = names(&h);
+    let added: Vec<&String> = after.iter().filter(|n| !before.contains(n)).collect();
+    assert_eq!(added.len(), 4, "two rows of two copies: {added:?}");
+    assert!(added.iter().all(|n| n.starts_with("Copy")), "every column is named as a copy: {added:?}");
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    for name in added {
+        let f = doc.form.iter().find(|f| &f.name == name).unwrap();
+        assert_eq!((f.flags, doc.field_look(name).unwrap()), styled, "{name} keeps the day's multi-line flag, background and border");
+    }
+    assert_eq!(doc.can_undo(), Some("Copy field into grid"));
+    h.execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(names(&h), before, "one undo takes every copy back");
+}
+
 #[test]
 fn aligning_distributing_and_sizing_several_fields() {
     use pdfcraft_ui_egui::prepare::{Arrange, arrange};

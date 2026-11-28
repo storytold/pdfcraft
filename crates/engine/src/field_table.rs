@@ -12,6 +12,9 @@ use crate::{Edit, FormField, NewField};
 /// The edit's name in the history ("Undo Add text field table"), one of [`crate::BATCH_LABELS`].
 pub const LABEL: &str = "Add text field table";
 
+/// The history entry for a grid copied from an existing field.
+pub const COPY_LABEL: &str = "Copy field into grid";
+
 /// The edit adding `table`'s cells to `page` (0-based, shown as `info`) of a document whose
 /// fields are `form`. Refused, with nothing added, when a cell would be too small on the page or
 /// its name can't be used.
@@ -38,6 +41,35 @@ pub fn edit(table: &FieldTable, page: usize, info: &PageInfo, form: &[FormField]
         edits.push(Edit::AddField { page, rect, kind: NewField::Text { multiline: false }, name: Some(cell.name) });
     }
     Ok(Edit::Batch { label: LABEL.to_owned(), edits })
+}
+
+/// Whether a grid can copy widget `widget` of `field`: `pdfcraft_forms::copy_field`'s own test
+/// ([`pdfcraft_forms::copyable_widget`]), so the preview and the copy agree.
+pub fn copyable(field: &FormField, widget: usize) -> bool {
+    pdfcraft_forms::copyable_widget(field, widget).is_ok()
+}
+
+/// The edit laying `table` out as independent copies of widget `widget` of the field `source`,
+/// one copy in each cell. Refused, with nothing added, for a field a grid can't copy
+/// ([`copyable`]) and for whatever [`edit`] refuses.
+pub fn copy_edit(table: &FieldTable, page: usize, info: &PageInfo, form: &[FormField], source: &str, widget: usize) -> Result<Edit, TableError> {
+    if !form.iter().any(|f| f.name == source && copyable(f, widget)) {
+        return Err(TableError::Uncopyable(source.to_owned()));
+    }
+    let batch = edit(table, page, info, form)?;
+    Ok(match batch {
+        Edit::Batch { edits, .. } => Edit::Batch {
+            label: COPY_LABEL.to_owned(),
+            edits: edits
+                .into_iter()
+                .map(|edit| match edit {
+                    Edit::AddField { page, rect, name: Some(name), .. } => Edit::CopyField { source: source.to_owned(), widget, page, rect, name },
+                    other => other,
+                })
+                .collect(),
+        },
+        other => other,
+    })
 }
 
 #[cfg(test)]
@@ -79,6 +111,57 @@ mod tests {
         assert_eq!(add(&s).err(), Some(TableError::Taken("desc_1".into())));
         assert_eq!(s.undo(id).unwrap().to_string(), LABEL);
         assert!(s.get(id).unwrap().form.is_empty(), "one undo takes the whole table back");
+    }
+
+    #[test]
+    fn a_grid_of_field_copies_is_one_undoable_edit() {
+        let mut s = Session::new();
+        let bytes = s.create_blank(300.0, 400.0, 1).unwrap();
+        let id = s.open("copies.pdf", None, bytes, None).unwrap();
+        s.apply(
+            id,
+            Edit::AddField { page: 0, rect: [30.0, 330.0, 130.0, 350.0], kind: NewField::Text { multiline: true }, name: Some("source".into()) },
+        )
+        .unwrap();
+        let table = grid([30.0, 100.0, 230.0, 180.0], 2, &["a_N", "b_N"]);
+        let doc = s.get(id).unwrap();
+        let edit = copy_edit(&table, 0, &doc.info.pages[0], &doc.form, "source", 0).unwrap();
+        s.apply(id, edit).unwrap();
+        let form = &s.get(id).unwrap().form;
+        assert_eq!(form.len(), 5);
+        for name in ["a_1", "b_1", "a_2", "b_2"] {
+            assert!(form.iter().find(|f| f.name == name).unwrap().has(pdfcraft_forms::flags::MULTILINE));
+        }
+        assert_eq!(s.undo(id).unwrap().to_string(), COPY_LABEL);
+        assert_eq!(s.get(id).unwrap().form.len(), 1);
+    }
+
+    #[test]
+    fn a_grid_copies_a_check_box_only_when_its_widgets_export_one_value() {
+        let mut s = Session::new();
+        let bytes = s.create_blank(300.0, 400.0, 1).unwrap();
+        let id = s.open("boxes.pdf", None, bytes, None).unwrap();
+        s.apply(id, Edit::AddField { page: 0, rect: [30.0, 330.0, 50.0, 350.0], kind: NewField::CheckBox, name: Some("box".into()) }).unwrap();
+        let doc = s.get(id).unwrap();
+        let table = grid([30.0, 100.0, 230.0, 180.0], 2, &["a_N"]);
+        assert!(copy_edit(&table, 0, &doc.info.pages[0], &doc.form, "box", 0).is_ok());
+        // The same box as two widgets with an export value each (`/Opt`), as the forms layer reads it.
+        let mut form = doc.form.to_vec();
+        let boxes = form.iter_mut().find(|f| f.name == "box").unwrap();
+        boxes.widgets.push(boxes.widgets[0].clone());
+        boxes.options = vec![("Yes".into(), "Yes".into()), ("No".into(), "No".into())];
+        let refused = copy_edit(&table, 0, &doc.info.pages[0], &form, "box", 0);
+        assert_eq!(refused.err(), Some(TableError::Uncopyable("box".into())), "the preview can't call it valid");
+        // One export value from every widget is a box a grid copies, `/Opt` or not.
+        let boxes = form.iter_mut().find(|f| f.name == "box").unwrap();
+        boxes.options = vec![("Yes".into(), "Yes".into()); 2];
+        assert!(copy_edit(&table, 0, &doc.info.pages[0], &form, "box", 0).is_ok());
+        // Different on states without `/Opt` are different export values.
+        let boxes = form.iter_mut().find(|f| f.name == "box").unwrap();
+        boxes.options.clear();
+        boxes.widgets[1].on_state = Some("Other".into());
+        let refused = copy_edit(&table, 0, &doc.info.pages[0], &form, "box", 0);
+        assert_eq!(refused.err(), Some(TableError::Uncopyable("box".into())));
     }
 
     #[test]

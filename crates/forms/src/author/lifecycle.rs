@@ -1,5 +1,5 @@
 use super::look::redraw_field;
-use super::tree::{add_to_page, attach, clash, detach, ensure_form, free_name, name_parts, top_names};
+use super::tree::{add_to_page, attach, clash, detach, ensure_form, free_name, inherited, name_parts, top_names};
 use super::{
     Dict, Document, Field, FieldKind, FormError, MIN_FIELD_SIDE, NewField, ObjRef, Object, PdfString, Widget, appearance, fields, flags, invalid,
     page_refs, rgb,
@@ -341,6 +341,164 @@ pub(super) fn split_triggers(aa: &Dict) -> (Option<Dict>, Option<Dict>) {
     }
     let some = |d: Dict| (!d.is_empty()).then_some(d);
     (some(widget), some(field))
+}
+
+/// Keys a grid copy never takes from its source: what ties a field into the tree, names it, or
+/// binds it to an XFA template node (a new layout would replace or drop a field carrying them).
+const COPY_DROPS: [&[u8]; 8] = [b"Kids", b"Parent", b"T", b"NM", b"StructParent", b"PCSom", b"PCXfaNode", b"PCItems"];
+
+/// Copy one widget into a new, independently named field on a page.
+///
+/// The field's current value and properties are copied, but the new field has its own value and
+/// its own appearance streams. Radio groups and signature fields require special handling and are
+/// not supported here.
+pub fn copy_field(doc: &mut Document, name: &str, widget: usize, page: usize, rect: [f64; 4], new_name: &str) -> Result<(), FormError> {
+    let all = fields(doc);
+    let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    let w = copyable_widget(f, widget)?;
+    let page_ref = *page_refs(doc).get(page).ok_or_else(|| FormError::Invalid(format!("page {} does not exist", page.saturating_add(1))))?;
+    let width = rect[2] - rect[0];
+    let height = rect[3] - rect[1];
+    if !rect.iter().all(|v| v.is_finite()) || !width.is_finite() || !height.is_finite() || width < MIN_FIELD_SIDE || height < MIN_FIELD_SIDE {
+        return invalid("the field is too small");
+    }
+    let parts = name_parts(new_name)?;
+    if let Some(why) = all.iter().find_map(|other| clash(new_name, &other.name)) {
+        return invalid(why);
+    }
+    let mut field = copy_source(doc, f, w)?;
+    for key in COPY_DROPS {
+        field.remove(key);
+    }
+    // A check box's `/Opt` holds an export value per widget when it has one entry per widget
+    // (else the on state is the export value); the copy has one widget, this one.
+    if f.kind == FieldKind::CheckBox && field.contains(b"Opt") {
+        match f.options.get(widget).filter(|_| f.options.len() == f.widgets.len()) {
+            Some((export, _)) => field.set(b"Opt".to_vec(), Object::Array(vec![Object::String(PdfString::text(export))])),
+            None => {
+                field.remove(b"Opt");
+            }
+        }
+    }
+    // The appearance editor updates indirect /MK and /BS dictionaries in place. Make these
+    // per-widget dictionaries direct so editing a copy cannot restyle the source or its siblings.
+    for key in [&b"MK"[..], b"BS"] {
+        if let Some(value) = field.get(key).filter(|v| Object::as_ref(v).is_some())
+            && let Some(dict) = doc.resolve(value).as_dict().cloned()
+        {
+            field.set(key.to_vec(), Object::Dict(dict));
+        }
+    }
+    own_appearance(doc, &mut field);
+    field.set(b"P".to_vec(), Object::Ref(page_ref));
+    field.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|v| Object::Real(*v)).collect()));
+    // Keep a custom appearance rather than replacing it with a generated approximation.
+    // A viewer scales its appearance stream to the new widget rectangle.
+    let has_appearance = field.get(b"AP").is_some_and(|o| matches!(&*doc.resolve(o), Object::Dict(d) if d.contains(b"N")));
+    let af = ensure_form(doc)?;
+    let copied = doc.add(Object::Dict(field));
+    attach(doc, af, copied, &parts)?;
+    add_to_page(doc, page_ref, copied)?;
+    if !has_appearance {
+        redraw_field(doc, new_name)?;
+    }
+    Ok(())
+}
+
+/// The widget `widget` of `f`, when [`copy_field`] can copy it: a text field, or a check box
+/// whose widgets all have one on state and one export value. A widget without an on state
+/// counts as a different value.
+pub fn copyable_widget(f: &Field, widget: usize) -> Result<&Widget, FormError> {
+    if !matches!(f.kind, FieldKind::Text | FieldKind::CheckBox) {
+        return invalid("only text fields and check boxes can be copied into a grid");
+    }
+    if f.kind == FieldKind::CheckBox && f.widgets.len() > 1 {
+        let on = f.widgets.first().and_then(|w| w.on_state.as_deref());
+        let export = f.export_of(0);
+        let one = on.is_some() && f.widgets.iter().enumerate().all(|(i, w)| w.on_state.as_deref() == on && f.export_of(i) == export);
+        if !one {
+            return invalid("a check box whose widgets export different values cannot yet be copied into a grid");
+        }
+    }
+    f.widgets.get(widget).ok_or_else(|| FormError::Invalid(format!("{} has no widget {}", f.name, widget.saturating_add(1))))
+}
+
+/// The field dictionary of `f` with what it inherits and, when the widget `w` is separate, the
+/// widget's own entries merged in: one merged field/widget dictionary for the copy.
+fn copy_source(doc: &Document, f: &Field, w: &Widget) -> Result<Dict, FormError> {
+    let mut field = doc.get(f.obj).as_dict().cloned().ok_or_else(|| FormError::Invalid("field is not a dictionary".into()))?;
+    let widget_dict = doc.get(w.obj).as_dict().cloned().ok_or_else(|| FormError::Invalid("widget is not a dictionary".into()))?;
+    for (k, v) in inherited(doc, f.obj).iter() {
+        field.set(k.to_vec(), v.clone());
+    }
+    if w.obj == f.obj {
+        return Ok(field);
+    }
+    // Preserve widget entries that aren't in the field dictionary, including unfamiliar
+    // annotation keys, while the field's own attributes keep their precedence. A widget's /Ff
+    // is skipped: its radio or push-button bit would change the copy's kind, and its read-only
+    // bit is carried below.
+    for (key, value) in widget_dict.iter() {
+        if !field.contains(key) && !matches!(key.as_slice(), b"AA" | b"Ff") && !COPY_DROPS.contains(&key.as_slice()) {
+            field.set(key.clone(), value.clone());
+        }
+    }
+    for key in WIDGET_KEYS.iter().copied().chain([&b"DA"[..]]) {
+        if let Some(value) = widget_dict.get(key) {
+            field.set(key.to_vec(), value.clone());
+        }
+    }
+    // A widget can be read-only on its own (`/Ff` in the widget); the copy's one dictionary keeps it.
+    if w.read_only {
+        let ff = field.get(b"Ff").and_then(|v| doc.resolve(v).as_int()).unwrap_or(0);
+        field.set(b"Ff".to_vec(), Object::Int(ff | i64::from(flags::READ_ONLY)));
+    }
+    // Keep both field and widget event dictionaries when they were separate.
+    let mut aa = field.get(b"AA").and_then(|a| doc.resolve(a).as_dict().cloned()).unwrap_or_default();
+    if let Some(widget_aa) = widget_dict.get(b"AA").and_then(|a| doc.resolve(a).as_dict().cloned()) {
+        for (k, v) in widget_aa.iter() {
+            aa.set(k.to_vec(), v.clone());
+        }
+    }
+    if !aa.is_empty() {
+        field.set(b"AA".to_vec(), Object::Dict(aa));
+    }
+    Ok(field)
+}
+
+/// Give `field` appearance streams of its own: every stream its `/AP` reaches (`/N`, `/D`, `/R`,
+/// directly or per state) is added again as a new object, so redrawing the copy, as a password
+/// or value change does, can't rewrite the source's look. Resources the streams use stay shared.
+fn own_appearance(doc: &mut Document, field: &mut Dict) {
+    let Some(ap) = field.get(b"AP").and_then(|o| doc.resolve(o).as_dict().cloned()) else { return };
+    let mut fresh = Dict::new();
+    for (key, look) in ap.iter() {
+        let owned = match &*doc.resolve(look) {
+            Object::Stream(_) => own_stream(doc, look),
+            Object::Dict(states) => {
+                let mut mine = Dict::new();
+                for (state, stream) in states.iter() {
+                    let value = own_stream(doc, stream);
+                    mine.set(state.clone(), value);
+                }
+                Object::Dict(mine)
+            }
+            _ => look.clone(),
+        };
+        fresh.set(key.clone(), owned);
+    }
+    field.set(b"AP".to_vec(), Object::Dict(fresh));
+}
+
+/// A new object holding the stream `look` refers to; anything else as it is.
+fn own_stream(doc: &mut Document, look: &Object) -> Object {
+    match Object::as_ref(look) {
+        Some(r) if matches!(&*doc.get(r), Object::Stream(_)) => {
+            let stream = (*doc.get(r)).clone();
+            Object::Ref(doc.add(stream))
+        }
+        _ => look.clone(),
+    }
 }
 
 /// Duplicate a field onto other pages (Acrobat: right-click a field ▸ Duplicate): each page

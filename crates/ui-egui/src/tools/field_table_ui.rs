@@ -44,7 +44,9 @@ pub struct FieldTableDraft {
     /// The page it goes on, 0-based.
     pub page: usize,
     pub table: FieldTable,
-    /// What added columns are named after: the first free "TableK" when the window opened.
+    /// The field and widget each cell copies (Copy into Grid), or none for new text fields.
+    pub source: Option<(String, usize)>,
+    /// What added columns are named after: the first free "TableK" (or "CopyK") when the window opened.
     base: String,
     /// The document's edit generation when the window opened: any edit since closes it.
     generation: u64,
@@ -55,7 +57,8 @@ pub struct FieldTableDraft {
 /// Two drafts are the same table in the same place; what is kept for the next frame isn't part of it.
 impl PartialEq for FieldTableDraft {
     fn eq(&self, other: &Self) -> bool {
-        (self.doc, self.page, &self.table, &self.base, self.generation) == (other.doc, other.page, &other.table, &other.base, other.generation)
+        (self.doc, self.page, &self.table, &self.source, &self.base, self.generation)
+            == (other.doc, other.page, &other.table, &other.source, &other.base, other.generation)
     }
 }
 
@@ -63,7 +66,7 @@ impl PartialEq for FieldTableDraft {
 impl Default for FieldTableDraft {
     fn default() -> Self {
         let base = "Table1".to_owned();
-        FieldTableDraft { doc: DocId(0), page: 0, table: FieldTable::new([0.0, 0.0, 1.0, 1.0], &base), base, generation: 0, laid: None }
+        FieldTableDraft { doc: DocId(0), page: 0, table: FieldTable::new([0.0, 0.0, 1.0, 1.0], &base), source: None, base, generation: 0, laid: None }
     }
 }
 
@@ -94,7 +97,34 @@ impl FieldTableDraft {
     /// the first base `form` leaves free.
     pub(crate) fn new(doc: DocId, page: usize, rect: [f64; 4], form: &[FormField], generation: u64) -> Self {
         let base = field_table::free_base(form.iter().map(|f| f.name.as_str()));
-        FieldTableDraft { doc, page, table: FieldTable::new(rect, &base), base, generation, laid: None }
+        FieldTableDraft { doc, page, table: FieldTable::new(rect, &base), source: None, base, generation, laid: None }
+    }
+
+    /// A grid of copies of widget `widget` of the field `source`, starting as two copies beside it
+    /// ([`copy_grid`]) on its page (`info`), every column named after the first "CopyK" `form`
+    /// leaves free. `None` when the widget isn't on a page or there is no room beside it.
+    pub(crate) fn copies(doc: DocId, info: &PageInfo, form: &[FormField], source: (String, usize), generation: u64) -> Option<Self> {
+        let widget = form.iter().find(|f| f.name == source.0)?.widgets.get(source.1)?;
+        let page = widget.page?;
+        let (rect, rows, columns) = copy_grid(info, widget.rect)?;
+        let base = free_copy_base(form);
+        let mut table = FieldTable::new(rect, &base);
+        table.rows = rows;
+        table.set_columns(columns, &base);
+        Some(FieldTableDraft { doc, page, table, source: Some(source), base, generation, laid: None })
+    }
+
+    /// The edit Add fields applies: new text fields, or copies of the source.
+    fn edit(&self, info: &PageInfo, form: &[FormField]) -> Result<Edit, TableError> {
+        match &self.source {
+            Some((name, widget)) => field_table::copy_edit(&self.table, self.page, info, form, name, *widget),
+            None => field_table::edit(&self.table, self.page, info, form),
+        }
+    }
+
+    /// The window's title, and its group's.
+    fn title(&self) -> &'static str {
+        if self.source.is_some() { tl!("Copy into Grid") } else { tl!("Text Field Table") }
     }
 
     /// The table laid out on its page (`info`, in a form whose fields are `form`), worked out again
@@ -104,8 +134,7 @@ impl FieldTableDraft {
         if let Some(laid) = self.laid.as_ref().filter(|l| l.table == self.table) {
             return Arc::clone(laid);
         }
-        let laid =
-            Arc::new(Laid { table: self.table.clone(), cells: self.table.cells(), edit: field_table::edit(&self.table, self.page, info, form) });
+        let laid = Arc::new(Laid { table: self.table.clone(), cells: self.table.cells(), edit: self.edit(info, form) });
         self.laid = Some(Arc::clone(&laid));
         laid
     }
@@ -148,7 +177,7 @@ impl StackDialog for FieldTableDialog {
         let refusal = held.refusal().filter(|(_, refused)| **refused == *draft).map(|(reason, _)| reason.clone());
         // The layout of a table that did not change this pass is kept in the draft, so the body asks for it again for free.
         draft.laid(info, form);
-        let shown = FormDialog::new(tl!("Text Field Table").to_owned(), Bind::bound(&mut *draft))
+        let shown = FormDialog::new(draft.title().to_owned(), Bind::bound(&mut *draft))
             .ok_label(tl!("Add fields").to_owned())
             .enter_confirms(false)
             .accept_stays_open(true)
@@ -197,8 +226,13 @@ impl StackDialog for FieldTableDialog {
     /// while it can't.
     fn json_fields(&self) -> Option<Json> {
         let t = &self.draft.table;
-        let reason = field_table::edit(t, self.draft.page, &self.info, &self.form).err().map(|e| e.said(&i18n::words));
+        let reason = self.draft.edit(&self.info, &self.form).err().map(|e| e.said(&i18n::words));
         let mut map = serde_json::Map::new();
+        if let Some((name, widget)) = &self.draft.source {
+            map.insert("source".into(), json!(name));
+            map.insert("source_widget".into(), json!(widget));
+            map.insert("rect".into(), json!(t.rect));
+        }
         map.insert("rows".into(), json!(t.rows));
         map.insert("columns".into(), json!(t.columns.len()));
         map.insert("row_gap".into(), json!(t.row_gap));
@@ -219,6 +253,19 @@ pub(crate) fn open(app: &mut PdfCraftApp, doc: DocId, page: usize, rect: [f64; 4
     let Some(info) = app.session.get(doc).and_then(|d| d.info.pages.get(page)).cloned() else { return };
     let draft = FieldTableDraft::new(doc, page, rect, form, generation);
     crate::dialogs::host::open(app, FieldTableDialog { draft, info, form: form.to_vec(), held: HeldAnswer::new() });
+}
+
+/// Opens the window for copies of widget `widget` of the field `name` of `doc` in a grid beside it (Copy into Grid), or
+/// says there is no room for them. Nothing opens when the field or its page is gone. Whether it opened.
+pub(crate) fn open_copies(app: &mut PdfCraftApp, doc: DocId, name: String, widget: usize, form: &[FormField], generation: u64) -> bool {
+    let Some(page) = form.iter().find(|f| f.name == name).and_then(|f| f.widgets.get(widget)).and_then(|w| w.page) else { return false };
+    let Some(info) = app.session.get(doc).and_then(|d| d.info.pages.get(page)).cloned() else { return false };
+    let Some(draft) = FieldTableDraft::copies(doc, &info, form, (name, widget), generation) else {
+        app.notify_tr("There is not enough space beside this field for the copies.");
+        return false;
+    };
+    crate::dialogs::host::open(app, FieldTableDialog { draft, info, form: form.to_vec(), held: HeldAnswer::new() });
+    true
 }
 
 /// Closes the window when its page or document is no longer what it was opened on, and adds the table when asked to; once per
@@ -255,7 +302,10 @@ pub(crate) fn preview(dialogs: &mut DialogHost, doc: DocId) -> Option<Preview> {
 /// The window's controls, the names the table will have, and why it can't be added if it can't. Returns whether it can.
 fn body(ui: &mut Ui, d: &mut FieldTableDraft, info: &PageInfo, form: &[FormField], refusal: Option<&Label>) -> bool {
     Stack::new().show(ui, |ui, _| {
-        FieldGroup::new(tl!("Text Field Table").to_owned()).show(ui, |ui, _| {
+        if d.source.is_some() {
+            copy_area(ui, d, info);
+        }
+        FieldGroup::new(d.title().to_owned()).show(ui, |ui, _| {
             whole(ui, "Rows", &mut d.table.rows, 1, MAX_ROWS);
             let mut columns = d.table.columns.len();
             if whole(ui, "Columns", &mut columns, 1, MAX_COLUMNS) {
@@ -288,6 +338,77 @@ fn body(ui: &mut Ui, d: &mut FieldTableDraft, info: &PageInfo, form: &[FormField
         Notice::new(Tone::Bad, reason.clone()).layout(NoticeLayout::Inline).show(ui);
     }
     laid.edit.is_ok()
+}
+
+/// Where the copies go, in points from the displayed page's top-left. Each box is held so the area stays on the page.
+fn copy_area(ui: &mut Ui, d: &mut FieldTableDraft, info: &PageInfo) {
+    let [x0, y0, x1, y1] = d.table.rect;
+    let (mut left, mut top) = (x0.min(x1), y0.min(y1));
+    let (mut width, mut height) = ((x1 - x0).abs(), (y1 - y0).abs());
+    let (page_width, page_height) = (f64::from(info.width), f64::from(info.height));
+    if ![left, top, width, height, page_width, page_height].iter().all(|v| v.is_finite()) {
+        return;
+    }
+    FieldGroup::new(tl!("Area").to_owned()).show(ui, |ui, _| {
+        length(ui, "Left", &mut left, 0.0, page_width - width);
+        length(ui, "Top", &mut top, 0.0, page_height - height);
+        length(ui, "Width", &mut width, 1.0, page_width - left);
+        length(ui, "Height", &mut height, 1.0, page_height - top);
+    });
+    d.table.rect = [left, top, left + width, top + height];
+}
+
+/// A length in points held to `least..=most` (to `least` when `most` is under it).
+fn length(ui: &mut Ui, label: &str, value: &mut f64, least: f64, most: f64) {
+    let most = most.max(least);
+    let mut typed = Some(*value);
+    Field::new(tl!(label).to_owned()).show(ui, |ui, _| {
+        NumberField::new(tl!(label).to_owned(), Bind::bound(&mut typed)).range(least..=most).unit("pt").show(ui);
+    });
+    // An emptied field keeps the length; `max` then `min` rather than `clamp`, which panics if the bounds cross.
+    if let Some(v) = typed.filter(|v| v.is_finite()) {
+        *value = v.max(least).min(most);
+    }
+}
+
+/// The first of "Copy", "Copy2", … that no field in `form` is named after (`{base}_…`), so a grid's names start free.
+fn free_copy_base(form: &[FormField]) -> String {
+    let taken: std::collections::HashSet<&str> = form.iter().filter_map(|f| f.name.split_once('_').map(|(head, _)| head)).collect();
+    // One of the first `taken.len() + 1` is always free.
+    (1..=taken.len().saturating_add(1))
+        .map(|k| if k == 1 { "Copy".to_owned() } else { format!("Copy{k}") })
+        .find(|base| !taken.contains(base.as_str()))
+        .unwrap_or_else(|| "Copy".to_owned())
+}
+
+/// Points between a field and the grid of its copies.
+const COPY_GAP: f64 = 8.0;
+
+/// Where a grid of copies of a widget at `rect` (user space) starts: two copies below the widget, else above, else to its
+/// right, else to its left, [`COPY_GAP`] from it and wholly on the displayed page. A view-space area with its rows and
+/// columns; `None` when there is no room on any side.
+pub(crate) fn copy_grid(info: &PageInfo, rect: [f64; 4]) -> Option<([f64; 4], usize, usize)> {
+    let a = info.user_to_view_f64(rect[0], rect[1]);
+    let b = info.user_to_view_f64(rect[2], rect[3]);
+    let (left, right, top, bottom) = (a[0].min(b[0]), a[0].max(b[0]), a[1].min(b[1]), a[1].max(b[1]));
+    let (width, height) = (right - left, bottom - top);
+    let (page_width, page_height) = (f64::from(info.width), f64::from(info.height));
+    if ![left, right, top, bottom, page_width, page_height].iter().all(|v| v.is_finite()) || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let (tall, wide) = (COPY_GAP + height * 2.0, COPY_GAP + width * 2.0);
+    let (fits_across, fits_down) = (left >= 0.0 && right <= page_width, top >= 0.0 && bottom <= page_height);
+    if fits_across && bottom + tall <= page_height {
+        Some(([left, bottom + COPY_GAP, right, bottom + tall], 2, 1))
+    } else if fits_across && top >= tall {
+        Some(([left, top - tall, right, top - COPY_GAP], 2, 1))
+    } else if fits_down && right + wide <= page_width {
+        Some(([right + COPY_GAP, top, right + wide, bottom], 1, 2))
+    } else if fits_down && left >= wide {
+        Some(([left - wide, top, left - COPY_GAP, bottom], 1, 2))
+    } else {
+        None
+    }
 }
 
 /// A whole number field held to `least..=most`. Whether the number changed.
@@ -454,6 +575,21 @@ fn paint_table(draw: &Draw<'_>, xf: &PageXform, visible: Rect, preview: &Preview
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The copies start beside their field, on the page, and say so when there is no room.
+    #[test]
+    fn a_copy_grid_starts_on_the_page_without_covering_the_source() {
+        let info = PageInfo { width: 400.0, height: 300.0, label: "1".into(), crop: [0.0, 0.0, 400.0, 300.0], rotation: 0 };
+        let inside = |r: [f64; 4]| r[0] >= 0.0 && r[1] >= 0.0 && r[2] <= 400.0 && r[3] <= 300.0;
+        let apart = |a: [f64; 4], b: [f64; 4]| a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1];
+        // A field near the top of the page (user y up) gets its copies under it; one near the bottom, over it.
+        for (user, view) in [([10.0, 270.0, 110.0, 290.0], [10.0, 10.0, 110.0, 30.0]), ([10.0, 0.0, 110.0, 20.0], [10.0, 280.0, 110.0, 300.0])] {
+            let (grid, rows, columns) = copy_grid(&info, user).expect("room above or below");
+            assert_eq!((rows, columns), (2, 1));
+            assert!(inside(grid) && apart(grid, view), "{grid:?} is on the page and clear of {view:?}");
+        }
+        assert!(copy_grid(&info, [0.0, 0.0, 400.0, 300.0]).is_none(), "a field filling the page leaves no room");
+    }
 
     fn draft(columns: usize) -> FieldTableDraft {
         let mut d = FieldTableDraft::new(DocId(1), 0, [0.0, 0.0, 400.0, 200.0], &[], 0);

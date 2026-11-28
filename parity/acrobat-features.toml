@@ -5249,7 +5249,7 @@ notes = "right-click a field ▸ Duplicate: all pages or a range; one field, sha
 
 [[feature]]
 id = "form.multiple-copies"
-title = "Create multiple copies of a field in a grid"
+title = "Copy a field into a grid"
 area = "F"
 tier = "P2"
 milestone = "M6"
@@ -5261,8 +5261,17 @@ evidence = [
   "crates/engine/src/field_table.rs::a_table_is_added_and_undone_as_one_step",
   "crates/automation/tests/it/automation.rs::adding_a_field_table_through_tools",
   "crates/ui-egui/tests/it/prepare.rs::a_text_field_table_is_drawn_set_up_and_added_in_one_step",
+  "crates/forms/src/tests.rs::grid_copy_preserves_properties_and_has_an_independent_value",
+  "crates/forms/src/tests.rs::grid_copy_keeps_a_transparent_borderless_multiline_look",
+  "crates/automation/tests/it/automation.rs::copying_a_field_into_a_grid_through_tools",
+  "crates/ui-egui/tests/it/prepare.rs::copying_a_field_into_a_grid_from_its_context_menu",
+  "crates/engine/src/field_table.rs::a_grid_copies_a_check_box_only_when_its_widgets_export_one_value",
+  "crates/forms/src/tests.rs::grid_copy_refuses_a_check_box_whose_widgets_export_different_values",
+  "crates/forms/src/tests.rs::grid_copy_takes_a_check_box_whose_widgets_export_one_value",
+  "crates/forms/src/tests.rs::grid_copy_keeps_a_widget_that_is_read_only_on_its_own",
+  "crates/forms/src/tests.rs::grid_copy_of_a_check_box_ignores_its_widgets_button_kind_bits",
 ]
-notes = "Prepare a form ▸ Text field table: drag an area, then set rows, columns, spacing, column widths (draggable dividers) and a name pattern per column in a movable window, with the table previewed on the page. Added as one undoable edit, or refused whole with the reason (a cell under 4 pt, a name with a period, a repeated or existing name); form_add_field_table does the same headlessly. Missing: copying an existing field of any type, with its properties, into a grid from its context menu, which is what this entry describes; the table only creates new text fields."
+notes = "Prepare a form ▸ Text field table: drag an area, then set rows, columns, spacing, column widths (draggable dividers) and a name pattern per column in a movable window, with the table previewed on the page. Added as one undoable edit, or refused whole with the reason (a cell under 4 pt, a name with a period, a repeated or existing name). Copy into Grid in a text field or check box's menu uses the same window to repeat that field in rows and columns beside it: each copy is an independently named field with the source's flags, look and value and appearance streams of its own, previewed on the page and added as one undoable edit; form_add_field_table does the same with source_field. Missing: copying radio groups, choice fields, buttons, signatures and check boxes whose widgets export different values (refused with the reason)."
 
 [[feature]]
 id = "form.rename-lock-fields"

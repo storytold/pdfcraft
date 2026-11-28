@@ -6017,6 +6017,56 @@ fn adding_a_field_table_through_tools() {
 }
 
 #[test]
+fn copying_a_field_into_a_grid_through_tools() {
+    let dir = workdir("copy-field-grid");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({"doc": doc, "page": 1, "type": "text", "name": "source", "rect": [20, 20, 180, 50], "multiline": true}));
+    ok(&mut a, "form_fill", json!({"doc": doc, "values": {"source": "initial"}}));
+    let args = json!({"doc": doc, "page": 1, "rect": [20, 70, 180, 150], "rows": 2, "names": ["copy_N"], "source_field": "source"});
+    assert_eq!(ok(&mut a, "form_add_field_table", args.clone())["fields"], json!(["copy_1", "copy_2"]));
+    ok(&mut a, "form_fill", json!({"doc": doc, "values": {"copy_1": "changed"}}));
+    let result = ok(&mut a, "form_fields", json!({"doc": doc}));
+    let fields = result["fields"].as_array().unwrap();
+    let get = |name: &str| fields.iter().find(|f| f["name"] == name).unwrap();
+    assert_eq!(get("source")["value"], "initial");
+    assert_eq!(get("copy_1")["value"], "changed");
+    assert_eq!(get("copy_2")["value"], "initial");
+    assert_eq!(get("copy_1")["multiline"], true);
+    assert_eq!(get("copy_2")["multiline"], true);
+    ok(&mut a, "edit_undo", json!({"doc": doc})); // undo the fill
+    ok(&mut a, "edit_undo", json!({"doc": doc})); // undo the complete grid
+    let result = ok(&mut a, "form_fields", json!({"doc": doc}));
+    assert_eq!(result["fields"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn copying_into_a_grid_refuses_what_it_cannot_copy() {
+    let dir = workdir("copy-field-grid-refusals");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({"doc": doc, "page": 1, "type": "text", "name": "source", "rect": [20, 20, 180, 50]}));
+    ok(&mut a, "form_add_field", json!({"doc": doc, "page": 1, "type": "radio", "rect": [20, 100, 34, 114], "group": "size", "export": "S"}));
+    ok(&mut a, "form_add_field", json!({"doc": doc, "page": 1, "type": "radio", "rect": [40, 100, 54, 114], "group": "size", "export": "L"}));
+    let grid = |extra: Value| {
+        let mut args = json!({"doc": doc, "page": 1, "rect": [20, 150, 180, 230], "rows": 2});
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        args
+    };
+    let refused = |a: &mut Automation, extra: Value, says: &str| match err(a, "form_add_field_table", grid(extra.clone())) {
+        ToolError::InvalidArgs(m) => assert!(m.contains(says), "{extra}: {m}"),
+        other => panic!("{extra}: expected InvalidArgs, got {other:?}"),
+    };
+    refused(&mut a, json!({"source_widget": 1}), "source_widget requires source_field");
+    refused(&mut a, json!({"source_field": "nowhere"}), "\"nowhere\" does not exist");
+    refused(&mut a, json!({"source_field": "size"}), "can't be copied into a grid");
+    refused(&mut a, json!({"source_field": "source", "source_widget": 0}), "source_widget must be at least 1");
+    refused(&mut a, json!({"source_field": "source", "source_widget": 2}), "source_widget does not exist");
+    // Each was refused before anything was added.
+    assert_eq!(ok(&mut a, "form_fields", json!({"doc": doc}))["fields"].as_array().unwrap().len(), 2);
+}
+
+#[test]
 fn redact_mark_respects_single_page_and_rejects_conflicting_selectors() {
     let dir = workdir("redact-single-page");
     std::fs::write(dir.join("memo.txt"), "Private 123-45-6789").unwrap();
