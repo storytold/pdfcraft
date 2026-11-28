@@ -414,13 +414,17 @@ dialogs, panels and keyboard shortcuts. Command search accepts the translated la
 English label and the stable command id; filenames, PDF contents, author names, custom
 action names and error details from the engine or the operating system keep their own text.
 
-Japanese fonts come from [craft-fonts](https://github.com/storytold/craft-fonts), an optional build
-input that every release includes. To build with them (Japanese interface text, and Japanese text in
-edited PDFs):
+Source builds are English-only unless `CRAFT_I18N_DIR` points to the absolute path of a
+[craft-i18n](https://github.com/storytold/craft-i18n) checkout at the commit in `craft-i18n.rev`.
+Japanese fonts come from [craft-fonts](https://github.com/storytold/craft-fonts), another optional
+build input that every release includes. To build with translations and Japanese fonts:
 
 ```sh
 git clone https://github.com/storytold/craft-fonts ../craft-fonts
-CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p pdfcraft -- some.pdf
+git clone https://github.com/storytold/craft-i18n ../craft-i18n
+git -C ../craft-i18n checkout "$(cat craft-i18n.rev)" &&
+CRAFT_I18N_DIR="$(cd ../craft-i18n && pwd)" CRAFT_I18N_REQUIRED=1 \
+CRAFT_FONTS_DIR="$(pwd)/../craft-fonts" cargo run --release -p pdfcraft -- some.pdf
 ```
 
 Each [GitHub release](https://github.com/storytold/pdfcraft/releases) has ready-made builds for macOS,
