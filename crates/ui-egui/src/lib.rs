@@ -205,8 +205,8 @@ struct PendingOpen {
     ready: Option<open_worker::ResultKind>,
     /// Reopen Closed Tab asked for it: its closed-tab entry goes once it has opened, and stays when it fails.
     reopen: bool,
-    /// Optional tab group to join once the opened tab is created ("New tab in group").
-    target_group: Option<tab_group::TabGroupId>,
+    /// Optional tab group and originating pane to join once the opened tab is created ("New tab in group").
+    target_group: Option<(tab_group::TabGroupId, panes::Place)>,
 }
 
 /// A named destination being looked up in a document.

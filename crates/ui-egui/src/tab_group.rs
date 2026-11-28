@@ -372,7 +372,7 @@ pub fn paint_group_pill(ui: &egui::Ui, group: &TabGroup, rect: Rect, hovered: bo
 }
 
 /// Render the Group Edit Popover (name input, color swatches, new tab in group, ungroup, close group).
-pub fn group_editor_popup(app: &mut PdfCraftApp, ui: &mut egui::Ui, group_id: TabGroupId, close_popup: &mut bool) {
+pub fn group_editor_popup(app: &mut PdfCraftApp, ui: &mut egui::Ui, place: crate::panes::Place, group_id: TabGroupId, close_popup: &mut bool) {
     let Some(group) = app.group(group_id).cloned() else {
         *close_popup = true;
         return;
@@ -411,7 +411,7 @@ pub fn group_editor_popup(app: &mut PdfCraftApp, ui: &mut egui::Ui, group_id: Ta
         ui.separator();
 
         if Button::new(tl!("New tab in group")).variant(Variant::GHOST).show(ui).clicked() {
-            app.open_dialog_in_group(Some(group_id));
+            app.open_dialog_in_group(Some((group_id, place)));
             *close_popup = true;
         }
 
@@ -653,12 +653,59 @@ mod tests {
         let gid = app.create_tab_group("Bundle".into(), TabGroupColor::Purple);
         app.add_tab_to_group(0, gid);
 
-        app.open_path_in_group(path.to_str().unwrap(), Some(gid));
+        app.open_path_in_group(path.to_str().unwrap(), Some((gid, crate::panes::Place::Main)));
         jobs.run_all();
         app.poll_pending_opens(&ctx);
 
         assert_eq!(app.views.len(), 2);
         assert_eq!(app.views[1].group, Some(gid));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn open_path_in_group_in_second_pane_places_tab_next_to_group() {
+        use std::io::Write as _;
+        use std::sync::Arc;
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let filename = format!("pdfcraft-split-group-open-{}-{nonce}.pdf", std::process::id());
+        let path = std::env::temp_dir().join(&filename);
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+        file.write_all(FIXTURE).unwrap();
+        drop(file);
+
+        let jobs = Arc::new(craft::host::ManualJobs::new());
+        let host = craft::host::Host::builder(crate::APP_INFO).jobs(jobs.clone()).build();
+        let mut app = PdfCraftApp::for_unit_tests_on(Arc::new(host));
+        let ctx = egui::Context::default();
+        app.open_bytes(&ctx, "main.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "grouped.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "unrelated.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.settle_panes(&ctx);
+
+        // Put grouped.pdf and unrelated.pdf in the second (right) pane, with grouped.pdf before unrelated.pdf.
+        app.move_tab_to(1, crate::panes::Place::Second);
+        app.move_tab_to(2, crate::panes::Place::Second);
+        let gid = app.create_tab_group("RightBundle".into(), TabGroupColor::Blue);
+        app.add_tab_to_group(1, gid);
+        app.active = Some(1);
+        app.settle_panes(&ctx);
+
+        app.open_path_in_group(path.to_str().unwrap(), Some((gid, crate::panes::Place::Second)));
+        jobs.run_all();
+        app.poll_pending_opens(&ctx);
+        app.settle_panes(&ctx);
+
+        let second_names: Vec<String> =
+            app.tabs_in(crate::panes::Place::Second).into_iter().map(|i| app.session.get(app.views[i].id).unwrap().name.clone()).collect();
+        let main_names: Vec<String> =
+            app.tabs_in(crate::panes::Place::Main).into_iter().map(|i| app.session.get(app.views[i].id).unwrap().name.clone()).collect();
+        assert_eq!(main_names, ["main.pdf"]);
+        assert_eq!(second_names, ["grouped.pdf", filename.as_str(), "unrelated.pdf"]);
+        let new_idx = app.tabs_in(crate::panes::Place::Second)[1];
+        assert_eq!(app.views[new_idx].group, Some(gid));
+        assert_eq!(app.views[new_idx].place(), crate::panes::Place::Second);
+
         std::fs::remove_file(path).unwrap();
     }
 }

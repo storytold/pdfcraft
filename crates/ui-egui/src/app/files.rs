@@ -855,8 +855,12 @@ impl PdfCraftApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn open_path_in_group(&mut self, path: &str, group_id: Option<crate::tab_group::TabGroupId>) -> OpenOutcome {
-        self.open_path_request(path, None, None, group_id)
+    pub(crate) fn open_path_in_group(
+        &mut self,
+        path: &str,
+        group_target: Option<(crate::tab_group::TabGroupId, crate::panes::Place)>,
+    ) -> OpenOutcome {
+        self.open_path_request(path, None, None, group_target)
     }
 
     /// Keep a chosen tool with its file until preparation and any password entry finish. The
@@ -878,7 +882,7 @@ impl PdfCraftApp {
         path: &str,
         then: Option<&'static str>,
         display_override: Option<(canvas::PageDisplay, bool)>,
-        target_group: Option<crate::tab_group::TabGroupId>,
+        target_group: Option<(crate::tab_group::TabGroupId, crate::panes::Place)>,
     ) -> OpenOutcome {
         // `manual.pdf#nameddest=Intro`, as a help system starts a PDF reader (#3425): the file,
         // shown at that destination once open. A path that names a file is never split.
@@ -897,7 +901,7 @@ impl PdfCraftApp {
         after_open: Option<pdfcraft_render::RemoteDestination>,
         then: Option<&'static str>,
         display_override: Option<(canvas::PageDisplay, bool)>,
-        target_group: Option<crate::tab_group::TabGroupId>,
+        target_group: Option<(crate::tab_group::TabGroupId, crate::panes::Place)>,
     ) -> OpenOutcome {
         // One file, one tab (#2166): a file that is open already comes to the front instead,
         // and the tool it was opened for runs on it. One still being opened is left to that.
@@ -1016,11 +1020,17 @@ impl PdfCraftApp {
         self.open_path_request(path, None, Some((layout, continuous)), None);
     }
 
-    /// Attach newly opened tab `index` to `group_id` if the group still exists.
-    pub(crate) fn attach_tab_to_target_group(&mut self, index: usize, group_id: Option<crate::tab_group::TabGroupId>) {
-        if let Some(gid) = group_id
+    /// Attach newly opened tab `index` to `target_group` (setting its originating pane before grouping) if the group still exists.
+    pub(crate) fn attach_tab_to_target_group(&mut self, index: usize, target_group: Option<(crate::tab_group::TabGroupId, crate::panes::Place)>) {
+        if let Some((gid, target_place)) = target_group
             && self.group(gid).is_some()
         {
+            if let Some(view) = self.views.get_mut(index)
+                && !view.pane.placed
+            {
+                view.pane.place = if self.panes.split.is_some() { target_place } else { crate::panes::Place::Main };
+                view.pane.placed = true;
+            }
             self.add_tab_to_group(index, gid);
         }
     }
@@ -1051,15 +1061,15 @@ impl PdfCraftApp {
         self.open_dialog_in_group(None);
     }
 
-    /// Show the Open file picker and add opened tabs to `group_id` when given.
-    pub fn open_dialog_in_group(&mut self, group_id: Option<crate::tab_group::TabGroupId>) {
+    /// Show the Open file picker and add opened tabs to `target_group` when given.
+    pub fn open_dialog_in_group(&mut self, target_group: Option<(crate::tab_group::TabGroupId, crate::panes::Place)>) {
         self.startup_superseded = true;
         // The web answers `Picked::Contents`, the desktop `Picked::Paths`.
         self.pick_file(Self::open_request(), None, move |app, ctx, picked| match picked {
             #[cfg(not(target_arch = "wasm32"))]
             Picked::Paths(paths) => {
                 for path in paths {
-                    app.open_path_in_group(&path.to_string_lossy(), group_id);
+                    app.open_path_in_group(&path.to_string_lossy(), target_group);
                 }
             }
             Picked::Contents(files) => {
@@ -1068,9 +1078,9 @@ impl PdfCraftApp {
                     match app.open_bytes(ctx, &name, None, bytes) {
                         Ok(()) => {
                             if app.views.len() > before {
-                                app.attach_tab_to_target_group(app.views.len() - 1, group_id);
+                                app.attach_tab_to_target_group(app.views.len() - 1, target_group);
                             } else if let Some(prompt) = app.password_prompt.as_mut() {
-                                prompt.target_group = group_id;
+                                prompt.target_group = target_group;
                             }
                         }
                         Err(error) => app.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]),

@@ -97,7 +97,7 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, place: Place) {
     let group_rects = paint_group_overlays(app, ui, &output.tab_rects);
     let response = output.response.response.clone();
     handle_strip_output(app, ui, place, &entries, output);
-    show_group_editor(app, ui, &seen_groups, &group_rects);
+    show_group_editor(app, ui, place, &seen_groups, &group_rects);
     show_tab_context_menu(app, ui, place, &response);
 }
 
@@ -376,7 +376,13 @@ fn handle_strip_output(app: &mut PdfCraftApp, ui: &egui::Ui, place: Place, entri
     }
 }
 
-fn show_group_editor(app: &mut PdfCraftApp, ui: &mut egui::Ui, seen_groups: &HashSet<TabGroupId>, group_rects: &[(TabGroupId, egui::Rect)]) {
+fn show_group_editor(
+    app: &mut PdfCraftApp,
+    ui: &mut egui::Ui,
+    place: Place,
+    seen_groups: &HashSet<TabGroupId>,
+    group_rects: &[(TabGroupId, egui::Rect)],
+) {
     let Some(gid) = app.editing_group else { return };
     if app.group(gid).is_none() || !seen_groups.contains(&gid) {
         return;
@@ -391,7 +397,7 @@ fn show_group_editor(app: &mut PdfCraftApp, ui: &mut egui::Ui, seen_groups: &Has
         popover = popover.at_pointer();
     }
     popover.show(ui, |ui, _| {
-        crate::tab_group::group_editor_popup(app, ui, gid, &mut close_popup);
+        crate::tab_group::group_editor_popup(app, ui, place, gid, &mut close_popup);
     });
     if !open || close_popup {
         app.editing_group = None;
