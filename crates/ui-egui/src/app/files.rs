@@ -58,15 +58,22 @@ impl PdfCraftApp {
             return;
         }
         let target = target.to_string_lossy().into_owned();
-        // A failed open has told the user why; no success notice after it.
-        if matches!(self.open_path(&target), OpenOutcome::Failed(_)) {
-            return;
-        }
-        self.notify(if signed {
+        let notice = if signed {
             tl!("Opened an editable copy. The original is unchanged; its digital signature isn't valid in the copy.").to_string()
         } else {
             tl!("Opened an editable copy. The original is unchanged.").to_string()
-        });
+        };
+        match self.open_path(&target) {
+            // A failed open has told the user why; no success notice after it.
+            OpenOutcome::Failed(_) => {}
+            // Opened in the background: the notice waits for the tab, and a failure reports itself instead.
+            OpenOutcome::Pending => {
+                if let Some(pending) = self.pending_opens.iter_mut().find(|p| p.path.as_deref() == Some(target.as_str())) {
+                    pending.notice_on_open = Some(notice);
+                }
+            }
+            OpenOutcome::Opened | OpenOutcome::Focused => self.notify(notice),
+        }
     }
 
     /// Unlock for editing needs a file system (desktop builds).
@@ -216,6 +223,7 @@ impl PdfCraftApp {
             display_override: None,
             ready: None,
             reopen: false,
+            notice_on_open: None,
         });
         token
     }
@@ -335,6 +343,9 @@ impl PdfCraftApp {
                         }
                         if let Some(meta) = &pending.recovered {
                             self.finish_recovery(meta);
+                        }
+                        if let Some(notice) = pending.notice_on_open {
+                            self.notify(notice);
                         }
                         if let Some(command) = pending.then {
                             self.execute(ctx, command);

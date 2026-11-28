@@ -203,6 +203,8 @@ struct PendingOpen {
     ready: Option<open_worker::ResultKind>,
     /// Reopen Closed Tab asked for it: its closed-tab entry goes once it has opened, and stays when it fails.
     reopen: bool,
+    /// Shown once the tab has opened, and not when the open fails (Unlock for editing's notice).
+    notice_on_open: Option<String>,
 }
 
 /// A named destination being looked up in a document.
