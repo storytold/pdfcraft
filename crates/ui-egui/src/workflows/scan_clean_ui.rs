@@ -1,5 +1,5 @@
 //! Scan & OCR ▸ Enhance scanned file: the dialog (pages, background removal level, edge
-//! shadows, despeckle) and the background run with its progress card. The scans are cleaned
+//! shadows, despeckle, halftone restore) and the background run with its progress card. The scans are cleaned
 //! on the host's job queue ([`pdfcraft_engine::scan_clean`]); the result is applied as one undoable
 //! step when it is done, unless the document changed meanwhile.
 
@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use craft::pages::PageRange;
 use craft::pages::ui::{PageRangeChoices, PageRangeOptions};
+use craft::ui::contract::Bind;
 use craft::ui::dialog::{DialogResult, dialog_id};
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
 use craft::ui::value_drag::SliderScale;
@@ -41,6 +42,8 @@ fn settings_from(fields: &DialogFields, base: ScanCleanSettings) -> ScanCleanSet
         level: fields.number("level").map_or(base.level, |n| n.round().clamp(0.0, max) as _),
         edge_shadows: fields.bool("edge_shadows").unwrap_or(base.edge_shadows),
         despeckle: fields.bool("despeckle").unwrap_or(base.despeckle),
+        restore_halftones: fields.bool("restore_halftones").unwrap_or(base.restore_halftones),
+        halftone: base.halftone,
     }
 }
 
@@ -63,10 +66,13 @@ fn build_dialog(fields: &mut DialogFields, base: ScanCleanSettings, count: usize
         Param::new("edge_shadows", tl!("Edge shadow removal"), ParamKind::bool(base.edge_shadows))
             .tooltip(tl!("Lightens shadows along the edges of the scan, such as a book's gutter or a copier's dark border")),
         Param::new("despeckle", tl!("Despeckle"), ParamKind::bool(base.despeckle))
-            .tooltip(tl!("Removes isolated dark specks such as dust and scanner noise. The only filter black and white scans take.")),
+            .tooltip(tl!("Removes isolated dark specks such as dust and scanner noise.")),
+        Param::new("restore_halftones", tl!("Restore halftone scans"), ParamKind::bool(base.restore_halftones)).tooltip(tl!(
+            "Turns a black and white scan that is fine dots all over, such as a fax of a faint page, back into clean grey with readable text. Pages of crisp text are left as they are."
+        )),
     ];
     let ready = settings_from(fields, base).changes_something();
-    ParamDialog::new(DIALOG_KEY, tl!("Enhance Scanned File"), params).ok_label(tl!("Enhance").into()).ok_enabled(ready)
+    ParamDialog::new(DIALOG_KEY, tl!("Enhance Scanned File"), params).ok_label(tl!("Enhance").into()).ok_enabled(ready).values(Bind::bound(fields))
 }
 
 /// What a finished run says: what was cleaned, what was not a scan, and what was left and why.
@@ -77,6 +83,11 @@ fn summary(r: &ScanCleanReport) -> String {
     } else {
         crate::i18n::trn(lang, r.pages.len() as u64, "Cleaned up the scan on {n} page.", "Cleaned up the scans on {n} pages.")
     };
+    let restored: std::collections::BTreeSet<_> = r.halftone.iter().flat_map(|h| &h.pages).collect();
+    if !restored.is_empty() {
+        out.push(' ');
+        out.push_str(&crate::i18n::trn(lang, restored.len() as u64, "{n} halftone page was restored.", "{n} halftone pages were restored."));
+    }
     if !r.not_scanned.is_empty() {
         out.push(' ');
         out.push_str(&crate::i18n::trn(lang, r.not_scanned.len() as u64, "{n} page is not a scan.", "{n} pages are not scans."));
@@ -110,6 +121,7 @@ impl PdfCraftApp {
             ("level", f64::from(draft.settings.level).into()),
             ("edge_shadows", draft.settings.edge_shadows.into()),
             ("despeckle", draft.settings.despeckle.into()),
+            ("restore_halftones", draft.settings.restore_halftones.into()),
         ]);
         let base = draft.settings;
         let dialog = HostedParamDialog::new(ctx, DIALOG_KEY, fields, move |fields| build_dialog(fields, base, count, current));
@@ -241,9 +253,20 @@ mod tests {
             images: 1,
             not_scanned: vec![1],
             skipped: vec![SkippedImage { pages: vec![3], name: "Im0".into(), reason: "it is CMYK".into() }],
+            ..Default::default()
         };
         let said = summary(&r);
         assert!(said.contains('2') && said.contains('1') && said.contains('4'), "cleaned, not-a-scan and the skipped page: {said}");
+        let restored = summary(&ScanCleanReport {
+            pages: vec![0],
+            halftone: vec![pdfcraft_engine::scan_clean::HalftoneImage {
+                object: pdfcraft_cos::ObjRef::new(4, 0),
+                format: String::new(),
+                pages: vec![0],
+            }],
+            ..Default::default()
+        });
+        assert!(restored.contains("halftone"), "{restored}");
         let nothing = summary(&ScanCleanReport::default());
         assert_ne!(said, nothing);
         assert!(!nothing.chars().any(|c| c.is_ascii_digit()), "{nothing}");

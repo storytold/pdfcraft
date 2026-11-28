@@ -6489,6 +6489,7 @@ version = "0.22.0"
 dependencies = [
  "craft-image-codecs",
  "craft-jpeg",
+ "hayro-jpeg2000",
  "image",
  "pdfcraft-annot",
  "pdfcraft-content",
