@@ -296,6 +296,19 @@ fn undoing_delivered_redactions_asks_where() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An Apply redactions run through `apply_edit` counts the step, as the Apply dialog's does.
+#[test]
+fn apply_edit_counts_an_apply_redactions_step() {
+    let mut h = harness();
+    h.execute("redact.pages");
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::ApplyRedactions { pages: None }));
+    assert_eq!(h.state().views[0].redactions_applied, 1);
+}
+
 /// Once every Apply redactions step is delivered, Save writes in place again even though the web
 /// build keeps the steps counted for the `_Redacted` name.
 #[test]

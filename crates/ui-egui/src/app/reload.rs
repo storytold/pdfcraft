@@ -138,6 +138,7 @@ impl PdfCraftApp {
                 if let (Some(view), Some(doc)) = (self.views.get_mut(i), self.session.get(id)) {
                     view.document_replaced(ctx, &doc.info);
                 }
+                self.share_redaction_state(i);
                 // What the form's scripts said while it opened, as on opening.
                 let out = self.session.take_js_output(id);
                 self.handle_js(ctx, id, out);
@@ -259,6 +260,24 @@ mod tests {
             let app = self.h.state();
             app.session.get(app.views[0].id).unwrap()
         }
+    }
+
+    /// Reload from disk drops the unsaved Apply redactions step in every view of the document.
+    #[test]
+    fn reloading_clears_the_apply_redactions_count_in_every_view() {
+        let (_dir, path) = TempDir::new("redactions-reload", &fixture(2));
+        let mut r = Rig::new(&path);
+        let ctx = r.h.ctx.clone();
+        let app = r.app();
+        let twin = {
+            let doc = app.session.get(app.views[0].id).unwrap();
+            app.views[0].twin(&doc.info)
+        };
+        app.views.push(twin);
+        app.views[0].redactions_applied = 1;
+        app.views[1].redactions_applied = 1;
+        app.reload_view(&ctx, 0, Arc::new(fixture(2)));
+        assert_eq!(app.views[1].redactions_applied, 0);
     }
 
     /// #2348 review (CodeRabbit): a reload from disk replaces the document, so a signature

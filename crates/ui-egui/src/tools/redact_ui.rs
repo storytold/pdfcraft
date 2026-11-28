@@ -283,21 +283,12 @@ impl PdfCraftApp {
     }
 }
 
-/// The Apply redactions prompt was confirmed: apply every mark, count the step for the
-/// `_Redacted` save rules, and say what the removed text left behind.
+/// The Apply redactions prompt was confirmed: apply every mark (`apply_edit` counts the step for
+/// the `_Redacted` save rules), and say what the removed text left behind.
 pub(crate) fn finish_apply(ctx: &egui::Context, app: &mut PdfCraftApp) {
     let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
     if !app.apply_edit(ctx, Edit::ApplyRedactions { pages: None }) {
         return;
-    }
-    if let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) {
-        let delivered_undone = view.redactions_applied < view.redactions_downloaded;
-        view.redactions_applied = view.redactions_applied.saturating_add(1);
-        // A new step clears the redo history, so the undone saved steps can't come back.
-        if view.redactions_undone_after_save > 0 || delivered_undone {
-            view.redactions_undone_after_save = 0;
-            view.saved_redactions_cut_off = true;
-        }
     }
     if let Some((_, id)) = app.active_ids() {
         app.renew_recovery(id);

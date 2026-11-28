@@ -269,10 +269,12 @@ pub struct DocView {
     pub redactions_applied: usize,
     /// How many Apply redactions steps saved into the document's file are undone in this view.
     /// While it is above 0, Save asks where, so the restored content is not written over the
-    /// redacted file. Redo takes one off. Revert, Reload and a desktop save set it to 0.
+    /// redacted file. Redo takes one off. Revert, Reload, a desktop save and a web delivery set it
+    /// to 0.
     pub redactions_undone_after_save: usize,
     /// Set when Apply redactions runs while saved Apply redactions steps are undone: Redo can no
-    /// longer bring those steps back, so Save asks where until a desktop save or Revert clears it.
+    /// longer bring those steps back, so Save asks where until a desktop save, a web delivery or
+    /// Revert clears it.
     pub saved_redactions_cut_off: bool,
     /// `redactions_applied` at the last web download, which Revert restores. While
     /// `redactions_applied` is below it, a delivered step is undone and Save asks where. A desktop
@@ -518,6 +520,16 @@ pub enum ViewAction {
 }
 
 impl DocView {
+    /// The Apply redactions fields Save reads, which every view of a document shares.
+    pub(crate) fn redaction_state(&self) -> (usize, usize, bool, usize) {
+        (self.redactions_applied, self.redactions_undone_after_save, self.saved_redactions_cut_off, self.redactions_downloaded)
+    }
+
+    /// Sets the fields [`Self::redaction_state`] returns.
+    pub(crate) fn set_redaction_state(&mut self, state: (usize, usize, bool, usize)) {
+        (self.redactions_applied, self.redactions_undone_after_save, self.saved_redactions_cut_off, self.redactions_downloaded) = state;
+    }
+
     /// Whether a middle-button scrolling gesture is active (tests and automation).
     pub fn auto_scrolling(&self) -> bool {
         self.middle_scrolling
@@ -707,13 +719,16 @@ impl DocView {
     /// points into the old version.
     pub(crate) fn follow_document(&mut self, ctx: &egui::Context, info: &DocInfo) {
         let continuous = self.view.continuous;
+        let redactions = self.redaction_state();
         self.document_replaced(ctx, info);
         self.view.continuous = continuous;
+        self.set_redaction_state(redactions);
     }
 
     /// A second view of this document (split view), showing what this one shows.
     pub(crate) fn twin(&self, info: &DocInfo) -> Self {
         let mut v = Self::new(self.id, info, ViewDefaults::default(), self.session.highlight_fields);
+        v.set_redaction_state(self.redaction_state());
         v.view = self.view.clone();
         v.view.go_to(self.view.current);
         v.page_input = self.page_input.clone();
