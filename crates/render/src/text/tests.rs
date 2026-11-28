@@ -142,7 +142,7 @@ fn a_ligature_is_one_glyph_in_every_writing_direction() {
 
 /// One page per content stream, in Helvetica (`/F1`), with `/P1` in the resources'
 /// `/Properties` naming the `/ActualText` "fi".
-fn marked_pages(contents: &[&str]) -> Pdf {
+pub(crate) fn marked_pages(contents: &[&str]) -> Pdf {
     use lopdf::{Document, Object, Stream, dictionary};
     let mut doc = Document::with_version("1.7");
     let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });

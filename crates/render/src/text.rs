@@ -768,10 +768,12 @@ const SIDE_BY_SIDE_LINES: usize = 256;
 
 use craft_pdf::interpret::TransformExt;
 
+mod audit;
 mod device;
 mod layout;
 mod order;
 
+pub use audit::{GlyphAudit, PageAudit, audit_page, audit_page_with};
 use device::{CELL_GAP, WORD_GAP};
 #[cfg(test)]
 use device::{MAX_REDRAW_TEXT, REDRAW_TEXT_BYTES, Replaced, TextDevice, ligature_letters};

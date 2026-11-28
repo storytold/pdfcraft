@@ -6526,6 +6526,42 @@ fn auditing_faux_redactions_through_tools() {
     assert_eq!(ok(&mut a, "doc_audit_redactions", json!({ "doc": clean }))["count"], 0);
 }
 
+/// Invisible text (`3 Tr`), white-on-white text and text placed wholly off the page are all read
+/// by text extraction but not seen by a reader; `doc_audit_visibility` lists them per page. A
+/// clean document audits clean.
+#[test]
+fn auditing_invisible_content_through_tools() {
+    let dir = workdir("invisible-content-audit");
+    let body = "BT /F1 12 Tf\n\
+                1 0 0 1 72 700 Tm (Visible) Tj\n\
+                3 Tr 1 0 0 1 72 650 Tm (Injected instruction) Tj\n\
+                0 Tr 1 1 1 rg 1 0 0 1 72 600 Tm (Whisper) Tj\n\
+                0 0 0 rg 1 0 0 1 700 700 Tm (Offpage) Tj\n\
+                ET";
+    std::fs::write(dir.join("invisible.pdf"), helvetica_page(body)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "invisible.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_audit_visibility", json!({ "doc": doc }));
+    let page = &r["pages"][0];
+    assert_eq!(page["page"], 1, "{r}");
+    let kinds: Vec<(&str, u64)> =
+        page["findings"].as_array().unwrap().iter().map(|f| (f["kind"].as_str().unwrap(), f["count"].as_u64().unwrap())).collect();
+    assert!(kinds.contains(&("invisible", 20)), "{kinds:?}");
+    assert!(kinds.contains(&("light-fill", 7)), "{kinds:?}");
+    assert!(kinds.contains(&("off-page", 7)), "{kinds:?}");
+    // Samples name the invisible text (per glyph, capped at 8); rectangles are page points
+    // like every other tool.
+    let invisible = page["findings"].as_array().unwrap().iter().find(|f| f["kind"] == "invisible").unwrap();
+    let sample: String = invisible["samples"].as_array().unwrap().iter().map(|s| s.as_str().unwrap_or("")).collect();
+    assert!(sample.starts_with("Injected"), "{invisible}");
+    assert_eq!(invisible["rects"].as_array().unwrap().len(), 8);
+    assert_eq!(r["totals"]["invisible"], 20, "{r}");
+    // A clean document audits clean.
+    let clean = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_audit_visibility", json!({ "doc": clean }));
+    assert!(r["totals"].as_object().is_none_or(|t| t.is_empty()), "{r}");
+}
+
 /// An applied redaction at the end of a line leaves the words before it, then a gap the text
 /// matrix jumps over and the redaction box: nothing is under the box any more, so the audit must
 /// not report the words beside it as covered. In the middle of a line it never did.
