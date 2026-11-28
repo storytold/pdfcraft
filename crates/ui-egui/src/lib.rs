@@ -502,6 +502,10 @@ pub struct PdfCraftApp {
     /// The progress card of each background job that shows one.
     pub(crate) progress_cards: std::collections::HashMap<crate::notices::ProgressKey, craft::ui::runtime::toast::ToastId>,
     pub password_prompt: Option<PasswordPrompt>,
+    /// Files the Print verb couldn't print unattended (`--print-file`, #1695), in the order asked,
+    /// with the document once it is open (also after its password is entered): each gets its
+    /// Print dialog in turn (`open_queued_print`).
+    pub(crate) print_requests: Vec<(String, Option<DocId>)>,
     /// Whole-document text copies (#2639) reading their pages off the UI thread.
     pub(crate) text_copies: Queue<DocId, String>,
     /// Reveal-in-file-manager calls, which can block on a slow mount; their failures are shown by `drain_reveals`.

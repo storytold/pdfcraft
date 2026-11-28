@@ -45,7 +45,7 @@ pub use outline::{
 pub use outline_io::{MAX_IMPORT_BOOKMARKS, OutlineNode, OutlineTree, import_outline, outline_tree, unmapped, view_arity};
 pub use templates::{Template, set_template_hidden, spawn_template, templates};
 pub use transition::{TRANSITION_DIRECTIONS, TRANSITION_STYLES, Transition, TransitionSpec, set_transition};
-pub use view::{InitialView, displays_doc_title, initial_view, set_initial_view};
+pub use view::{InitialView, displays_doc_title, initial_view, prints_without_scaling, set_initial_view};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum OrganizeError {

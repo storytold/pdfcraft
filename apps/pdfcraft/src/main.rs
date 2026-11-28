@@ -4,6 +4,8 @@
 //! `--two-paged` opens each command-line PDF in noncontinuous two-page view, without changing defaults.
 //! An explicit `--layout` takes precedence for the active document, regardless of argument order.
 //! `--create-images [images…]` stages the images in one PDF and asks for the page DPI.
+//! `--print files…` prints each file on the default printer without a window (File Explorer's
+//! Print verb); one that can't be printed that way opens with the Print dialog (`print_verb`).
 //!
 //! View options (applied after the files open; also the seed of the UI control channel):
 //! `--page N  --zoom 150  --layout single|continuous|two-up|two-page  --continuous on|off  --panel comments|bookmarks|pages|fields|layers|attachments|none
@@ -41,6 +43,7 @@ use pdfcraft_ui_egui::PdfCraftApp;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod compositor_gpu;
+mod print_verb;
 mod reopen;
 mod single_instance;
 mod startup;
@@ -97,6 +100,18 @@ fn settings_dir() -> Option<std::path::PathBuf> {
 /// Whether settings, logs and recovery live beside the executable (#157).
 fn portable() -> bool {
     pdfcraft_ui_egui::settings::resolution().rule == craft::settings::Rule::Portable
+}
+
+/// Preferences ▸ JavaScript as saved, for the Print verb, which opens documents without the
+/// window: the window reads it from the same settings store when it starts (#1723 review).
+fn saved_javascript() -> bool {
+    javascript_in(pdfcraft_ui_egui::settings::open().get())
+}
+
+/// Whether saved settings leave JavaScript on. Like the window, settings that don't say leave it
+/// on (the default).
+fn javascript_in(saved: &pdfcraft_ui_egui::settings::PdfCraftSettings) -> bool {
+    saved.signature.javascript.unwrap_or(true)
 }
 
 /// Move the settings and crash-recovery folders of the app's former name, PrintCraft, to the new
@@ -202,7 +217,8 @@ fn main() -> eframe::Result {
     }
     startup.files = rejoin_split_paths(startup.files, |p| std::path::Path::new(p).is_file());
     let may_hand_off = startup.may_hand_off();
-    let startup::Arguments { files, options, control_port, control_token, control_token_file, create_images, combine, two_paged, .. } = startup;
+    let startup::Arguments { files, mut options, control_port, control_token, control_token_file, create_images, combine, two_paged, print, .. } =
+        startup;
     // A bad control configuration stops the launch before any window opens.
     let control = match control_options(control_port, control_token, control_token_file) {
         Ok(control) => control,
@@ -213,13 +229,33 @@ fn main() -> eframe::Result {
     // no file behind) and after the PrintCraft migration (which a fresh folder would block).
     // Records logged until now are written to it first.
     let data_dir = if portable() { settings_dir() } else { eframe::storage_dir("PdfCraft") };
-    if let (Some(logger), Some(dir)) = (logger, data_dir) {
+    if print {
+        // The Print verb runs once per selected file, all at once: each rotating the log would
+        // push the app's own logs out, so these runs log to standard error only.
+        if let Some(logger) = logger {
+            logger.stderr_only();
+        }
+    } else if let (Some(logger), Some(dir)) = (logger, data_dir) {
         match logger.attach_dir(&dir.join("logs")) {
             Ok(path) => log::info!("PdfCraft {}, log file {}", pdfcraft_engine::build_info::version(), path.display()),
             // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
             Err(e) => log::warn!("no log file: {e}"),
         }
     }
+    // File Explorer's Print verb (#1695): print without a window, and open only the files that
+    // couldn't be printed that way, with the Print dialog. When every file printed, no window.
+    let files = if print && !files.is_empty() {
+        let leftover = print_verb::run(&files, saved_javascript());
+        if leftover.is_empty() {
+            return Ok(());
+        }
+        // Each file gets its own Print dialog once it is open (a file that asks for a password
+        // too, after it is entered), one after another.
+        options.extend(single_instance::absolute(&leftover).into_iter().map(|f| ("print-file".to_string(), f)));
+        leftover
+    } else {
+        files
+    };
     // Windows, Linux and the BSDs: a launch that only names files (an Outlook attachment, an
     // Explorer double-click, a file manager or `xdg-open`) hands them to the PdfCraft already
     // running and exits (#282, #317, #1726). Any option means the caller wants this launch's own

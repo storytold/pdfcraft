@@ -23,6 +23,16 @@ impl PdfCraftApp {
     ///
     /// This is the seed of the UI control channel (M3.9): the same verbs become `ui.set` calls.
     pub fn set_option(&mut self, ctx: &egui::Context, key: &str, value: &str) -> Result<(), String> {
+        if key == "print-file" {
+            // The file's Print dialog, now if it is open, else once it opens.
+            let open = self
+                .views
+                .iter()
+                .map(|v| v.id)
+                .find(|id| self.session.get(*id).and_then(|d| d.path.as_deref()).is_some_and(|p| super::files::same_file(p, value)));
+            self.print_requests.push((value.to_string(), open));
+            return Ok(());
+        }
         let view = self.active.and_then(|i| self.views.get_mut(i));
         match (key, view) {
             ("hotbar-tools", _) => self.hotbar.set_tools(value)?,
@@ -490,6 +500,9 @@ impl PdfCraftApp {
             "watermark" => self.open_marks(ctx, MarkKind::Watermark, false),
             "background" => self.open_marks(ctx, MarkKind::Background, false),
             "printer-marks" => self.open_printer_marks(ctx),
+            // Same path as the menu, so the printers and pages are seeded; nothing with no
+            // document open.
+            "print" => self.open_print(),
             "export-image" => export_ui::open(self, ctx, export_ui::ExportKind::Image),
             "word-count" => self.open_word_count(),
             "export-text" => export_ui::open(self, ctx, export_ui::ExportKind::Text),

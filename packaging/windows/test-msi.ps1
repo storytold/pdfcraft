@@ -249,6 +249,12 @@ if ($pdfCheckbox[2] -notmatch '&Edit' -or $pdfCheckbox[2] -notmatch 'Combine fil
 $pdfChecked = Read-Row 'SELECT `Value` FROM `CheckBox` WHERE `Property` = ''INSTALLPDFCONTEXTMENU''' 1
 Assert-Equal $pdfChecked[0] '1' 'Welcome PDF context-menu value'
 Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf'' AND `Name` IS NULL' '.pdf default app'
+# Print verb (#1695): Explorer's Print, while PdfCraft is the default, prints without a window.
+# Part of the PDF handler's ProgID, so it is there whenever "Open" is, and uninstall removes it.
+$printCommand = Read-Row 'SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''Software\Classes\PdfCraft.Document\shell\print\command'' AND `Name` IS NULL' 3
+Assert-Equal $printCommand[0] '"[#PdfcraftExe]" --print "%1"' 'PDF print verb command'
+Assert-Equal $printCommand[1] 'PdfcraftApp' 'PDF print verb component'
+Assert-Equal $printCommand[2] '-1' 'PDF print verb context-sensitive root'
 # #1080: Explorer is told the associations changed (SHCNE_ASSOCCHANGED) after install/uninstall,
 # without ever failing setup. 34 = exe in a directory; 64 = ignore its exit code.
 $notify = Read-Row 'SELECT `Type`, `Source`, `Target` FROM `CustomAction` WHERE `Action` = ''NotifyAssociationsChanged''' 3

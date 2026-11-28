@@ -521,3 +521,15 @@ fn start_up_and_the_panic_hook_never_use_eprintln() {
         offenders.join("\n")
     );
 }
+
+/// #1723 review: the Print verb reads Preferences ▸ JavaScript from the settings store as the
+/// window does, and leaves JavaScript on when the settings don't say.
+#[test]
+fn the_print_verb_reads_the_saved_javascript_preference() {
+    let mut saved = pdfcraft_ui_egui::settings::PdfCraftSettings::default();
+    assert!(super::javascript_in(&saved), "not saved: the default");
+    saved.signature.javascript = Some(false);
+    assert!(!super::javascript_in(&saved));
+    saved.signature.javascript = Some(true);
+    assert!(super::javascript_in(&saved));
+}

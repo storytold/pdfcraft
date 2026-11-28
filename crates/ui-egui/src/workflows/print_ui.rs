@@ -223,6 +223,38 @@ pub enum PrintStart {
 }
 
 impl PdfCraftApp {
+    /// The next file asked for with `--print-file` gets its Print dialog, once nothing else is
+    /// being asked: one dialog at a time, in the order asked, each for its own document. A file
+    /// still opening holds back the ones after it (opens can finish in any order, and one that
+    /// needed a password is opened again after the others); one no longer opening (it couldn't
+    /// be opened, or its password was cancelled) is passed over. Every modal prompt holds the
+    /// queue, another document's permissions password among them (#1723 review).
+    pub(crate) fn open_queued_print(&mut self) {
+        if self.modal_open() || self.print_requests.is_empty() {
+            return;
+        }
+        // Still opening: on the open queue's worker, or its answer kept back for later.
+        #[cfg(not(target_arch = "wasm32"))]
+        let opening = |app: &Self, path: &str| app.pending_opens.iter().any(|p| p.path.as_deref().is_some_and(|q| crate::same_file(q, path)));
+        #[cfg(target_arch = "wasm32")]
+        let opening = |_: &Self, _: &str| false;
+        while let Some((path, open)) = self.print_requests.first().cloned() {
+            match open {
+                None if opening(self, &path) => return,
+                None => {}
+                Some(id) => {
+                    if let Some(i) = self.views.iter().position(|v| v.id == id) {
+                        self.print_requests.remove(0);
+                        self.active = Some(i);
+                        self.open_print();
+                        return;
+                    }
+                }
+            }
+            self.print_requests.remove(0);
+        }
+    }
+
     /// Label printing: find each printed page's printed area (a quick low-resolution render, as
     /// Fit Visible does) and which way its text runs. Only the pages being printed are read, at
     /// most [`LABEL_CROP_PAGES`] of them (the rest print whole); read again when they change.
@@ -1049,5 +1081,57 @@ mod tests {
         later.sheet = 2;
         let rasters = preview_rasters(&later, &sizes, &labels, 2.0, 8192.0, PANE);
         assert!(rasters.iter().any(|(page, _)| *page == 2));
+    }
+
+    /// The Print dialog is open over the app.
+    fn print_dialog_open(app: &PdfCraftApp) -> bool {
+        app.dialogs.get::<HostedPrint>().is_some()
+    }
+
+    /// A file the Print verb left that is still opening keeps its request: its dialog comes once
+    /// it opens.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_print_request_waits_for_a_file_still_opening() {
+        let mut app = PdfCraftApp::for_unit_tests();
+        let path = "still-opening.pdf".to_string();
+        app.pending_opens.push(crate::PendingOpen {
+            token: 1,
+            name: path.clone(),
+            path: Some(path.clone()),
+            stamp: None,
+            activate: true,
+            after_open: None,
+            recovered: None,
+            then: None,
+            display_override: None,
+            ready: None,
+            reopen: false,
+        });
+        app.print_requests.push((path.clone(), None));
+        app.open_queued_print();
+        assert_eq!(app.print_requests, vec![(path, None)], "kept until the file opens");
+        assert!(!print_dialog_open(&app));
+    }
+
+    /// #1723 review: a queued Print dialog waits while another document asks for its permissions
+    /// password, and comes once that prompt closes.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_print_request_waits_for_every_modal_prompt() {
+        let mut app = PdfCraftApp::for_unit_tests();
+        let blank = app.session.create_blank(612.0, 792.0, 1).unwrap();
+        app.open_bytes(&egui::Context::default(), "a.pdf", None, blank.to_vec()).unwrap();
+        let (_, id) = app.active_ids().unwrap();
+        let doc = app.session.get(id).unwrap();
+        app.unlock_prompt = Some(crate::state::UnlockPrompt::new(doc, None));
+        app.print_requests.push(("a.pdf".to_string(), Some(id)));
+        app.open_queued_print();
+        assert!(!print_dialog_open(&app), "not over the password prompt");
+        assert_eq!(app.print_requests.len(), 1, "kept for later");
+        app.unlock_prompt = None;
+        app.open_queued_print();
+        assert!(print_dialog_open(&app));
+        assert!(app.print_requests.is_empty());
     }
 }
