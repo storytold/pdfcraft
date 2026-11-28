@@ -798,6 +798,13 @@ pub(crate) fn picture_menu(ui: &mut egui::Ui, session: &mut PageSession, menu: &
             }
         }
     });
+    let _ = Menu::submenu_row(ui, tl!("Opacity"), |ui, _| {
+        for (alpha, label) in [(1.0, tl!("100% (opaque)")), (0.75, tl!("75%")), (0.5, tl!("50%")), (0.25, tl!("25%"))] {
+            if item(ui, true, label) {
+                session.pending_edit = edit(E::Opacity(alpha));
+            }
+        }
+    });
     // Grouped Form artwork: draw its content in place, so its text and pictures edit one by
     // one (#2964, #3005).
     if img.is_form && item(ui, true, tl!("Ungroup")) {
