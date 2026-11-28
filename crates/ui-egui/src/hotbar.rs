@@ -1,56 +1,65 @@
-//! A movable, persistent set of shortcuts to the shared command registry.
-use egui::{Rect, Sense, vec2};
+//! The toolbar: a tool rail in the dock, with a searchable drawer that edits which commands sit on it.
+use craft::behavior::{DockSide, IconId};
+use craft::keymap::CommandRef;
+use craft::theme::Srgba;
+use craft::ui::buttons::IconButton;
+use craft::ui::choice::Swatch;
+use craft::ui::contract::{Bind, Entry, Props as _, Show, Tracked};
+use craft::ui::docking::{DockGrid, PanelSpec};
+use craft::ui::form::SliderField;
+use craft::ui::pickers::Select;
+use craft::ui::rails::{DrawerGroup, DrawerKind, LastUsed, RailTool, SlotId, ToolRail, ToolSlot, ToolbarDrawer, apply_toolbar_edit};
+use craft::ui::runtime::env::UnitKind;
+use craft::ui::value_drag::SliderScale;
 use pdfcraft_engine::commands::{COMMANDS, command};
+use pdfcraft_engine::{Edit, Rgb};
 use serde::{Deserialize, Serialize};
 
-use crate::{PdfCraftApp, icons, theme::Tokens};
+use crate::fill_sign::{FILL_TOOLS, FillTool};
+use crate::{Mode, PdfCraftApp, QuickTool, comments};
 
-/// Persistent state and UI state for the customizable document hotbar.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// The tool ids of the tools that are not registry commands; the rail's current tool and its slots are keyed by
+/// command id.
+const TOOL_SELECT: &str = "view.select_tool";
+const TOOL_HAND: &str = "view.hand_tool";
+const TOOL_CROP: &str = "page.crop";
+const TOOL_EDIT_TEXT: &str = "edit.edit_text";
+
+const SLOT_SELECT: SlotId = 0;
+const SLOT_HAND: SlotId = 1;
+const SLOT_CROP: SlotId = 2;
+/// The first comment group's slot; group `g` is `SLOT_COMMENT + g`.
+const SLOT_COMMENT: SlotId = 10;
+const SLOT_EDIT_TEXT: SlotId = 20;
+const SLOT_FILL: SlotId = 30;
+/// The first user slot; the user's `i`-th command is `SLOT_USER + i`.
+const SLOT_USER: SlotId = 100;
+
+/// Persistent state and UI state for the toolbar.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Hotbar {
+    /// The commands the user put on the toolbar, in order.
     pub tools: Vec<String>,
-    /// Position as a fraction of the available travel, so resizing keeps the bar visible.
-    pub position: [f32; 2],
-    pub vertical: bool,
-    pub button_size: f32,
-    pub dock: Option<String>,
-    pub full_side: bool,
+    /// The tool each slot showed last.
     #[serde(skip)]
-    search: String,
+    last_used: LastUsed<String>,
+    /// Whether the drawer that edits the toolbar is open.
     #[serde(skip)]
-    picker_open: bool,
-}
-
-impl Default for Hotbar {
-    /// Create a default empty horizontal floating hotbar.
-    fn default() -> Self {
-        Self {
-            tools: Vec::new(),
-            position: [0.5, 0.0],
-            vertical: false,
-            button_size: 32.0,
-            dock: None,
-            full_side: false,
-            search: String::new(),
-            picker_open: false,
-        }
-    }
+    drawer_open: bool,
+    /// The rail's slots as last shown, written only when they change, so a settled rail repaints its last run.
+    #[serde(skip)]
+    rail_slots: Tracked<Vec<ToolSlot<String>>>,
+    /// The tool each slot showed last, as the rail was last given it; written only when it changes.
+    #[serde(skip)]
+    rail_last_used: Tracked<LastUsed<String>>,
 }
 
 impl Hotbar {
-    /// Clamp button size and normalized position coordinates, drop unknown docked sides,
-    /// and deduplicate/filter tool command identifiers against the command registry.
+    /// Drops tool ids the command registry no longer has, and duplicates.
     pub fn normalize(&mut self) {
-        self.button_size = if self.button_size.is_finite() { self.button_size.clamp(24.0, 64.0) } else { 32.0 };
-        if self.dock.as_deref().is_some_and(|side| !matches!(side, "left" | "right" | "top" | "bottom")) {
-            self.dock = None;
-        }
         let mut seen = std::collections::HashSet::new();
         self.tools.retain(|id| command(id).is_some() && seen.insert(id.clone()));
-        for coordinate in &mut self.position {
-            *coordinate = if coordinate.is_finite() { coordinate.clamp(0.0, 1.0) } else { 0.5 };
-        }
     }
 
     /// Parse and validate a comma-separated list of command identifiers for the hotbar.
@@ -63,249 +72,502 @@ impl Hotbar {
         self.normalize();
         Ok(())
     }
+}
 
-    /// Dock the hotbar to `"left"`, `"right"`, `"top"`, or `"bottom"`, or undock with `"float"`.
-    pub fn place(&mut self, side: &str) -> Result<(), String> {
-        if side == "float" {
-            self.dock = None;
-            return Ok(());
-        }
-        let (position, vertical) = match side {
-            "left" => ([0.0, 0.5], true),
-            "right" => ([1.0, 0.5], true),
-            "top" => ([0.5, 0.0], false),
-            "bottom" => ([0.5, 1.0], false),
-            _ => return Err("hotbar-side must be float, left, right, top or bottom".into()),
-        };
-        self.dock = Some(side.to_owned());
-        self.position = position;
-        self.vertical = vertical;
-        Ok(())
+/// Reads a `hotbar` object saved before the toolbar became a dock panel: its tool list (filtered as `normalize`
+/// does) and the side it was docked to. Position, size, full-side and placement are dropped. The old physical
+/// `"left"` maps to `Start`, as `DockSide`'s own aliases do, so a right-to-left window docks it on the right.
+pub(crate) fn migrate_legacy(value: &serde_json::Value) -> (Vec<String>, Option<DockSide>) {
+    let mut bar = Hotbar {
+        tools: value
+            .get("tools")
+            .and_then(|tools| tools.as_array())
+            .map(|tools| tools.iter().filter_map(|id| id.as_str().map(str::to_owned)).collect())
+            .unwrap_or_default(),
+        ..Hotbar::default()
+    };
+    bar.normalize();
+    let side = match value.get("dock").and_then(|dock| dock.as_str()) {
+        Some("left") => Some(DockSide::Start),
+        Some("right") => Some(DockSide::End),
+        Some("top") => Some(DockSide::Top),
+        Some("bottom") => Some(DockSide::Bottom),
+        _ => None,
+    };
+    (bar.tools, side)
+}
+
+fn rail_tool(id: &str) -> RailTool<String> {
+    RailTool::new(id.to_owned(), CommandRef::new(id))
+}
+
+/// The id of the rail tool the app's current tool stands for; empty when the rail has none for it.
+fn current_tool(app: &PdfCraftApp) -> String {
+    match app.quick_tool {
+        QuickTool::Select => TOOL_SELECT.to_owned(),
+        QuickTool::Hand => TOOL_HAND.to_owned(),
+        QuickTool::Crop => TOOL_CROP.to_owned(),
+        QuickTool::EditText => TOOL_EDIT_TEXT.to_owned(),
+        QuickTool::Comment(tool) => tool.command().to_owned(),
+        QuickTool::Fill(tool) => tool.command().to_owned(),
+        _ => String::new(),
     }
 }
 
-/// Render the hotbar settings gear button and open the tool picker when clicked.
-fn settings_button(ui: &mut egui::Ui, cell: f32, picker_open: &mut bool) {
-    let settings = ui
-        .push_id("hotbar-settings", |ui| {
-            icons::button(ui, "settings", cell, false, tl!("Hotbar settings")).on_hover_text(tl!("Hotbar settings / add tools"))
+/// The tool each slot shows while its tools aren't current. The comment groups and Fill & Sign show the app's own last
+/// tool of theirs, which every pick sets (a command, a menu, the control channel), with the toolbar shown or not; the
+/// other slots show the rail's own memory.
+fn last_used(app: &PdfCraftApp) -> LastUsed<String> {
+    let mut last = app.hotbar.last_used.clone();
+    for (g, tool) in app.comment_prefs.group_tool.iter().enumerate() {
+        last.set(SLOT_COMMENT + g as SlotId, tool.command().to_owned());
+    }
+    last.set(SLOT_FILL, app.fill_tool.command().to_owned());
+    last
+}
+
+/// The built-in slots, then one slot for each of `user` commands.
+fn slots_with(app: &PdfCraftApp, user: &[String]) -> Vec<ToolSlot<String>> {
+    let mut slots = vec![
+        ToolSlot::new(SLOT_SELECT, vec![rail_tool(TOOL_SELECT)]),
+        ToolSlot::new(SLOT_HAND, vec![rail_tool(TOOL_HAND)]),
+        ToolSlot::ending_group(SLOT_CROP, vec![rail_tool(TOOL_CROP)]),
+    ];
+    let groups = comments::GROUPS.len();
+    for (g, tools) in comments::GROUPS.iter().enumerate() {
+        let tools = tools.iter().map(|tool| rail_tool(tool.command())).collect();
+        let id = SLOT_COMMENT + g as SlotId;
+        slots.push(if g + 1 == groups { ToolSlot::ending_group(id, tools) } else { ToolSlot::new(id, tools) });
+    }
+    if app.mode == Mode::Edit || app.quick_tool == QuickTool::EditText {
+        slots.push(ToolSlot::new(SLOT_EDIT_TEXT, vec![rail_tool(TOOL_EDIT_TEXT)]));
+    }
+    slots.push(ToolSlot::ending_group(SLOT_FILL, FILL_TOOLS.iter().map(|tool| rail_tool(tool.command())).collect()));
+    for (i, id) in user.iter().enumerate() {
+        slots.push(ToolSlot::new(SLOT_USER + i as SlotId, vec![rail_tool(id)]));
+    }
+    slots
+}
+
+/// The toolbar's slots: the built-in tools and the user's commands.
+pub(crate) fn slots(app: &PdfCraftApp) -> Vec<ToolSlot<String>> {
+    slots_with(app, &app.hotbar.tools)
+}
+
+/// The registry's commands grouped by family (the id up to its first dot) for the drawer.
+fn drawer_groups() -> Vec<DrawerGroup<String>> {
+    let mut families: Vec<(&str, Vec<RailTool<String>>)> = Vec::new();
+    for spec in COMMANDS {
+        let family = spec.id.split('.').next().unwrap_or(spec.id);
+        match families.iter_mut().find(|(name, _)| *name == family) {
+            Some((_, tools)) => tools.push(rail_tool(spec.id)),
+            None => families.push((family, vec![rail_tool(spec.id)])),
+        }
+    }
+    families
+        .into_iter()
+        .map(|(family, tools)| {
+            let mut name = family.to_owned();
+            if let Some(first) = name.get_mut(..1) {
+                first.make_ascii_uppercase();
+            }
+            DrawerGroup::new(name, tools)
         })
-        .inner;
-    if settings.clicked() {
-        *picker_open = true;
+        .collect()
+}
+
+/// The toolbar's dock panel, titled `title`: its column is whole tool columns wide (a rail grid of `cells` cells, which
+/// the dock sizes from its style), and its tab shows the marker of the command that toggles panels.
+pub(crate) fn panel_spec(title: &str, cells: usize) -> PanelSpec {
+    PanelSpec::new(title.to_owned())
+        .grid(DockGrid::rail(cells))
+        .command(CommandRef::with_params("view.panel", serde_json::json!({ "panel": "toolbar" })))
+}
+
+/// The number of cells the toolbar's rail shows.
+pub(crate) fn rail_cells(app: &PdfCraftApp) -> usize {
+    slots(app).len()
+}
+
+/// The rail's slots and last-used tools as `app` stands, taken out of the app while the rail's footer borrows it
+/// ([`keep_rail_model`] puts them back). Each is written only when it changed, keeping its revision otherwise.
+fn take_rail_model(app: &mut PdfCraftApp) -> (Tracked<Vec<ToolSlot<String>>>, Tracked<LastUsed<String>>) {
+    let (now_slots, now_last) = (slots(app), last_used(app));
+    let mut kept = (std::mem::take(&mut app.hotbar.rail_slots), std::mem::take(&mut app.hotbar.rail_last_used));
+    if *kept.0 != now_slots {
+        *kept.0 = now_slots;
+    }
+    if *kept.1 != now_last {
+        *kept.1 = now_last;
+    }
+    kept
+}
+
+/// Puts back what [`take_rail_model`] took.
+fn keep_rail_model(app: &mut PdfCraftApp, (slots, last_used): (Tracked<Vec<ToolSlot<String>>>, Tracked<LastUsed<String>>)) {
+    app.hotbar.rail_slots = slots;
+    app.hotbar.rail_last_used = last_used;
+}
+
+/// Measures the toolbar and active tool controls so the dock gives the rail its full height.
+pub(crate) fn measure_rail(app: &mut PdfCraftApp, ui: &egui::Ui, width: f32) -> f32 {
+    app.hotbar.normalize();
+    let model = take_rail_model(app);
+    let current = current_tool(app);
+    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &model.0, &current, &model.1)
+        .edit_toolbar(tl!("Edit toolbar").to_string())
+        .edit_icon(IconId::new("settings"));
+    if app.hotbar.drawer_open {
+        rail = rail.editing();
+    }
+    let height = rail.measure_rail(ui, width, |ui, _footer| footer_controls(ui, app)).y;
+    keep_rail_model(app, model);
+    height
+}
+
+// Every conversion between the engine's `f64` colour and the framework's goes through these two.
+fn to_srgba(color: Rgb) -> Srgba {
+    Srgba::rgb(color[0] as f32, color[1] as f32, color[2] as f32)
+}
+
+fn from_srgba(color: Srgba) -> Rgb {
+    let [r, g, b] = color.to_rgb_array();
+    [f64::from(r), f64::from(g), f64::from(b)]
+}
+
+/// Opens the colour picker in the main window, the window the rail's footer lives in, and runs `then` with the answer.
+fn open_picker(
+    app: &mut PdfCraftApp,
+    request: craft::ui::runtime::requests::ColorRequest,
+    then: impl FnOnce(&mut PdfCraftApp, &egui::Context, Srgba) + 'static,
+) {
+    app.open_colour_picker(crate::colour_picker::PickerHost::App, request, then);
+}
+
+/// Shows the toolbar's rail in the width `ui` has left, with the active tool's controls under it, and applies what
+/// the user did: a drawer pick runs its command, a drawer edit changes the tool list.
+pub(crate) fn show_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    app.hotbar.normalize();
+    let model = take_rail_model(app);
+    show_rail_over(app, ui, &model.0, &model.1);
+    keep_rail_model(app, model);
+}
+
+/// [`show_rail`] over the rail's slots `toolbar` and its last-used tools `last_used`.
+fn show_rail_over(app: &mut PdfCraftApp, ui: &mut egui::Ui, toolbar: &Tracked<Vec<ToolSlot<String>>>, last_used: &Tracked<LastUsed<String>>) {
+    let current = current_tool(app);
+    let editing = app.hotbar.drawer_open;
+    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), toolbar, &current, last_used)
+        .edit_toolbar(tl!("Edit toolbar").to_string())
+        .edit_icon(IconId::new("settings"));
+    if editing {
+        rail = rail.editing();
+    }
+    let output = rail.show_rail(ui, |ui, _footer| footer_controls(ui, app));
+    if let Some(next) = output.last_used {
+        app.hotbar.last_used = next;
+    }
+    // A click by the pointer or by keyboard activation.
+    if output.edit_toolbar.as_ref().is_some_and(craft::ui::contract::clicked) {
+        app.hotbar.drawer_open = true;
+    }
+    if !app.hotbar.drawer_open {
+        return;
+    }
+    let groups = drawer_groups();
+    let toolbar: &[ToolSlot<String>] = toolbar;
+    let mut drawer = ToolbarDrawer::new(output.response.rect, &groups, toolbar, output.dropped)
+        .kind(DrawerKind::Searchable)
+        // A tool held only inside a group stays draggable, so it can get a slot of its own (L-323).
+        .grouped_tools_drag();
+    // The pass a drop adds a slot lays the Edit Toolbar button out anew and has no response for it yet: the drawer
+    // stays open, anchored to the rail, and finds its opener again next pass.
+    if let Some(opener) = output.edit_toolbar.as_ref() {
+        drawer = drawer.opened_by(opener);
+    }
+    let drawer = drawer.show(ui);
+    let defaults = slots_with(app, &[]);
+    let mut edited: Option<Vec<ToolSlot<String>>> = None;
+    for edit in &drawer.edits {
+        let base = edited.as_deref().unwrap_or(toolbar);
+        edited = Some(apply_toolbar_edit(base, edit, &defaults));
+    }
+    if let Some(edited) = edited {
+        // Built-in slots are not the user's list; only commands the registry has are kept.
+        app.hotbar.tools = edited
+            .iter()
+            .filter(|slot| !defaults.iter().any(|built_in| built_in.id == slot.id))
+            .flat_map(|slot| slot.tools.iter())
+            .map(|tool| tool.id.clone())
+            .collect();
+        app.hotbar.normalize();
+    }
+    if let Some(id) = drawer.select {
+        app.execute(ui.ctx(), &id);
+    }
+    if drawer.closed {
+        app.hotbar.drawer_open = false;
     }
 }
 
-/// Whether `spec` matches the hotbar picker search query across the translated label, canonical
-/// English label, or command identifier (case-insensitively).
-fn matches_search(spec: &pdfcraft_engine::commands::CommandSpec, query: &str) -> bool {
-    let search = query.to_lowercase();
-    tl!(spec.label).to_lowercase().contains(&search) || spec.label.to_lowercase().contains(&search) || spec.id.to_lowercase().contains(&search)
+fn selected_fill_text(app: &PdfCraftApp) -> Option<(usize, usize)> {
+    let (index, id) = app.active_ids()?;
+    let (page, annotation) = app.views.get(index)?.session.comments.primary()?;
+    let doc = app.session.get(id).filter(|doc| doc.allows_annotation())?;
+    doc.info
+        .annotations
+        .iter()
+        .any(|a| a.page == page && a.index == annotation && a.fill_sign && a.subtype == "FreeText" && !a.locked)
+        .then_some((page, annotation))
 }
 
-/// Render the configured tool shortcut buttons and their removal context menus.
-fn tool_buttons(ui: &mut egui::Ui, app: &PdfCraftApp, tools: &[String], cell: f32, run: &mut Option<&'static str>, remove: &mut Option<usize>) {
-    for (index, id) in tools.iter().enumerate() {
-        let Some(spec) = command(id) else { continue };
-        let active = crate::comments::CommentTool::from_command(id).is_some_and(|tool| app.quick_tool == crate::QuickTool::Comment(tool));
-        let button = ui.add_enabled_ui(app.command_enabled(spec), |ui| icons::button(ui, spec.icon, cell, active, tl!(spec.label))).inner;
-        if button.clicked() {
-            *run = Some(spec.id);
-        }
-        button.context_menu(|ui| {
-            if ui.button(tl!("Remove from hotbar")).clicked() {
-                *remove = Some(index);
-                ui.close();
-            }
-        });
+/// The controls of the active tool under the rail's slots.
+fn footer_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
+    match app.quick_tool {
+        QuickTool::Fill(FillTool::Text | FillTool::Date) => fill_text_controls(ui, app),
+        QuickTool::Comment(tool) => comment_controls(ui, app, tool),
+        _ => {}
     }
 }
 
-/// Draw the floating or side-docked hotbar and its tool picker window inside `area`.
-pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ctx: &egui::Context) {
-    let mut bar = std::mem::take(&mut app.hotbar);
-    let t = Tokens::get(ctx);
-    let id = egui::Id::unique("custom-hotbar");
-    let full_side = bar.full_side && bar.dock.is_some();
-    let bounds = if full_side { area } else { area.shrink(10.0) };
-    if let Some(side) = bar.dock.clone() {
-        let _ = bar.place(&side);
+/// The colour of new Fill & Sign text, and of the selected text.
+fn set_fill_text_colour(app: &mut PdfCraftApp, ctx: &egui::Context, color: Rgb) {
+    app.fill_text_color = color;
+    if let Some((page, index)) = selected_fill_text(app) {
+        app.apply_edit(ctx, Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None });
     }
-    let cell = bar.button_size;
-    let mut size = ctx.data_mut(|data| data.get_temp::<egui::Vec2>(id)).unwrap_or(vec2(90.0, 44.0));
-    if full_side {
-        size = if bar.vertical { vec2(cell + 12.0, bounds.height()) } else { vec2(bounds.width(), cell + 12.0) };
-    }
-    let travel = (bounds.size() - size).max(vec2(0.0, 0.0));
-    let pos = bounds.min + vec2(travel.x * bar.position[0], travel.y * bar.position[1]);
-    let mut run = None;
-    let mut picker_open = bar.picker_open;
-    let shown = egui::Area::new(id).order(egui::Order::Middle).fixed_pos(pos).constrain_to(bounds).show(ctx, |ui| {
-        let frame = if full_side {
-            egui::Frame::NONE.fill(t.chrome).corner_radius(egui::CornerRadius::ZERO).inner_margin(6)
-        } else {
-            egui::Frame::new().fill(t.card).stroke(egui::Stroke::new(1.0, t.border)).corner_radius(10).inner_margin(6)
-        };
-        let frame_resp = frame.show(ui, |ui| {
-            if full_side {
-                ui.set_min_size((size - vec2(12.0, 12.0)).max(vec2(0.0, 0.0)));
-            }
-            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-            if bar.vertical {
-                ui.set_width(cell);
-            } else {
-                ui.set_height(cell);
-            }
-            let mut remove = None;
-            if full_side {
-                if bar.vertical {
-                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                        settings_button(ui, cell, &mut picker_open);
-                        ui.add_space(4.0);
-                        let remaining = ui.available_height().max(cell);
-                        egui::ScrollArea::vertical().max_width(cell).max_height(remaining).show(ui, |ui| {
-                            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
-                            });
-                        });
-                    });
-                } else {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        settings_button(ui, cell, &mut picker_open);
-                        ui.add_space(4.0);
-                        let remaining = ui.available_width().max(cell);
-                        egui::ScrollArea::horizontal().max_height(cell).max_width(remaining).show(ui, |ui| {
-                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
-                            });
-                        });
-                    });
-                }
-            } else {
-                let layout =
-                    if bar.vertical { egui::Layout::top_down(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) };
-                ui.with_layout(layout, |ui| {
-                    let grip_size = if bar.vertical { vec2(cell, 18.0) } else { vec2(18.0, cell) };
-                    let (grip_rect, grip) = ui.allocate_exact_size(grip_size, Sense::drag());
-                    for x in [-3.0, 3.0] {
-                        for y in [-6.0, 0.0, 6.0] {
-                            let offset = if bar.vertical { vec2(y, x) } else { vec2(x, y) };
-                            ui.painter().circle_filled(grip_rect.center() + offset, 1.5, t.text_faint);
-                        }
-                    }
-                    let drag_label = tl!("Drag hotbar");
-                    let grip = grip.on_hover_text(drag_label).on_hover_cursor(egui::CursorIcon::Grab);
-                    grip.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, drag_label));
-                    if grip.dragged() && bar.dock.is_none() {
-                        let delta = grip.drag_delta();
-                        bar.position[0] = (bar.position[0] + delta.x / travel.x.max(1.0)).clamp(0.0, 1.0);
-                        bar.position[1] = (bar.position[1] + delta.y / travel.y.max(1.0)).clamp(0.0, 1.0);
-                    }
-                    let scroll_max = if bar.vertical { (bounds.height() - cell - 50.0).max(cell) } else { (bounds.width() - cell - 50.0).max(cell) };
-                    let scroll = if bar.vertical {
-                        egui::ScrollArea::vertical().max_width(cell).max_height(scroll_max)
-                    } else {
-                        egui::ScrollArea::horizontal().max_height(cell).max_width(scroll_max)
-                    };
-                    scroll.auto_shrink([true, true]).show(ui, |ui| {
-                        ui.with_layout(layout, |ui| {
-                            tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
-                        });
-                    });
-                    settings_button(ui, cell, &mut picker_open);
-                });
-            }
-            if let Some(index) = remove {
-                bar.tools.remove(index);
-            }
-        });
-        if full_side {
-            let r = frame_resp.response.rect;
-            let divider = egui::Stroke::new(1.0, t.divider);
-            match bar.dock.as_deref() {
-                Some("left") => {
-                    ui.painter().vline(r.right() - 0.5, r.top()..=r.bottom(), divider);
-                }
-                Some("right") => {
-                    ui.painter().vline(r.left() + 0.5, r.top()..=r.bottom(), divider);
-                }
-                Some("top") => {
-                    ui.painter().hline(r.left()..=r.right(), r.bottom() - 0.5, divider);
-                }
-                Some("bottom") => {
-                    ui.painter().hline(r.left()..=r.right(), r.top() + 0.5, divider);
-                }
-                _ => {}
-            }
-        }
-    });
-    let picker_id = egui::Id::unique("hotbar-picker");
-    // A remembered collapsed state can survive disabling the collapse affordance.
-    let mut expanded = egui::collapsing_header::CollapsingState::load_with_default_open(ctx, picker_id.with("collapsing"), true);
-    expanded.set_open(true);
-    expanded.store(ctx);
-    let screen = ctx.content_rect().shrink(12.0);
-    let picker_x = if pos.x + cell + 380.0 < screen.right() { pos.x + cell + 20.0 } else { pos.x - 360.0 };
-    let picker_pos = egui::pos2(
-        picker_x.clamp(screen.left(), (screen.right() - 350.0).max(screen.left())),
-        pos.y.clamp(screen.top(), (screen.bottom() - 640.0).max(screen.top())),
+}
+
+/// Fill & Sign's text controls: its colour, font size and border, for the selected text, or for new text when none
+/// is selected. Each opens a popover from the bar, as the comment tools' controls do.
+fn fill_text_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
+    let picked = selected_fill_text(app);
+    let mut colour = comments::colours::PalettePick::default();
+    let current = app.fill_text_color;
+    comments::popover_from(
+        ui,
+        tl!("Colour"),
+        |ui| Swatch::new(tl!("Colour").to_string(), to_srgba(current)).show(ui).response,
+        |ui| {
+            let pick = comments::palette(ui, tl!("Colour"), Some(current), "hotbar.fill-text-colour", &app.recent_colours);
+            let done = pick.picked.is_some();
+            colour.picked = colour.picked.take().or(pick.picked);
+            colour.request = colour.request.take().or(pick.request);
+            done
+        },
     );
-    egui::Window::new(tl!("Hotbar tools"))
-        .id(picker_id)
-        .order(egui::Order::Foreground)
-        .open(&mut picker_open)
-        .collapsible(false)
-        .resizable(false)
-        .fixed_pos(picker_pos)
-        .max_height((screen.height() - 24.0).max(180.0))
-        .vscroll(true)
-        .show(ctx, |ui| {
-            ui.set_min_width(260.0);
-            ui.add(egui::Slider::new(&mut bar.button_size, 24.0..=64.0).text(tl!("Toolbar size")).suffix(" px"));
-            ui.add_enabled(bar.dock.is_none(), crate::widgets::checkbox(&mut bar.vertical, tl!("Vertical layout")));
-            if ui.selectable_label(bar.dock.is_none(), tl!("Float (drag anywhere)")).clicked() {
-                let _ = bar.place("float");
-            }
-            ui.label(tl!("Stick to a side:"));
-            ui.horizontal(|ui| {
-                for (label, side) in [(tl!("Left"), "left"), (tl!("Right"), "right"), (tl!("Top"), "top"), (tl!("Bottom"), "bottom")] {
-                    if ui.selectable_label(bar.dock.as_deref() == Some(side), label).clicked() {
-                        let _ = bar.place(side);
-                    }
-                }
-            });
-            let strip_hint = tl!("Extend the docked toolbar along the entire side. Choose a side above to enable.");
-            ui.add_enabled(bar.dock.is_some(), crate::widgets::checkbox(&mut bar.full_side, tl!("Full-side strip")))
-                .on_hover_text(strip_hint)
-                .on_disabled_hover_text(strip_hint);
-            if ui.button(tl!("Close menu")).clicked() {
-                ui.close();
-            }
-            ui.separator();
-            ui.label(tl!("Add tools to hotbar"));
-            ui.add(egui::TextEdit::singleline(&mut bar.search).hint_text(tl!("Search all tools…")));
-            egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                for spec in COMMANDS {
-                    if !matches_search(spec, &bar.search) {
-                        continue;
-                    }
-                    let mut selected = bar.tools.iter().any(|id| id == spec.id);
-                    if ui.add(crate::widgets::checkbox(&mut selected, tl!(spec.label))).changed() {
-                        if selected {
-                            bar.tools.push(spec.id.to_owned());
-                        } else {
-                            bar.tools.retain(|id| id != spec.id);
-                        }
-                    }
-                }
-            });
-            ui.separator();
+    if let Some(color) = colour.picked {
+        set_fill_text_colour(app, ui.ctx(), color);
+    }
+    if let Some(request) = colour.request {
+        open_picker(app, request, move |app: &mut PdfCraftApp, ctx: &egui::Context, picked_colour: Srgba| {
+            set_fill_text_colour(app, ctx, from_srgba(picked_colour));
         });
-    ctx.data_mut(|data| data.insert_temp(id, shown.response.rect.size()));
-    bar.picker_open = picker_open;
-    app.hotbar = bar;
-    if let Some(id) = run {
-        app.execute(id);
+    }
+
+    let (min, max) = (crate::fill_sign::MIN_TEXT_SIZE, crate::fill_sign::MAX_TEXT_SIZE);
+    let mut size = app.fill_text_size;
+    // #1274: the size also applies to the Fill & Sign text that is selected, once per committed change (a typed
+    // value, or the end of a drag), so a drag adds one undo step and not one per frame.
+    let mut committed = false;
+    comments::popover_from(
+        ui,
+        tl!("Font size"),
+        |ui| IconButton::new(IconId::new("a-large-small")).label(tl!("Font size")).show(ui).response,
+        |ui| {
+            let field = SliderField::new(tl!("Font size"), Bind::bound(&mut size), min..=max)
+                .scale(SliderScale::Log)
+                .typed_decimals(12)
+                .unit_kind(UnitKind::Points)
+                .show(ui);
+            committed |= field.edit.events.committed().is_some();
+            false
+        },
+    );
+    app.fill_text_size = size;
+    if committed
+        && let Some((page, index)) = picked
+        && app
+            .active_ids()
+            .and_then(|(_, id)| app.session.get(id)?.comment_props(page, index)?.font_size)
+            .is_none_or(|stored| format!("{stored:.3}") != format!("{size:.3}"))
+    {
+        app.apply_edit(ui.ctx(), Edit::FontSizeAnnotation { page, index, size });
+    }
+
+    comments::popover_from(
+        ui,
+        tl!("Border"),
+        |ui| IconButton::new(IconId::new("square")).label(tl!("Border")).show(ui).response,
+        |ui| {
+            fill_text_border_controls(ui, app, picked);
+            false
+        },
+    );
+}
+
+/// Fill & Sign's Border controls for typed text: its width, colour and shape, for the selected text (`picked`), or
+/// for new text when none is selected.
+fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: Option<(usize, usize)>) {
+    // The selected text's own border (Comment Properties may have changed it since): the controls below show it and
+    // change only it. Without one they set what new text gets until PdfCraft quits; Make Current Properties Default
+    // on typed text keeps it.
+    let selected = picked.and_then(|(page, annotation)| {
+        let p = app.active_ids().and_then(|(_, id)| app.session.get(id))?.comment_props(page, annotation)?;
+        let own = crate::fill_sign::TextBorder { width: p.width.unwrap_or(0.0), color: p.border_color, shape: p.border_shape.unwrap_or_default() };
+        Some((page, annotation, own))
+    });
+    let was = selected.map_or(
+        crate::fill_sign::TextBorder { width: app.fill_text_border, color: app.fill_text_border_color, shape: app.fill_text_border_shape },
+        |(_, _, own)| own,
+    );
+    let mut border = was;
+    let border_label = |w: f64| if w > 0.0 { format!("{w} pt") } else { tl!("None").to_string() };
+    let widths: Vec<Entry<usize>> = crate::fill_sign::TEXT_BORDERS.iter().enumerate().map(|(i, w)| Entry::new(i, border_label(*w))).collect();
+    let mut width_at = crate::fill_sign::TEXT_BORDERS.iter().position(|w| *w == was.width).unwrap_or(0);
+    Select::new(tl!("Border:").to_string(), Bind::bound(&mut width_at), &widths).show(ui);
+    if let Some(width) = crate::fill_sign::TEXT_BORDERS.get(width_at) {
+        border.width = *width;
+    }
+    // The border's own colour (the text's unless picked).
+    if was.width > 0.0 {
+        let text_colour = selected
+            .and_then(|(page, index, _)| app.active_ids().and_then(|(_, id)| app.session.get(id))?.comment_props(page, index)?.color)
+            .unwrap_or(app.fill_text_color);
+        let pick = border_colour_control(ui, was.color, text_colour, "hotbar.fill-border-colour", &app.recent_colours);
+        if let Some(color) = pick.choice {
+            border.color = color;
+        }
+        if let Some(request) = pick.request {
+            let target = selected.map(|(page, index, _)| (page, index));
+            open_picker(app, request, move |app: &mut PdfCraftApp, ctx: &egui::Context, picked_colour: Srgba| {
+                let color = from_srgba(picked_colour);
+                match target {
+                    Some((page, index)) => {
+                        app.apply_edit(ctx, Edit::BorderColorAnnotation { page, index, color: Some(color) });
+                    }
+                    None => app.fill_text_border_color = Some(color),
+                }
+            });
+        }
+        // Its shape: an oval or a circle goes around the text, which keeps its place.
+        let shapes: Vec<Entry<usize>> =
+            pdfcraft_engine::BorderShape::ALL.iter().enumerate().map(|(i, shape)| Entry::new(i, tl!(shape.name()).to_string())).collect();
+        let mut shape_at = pdfcraft_engine::BorderShape::ALL.iter().position(|shape| *shape == was.shape).unwrap_or(0);
+        Select::new(tl!("Border shape").to_string(), Bind::bound(&mut shape_at), &shapes).show(ui);
+        if let Some(shape) = pdfcraft_engine::BorderShape::ALL.get(shape_at) {
+            border.shape = *shape;
+        }
+    }
+    // No border, no shape: an oval or a circle left without its line would keep its box grown around a shape that
+    // isn't drawn.
+    if border.width <= 0.0 {
+        border.shape = pdfcraft_engine::BorderShape::Rectangle;
+    }
+    match selected {
+        Some((page, index, _)) => {
+            // One undo step for what one choice changed (Border ▸ None takes a circle's line and its shape).
+            let mut edits = Vec::new();
+            if border.width != was.width {
+                edits.push(Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(border.width), endings: None });
+            }
+            if border.color != was.color {
+                edits.push(Edit::BorderColorAnnotation { page, index, color: border.color });
+            }
+            if border.shape != was.shape {
+                edits.push(Edit::BorderShapeAnnotation { page, index, shape: border.shape });
+            }
+            if edits.len() > 1 {
+                app.apply_edit(ui.ctx(), Edit::Batch { label: "Change comment properties".into(), edits });
+            } else if let Some(edit) = edits.pop() {
+                app.apply_edit(ui.ctx(), edit);
+            }
+        }
+        None => {
+            app.fill_text_border = border.width;
+            app.fill_text_border_color = border.color;
+            app.fill_text_border_shape = border.shape;
+        }
+    }
+}
+
+/// The Border colour control: a swatch of the border as drawn (`own`, else the text's colour `text`) that opens
+/// "Same as text" over the palette. `choice` is `Some(None)` for Same as text, `Some(Some(c))` for a colour; a choice
+/// closes the popover.
+fn border_colour_control(
+    ui: &mut egui::Ui,
+    own: Option<Rgb>,
+    text: Rgb,
+    key: &str,
+    recent: &comments::RecentColours,
+) -> comments::colours::ColourChoice {
+    let mut pick = comments::colours::ColourChoice::default();
+    comments::popover_from(
+        ui,
+        tl!("Border colour"),
+        |ui| Swatch::new(tl!("Border colour").to_string(), to_srgba(own.unwrap_or(text))).show(ui).response,
+        |ui| {
+            let this = comments::border_choice(ui, own, key, recent);
+            let done = this.choice.is_some();
+            pick.choice = pick.choice.take().or(this.choice);
+            pick.request = pick.request.take().or(this.request);
+            done
+        },
+    );
+    pick
+}
+
+/// The controls of the active comment tool: its border colour (text boxes and callouts), and the quick bar's.
+fn comment_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, tool: comments::CommentTool) {
+    // Text boxes and callouts: the border's own colour, for new ones and the selected one this tool made (not a
+    // locked one). With one selected the well shows its colours (Comment Properties may have changed them), else the
+    // tool's.
+    if tool.has_border_color() {
+        let style = app.comment_prefs.style(tool);
+        let selected = app.active_ids().and_then(|(index, id)| {
+            let (page, annotation) = app.views.get(index)?.session.comments.primary()?;
+            let doc = app.session.get(id)?;
+            let made = doc.allows_annotation()
+                && doc.info.annotations.iter().any(|a| a.page == page && a.index == annotation && !a.locked && comments::made_by(a, tool));
+            made.then(|| (page, annotation, doc.comment_props(page, annotation)))
+        });
+        let (own, text) = match selected.as_ref().and_then(|(.., p)| p.as_ref()) {
+            Some(p) => (p.border_color, p.color.unwrap_or(style.color)),
+            None => (style.border_color, style.color),
+        };
+        let pick = border_colour_control(ui, own, text, "hotbar.comment-border-colour", &app.recent_colours);
+        if let Some(color) = pick.choice {
+            app.comment_prefs.set_border_color(tool, color);
+            if let Some((page, annotation, _)) = &selected {
+                app.apply_edit(ui.ctx(), Edit::BorderColorAnnotation { page: *page, index: *annotation, color });
+            }
+        }
+        if let Some(request) = pick.request {
+            let target = selected.map(|(page, annotation, _)| (page, annotation));
+            open_picker(app, request, move |app: &mut PdfCraftApp, ctx: &egui::Context, picked_colour: Srgba| {
+                let color = from_srgba(picked_colour);
+                app.comment_prefs.set_border_color(tool, Some(color));
+                if let Some((page, annotation)) = target {
+                    app.apply_edit(ctx, Edit::BorderColorAnnotation { page, index: annotation, color: Some(color) });
+                }
+            });
+        }
+    }
+    // The selected comments this tool made take the colour too (locked ones keep theirs).
+    let pick = comments::quick_bar_controls(ui, tool, &mut app.comment_prefs, &app.recent_colours);
+    if let Some(color) = pick.colour
+        && let Some((_, id)) = app.active_ids()
+        && app.session.get(id).is_some_and(|doc| doc.allows_annotation())
+    {
+        app.colour_selection(ui.ctx(), color, |a| comments::made_by(a, tool));
+    }
+    if let Some(request) = pick.request {
+        open_picker(app, request, move |app: &mut PdfCraftApp, ctx: &egui::Context, picked_colour: Srgba| {
+            let color = from_srgba(picked_colour);
+            if app.active_ids().and_then(|(_, id)| app.session.get(id)).is_some_and(|doc| doc.allows_annotation()) {
+                app.colour_selection(ctx, color, |a| comments::made_by(a, tool));
+            }
+        });
     }
 }
 
@@ -313,60 +575,51 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ctx: &egui::Context) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn hotbar_validation_and_placement() {
-        let mut bar = Hotbar::default();
-        assert!(bar.tools.is_empty());
-        bar.set_tools("comment.ink,comment.freehand_highlight,comment.ink").unwrap();
-        assert_eq!(bar.tools.len(), 2);
-        assert!(bar.set_tools("does.not.exist").is_err());
-        assert_eq!(bar.tools.len(), 2);
-        bar.place("right").unwrap();
-        assert!(bar.vertical);
-        assert_eq!(bar.position, [1.0, 0.5]);
-        bar.place("bottom").unwrap();
-        assert!(!bar.vertical);
-        assert_eq!(bar.position, [0.5, 1.0]);
-        assert_eq!(bar.dock.as_deref(), Some("bottom"));
-        bar.place("float").unwrap();
-        assert!(bar.dock.is_none());
-    }
-
+    /// An old `hotbar` object keeps its tools and the side it was docked to, drops what the dock workspace owns now
+    /// (position, size, full-side, placement), and a side the dock has no name for docks nowhere.
     #[test]
     fn hotbar_preferences_round_trip() {
-        let mut app = PdfCraftApp::new();
-        app.set_option("hotbar-tools", "comment.freehand_highlight,comment.ink").unwrap();
-        app.set_option("hotbar-side", "left").unwrap();
-        app.set_option("hotbar-size", "48").unwrap();
-        app.set_option("hotbar-full-side", "true").unwrap();
-        assert!(app.set_option("hotbar-size", "NaN").is_err());
-        let mut restored = PdfCraftApp::new();
-        restored.restore(&app.persist());
-        assert_eq!(restored.hotbar.tools, app.hotbar.tools);
-        assert_eq!(restored.hotbar.position, [0.0, 0.5]);
-        assert!(restored.hotbar.vertical);
-        assert_eq!(restored.hotbar.button_size, 48.0);
-        assert!(restored.hotbar.full_side);
-        assert_eq!(restored.hotbar.dock.as_deref(), Some("left"));
+        let old = serde_json::json!({
+            "tools": ["comment.freehand_highlight", "comment.ink"],
+            "position": [0.0, 0.5], "vertical": true, "button_size": 48.0, "dock": "left", "full_side": true, "placed": true,
+        });
+        let (tools, side) = migrate_legacy(&old);
+        assert_eq!(tools, ["comment.freehand_highlight", "comment.ink"]);
+        assert_eq!(side, Some(DockSide::Start));
+        assert_eq!(migrate_legacy(&serde_json::json!({ "dock": "top" })).1, Some(DockSide::Top));
+        assert_eq!(migrate_legacy(&serde_json::json!({ "dock": "float" })).1, None);
+
+        // The list survives a save and a restore, and nothing but the list is saved.
+        let mut bar = Hotbar::default();
+        bar.set_tools("comment.freehand_highlight,comment.ink").unwrap();
+        let saved = serde_json::to_value(&bar).unwrap();
+        assert_eq!(saved, serde_json::json!({ "tools": ["comment.freehand_highlight", "comment.ink"] }));
+        let restored: Hotbar = serde_json::from_value(old).unwrap();
+        assert_eq!(restored.tools, bar.tools, "an old object with the dropped keys still deserializes");
+
+        // The floating bar's options are gone from the control channel.
+        let ctx = egui::Context::default();
+        let mut app = PdfCraftApp::for_unit_tests();
+        for key in ["hotbar-size", "hotbar-side", "hotbar-full-side"] {
+            assert!(app.set_option(&ctx, key, "left").is_err(), "{key} is removed");
+        }
+        app.set_option(&ctx, "hotbar-tools", "comment.freehand_highlight,comment.ink").unwrap();
+        let saved = app.settings_snapshot();
+        let mut fresh = PdfCraftApp::for_unit_tests();
+        fresh.apply_settings(&saved);
+        assert_eq!(fresh.hotbar.tools, app.hotbar.tools);
     }
 
+    /// Ids the registry no longer has, and duplicates, are dropped on restore; an unknown id given to the control
+    /// channel is refused and leaves the list as it was.
     #[test]
     fn hotbar_restore_filters_unknown_tools_and_offscreen_positions() {
-        let mut app = PdfCraftApp::new();
-        app.restore(r#"{"hotbar":{"tools":["invalid","comment.ink","comment.ink"],"position":[-10,999]}}"#);
-        assert_eq!(app.hotbar.tools, ["comment.ink"]);
-        assert_eq!(app.hotbar.position, [0.0, 1.0]);
-    }
+        let (tools, _) = migrate_legacy(&serde_json::json!({ "tools": ["invalid", "comment.ink", "comment.ink"] }));
+        assert_eq!(tools, ["comment.ink"]);
 
-    #[test]
-    fn hotbar_search_matches_translated_and_canonical_labels() {
-        let ink = command("comment.ink").unwrap();
-        crate::i18n::set_current(crate::i18n::lang_from_tag("fr").unwrap());
-        assert_eq!(tl!(ink.label), "Dessiner à main levée");
-        assert!(matches_search(ink, "dessiner"), "translated French label must match");
-        assert!(matches_search(ink, "freehand"), "canonical English label must still match");
-        assert!(matches_search(ink, "comment.ink"), "command ID must still match");
-        assert!(!matches_search(ink, "introuvable"));
-        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let mut app = PdfCraftApp::for_unit_tests();
+        app.hotbar.set_tools("comment.ink").unwrap();
+        assert!(app.set_option(&egui::Context::default(), "hotbar-tools", "does.not.exist").is_err());
+        assert_eq!(app.hotbar.tools, ["comment.ink"]);
     }
 }

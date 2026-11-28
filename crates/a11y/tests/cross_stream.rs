@@ -99,14 +99,20 @@ fn shown_strings(ops: &[Op]) -> Vec<String> {
 
 #[test]
 fn mark_decorative_leaves_the_other_stream_untouched() {
-    let mut doc = tagged_figure_two_streams("0 0 1 rg 300 600 100 50 re f", "BT /F1 12 Tf 72 500 Td (After) Tj ET");
-    let before = doc.get(ObjRef::new(11, 0)).clone();
-    mark_decorative(&mut doc, ObjRef::new(8, 0)).expect("mark decorative succeeds");
-    assert!(figures(&doc).is_empty());
-    assert_eq!(*doc.get(ObjRef::new(11, 0)), *before, "the second stream holds no figure and keeps its object");
-    let page = doc.get(ObjRef::new(3, 0));
-    let contents = page.as_dict().unwrap().get(b"Contents").unwrap().as_array().unwrap();
-    assert_eq!(contents[1].as_ref(), Some(ObjRef::new(11, 0)), "the untouched stream must not be replaced by a re-encoded copy");
+    for use_artifact in [false, true] {
+        let mut doc = tagged_figure_two_streams("0 0 1 rg 300 600 100 50 re f", "BT /F1 12 Tf 72 500 Td (After) Tj ET");
+        let before = doc.get(ObjRef::new(11, 0)).clone();
+        if use_artifact {
+            mark_tag_artifact(&mut doc, ObjRef::new(8, 0)).expect("mark tag artifact succeeds");
+        } else {
+            mark_decorative(&mut doc, ObjRef::new(8, 0)).expect("mark decorative succeeds");
+        }
+        assert!(figures(&doc).is_empty());
+        assert_eq!(*doc.get(ObjRef::new(11, 0)), *before, "the second stream holds no figure and keeps its object");
+        let page = doc.get(ObjRef::new(3, 0));
+        let contents = page.as_dict().unwrap().get(b"Contents").unwrap().as_array().unwrap();
+        assert_eq!(contents[1].as_ref(), Some(ObjRef::new(11, 0)), "the untouched stream must not be replaced by a re-encoded copy");
+    }
 }
 
 /// A and B supply different operands to R's BDC. Reusing R must not let the first

@@ -1,8 +1,8 @@
 use super::common::{button_action, date_pattern};
 use super::items::{BorderShape, Item, Widget, WidgetBorder, WidgetKind};
 use super::{
-    Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value, XfaError,
-    data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
+    Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value, Views,
+    XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, pattern_to_iso, text,
 };
 
 impl Layouter<'_> {
@@ -20,12 +20,17 @@ impl Layouter<'_> {
         if let Some(b) = &f.common.border
             && f.ui != Ui::Button
         {
+            let start = self.item_count();
             self.draw_border(b, rect)?;
+            self.field_border = Some((start, self.item_count()));
         }
         let fctx = ctx.child(&f.common);
         let inner = rect.inset(&f.common.margin);
         let (mut ui, mut cap_rect) = (inner, None);
-        if let Some((placement, reserve)) = self.caption_reserve(f, inner.w, ctx) {
+        // A caption without a font of its own is drawn in the field's (XFA 3.3, "Formatting Text
+        // That Appears as Fixed or Variable Content", p. 43), in the paragraph around the field,
+        // as it is measured.
+        if let Some((placement, reserve)) = self.caption_reserve(f, inner.w, &fctx, &ctx.para) {
             let reserve = auto_check_reserve(f, placement, inner.w, Some(inner.h)).unwrap_or(reserve);
             let r = reserve.max(0.0);
             match placement {
@@ -50,9 +55,9 @@ impl Layouter<'_> {
         if let (Some(cr), Some(cap)) = (cap_rect, &f.caption)
             && cap.presence == Presence::Visible
         {
-            let font = ctx.font.apply(&cap.font);
+            let font = fctx.font.apply(&cap.font);
             let para = ctx.para.apply(&cap.para);
-            self.draw_value_text(&cap.value, cr, &font, &para)?;
+            self.draw_value_text(&cap.value, cr, &font, &para, &ctx.som)?;
         }
         let som_path = || {
             if fctx.som.is_empty() {
@@ -95,7 +100,7 @@ impl Layouter<'_> {
                 let box_ = ui.inset(&f.ui_margin);
                 match (&from_data, &f.value) {
                     (Some(d), _) => self.draw_image(d, "", box_)?,
-                    (None, Value::Image { content_type, data }) => self.draw_image(data, content_type, box_)?,
+                    (None, Value::Image { content_type, data, .. }) => self.draw_image(data, content_type, box_)?,
                     _ => {}
                 }
                 // Then the field itself, which clicking gives a new picture.
@@ -112,7 +117,7 @@ impl Layouter<'_> {
                 if !value.trim().is_empty() {
                     let mut para = fctx.para.clone();
                     para.h_align = HAlign::Center;
-                    self.draw_value_text(&Value::Text(value), ui.inset(&f.ui_margin), &fctx.font, &para)?;
+                    self.draw_value_text(&Value::Text(value), ui.inset(&f.ui_margin), &fctx.font, &para, &fctx.som)?;
                 }
                 return Ok(());
             }
@@ -120,7 +125,7 @@ impl Layouter<'_> {
         }
         if f.access == Access::NonInteractive && f.ui != Ui::Button {
             // Shown as text, not as a field.
-            return self.draw_value_text(&f.value, ui.inset(&f.ui_margin), &fctx.font, &fctx.para);
+            return self.draw_value_text(&f.value, ui.inset(&f.ui_margin), &fctx.font, &fctx.para, &fctx.som);
         }
         // A text field that grew past what a content area holds can't be one widget: its text
         // is drawn as lines the page breaks fall between, and stays what the data holds.
@@ -145,14 +150,14 @@ impl Layouter<'_> {
         }
         let face = match (&f.ui, &f.caption) {
             // Buttons show their caption in the caption's font.
-            (Ui::Button, Some(cap)) => Face::of(&ctx.font.apply(&cap.font)).unscaled(),
+            (Ui::Button, Some(cap)) => Face::of(&fctx.font.apply(&cap.font)).unscaled(),
             _ => Face::of(&fctx.font).unscaled(),
         };
         let h_align = match (&f.ui, &f.caption) {
             (Ui::Button, Some(cap)) => ctx.para.apply(&cap.para).h_align,
             _ => fctx.para.h_align,
         };
-        let name = self.unique_name(f.common.name.as_deref().unwrap_or("field"));
+        let name = self.unique_name(f.common.name.as_deref().unwrap_or("field"), f.common.name.is_none());
         let som = som_path();
         let read_only = matches!(f.access, Access::ReadOnly | Access::Protected);
         // The data's value wins over the template's default.
@@ -207,12 +212,15 @@ impl Layouter<'_> {
             }
             Ui::DateTimeEdit => {
                 let pattern = date_pattern(f.picture.as_deref());
-                // The data holds the date in the field's data picture, or else as an ISO date; the
-                // field shows it in its own pattern.
+                // The data holds the date in the field's data picture, or else as an ISO date; a
+                // template default is a canonical date (ISO, or its basic form). Either way the
+                // field holds it in its own pattern, as a date typed there is held, so its value
+                // never reads two ways (an ISO date read in a `yyyy-dd-mm` pattern, say).
                 let data_pattern = data_date_letters(f);
-                let shown = plain_value
-                    .as_ref()
-                    .map(|v| if data_value.is_some() { iso_to_pattern(&data_to_iso(v, data_pattern.as_deref()), &pattern) } else { v.clone() });
+                let shown = plain_value.as_ref().map(|v| match data_value {
+                    Some(_) => iso_to_pattern(&data_to_iso(v, data_pattern.as_deref()), &pattern),
+                    None => canonical_date_in(v, &pattern),
+                });
                 (WidgetKind::Date(pattern), ui, widget_border(f.ui_border.as_ref(), false), shown, f.tooltip.clone())
             }
             Ui::ChoiceList => {
@@ -240,6 +248,11 @@ impl Layouter<'_> {
             return Ok(());
         }
         let action = if f.ui == Ui::Button { button_action(&f.scripts) } else { None };
+        // A date field's default, like its value, in the field's own pattern.
+        let default = match &kind {
+            WidgetKind::Date(pattern) => template_default.map(|v| canonical_date_in(&v, pattern)),
+            _ => template_default,
+        };
         let items: Vec<String> = match &kind {
             WidgetKind::CheckBox { on, .. } => vec![on.clone(), f.items.get(1).cloned().unwrap_or_default()],
             WidgetKind::Radio { on, .. } => vec![on.clone()],
@@ -259,10 +272,14 @@ impl Layouter<'_> {
             read_only,
             border,
             value,
-            default: template_default,
+            default,
             action,
             items,
             no_scroll: f.no_scroll,
+            display_date: (f.ui == Ui::DateTimeEdit).then(|| f.display_picture.as_deref().and_then(crate::data::date_letters)).flatten(),
+            // `push` sets where it shows.
+            views: Views::ALL,
+            required: f.required,
         })))
     }
 }
@@ -304,5 +321,14 @@ fn widget_border(b: Option<&Border>, check: bool) -> WidgetBorder {
         fill: b.fill().map(|c| c.0),
         shape,
         width: edge.thickness.clamp(0.1, 12.0),
+    }
+}
+
+/// A template's canonical date `v` (ISO `2016-10-11`, or its basic form `20161011`) written in
+/// `pattern`; anything else as it is.
+fn canonical_date_in(v: &str, pattern: &str) -> String {
+    match ["yyyy-mm-dd", "yyyymmdd"].iter().find_map(|p| pattern_to_iso(v, p)) {
+        Some(iso) => iso_to_pattern(&iso, pattern),
+        None => v.to_string(),
     }
 }

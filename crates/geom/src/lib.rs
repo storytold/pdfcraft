@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod perspective;
+pub mod quad_points;
 
 /// An axis-aligned rectangle in PDF user space (points).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
