@@ -28,7 +28,30 @@ use layout::Piece;
 pub(crate) use layout::WRAP_CALLS;
 #[cfg(test)]
 pub(crate) use layout::shaped_width;
-pub use layout::{PASTE_STEP, first_undrawable, lines, paste_place, paste_rect, text_rect, text_width};
+pub use layout::{PASTE_STEP, paste_place, paste_rect};
+
+fn with_nfc<T>(t: &AddedText, f: impl FnOnce(&AddedText) -> T) -> T {
+    use unicode_normalization::UnicodeNormalization;
+    let text: String = t.text.nfc().collect();
+    if text == t.text { f(t) } else { f(&AddedText { text, ..t.clone() }) }
+}
+
+/// The first character of `t` (after NFC normalisation) that [`add_content`] cannot draw.
+pub fn first_undrawable(t: &AddedText) -> Option<char> {
+    with_nfc(t, layout::first_undrawable)
+}
+
+pub fn lines(t: &AddedText) -> Vec<String> {
+    with_nfc(t, layout::lines)
+}
+
+pub fn text_rect(t: &AddedText) -> [f64; 4] {
+    with_nfc(t, layout::text_rect)
+}
+
+pub fn text_width(t: &AddedText) -> f64 {
+    with_nfc(t, layout::text_width)
+}
 #[cfg(test)]
 use pdfcraft_fonts::ShapedCluster;
 pub use store::{add_content, delete_content, isolate_content, list_added, scan_markers, update_content};

@@ -193,11 +193,16 @@ proptest! {
         }
     }
 
-    /// Text, author and id survive exactly — including the empty string. `/Contents` is stored even
-    /// when empty (an empty PDF string), while `/T` and `/NM` follow the crate's emptiness rule:
-    /// no author or id means the key is not written at all.
+    /// Text, author and id survive round-trip (with `/Contents` and `/T` normalised to Unicode NFC
+    /// on write) — including the empty string. `/Contents` is stored even when empty (an empty PDF
+    /// string), while `/T` and `/NM` follow the crate's emptiness rule: no author or id means the
+    /// key is not written at all.
     #[test]
     fn text_author_and_id_survive_exactly(contents in text_of(40), author in text_of(16), id in id_of(12)) {
+        use unicode_normalization::UnicodeNormalization;
+
+        let want_contents: String = contents.nfc().collect();
+        let want_author: String = author.nfc().collect();
         for path in [Save::Incremental, Save::FullTable] {
             let mut doc = blank(1);
             add_annotation(&mut doc, &comment(0, Shape::Rectangle { rect: [10.0, 20.0, 70.0, 45.0] }, Style::default(), contents.clone(), author.clone()), &meta(id.clone()))
@@ -207,14 +212,14 @@ proptest! {
             prop_assert_eq!(entries.len(), 1, "{}: exactly the one comment", tag(path));
             let d = dict_of(&reopened, &entries[0]).expect("one annotation");
             let storedcontents = str_of(&reopened, &d, b"Contents");
-            prop_assert_eq!(storedcontents.as_deref(), Some(contents.as_str()), "{}: /Contents round trip for {:?}", tag(path), contents);
+            prop_assert_eq!(storedcontents.as_deref(), Some(want_contents.as_str()), "{}: /Contents round trip for {:?}", tag(path), contents);
             let storedid = str_of(&reopened, &d, b"NM");
             if id.is_empty() {
                 prop_assert!(storedid.is_none(), "{}: an empty id writes no /NM, got {storedid:?}", tag(path));
             } else {
                 prop_assert_eq!(storedid.as_deref(), Some(id.as_str()), "{}: /NM round trip", tag(path));
             }
-            prop_assert!(bytes::texts_of(&file, "Contents").contains(&contents), "{:?} must appear in the file as a PDF string", contents);
+            prop_assert!(bytes::texts_of(&file, "Contents").contains(&want_contents), "{:?} must appear in the file as a PDF string", want_contents);
             if id.is_empty() {
                 prop_assert!(bytes::texts_of(&file, "NM").is_empty(), "{}: no /NM in the file for an empty id", tag(path));
             } else {
@@ -224,7 +229,7 @@ proptest! {
                 prop_assert!(d.get(b"T").is_none(), "{}: an empty author writes no /T", tag(path));
             } else {
                 let storedauthor = str_of(&reopened, &d, b"T");
-            prop_assert_eq!(storedauthor.as_deref(), Some(author.as_str()), "{}: /T round trip for {:?}", tag(path), author);
+                prop_assert_eq!(storedauthor.as_deref(), Some(want_author.as_str()), "{}: /T round trip for {:?}", tag(path), author);
             }
         }
     }

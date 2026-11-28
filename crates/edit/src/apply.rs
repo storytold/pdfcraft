@@ -29,6 +29,8 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
 }
 
 fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replace: bool, cx: &Context) -> Result<(), EditError> {
+    use unicode_normalization::UnicodeNormalization;
+    let hf = &HeaderFooter { text: hf.text.clone().map(|t| t.nfc().collect()), ..hf.clone() };
     let all = page_list(doc);
     check(pages, all.len())?;
     if hf.text.iter().all(|t| t.trim().is_empty()) {
@@ -164,6 +166,8 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
 }
 
 fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, replace: bool) -> Result<(), EditError> {
+    use unicode_normalization::UnicodeNormalization;
+    let wm = &Watermark { text: wm.text.nfc().collect(), ..wm.clone() };
     let all = page_list(doc);
     check(pages, all.len())?;
     let text = wm.text.trim();
