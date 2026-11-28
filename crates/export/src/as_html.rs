@@ -139,6 +139,7 @@ mod tests {
             italic: false,
             color: [0.0; 3],
             rotation: 0.0,
+            heading_level: None,
             space_around: [false; 2],
         }
     }

@@ -135,7 +135,7 @@ fn language(tag: &str) -> CharProps {
     }
 }
 
-/// The styles: the body text in `font`, in the document's language, and two heading levels.
+/// The styles: the body text in `font`, in the document's language, and six heading levels.
 fn styles(font: &str, lang: Option<&str>) -> StyleSheet {
     let mut s = StyleSheet { styles: Vec::new(), ..StyleSheet::default() };
     s.default_chr = CharProps { font: Some(font.to_string()), ..language_tag(lang).map(language).unwrap_or_default() };
@@ -144,7 +144,8 @@ fn styles(font: &str, lang: Option<&str>) -> StyleSheet {
     s.default_para_present = true;
     let normal = ParaProps { space_after: Some(6.0), ..ParaProps::default() };
     s.styles.push(Style { id: "Normal".into(), name: "Normal".into(), default: true, builtin: true, para: normal, ..Style::default() });
-    for (lvl, before) in [(1u8, 12.0f32), (2, 10.0)] {
+    for lvl in 1u8..=6 {
+        let before = if lvl == 1 { 12.0 } else { 10.0 };
         s.styles.push(Style {
             id: format!("Heading{lvl}"),
             name: format!("heading {lvl}"),
@@ -227,7 +228,7 @@ impl<'a> Builder<'a> {
         match it {
             Item::Para(runs, lvl) => {
                 let mut p = Paragraph::new();
-                if matches!(lvl, 1 | 2) {
+                if (1..=6).contains(&lvl) {
                     p.props.style = Some(format!("Heading{lvl}"));
                 }
                 for r in &runs {
@@ -395,7 +396,8 @@ fn positioned_page<'a>(b: &mut Builder<'a>, page: &'a Page) {
         let w = layout_number(w).max(1.0);
         let (x, y) = (layout_number(bl.rect[0] + (bw - w) / 2.0), layout_number(page.height - bl.rect[3] + (bh - h) / 2.0));
         let mut p = Paragraph::new();
-        p.props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), ..ParaProps::default() };
+        let style = bl.heading_level.filter(|level| (1..=6).contains(level)).map(|level| format!("Heading{level}"));
+        p.props = ParaProps { style, space_before: Some(0.0), space_after: Some(0.0), ..ParaProps::default() };
         push_text(&mut p, &bl.text, chr(bl.size, bl.bold, bl.italic, bl.color));
         let story = b.doc.add_part(PartKind::TextBox, vec![craft_wordmodel::para_block(p)]);
         if let Some(part) = b.doc.parts.get_mut(&story) {

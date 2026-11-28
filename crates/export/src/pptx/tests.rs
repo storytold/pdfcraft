@@ -34,6 +34,7 @@ fn sample_page() -> Page {
                 italic: false,
                 color: [0.1, 0.2, 0.3],
                 rotation: 0.0,
+                heading_level: None,
                 space_around: [false; 2],
             },
             Block {
@@ -44,6 +45,7 @@ fn sample_page() -> Page {
                 italic: false,
                 color: [0.0; 3],
                 rotation: 0.0,
+                heading_level: None,
                 space_around: [false; 2],
             },
             Block {
@@ -54,6 +56,7 @@ fn sample_page() -> Page {
                 italic: true,
                 color: [0.0; 3],
                 rotation: 0.0,
+                heading_level: None,
                 space_around: [false; 2],
             },
         ],
@@ -182,6 +185,7 @@ fn pptx_package_parts_are_complete_and_consistent() {
         italic: false,
         color: [0.0; 3],
         rotation: 0.0,
+        heading_level: None,
         space_around: [false; 2],
     };
     let table_page = Page {
@@ -285,6 +289,7 @@ fn hostile_sizes_do_not_overflow_the_slide_position() {
         italic: false,
         color: [0.0; 3],
         rotation: 0.0,
+        heading_level: None,
         space_around: [false; 2],
     };
     let mut blocks = vec![huge("Title", f64::MAX, 500.0)];
@@ -356,6 +361,7 @@ fn pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title() {
         italic: false,
         color: [0.0; 3],
         rotation: 0.0,
+        heading_level: None,
         space_around: [false; 2],
     };
     let p = Page {
@@ -371,6 +377,7 @@ fn pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title() {
                 italic: false,
                 color: [0.0; 3],
                 rotation: 0.0,
+                heading_level: None,
                 space_around: [false; 2],
             },
             // Table where one cell has a very large number (e.g. 36 pt callout in the table)

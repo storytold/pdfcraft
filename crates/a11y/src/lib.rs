@@ -23,6 +23,7 @@ mod headings;
 mod layout_table;
 mod report;
 mod structure;
+mod tagged_headings;
 mod tags;
 
 #[cfg(test)]
@@ -48,6 +49,7 @@ pub use heading_levels::{TextBlock, heading_levels};
 pub use headings::{Heading, MAX_HEADINGS, headings, headings_with_truncation};
 pub use layout_table::{LayoutTableError, layout_table_to_blocks};
 pub use report::{REPORT_WORDS, report_html};
+pub use tagged_headings::{HeadingLevels, tagged_heading_levels};
 pub use tags::{TagContentItem, TagError, TagInfo, TagPlacement, TagProperty, move_tag, set_tag_property, tag_content, tags};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

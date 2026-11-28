@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::fallback::{adopt_source_font, continues_font, same_paint};
 use super::interp::{Carry, Clip, Origin, Pen, Shown, TextState, Ts, clip_shows, clip_within, direction, interpret, region, to_frame, union};
 use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
+use super::{HeadingResolver, MarkedScope, TextProperties};
 
 impl TextLine {
     /// The baseline's height in user space.
@@ -461,7 +462,8 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
     let ops = pieces.parse().ops;
     let properties = res.get(b"Properties").and_then(|o| doc.dict(o)).unwrap_or_default();
     carry.containers = std::rc::Rc::new(super::containers::Containers::collect(doc, &ops, &res));
-    let shown = interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(&properties))?;
+    let shown =
+        interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(TextProperties { lists: &properties, heading_levels: None }))?;
     let mut last: Option<(usize, Pen)> = None; // the stream piece and where its last run ended
     for mut s in shown {
         // A single RTL glyph's ActualText (e.g. lam-alef) is an inline ligature, not a
@@ -480,7 +482,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             let (near, gap) = pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 });
             piece == si
                 && lines.last().is_some_and(|l| {
-                    l.scope == s.scope && l.paint == s.paint && l.containers == s.containers && l.logical_order == s.logical_order
+                    l.scope == s.scope && l.paint == s.paint && l.heading_level == s.heading_level && l.containers == s.containers && l.logical_order == s.logical_order
                 })
                 && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
                 && (s.text.trim().is_empty() || lines.last().is_some_and(|l| continues_font(l, &s)))
@@ -536,6 +538,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 face: s.face.clone(),
                 stream: si,
                 scope: s.scope,
+                heading_level: s.heading_level,
                 paint: s.paint.clone(),
                 containers: s.containers.clone(),
                 logical_order: s.logical_order,
@@ -605,8 +608,13 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
 fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream: usize) {
     let joins = last.is_some_and(|pen| {
         let bt = pen.bt;
-        lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.containers == s.containers && l.logical_order == s.logical_order)
-            && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
+        lines.last().is_some_and(|l| {
+            l.scope == s.scope
+                && l.paint == s.paint
+                && l.heading_level == s.heading_level
+                && l.containers == s.containers
+                && l.logical_order == s.logical_order
+        }) && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
             && (s.text.trim().is_empty() || lines.last().is_some_and(|l| continues_font(l, &s)))
             && (s.text.trim().is_empty()
                 || lines.last().is_some_and(|l| {
@@ -656,6 +664,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             face: s.face.clone(),
             stream,
             scope: s.scope,
+            heading_level: s.heading_level,
             paint: s.paint.clone(),
             containers: s.containers.clone(),
             logical_order: s.logical_order,
@@ -818,27 +827,43 @@ pub(crate) fn form_call(
 /// [`text_lines`] leaves out because it can only rewrite the page's own streams). Lines from a
 /// form carry a stream number past the page's streams, one per form drawn. The flag is `true`
 /// when forms past [`MAX_FORM_DEPTH`] or [`MAX_FORM_VISITS`] were left unread.
-pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine>, bool), EditError> {
+pub(super) fn reading_lines(doc: &Document, page: usize, levels: Option<&HeadingResolver<'_>>) -> Result<(Vec<TextLine>, bool), EditError> {
     struct Walk<'a> {
         doc: &'a Document,
+        levels: Option<&'a HeadingResolver<'a>>,
         lines: Vec<TextLine>,
         next_stream: usize,
         path: Vec<pdfcraft_cos::ObjRef>,
         budget: FormBudget,
     }
     /// `stream` gives the stream number of the operator at an index of `ops`.
-    fn walk(w: &mut Walk, ops: &[Op], resources: &Dict, carry: &mut Carry, stream: &dyn Fn(usize) -> usize) -> Result<(), EditError> {
+    fn walk(
+        w: &mut Walk,
+        ops: &[Op],
+        resources: &Dict,
+        carry: &mut Carry,
+        stream: &dyn Fn(usize) -> usize,
+        levels: Option<&dyn Fn(i64) -> Option<(usize, u8)>>,
+    ) -> Result<(), EditError> {
         let mut cache = HashMap::new();
         let mut invoked = Vec::new();
         let (mut held, none) = (None, Dict::new());
         let properties = resource_dict(w.doc, resources, b"Properties", &mut held).unwrap_or(&none);
-        let shown = interpret(w.doc, ops, resources, &mut cache, carry, Some(&mut invoked), Some(properties))?;
+        let shown = interpret(
+            w.doc,
+            ops,
+            resources,
+            &mut cache,
+            carry,
+            Some(&mut invoked),
+            Some(TextProperties { lists: properties, heading_levels: levels }),
+        )?;
         let mut last = None;
         let mut last_stream = None;
         let mut forms = invoked.into_iter().peekable();
         for s in shown {
-            while let Some((i, name, ts)) = forms.next_if(|f| f.0 < s.op) {
-                enter(w, resources, &name, ts, &mut carry.text_left, carry.containers.clone(), [carry.at.as_slice(), &[i]].concat())?;
+            while let Some((i, name, ts, parent)) = forms.next_if(|f| f.0 < s.op) {
+                enter(w, resources, &name, ts, parent, &mut carry.text_left, carry.containers.clone(), [carry.at.as_slice(), &[i]].concat())?;
                 // Text after a form starts a new line.
                 last = None;
             }
@@ -855,8 +880,8 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             }
             add_shown(&mut w.lines, &mut last, s, si);
         }
-        for (i, name, ts) in forms {
-            enter(w, resources, &name, ts, &mut carry.text_left, carry.containers.clone(), [carry.at.as_slice(), &[i]].concat())?;
+        for (i, name, ts, parent) in forms {
+            enter(w, resources, &name, ts, parent, &mut carry.text_left, carry.containers.clone(), [carry.at.as_slice(), &[i]].concat())?;
         }
         Ok(())
     }
@@ -866,6 +891,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         resources: &Dict,
         name: &[u8],
         ts: Ts,
+        parent: MarkedScope,
         text_left: &mut usize,
         containers: std::rc::Rc<super::containers::Containers>,
         at: Vec<usize>,
@@ -879,22 +905,27 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             (Some(outer), Some(own)) => Some(clip_within(outer, own)),
             (outer, own) => outer.clone().or_else(|| own.clone()),
         };
+        let stream = w.next_stream;
         let mut carry = Carry {
             ts: Ts { ctm: form.ctm, clip, ..ts },
             stack: Vec::new(),
             marked: Vec::new(),
+            parent,
+            scope_stream: stream,
             layers: Vec::new(),
             text_left: *text_left,
             gap_space: false,
             containers,
             at,
         };
-        let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);
         if let Some(r) = form.obj {
             w.path.push(r);
         }
-        walk(w, &ops, form.resources(resources), &mut carry, &|_| stream)?;
+        // An inline malformed form has no stable /Stm identity: never borrow the page MCIDs.
+        let resolver = w.levels;
+        let lookup = |mcid| form.obj.and_then(|r| resolver.and_then(|f| f(Some(r), mcid)));
+        walk(w, &ops, form.resources(resources), &mut carry, &|_| stream, resolver.map(|_| &lookup as &dyn Fn(i64) -> Option<(usize, u8)>))?;
         *text_left = carry.text_left;
         if form.obj.is_some() {
             w.path.pop();
@@ -905,7 +936,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut decode = DecodeBudget::page();
     let streams = content_streams_within(doc, &p.dict, &mut decode)?;
-    let mut w = Walk { doc, lines: Vec::new(), next_stream: streams.len(), path: Vec::new(), budget: FormBudget::new(decode) };
+    let mut w = Walk { doc, levels, lines: Vec::new(), next_stream: streams.len(), path: Vec::new(), budget: FormBudget::new(decode) };
     let mut carry = Carry::new();
     // Read the page's streams as the one stream they are, in one pass, as rendering and editing
     // do: a comment, an operator's operands or a marked-content sequence (its /ActualText too)
@@ -915,7 +946,8 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
     let ops = pieces.parse().ops;
     let stream_of = |i: usize| ops.get(i).map_or(0, |op| pieces.pieces_of(op).0);
     carry.containers = std::rc::Rc::new(super::containers::Containers::collect(doc, &ops, &res));
-    walk(&mut w, &ops, &res, &mut carry, &stream_of)?;
+    let lookup = |mcid| levels.and_then(|f| f(None, mcid));
+    walk(&mut w, &ops, &res, &mut carry, &stream_of, levels.map(|_| &lookup as &dyn Fn(i64) -> Option<(usize, u8)>))?;
     let mut lines = w.lines;
     // A visual-order Indic font draws pre-base vowel signs before their consonant.
     for l in lines.iter_mut().filter(|l| l.visual_order && !l.actual_text) {
