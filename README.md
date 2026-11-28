@@ -549,6 +549,7 @@ Every other Linux build needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fe
 | Build | File |
 |---|---|
 | x86_64 | `pdfcraft-<ver>-freebsd-x86_64.tar.gz` |
+| ARM64 (aarch64) | `pdfcraft-<ver>-freebsd-aarch64.tar.gz` |
 
 ### Web (WebAssembly)
 
