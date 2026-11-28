@@ -52,7 +52,7 @@ pub use audit::{SpaceCategory, SpaceUse, audit_space};
 use pdfcraft_cos::{Dict, Document, ImageBudget, MAX_PAGE_DECODED, ObjRef, Object, Stream, serialize};
 use pdfcraft_filters::{Filter, Params};
 
-pub use images::{ImageTarget, effective_resolutions, recolour_image};
+pub use images::{ImageTarget, Resolutions, effective_resolutions, measured_resolutions, recolour_image};
 pub use pool::give_way_to_other_programs;
 pub use samples::{NotDecoded, Samples, decode_samples, encode_samples};
 pub use tiles::{DOWNSAMPLED_ABOVE, TileReport, tile_large_images};

@@ -60,7 +60,8 @@ pub struct PrintReadiness {
     pub pdfa_issues: Vec<Issue>,
     pub findings: Vec<Finding>,
     /// Image placements whose resolution couldn't be measured (a degenerate or non-finite
-    /// placement matrix). They are neither passed nor failed.
+    /// placement matrix, or content drawing them that couldn't be read in full). They are neither
+    /// passed nor failed.
     pub resolution_unknown: usize,
 }
 
@@ -237,7 +238,7 @@ fn inspect(doc: &Document) -> PrintReadiness {
             id: "image-ppi-unknown",
             severity: "info",
             message: format!(
-                "The resolution of {resolution_unknown} image placement{} couldn't be measured (its placement matrix is degenerate or not finite).",
+                "The resolution of {resolution_unknown} image placement{} couldn't be measured (its placement matrix is degenerate or not finite, or the content drawing it couldn't be read in full).",
                 if resolution_unknown == 1 { "" } else { "s" }
             ),
             page: None,
@@ -280,6 +281,7 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
     let mut seen = std::collections::HashSet::new();
     for (i, page) in pages.iter().enumerate() {
         let page_no = (i + 1) as u32;
+        let mut page_unknown = false;
         if let Ok(placed) = pdfcraft_edit::page_images(doc, i) {
             for image in placed {
                 if let Some(ppi) = placed_ppi(&image) {
@@ -288,6 +290,7 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
                     }
                     if !ppi.is_finite() {
                         unknown = unknown.saturating_add(1);
+                        page_unknown = true;
                         continue;
                     }
                     let w = (image.rect[2] - image.rect[0]).abs();
@@ -298,15 +301,20 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
         }
         // Images drawn inside a form XObject are not listed above. Their resolution is the
         // smallest use on this page, which is what the optimizer already measures.
-        for (object, ppi) in pdfcraft_optimize::effective_resolutions(doc, &[page.obj]) {
+        let measured = pdfcraft_optimize::measured_resolutions(doc, &[page.obj]);
+        for (object, ppi) in measured.ppi {
             if seen.contains(&(page_no, object)) {
                 continue;
             }
             if !ppi.is_finite() {
                 unknown = unknown.saturating_add(1);
+                page_unknown = true;
                 continue;
             }
             out.push(DrawnImage { page: page_no, name: format!("object {object}"), ppi, pixels: [0, 0], size_mm: [0.0, 0.0] });
+        }
+        if !measured.complete && !page_unknown {
+            unknown = unknown.saturating_add(1);
         }
     }
     out.sort_by(|a, b| a.page.cmp(&b.page).then(a.name.cmp(&b.name)).then(a.ppi.total_cmp(&b.ppi)));
@@ -489,5 +497,95 @@ mod tests {
         let report = inspect(&doc);
         assert!(report.images.iter().all(|image| image.ppi.is_finite()), "{:?}", report.images);
         assert!(!report.findings.iter().any(|f| f.id == "image-ppi"), "{:?}", report.findings);
+    }
+
+    fn form_with_image(doc: &mut Document, img: pdfcraft_cos::ObjRef, raw: Vec<u8>, flate: bool) -> pdfcraft_cos::ObjRef {
+        let mut x = Dict::new();
+        x.set(b"Im".to_vec(), Object::Ref(img));
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(x));
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Form"));
+        d.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 72.into(), 72.into()]));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+        if flate {
+            d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        }
+        doc.add(Object::Stream(Stream::from_raw(d, raw)))
+    }
+
+    #[test]
+    fn an_image_drawn_only_in_a_form_that_does_not_decode_is_counted_as_unmeasured() {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 100, 100);
+        let fm = form_with_image(&mut doc, img, b"not valid zlib".to_vec(), true);
+        page(&mut doc, "Fm", fm, "/Fm Do");
+
+        let report = inspect(&doc);
+        assert_eq!(report.resolution_unknown, 1, "{report:?}");
+        assert!(report.findings.iter().any(|f| f.id == "image-ppi-unknown"), "{:?}", report.findings);
+    }
+
+    #[test]
+    fn a_page_with_an_unreadable_form_keeps_its_measured_images_and_one_unmeasured_placement() {
+        let mut doc = Document::new_empty();
+        let hidden = image(&mut doc, 100, 100);
+        let fm = form_with_image(&mut doc, hidden, b"not valid zlib".to_vec(), true);
+        let direct = image(&mut doc, 600, 600);
+        let p = page(&mut doc, "Im", direct, "q 72 0 0 72 36 36 cm /Im Do Q /Fm Do");
+        doc.update_dict(p, |d| {
+            if let Some(Object::Dict(res)) = d.get_mut(b"Resources")
+                && let Some(Object::Dict(x)) = res.get_mut(b"XObject")
+            {
+                x.set(b"Fm".to_vec(), Object::Ref(fm));
+            }
+        })
+        .unwrap();
+
+        let report = inspect(&doc);
+        let drawn = report.images.iter().find(|image| image.name == "Im").unwrap();
+        assert!((drawn.ppi - 600.0).abs() < 0.5, "{}", drawn.ppi);
+        assert_eq!(report.resolution_unknown, 1, "{report:?}");
+        assert!(report.findings.iter().any(|f| f.id == "image-ppi-unknown"), "{:?}", report.findings);
+    }
+
+    #[test]
+    fn a_low_resolution_image_in_a_readable_form_is_still_flagged_beside_an_unreadable_form() {
+        let mut doc = Document::new_empty();
+        let low = image(&mut doc, 50, 50);
+        let readable = form_with_image(&mut doc, low, b"q 72 0 0 72 0 0 cm /Im Do Q".to_vec(), false);
+        let hidden = image(&mut doc, 100, 100);
+        let unreadable = form_with_image(&mut doc, hidden, b"not valid zlib".to_vec(), true);
+        let p = page(&mut doc, "Fm", readable, "/Fm Do /Bad Do");
+        doc.update_dict(p, |d| {
+            if let Some(Object::Dict(res)) = d.get_mut(b"Resources")
+                && let Some(Object::Dict(x)) = res.get_mut(b"XObject")
+            {
+                x.set(b"Bad".to_vec(), Object::Ref(unreadable));
+            }
+        })
+        .unwrap();
+
+        let report = inspect(&doc);
+        assert_eq!(report.images.len(), 1, "{:?}", report.images);
+        assert!((report.images[0].ppi - 50.0).abs() < 0.5, "{}", report.images[0].ppi);
+        assert!(report.findings.iter().any(|f| f.id == "image-ppi"), "{:?}", report.findings);
+        assert_eq!(report.resolution_unknown, 1, "{report:?}");
+        assert!(report.findings.iter().any(|f| f.id == "image-ppi-unknown"), "{:?}", report.findings);
+    }
+
+    #[test]
+    fn an_image_in_a_form_that_decodes_is_measured_and_nothing_is_unknown() {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 600, 600);
+        let fm = form_with_image(&mut doc, img, b"q 72 0 0 72 0 0 cm /Im Do Q".to_vec(), false);
+        page(&mut doc, "Fm", fm, "/Fm Do");
+
+        let report = inspect(&doc);
+        assert_eq!(report.resolution_unknown, 0, "{report:?}");
+        assert!(!report.findings.iter().any(|f| f.id == "image-ppi-unknown"), "{:?}", report.findings);
+        assert_eq!(report.images.len(), 1, "{:?}", report.images);
+        assert!((report.images[0].ppi - 600.0).abs() < 0.5, "{}", report.images[0].ppi);
     }
 }

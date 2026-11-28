@@ -6,7 +6,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_fu
 use pdfcraft_filters::{Filter, Params};
 use pdfcraft_optimize::{
     Compatibility, Compression, ImageSettings, MonoCompression, MonoSettings, OptimizeError, Settings, SpaceCategory, audit_space,
-    effective_resolutions, optimize,
+    effective_resolutions, measured_resolutions, optimize,
 };
 
 /// What image `s` decodes to, its fax or JBIG2 data included, with no limit on the work: the
@@ -4087,6 +4087,46 @@ fn strips_on_a_page_damaged_partway_are_left_as_they_are() {
     assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
     assert_eq!(doc.get(p).as_dict().unwrap().get(b"Contents"), Some(&contents));
     assert_eq!(stream(&doc, damaged), bad);
+}
+
+/// `measured_resolutions` reports whether the walk finished in full, while `effective_resolutions`
+/// keeps its map-only result (empty when the only image is behind a damaged form, `INFINITY` for
+/// images recorded before the damage).
+#[test]
+fn measured_resolutions_says_whether_every_form_was_read() {
+    let mut healthy = Document::new_empty();
+    let img = image(&mut healthy, 720, 720, 1, false, None);
+    let fm = form(&mut healthy, Some(Object::Dict(resources(xobjects(&[("Im", img)])))), "q 72 0 0 72 0 0 cm /Im Do Q");
+    let p = page(&mut healthy, &[("Fm", fm)], "/Fm Do");
+    let res = measured_resolutions(&healthy, &[p]);
+    assert!(res.complete);
+    assert_eq!(res.ppi.get(&img).copied(), Some(720.0));
+    assert_eq!(effective_resolutions(&healthy, &[p]), res.ppi);
+
+    let mut damaged = Document::new_empty();
+    let img = image(&mut damaged, 720, 720, 1, false, None);
+    let mut dict = Dict::new();
+    dict.set(b"Type".to_vec(), Object::name("XObject"));
+    dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 72.into(), 72.into()]));
+    dict.set(b"Resources".to_vec(), Object::Dict(resources(xobjects(&[("Im", img)]))));
+    dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    let bad_fm = damaged.add(Object::Stream(Stream::from_raw(dict, b"not valid zlib".to_vec())));
+    let p = page(&mut damaged, &[("Fm", bad_fm)], "/Fm Do");
+    let res = measured_resolutions(&damaged, &[p]);
+    assert!(!res.complete);
+    assert!(res.ppi.is_empty());
+    assert!(effective_resolutions(&damaged, &[p]).is_empty());
+
+    // With a direct image also drawn on the same page, `measured_resolutions` keeps the ppi it
+    // measured, while `effective_resolutions` marks it `INFINITY` so Reduce File Size will not
+    // resample it.
+    let direct = image(&mut damaged, 720, 720, 1, false, None);
+    let p_both = page(&mut damaged, &[("Im", direct), ("Fm", bad_fm)], "q 72 0 0 72 0 0 cm /Im Do Q /Fm Do");
+    let res = measured_resolutions(&damaged, &[p_both]);
+    assert!(!res.complete);
+    assert_eq!(res.ppi.get(&direct).copied(), Some(720.0));
+    assert_eq!(effective_resolutions(&damaged, &[p_both]).get(&direct).copied(), Some(f64::INFINITY));
 }
 
 /// An image may be drawn larger past the damage in a page's or a form's content, so no image is
