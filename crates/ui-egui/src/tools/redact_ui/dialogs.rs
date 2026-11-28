@@ -238,6 +238,8 @@ fn search_rows(ui: &mut Ui, d: &mut SearchDraft, import: &mut bool) {
         if let Some(n) = d.found {
             let line = if n == 0 {
                 tl!("No matches.").to_string()
+            } else if d.capped {
+                crate::i18n::fmt(tl!("First {n} matches marked for redaction (limit reached)."), &[("n", &n.to_string())])
             } else {
                 crate::i18n::fmt(tl!("{n} match(es) marked for redaction."), &[("n", &n.to_string())])
             };
