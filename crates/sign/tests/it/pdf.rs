@@ -3880,4 +3880,16 @@ fn an_ed25519_digital_id_signs_and_validates() {
     tampered[i] = b'K';
     let s = signatures(&open(&tampered), &tampered, &TrustStore { certs: vec![id.certificate.clone()] }).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+
+    // RFC 8419 §3.1: an Ed25519 CMS names SHA-512 only. Asked for another digest, it refuses
+    // rather than write a SignerInfo whose digest the signature doesn't follow.
+    for alg in [pdfcraft_sign::DigestAlg::Sha256, pdfcraft_sign::DigestAlg::Sha384] {
+        let digest = alg.digest(&[b"content"]);
+        let r = pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &[], alg, &digest);
+        assert!(matches!(r, Err(pdfcraft_sign::SignError::Unsupported(_))), "{alg:?}: {r:?}");
+        let r = pdfcraft_sign::cms::sign_encapsulated(&id.key, &id.certificate, &[], alg, "1.2.840.113549.1.7.1", b"content");
+        assert!(matches!(r, Err(pdfcraft_sign::SignError::Unsupported(_))), "{alg:?}: {r:?}");
+    }
+    let digest = pdfcraft_sign::DigestAlg::Sha512.digest(&[b"content"]);
+    pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &[], pdfcraft_sign::DigestAlg::Sha512, &digest).unwrap();
 }
