@@ -538,6 +538,89 @@ fn non_utf8_check_box_states_round_trip() {
     }
 }
 
+/// Importing values into a large form reads the form a fixed number of times, not once or twice per
+/// value (PDFBOX-4410: 3,523 fields took minutes). A read-only field still takes its value and
+/// stays read-only.
+#[test]
+fn importing_many_values_reads_the_form_a_fixed_number_of_times() {
+    let n: u32 = 60;
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 5)).collect();
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [{}] >>", kids.join(" ")),
+        format!("<< /Fields [{}] /DA (/Helv 10 Tf 0 g) >>", kids.join(" ")),
+    ];
+    for i in 0..n {
+        let ff = if i == 0 { " /Ff 1" } else { "" };
+        objs.push(format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (f{i}){ff} /Rect [50 {y} 250 {top}] /P 3 0 R >>",
+            y = 10 * i,
+            top = 10 * i + 10
+        ));
+    }
+    let mut out = b"%PDF-1.7
+"
+    .to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(
+            format!(
+                "{} 0 obj
+{o}
+endobj
+",
+                i + 1
+            )
+            .as_bytes(),
+        );
+    }
+    let xref = out.len();
+    out.extend_from_slice(
+        format!(
+            "xref
+0 {}
+0000000000 65535 f 
+",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
+    for o in offsets {
+        out.extend_from_slice(
+            format!(
+                "{o:010} 00000 n 
+"
+            )
+            .as_bytes(),
+        );
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{xref}
+%%EOF
+",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
+    let mut doc = Document::open(Arc::new(out)).unwrap();
+    let body: String = (0..n).map(|i| format!("<field name=\"f{i}\"><value>v{i}</value></field>")).collect();
+    let xfdf = format!("<?xml version=\"1.0\"?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><fields>{body}</fields></xfdf>");
+    let before = pdfcraft_forms::form_reads_on_this_thread();
+    let report = import(&mut doc, xfdf.as_bytes()).unwrap();
+    let reads = pdfcraft_forms::form_reads_on_this_thread() - before;
+    assert_eq!(report.fields, n as usize, "{report:?}");
+    assert!(reads <= 4, "{reads} readings of the form for {n} values");
+    let all = fields(&doc);
+    assert!(all.iter().all(|f| f.value == [format!("v{}", &f.name[1..])]));
+    assert!(all.iter().find(|f| f.name == "f0").unwrap().read_only(), "the read-only field took its value and stays read-only");
+}
+
 /// Who each comment replies to, by name, with its review state.
 fn threads(doc: &Document) -> Vec<(Option<String>, Option<String>, Option<String>)> {
     summaries(doc).into_iter().map(|s| (s.name, s.in_reply_to, s.state)).collect()
