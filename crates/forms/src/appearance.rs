@@ -445,11 +445,17 @@ fn stroke_op(fill: &str) -> String {
 /// Background and border from `/MK` and `/BS`; returns (content, border width). A round XFA
 /// check button's ([`is_round`]) are a circle inside the widget instead of its rectangle.
 fn frame(doc: &Document, wd: &Dict, w: f64, h: f64) -> (String, f64) {
+    frame_with_shape(doc, wd, w, h, is_round(doc, wd))
+}
+
+/// [`frame`] with the shape chosen by the caller: circular when `round` is true (an XFA round
+/// check button or a radio button with the Circle style), rectangular otherwise.
+fn frame_with_shape(doc: &Document, wd: &Dict, w: f64, h: f64, round: bool) -> (String, f64) {
     let mk = wd.get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned());
-    let mut c = String::new();
-    if is_round(doc, wd) {
+    if round {
         return round_frame(doc, wd, mk.as_ref(), w, h);
     }
+    let mut c = String::new();
     if let Some(bg) = color_array(doc, mk.as_ref(), b"BG") {
         c.push_str(&format!("{bg}\n0 0 {} {} re f\n", n(w), n(h)));
     }
@@ -521,24 +527,40 @@ pub(crate) fn is_round(doc: &Document, wd: &Dict) -> bool {
     matches!(wd.get(b"PCXfaRound").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true)))
 }
 
-/// [`frame`] for a round check button: the `/MK /BG` background as a disc and the `/MK /BC`
-/// border as a circle, both centred in the `w` × `h` box and as wide as its shorter side. A
-/// dashed border stays dashed and an underline stays an underline; any other style is drawn
-/// solid, and a border as wide as the circle fills it. Returns the border width.
+/// Whether widget `wd` of field `kind` draws a circular frame: either an XFA round check button
+/// (`/PCXfaRound true`) or a radio button whose style is Circle (`/MK /CA (l)`, the radio
+/// default). Check boxes stay square for every style unless marked round by XFA.
+fn uses_round_frame(doc: &Document, wd: &Dict, kind: FieldKind) -> bool {
+    is_round(doc, wd) || (kind == FieldKind::Radio && crate::author::CheckStyle::of_widget(doc, wd, kind) == crate::author::CheckStyle::Circle)
+}
+
+/// Cubic Bézier handle ratio for a quarter-circle arc (`4 * (sqrt(2) - 1) / 3`).
+const CIRCLE_KAPPA: f64 = 0.5523;
+
+/// [`frame`] for a circular button: the `/MK /BG` background as a disc and the `/MK /BC` border
+/// as a circle, both centred in the `w` × `h` box and as wide as its shorter side. A dashed
+/// border stays dashed, beveled and inset borders add inner upper-left / lower-right shading
+/// half-arcs when the radius leaves room, an underline stays the bottom edge, and a border as
+/// wide as the circle fills it. Returns the border width.
 fn round_frame(doc: &Document, wd: &Dict, mk: Option<&Dict>, w: f64, h: f64) -> (String, f64) {
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return (String::new(), 0.0);
+    }
     let mut c = String::new();
-    let (cx, cy, r) = (w / 2.0, h / 2.0, w.min(h).max(0.0) / 2.0);
+    let (cx, cy, r) = (w / 2.0, h / 2.0, w.min(h) / 2.0);
     if let Some(bg) = color_array(doc, mk, b"BG") {
         c.push_str(&format!("{bg}\n{}f\n", circle_path(cx, cy, r)));
     }
     let bs = wd.get(b"BS").map(|b| doc.resolve(b)).and_then(|b| b.as_dict().cloned());
-    let bw = bs.as_ref().and_then(|b| b.get(b"W")).and_then(|x| doc.resolve(x).as_f64()).unwrap_or(1.0).max(0.0);
+    let bw =
+        bs.as_ref().and_then(|b| b.get(b"W")).and_then(|x| doc.resolve(x).as_f64()).map_or(1.0, |v| if v.is_finite() { v.max(0.0) } else { 0.0 });
     let style = bs.as_ref().and_then(|b| b.name(b"S").map(<[u8]>::to_vec)).unwrap_or_default();
     match color_array(doc, mk, b"BC") {
         // An underline stays one: only the bottom edge, as for any widget.
         Some(bc) if bw > 0.0 && style == b"U" => {
-            c.push_str(&format!("{}\n{} w\n0 {} m {} {} l S\n", stroke_op(&bc), n(bw), n(bw / 2.0), n(w), n(bw / 2.0)));
-            (c, bw)
+            let ul = bw.min(h);
+            c.push_str(&format!("{}\n{} w\n0 {} m {} {} l S\n", stroke_op(&bc), n(ul), n(ul / 2.0), n(w), n(ul / 2.0)));
+            (c, ul)
         }
         // A border as wide as the circle fills it: a disc in the border's colour.
         Some(bc) if bw > 0.0 && bw >= 2.0 * r => {
@@ -550,17 +572,69 @@ fn round_frame(doc: &Document, wd: &Dict, mk: Option<&Dict>, w: f64, h: f64) -> 
             // The stroke is centred on the path: inset by half its width, it stays inside.
             let path = circle_path(cx, cy, r - bw / 2.0);
             c.push_str(&format!("{}\n{} w\n{}{path}S\n[] 0 d\n", stroke_op(&bc), n(bw), if dashed { "[3] 0 d\n" } else { "" }));
+            if (style == b"B" || style == b"I") && r > 1.5 * bw {
+                // Beveled: a light top-left half-arc and a darker bottom-right half-arc inside
+                // the border; inset: grey top-left and light grey bottom-right.
+                let (tl, br) = if style == b"B" { ("1 G", "0.5 G") } else { ("0.5 G", "0.75 G") };
+                let (top_left, bottom_right) = circle_half_arcs(cx, cy, r - 1.5 * bw);
+                c.push_str(&format!("{tl}\n{top_left}S\n{br}\n{bottom_right}S\n"));
+                return (c, 2.0 * bw);
+            }
             (c, bw)
         }
         _ => (c, 0.0),
     }
 }
 
+/// Two semicircular arcs of radius `r` around (`cx`, `cy`) split along the 45°–225° diagonal:
+/// `(upper_left, lower_right)`, each ending with a space so a stroke operator can follow.
+fn circle_half_arcs(cx: f64, cy: f64, r: f64) -> (String, String) {
+    let d = r * std::f64::consts::FRAC_1_SQRT_2;
+    let k = CIRCLE_KAPPA * d;
+    // 45° -> 135° -> 225° (top-right, through top and left, to bottom-left).
+    let top_left = format!(
+        "{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c ",
+        n(cx + d),
+        n(cy + d),
+        n(cx + d - k),
+        n(cy + d + k),
+        n(cx - d + k),
+        n(cy + d + k),
+        n(cx - d),
+        n(cy + d),
+        n(cx - d - k),
+        n(cy + d - k),
+        n(cx - d - k),
+        n(cy - d + k),
+        n(cx - d),
+        n(cy - d)
+    );
+    // 225° -> 315° -> 45° (bottom-left, through bottom and right, to top-right).
+    let bottom_right = format!(
+        "{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c ",
+        n(cx - d),
+        n(cy - d),
+        n(cx - d + k),
+        n(cy - d - k),
+        n(cx + d - k),
+        n(cy - d - k),
+        n(cx + d),
+        n(cy - d),
+        n(cx + d + k),
+        n(cy - d + k),
+        n(cx + d + k),
+        n(cy + d - k),
+        n(cx + d),
+        n(cy + d)
+    );
+    (top_left, bottom_right)
+}
+
 /// A closed circle of radius `r` around (`cx`, `cy`) as four Bézier arcs, ending with a space
 /// so a paint operator can follow.
 fn circle_path(cx: f64, cy: f64, r: f64) -> String {
     // The control-point distance for a quarter circle.
-    let k = 0.5523 * r;
+    let k = CIRCLE_KAPPA * r;
     format!(
         "{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c ",
         n(cx + r),
@@ -1052,8 +1126,9 @@ pub fn check_box_states(doc: &mut Document, w: &Widget, kind: FieldKind, on_name
     let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
     let place = placement(mk_rotation(doc, &wd), page_w, page_h);
     let (width, height) = (place.layout_w, place.layout_h);
-    let (frame_c, _) = frame(doc, &wd, width, height);
     let style = crate::author::CheckStyle::of_widget(doc, &wd, kind);
+    let round = uses_round_frame(doc, &wd, kind);
+    let (frame_c, _) = frame_with_shape(doc, &wd, width, height, round);
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(f_da));
     let mut form = |content: String| -> Object {
         let mut d = Dict::new();
@@ -1131,39 +1206,7 @@ fn check_mark(style: crate::author::CheckStyle, cx: f64, cy: f64, s: f64, color:
                 .collect();
             polygon(&pts)
         }
-        CheckStyle::Circle => {
-            let r = s * 0.25;
-            let k = 0.5523 * r;
-            format!(
-                "{fill}\n{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c f\n",
-                n(cx + r),
-                n(cy),
-                n(cx + r),
-                n(cy + k),
-                n(cx + k),
-                n(cy + r),
-                n(cx),
-                n(cy + r),
-                n(cx - k),
-                n(cy + r),
-                n(cx - r),
-                n(cy + k),
-                n(cx - r),
-                n(cy),
-                n(cx - r),
-                n(cy - k),
-                n(cx - k),
-                n(cy - r),
-                n(cx),
-                n(cy - r),
-                n(cx + k),
-                n(cy - r),
-                n(cx + r),
-                n(cy - k),
-                n(cx + r),
-                n(cy)
-            )
-        }
+        CheckStyle::Circle => format!("{fill}\n{}f\n", circle_path(cx, cy, s * 0.25)),
     }
 }
 
@@ -1181,7 +1224,7 @@ pub(crate) fn button_state_shown(doc: &Document, f: &Field, w: &Widget, on: bool
     let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
     let place = placement(mk_rotation(doc, &wd), page_w, page_h);
     let (width, height) = (place.layout_w, place.layout_h);
-    let (frame_c, bw) = frame(doc, &wd, width, height);
+    let (frame_c, bw) = frame_with_shape(doc, &wd, width, height, uses_round_frame(doc, &wd, f.kind));
     let mut content = frame_c.into_bytes();
     let mut res = Dict::new();
     if on {
@@ -1301,5 +1344,38 @@ mod tests {
         assert_eq!(font.first_unencodable(&"a\u{e9}".repeat(1000)), None);
         assert_eq!(font.first_unencodable("ab\u{3a9}c\u{3a8}"), Some('\u{3a9}'));
         assert_eq!(font.first_unencodable(""), None);
+    }
+
+    #[test]
+    fn round_frame_clamps_degenerate_sizes_and_huge_borders() {
+        let doc = Document::new_empty();
+        let mut mk = Dict::new();
+        mk.set(b"BG".to_vec(), Object::Array(vec![1.into(), 1.into(), 1.into()]));
+        mk.set(b"BC".to_vec(), Object::Array(vec![0.into(), 0.into(), 0.into()]));
+        let mut bs = Dict::new();
+        bs.set(b"W".to_vec(), Object::Real(100.0));
+        bs.set(b"S".to_vec(), Object::name("B"));
+        let mut wd = Dict::new();
+        wd.set(b"MK".to_vec(), Object::Dict(mk.clone()));
+        wd.set(b"BS".to_vec(), Object::Dict(bs));
+
+        for (w, h) in [(0.0, 20.0), (20.0, 0.0), (-10.0, 20.0), (f64::NAN, 20.0), (f64::INFINITY, 20.0)] {
+            let (ops, bw) = round_frame(&doc, &wd, Some(&mk), w, h);
+            assert!(ops.is_empty() && bw == 0.0, "degenerate ({w}, {h}) draws nothing: {ops:?} {bw}");
+        }
+
+        // Huge border width fills the disc without NaN or negative radii.
+        let (ops, bw) = round_frame(&doc, &wd, Some(&mk), 20.0, 20.0);
+        assert!(!ops.contains("NaN") && !ops.contains("inf") && ops.contains("0 0 0 rg\n20 10 m") && !ops.contains(" S\n"));
+        assert_eq!(bw, 20.0);
+
+        // Beveled border too wide for inner shading (r <= 1.5 * bw < 2 * r) draws outer circle only.
+        let mut bs_mid = Dict::new();
+        bs_mid.set(b"W".to_vec(), Object::Real(8.0));
+        bs_mid.set(b"S".to_vec(), Object::name("B"));
+        wd.set(b"BS".to_vec(), Object::Dict(bs_mid));
+        let (ops, bw) = round_frame(&doc, &wd, Some(&mk), 20.0, 20.0);
+        assert!(!ops.contains("NaN") && ops.contains("16 10 m") && ops.contains(" c S\n") && !ops.contains("1 G\n"));
+        assert_eq!(bw, 8.0);
     }
 }
