@@ -248,6 +248,111 @@ fn doc_info_lists_page_transitions_and_display_times() {
     );
 }
 
+/// `doc_info` gives the size an attachment holds, and the size it declares only when the two
+/// differ.
+#[test]
+fn doc_info_gives_a_declared_size_only_when_the_bytes_contradict_it() {
+    let dir = workdir("declared-size");
+    let body = b"0123456789";
+    let objects: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(honest.txt) 4 0 R (lies.txt) 6 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R >>".to_vec(),
+        b"<< /Type /Filespec /F (honest.txt) /EF << /F 5 0 R >> >>".to_vec(),
+        [
+            format!(
+                "<< /Type /EmbeddedFile /Length {0} /Params << /Size {0} >> >>
+stream
+",
+                body.len()
+            )
+            .as_bytes(),
+            body,
+            b"
+endstream",
+        ]
+        .concat(),
+        b"<< /Type /Filespec /F (lies.txt) /EF << /F 7 0 R >> >>".to_vec(),
+        [
+            format!(
+                "<< /Type /EmbeddedFile /Length {} /Params << /Size 999999 >> >>
+stream
+",
+                body.len()
+            )
+            .as_bytes(),
+            body,
+            b"
+endstream",
+        ]
+        .concat(),
+    ];
+    let mut bytes = b"%PDF-1.7
+"
+    .to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(
+            format!(
+                "{} 0 obj
+",
+                i + 1
+            )
+            .as_bytes(),
+        );
+        bytes.extend_from_slice(object);
+        bytes.extend_from_slice(
+            b"
+endobj
+",
+        );
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(
+        format!(
+            "xref
+0 {}
+0000000000 65535 f 
+",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    for o in offsets {
+        bytes.extend_from_slice(
+            format!(
+                "{o:010} 00000 n 
+"
+            )
+            .as_bytes(),
+        );
+    }
+    bytes.extend_from_slice(
+        format!(
+            "trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{xref}
+%%EOF
+",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    std::fs::write(dir.join("files.pdf"), bytes).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "files.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let listed = info["attachments"].as_array().unwrap();
+    let get = |name: &str| listed.iter().find(|a| a["name"] == name).unwrap_or_else(|| panic!("{name} is listed: {listed:?}"));
+    let (honest, lies) = (get("honest.txt"), get("lies.txt"));
+    assert_eq!(honest["size"].as_u64(), Some(body.len() as u64), "{honest}");
+    assert!(honest["declared_size"].is_null(), "an honest file declares nothing extra: {honest}");
+    assert_eq!(lies["size"], honest["size"], "the same bytes count the same: {lies}");
+    assert_eq!(lies["declared_size"].as_u64(), Some(999_999), "{lies}");
+}
+
 /// `doc_info` says where the document opens: the `/OpenAction` destination, a named one
 /// resolved (ISO 32000-2 §12.3.2.4), as a 1-based page and a destination in view coordinates.
 #[test]

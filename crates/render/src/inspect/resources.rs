@@ -358,27 +358,53 @@ impl<'a> Inspector<'a> {
         fallback: impl FnOnce(&mut usize) -> Option<String>,
     ) -> Attachment {
         let d = self.dict(spec);
-        let size =
-            d.and_then(|d| d.get(b"EF").ok()).and_then(|o| self.dict(o)).and_then(|ef| ef.get(b"F").ok().or_else(|| ef.get(b"UF").ok())).and_then(
-                |f| match self.resolve(f) {
-                    Object::Stream(s) => s
-                        .dict
-                        .get(b"Params")
-                        .ok()
-                        .and_then(|p| self.dict(p))
-                        .and_then(|p| p.get(b"Size").ok())
-                        .and_then(|s| s.as_i64().ok())
-                        .map(|s| s as usize)
-                        .or(Some(s.content.len())),
-                    _ => None,
-                },
-            );
+        let (size, declared_size) = d
+            .and_then(|d| d.get(b"EF").ok())
+            .and_then(|o| self.dict(o))
+            .and_then(|ef| ef.get(b"F").ok().or_else(|| ef.get(b"UF").ok()))
+            .and_then(|f| match self.resolve(f) {
+                Object::Stream(s) => Some(self.embedded_size(s)),
+                _ => None,
+            })
+            .unwrap_or_default();
         let display = d
             .and_then(|d| self.budgeted_text(d, b"UF", text_budget).or_else(|| self.budgeted_text(d, b"F", text_budget)))
             .or_else(|| fallback(text_budget))
             .unwrap_or_else(|| "attachment".into());
         let has_description = d.is_some_and(|d| d.get(b"Desc").is_ok());
-        Attachment { name: display, description: d.and_then(|d| self.budgeted_text(d, b"Desc", text_budget)), has_description, size, source }
+        Attachment {
+            name: display,
+            description: d.and_then(|d| self.budgeted_text(d, b"Desc", text_budget)),
+            has_description,
+            size,
+            declared_size,
+            source,
+        }
+    }
+
+    /// An embedded file's size and, when it disagrees, the `/Params /Size` it declares. An
+    /// unfiltered stream's bytes are the file, so they are counted; a filtered one would have to
+    /// be decoded, so its declared size is taken as it stands. A size that is not a
+    /// non-negative integer is not one.
+    fn embedded_size(&self, s: &lopdf::Stream) -> (Option<usize>, Option<usize>) {
+        let declared = s
+            .dict
+            .get(b"Params")
+            .ok()
+            .and_then(|p| self.dict(p))
+            .and_then(|p| p.get(b"Size").ok())
+            .and_then(|o| self.resolve(o).as_i64().ok())
+            .and_then(|n| usize::try_from(n).ok());
+        let filtered = match s.dict.get(b"Filter").ok().map(|f| self.resolve(f)) {
+            None | Some(Object::Null) => false,
+            Some(Object::Array(filters)) => !filters.is_empty(),
+            Some(_) => true,
+        };
+        if filtered {
+            return (declared.or(Some(s.content.len())), None);
+        }
+        let counted = s.content.len();
+        (Some(counted), declared.filter(|&n| n != counted))
     }
 }
 
