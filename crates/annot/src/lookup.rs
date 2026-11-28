@@ -43,7 +43,10 @@ impl Iterator for PageWalk<'_> {
             let node = kid.as_ref();
             *next += 1;
             self.examined += 1;
-            let Some(node) = node else { continue };
+            // A kid may be a reference to an object that holds only a reference (ISO 32000-2
+            // §7.3.10): the node or page is where the chain ends, as `pdfcraft_model::pages` and
+            // the renderer read it, so page indices agree.
+            let Some(node) = node.map(|r| final_ref(self.doc, r)) else { continue };
             if self.seen.len() >= 1_000_000 || self.examined > 4_000_000 {
                 self.pending.clear();
                 return None;
@@ -53,20 +56,62 @@ impl Iterator for PageWalk<'_> {
             }
             let obj = self.doc.get(node);
             let Some(d) = obj.as_dict() else { continue };
-            match d.get(b"Kids") {
+            // The node's /Kids array, direct or indirect (through a chain of references), with
+            // the object it is read from; anything else (absent, null, which is the same as
+            // absent per ISO 32000-2 §7.3.9, or not an array) gives no children.
+            let kids = match d.get(b"Kids") {
+                Some(Object::Ref(array)) => {
+                    let array = final_ref(self.doc, *array);
+                    Some((self.doc.get(array), Some(array))).filter(|(k, _)| k.as_array().is_some())
+                }
+                Some(kids @ Object::Array(_)) => Some((std::sync::Arc::new(kids.clone()), None)),
+                _ => None,
+            };
+            // A node is /Type /Pages, or has a /Kids array and is not /Type /Page; anything else
+            // is a page, whatever its /Type says (the rule `pdfcraft_model::pages` and the
+            // renderer walk by). /Type is read through references too.
+            let indirect_type = match d.get(b"Type") {
+                Some(r @ Object::Ref(_)) => Some(self.doc.resolve(r)),
+                _ => None,
+            };
+            let ty = match &indirect_type {
+                Some(t) => t.as_name(),
+                None => d.name(b"Type"),
+            };
+            let is_node = match ty {
+                Some(b"Pages") => true,
+                Some(b"Page") => false,
+                _ => kids.is_some(),
+            };
+            if !is_node {
+                return Some(node);
+            }
+            match kids {
                 // A `/Kids` array object shared by several nodes is read under the first: under
                 // the others it would only list nodes already seen.
-                Some(Object::Ref(array)) if d.name(b"Type") != Some(b"Page") => {
-                    if self.seen.insert(*array) {
-                        self.pending.push((self.doc.get(*array), 0));
+                Some((kids, Some(array))) => {
+                    if self.seen.insert(array) {
+                        self.pending.push((kids, 0));
                     }
                 }
-                Some(kids) if d.name(b"Type") != Some(b"Page") => self.pending.push((self.doc.resolve(kids), 0)),
-                _ => return Some(node),
+                Some((kids, None)) => self.pending.push((kids, 0)),
+                None => {}
             }
         }
         None
     }
+}
+
+/// Where a chain of references starting at `r` ends: `r` itself unless its object is nothing but
+/// a reference, followed as far as `Document::resolve` follows one (32 more), so a cycle stops.
+fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
+    for _ in 0..32 {
+        match &*doc.get(r) {
+            Object::Ref(next) => r = *next,
+            _ => break,
+        }
+    }
+    r
 }
 
 pub(crate) fn page_ref(doc: &Document, page: usize) -> Result<ObjRef, AnnotError> {
