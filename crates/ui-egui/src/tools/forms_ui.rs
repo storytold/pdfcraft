@@ -472,6 +472,14 @@ pub(crate) fn field_press(
             }
         }
         PressPhase::Release { pos, click: true, .. } => clicked(session, doc, info, allowed, (f, w, wi), (press.page, *pos, press.mods), geo),
+        // A press that dragged along a text field's text and comes up over the field is still a click
+        // on it, as another viewer runs it: its Mouse Up runs.
+        PressPhase::Release { pos, click: false, .. } if usable && f.kind == FormFieldKind::Text => {
+            let over = session.page_xform(press.page, geo).is_some_and(|xf| widget_rect(&xf, info, press.page, w.rect).contains(*pos));
+            if over {
+                session.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
+            }
+        }
         _ => {}
     }
 }
