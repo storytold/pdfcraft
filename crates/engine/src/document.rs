@@ -326,6 +326,11 @@ impl Document {
         self.editor.as_ref().and_then(|e| pdfcraft_edit::page_images(&e.cos, page).ok()).unwrap_or_default()
     }
 
+    /// The fill opacity each of [`Self::page_images`] is drawn at, in the same order.
+    pub fn page_image_opacities(&self, page: usize) -> Vec<f64> {
+        self.editor.as_ref().and_then(|e| pdfcraft_edit::image_opacities(&e.cos, page).ok()).unwrap_or_default()
+    }
+
     /// Mixed editable objects on one page. Source inventories are zero-based and added items
     /// appear once. Rectangles are user-space points, independent of the viewer's zoom.
     pub fn editable_objects(&self, page: usize) -> Result<Vec<EditableObject>, String> {

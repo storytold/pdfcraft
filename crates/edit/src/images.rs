@@ -112,7 +112,7 @@ fn too_many_images() -> EditError {
     EditError::Invalid(format!("the page draws more than {MAX_PAGE_IMAGES} images"))
 }
 
-fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
+pub(crate) fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
     pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
 }
 
@@ -1287,6 +1287,8 @@ pub enum ImageChange {
     /// Grouped Form artwork only: draw the form's content in place of its `Do`, so its text and
     /// pictures become the page's own and can be edited one by one (#2964).
     Ungroup,
+    /// Draw it at this opacity, 0 (transparent) to 1 (opaque), see [`crate::image_opacities`].
+    Opacity(f64),
 }
 
 /// The user-space transform that maps box `from` onto box `to` (move and resize).
@@ -2513,6 +2515,9 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
         }
         ImageChange::Crop(keep) => {
             return crop_image_impl(doc, &p, &all, &img, *keep);
+        }
+        ImageChange::Opacity(alpha) => {
+            return crate::image_opacity::set_image_opacity(doc, page, &img, *alpha);
         }
         ImageChange::Ungroup => {
             if !img.is_form {

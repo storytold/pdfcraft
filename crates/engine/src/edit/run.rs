@@ -433,6 +433,7 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
         ImageEdit::Arrange(order) => pdfcraft_edit::ImageChange::Arrange(*order),
         ImageEdit::RemoveCrop => pdfcraft_edit::ImageChange::RemoveCrop,
         ImageEdit::Ungroup => pdfcraft_edit::ImageChange::Ungroup,
+        ImageEdit::Opacity(alpha) => pdfcraft_edit::ImageChange::Opacity(*alpha),
     };
     let page_model = pdfcraft_model::pages(doc)
         .into_iter()
@@ -465,7 +466,15 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
             if !((b.abs() < 1e-5 && c.abs() < 1e-5) || (a.abs() < 1e-5 && d.abs() < 1e-5)));
         let should_promote = has_active_crop
             || non_axis_transform
-            || matches!(change, ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete);
+            || matches!(
+                change,
+                ImageEdit::Crop(_)
+                    | ImageEdit::RemoveCrop
+                    | ImageEdit::RotateBy(_)
+                    | ImageEdit::Arrange(_)
+                    | ImageEdit::Delete
+                    | ImageEdit::Opacity(_)
+            );
 
         if should_promote {
             doc.update_dict(added_item.obj, |d| {
@@ -535,7 +544,13 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
                 ai.image = new_image;
                 pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
             }
-            ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete | ImageEdit::Ungroup => {
+            ImageEdit::Crop(_)
+            | ImageEdit::RemoveCrop
+            | ImageEdit::RotateBy(_)
+            | ImageEdit::Arrange(_)
+            | ImageEdit::Delete
+            | ImageEdit::Ungroup
+            | ImageEdit::Opacity(_) => {
                 pdfcraft_edit::change_image(doc, page, index, &c)?;
             }
         }
