@@ -1,4 +1,4 @@
-use super::draw::draw_appearance;
+use super::draw::{can_draw, draw_appearance, shaped_text_error};
 use super::lookup::{annot_dict, annot_ref, annots, change_annots, fill_sign_shape, page_ref};
 use super::modify::{free_text_da, n, refuse_undrawable_thai, rich_text, set_part_keys, shape_text_box};
 use super::types::{
@@ -311,6 +311,16 @@ pub(crate) fn on_side(rect: [f64; 4], side: Side, end: [f64; 2]) -> bool {
     }
 }
 
+/// Checked before anything is added: an annotation whose appearance can't be drawn (shaped text
+/// past its budget) is refused with a reason.
+fn refuse_undrawn(doc: &Document, d: &Dict) -> Result<(), AnnotError> {
+    if can_draw(doc, d) {
+        return Ok(());
+    }
+    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    Err(shaped_text_error(doc, d).unwrap_or(AnnotError::Unsupported(subtype)))
+}
+
 /// Add a comment; returns its index in the page's `/Annots`.
 pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> Result<usize, AnnotError> {
     let page = page_ref(doc, new.page)?;
@@ -529,6 +539,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
         return Err(AnnotError::Undrawable(pdfcraft_fonts::undrawable_message(what, c)));
     }
     refuse_undrawable_thai(d.name(b"Subtype") == Some(b"FreeText"), &new.contents)?;
+    refuse_undrawn(doc, &d)?;
     let r = doc.add(Object::Dict(d.clone()));
     draw_appearance(doc, r)?;
     let mut list = annots(doc, page);

@@ -82,13 +82,30 @@ fn rich_text_in(d: &mut Dict, style: TextStyle) {
         (col[1].clamp(0.0, 1.0) * 255.0).round() as u8,
         (col[2].clamp(0.0, 1.0) * 255.0).round() as u8
     );
-    let align = match d.get(b"Q").and_then(Object::as_int) {
-        Some(1) => "center",
-        Some(2) => "right",
+    let q = d.get(b"Q").and_then(Object::as_int).unwrap_or(0);
+    let align = match q {
+        1 => "center",
+        2 => "right",
         _ => "left",
     };
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
-    let body: String = text.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect();
+    // Text the Arabic and Hebrew writer draws has the paragraphs that writer gives it (CR, LF, a
+    // CRLF pair once, U+2029), each with its own direction. Any other text has the rich text
+    // it always had.
+    let shaped = pdfcraft_fonts::appearance_text::has_shaped_text(&text) && pdfcraft_fonts::appearance_text::can_shape(&text);
+    let body: String = if shaped {
+        text.replace("\r\n", "\n")
+            .split(['\r', '\n', '\u{0085}', '\u{2029}'])
+            .map(|line| {
+                let rtl = pdfcraft_fonts::appearance_text::paragraph_rtl(line);
+                let direction = if rtl { "rtl" } else { "ltr" };
+                let paragraph_style = if q == 0 && rtl { " style=\"text-align:right\"" } else { "" };
+                format!("<p dir=\"{direction}\"{paragraph_style}>{}</p>", esc(line))
+            })
+            .collect()
+    } else {
+        text.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect()
+    };
     let style = format!(
         "font-size:{}pt;text-align:{align};color:{hex};font-weight:{weight};font-style:{slant};font-family:{family};font-stretch:normal",
         n(size)
@@ -328,9 +345,13 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
             let circle = text_box_of(&d).filter(|_| BorderShape::of(&d) == BorderShape::Circle);
             fitted_box(doc, r, text).map(|fit| circle.map_or(fit, |old| [fit[0], fit[1].min(old[1]), fit[2], fit[3]]))
         };
-        match fit {
-            Some(rect) => apply_text_box(doc, r, rect, meta, true)?,
-            None => draw_appearance(doc, r)?,
+        let result = match fit {
+            Some(rect) => apply_text_box(doc, r, rect, meta, true),
+            None => draw_appearance(doc, r),
+        };
+        if let Err(error) = result {
+            doc.set(r, Object::Dict(before));
+            return Err(error);
         }
     }
     Ok(())
@@ -365,8 +386,13 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         let longest = text.lines().map(|l| measure(l, size)).fold(0.0, f64::max);
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
-    let height = appearance::text_lines_height(&pdfcraft_fonts::wrap_with(text, size, (w - 2.0 * pad).max(1.0), measure), size);
-    Some([x0, top - height - 2.0 * pad - 2.0, x0 + w, top])
+    let width = (w - 2.0 * pad).max(1.0);
+    let text_height = if pdfcraft_fonts::appearance_text::has_shaped_text(text) && pdfcraft_fonts::appearance_text::can_shape(text) {
+        pdfcraft_fonts::appearance_text::height(&pdfcraft_fonts::appearance_text::wrap_with_latin(text, size, width, face).ok()?, size)
+    } else {
+        appearance::text_lines_height(&pdfcraft_fonts::wrap_with(text, size, width, measure), size)
+    };
+    Some([x0, top - text_height - 2.0 * pad - 2.0, x0 + w, top])
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.
@@ -732,9 +758,7 @@ pub(crate) fn shape_text_box(d: &mut Dict, tb: [f64; 4], shape: BorderShape, wid
 fn text_extent(d: &Dict, wrap: f64) -> [f64; 2] {
     let text = d.get(b"Contents").and_then(|o| o.as_string()).map(PdfString::to_text).unwrap_or_default();
     let (_, size) = appearance::parse_da(d);
-    let lines = appearance::wrap(&text, size, wrap.max(1.0));
-    let widest = lines.iter().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
-    [widest, appearance::text_lines_height(&lines, size)]
+    appearance::text_box_extent(&text, size, wrap.max(1.0))
 }
 
 /// The width and height of FreeText `d`'s text box `tb` as displayed: swapped on a page turned by

@@ -239,7 +239,9 @@ pub(crate) fn show(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSes
             // text, the border around that.
             BorderShape::Circle => {
                 let (bw, size) = (tb.border.width, tb.size);
-                let longest = pdfcraft_engine::annot_text::text_width(host.text.trim(), size);
+                let typed = host.text.trim();
+                let longest =
+                    pdfcraft_engine::annot_text::shaped_width(typed, size).unwrap_or_else(|| pdfcraft_engine::annot_text::text_width(typed, size));
                 let (tw, th) = (longest + 8.0 + 2.0 * bw, size * 1.2 + 6.0 + 2.0 * bw);
                 let o = BorderShape::Circle.around([0.0, 0.0, tw, th], bw, Some([longest, size * 1.2]));
                 let centre = corner + vec2((tw / 2.0 - bw) as f32, (th / 2.0 - bw) as f32) * zoom;

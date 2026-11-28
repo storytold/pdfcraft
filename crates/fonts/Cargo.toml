@@ -18,6 +18,7 @@ skrifa = "0.44"
 # Arabic shaping for text written into PDFs; already in the tree via egui, on the same read-fonts.
 harfrust = "0.12"
 unicode-bidi = "0.3"
+unicode-segmentation = "1.13"
 
 [build-dependencies]
 # `build.rs` reads each craft-fonts manifest with its parser, so the table carries the face index and role.

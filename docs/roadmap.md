@@ -5,6 +5,8 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-11-18 | **Last updated:** 2026-11-18 | **Change:** minor (M5 #4085: text boxes, callouts and Fill & Sign text draw shaped Arabic and Hebrew in reading order and keep typing order in contents and copied text; estimates unchanged)
+
 > **Last reviewed:** 2026-11-04 | **Last updated:** 2026-11-04 | **Change:** minor (M7: paragraph boundaries respect row typography and page-wide filled panels; estimates unchanged)
 
 > **Last reviewed:** 2026-11-18 · **Last updated:** 2026-11-18 · **Change:** patch (M7 #7687: PDF-page watermarks use the visible source bounds; estimates unchanged)

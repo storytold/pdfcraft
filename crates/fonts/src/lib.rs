@@ -7,6 +7,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod appearance_text;
 #[cfg(test)]
 mod cjk_scripts;
 mod craft;
@@ -33,7 +34,7 @@ pub use script::{
 };
 pub use shaping::{
     ShapedCluster, ShapedScript, arabic_glyph, arabic_has, face_glyph, hebrew_has, latin_has, shape_arabic, shape_hebrew, shape_latin, shape_thai,
-    shaped_glyph, thai_has,
+    shaped_bounds, shaped_glyph, thai_has,
 };
 
 /// Advance of `s` in Helvetica at `size` points, using the exact standard-14 metrics.
