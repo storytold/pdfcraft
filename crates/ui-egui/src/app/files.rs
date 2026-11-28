@@ -1,6 +1,8 @@
 use super::{DocId, DocView, LeftPanel, Mode, PasswordPrompt, PdfCraftApp, RecentFile, RightPanel, UnlockPrompt, canvas, i18n};
 #[cfg(not(target_arch = "wasm32"))]
 use super::{OpenOutcome, OpenRequest, PendingOpen, open_worker};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::OpeningNotice;
 use craft::docpath::names::safe_file_name;
 #[cfg(not(target_arch = "wasm32"))]
 use craft::host::queue::Priority;
@@ -8,8 +10,6 @@ use craft::host::{FileFilter, PickRequest, Picked};
 #[cfg(not(target_arch = "wasm32"))]
 use craft::platform::watch::FileStamp;
 use craft::ui::patterns::form_dialogs::{PasswordDialog, PasswordPurpose};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::OpeningNotice;
 
 /// Whether an open's reply asks for a password: the file is encrypted and none, or a wrong one,
 /// was given.
