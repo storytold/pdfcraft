@@ -57,6 +57,19 @@ pub(crate) fn undrawable(d: &TextDraft, memo: &UndrawableMemo) -> Option<char> {
 /// anything that changes its layout does.
 pub(crate) type UndrawableMemo = std::cell::RefCell<Option<(AddedText, Option<char>)>>;
 
+/// The warning shown for a draft with `c` in it: in Courier, a Central European letter Helvetica
+/// and Times draw but a widely used viewer's stand-in for Courier doesn't (review on #3076) says
+/// so.
+pub(crate) fn draft_undrawable_message(d: &TextDraft, c: char) -> String {
+    if d.style.family == pdfcraft_engine::FontFamily::Courier && pdfcraft_fonts::extra_letter(c).is_some() {
+        return crate::i18n::fmt(
+            tl!("Courier can't draw “{c}” ({code}) in other PDF viewers. Choose Helvetica or Times."),
+            &[("c", &c.to_string()), ("code", &format!("U+{:04X}", u32::from(c)))],
+        );
+    }
+    undrawable_message(c)
+}
+
 /// The warning shown for text with `c` in it.
 pub(crate) fn undrawable_message(c: char) -> String {
     crate::i18n::fmt(
@@ -248,6 +261,12 @@ impl ContentView {
     /// counts as unsaved work, until it is corrected or discarded.
     pub(crate) fn blocked(&self) -> Option<char> {
         self.draft.as_ref().and_then(|d| undrawable(d, &self.undrawable))
+    }
+
+    /// The warning for a draft held because of `c`: the draft's own (Courier names the letters it
+    /// refuses), or the generic one when no draft is open.
+    pub(crate) fn blocked_message(&self, c: char) -> String {
+        self.draft.as_ref().map_or_else(|| undrawable_message(c), |d| draft_undrawable_message(d, c))
     }
 
     /// Keeps a blocked draft open and focused instead of finishing or replacing it.
@@ -1052,7 +1071,7 @@ fn draft_session(
     let corners = [paper.left_top(), paper.right_top(), paper.right_bottom(), paper.left_bottom()].map(|p| body.view.to_doc(p));
     let _ = TaskBar::fixed(tl!("Text box actions"), &corners).compact(true).show(ui, body.rect, |ui, _| {
         if let Some(c) = blocked {
-            let _ = Text::new(undrawable_message(c)).tone(Tone::Bad).show(ui);
+            let _ = Text::new(cv.blocked_message(c)).tone(Tone::Bad).show(ui);
         }
         done = IconButton::new(IconId::new("check")).label(tl!("Done adding text")).show(ui).clicks > 0;
         discard = IconButton::new(IconId::new("close")).label(tl!("Discard this text (Esc)")).show(ui).clicks > 0;
