@@ -103,6 +103,22 @@ fn image_resolution_override_changes_size_without_resampling() {
     }
 }
 
+/// Print as image hands every rendered page to `from_images_with_resolution` (#7925): the
+/// decoded pixels held at once must not grow with the number of pages.
+#[test]
+fn images_made_into_pages_are_held_one_file_at_a_time_however_many_there_are() {
+    let most_held = |n: usize| {
+        IMAGES_HELD.with(|c| c.set((0, 0)));
+        let images: Vec<(String, Vec<u8>)> = (0..n).map(|i| (format!("page-{i}.png"), png_bytes(false))).collect();
+        let doc = from_images_with_resolution(&images, ImageResolution::Dpi(150.0)).unwrap();
+        assert_eq!(pages(&doc).len(), n);
+        IMAGES_HELD.with(|c| c.get().1)
+    };
+    let (few, many) = (most_held(2), most_held(16));
+    assert!(few > 0, "the counter sees the images read");
+    assert_eq!(many, few, "sixteen pages hold no more decoded images at once than two");
+}
+
 #[test]
 fn text_is_wrapped_and_paginated() {
     let long: String = (0..200).map(|i| format!("Line {i} of a plain text file\n")).collect();
