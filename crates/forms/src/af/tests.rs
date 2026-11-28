@@ -542,3 +542,59 @@ fn a_simple_calculation_that_expands_past_the_allowance_is_not_calculated() {
     assert_eq!(calculate(&within, &thousand).as_deref(), Some("1000000"));
     assert_eq!(calculate(&past, &thousand), None);
 }
+
+/// A date typed with its day and month but not the year that follows them takes the current
+/// year and is stored written out in the format: "10.10" in dd.mm.yyyy is 10.10.<year>. One
+/// number alone, a year the format puts first, a day the year doesn't have and any date typed with
+/// no current year given stay refused; a whole date is stored as typed.
+#[test]
+fn a_date_typed_without_its_year_takes_the_current_year() {
+    let date = |fmt: &str| Format::Date(fmt.into());
+    let in_2026 = |fmt: &str, typed: &str| with_current_year(2026, || keystroke(&date(fmt), "d", typed));
+    assert_eq!(in_2026("dd.mm.yyyy", "10.10"), Ok("10.10.2026".into()));
+    assert_eq!(in_2026("dd.mm.yyyy", "1.2"), Ok("01.02.2026".into()));
+    assert_eq!(in_2026("mm/dd/yyyy", "10/10"), Ok("10/10/2026".into()));
+    assert_eq!(in_2026("mm/dd/yyyy", "1/2"), Ok("01/02/2026".into()));
+    assert_eq!(in_2026("dd.mm.yy", "10.10"), Ok("10.10.26".into()));
+    assert!(in_2026("dd.mm.yyyy", "10").is_err(), "a day alone is no date");
+    assert!(in_2026("yyyy-mm-dd", "10-10").is_err(), "a year that comes first is not left out");
+    assert!(in_2026("dd.mm.yyyy", "29.02").is_err(), "2026 has no 29 February");
+    assert_eq!(with_current_year(2028, || keystroke(&date("dd.mm.yyyy"), "d", "29.02")), Ok("29.02.2028".into()));
+    assert_eq!(in_2026("dd.mm.yyyy", "10.10.2025"), Ok("10.10.2025".into()), "a whole date is stored as typed");
+    assert!(keystroke(&date("dd.mm.yyyy"), "d", "10.10").is_err(), "no current year given: refused, as before");
+    assert_eq!(parse_date("10.10", "dd.mm.yyyy"), None, "reading a stored value never fills a year in");
+}
+
+/// The year a date takes is the one left out, not a time typed after the date, a word, or a year
+/// typed in other digits; and a completed date is stored only when the field reads it back.
+#[test]
+fn a_completed_year_takes_no_time_or_word_and_reads_back() {
+    let date = |fmt: &str| Format::Date(fmt.into());
+    let in_2026 = |fmt: &str, typed: &str| with_current_year(2026, || keystroke(&date(fmt), "d", typed));
+    assert_eq!(in_2026("m/d/yy HH:MM", "10/10 14:30"), Ok("10/10/26 14:30".into()), "14 is the hour, not the year");
+    assert_eq!(in_2026("m/d/yy HH:MM", "10/10 14:5"), Ok("10/10/26 14:05".into()), "nor with a one-digit minute");
+    assert_eq!(in_2026("m/d/yy HH:MM", "10/10/26 14:30"), Ok("10/10/26 14:30".into()), "a whole date is stored as typed");
+    assert!(in_2026("dd.mm.yyyy", "10.10.abc").is_err(), "a word where the year goes");
+    assert!(in_2026("dd.mm.yyyy", "10.10.\u{ff12}\u{ff10}\u{ff12}\u{ff15}").is_err(), "a year in full-width digits");
+    assert_eq!(in_2026("dd.mm.yyyy", "Sat 10.10"), Ok("10.10.2026".into()), "a weekday says nothing a date needs");
+    assert!(in_2026("dmyyyy", "1.2").is_err(), "122026 can't be read back as 1 February");
+    assert_eq!(in_2026("dmyyyy", "1.2.2026"), Ok("1.2.2026".into()));
+    assert_eq!(in_2026("ddmmyyyy", "10.10"), Ok("10102026".into()), "fixed widths read back");
+}
+
+/// The time starts at a number typed after a space and followed by ':', not at a colon that a
+/// date separator leads to: a year typed before a colon is kept, a format that separates its
+/// date with colons still has its year filled in, and 29 February without a year in a year that
+/// has none is refused rather than read with the hour as its year.
+#[test]
+fn a_colon_in_the_date_is_no_time_and_a_missing_leap_day_is_refused() {
+    let date = |fmt: &str| Format::Date(fmt.into());
+    let in_2026 = |fmt: &str, typed: &str| with_current_year(2026, || keystroke(&date(fmt), "d", typed));
+    assert_eq!(in_2026("m/d/yy HH:MM", "10/10/21:14"), Ok("10/10/21:14".into()), "the typed year 21 is kept");
+    assert_eq!(in_2026("m/d/yy:HH:MM", "10/10/21:14"), Ok("10/10/21:14".into()));
+    assert_eq!(in_2026("dd:mm:yyyy HH:MM", "10:10 14:30"), Ok("10:10:2026 14:30".into()));
+    assert_eq!(in_2026("m/d/yy HH:MM", "10/10 14:30"), Ok("10/10/26 14:30".into()), "still completed");
+    assert!(in_2026("m/d/yy HH:MM", "2/29 00:15").is_err(), "2026 has no 29 February, and 00 is the hour");
+    assert_eq!(with_current_year(2028, || keystroke(&date("m/d/yy HH:MM"), "d", "2/29 00:15")), Ok("2/29/28 00:15".into()));
+    assert_eq!(in_2026("m/d/yy HH:MM", "2/29/00 15:00"), Ok("2/29/00 15:00".into()), "a typed year 2000 is kept");
+}

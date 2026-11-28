@@ -331,6 +331,13 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             }
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
             let t = &f.actions.keystroke(&f.name, t).map_err(FormError::Format)?;
+            // The keystroke can write the value out (a date given the current year): what is
+            // stored must fit too.
+            if let Some(max) = f.max_len
+                && t.chars().count() > max
+            {
+                return invalid(format!("{:?} takes at most {max} characters", f.name));
+            }
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
             let (t, refresh_field) = if resetting { (t.clone(), false) } else { scripting::accept(doc, f, t, scripts)? };
             let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");

@@ -3154,6 +3154,97 @@ fn protect_fails_closed_when_randomness_is_unavailable() {
     }
 }
 
+/// A one-page form with a dd.mm.yyyy date field named "when".
+fn date_field_pdf() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (when) /Rect [20 250 180 270] /P 3 0 R /DA (/Helv 10 Tf 0 g) /AA << /K << /S /JavaScript /JS (AFDate_KeystrokeEx(\"dd.mm.yyyy\");) >> /F << /S /JavaScript /JS (AFDate_FormatEx(\"dd.mm.yyyy\");) >> >> >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ];
+    let mut out = b"%PDF-1.7
+"
+    .to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(
+            format!(
+                "{} 0 obj
+{o}
+endobj
+",
+                i + 1
+            )
+            .as_bytes(),
+        );
+    }
+    let xref = out.len();
+    out.extend_from_slice(
+        format!(
+            "xref
+0 {}
+0000000000 65535 f 
+",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
+    for o in offsets {
+        out.extend_from_slice(
+            format!(
+                "{o:010} 00000 n 
+"
+            )
+            .as_bytes(),
+        );
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{xref}
+%%EOF
+",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
+    out
+}
+
+/// A date typed without its year into a dd.mm.yyyy field takes the year of the session's clock
+/// (here 2023-11-14) and is stored written out; a day alone is still refused.
+#[test]
+fn a_date_typed_without_its_year_takes_the_year_of_the_sessions_clock() {
+    let out = date_field_pdf();
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("date.pdf", None, Arc::new(out), None).unwrap();
+    let fill = |s: &mut Session, v: &str| s.apply(id, Edit::SetFieldValue { name: "when".into(), value: FieldValue::Text(v.into()) });
+    let value = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "when").map(|f| f.value.clone()).unwrap();
+    fill(&mut s, "10.10").expect("day and month take the current year");
+    assert_eq!(value(&s), vec!["10.10.2023".to_string()]);
+    assert!(fill(&mut s, "10").is_err(), "a day alone is no date");
+    assert_eq!(value(&s), vec!["10.10.2023".to_string()], "the refused value changed nothing");
+}
+
+/// The year a date typed without one takes comes from the same clock reading as the edit's own
+/// date: a clock that ticks from 2026-12-31 23:59:59 to the new year between two readings still
+/// stores 2026, the year the edit was made.
+#[test]
+fn a_completed_date_takes_its_year_from_the_edits_own_clock_reading() {
+    static NEXT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1_700_000_000);
+    let mut s = Session::new().with_clock(|| NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+    let id = s.open("date.pdf", None, Arc::new(date_field_pdf()), None).unwrap();
+    // 2026-12-31T23:59:59 (the test clock is local time); every reading after it is 2027.
+    NEXT.store(1_798_761_599, std::sync::atomic::Ordering::SeqCst);
+    s.apply(id, Edit::SetFieldValue { name: "when".into(), value: FieldValue::Text("10.10".into()) }).expect("day and month take the year");
+    let value = s.get(id).unwrap().form.iter().find(|f| f.name == "when").map(|f| f.value.clone()).unwrap();
+    assert_eq!(value, vec!["10.10.2026".to_string()]);
+}
+
 /// A one-page form: a text field and a check box (with appearance states).
 fn form_fixture() -> Vec<u8> {
     let objs = [
