@@ -85,7 +85,7 @@ impl PdfCraftApp {
         // LaunchServices recovery (and Finder metadata edits) changes ctime. The watch already
         // read the stable file: identical saved bytes are not a document change.
         if let Some(bytes) = &change.bytes
-            && self.session.get(change.key).is_some_and(|d| d.saved_bytes().as_slice() == bytes.as_slice())
+            && self.session.get(change.key).is_some_and(|d| d.file_bytes().as_slice() == bytes.as_slice())
         {
             self.watch.known_as(change.key, &change.path, Some(change.stamp));
             return;

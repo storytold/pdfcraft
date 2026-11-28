@@ -810,6 +810,14 @@ impl Document {
         self.editor.as_ref().map_or_else(|| self.bytes.clone(), |e| e.saved.clone())
     }
 
+    /// The file where the document belongs as it is on disk: as opened, then as last saved.
+    /// Unlike [`Self::saved_bytes`], it never holds a revision that opening appended in memory
+    /// (an XFA form's layout, a page tree recovered by scanning), so a save that keeps it as
+    /// its first bytes is the one that is incremental.
+    pub fn file_bytes(&self) -> Arc<Vec<u8>> {
+        self.editor.as_ref().map_or_else(|| self.bytes.clone(), |e| e.file.clone())
+    }
+
     /// Notes about damage repaired while opening (Document Properties ▸ Advanced, notices).
     pub fn repair_log(&self) -> Vec<String> {
         self.editor.as_ref().map(|e| e.cos.repair_log().to_vec()).unwrap_or_default()

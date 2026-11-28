@@ -178,7 +178,10 @@ impl Automation {
         let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) }.map_err(failed)?;
         // A save that adds or removes encryption, or must not keep the old revision (Sanitize,
         // redaction), is rewritten in full even when an incremental save was asked for.
-        let incremental = !full && bytes.starts_with(&self.doc(a)?.saved_bytes());
+        // Incremental means the bytes written start with the document's file as it was opened
+        // or last saved (#1329): not the copy opening rebuilt in memory, which a repaired file's
+        // first save writes in full. The destination is not read again to compare.
+        let incremental = !full && bytes.starts_with(&self.doc(a)?.file_bytes());
         let mut out = self.publish_save(id, &target, bytes, incremental, write)?;
         if !scripts.is_empty()
             && let Some(o) = out.as_object_mut()

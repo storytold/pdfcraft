@@ -145,7 +145,7 @@ impl PdfCraftApp {
             failed(self, ctx);
             return false;
         };
-        let (name, path, saved) = (doc.name.clone(), doc.path.clone(), doc.saved_bytes());
+        let (name, path, saved) = (doc.name.clone(), doc.path.clone(), doc.file_bytes());
         // After Apply redactions, Save asks where and proposes the name with `_Redacted`.
         let redacted = self.views.get(index).is_some_and(|v| v.redactions_applied > 0);
         let not_delivered = self.views.get(index).is_some_and(|v| v.redactions_applied > v.redactions_downloaded);
