@@ -529,6 +529,11 @@ notarized. The MSI's manufacturer, shown as the publisher in Installed apps, is
 | App, universal (Apple silicon + Intel) | `pdfcraft-<ver>-macos-universal.dmg` | Signed and notarized |
 | Command-line tool, universal | `pdfcraft-cli-<ver>-macos-universal.zip` | Signed and notarized |
 
+Installing doesn't make PdfCraft the app that opens PDFs. To make it that app, press **Open PDFs with
+PdfCraft** in Preferences ▸ General & Interface ▸ App that opens PDFs. macOS asks you to confirm. This
+also helps when PDFs keep opening in Preview after Finder's Get Info ▸ Change All, which can happen
+when the app that used to open PDFs was uninstalled.
+
 ### Linux
 
 | Format | x86_64 | aarch64 (ARM64) | Notes |
