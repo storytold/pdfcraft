@@ -40,6 +40,7 @@ mod fallback;
 pub mod forms;
 mod interp;
 mod lines;
+mod marks;
 mod rewrite;
 
 #[cfg(test)]

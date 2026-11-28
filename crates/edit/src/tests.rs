@@ -16937,6 +16937,250 @@ fn unicode_row_breaks_break_the_row_instead_of_needing_a_glyph() {
     }
 }
 
+/// A page of Chrome-style runs, and its twin without the marks. Each run is where it starts (when
+/// it starts a row), its `/ActualText` (none for a run read from its glyphs) and the string it
+/// shows. The twin's `/ActualText` is the same without U+202D, U+202C and U+200B, so both draw the
+/// same glyphs and only the marks differ.
+type ChromeRuns<'a> = &'a [(Option<(f64, f64)>, Option<&'a str>, &'a str)];
+
+fn chrome_page(marked: bool, runs: ChromeRuns) -> Document {
+    let mut content = String::from("BT /F1 12 Tf ");
+    for (at, said, shown) in runs {
+        if let Some((x, y)) = at {
+            content.push_str(&format!("1 0 0 1 {x} {y} Tm "));
+        }
+        match said {
+            Some(said) => {
+                let said: String =
+                    if marked { (*said).to_owned() } else { said.chars().filter(|c| !matches!(c, '\u{202D}' | '\u{202C}' | '\u{200B}')).collect() };
+                let hex: String = said.encode_utf16().map(|u| format!("{u:04X}")).collect();
+                content.push_str(&format!("/Span <</ActualText <FEFF{hex}>>> BDC {shown} Tj EMC "));
+            }
+            None => content.push_str(&format!("{shown} Tj ")),
+        }
+    }
+    content.push_str("ET");
+    text_page(&content)
+}
+
+/// What editing reads from a page: each line's text and box, and each paragraph's texts, spans,
+/// rows and lines.
+type Read = (Vec<(String, [i64; 4])>, Vec<(String, String, String, text::RunSources, Vec<Vec<usize>>, Vec<usize>)>);
+
+fn chrome_read(doc: &Document) -> Read {
+    let lines = text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text, l.rect.map(|v| (v * 10.0).round() as i64))).collect();
+    let blocks = text::text_blocks(doc, 0).unwrap().into_iter().map(|b| (b.text, b.editor_text, b.reflow_text, b.spans, b.rows, b.lines)).collect();
+    (lines, blocks)
+}
+
+/// Chrome's PDFs (Google Docs exports among them) wrap every run's `/ActualText` in U+202D
+/// LEFT-TO-RIGHT OVERRIDE ... U+202C POP DIRECTIONAL FORMATTING. The text read for editing leaves
+/// them (and zero-width characters) out, so every text editing reads is as it is on the same page
+/// without them: lines, paragraphs, their spans, rows and the text a width change reflows. That
+/// holds where a mark used to shield a row's trailing space from the trim, sat after a hyphen at a
+/// row's end, made up a run of its own over a space glyph (as Chrome writes it), or filled a row.
+#[test]
+fn chrome_marks_are_read_as_if_they_were_not_there() {
+    let fixtures: [(&str, ChromeRuns); 6] = [
+        (
+            "runs",
+            &[
+                (Some((72.0, 700.0)), Some("\u{202D}Hello \u{202C}"), "(Hello )"),
+                (None, Some("\u{202D}world\u{202C}"), "(world)"),
+                (Some((72.0, 686.0)), Some("\u{202D}again\u{202C}"), "(again)"),
+            ],
+        ),
+        (
+            "marks on space glyphs",
+            &[(Some((72.0, 700.0)), Some("\u{202D}"), "( )"), (Some((72.0, 700.0)), None, "(Hello world)"), (None, Some("\u{202C}"), "( )")],
+        ),
+        (
+            "space before the closing mark",
+            &[
+                (Some((72.0, 700.0)), Some("\u{202D}Hello world \u{202C}"), "(Hello world )"),
+                (Some((72.0, 686.0)), Some("\u{202D}again\u{202C}"), "(again)"),
+            ],
+        ),
+        (
+            "hyphen before the closing mark",
+            &[(Some((72.0, 700.0)), Some("\u{202D}exam-\u{202C}"), "(exam-)"), (Some((72.0, 686.0)), Some("\u{202D}ple\u{202C}"), "(ple)")],
+        ),
+        ("zero-width space", &[(Some((72.0, 700.0)), Some("Hello\u{200B} world"), "(Hello world)")]),
+        (
+            "a row of marks",
+            &[
+                (Some((72.0, 700.0)), Some("\u{202D}Hello\u{202C}"), "(Hello)"),
+                (Some((72.0, 686.0)), Some("\u{202D}\u{202C}"), "( )"),
+                (Some((72.0, 672.0)), Some("\u{202D}again\u{202C}"), "(again)"),
+            ],
+        ),
+    ];
+    let marked = |text: &str| text.contains(['\u{202D}', '\u{202C}', '\u{200B}']);
+    for (name, runs) in fixtures {
+        let read = chrome_read(&chrome_page(true, runs));
+        for (text, _) in &read.0 {
+            assert!(!marked(text), "{name}: line {text:?}");
+        }
+        for (text, editor, reflow, ..) in &read.1 {
+            assert!(!marked(text) && !marked(editor) && !marked(reflow), "{name}: paragraph {text:?} / {editor:?} / {reflow:?}");
+        }
+        assert_eq!(read, chrome_read(&chrome_page(false, runs)), "{name}: read with the marks, then without");
+    }
+}
+
+/// Right-to-left `/ActualText` keeps its bidi controls (shaping it in the paragraph's own font
+/// orders it with them); a Latin run beside it still loses its own.
+#[test]
+fn right_to_left_actual_text_keeps_its_bidi_controls() {
+    let doc = chrome_page(
+        true,
+        &[(Some((72.0, 700.0)), Some("\u{202D}Hello\u{202C}"), "(Hello)"), (Some((72.0, 650.0)), Some("\u{202B}שלום\u{202C}"), "(abcd)")],
+    );
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert!(lines.iter().any(|l| l == "Hello"), "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains('\u{202B}') && l.contains("שלום")), "{lines:?}");
+}
+
+/// A Unicode chart draws a box for each format character it lists, with that character as the
+/// box's `/ActualText` (PDFBOX-2294's TaroUTR50SortedList112.pdf, U+2060 to U+2069), right after
+/// the label. A glyph that draws something keeps its text, so the box is never a run with no text
+/// that joins the label's line and goes with an edit of it: the edit keeps the box, or is refused
+/// as before for the character no font draws. A mark over a blank glyph (Google Docs puts U+200B
+/// on a space) is still left out.
+#[test]
+fn a_glyph_drawn_for_a_format_character_keeps_its_text() {
+    let chart = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (R 2060) Tj /F2 12 Tf /Span <</ActualText <FEFF2060>>> BDC (a) Tj EMC \
+                 /F1 12 Tf ( .. 2064) Tj /F2 12 Tf /Span <</ActualText <FEFF2064>>> BDC (a) Tj EMC ET \
+                 BT /F1 12 Tf 1 0 0 1 72 650 Tm /Span <</ActualText <FEFF200B>>> BDC ( ) Tj EMC (Item) Tj ET";
+    let doc = text_page(chart);
+    let boxes = |doc: &Document| page_content(doc).matches("(a) Tj").count();
+    assert_eq!(boxes(&doc), 2);
+    let (index, label) =
+        text::text_blocks(&doc, 0).unwrap().into_iter().enumerate().find(|(_, b)| b.editor_text.contains("2060")).expect("the label paragraph");
+    let mut edited = doc.clone();
+    match text::rewrite_block(&mut edited, 0, index, Some(&label.editor_text.replacen("2060", "2061", 1)), &text::BlockStyle::default()) {
+        Ok(_) => {
+            let edited = reopen(&edited);
+            assert_eq!(boxes(&edited), 2, "an edit of the label keeps both boxes: {:?} -> {}", label.editor_text, page_content(&edited));
+        }
+        Err(e) => assert!(e.to_string().contains("U+2060"), "refused only for the box's character: {e}"),
+    }
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    for (mark, name) in [('\u{2060}', "U+2060"), ('\u{2064}', "U+2064")] {
+        assert!(lines.iter().any(|l| l.contains(mark)), "the {name} box keeps its text: {lines:?}");
+    }
+    assert!(lines.iter().any(|l| l.trim() == "Item"), "the zero-width space over a space glyph is left out: {lines:?}");
+}
+
+/// Filling in a blank of a Chrome paragraph failed with "the Shippori Mincho fallback font has no
+/// glyph for U+202D": the marks, written as `/ActualText`
+/// over a space glyph at each end of the run, were in the paragraph's text and in every draft
+/// made from it. The edit now succeeds, with the subset's missing letter substituted as before; a
+/// change of formatting alone (no draft) works too, and so does the unchanged text.
+#[test]
+fn chrome_override_marks_around_a_run_do_not_stop_an_edit() {
+    let chrome = |font: &str, shown: &str| {
+        text_page(&format!(
+            "BT /{font} 12 Tf 72 700 Td /Span <</ActualText <FEFF202D>>> BDC ( ) Tj EMC {shown} Tj /Span <</ActualText <FEFF202C>>> BDC ( ) Tj EMC ET"
+        ))
+    };
+    let lines = |doc: &Document| -> Vec<String> { text::text_lines(&reopen(doc), 0).unwrap().into_iter().map(|l| l.text).collect() };
+    for (font, shown, own, edited) in [("F1", "(Hello world)", "Hello world", "Hello there"), ("F2", "(ab)", "ab", "abc")] {
+        let doc = chrome(font, shown);
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        assert!(!block.editor_text.contains(['\u{202D}', '\u{202C}']), "{font}: {:?}", block.editor_text);
+        assert_eq!(block.editor_text.trim(), own, "{font}");
+        let draft = block.editor_text.replace(own, edited);
+        for style in [text::BlockStyle::default(), text::BlockStyle { bold: Some(true), ..Default::default() }] {
+            let mut doc = doc.clone();
+            text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap_or_else(|e| panic!("{font} {style:?}: {e}"));
+            assert_eq!(lines(&doc).concat().trim(), edited, "{font} {style:?}");
+        }
+        let mut bold = doc.clone();
+        text::rewrite_block(&mut bold, 0, 0, None, &text::BlockStyle { bold: Some(true), ..Default::default() })
+            .unwrap_or_else(|e| panic!("{font} bold, no draft: {e}"));
+        assert_eq!(lines(&bold).concat().trim(), own, "{font} bold, no draft");
+        let mut same = doc.clone();
+        text::rewrite_block(&mut same, 0, 0, Some(&block.editor_text), &text::BlockStyle::default())
+            .unwrap_or_else(|e| panic!("{font} unchanged: {e}"));
+        assert_eq!(lines(&same).concat().trim(), own, "{font} unchanged");
+    }
+}
+
+/// An edit of a Chrome paragraph comes out as the same edit of the same paragraph without the
+/// marks, read back as it is. Each run keeps its own style where the text around it is kept, a
+/// lone title realigned in place stays where it is, a formatting change with the paragraph's own
+/// text keeps its rows, the paragraph's own text changes nothing, and a row whose trailing space
+/// sat before the closing mark is laid out as without it.
+#[test]
+fn an_edit_of_a_chrome_paragraph_matches_the_same_edit_without_its_marks() {
+    let seen = |doc: &Document| -> Vec<(String, [i64; 4], [i64; 3])> {
+        text::text_lines(&reopen(doc), 0)
+            .unwrap()
+            .into_iter()
+            .map(|l| (l.text, l.rect.map(|v| (v * 10.0).round() as i64), l.color.map(|v| (v * 100.0).round() as i64)))
+            .filter(|(text, ..)| !text.trim().is_empty())
+            .collect()
+    };
+    fn blue(range: std::ops::Range<usize>) -> text::RangeStyle {
+        text::RangeStyle {
+            range,
+            family: None,
+            resource: None,
+            size: None,
+            color: Some([0.0, 0.0, 1.0]),
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }
+    }
+    // "Hello " and a red "world" on one row, "again" on the next; and a lone title.
+    let paragraph: ChromeRuns = &[
+        (Some((72.0, 700.0)), Some("\u{202D}Hello \u{202C}"), "0 0 0 rg (Hello )"),
+        (None, Some("\u{202D}world\u{202C}"), "1 0 0 rg (world)"),
+        (Some((72.0, 686.0)), Some("\u{202D}again\u{202C}"), "0 0 0 rg (again)"),
+    ];
+    let spaced_rows: ChromeRuns = &[
+        (Some((72.0, 700.0)), Some("\u{202D}Hello \u{202C}"), "0 0 0 rg (Hello )"),
+        (None, Some("\u{202D}world \u{202C}"), "1 0 0 rg (world )"),
+        (Some((72.0, 686.0)), Some("\u{202D}again\u{202C}"), "0 0 0 rg (again)"),
+    ];
+    let title: ChromeRuns = &[(Some((250.0, 700.0)), Some("\u{202D}Title\u{202C}"), "(Title)")];
+    let spaced: ChromeRuns = &[(Some((250.0, 700.0)), Some("\u{202D}Title \u{202C}"), "(Title )")];
+    type Edit = fn(&text::TextBlock) -> (Option<String>, text::BlockStyle);
+    let edits: [(&str, ChromeRuns, Edit); 10] = [
+        ("retyped word", paragraph, |b| (Some(b.editor_text.replace("Hello", "Howdy")), text::BlockStyle::default())),
+        ("size, no draft", paragraph, |_| (None, text::BlockStyle { size: Some(14.0), ..Default::default() })),
+        ("colour with own text", paragraph, |b| (Some(b.text.clone()), text::BlockStyle { color: Some([0.0, 0.5, 0.0]), ..Default::default() })),
+        ("range on one word", paragraph, |b| {
+            let at = b.editor_text.find("again").unwrap();
+            (Some(b.editor_text.clone()), text::BlockStyle { ranges: vec![blue(at..at + 5)], ..Default::default() })
+        }),
+        ("own text unchanged", paragraph, |b| (Some(b.editor_text.clone()), text::BlockStyle::default())),
+        ("spaced row end, colour with own text", spaced_rows, |b| {
+            (Some(b.text.clone()), text::BlockStyle { color: Some([0.0, 0.5, 0.0]), ..Default::default() })
+        }),
+        ("title centred", title, |b| (Some(b.text.clone()), text::BlockStyle { align: Some(crate::added::Align::Center), ..Default::default() })),
+        ("spaced title bold with own text", spaced, |b| (Some(b.text.clone()), text::BlockStyle { bold: Some(true), ..Default::default() })),
+        ("spaced title bold, no draft", spaced, |_| (None, text::BlockStyle { bold: Some(true), ..Default::default() })),
+        ("spaced title size, no draft", spaced, |_| (None, text::BlockStyle { size: Some(14.0), ..Default::default() })),
+    ];
+    for (name, runs, edit) in edits {
+        let mut results = Vec::new();
+        for marked in [true, false] {
+            let mut doc = chrome_page(marked, runs);
+            let blocks = text::text_blocks(&doc, 0).unwrap();
+            assert_eq!(blocks.len(), 1, "{name}, marked {marked}: one paragraph, {blocks:?}");
+            let block = &blocks[0];
+            assert_eq!(block.rows.len(), runs.iter().filter(|r| r.0.is_some()).count(), "{name}: {:?}", block.rows);
+            let (draft, style) = edit(block);
+            text::rewrite_block(&mut doc, 0, 0, draft.as_deref(), &style).unwrap_or_else(|e| panic!("{name}, marked {marked}: {e}"));
+            results.push(seen(&doc));
+        }
+        assert_eq!(results[0], results[1], "{name}: with the marks, then without");
+    }
+}
+
 /// Thai text on the styled path has its own coverage checks and row splits. A Unicode row break
 /// in a Thai draft breaks the row there too, whether the paragraph keeps its legacy subset, takes
 /// the bundled Thai face by choice or is completed by the matching one, instead of being refused
