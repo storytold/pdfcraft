@@ -265,6 +265,19 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
     let base = if rtl { Level::rtl() } else { Level::ltr() };
     let info = ParagraphBidiInfo::new(line, Some(base));
     let (levels, runs) = info.visual_runs(0..line.len());
+    // In an item drawn with the Hebrew face, a sign the standard fonts can't draw takes that face wherever the bidi
+    // runs put it: ₪ beside a number joins the number's run or starts a run of its own (#8013). A combining mark
+    // doesn't: drawn on its own it would leave the Latin letter it belongs to. The item is searched for Hebrew only
+    // when the line holds such a sign, and once, so measuring an item word by word doesn't read all of it for every
+    // word (review on #8016).
+    let hebrew_item = std::cell::OnceCell::new();
+    let hebrew_sign = |c: char| {
+        !c.is_alphanumeric()
+            && !pdfcraft_fonts::win_ansi_encodable(c)
+            && unicode_bidi::bidi_class(c) != unicode_bidi::BidiClass::NSM
+            && pdfcraft_fonts::hebrew_has(c)
+            && *hebrew_item.get_or_init(|| t.text.chars().any(is_hebrew))
+    };
     let mut pieces = Vec::new();
     for run in runs {
         let run_rtl = levels.get(run.start).is_some_and(Level::is_rtl);
@@ -282,6 +295,8 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
                 Some(ShapedScript::Hebrew)
             } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
                 Some(ShapedScript::Arabic)
+            } else if hebrew_sign(c) {
+                Some(ShapedScript::Hebrew)
             } else {
                 None
             };
