@@ -26,6 +26,8 @@ mod nodes;
 mod props;
 mod run;
 
+pub use globals::som_names;
+pub(crate) use globals::{field_now, field_written};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use host::forget_base;
 pub(crate) use host::{HNode, XHost};

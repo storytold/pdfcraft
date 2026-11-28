@@ -42,6 +42,10 @@ pub struct Script {
     pub root: std::sync::Arc<XfaNode>,
     pub limits: Limits,
     pub timeout: std::time::Duration,
+    /// The document's form fields as they are now ([`XfaDoc::fields`]), in place of the
+    /// session's when given: values change from script to script, and the fields with the
+    /// form's layout.
+    pub fields: Option<std::sync::Arc<Vec<crate::FieldState>>>,
 }
 
 /// Run `s` here: a fresh context (JavaScript) or interpreter (FormCalc) on its copy of the
@@ -66,7 +70,13 @@ fn run_script(s: Script, doc: &XfaDoc, started: &dyn Fn()) -> XfaOutcome {
         started();
         return XfaOutcome { error: Some(why), ..Default::default() };
     }
-    crate::xfa::run_here(&s.source, &s.event, doc, s.root, true, s.limits, started)
+    match s.fields {
+        Some(fields) => {
+            let doc = XfaDoc { fields, ..doc.clone() };
+            crate::xfa::run_here(&s.source, &s.event, &doc, s.root, true, s.limits, started)
+        }
+        None => crate::xfa::run_here(&s.source, &s.event, doc, s.root, true, s.limits, started),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
