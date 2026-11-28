@@ -327,10 +327,21 @@ use pdfcraft_sign::revocation::{CertificateList, OcspResponse, RevocationStatus}
 
 /// A self-issued CRL from `issuer`: optional revocation entry, signed with the issuer's key.
 fn crl(issuer: &pkcs12::DigitalId, revoked_serial: Option<(&[u8], Time)>, this: Time, next: Time) -> Vec<u8> {
+    let entry = revoked_serial.map(|(serial, at)| der::seq(&[&der::uint(serial), &at.encode()]));
+    crl_with_entry(issuer, entry, this, next)
+}
+
+/// A CRL entry revoking `serial` at `at` with CRLReason `reason` in its reasonCode extension.
+fn crl_entry_with_reason(serial: &[u8], at: Time, reason: u8) -> Vec<u8> {
+    let reason_code = der::seq(&[&der::oid("2.5.29.21"), &der::octets(&der::tlv(tag::ENUMERATED, &[reason]))]);
+    der::seq(&[&der::uint(serial), &at.encode(), &der::seq(&[&reason_code])])
+}
+
+fn crl_with_entry(issuer: &pkcs12::DigitalId, entry: Option<Vec<u8>>, this: Time, next: Time) -> Vec<u8> {
     let alg = issuer.key.signature_algorithm(DigestAlg::Sha256);
     let mut tbs = vec![der::int(1), alg.clone(), issuer.certificate.subject.raw.clone(), this.encode(), next.encode()];
-    if let Some((serial, at)) = revoked_serial {
-        tbs.push(der::seq(&[&der::seq(&[&der::uint(serial), &at.encode()])]));
+    if let Some(entry) = entry {
+        tbs.push(der::seq(&[&entry]));
     }
     let refs: Vec<&[u8]> = tbs.iter().map(Vec::as_slice).collect();
     let tbs = der::seq(&refs);
@@ -340,12 +351,6 @@ fn crl(issuer: &pkcs12::DigitalId, revoked_serial: Option<(&[u8], Time)>, this: 
 
 /// A self-issued OCSP response from `issuer` answering for its own serial.
 fn ocsp(issuer: &pkcs12::DigitalId, status: RevocationStatus, this: Time, next: Time) -> Vec<u8> {
-    let cert_id = der::seq(&[
-        &DigestAlg::Sha1.algorithm(),
-        &der::octets(&DigestAlg::Sha1.digest(&[&issuer.certificate.issuer.raw])),
-        &der::octets(&DigestAlg::Sha1.digest(&[&issuer.certificate.public_key.key_bits()])),
-        &der::uint(&issuer.certificate.serial),
-    ]);
     // RFC 6960's real encodings: good [0] IMPLICIT NULL, revoked [1] IMPLICIT RevokedInfo,
     // unknown [2] IMPLICIT; nextUpdate [0] EXPLICIT GeneralizedTime.
     let status = match status {
@@ -353,7 +358,23 @@ fn ocsp(issuer: &pkcs12::DigitalId, status: RevocationStatus, this: Time, next: 
         RevocationStatus::Revoked { at } => der::tlv(tag::ctx(1), &at.encode()),
         RevocationStatus::Unknown => der::tlv(tag::ctx_prim(2), &[]),
     };
-    let single = der::seq(&[&cert_id, &status, &this.encode(), &der::tlv(tag::ctx(0), &next.encode())]);
+    ocsp_with_status(issuer, &status, this, next)
+}
+
+/// An OCSP revoked status dated `at` whose RevokedInfo carries CRLReason `reason`.
+fn ocsp_revoked_with_reason(at: Time, reason: u8) -> Vec<u8> {
+    let info = [at.encode(), der::explicit(0, &der::tlv(tag::ENUMERATED, &[reason]))].concat();
+    der::tlv(tag::ctx(1), &info)
+}
+
+fn ocsp_with_status(issuer: &pkcs12::DigitalId, status: &[u8], this: Time, next: Time) -> Vec<u8> {
+    let cert_id = der::seq(&[
+        &DigestAlg::Sha1.algorithm(),
+        &der::octets(&DigestAlg::Sha1.digest(&[&issuer.certificate.issuer.raw])),
+        &der::octets(&DigestAlg::Sha1.digest(&[&issuer.certificate.public_key.key_bits()])),
+        &der::uint(&issuer.certificate.serial),
+    ]);
+    let single = der::seq(&[&cert_id, status, &this.encode(), &der::tlv(tag::ctx(0), &next.encode())]);
     let responder_id = der::tlv(tag::ctx(1), &issuer.certificate.subject.raw);
     signed_ocsp(&issuer.key, &responder_id, None, &single, this)
 }
@@ -407,6 +428,75 @@ fn crls_verify_and_report_revocation() {
         CertificateList::parse(&crl(&id, None, this, next)).unwrap().check(&other.certificate, &other.certificate, at),
         RevocationStatus::Unknown
     );
+}
+
+/// Issue #7928: evidence issued after the validation time (the usual long-term validation
+/// case) still revokes when it dates the revocation at or before that time; a later
+/// revocation, or a "good", from outside the window proves nothing.
+#[test]
+fn later_evidence_still_proves_an_earlier_revocation() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let issuer = &id.certificate;
+    let at = mid_june();
+    let (this, next) =
+        (Time { year: 2026, month: 7, day: 1, hour: 0, minute: 0, second: 0 }, Time { year: 2026, month: 8, day: 1, hour: 0, minute: 0, second: 0 });
+    let before = Time { year: 2026, month: 6, day: 1, hour: 8, minute: 0, second: 0 };
+    let after = Time { year: 2026, month: 6, day: 20, hour: 8, minute: 0, second: 0 };
+    let check_crl = |revoked: Option<(&[u8], Time)>| CertificateList::parse(&crl(&id, revoked, this, next)).unwrap().check(issuer, issuer, at);
+    assert_eq!(check_crl(Some((&issuer.serial, before))), RevocationStatus::Revoked { at: before });
+    assert_eq!(check_crl(Some((&issuer.serial, after))), RevocationStatus::Unknown);
+    assert_eq!(check_crl(None), RevocationStatus::Unknown);
+    let check_ocsp = |status| OcspResponse::parse(&ocsp(&id, status, this, next)).unwrap().check(issuer, issuer, at);
+    assert_eq!(check_ocsp(RevocationStatus::Revoked { at: before }), RevocationStatus::Revoked { at: before });
+    assert_eq!(check_ocsp(RevocationStatus::Revoked { at: after }), RevocationStatus::Unknown);
+    assert_eq!(check_ocsp(RevocationStatus::Good), RevocationStatus::Unknown);
+}
+
+/// A hold (CRLReason certificateHold) may be lifted and a removeFromCRL entry lifts one, so
+/// later evidence of either proves nothing about the validation time; neither does a reason
+/// that cannot be read. A permanent reason still revokes.
+#[test]
+fn later_evidence_of_a_hold_proves_nothing() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let issuer = &id.certificate;
+    let at = mid_june();
+    let (this, next) =
+        (Time { year: 2026, month: 7, day: 1, hour: 0, minute: 0, second: 0 }, Time { year: 2026, month: 8, day: 1, hour: 0, minute: 0, second: 0 });
+    let before = Time { year: 2026, month: 6, day: 1, hour: 8, minute: 0, second: 0 };
+    let (key_compromise, hold, remove) = (1, 6, 8);
+    let check_crl = |reason| {
+        let entry = crl_entry_with_reason(&issuer.serial, before, reason);
+        CertificateList::parse(&crl_with_entry(&id, Some(entry), this, next)).unwrap().check(issuer, issuer, at)
+    };
+    assert_eq!(check_crl(key_compromise), RevocationStatus::Revoked { at: before });
+    assert_eq!(check_crl(hold), RevocationStatus::Unknown);
+    assert_eq!(check_crl(remove), RevocationStatus::Unknown);
+    let check_ocsp = |status: &[u8]| OcspResponse::parse(&ocsp_with_status(&id, status, this, next)).unwrap().check(issuer, issuer, at);
+    assert_eq!(check_ocsp(&ocsp_revoked_with_reason(before, key_compromise)), RevocationStatus::Revoked { at: before });
+    assert_eq!(check_ocsp(&ocsp_revoked_with_reason(before, hold)), RevocationStatus::Unknown);
+    assert_eq!(check_ocsp(&ocsp_revoked_with_reason(before, remove)), RevocationStatus::Unknown);
+    // A hold under the wrong tag ([1] instead of [0]) is unreadable, not absent.
+    let mistagged = der::tlv(tag::ctx(1), &[before.encode(), der::explicit(1, &der::tlv(tag::ENUMERATED, &[hold]))].concat());
+    assert_eq!(check_ocsp(&mistagged), RevocationStatus::Unknown);
+    // With no reason at all, the revocation stands.
+    assert_eq!(check_ocsp(&der::tlv(tag::ctx(1), &before.encode())), RevocationStatus::Revoked { at: before });
+    // The reason stays with its own entry: another certificate's permanent revocation listed
+    // first, then dropped from the public list, must not stand in for this one's hold.
+    let single = |serial: &[u8], reason| {
+        let cert_id = der::seq(&[
+            &DigestAlg::Sha1.algorithm(),
+            &der::octets(&DigestAlg::Sha1.digest(&[&issuer.issuer.raw])),
+            &der::octets(&DigestAlg::Sha1.digest(&[&issuer.public_key.key_bits()])),
+            &der::uint(serial),
+        ]);
+        der::seq(&[&cert_id, &ocsp_revoked_with_reason(before, reason), &this.encode(), &der::tlv(tag::ctx(0), &next.encode())])
+    };
+    let other = single(&[0x7f, 0x01], key_compromise);
+    let both = [other, single(&issuer.serial, hold)].concat();
+    let responder_id = der::tlv(tag::ctx(1), &issuer.subject.raw);
+    let mut response = OcspResponse::parse(&signed_ocsp(&id.key, &responder_id, None, &both, this)).unwrap();
+    response.responses.remove(0);
+    assert_eq!(response.check(issuer, issuer, at), RevocationStatus::Unknown);
 }
 
 /// Issue #159: `.p12` files that aren't clean DER still open — trailing
