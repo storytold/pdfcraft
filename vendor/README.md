@@ -43,6 +43,27 @@ licence files unchanged. Every patch is marked `PdfCraft patch:` in the source, 
 PdfCraft test, and should be proposed upstream. Remove the vendored copy once upstream releases
 the fix. Vendoring copyleft code is never allowed (plan/adr/0001).
 
+Reader diagnostics (#2670, item 11): `lopdf::Reader::load_objects_raw` shares one
+budget across eager object errors, encrypted skips, object-stream dictionary/member
+warnings and deferred missing/broken `/Length` lookups. It logs at most eight details,
+then one summary with category totals and the suppressed-message count. The summary
+uses ERROR if an object/Length error occurred, otherwise WARN; each detail retains
+its original level. It is emitted after deferred lookups, or before a strict error
+returns. Counters saturate, recovery and small-file diagnostics are unchanged, and
+concurrent reads have independent budgets. Direct `ObjectStream` parsing gets a fresh
+budget per call. Indirect `/Length` lookups retain the eager load's budget while
+reading compressed containers; lightweight metadata lookups use a silent context
+instead of starting independent batches. Other parser diagnostics (including
+stream-boundary recovery and reference-cycle warnings) are outside this scope. The encrypted
+loader also shares one warning budget across every decrypted object-stream container.
+Encrypted-container parse failures contribute to the shared failure/stream totals.
+Lookup-depth and reference-cycle warnings use that same budget and stay silent
+when only lightweight metadata is requested.
+
+Covered by the tests in `crates/render/tests/object_load_logging.rs`, including all
+`lopdf::*` targets, the summary before a strict container error, and the shared
+diagnostics for exhausted node budgets, plus the reader's `encrypted_load_logging`
+unit test for the normally unused eager encrypted-skip branch.
 The TrueType name lookup patch probes Unicode `(0, *)` and Windows `(3, 10)` cmap records,
 recognizes post-name aliases, and retains known descriptor flags when unknown bits are present.
 `crates/render/tests/truetype_cmap.rs` covers these synthetic cases and verifies that Symbolic
