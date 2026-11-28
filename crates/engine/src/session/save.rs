@@ -1,6 +1,6 @@
 use super::{
     Arc, DocId, Document, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, StatusCaptions, TrustStore,
-    display_bytes, display_config, guard, render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
+    display_bytes, display_config, editor_signatures, guard, render_threads, writable, write_full, write_incremental, xfa_sync_datasets,
 };
 
 impl Session {
@@ -90,6 +90,8 @@ impl Session {
             editor.saved = bytes;
             editor.saved_keys = keys;
             editor.unsaved_file = false;
+            // The saved file holds what opening appended: from now on it is the file.
+            editor.as_opened = None;
         }
         if let Some(p) = path {
             doc.name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
@@ -269,7 +271,7 @@ impl Session {
             return;
         }
         let Some(editor) = doc.editor.as_mut() else { return };
-        let mut signatures = signatures_of(&editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache);
+        let mut signatures = editor_signatures(editor, &doc.bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &doc.bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));

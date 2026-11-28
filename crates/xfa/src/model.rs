@@ -534,6 +534,12 @@ pub struct Subform {
     /// `<breakBefore targetType="pageArea">`: start on a new page.
     pub break_before_page: bool,
     pub break_after_page: bool,
+    /// `<breakBefore target="…">` / `<break beforeTarget="…">`: named `pageArea` (or `#id`) to start on.
+    pub break_before_target: Option<String>,
+    /// `<breakAfter target="…">` / `<break afterTarget="…">`: named `pageArea` (or `#id`) to switch to after.
+    pub break_after_target: Option<String>,
+    /// `<overflow target="…">` / `<break overflowTarget="…">`: named `pageArea` (or `#id`) for overflow pages.
+    pub overflow_target: Option<String>,
     /// Parsed from a `subformSet`: transparent to layout (XFA 3.3 p. 357), so in a flowing
     /// container its members are laid out among their parent's other children.
     pub set: bool,
@@ -848,6 +854,7 @@ pub struct PageSet {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageArea {
     pub name: Option<String>,
+    pub id: Option<String>,
     pub width: f64,
     pub height: f64,
     /// Where flowed content goes, in order.
