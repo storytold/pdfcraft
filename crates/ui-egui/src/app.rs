@@ -314,6 +314,7 @@ impl PdfCraftApp {
             portfolio_seen: None,
             portfolio_panel: None,
             quick_tool: QuickTool::Select,
+            text_tool_up: None,
             full_screen_tool: None,
             comment_prefs: Default::default(),
             recent_colours: Default::default(),
@@ -812,6 +813,7 @@ impl PdfCraftApp {
                 view.cancel_pointer_gestures(ctx);
             }
         }
+        self.apply_text_of_put_down_tool(ctx);
         self.process_pending_edits(ctx);
         self.poll_export();
         self.auto_ocr_scanned_page(ctx);

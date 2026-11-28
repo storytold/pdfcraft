@@ -317,6 +317,8 @@ pub struct PdfCraftApp {
     /// closed), given back when its tab is left.
     portfolio_panel: Option<Option<RightPanel>>,
     pub quick_tool: QuickTool,
+    /// Add text or Edit text as last seen up, for [`Self::apply_text_of_put_down_tool`].
+    text_tool_up: Option<QuickTool>,
     /// The tool before full screen, given back on leaving it (see [`Self::apply_full_screen`]).
     full_screen_tool: Option<QuickTool>,
     /// Comment author, per-tool colours and widths, pin.

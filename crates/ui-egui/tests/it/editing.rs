@@ -4309,6 +4309,21 @@ fn the_edit_panel_back_arrow_applies_an_open_paragraph_and_puts_edit_text_down()
     assert_edit_text_put_down_and_the_paragraph_applied(h.state());
 }
 
+/// Choosing Select from the toolbar (or its key or command) applies the paragraph open in the
+/// editor as leaving Edit does; it stayed open, with the document unmodified.
+#[test]
+fn choosing_select_applies_an_open_paragraph() {
+    let mut h = harness(1, |_| {});
+    assert!(h.execute("edit.edit_text"));
+    h.run_steps(3);
+    open_the_first_line(&mut h);
+    assert!(h.execute("view.select_tool"));
+    h.run_steps(3);
+    assert_edit_text_put_down_and_the_paragraph_applied(h.state());
+    let s = h.state();
+    assert!(s.session.get(s.views[0].id).unwrap().dirty, "the document is modified");
+}
+
 /// Organize pages, opened under the Edit tab, leaves Edit the same way through its own back arrow.
 #[test]
 fn the_organize_back_arrow_applies_an_open_paragraph_and_puts_edit_text_down() {

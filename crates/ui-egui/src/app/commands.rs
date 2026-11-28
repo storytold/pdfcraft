@@ -143,6 +143,25 @@ impl PdfCraftApp {
         }
     }
 
+    /// Applies the text box open on the page (added text, a paragraph in the editor) once Add
+    /// text or Edit text is put down, however that happened: a toolbar button, a key, a menu, a
+    /// command. Left open, the document stayed unmodified, with no undo step, until a click on
+    /// the page or a save applied it. Text that can't be applied keeps its tool up, so it stays
+    /// shown, as Undo leaves it. Read mode keeps every tool down (`enter_mode`), so there the
+    /// text and its warning are kept without the tool.
+    pub(crate) fn apply_text_of_put_down_tool(&mut self, ctx: &egui::Context) {
+        let up = matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText).then_some(self.quick_tool);
+        let Some(was) = std::mem::replace(&mut self.text_tool_up, up) else { return };
+        if up.is_some() {
+            return;
+        }
+        let Some((i, id)) = self.active_ids() else { return };
+        if !self.close_text_editors(ctx, i, id) && self.mode != Mode::Read {
+            self.quick_tool = was;
+            self.text_tool_up = Some(was);
+        }
+    }
+
     /// Switches workspace because the user chose to (mode bar, Read mode command). Entering Read
     /// mode closes the right panel, as Acrobat's Read mode hides its panes, and leaving it reopens
     /// that panel. The rail stays in Read mode, and its buttons open panels there too (#932).

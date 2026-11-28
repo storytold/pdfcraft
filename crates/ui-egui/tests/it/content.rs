@@ -245,6 +245,65 @@ fn clicking_elsewhere_keeps_the_text_and_starts_a_new_box() {
 }
 
 #[test]
+fn choosing_another_tool_keeps_the_text_being_typed() {
+    // Picking Select from the toolbar left the box open: the document stayed unmodified, with
+    // nothing to undo, until a click on the page or a save applied the text.
+    let mut h = harness();
+    assert!(h.execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 100.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("Typed".into()));
+    h.run_steps(2);
+    assert!(h.execute("view.select_tool"));
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["Typed"]);
+    assert!(h.state().views[0].session.content.draft.is_none(), "the box closed");
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert!(doc.dirty, "the document is modified");
+    assert!(doc.can_undo().is_some(), "the text is one undo step");
+}
+
+/// Text the document refuses is not lost when another tool is chosen: Add text stays up, so the
+/// text stays on screen with the reason, as a click elsewhere on the page leaves it.
+#[test]
+fn choosing_another_tool_over_refused_text_keeps_add_text_up() {
+    let mut h = harness();
+    assert!(h.execute("edit.text"));
+    h.run_steps(2);
+    // The document has one page, so text for a tenth page is refused.
+    let draft = pdfcraft_ui_egui::TextDraft::new(9, None, [20.0, 200.0, 220.0, 220.0], "Typed".into(), Default::default());
+    h.state_mut().views[0].session.content.draft = Some(draft);
+    h.run_steps(2);
+    assert!(h.execute("view.select_tool"));
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::AddText, "the tool stays up over text it can't apply");
+    let draft = h.state().views[0].session.content.draft.as_ref().map(|d| d.text.clone());
+    assert_eq!(draft.as_deref(), Some("Typed"), "the typed text is kept");
+    assert!(texts(&h).is_empty(), "nothing was written to the page");
+}
+
+/// Entering Read mode over refused text keeps the text but not the tool: Read mode keeps every
+/// tool down.
+#[test]
+fn read_mode_over_refused_text_keeps_the_text_and_puts_add_text_down() {
+    let mut h = harness();
+    assert!(h.execute("edit.text"));
+    h.run_steps(2);
+    let draft = pdfcraft_ui_egui::TextDraft::new(9, None, [20.0, 200.0, 220.0, 220.0], "Typed".into(), Default::default());
+    h.state_mut().views[0].session.content.draft = Some(draft);
+    h.run_steps(2);
+    assert!(h.execute("view.read_mode"));
+    h.run_steps(3);
+    assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Read);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "no tool stays up in Read mode");
+    let draft = h.state().views[0].session.content.draft.as_ref().map(|d| d.text.clone());
+    assert_eq!(draft.as_deref(), Some("Typed"), "the typed text is kept");
+    assert!(texts(&h).is_empty(), "nothing was written to the page");
+}
+
+#[test]
 fn typing_moving_styling_and_deleting_added_content() {
     let mut h = harness();
     assert!(h.execute("edit.text"));
