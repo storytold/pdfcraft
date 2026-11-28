@@ -231,6 +231,24 @@ fn selected_text_copy_command_requires_selection() {
     assert!(!app.execute(&egui::Context::default(), "edit.copy"));
 }
 
+/// #8557: Copy with nothing selected, in a document that allows copying, says there is nothing
+/// selected. It used to blame the document's security settings, which the document doesn't have
+/// (#7841 ends that way once its selection is lost). A document that withholds copying keeps that
+/// message: `editing::copying_out_of_a_document_honours_its_security`.
+#[test]
+fn copy_with_nothing_selected_does_not_blame_the_documents_security() {
+    let clipboard = RecordingClipboard::default();
+    let (mut h, _) = harness_clip(two_lines(), clipboard.clone(), readable_zoom);
+    assert!(h.state().views[0].selected_text().is_none());
+    // ⌘C, as the key reaches the app.
+    h.event(Event::Copy);
+    h.run_steps(4);
+    let notice = crate::support::shown_notice(&h).expect("Copy says why it did nothing");
+    assert!(!notice.contains("security"), "{notice:?}");
+    assert!(notice.to_lowercase().contains("select"), "{notice:?}");
+    assert_eq!(clipboard.copied(), None, "nothing was copied");
+}
+
 #[test]
 fn selected_text_copy_floating_button_honours_permissions() {
     use egui_kittest::kittest::Queryable;
