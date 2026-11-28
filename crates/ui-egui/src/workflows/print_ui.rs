@@ -73,7 +73,11 @@ pub fn system_two_sided() -> TwoSidedSource {
 #[cfg(not(target_arch = "wasm32"))]
 type PaperInfo = (Vec<spool::Paper>, Option<spool::Paper>);
 #[cfg(not(target_arch = "wasm32"))]
-type PendingLabelCrops = (Vec<usize>, std::sync::mpsc::Receiver<(usize, Option<print::Crop>)>);
+struct PendingLabelCrops {
+    pages: Vec<usize>,
+    rx: std::sync::mpsc::Receiver<(usize, Option<print::Crop>)>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+}
 
 /// A print job being spooled: the ticket its queue entry has, where it goes, and the sheets the
 /// spooler has so far.
@@ -117,6 +121,9 @@ pub(crate) struct PrintTasks {
     /// Active background label crop task: (pages being cropped, receiver for page crops).
     #[cfg(not(target_arch = "wasm32"))]
     label_crops: Option<PendingLabelCrops>,
+    /// User clicked Print while background label crops were still running.
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_print: bool,
     /// The last printer list, which the dialog offers at once the next time it opens.
     pub(crate) listed: Vec<craft::print::ui::Printer>,
     /// Wakes the app when a job reports.
@@ -154,6 +161,7 @@ impl PrintTasks {
                 next_ticket: 0,
                 papers_cache: std::collections::HashMap::new(),
                 label_crops: None,
+                pending_print: false,
                 listed: Vec::new(),
                 wake,
             }
@@ -226,6 +234,8 @@ pub enum PrintStart {
     Sent,
     /// Save as PDF is asking where to write; the pick answers the held OK.
     Picking,
+    /// Background label crops are still finishing; the dialog answers the held OK once done.
+    Waiting,
 }
 
 /// Label pages to crop: at most [`LABEL_CROP_PAGES`] of the printed pages, sorted and deduplicated.
@@ -250,7 +260,10 @@ impl PdfCraftApp {
     pub(crate) fn cancel_label_crops(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.print_tasks.label_crops = None;
+            if let Some(pending) = self.print_tasks.label_crops.take() {
+                pending.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            self.print_tasks.pending_print = false;
         }
     }
 
@@ -261,6 +274,8 @@ impl PdfCraftApp {
         let Some(doc) = self.session.get(id) else { return };
         let pages = label_crop_pages(&self.print_draft, doc);
         if pages.is_empty() {
+            self.cancel_label_crops();
+            self.print_draft.crops.clear();
             self.print_draft.crop_pages = Some(pages);
             return;
         }
@@ -269,10 +284,14 @@ impl PdfCraftApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if let Some((running, _)) = &self.print_tasks.label_crops
-                && running == &pages
+            if let Some(pending) = &self.print_tasks.label_crops
+                && pending.pages == pages
             {
                 return;
+            }
+            // Cancel any superseded task before preparing the new one so it stops promptly.
+            if let Some(pending) = self.print_tasks.label_crops.take() {
+                pending.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             if self.print_draft.crops.len() != doc.info.pages.len() {
                 self.print_draft.crops.resize(doc.info.pages.len(), None);
@@ -284,15 +303,21 @@ impl PdfCraftApp {
                 }
             }
             let (tx, rx) = std::sync::mpsc::channel();
+            let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let worker_cancel = cancel.clone();
             let wake = self.print_tasks.wake.clone();
             let bytes = doc.bytes.clone();
+            let editor_cos = self.session.print_editor_cos(id);
             let password = doc.password.as_deref().map(std::sync::Arc::from);
             let wanted = pages.clone();
             let page_sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
             let active_sheet_page = pages.get(self.print_draft.sheet).copied();
 
             let spawned = std::thread::Builder::new().name("label-crops".into()).spawn(move || {
-                let cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), password.as_deref()).ok();
+                if worker_cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                let cos = editor_cos.or_else(|| pdfcraft_cos::Document::open_with_password(bytes.clone(), password.as_deref()).ok());
                 let up_flags: std::collections::HashMap<usize, bool> = if let Some(ref cos) = cos {
                     let unique_wanted: Vec<usize> = wanted.clone();
                     unique_wanted.iter().copied().zip(print::texts_read_up(cos, &unique_wanted)).collect()
@@ -313,6 +338,9 @@ impl PdfCraftApp {
                 }
 
                 for page in order {
+                    if worker_cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
                     let Some(&(w, h)) = page_sizes.get(page) else { continue };
                     if w <= 0.0 || h <= 0.0 {
                         continue;
@@ -325,6 +353,9 @@ impl PdfCraftApp {
                         tag: 0,
                         preview: false,
                     });
+                    if worker_cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
                     let crop = crate::zoom_snap::ink_bounds(out.width as usize, out.height as usize, &out.rgba)
                         .map(|bounds| crop_from_ink_bounds(bounds, w, h, up_flags.get(&page).copied().unwrap_or(false)));
                     if tx.send((page, crop)).is_err() {
@@ -337,7 +368,7 @@ impl PdfCraftApp {
             });
             match spawned {
                 Ok(_) => {
-                    self.print_tasks.label_crops = Some((pages, rx));
+                    self.print_tasks.label_crops = Some(PendingLabelCrops { pages, rx, cancel });
                 }
                 Err(_) => {
                     self.print_draft.crop_pages = Some(pages);
@@ -554,12 +585,15 @@ impl PdfCraftApp {
                 }
             }
             self.poll_two_sided();
+            if !self.dialogs.is_open::<HostedPrint>() && self.print_tasks.label_crops.is_some() {
+                self.cancel_label_crops();
+            }
             let mut label_crops_done = false;
             let mut label_pages = None;
-            if let Some((pages, rx)) = self.print_tasks.label_crops.take() {
+            if let Some(pending) = self.print_tasks.label_crops.take() {
                 let mut still_running = true;
                 loop {
-                    match rx.try_recv() {
+                    match pending.rx.try_recv() {
                         Ok((page, crop)) => {
                             if page < self.print_draft.crops.len() {
                                 self.print_draft.crops[page] = crop;
@@ -570,14 +604,14 @@ impl PdfCraftApp {
                         }
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                             label_crops_done = true;
-                            label_pages = Some(pages.clone());
+                            label_pages = Some(pending.pages.clone());
                             still_running = false;
                             break;
                         }
                     }
                 }
                 if still_running {
-                    self.print_tasks.label_crops = Some((pages, rx));
+                    self.print_tasks.label_crops = Some(pending);
                 }
             }
             if label_crops_done {
@@ -685,33 +719,24 @@ impl PdfCraftApp {
             return Err(tl!("A form field has text that can't be kept yet.").to_string());
         }
         let Some((_, id)) = self.active_ids() else { return Err(tl!("There is no document to print.").to_string()) };
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.print_draft.handling == Handling::Label && self.print_tasks.label_crops.is_some() {
+            self.print_tasks.pending_print = true;
+            return Ok(PrintStart::Waiting);
+        }
         // A form's Will Print script runs first: what it changes is printed.
         if self.session.get(id).is_some_and(|d| d.allows_printing()) {
             let before = self.session.get(id).map(|d| d.edit_generation());
             self.run_document_actions(ctx, id, pdfcraft_engine::js::DocumentScriptEvent::WillPrint);
             // What it showed may lie outside the printed areas Label printing found: find them again.
             if self.session.get(id).map(|d| d.edit_generation()) != before && self.print_draft.handling == Handling::Label {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    self.print_tasks.label_crops = None;
-                }
+                self.cancel_label_crops();
                 self.print_draft.crops.clear();
                 self.print_draft.crop_pages = None;
                 self.compute_label_crops_sync(id);
             }
         }
         let Some(doc) = self.session.get(id) else { return Err(tl!("There is no document to print.").to_string()) };
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.print_draft.handling == Handling::Label
-            && let Some((pages, rx)) = self.print_tasks.label_crops.take()
-        {
-            while let Ok((page, crop)) = rx.recv() {
-                if page < self.print_draft.crops.len() {
-                    self.print_draft.crops[page] = crop;
-                }
-            }
-            self.print_draft.crop_pages = Some(pages);
-        }
         let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
         // `settings` words its errors for the person already.
         let settings = self.print_draft.settings(doc.info.pages.len(), &labels)?;

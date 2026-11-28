@@ -305,11 +305,19 @@ impl PdfCraftApp {
         dialog.set_duplex_by_layout(booklet);
         dialog.set_settings_valid(settings_valid);
 
-        if ok.is_some() {
+        #[cfg(not(target_arch = "wasm32"))]
+        let ready_pending = self.print_tasks.pending_print && self.print_tasks.label_crops.is_none();
+        #[cfg(target_arch = "wasm32")]
+        let ready_pending = false;
+        if ok.is_some() || ready_pending {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.print_tasks.pending_print = false;
+            }
             match self.print_now(ctx) {
                 Ok(PrintStart::Sent) => self.answer_print(Ok(())),
-                // The Save as PDF continuation answers the held OK.
-                Ok(PrintStart::Picking) => {}
+                // The Save as PDF continuation (or pending label crops) answers the held OK.
+                Ok(PrintStart::Picking | PrintStart::Waiting) => {}
                 Err(reason) => self.answer_print(Err(Label::from(reason))),
             }
         }
