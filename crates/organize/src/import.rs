@@ -29,6 +29,7 @@ use crate::{INHERITABLE, OrganizeError, pages_root, rebuild, walk};
 mod carry;
 mod combine;
 mod copy;
+mod destinations;
 mod fields;
 
 use carry::{Mark, source_outline, write_outline_level};
@@ -452,6 +453,10 @@ fn name_tree_lookup(src: &Document, node: &Object, key: &[u8], depth: u8, seen: 
 
 /// All (key, value) pairs of a name tree, in order, each node read once.
 pub(crate) fn name_tree_entries(src: &Document, node: &Object, depth: u8, seen: &mut HashSet<ObjRef>, out: &mut Vec<(Vec<u8>, Object)>) {
+    visit_name_tree(src, node, depth, seen, &mut |key, value| out.push((key.to_vec(), value.clone())));
+}
+
+fn visit_name_tree(src: &Document, node: &Object, depth: u8, seen: &mut HashSet<ObjRef>, visit: &mut impl FnMut(&[u8], &Object)) {
     if depth > 32 || node.as_ref().is_some_and(|r| !seen.insert(r)) {
         return;
     }
@@ -459,17 +464,21 @@ pub(crate) fn name_tree_entries(src: &Document, node: &Object, depth: u8, seen: 
     crate::work(1);
     let node = src.resolve(node);
     let Some(d) = node.as_dict() else { return };
-    if let Some(names) = d.get(b"Names").map(|n| src.resolve(n)).and_then(|n| n.as_array().cloned()) {
-        for pair in names.chunks(2) {
-            if let [k, v] = pair
-                && let Some(k) = src.resolve(k).as_string()
-            {
-                out.push((k.bytes.clone(), v.clone()));
+    if let Some(names) = d.get(b"Names").map(|n| src.resolve(n))
+        && let Some(pairs) = names.as_array()
+    {
+        for [key, value] in pairs.as_chunks::<2>().0 {
+            if let Some(key) = src.resolve(key).as_string() {
+                visit(&key.bytes, value);
             }
         }
     }
-    for k in d.get(b"Kids").map(|k| src.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default() {
-        name_tree_entries(src, &k, depth + 1, seen, out);
+    if let Some(kids) = d.get(b"Kids").map(|k| src.resolve(k))
+        && let Some(kids) = kids.as_array()
+    {
+        for k in kids {
+            visit_name_tree(src, k, depth + 1, seen, visit);
+        }
     }
 }
 

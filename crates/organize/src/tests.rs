@@ -1595,6 +1595,65 @@ fn named_destinations_are_resolved_to_the_copies() {
     assert!(!annots(&alone, 0)[0].contains(b"Dest"));
 }
 
+/// Read a saved destination from the relevant catalog table.
+fn copied_destination(doc: &Document, key: &[u8], legacy: bool) -> Option<Vec<Object>> {
+    let catalog = catalog(doc);
+    let value = if legacy {
+        doc.resolve(catalog.get(b"Dests")?).as_dict()?.get(key)?.clone()
+    } else {
+        let names = doc.resolve(catalog.get(b"Names")?);
+        let tree = doc.resolve(names.as_dict()?.get(b"Dests")?);
+        let names = doc.resolve(tree.as_dict()?.get(b"Names")?);
+        names.as_array()?.as_chunks::<2>().0.iter().find(|pair| pair[0].as_string().is_some_and(|name| name.bytes == key))?[1].clone()
+    };
+    doc.resolve(&value).as_array().cloned()
+}
+
+#[test]
+fn extract_and_split_keep_catalog_destinations_for_the_copied_pages() {
+    // Synthetic source with a nested name tree, a broken entry, and an indirect legacy
+    // destination whose view also contains a reference.
+    let src = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /Names << /Dests 5 0 R >> /Dests 7 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(),
+            "<< /Type /Page /Parent 2 0 R >>".into(),
+            "<< /Type /Page /Parent 2 0 R >>".into(),
+            "<< /Kids [6 0 R] >>".into(),
+            "<< /Limits [(chap2) (missing)] /Names [(chap2) [4 0 R /Fit] (missing) null] >>".into(),
+            "<< /first << /D 8 0 R >> >>".into(),
+            "[3 0 R /FitH 9 0 R]".into(),
+            "137".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+
+    let out = full_roundtrip(&extract_pages(&src, &[1, 0, 1]).unwrap());
+    let ps = pages(&out).unwrap();
+    assert_eq!(copied_destination(&out, b"chap2", false), Some(vec![Object::Ref(ps[0].obj), Object::name("Fit")]));
+    assert_eq!(copied_destination(&out, b"first", true), Some(vec![Object::Ref(ps[1].obj), Object::name("FitH"), Object::Int(137)]));
+    assert!(copied_destination(&out, b"missing", false).is_none());
+
+    let parts = split(&src, &SplitBy::PageCount(1)).unwrap();
+    let first = full_roundtrip(&parts[0]);
+    let second = full_roundtrip(&parts[1]);
+    assert!(copied_destination(&first, b"chap2", false).is_none());
+    assert!(copied_destination(&second, b"first", true).is_none());
+    assert_eq!(copied_destination(&first, b"first", true).unwrap()[0], Object::Ref(pages(&first).unwrap()[0].obj));
+    assert_eq!(copied_destination(&second, b"chap2", false).unwrap()[0], Object::Ref(pages(&second).unwrap()[0].obj));
+}
+
+#[test]
+fn combine_keeps_the_first_target_of_a_shared_name_and_both_local_links() {
+    let src = doc_c();
+    let out = full_roundtrip(&combine(&[("First", &src), ("Second", &src)]).unwrap());
+    let ps = pages(&out).unwrap();
+    assert_eq!(copied_destination(&out, b"chap2", false).unwrap()[0], Object::Ref(ps[1].obj));
+    for (link_page, target_page) in [(0, 1), (2, 3)] {
+        assert_eq!(annots(&out, link_page)[0].get(b"Dest").unwrap().as_array().unwrap()[0], Object::Ref(ps[target_page].obj));
+    }
+}
+
 #[test]
 fn layers_are_registered_with_their_default_state() {
     let out = full_roundtrip(&extract_pages(&doc_c(), &[1]).unwrap());
@@ -1641,6 +1700,7 @@ fn a_file_split_around_another_is_copied_once_with_one_bookmark() {
     // The link from C1 to C2 still works across A's pages between them.
     let link = &annots(&out, 0)[0];
     assert_eq!(link.get(b"Dest").and_then(|d| d.as_array()).expect("kept").first().and_then(|o| o.as_ref()), Some(ps[4].obj));
+    assert_eq!(copied_destination(&out, b"chap2", false).unwrap()[0], Object::Ref(ps[4].obj));
     // Its attachment once, not once per run.
     let names = out.resolve(catalog(&out).get(b"Names").unwrap()).as_dict().cloned().unwrap();
     let tree = out.resolve(names.get(b"EmbeddedFiles").unwrap()).as_dict().cloned().unwrap();

@@ -3124,8 +3124,8 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/organize/src/tests.rs::links_are_rewired_to_copied_pages_or_dropped", "crates/organize/src/tests.rs::named_destinations_are_resolved_to_the_copies"]
-notes = ""
+evidence = ["crates/organize/src/tests.rs::links_are_rewired_to_copied_pages_or_dropped", "crates/organize/src/tests.rs::named_destinations_are_resolved_to_the_copies", "crates/organize/src/tests.rs::extract_and_split_keep_catalog_destinations_for_the_copied_pages", "crates/organize/src/tests.rs::combine_keeps_the_first_target_of_a_shared_name_and_both_local_links"]
+notes = "Combine, Extract and Split keep catalog destination names whose target pages are copied. If multiple inputs use the same key in a destination table, the first copied target keeps the key. Each input’s local links and bookmarks still point to its own copied pages."
 
 [[feature]]
 id = "organize.preserve-fields"
