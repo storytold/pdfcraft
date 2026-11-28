@@ -500,6 +500,10 @@ pub fn run(args: &[String]) -> Result<()> {
     // Half the cores by default: a saturated machine turns slow inputs into false hangs.
     let jobs: usize =
         flag(args, "--jobs").map(str::parse).transpose()?.unwrap_or_else(|| std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).max(1)));
+    // Zero workers would report a successful run without testing any input.
+    if jobs == 0 {
+        bail!("--jobs must be at least 1");
+    }
     let timeout = Duration::from_secs(flag(args, "--timeout").unwrap_or("10").parse()?);
 
     let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
@@ -603,6 +607,13 @@ fn fxhash(b: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Invalid worker counts are rejected before building the CLI or creating fuzz output.
+    #[test]
+    fn zero_workers_are_rejected_before_building() {
+        let error = run(&["--jobs".into(), "0".into()]).unwrap_err().to_string();
+        assert!(error.contains("--jobs must be at least 1"), "{error}");
+    }
 
     /// The offset after the last `startxref`, if the file has a well-formed one.
     fn startxref(pdf: &[u8]) -> Option<usize> {
