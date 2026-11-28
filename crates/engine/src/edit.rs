@@ -410,6 +410,11 @@ pub enum Edit {
         pages: Vec<usize>,
         settings: pdfcraft_edit::ConvertColours,
     },
+    /// Print production ▸ Convert spots to process: the named spot inks (every spot ink when
+    /// `inks` is empty) become the CMYK their tint transforms give, across the whole document.
+    ConvertSpotsToProcess {
+        inks: Vec<String>,
+    },
     /// Change or clear only `/Desc` on a document-level attachment's file specification.
     EditAttachmentDescription {
         key: String,

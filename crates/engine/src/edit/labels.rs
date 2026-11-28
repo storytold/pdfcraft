@@ -275,6 +275,7 @@ impl Edit {
             Edit::AddAttachment { name, .. } => Label::with("Attach {name}", name.as_str()),
             Edit::DeleteAttachment { key } => Label::with("Delete attachment {key}", key.as_str()),
             Edit::ConvertColours { .. } => Label::of("Convert colours"),
+            Edit::ConvertSpotsToProcess { .. } => Label::of("Convert spots to process"),
             Edit::EditAttachmentDescription { .. } => Label::of("Edit attachment description"),
             Edit::AutoTagText => Label::of("Automatically tag text"),
             Edit::SetAltText { .. } => Label::of("Set alternate text"),

@@ -208,6 +208,16 @@ impl Session {
         guard(|| pdfcraft_edit::convert_colours(&mut cos, pages, settings, &mut recolour).unwrap_or_default()).unwrap_or_default()
     }
 
+    /// What Convert spots to process would change in `id` for `inks`, and what it would refuse,
+    /// without changing the document.
+    pub fn count_spots_to_process(&self, id: DocId, inks: &[String]) -> Result<pdfcraft_edit::SpotsConverted, String> {
+        let doc = self.get(id).ok_or("no such document")?;
+        let editor = doc.editor.as_ref().ok_or("the document is not editable")?;
+        let mut cos = editor.cos.clone();
+        // The preview decodes the document's own images; a panic in a decoder is an error here.
+        guard(|| pdfcraft_edit::convert_spots_to_process(&mut cos, inks))?.map_err(|e| e.to_string())
+    }
+
     /// How many hairlines [`Edit::FixHairlines`] would change on `pages` of `id`, and on how many
     /// pages, without changing the document (the edit itself refuses when there is nothing to fix).
     pub fn count_hairlines(&self, id: DocId, pages: &[usize], settings: &Hairlines) -> HairlinesFixed {

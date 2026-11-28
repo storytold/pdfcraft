@@ -35,6 +35,7 @@ mod printing;
 mod reading;
 mod redact;
 mod signing;
+mod spots_to_process;
 mod text_cache;
 mod tools;
 
