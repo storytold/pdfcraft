@@ -38,7 +38,11 @@ pub(crate) enum Scope {
 /// Edits during which field scripts run.
 pub(crate) fn uses_scripts(edit: &Edit) -> bool {
     match edit {
-        Edit::SetFieldValue { .. } | Edit::ApplyScriptChanges { .. } | Edit::SetFieldScript { .. } | Edit::SetCalculationOrder { .. } => true,
+        Edit::SetFieldValue { .. }
+        | Edit::ResetForm { .. }
+        | Edit::ApplyScriptChanges { .. }
+        | Edit::SetFieldScript { .. }
+        | Edit::SetCalculationOrder { .. } => true,
         Edit::Batch { edits, .. } => edits.iter().any(uses_scripts),
         _ => false,
     }
@@ -47,13 +51,16 @@ pub(crate) fn uses_scripts(edit: &Edit) -> bool {
 pub(crate) fn scope_of(edit: &Edit) -> Scope {
     match edit {
         Edit::SetInfo { .. } => Scope::Metadata,
+        Edit::AddPrinterMarks { .. } => Scope::Full,
         // The Attachments list is read from the whole document.
-        Edit::AddAttachment { .. } | Edit::DeleteAttachment { .. } => Scope::Full,
+        Edit::AddAttachment { .. } | Edit::DeleteAttachment { .. } | Edit::EditAttachmentDescription { .. } => Scope::Full,
         // A file attachment also changes the Attachments list.
         Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
+        | Edit::PasteComments { .. }
         | Edit::AddCustomStamp { .. }
+        | Edit::AddModel3d { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }
@@ -64,29 +71,47 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::EraseInk { .. }
         | Edit::MoveAnnotation { .. }
         | Edit::ReshapeAnnotation { .. }
+        | Edit::SetAnnotationPopup { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
         | Edit::FillAnnotation { .. }
+        | Edit::PartOpacity { .. }
         | Edit::FontSizeAnnotation { .. }
+        | Edit::BorderColorAnnotation { .. }
+        | Edit::BorderShapeAnnotation { .. }
         | Edit::SetAnnotationInfo { .. } => Scope::Comments,
         Edit::AddLink { .. } | Edit::SetLink { .. } | Edit::DeleteLink { .. } | Edit::RemoveLinks { .. } | Edit::AddLinks { .. } => Scope::Links,
-        Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::ApplyScriptChanges { .. } => Scope::Form,
+        Edit::SetFieldValue { .. }
+        | Edit::ResetForm { .. }
+        | Edit::SetFieldImage { .. }
+        | Edit::SetFieldImageTarget { .. }
+        | Edit::ApplyScriptChanges { .. } => Scope::Form,
         // Page content, resources and added content/marks only: the page tree, annotations,
         // fields, links and document metadata are untouched (see `refresh_content`).
         Edit::MoveObjects { .. }
+        | Edit::DeleteObjects { .. }
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
+        | Edit::PrepareText { .. }
         | Edit::EditPageImage { .. }
+        | Edit::EnhanceScan { .. }
         | Edit::AddText { .. }
         | Edit::AddImage { .. }
         | Edit::UpdateContent { .. }
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
         | Edit::PasteContent { .. }
+        | Edit::PasteObjects { .. }
         | Edit::AddHeaderFooter { .. }
         | Edit::AddWatermark { .. }
         | Edit::AddBackground { .. }
-        | Edit::RemoveMarks { .. } => Scope::Content,
+        | Edit::RemoveMarks { .. }
+        | Edit::ConvertColours { .. }
+        | Edit::FixHairlines { .. }
+        // Recognized text is an invisible text layer stamped on its page, with its font in the
+        // page's resources (#6310): a full re-inspection made applying one word cost seconds on
+        // a large file.
+        | Edit::AddOcrText { .. } => Scope::Content,
         Edit::Batch { edits, .. } => {
             let mut scopes = edits.iter().map(scope_of);
             let first = scopes.next().unwrap_or(Scope::Full);
@@ -125,6 +150,17 @@ pub(crate) struct Editor {
     pub(crate) field_appearances: pdfcraft_forms::FieldAppearanceCache,
     /// The text blocks last computed for one page, reused while the document is unchanged.
     pub(crate) text_blocks: TextBlocksCache,
+    /// A signed file that opening appended revisions to (an XFA form's layout, the values from
+    /// its data, its open scripts): the file as it was read, which the signatures are validated
+    /// against until the user changes something or saves (#2759).
+    pub(crate) as_opened: Option<AsOpened>,
+}
+
+/// The file as read, before opening appended PdfCraft's own revisions to it.
+#[derive(Clone)]
+pub(crate) struct AsOpened {
+    pub(crate) cos: pdfcraft_cos::Document,
+    pub(crate) bytes: Arc<Vec<u8>>,
 }
 
 /// One page's text blocks ([`pdfcraft_edit::text_blocks`]) and the document state they were read
