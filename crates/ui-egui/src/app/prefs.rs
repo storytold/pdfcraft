@@ -144,6 +144,7 @@ impl PdfCraftApp {
             text_links: Some(self.text_links),
             pinned_folders: json_text(&self.pinned.folders),
             pinned_folders_collapsed: json_text(&self.pinned.collapsed),
+            format_bar: json_text(&self.format_bar),
             pinned_tools: Some(self.pinned_tools.clone()),
             theme: Some(self.theme_preference),
             scroll_speed: Some(self.scroll_speed),
@@ -355,6 +356,9 @@ impl PdfCraftApp {
         }
         self.pinned.restore(&parsed(&s.pinned_folders).unwrap_or(serde_json::Value::Null));
         self.pinned.restore_collapsed(&parsed(&s.pinned_folders_collapsed).unwrap_or(serde_json::Value::Null));
+        if let Some(bar) = parsed(&s.format_bar).and_then(|v| serde_json::from_value(v).ok()) {
+            self.format_bar = bar;
+        }
         if let Some(items) = &s.pinned_tools {
             let mut tools: Vec<String> = Vec::new();
             for id in items {

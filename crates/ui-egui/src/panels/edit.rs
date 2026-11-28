@@ -284,73 +284,86 @@ fn centred_text(cx: &craft::ui::primitives::ContentPainterCx<'_>, at: egui::Pos2
     cx.with_draw(|draw| draw.galley(pos, &layout));
 }
 
-/// Edit a PDF ▸ Format text: for the selected added text (one undoable change), or the style
-/// new text gets.
-fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    use crate::format_text_ui::{Target, panel};
+/// What Format text or Edit image formats in a view: the open paragraph, the box being typed, the selected added
+/// text or image, or the style Add text gives the next text. The Edit panel and the format bar both show it.
+pub(crate) enum Formatting {
+    /// Text, with the open paragraph's selection formatting and page fonts (none for added text), and whether the
+    /// hint for adding text applies.
+    Text { target: crate::format_text_ui::Target, fmt: Option<crate::edit_text_ui::SelectionFormatting>, sources: Vec<(String, String)>, hint: bool },
+    /// The selected added image: its page, its place among the page's added content, and the image.
+    Image { page: usize, index: usize, img: pdfcraft_engine::AddedImage },
+}
+
+/// What a view formats (see [`Formatting`]): `session` is the view's, `doc` its document, `tool` the tool in use and
+/// `text_style` the style Add text gives the next text.
+pub(crate) fn format_target(
+    session: &crate::canvas::PageSession,
+    doc: &pdfcraft_engine::Document,
+    tool: crate::QuickTool,
+    text_style: &pdfcraft_engine::AddedText,
+) -> Option<Formatting> {
+    use crate::format_text_ui::Target;
     // Editing a paragraph of existing text: its formatting, applied as it changes.
-    if let Some((i, _)) = app.active_ids()
-        && let Some(ed) = app.views[i].session.line_editor.clone()
-    {
+    if let Some(ed) = session.line_editor.clone() {
         let mut ed = ed;
-        let sources: Vec<(String, String)> = app
-            .session
-            .get(app.views[i].id)
-            .map(|d| d.text_editor_fonts(ed.page))
-            .unwrap_or_default()
-            .into_iter()
-            .map(|f| (f.resource, f.face))
-            .collect();
+        let sources: Vec<(String, String)> = doc.text_editor_fonts(ed.page).into_iter().map(|f| (f.resource, f.face)).collect();
         let fmt = ed.selection_formatting(&sources);
         ed.sync_selection_look(&fmt);
-        panel(app, ui, i, Target::Paragraph(Box::new(ed)), Some(&fmt), &sources);
-        return;
+        return Some(Formatting::Text { target: Target::Paragraph(Box::new(ed)), fmt: Some(fmt), sources, hint: false });
     }
     // Typing added text: the box's formatting, and alignment for the lines a selection touches.
-    if let Some(i) = app.active_ids().map(|(i, _)| i)
-        && let Some(draft) = app.views[i].session.content.draft.clone()
-    {
-        if draft.index.is_none() && app.quick_tool == crate::QuickTool::AddText {
-            crate::content_ui::hint(ui);
+    if let Some(draft) = session.content.draft.clone() {
+        let hint = draft.index.is_none() && tool == crate::QuickTool::AddText;
+        return Some(Formatting::Text { target: Target::Draft(Box::new(draft)), fmt: None, sources: Vec::new(), hint });
+    }
+    if let Some((page, index)) = session.content.selected {
+        match &doc.added().iter().filter(|a| a.page == page).nth(index)?.content {
+            pdfcraft_engine::AddedContent::Image(img) => return Some(Formatting::Image { page, index, img: img.clone() }),
+            pdfcraft_engine::AddedContent::Text(text) => {
+                return Some(Formatting::Text {
+                    target: Target::Added { page, index, text: text.clone() },
+                    fmt: None,
+                    sources: Vec::new(),
+                    hint: false,
+                });
+            }
         }
-        panel(app, ui, i, Target::Draft(Box::new(draft)), None, &[]);
+    }
+    (tool == crate::QuickTool::AddText).then(|| Formatting::Text {
+        target: Target::Armed(text_style.clone()),
+        fmt: None,
+        sources: Vec::new(),
+        hint: true,
+    })
+}
+
+/// Edit a PDF ▸ Format text: for the selected added text (one undoable change), or the style
+/// new text gets. Only while the format bar is hidden: it shows them on the page otherwise.
+fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    if !app.format_bar.hidden {
         return;
     }
-    let image = app.active_ids().and_then(|(i, id)| {
-        let (page, index) = app.views[i].session.content.selected?;
-        let doc = app.session.get(id)?;
-        match &doc.added().iter().filter(|a| a.page == page).nth(index)?.content {
-            pdfcraft_engine::AddedContent::Image(img) => Some((page, index, img.clone())),
-            _ => None,
+    let Some((i, id)) = app.active_ids() else { return };
+    let Some(doc) = app.session.get(id) else { return };
+    let Some(shown) = format_target(&app.views[i].session, doc, app.quick_tool, &app.text_style) else { return };
+    if clicked(&IconButton::new(IconId::new("external-link")).label(tl!("Show on page")).show(ui).response) {
+        app.format_bar.hidden = false;
+        return;
+    }
+    match shown {
+        Formatting::Text { target, fmt, sources, hint } => {
+            if hint {
+                crate::content_ui::hint(ui);
+            }
+            crate::format_text_ui::panel(app, ui, i, target, fmt.as_ref(), &sources);
         }
-    });
-    if let Some((page, index, img)) = image {
-        match crate::content_ui::image_panel(ui, &img) {
+        Formatting::Image { page, index, img } => match crate::content_ui::image_panel(ui, &img) {
             Some(crate::content_ui::ImageAction::Update(content)) => {
                 app.apply_edit(ui.ctx(), pdfcraft_engine::Edit::UpdateContent { page, index, content });
             }
             Some(crate::content_ui::ImageAction::Replace) => app.replace_image_dialog(page, index),
             None => {}
-        }
-        return;
-    }
-    let selected = app.active_ids().and_then(|(i, id)| {
-        let (page, index) = app.views[i].session.content.selected?;
-        let doc = app.session.get(id)?;
-        let a = doc.added().iter().filter(|a| a.page == page).nth(index)?;
-        match &a.content {
-            pdfcraft_engine::AddedContent::Text(text) => Some((i, page, index, text.clone())),
-            _ => None,
-        }
-    });
-    match selected {
-        Some((i, page, index, text)) => panel(app, ui, i, Target::Added { page, index, text }, None, &[]),
-        None if app.quick_tool == crate::QuickTool::AddText => {
-            crate::content_ui::hint(ui);
-            let armed = app.text_style.clone();
-            panel(app, ui, 0, Target::Armed(armed), None, &[]);
-        }
-        None => {}
+        },
     }
 }
 

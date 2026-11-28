@@ -29,6 +29,8 @@ pub struct Layout {
     pub pinned_folders: Option<String>,
     /// JSON text: which pinned folders are collapsed.
     pub pinned_folders_collapsed: Option<String>,
+    /// JSON text: the format bar hidden, and its place.
+    pub format_bar: Option<String>,
     pub pinned_tools: Option<Vec<String>>,
     pub theme: Option<ModeChoice>,
     pub scroll_speed: Option<crate::scroll_speed::ScrollSpeed>,
@@ -535,6 +537,7 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
             text_links: r.bool("text_links"),
             pinned_folders: r.text("pinned_folders"),
             pinned_folders_collapsed: r.text("pinned_folders_collapsed"),
+            format_bar: r.text("format_bar"),
             pinned_tools: r.list("pinned_tools"),
             theme,
             scroll_speed: r.typed("scroll_speed"),

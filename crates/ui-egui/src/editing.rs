@@ -443,13 +443,55 @@ impl PdfCraftApp {
         }
     }
 
+    /// Before tab `i`'s pages draw: a paragraph, or a box of new text, stays open only under the tools that
+    /// open one, Edit text and Add text. Picking another tool (Select or Hand on the rail, a command, the
+    /// control channel) puts it down, applied or finished as a click away from it is. Left open, its editor
+    /// and bars would stay over the pages under a tool that doesn't edit them. Added text retyped from a
+    /// double click under Select stays open while Select is. A box holding text the standard fonts can't
+    /// draw stays open, as `close_text_editors` keeps it, without its notice repeated every frame. Text the
+    /// document refuses stays open for correcting under the tool that types in it, rather than being
+    /// tried again, and refused again, every frame.
+    pub(crate) fn put_down_text_editors_for_tool(&mut self, ctx: &egui::Context, i: usize) {
+        use crate::QuickTool;
+        if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
+            return;
+        }
+        let Some(view) = self.views.get(i) else { return };
+        let select = self.quick_tool == QuickTool::Select;
+        let open = view.session.line_editor.is_some() || view.session.content.draft.as_ref().is_some_and(|d| d.index.is_none() || !select);
+        if !open || view.session.content.blocked().is_some() {
+            return;
+        }
+        let id = view.id;
+        if self.close_text_editors(ctx, i, id) {
+            return;
+        }
+        let Some(session) = self.views.get(i).map(|v| &v.session) else { return };
+        self.quick_tool = if session.line_editor.is_some() {
+            QuickTool::EditText
+        } else if session.content.draft.as_ref().is_some_and(|d| d.index.is_none()) {
+            QuickTool::AddText
+        } else {
+            QuickTool::Select
+        };
+    }
+
     /// Before Undo or Redo: a paragraph or added text box open on the page shows the document as
     /// it is before the step, so it is applied as clicking away applies it, then closed. Left
     /// open, it kept showing what the step took away, and wrote from it when it was next applied.
     /// What was typed is then the step Undo takes back. False (nothing is undone, and the box
     /// stays open) while it holds text the standard fonts can't draw, or text that couldn't be
-    /// applied: it is shown, never lost.
+    /// applied: it is shown, never lost. The edits go to tab `i`'s document even while another tab
+    /// is active (a tool picked with the other pane active), which stays active.
     pub(crate) fn close_text_editors(&mut self, ctx: &egui::Context, i: usize, id: pdfcraft_engine::DocId) -> bool {
+        let was = self.active.replace(i);
+        let closed = self.close_text_editors_of(ctx, i, id);
+        self.active = was;
+        closed
+    }
+
+    /// [`Self::close_text_editors`] with tab `i` active, as [`Self::apply_edit`] edits the active tab.
+    fn close_text_editors_of(&mut self, ctx: &egui::Context, i: usize, id: pdfcraft_engine::DocId) -> bool {
         let Some(view) = self.views.get_mut(i) else { return true };
         if let Some(c) = view.session.content.blocked() {
             view.session.content.hold_blocked();

@@ -537,22 +537,25 @@ pub(super) fn selection_bar(
     // A comment or a replacement sits on one page: across pages, only markup and Copy.
     let across_pages = selection.pages().start() != selection.pages().end();
     let mut chosen = None;
-    TaskBar::fixed(tl!("Selection"), &anchor).show(ui, body.rect, |ui, _| {
-        for (label, action) in [
-            (tl!("Add comment"), SelectionAction::Note),
-            (tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
-            (tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
-            (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
-            (tl!("Replace text"), SelectionAction::Replace),
-        ] {
-            let one_page_only = matches!(action, SelectionAction::Note | SelectionAction::Replace);
-            if Button::new(label).enabled(can_comment && !(across_pages && one_page_only)).show(ui).clicked() {
-                chosen = Some(action);
+    // craft salts every fixed bar "task-bar": its own scope keeps it apart from the others in this body.
+    ui.push_id("selection-bar", |ui| {
+        TaskBar::fixed(tl!("Selection"), &anchor).show(ui, body.rect, |ui, _| {
+            for (label, action) in [
+                (tl!("Add comment"), SelectionAction::Note),
+                (tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
+                (tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
+                (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
+                (tl!("Replace text"), SelectionAction::Replace),
+            ] {
+                let one_page_only = matches!(action, SelectionAction::Note | SelectionAction::Replace);
+                if Button::new(label).enabled(can_comment && !(across_pages && one_page_only)).show(ui).clicked() {
+                    chosen = Some(action);
+                }
             }
-        }
-        if Button::new(tl!("Copy")).enabled(can_copy).show(ui).clicked() {
-            chosen = Some(SelectionAction::Copy);
-        }
+            if Button::new(tl!("Copy")).enabled(can_copy).show(ui).clicked() {
+                chosen = Some(SelectionAction::Copy);
+            }
+        })
     });
     let Some(action) = chosen else { return false };
     if let SelectionAction::Copy = action {

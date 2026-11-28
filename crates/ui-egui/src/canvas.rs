@@ -35,6 +35,7 @@ pub(crate) mod bars;
 mod cache;
 pub(super) mod crop;
 mod find;
+pub(crate) mod format_bar;
 pub(super) mod image_pick;
 mod navigation;
 pub(crate) mod organize;
@@ -915,6 +916,8 @@ struct PageBodyCx<'a> {
     units: crate::units::Unit,
     find_marks: &'a [TextMark],
     table_preview: Option<&'a crate::field_table_ui::Preview>,
+    /// What the format bar reads.
+    format_bar: format_bar::FormatBarCx<'a>,
 }
 
 impl PageBodyCx<'_> {
@@ -960,6 +963,8 @@ struct BodyOut {
     over_part: bool,
     /// The page a primary press started on in this pass, so clicking a page in continuous view makes it current.
     pressed_page: Option<usize>,
+    /// What the format bar did this pass.
+    format_bar: Option<format_bar::FormatBarOut>,
 }
 
 /// The part list of a pass, in paint order: pictures, paragraphs and added items, links and text links (only under
@@ -1452,6 +1457,8 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
         if let Some(edit) = edits.into_iter().flatten().next() {
             session.pending_edit = Some(edit);
         }
+        // The format bar, over what it formats; the app applies what it did after the pages.
+        out.format_bar = format_bar::show(ui, body, session, cx.doc, cx.tool, &cx.format_bar);
         // Done on the open box keeps its text and goes back to Select, the new text selected; read in the real run,
         // whose report is the one kept.
         if body.pass.is_some() {
@@ -1629,6 +1636,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 /// canvas view, the middle-button scroll); nothing in the next pass reads them to compute its result.
 #[allow(clippy::cognitive_complexity)]
 pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mut egui::Ui) -> Option<PageViewOutput> {
+    app.put_down_text_editors_for_tool(ui.ctx(), index);
+    // An open paragraph's format bar lists the installed fonts: look for them while one is open.
+    #[cfg(not(target_arch = "wasm32"))]
+    if app.views.get(index).is_some_and(|v| v.session.line_editor.is_some()) {
+        let _ = app.installed_document_fonts(false);
+    }
     // The seam returns `None` for a tab that closes, has no pages or shows the Organize grid: no page view runs there,
     // and `PageViewOutput` cannot be built outside its crate.
     // The Search panel closed: its search moves to the find bar.
@@ -1831,6 +1844,12 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         units: app.units,
         find_marks: &find_marks,
         table_preview: table_preview.as_ref(),
+        format_bar: format_bar::FormatBarCx {
+            prefs: app.format_bar,
+            text_style: &app.text_style,
+            #[cfg(not(target_arch = "wasm32"))]
+            installed: app.document_fonts.as_ref(),
+        },
     };
     let source = DocPages::new(&app.session, doc_id).rotated(state.rotation).revisions(revisions).reports(reports);
     // A modal over the pages blocks the canvas's keys and presses in the framework, so the view needs no gate here.
@@ -2038,6 +2057,9 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     }
     let tool = finish_sign_requests(app, ui.ctx(), index, tool, body_out.area_choice);
     app.quick_tool = tool;
+    if let Some(bar) = body_out.format_bar.take() {
+        format_bar::apply(app, ui.ctx(), index, bar);
+    }
     let requests = FrameRequests {
         open_props,
         field_props,

@@ -65,6 +65,9 @@ fn paragraph_spacing(h: &Harness<'static, PdfCraftApp>) -> Option<f64> {
 #[test]
 fn the_paragraph_spacing_field_edits_the_paragraph() {
     let mut h = editing();
+    // Format text in the Edit panel: this tests the panel's own controls, which the format bar also shows.
+    h.set_option("format-bar", "false").unwrap();
+    h.run_steps(2);
     let field = h.get_by_label("Paragraph spacing");
     assert!(!field.accesskit_node().is_disabled());
     assert_eq!(paragraph_spacing(&h), Some(0.0));

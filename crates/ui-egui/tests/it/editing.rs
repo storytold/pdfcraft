@@ -5121,6 +5121,9 @@ fn the_format_panel_restyles_the_paragraph_being_edited() {
 #[test]
 fn the_format_panel_toggles_superscript_and_subscript_on_selection() {
     let mut h = harness(1, |_| {});
+    // Format text in the Edit panel: this tests the panel's own controls, which the format bar also shows.
+    h.set_option("format-bar", "false").unwrap();
+    h.run_steps(2);
     assert!(h.execute("edit.edit_text"));
     h.run_steps(2);
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
@@ -5186,6 +5189,9 @@ fn the_format_panel_toggles_superscript_and_subscript_on_selection() {
 #[test]
 fn the_format_panel_takes_any_scale_and_character_spacing() {
     let mut h = harness(1, |_| {});
+    // Format text in the Edit panel: this tests the panel's own controls, which the format bar also shows.
+    h.set_option("format-bar", "false").unwrap();
+    h.run_steps(2);
     let id = h.state().views[0].id;
     let width = |h: &Harness<'static, PdfCraftApp>, view: usize| {
         let s = h.state();
@@ -5242,6 +5248,9 @@ fn the_format_panel_takes_any_scale_and_character_spacing() {
 #[test]
 fn typed_small_coloured_text_size_survives_save_and_reopen() {
     let mut h = harness(1, |_| {});
+    // Format text in the Edit panel: this tests the panel's own controls, which the format bar also shows.
+    h.set_option("format-bar", "false").unwrap();
+    h.run_steps(2);
     assert!(h.execute("edit.edit_text"));
     h.run_steps(2);
     let r = h.state().views[0].page_screen_rect(0).unwrap();
@@ -10548,6 +10557,9 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
             app
         }
     });
+    // Format text in the Edit panel: this tests the panel's own controls, which the format bar also shows.
+    h.set_option("format-bar", "false").unwrap();
+    h.run_steps(2);
     h.run_steps(4);
 
     assert!(h.execute("edit.edit_text"));

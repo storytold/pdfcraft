@@ -105,6 +105,22 @@ fn a_refused_text_box_is_put_back_whole() {
     assert_eq!(content.select_added, None, "nothing was added to select");
 }
 
+/// Hand picked with a new text box open on a document that refuses changes: the box stays open
+/// under Add text, so the next frame doesn't try, and refuse, it again.
+#[test]
+fn a_refused_box_put_down_by_a_tool_returns_to_add_text() {
+    let mut app = crate::PdfCraftApp::for_unit_tests();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
+    app.open_bytes(&egui::Context::default(), "a.pdf", None, no_changes_pdf()).unwrap();
+    let style = crate::content_ui::default_style();
+    app.views[0].session.content.draft = Some(crate::content_ui::TextDraft::new(0, None, [20.0, 20.0, 120.0, 40.0], "Typed".into(), style));
+    app.quick_tool = crate::QuickTool::Hand;
+    app.put_down_text_editors_for_tool(&egui::Context::default(), 0);
+    let content = &app.views[0].session.content;
+    assert_eq!(content.draft.as_ref().map(|d| d.text.as_str()), Some("Typed"), "the refused box stays open");
+    assert_eq!(app.quick_tool, crate::QuickTool::AddText, "under the tool that types in it");
+}
+
 /// Save commits the open text box before anything is written, even when it then asks where.
 #[test]
 fn save_commits_the_open_text_box() {

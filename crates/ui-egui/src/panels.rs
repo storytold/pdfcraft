@@ -9,7 +9,7 @@ pub(super) mod all_tools_ui;
 mod attachments;
 pub(crate) mod bookmarks;
 pub(super) mod comments_panel;
-mod edit;
+pub(crate) mod edit;
 mod fields;
 pub(super) mod format_text_ui;
 mod layers;

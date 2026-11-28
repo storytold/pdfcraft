@@ -385,6 +385,14 @@ impl PdfCraftApp {
                     _ => return Err("hide-empty-highlight-hover must be true or false".into()),
                 };
             }
+            // `--format-bar false`: Format text and Edit image in the Edit panel, not on the page (Hide bar).
+            ("format-bar", _) => {
+                self.format_bar.hidden = match value {
+                    "true" => false,
+                    "false" => true,
+                    _ => return Err("format-bar must be true or false".into()),
+                };
+            }
             ("text-links", _) => {
                 self.text_links = match value {
                     "true" => true,

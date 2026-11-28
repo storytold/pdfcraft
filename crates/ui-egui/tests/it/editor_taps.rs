@@ -344,6 +344,9 @@ fn line_spacing(h: &Harness<'_, PdfCraftApp>) -> Option<f64> {
 fn mouse_click_on_format_text_keeps_the_paragraph_open() {
     // Control for the tap below.
     let mut h = open(text_pdf());
+    // Format text in the Edit panel: this tests the panel's own controls, which the format bar also shows.
+    h.set_option("format-bar", "false").unwrap();
+    h.run_steps(2);
     edit_paragraph(&mut h);
     let spacing = h.get_by_value("Auto").rect().center();
     mouse_click(&mut h, spacing);
@@ -356,6 +359,9 @@ fn mouse_click_on_format_text_keeps_the_paragraph_open() {
 #[test]
 fn touch_tap_on_format_text_keeps_the_paragraph_open() {
     let mut h = open(text_pdf());
+    // Format text in the Edit panel: this tests the panel's own controls, which the format bar also shows.
+    h.set_option("format-bar", "false").unwrap();
+    h.run_steps(2);
     edit_paragraph(&mut h);
     let spacing = h.get_by_value("Auto").rect().center();
     touch_tap(&mut h, spacing);

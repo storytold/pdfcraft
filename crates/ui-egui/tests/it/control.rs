@@ -2042,6 +2042,9 @@ fn control_collapses_and_expands_a_pinned_folder() {
 #[test]
 fn accessible_labels_on_format_text_and_pin_dialog() {
     let (mut h, c) = harness();
+    // Format text in the Edit panel: this tests the panel's own controls, which the format bar also shows.
+    h.set_option("format-bar", "false").unwrap();
+    h.run_steps(2);
 
     // Open Add Text so Format text panel is visible
     ok(&mut h, &c, "ui.command", json!({"id": "edit.text"}));
@@ -2068,6 +2071,9 @@ fn accessible_labels_on_format_text_and_pin_dialog() {
 #[test]
 fn format_text_size_field_keeps_room_for_its_value() {
     let (mut h, c) = harness();
+    // Format text in the Edit panel: this tests the panel's own controls, which the format bar also shows.
+    h.set_option("format-bar", "false").unwrap();
+    h.run_steps(2);
     ok(&mut h, &c, "ui.command", json!({"id": "edit.text"}));
     h.run_steps(6);
     let size = h.get_by_label_contains("Font size").rect();

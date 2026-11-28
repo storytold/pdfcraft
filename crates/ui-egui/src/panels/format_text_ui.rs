@@ -47,7 +47,7 @@ pub(crate) enum FontPick {
 }
 
 /// The standard families, in the order the font row lists them.
-const STANDARD: [FontFamily; 3] = [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier];
+pub(crate) const STANDARD: [FontFamily; 3] = [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier];
 
 impl FontPick {
     /// The key the font picker reports when the host row of this pick is run.
@@ -238,7 +238,7 @@ impl Paragraphs<'_> {
     }
 }
 
-const SIZES: [f64; 16] = [4.0, 6.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0];
+pub(crate) const SIZES: [f64; 16] = [4.0, 6.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0];
 const LINE_SPACINGS: [f64; 7] = [1.0, 1.15, 1.2, 1.5, 2.0, 2.5, 3.0];
 const SCALES: [f64; 8] = [50.0, 75.0, 90.0, 100.0, 110.0, 125.0, 150.0, 200.0];
 const CHAR_SPACINGS: [f64; 8] = [-1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 3.0, 5.0];
@@ -431,7 +431,7 @@ pub(crate) fn panel(
     let shown = Section::fixed(tl!("Format text").to_string()).show(ui, |ui, _| {
         #[cfg(not(target_arch = "wasm32"))]
         let installed = if matches!(target, Target::Paragraph(_)) { app.installed_document_fonts(false) } else { None };
-        show(
+        controls(
             ui,
             &target,
             fmt,
@@ -442,16 +442,21 @@ pub(crate) fn panel(
     });
     let Some(mut out) = shown.inner else { return };
     if let Some(request) = out.requests.take_color() {
-        let which = target.recolour();
-        app.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app, ctx, color| recolour(ctx, app, view, which, color));
+        pick_colour(app, view, &target, request);
     }
     apply(ui.ctx(), app, view, target, &out.edits);
 }
 
+/// Opens the app's colour picker for `target`; the colour it answers is applied to the same target when it comes.
+pub(crate) fn pick_colour(app: &mut PdfCraftApp, view: usize, target: &Target, request: craft::ui::runtime::requests::ColorRequest) {
+    let which = target.recolour();
+    app.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app, ctx, color| recolour(ctx, app, view, which, color));
+}
+
 /// The Format text controls for `target`, shown. The font row is the font picker over the installed
 /// families with the page's fonts, the standard three and `Load font…` above them, for a paragraph;
-/// otherwise it lists the standard families.
-fn show(
+/// otherwise it lists the standard families. The panel's section and the format bar's All text formatting show it.
+pub(crate) fn controls(
     ui: &mut egui::Ui,
     target: &Target,
     fmt: Option<&SelectionFormatting>,
