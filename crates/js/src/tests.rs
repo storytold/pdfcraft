@@ -935,6 +935,33 @@ mod xfa_model {
 
     /// A calculate script finds its siblings by name and yields its last expression, and a
     /// value it sets comes back as an effect.
+    /// The script's node is in scope: `parent`, `rawValue` and `caption` without `this.` are its own, unless a nearer name or the
+    /// script's own variable takes them.
+    #[test]
+    fn a_scripts_node_members_are_read_without_this() {
+        let o = go("parent.name + ',' + rawValue + ',' + typeof caption + ',' + somExpression", "form1[0].page1[0].qty[0]", "calculate");
+        assert_eq!(o.result.as_deref(), Some("page1,4,object,form1[0].page1[0].qty[0]"), "{o:?}");
+        let o = go("rawValue = 7; this.rawValue", "form1[0].page1[0].qty[0]", "calculate");
+        assert_eq!(o.result.as_deref(), Some("7"), "{o:?}");
+        let o = go("var parent = 3; parent + ',' + typeof app.plugIns.toString().indexOf", "form1[0].page1[0].qty[0]", "calculate");
+        assert_eq!(o.result.as_deref(), Some("3,function"), "{o:?}");
+        // a sibling named like a member comes first: `caption` is the subform, not qty's caption
+        let mut f = form();
+        if let Some(page) = f.children.first_mut() {
+            page.children.push(XfaNode {
+                name: "caption".into(),
+                som: "form1[0].page1[0].caption[0]".into(),
+                kind: Some(XfaKind::Subform),
+                presence: "hidden".into(),
+                ..Default::default()
+            });
+        }
+        let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].qty[0]".into(), ..Default::default() };
+        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3, ..Default::default() };
+        let o = run_xfa("caption.presence + ',' + caption.somExpression", &ev, &doc, &f, Limits::default());
+        assert_eq!(o.result.as_deref(), Some("hidden,form1[0].page1[0].caption[0]"), "{o:?}");
+    }
+
     #[test]
     fn calculate_scripts_see_siblings_by_name_and_yield_their_last_expression() {
         let o = go("qty.rawValue * price.rawValue", "form1[0].page1[0].total[0]", "calculate");
