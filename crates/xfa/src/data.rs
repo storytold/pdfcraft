@@ -48,6 +48,7 @@ const XFA_DATA_NS: &str = "http://www.xfa.org/schema/xfa-data/1.0/";
 /// Most data nodes read.
 const MAX_NODES: u32 = 1_000_000;
 const MAX_DEPTH: usize = 64;
+const MAX_SOM_INDEX: usize = 100_000;
 
 /// One element of the data document.
 #[derive(Clone, Debug, Default, PartialEq)]

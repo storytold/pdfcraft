@@ -3,7 +3,7 @@ use super::merge::Op;
 use super::path::{data_path, parse_datasets_packet};
 use super::values::{Want, path_of, text_of, with_template};
 use super::write::{datasets_stream_ref, rewrite};
-use super::{DataNode, DataPath, Document, MAX_DEPTH, Node, ObjRef, Object, SomIndices, Template, Ui, XfaError};
+use super::{DataNode, DataPath, Document, MAX_DEPTH, MAX_SOM_INDEX, Node, ObjRef, Object, SomIndices, Template, Ui, XfaError};
 
 /// How deep the AcroForm field tree is walked for password fields: as deep as the form's own
 /// field walk (`pdfcraft_forms::fields`), which is what editing and dataset synchronization see.
@@ -111,96 +111,144 @@ fn password_dataset_wants(doc: &Document) -> Result<Vec<Want>, XfaError> {
         ));
     };
     let Ok(Some(packet)) = datasets_packet(doc) else { return Ok(Vec::new()) };
-    let Some(data) = parse_datasets_packet(&packet) else { return Ok(Vec::new()) };
-    Ok(with_template(doc, None, |tpl| {
-        let mut candidates: Vec<(String, DataPath, String)> = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        if let Some(t) = tpl {
-            struct Walk<'a> {
-                tpl: &'a Template,
-                data: &'a DataNode,
-                nodes: usize,
-                seen: &'a mut std::collections::HashSet<DataPath>,
-                out: &'a mut Vec<(String, DataPath, String)>,
-            }
-            impl Walk<'_> {
-                fn child_som(parent: &str, name: Option<&str>, index: usize) -> String {
-                    match name {
-                        Some(n) if !parent.is_empty() => format!("{parent}.{n}[{index}]"),
-                        Some(n) => format!("{n}[{index}]"),
-                        None => parent.to_string(),
-                    }
+    let Some((data, data_complete)) = parse_datasets_packet(&packet) else { return Ok(Vec::new()) };
+    if !data_complete {
+        return Err(XfaError::Malformed("the XFA password data scan was incomplete".into()));
+    }
+    let (wants, scan_complete) = with_template(doc, None, |tpl| collect_password_wants(Some(acro_fields), &data, tpl));
+    if !scan_complete {
+        return Err(XfaError::Malformed("the XFA password field scan was incomplete".into()));
+    }
+    Ok(wants)
+}
+
+/// Password values to clear in an already parsed data tree. Export passes the exact tree
+/// it will emit rather than treating an unreadable document packet as an empty scan.
+pub(super) fn password_data_wants(doc: &Document, data: &DataNode, tpl: Option<&Template>) -> (Vec<Want>, bool) {
+    collect_password_wants(acro_password_fields(doc), data, tpl)
+}
+
+/// Shared scan over template `<passwordEdit/>` fields and pre-scanned AcroForm password fields.
+fn collect_password_wants(acro_fields: Option<Vec<(String, String)>>, data: &DataNode, tpl: Option<&Template>) -> (Vec<Want>, bool) {
+    let mut complete = true;
+    let mut candidates: Vec<(String, DataPath, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Some(t) = tpl {
+        struct Walk<'a> {
+            tpl: &'a Template,
+            data: &'a DataNode,
+            nodes: usize,
+            seen: &'a mut std::collections::HashSet<DataPath>,
+            out: &'a mut Vec<(String, DataPath, String)>,
+            complete: &'a mut bool,
+        }
+        impl Walk<'_> {
+            fn child_som(parent: &str, name: Option<&str>, index: usize) -> String {
+                match name {
+                    Some(n) if !parent.is_empty() => format!("{parent}.{n}[{index}]"),
+                    Some(n) => format!("{n}[{index}]"),
+                    None => parent.to_string(),
                 }
-                fn walk(&mut self, children: &[Node], parent_som: &str, depth: usize) {
-                    if depth > MAX_DEPTH || self.nodes >= crate::script::MAX_FORM_NODES {
-                        return;
+            }
+            fn walk(&mut self, children: &[Node], parent_som: &str, depth: usize) {
+                if children.is_empty() {
+                    return;
+                }
+                if depth > MAX_DEPTH || self.nodes >= crate::script::MAX_FORM_NODES || !password_som_is_complete(parent_som) {
+                    *self.complete = false;
+                    return;
+                }
+                let sibs = SomIndices::of(children);
+                for (i, n) in children.iter().enumerate() {
+                    if self.nodes >= crate::script::MAX_FORM_NODES {
+                        *self.complete = false;
+                        break;
                     }
-                    let sibs = SomIndices::of(children);
-                    for (i, n) in children.iter().enumerate() {
-                        if self.nodes >= crate::script::MAX_FORM_NODES {
-                            break;
-                        }
-                        self.nodes += 1;
-                        let sib = sibs.at(i);
-                        match n {
-                            Node::Subform(sf) => {
-                                let from_data = match &sf.common.name {
-                                    Some(name) if sf.occur.max != Some(1) => self.data.count(&data_path(self.tpl, parent_som), name),
-                                    _ => 0,
-                                };
-                                let instances = crate::layout::instance_count(&sf.occur, from_data).max(from_data);
-                                for k in 0..instances {
-                                    if k > 0 {
-                                        if self.nodes >= crate::script::MAX_FORM_NODES {
-                                            break;
-                                        }
-                                        self.nodes += 1;
+                    self.nodes += 1;
+                    let sib = sibs.at(i);
+                    match n {
+                        Node::Subform(sf) => {
+                            let from_data = match &sf.common.name {
+                                Some(name) if sf.occur.max != Some(1) => self.data.count(&data_path(self.tpl, parent_som), name),
+                                _ => 0,
+                            };
+                            let instances = crate::layout::instance_count(&sf.occur, from_data).max(from_data);
+                            for k in 0..instances {
+                                if k > 0 {
+                                    if self.nodes >= crate::script::MAX_FORM_NODES {
+                                        *self.complete = false;
+                                        break;
                                     }
-                                    let som = Self::child_som(parent_som, sf.common.name.as_deref(), sib + k);
-                                    self.walk(&sf.children, &som, depth + 1);
+                                    self.nodes += 1;
                                 }
+                                let som = Self::child_som(parent_som, sf.common.name.as_deref(), sib + k);
+                                self.walk(&sf.children, &som, depth + 1);
                             }
-                            Node::Area(a) => {
-                                let som = Self::child_som(parent_som, a.common.name.as_deref(), sib);
-                                self.walk(&a.children, &som, depth + 1);
-                            }
-                            Node::Field(f) if f.ui == Ui::PasswordEdit => {
-                                let som = Self::child_som(parent_som, f.common.name.as_deref().or(Some("field")), sib);
-                                let path = data_path(self.tpl, &som);
-                                if !path.is_empty() && self.seen.insert(path.clone()) {
-                                    let default = f.value.plain().map(|v| f.saved_value(v.trim())).unwrap_or_default();
-                                    self.out.push((som, path, default));
-                                }
-                            }
-                            _ => {}
                         }
+                        Node::Area(a) => {
+                            let som = Self::child_som(parent_som, a.common.name.as_deref(), sib);
+                            self.walk(&a.children, &som, depth + 1);
+                        }
+                        Node::Field(f) if f.ui == Ui::PasswordEdit => {
+                            let som = Self::child_som(parent_som, f.common.name.as_deref().or(Some("field")), sib);
+                            if !password_som_is_complete(&som) {
+                                *self.complete = false;
+                                continue;
+                            }
+                            let path = data_path(self.tpl, &som);
+                            if !path.is_empty() && self.seen.insert(path.clone()) {
+                                let default = f.value.plain().map(|v| f.saved_value(v.trim())).unwrap_or_default();
+                                self.out.push((som, path, default));
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
-            let root = Node::Subform(Box::new(t.root.clone()));
-            let mut w = Walk { tpl: t, data: &data, nodes: 0, seen: &mut seen, out: &mut candidates };
-            w.walk(std::slice::from_ref(&root), "", 0);
-            if let Some(ps) = &t.root.page_set {
-                for (i, area) in ps.areas.iter().enumerate() {
-                    let som = area.name.clone().map(|n| format!("{n}[0]")).unwrap_or_else(|| format!("#pageArea[{i}]"));
-                    w.walk(&area.items, &som, 1);
+        }
+        let root = Node::Subform(Box::new(t.root.clone()));
+        let mut w = Walk { tpl: t, data, nodes: 0, seen: &mut seen, out: &mut candidates, complete: &mut complete };
+        w.walk(std::slice::from_ref(&root), "", 0);
+        if let Some(ps) = &t.root.page_set {
+            for (i, area) in ps.areas.iter().enumerate() {
+                let som = area.name.clone().map(|n| format!("{n}[0]")).unwrap_or_else(|| format!("#pageArea[{i}]"));
+                w.walk(&area.items, &som, 1);
+            }
+        }
+    }
+    match acro_fields {
+        Some(acro) => {
+            for (som, default) in acro {
+                if !password_som_is_complete(&som) {
+                    complete = false;
+                    continue;
+                }
+                let path = path_of(tpl, &som);
+                if !path.is_empty() && seen.insert(path.clone()) {
+                    candidates.push((som, path, default));
                 }
             }
         }
-        for (som, default) in acro_fields {
-            let path = path_of(tpl, &som);
-            if !path.is_empty() && seen.insert(path.clone()) {
-                candidates.push((som, path, default));
-            }
-        }
-        candidates
-            .into_iter()
-            .filter_map(|(som, path, default)| {
-                let cur = data.value_at(&path)?;
-                (!cur.is_empty() && cur != default).then_some(Want { som, path, text: default, ensure: false })
-            })
-            .collect()
-    }))
+        None => complete = false,
+    }
+    let wants = candidates
+        .into_iter()
+        .filter_map(|(som, path, default)| {
+            let node = data.get(&path)?;
+            // A structured password node is not a scalar the writer can safely clear.
+            // Include it even when value_at would hide its contents as empty text.
+            (!node.children.is_empty() || (!node.text.is_empty() && node.text != default)).then_some(Want { som, path, text: default, ensure: false })
+        })
+        .collect();
+    (wants, complete)
+}
+
+/// The general SOM reader clamps large indices; a security scan must not alias another node.
+fn password_som_is_complete(som: &str) -> bool {
+    som.split('.').all(|segment| match segment.split_once('[') {
+        Some((_, index)) => index.trim_end_matches(']').parse::<usize>().is_ok_and(|index| index <= MAX_SOM_INDEX),
+        None => true,
+    })
 }
 
 /// Whether any XFA password field (`<passwordEdit/>` or an AcroForm text field with the Password
