@@ -18,7 +18,7 @@ fn run(args: &[&str]) -> Output {
 fn a_cpu_override_naming_a_missing_feature_stops_neither_the_cli_nor_signing() {
     let out = run(&["--help"]);
     assert!(out.status.success(), "--help: {:?} {}", out.status, String::from_utf8_lossy(&out.stderr));
-    assert!(String::from_utf8_lossy(&out.stdout).contains("pdfcraft-cli render"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("\n  render "));
 
     let dir = std::env::temp_dir().join(format!("pdfcraft-cli-cpu-override-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

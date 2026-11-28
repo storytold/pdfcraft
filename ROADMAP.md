@@ -1022,3 +1022,7 @@ PR #1952 retains per-widget checkbox/radio export-value editing in the split for
 - **2026-10-31 (#1577):** Reconciled the page-shadow preference with split viewer, organizer, settings and control modules, preserving upstream page-gap shadow suppression. CI validation pending.
 
 - 2026-11-04: AcroForm review follow-up covers field-instance retirement across history, rejected-writeback realm invalidation, mixed widget icons, shared calculation budgets and multi-select/checkbox consistency, frozen-global events, exact image imports, comparison-half scripts, focus reveal and explicit busy/timeout feedback. Synthetic regressions and elapsed UI deadlines accompany the fixes.
+
+## CLI on clap (2026-10-30)
+
+`pdfcraft-cli` parses its arguments with clap derive and reports failures through thiserror enums, per RFC-0018 (#4881): a library `run(args, out, err)` behind a shim `main`, unknown and repeated flags and bad values are usage errors (exit 2), `error: <message>` on stderr for a failed command (exit 1), generated help, `-V`/`--version`, and a completions and man-page example. A value starting with `-` is written `--flag=-value`. ast-grep rules are not added (the CI change belongs in its own PR). Feature counts and estimates are unchanged.

@@ -66,6 +66,6 @@ fn without_the_flag_the_output_is_unchanged() {
 #[test]
 fn the_flag_needs_a_script() {
     let o = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli")).args(["run", "doc_create", "--report"]).output().unwrap();
-    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(o.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&o.stderr).contains("--report needs --script"));
 }

@@ -57,13 +57,12 @@ fn batch_exits_1_when_one_file_fails() {
 }
 
 #[test]
-fn batch_usage_error_exits_1_and_creates_nothing() {
+fn batch_usage_error_exits_2_and_creates_nothing() {
     let dir = workdir("batch-usage");
     std::fs::write(dir.join("page.txt"), "Exit code page").unwrap();
-    // Baseline: a usage error exits 1 today. A later change to the exit-code contract will
-    // update this assertion on purpose.
+    // RFC-0018: a usage error exits 2.
     let output = batch(&dir, &["page.txt", "--out-dir", "out"]);
-    assert_eq!(output.status.code(), Some(1), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.status.code(), Some(2), "{}", String::from_utf8_lossy(&output.stderr));
     assert!(output.stdout.is_empty(), "a usage error prints to stderr, not a report on stdout");
     assert!(!output.stderr.is_empty(), "a usage error says what is wrong");
     assert!(!dir.join("out").exists(), "a refused batch creates no output");

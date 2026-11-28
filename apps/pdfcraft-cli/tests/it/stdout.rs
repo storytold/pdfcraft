@@ -61,7 +61,8 @@ fn tools_exits_cleanly_when_the_reader_stops_after_one_line() {
 fn a_closed_stdout_does_not_hide_command_errors() {
     let out = closed_stdout(&["info"]);
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("info: missing file"));
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("required arguments were not provided"));
 }
 
 #[cfg(target_os = "linux")]

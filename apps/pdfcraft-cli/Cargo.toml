@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "pdfcraft_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "pdfcraft-cli"
 path = "src/main.rs"
@@ -22,11 +26,16 @@ pdfcraft-preflight = { workspace = true }
 pdfcraft-automation = { workspace = true }
 pdfcraft-platform = { workspace = true }
 base64 = "0.23"
+clap = { workspace = true }
+thiserror = { workspace = true }
 craft = { workspace = true, features = ["automation", "atomic"] }
 
 [dev-dependencies]
 # Decodes `render` output in tests/it/owner_password.rs.
 craft-image-codecs = { workspace = true }
+# The completions and man-page generator (examples/man-and-completions.rs); never linked into the binary.
+clap_complete = { workspace = true }
+clap_mangen = { workspace = true }
 
 [build-dependencies]
 # VERSIONINFO for pdfcraft-cli.exe; build.rs only uses it when targeting Windows.

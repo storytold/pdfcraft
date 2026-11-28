@@ -122,6 +122,10 @@ zeroize = "1"
 # Linear-time matching (no backtracking) for caller-supplied redaction patterns. `perf-dfa` gives
 # the lazy-DFA cache that `RegexBuilder::dfa_size_limit` bounds (the limit is inert without it).
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf-dfa"] }
+# Command-line parsing for pdfcraft-cli (RFC-0018); the completion and man-page generators are dev-dependencies of its example only.
+clap = { version = "4", features = ["derive", "string"] }
+clap_complete = "4"
+clap_mangen = "0.2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 log = "0.4"

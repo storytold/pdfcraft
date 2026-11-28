@@ -93,6 +93,14 @@ Every user-facing feature is reachable headlessly (app-agents.md rule 14):
 - the opt-in **UI control channel** (`pdfcraft --control PORT`; loopback, token-authenticated) lets an
   agent inspect, click, type, run commands and take screenshots of the real interface.
 
+`pdfcraft-cli` Follows RFC-0018 (command-line conventions): clap parses every subcommand, so an
+unknown or repeated flag, a bad value or a conflicting pair of flags is a usage error (exit 2, on
+stderr) before any work starts; failures exit 1 as `error: …`; a process ended by a signal exits
+128 plus its number (130 for Ctrl-C); `-V`/`--version` and `--help` work on every subcommand. The
+Linux and FreeBSD packages install its man pages and bash, zsh and fish completions
+(`cargo run -p pdfcraft-cli --example man-and-completions -- DIR` writes them). `ui` takes the
+app's `--control PORT` and a token (`--control-token`, `--control-token-file` or `PDFCRAFT_CONTROL_TOKEN`).
+
 ## Safety
 
 - `unsafe_code = "forbid"` workspace-wide; crates deny `unwrap`/`expect`/`panic!`; engine entry
