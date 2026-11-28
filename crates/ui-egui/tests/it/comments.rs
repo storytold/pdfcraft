@@ -1046,6 +1046,39 @@ fn comments_are_selected_moved_and_deleted_with_the_select_tool() {
     assert_eq!(comments(&h).len(), 1);
 }
 
+/// #8540: Undo while a comment is held mid-move puts back the comment deleted before it, which
+/// takes the held one's index. The release then moves nothing: the move ended with the step,
+/// rather than landing on the comment restored at that index.
+#[test]
+fn undo_during_a_held_move_ends_the_move() {
+    let mut h = visible_page_harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    drag_pt(&mut h, (170.0, 100.0), (270.0, 40.0));
+    let rects: Vec<_> = comments(&h).iter().map(|c| c.rect).collect();
+    assert_eq!(rects.len(), 2);
+    h.set_option("quick", "select").unwrap();
+    click_pt(&mut h, (90.0, 70.0));
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1, "the first rectangle is deleted");
+    // Hold the second rectangle, now at index 0, and move it without releasing.
+    let (from, to) = (at(&h, 220.0, 70.0), at(&h, 220.0, 150.0));
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    undo(&mut h);
+    h.run_steps(2);
+    h.drop_at(to);
+    h.run_steps(3);
+    let after: Vec<_> = comments(&h).iter().map(|c| c.rect).collect();
+    assert_eq!(after, rects, "neither rectangle moved");
+}
+
 /// A line's ends have handles: dragging one with the Select tool changes the line's length and
 /// angle (Shift holds it level or plumb with the other end), as one undo step. The line tool keeps
 /// drawing from an end: a new line starts there rather than dragging the one just drawn.
