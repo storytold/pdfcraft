@@ -7727,6 +7727,32 @@ fn a_launch_link_to_a_pdf_opens_it_like_a_remote_link() {
     assert_eq!(a.session().docs().len(), before, "nothing was opened or launched");
 }
 
+/// #7955: a URI link whose address is a relative reference to a PDF, as Word's Save as PDF
+/// writes a brief's link to an exhibit in the same folder, opens that PDF through link_open as a
+/// remote link does. A relative address to another kind of file stays an address to refuse.
+#[test]
+fn a_relative_uri_link_to_a_pdf_opens_the_file_beside_the_document() {
+    let (_base, root) = sandbox("relative-uri-pdf");
+    std::fs::write(root.join("01_Contratto locazione.pdf"), fixture(2)).unwrap();
+    // The helper writes a GoToR; the action is renamed (the parser rebuilds the shifted offsets).
+    let uri = |address: &str| String::from_utf8(remote_link_pdf(address, None)).unwrap().replace("/S /GoToR /F", "/S /URI /URI").into_bytes();
+    std::fs::write(root.join("brief.pdf"), uri("01_Contratto%20locazione.pdf")).unwrap();
+    std::fs::write(root.join("photo.pdf"), uri("01_foto.jpg")).unwrap();
+    let mut a = auto(&root);
+    let brief = ok(&mut a, "doc_open", json!({ "path": "brief.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": brief }));
+    assert_eq!(info["links"][0]["target"]["remote_document"].as_str(), Some("01_Contratto locazione.pdf"), "{info}");
+    let opened = ok(&mut a, "link_open", json!({ "doc": brief, "page": 1, "index": 1 }));
+    assert_eq!(opened["path"].as_str(), Some("01_Contratto locazione.pdf"), "{opened}");
+    assert_eq!(opened["document"]["pages"], 2);
+    let photo = ok(&mut a, "doc_open", json!({ "path": "photo.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": photo }));
+    assert_eq!(info["links"][0]["target"]["uri"].as_str(), Some("01_foto.jpg"), "{info}");
+    let before = a.session().docs().len();
+    assert!(matches!(err(&mut a, "link_open", json!({ "doc": photo, "page": 1, "index": 1 })), ToolError::InvalidArgs(_) | ToolError::Failed(_)));
+    assert_eq!(a.session().docs().len(), before, "nothing was opened");
+}
+
 /// A bookmark's action is reported as a link's target is, and only a go-to names a page here: a
 /// remote go-to's `[1 /Fit]` is the other file's page 2, so doc_info and bookmark_list give this
 /// file's no page for it.

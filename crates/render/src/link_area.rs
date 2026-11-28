@@ -140,6 +140,47 @@ pub fn resolve_uri(base: Option<&str>, raw: &str) -> Option<String> {
     (resolved.scheme() == base.scheme() && resolved.host().is_some()).then(|| resolved.to_string())
 }
 
+/// The PDF file a URI action names with a relative reference when the document gives no
+/// `/URI /Base` (#7955): `01_Contract%20lease.pdf`, as Word's Save as PDF writes a link to an
+/// exhibit beside the brief. ISO 32000-2 §12.6.4.8 (Table 211, `Base`) reads such a reference
+/// relative to the document itself, so it is the remote Go-To to that file that it amounts to,
+/// opened in PdfCraft through the same checks as one, never by the operating system. The path is
+/// percent-decoded, without its query or fragment. `None` for anything else: an address with a
+/// scheme (`C:` included), an absolute or network path (`/x.pdf`, `//host/x.pdf`), one whose
+/// decoded path holds a colon or a control character, and a file that isn't a `.pdf`.
+pub fn relative_pdf_uri(raw: &str) -> Option<String> {
+    let reference = raw.trim();
+    if has_scheme(reference) || reference.starts_with(['/', '\\']) {
+        return None;
+    }
+    let path = reference.split(['?', '#']).next()?;
+    let file = String::from_utf8(percent_decode(path.as_bytes())).ok()?;
+    if file.starts_with(['/', '\\']) || file.contains(':') || file.chars().any(char::is_control) {
+        return None;
+    }
+    let name = file.rsplit(['/', '\\']).next()?;
+    (name.len() > 4 && name.to_ascii_lowercase().ends_with(".pdf")).then_some(file)
+}
+
+/// Decode `%XX` escapes. A `%` not followed by two hex digits is kept as it is.
+fn percent_decode(s: &[u8]) -> Vec<u8> {
+    let hex = |b: Option<&u8>| b.and_then(|b| char::from(*b).to_digit(16)).and_then(|d| u8::try_from(d).ok());
+    let mut out = Vec::with_capacity(s.len());
+    let mut i = 0;
+    while let Some(&b) = s.get(i) {
+        if b == b'%'
+            && let (Some(hi), Some(lo)) = (hex(s.get(i + 1)), hex(s.get(i + 2)))
+        {
+            out.push(hi << 4 | lo);
+            i += 3;
+        } else {
+            out.push(b);
+            i += 1;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +210,34 @@ mod tests {
         assert_eq!(resolve_uri(None, "page.html"), None);
         assert_eq!(resolve_uri(Some(BASE), ""), None);
         assert_eq!(resolve_uri(Some(BASE), "   "), None);
+    }
+
+    /// #7955: a relative reference to a PDF is that file, decoded; nothing that could name a file
+    /// elsewhere, or anything but a PDF, is.
+    #[test]
+    fn a_relative_reference_to_a_pdf_names_that_file() {
+        let r = relative_pdf_uri;
+        assert_eq!(r("01_Contratto%20locazione.pdf").as_deref(), Some("01_Contratto locazione.pdf"));
+        assert_eq!(r(" docs/02%C3%A8.PDF#page=2 ").as_deref(), Some("docs/02è.PDF"), "trimmed, UTF-8, no fragment");
+        assert_eq!(r("../exhibits/03.pdf?x=1").as_deref(), Some("../exhibits/03.pdf"), "no query; the resolver checks the climb");
+        for refused in [
+            "https://example.org/a.pdf",
+            "file:///etc/a.pdf",
+            "C:/docs/a.pdf",
+            "/abs/a.pdf",
+            "//host/share/a.pdf",
+            "\\\\host\\share\\a.pdf",
+            "%2Fabs/a.pdf",
+            "c%3A/docs/a.pdf",
+            "a%0A.pdf",
+            "%FF.pdf",
+            "photo.jpg",
+            "a.pdf.exe",
+            ".pdf",
+            "",
+        ] {
+            assert_eq!(r(refused), None, "{refused}");
+        }
     }
 
     #[test]

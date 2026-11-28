@@ -1424,6 +1424,22 @@ fn relative_uri_actions_resolve_against_the_catalog_base() {
     for base in ["/URI << /Base (file:///C:/docs/) >>", "/URI << /Base /NotAString >>", "/URI 7", "/URI << /Base (javascript:x//) >>"] {
         assert_eq!(uris(&links_of(base, annots)).first().map(String::as_str), Some("page.html"), "{base}");
     }
+    // A relative PDF is the file beside the document only without a base (#7955): a web base
+    // makes it a web address, and one that isn't used leaves it as written.
+    let pdf = "<< /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (exhibit%2001.pdf) >> >>";
+    let beside = LinkTarget::RemoteGoTo { launch: false, file: "exhibit 01.pdf".into(), destination: RemoteDestination::Default, new_window: None };
+    assert_eq!(links_of("", pdf).links[0].target, beside);
+    assert_eq!(uris(&links_of("/URI << /Base (https://example.com/base/) >>", pdf)), ["https://example.com/base/exhibit%2001.pdf"]);
+    assert_eq!(uris(&links_of("/URI << /Base (file:///C:/docs/) >>", pdf)), ["exhibit%2001.pdf"]);
+    // A base the document gives but that isn't kept is a base all the same (review on #8070);
+    // a null one, or one whose reference leads nowhere, is none (§7.3.9, §7.3.10).
+    let long = format!("/URI << /Base (https://example.com/{}/) >>", "a".repeat(crate::MAX_URI_BASE_BYTES));
+    for base in [long.as_str(), "/URI << /Base /NotAString >>", "/URI << /Base 7 >>"] {
+        assert_eq!(uris(&links_of(base, pdf)), ["exhibit%2001.pdf"], "{}", &base[..base.len().min(40)]);
+    }
+    for absent in ["/URI << /Base null >>", "/URI << /Base 99 0 R >>"] {
+        assert_eq!(links_of(absent, pdf).links[0].target, beside, "{absent}");
+    }
 }
 
 /// ISO 32000-2 §12.5.6.5, Table 176: a link is active in its `/QuadPoints`, or over its
