@@ -2014,6 +2014,55 @@ mod tests {
         assert_eq!((oinfo.width, oinfo.height), (info.width, info.height));
     }
 
+    /// Reads what Tesseract reads off a page turned a quarter clockwise: two lines running
+    /// down the image, the first at the right, as its TSV lists them (tall boxes, reading order).
+    struct SidewaysTesseract;
+
+    impl Recognizer for SidewaysTesseract {
+        fn id(&self) -> &'static str {
+            "tesseract"
+        }
+        fn available(&self) -> bool {
+            true
+        }
+        fn languages(&self) -> Vec<(String, String)> {
+            vec![("en".into(), "English".into())]
+        }
+        fn recognize(&self, image: &pdfcraft_ocr::OcrImage, _options: &pdfcraft_ocr::RecognizeOptions) -> Result<Vec<pdfcraft_ocr::Line>, OcrError> {
+            let (w, h) = (image.width() as f32, image.height() as f32);
+            let mut tsv = String::new();
+            for (line, (x, words)) in [(0.85, ["ALPHA", "BRAVO", "CHARLIE"]), (0.75, ["DELTA", "ECHO", "FOXTROT"])].into_iter().enumerate() {
+                for (i, word) in words.into_iter().enumerate() {
+                    let top = h * (0.1 + 0.25 * i as f32);
+                    tsv.push_str(&format!("5\t1\t1\t1\t{}\t{}\t{}\t{top}\t{}\t{}\t95\t{word}\n", line + 1, i + 1, w * x, w * 0.04, h * 0.2));
+                }
+            }
+            Ok(pdfcraft_ocr::tesseract::parse_tsv(&tsv))
+        }
+    }
+
+    /// #7254: words Tesseract reads sideways on a /Rotate 90 page are written along the way
+    /// they read, so the searchable layer and the editable output both extract them as the
+    /// lines they are, in order.
+    #[test]
+    fn sideways_tesseract_words_keep_their_reading_direction() {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("src.pdf", None, Arc::new(fixture(1)), None).unwrap();
+        s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+        let r = Recognizers { primary: Arc::new(SidewaysTesseract), secondary: None };
+        let settings = OcrSettings { force_ocr: true, ..Default::default() };
+        let found = s.ocr_job(id, &[], settings).unwrap().run(&r, |_, _| true);
+        assert_eq!(found[0].words.len(), 6, "{found:?}");
+        let editable = s.editable_ocr_bytes(id, &found).unwrap();
+        s.apply_ocr(id, &found).unwrap();
+        let text = crate::tests::page_texts(&s, id)[0].clone();
+        assert!(text.contains("ALPHA BRAVO CHARLIE\nDELTA ECHO FOXTROT"), "{text}");
+        let mut out = Session::new();
+        let oid = out.open("ocr.pdf", None, editable, None).unwrap();
+        let otext = crate::tests::page_texts(&out, oid)[0].clone();
+        assert!(otext.contains("ALPHA BRAVO CHARLIE\nDELTA ECHO FOXTROT"), "{otext}");
+    }
+
     /// The searchable layer round-trips the recognized words through the engine's own
     /// extraction, characters beyond WinAnsi included, without needing any display fonts.
     #[test]
