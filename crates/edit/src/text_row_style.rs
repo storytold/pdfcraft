@@ -29,6 +29,20 @@ fn family(line: &TextLine) -> String {
     key
 }
 
+/// The size most of a row is set in: the one whose runs cover the most of its width, so one
+/// larger word does not make a body row look like a heading.
+pub(super) fn dominant_size(row: &[usize], lines: &[TextLine]) -> Option<f64> {
+    let mut widths: Vec<(f64, f64)> = Vec::new();
+    for line in row.iter().filter_map(|index| lines.get(*index)) {
+        let width = (line.rect[2] - line.rect[0]).max(0.0);
+        match widths.iter_mut().find(|(size, _)| (size - line.size).abs() < 0.01) {
+            Some((_, total)) => *total += width,
+            None => widths.push((line.size, width)),
+        }
+    }
+    widths.into_iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|(size, _)| size)
+}
+
 pub(super) fn compatible(previous: &[usize], next: &[usize], lines: &[TextLine]) -> bool {
     let representative =
         |row: &[usize]| row.iter().filter_map(|index| lines.get(*index)).max_by(|a, b| (a.rect[2] - a.rect[0]).total_cmp(&(b.rect[2] - b.rect[0])));

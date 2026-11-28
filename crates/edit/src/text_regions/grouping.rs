@@ -235,6 +235,26 @@ fn starts_list_item(row: &[usize], lines: &[TextLine]) -> bool {
     row.iter().filter_map(|i| lines.get(*i)).map(|l| l.text.trim_start()).find(|t| !t.is_empty()).is_some_and(opens_with_marker)
 }
 
+/// Whether `row` opens a body paragraph under a larger heading `above`: `row` is set distinctly
+/// smaller, the `next` row continues it in the same size from the same left edge, and the step
+/// between those two (the body's leading) differs from `gap`, the step down from the heading.
+fn heading_over_body(above: &[usize], row: &[usize], next: Option<&Vec<usize>>, gap: f64, lines: &[TextLine]) -> bool {
+    let dominant = |row: &[usize]| super::super::row_style::dominant_size(row, lines);
+    let (Some(heading), Some(body), Some(next)) = (dominant(above), dominant(row), next) else { return false };
+    let Some(following) = dominant(next) else { return false };
+    let (Some(first), Some(nfirst)) = (row.first().and_then(|i| lines.get(*i)), next.first().and_then(|i| lines.get(*i))) else { return false };
+    let (Some(frame), Some(nframe)) = (frame_row_rect(row, lines), frame_row_rect(next, lines)) else { return false };
+    let leading = first.frame_origin().1 - nfirst.frame_origin().1;
+    let scale = gap.abs().max(leading.abs());
+    body < heading * 0.9
+        && body.min(following) >= body.max(following) * 0.9
+        && same_plane(first, nfirst)
+        && (nframe[0] - frame[0]).abs() < body.max(1.0)
+        && leading > body * 0.8
+        && leading < body * 2.05
+        && (leading - gap).abs() > scale * 0.08 + 0.5
+}
+
 fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
     let mut rows: Vec<Vec<usize>> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
@@ -345,8 +365,15 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 .or(stated)
                 .or(repeated)
                 .map_or_else(|| following.map_or(tol * 2.05, |lead| (lead * 1.35).min(tol * 2.05)), |lead| lead * 1.5);
+            // A heading over its body (#1756): this row is distinctly smaller than the one above,
+            // and opens rows of its own size at a leading of their own, which the step down from
+            // the larger row is not (a heading's space after it). Joining them let an edit of the
+            // heading rewrite every body line under it. Rows that keep one step, such as a
+            // centred title over its subtitle, still form one region.
+            let heading_above = heading_over_body(prev_row, row, rows.get(row_at.saturating_add(1)), gap, lines);
             // OCR lines stay apart: the scan fixes where each one is, so they never rewrap together.
-            (!mixed || !(invisible(prev) || invisible(first)))
+            !heading_above
+                && (!mixed || !(invisible(prev) || invisible(first)))
                 && (mixed || same_style(prev, first))
                 && same_plane(prev, first)
                 // The rewrite sets every row in the first one's horizontal scale.

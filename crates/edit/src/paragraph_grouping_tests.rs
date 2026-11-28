@@ -345,3 +345,23 @@ fn separates_inline_labels_when_a_container_edge_is_between_them() {
 
     assert_eq!(blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Panel", "Outside"]);
 }
+
+/// A heading over its body (#1756): a 16 pt heading, with its space after, over 11 pt rows at their
+/// own leading, as a word processor writes them. Grouped into one paragraph, an edit of the heading
+/// rewrote every body line under it.
+#[test]
+fn separates_a_heading_from_the_smaller_body_under_it() {
+    let mut doc = text_page(
+        "BT /F1 16 Tf 72 700 Td (Public notice) Tj /F1 11 Tf 0 -18 Td (Deadline: 4 March 2026) Tj \
+         0 -13.4 Td (Fund A - small productions) Tj 0 -13.4 Td (Fund B - large productions) Tj ET",
+    );
+
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.first().map(|b| b.text.as_str()), Some("Public notice"));
+    text::replace_block(&mut doc, 0, 0, "Public notice (edited)").unwrap();
+
+    let after = text::text_lines(&reopen(&doc), 0).unwrap();
+    for body in ["Deadline: 4 March 2026", "Fund A - small productions", "Fund B - large productions"] {
+        assert!(after.iter().any(|l| l.text.contains(body)), "{body:?} survives an edit of the heading: {after:?}");
+    }
+}
