@@ -139,6 +139,7 @@ impl crate::PdfCraftApp {
             "home": self.active.is_none(),
             "mode": format!("{:?}", self.mode),
             "default_mode": self.default_mode,
+            "show_form_field_reminder": self.show_form_field_reminder,
             "hotbar": { "tools": self.hotbar.tools },
             "comment_tool_pinned": self.comment_prefs.pinned,
             // Home's pinned folders, in order, and whether each is folded down to its heading.

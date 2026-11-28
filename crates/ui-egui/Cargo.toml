@@ -92,6 +92,9 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "HtmlIFrameElement", "HtmlImageElement", "HtmlCollection", "Node", "EventTarget", "Navigator", "RequestCache", "RequestInit", "Response", "Worker", "WorkerOptions", "WorkerType", "MessageEvent"] }
 
 [dev-dependencies]
+# Exercise preference round-trips in the persisted config.toml format.
+toml = "1"
+pdfcraft-testkit = { workspace = true }
 # The fixture and suite runner the component trials drive the app's components with.
 craft = { workspace = true, features = ["ui-testing", "zip"] }
 pdfcraft-xfa = { workspace = true }

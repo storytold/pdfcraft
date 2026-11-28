@@ -773,6 +773,7 @@ fn apply_notice(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, notice
             }
         }
         Some(Notice::Signatures) => crate::side_panels::set_panel_visible(app, RightPanel::Signatures.into(), true),
+        Some(Notice::DismissFormReminder) => app.show_form_field_reminder = false,
         Some(Notice::FieldHighlights(on)) => app.highlight_fields = on,
         Some(Notice::Console) => crate::js_dialogs::open_console(app),
         // Back on in Preferences ▸ General.
@@ -1662,7 +1663,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     // PLAN: assumed `notices(view, doc, secured, repaired, lock_offer, banner, ui)`: pdf-canvas-w16 drops the tokens
     // argument and gives no other change.
     let bars_top = ui.available_rect_before_wrap().top();
-    let notice = notices(view, doc, secured, repaired, lock_offer, crate::sign_ui::banner(&doc.signatures), ui);
+    let notice = notices(view, app.show_form_field_reminder, doc, secured, repaired, lock_offer, crate::sign_ui::banner(&doc.signatures), ui);
     // The notice bars' height keeps the floating toolbar below them (the dock's top inset, next pass).
     let inset = (ui.available_rect_before_wrap().top() - bars_top).max(0.0);
     if (inset - app.notice_inset).abs() > 0.5 {

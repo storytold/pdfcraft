@@ -35,6 +35,7 @@
 //!   for this session without changing the saved preference. `ui.state.default_mode` reports it.
 //!   `theme=light|dark|system` changes the saved theme preference; `ui.state.theme_preference`
 //!   reports the choice and `ui.state.theme` reports the resolved light/dark colours.
+//!   `form-reminder=on|off` persists ordinary form reminders. `ui.state.show_form_field_reminder` reports the setting.
 //!   `show_page_edge_shadows=true|false` controls page decoration app-wide.
 //!   `comment-tool-pinned=true|false` remembers the annotation quick bar's pin across restarts.
 //!   `folder-collapsed=<folder>=on|off` folds a pinned folder on Home down to its heading or

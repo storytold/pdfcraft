@@ -180,6 +180,7 @@ impl PdfCraftApp {
             full_screen_escape_exits: Some(self.full_screen_escape_exits),
             units: Some(self.units),
             always_default_view: Some(self.always_default_view),
+            show_form_field_reminder: Some(self.show_form_field_reminder),
             highlight_fields: Some(self.highlight_fields),
             comments_panel_closed: Some(self.comments_panel_closed),
             right_panel_closed: Some(self.right_panel_closed),
@@ -477,6 +478,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = b.always_default_view {
             self.always_default_view = on;
+        }
+        if let Some(show) = b.show_form_field_reminder {
+            self.show_form_field_reminder = show;
         }
         if let Some(on) = b.highlight_fields {
             self.highlight_fields = on;

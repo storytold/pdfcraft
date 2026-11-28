@@ -294,6 +294,7 @@ impl PdfCraftApp {
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
             view_defaults: Default::default(),
+            show_form_field_reminder: true,
             highlight_fields: true,
             units: Default::default(),
             blank_paper: crate::paper::Paper::system(),

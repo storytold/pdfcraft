@@ -77,6 +77,7 @@ struct PrefsDraft {
     view_defaults: ViewDefaults,
     full_screen_fill: bool,
     full_screen_escape_exits: bool,
+    show_form_field_reminder: bool,
     highlight_fields: bool,
     always_default_view: bool,
     text_links: bool,
@@ -113,6 +114,7 @@ impl PrefsDraft {
             view_defaults: app.view_defaults,
             full_screen_fill: app.full_screen_fill,
             full_screen_escape_exits: app.full_screen_escape_exits,
+            show_form_field_reminder: app.show_form_field_reminder,
             highlight_fields: app.highlight_fields,
             always_default_view: app.always_default_view,
             text_links: app.text_links,
@@ -154,6 +156,7 @@ impl PrefsDraft {
             view_defaults: ViewDefaults::default(),
             full_screen_fill: true,
             full_screen_escape_exits: true,
+            show_form_field_reminder: true,
             highlight_fields: true,
             always_default_view: false,
             text_links: true,
@@ -433,6 +436,7 @@ impl PreferencesModel for Prefs<'_> {
             ("general.recent", PrefValue::Int(v)) => d.recent_limit = usize::try_from(v).unwrap_or(0).min(crate::RECENT_FILES_MAX),
             ("general.title_bar", PrefValue::Bool(v)) => d.system_title_bar = v,
             ("appearance.edge_shadows", PrefValue::Bool(v)) => d.show_page_edge_shadows = v,
+            ("view.form_reminder", PrefValue::Bool(v)) => d.show_form_field_reminder = v,
             ("appearance.highlight_fields", PrefValue::Bool(v)) => d.highlight_fields = v,
             ("appearance.reading.mode", PrefValue::Choice(id)) => {
                 if id == "custom" {
@@ -566,6 +570,7 @@ impl PreferencesModel for Prefs<'_> {
                 d.full_screen_fill = fresh.full_screen_fill;
                 d.full_screen_escape_exits = fresh.full_screen_escape_exits;
                 d.always_default_view = fresh.always_default_view;
+                d.show_form_field_reminder = fresh.show_form_field_reminder;
                 d.text_links = fresh.text_links;
                 d.units = fresh.units;
                 d.scroll_speed = fresh.scroll_speed;
@@ -642,6 +647,7 @@ impl PreferencesDraft for Prefs<'_> {
         self.app.view_defaults = d.view_defaults;
         self.app.full_screen_fill = d.full_screen_fill;
         self.app.full_screen_escape_exits = d.full_screen_escape_exits;
+        self.app.show_form_field_reminder = d.show_form_field_reminder;
         self.app.highlight_fields = d.highlight_fields;
         self.app.always_default_view = d.always_default_view;
         self.app.text_links = d.text_links;
@@ -767,6 +773,7 @@ impl Prefs<'_> {
         let rows = vec![
             choice_row("view.mode", tl!("Default workspace mode"), d.default_mode, &mode_table())
                 .help(tl!("Used when opening PDFs. An explicit launch or control mode takes precedence for the session.")),
+            RowSpec::new("view.form_reminder", tl!("Show form field reminder"), RowKind::Bool(d.show_form_field_reminder)),
             choice_row("view.layout", tl!("Default page display"), v.display, &layout_table()),
             RowSpec::new("view.continuous", tl!("Continuous scrolling"), RowKind::Bool(v.continuous)),
             RowSpec::new("view.gaps", tl!("Show gaps between pages"), RowKind::Bool(v.page_gaps))

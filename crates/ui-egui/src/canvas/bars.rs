@@ -52,6 +52,8 @@ pub(super) enum Notice {
     Close,
     /// Stop showing the secured-document notice, in every document (#4035).
     HideSecured,
+    /// Dismiss only the ordinary AcroForm reminder across sessions.
+    DismissFormReminder,
     /// Lock the placed signatures into the page (#2149).
     LockSignatures,
 }
@@ -69,6 +71,7 @@ fn bar(_tone: Tone, icon: &'static str, text: String) -> Bar<'static> {
 #[allow(clippy::cognitive_complexity)]
 pub(super) fn notices(
     view: &mut DocView,
+    show_form_field_reminder: bool,
     doc: &pdfcraft_engine::Document,
     secured: bool,
     repaired: bool,
@@ -145,12 +148,14 @@ pub(super) fn notices(
             bar(tone, icon, crate::i18n::fmt(tl!(template), &[("by", &arg)])).action(NoticeAction::new(tl!("Signature panel").to_string())).show(ui);
         return (out.action == Some(0)).then_some(Notice::Signatures);
     }
-    if view.notice_dismissed {
-        return None;
-    }
     // A form whose scripts were turned off no longer calculates or answers its buttons: that
     // comes before what else there is to say about the document.
     let scripts_off = doc.xfa_scripts_off();
+    let fillable_form = info.fields.iter().any(|f| f.kind != pdfcraft_render::FieldKind::PushButton);
+    let ordinary = show_form_field_reminder && fillable_form && !scripts_off && !secured && xfa.is_none() && info.xfa.is_none();
+    if view.notice_dismissed && !ordinary {
+        return None;
+    }
     // What the document is as a form, if it is one: what the bar says first, secured or not.
     let form = if let Some(x) = xfa {
         let lang = crate::i18n::current();
@@ -182,7 +187,7 @@ pub(super) fn notices(
             tl!("XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.").to_string(),
             true,
         ))
-    } else if info.fields.iter().any(|f| f.kind != pdfcraft_render::FieldKind::PushButton) {
+    } else if fillable_form && (show_form_field_reminder || secured) {
         // Push buttons alone (LaTeX `animate` frames, navigation buttons) leave nothing to fill in.
         Some((
             "text-cursor-input",
@@ -246,6 +251,9 @@ pub(super) fn notices(
     }
     let out = notice.show(ui);
     if out.dismissed {
+        if ordinary {
+            return Some(Notice::DismissFormReminder);
+        }
         view.notice_dismissed = true;
     }
     let taken = results.into_iter().nth(out.action?)?;
