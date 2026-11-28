@@ -263,6 +263,8 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
         sections: &[ToolSection {
             title: "Recognize text",
             items: &[
+                #[cfg(all(target_os = "windows", target_pointer_width = "64"))]
+                item("From scanner…", "scan", "scan.from_scanner", Ready),
                 item("In this file", "scan-text", "ocr.recognize", Ready),
                 item("In multiple files", "files", "ocr.recognize_batch", Ready),
                 item("Enhance scanned file", "sparkles", "ocr.enhance", Ready),

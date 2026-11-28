@@ -46,6 +46,7 @@ fn windows(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     crate::sign_ui::dialog::show(app, ui);
 
     crate::sign_ui::cert_viewer::show(app, ui);
+    crate::twain_scan_ui::show(app, ui);
 }
 
 /// Hands each area the answers its dialogs gave. `DialogHost::take` yields a result only once its dialog finished,

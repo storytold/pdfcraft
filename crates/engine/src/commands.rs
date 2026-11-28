@@ -399,6 +399,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("tools.js_console", "JavaScript console…", None, Some(Shortcut::cmd("J")), Document, "square-terminal"),
     c("tools.document_js", "Document JavaScripts…", None, None, Modification, "file-code"),
     c("ocr.recognize", "Recognize text…", None, None, Modification, "scan-text"),
+    #[cfg(all(target_os = "windows", target_pointer_width = "64"))]
+    c("scan.from_scanner", "Scan from scanner…", None, None, Nothing, "scan"),
     c("ocr.enhance_camera", "Enhance camera image", None, None, Modification, "camera"),
     c("ocr.enhance", "Enhance scanned file…", None, None, Modification, "sparkles"),
     c("ocr.recognize_batch", "Recognize text in multiple files…", None, None, Nothing, "files"),

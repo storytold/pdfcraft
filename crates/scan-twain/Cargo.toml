@@ -1,0 +1,20 @@
+[package]
+name = "pdfcraft-twain"
+description = "Windows 64-bit TWAIN 2.x scanner backend for PdfCraft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+log = { workspace = true }
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"

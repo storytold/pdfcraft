@@ -776,6 +776,8 @@ impl PdfCraftApp {
             "export.image" => crate::export_ui::open(self, ctx, crate::export_ui::ExportKind::Image),
             "export.text" => crate::export_ui::open(self, ctx, crate::export_ui::ExportKind::Text),
             "ocr.recognize" => self.open_recognize_text(ctx),
+            #[cfg(all(target_os = "windows", target_pointer_width = "64"))]
+            "scan.from_scanner" => self.open_twain_scan_dialog(),
             "ocr.enhance" => self.open_enhance_scan(ctx),
             "ocr.recognize_batch" => self.ocr_files_dialog(),
             "ocr.correct" => self.ocr_verify.open = true,

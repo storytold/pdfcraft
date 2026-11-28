@@ -118,7 +118,15 @@ const FILE: &[&str] = &[
     "print.dialog",
     QUIT,
 ];
-const CREATE: &[&str] = &["create.file", "create.multiple", "create.multiple_separate", "create.images", "create.clipboard"];
+const CREATE: &[&str] = &[
+    "create.file",
+    "create.multiple",
+    "create.multiple_separate",
+    "create.images",
+    "create.clipboard",
+    #[cfg(all(target_os = "windows", target_pointer_width = "64"))]
+    "scan.from_scanner",
+];
 const EXPORT: &[&str] = &["export.docx", "export.pptx", "export.rtf", "export.html", "export.text", SEP, "export.image", "export.all_images"];
 const PROTECT: &[&str] = &["protect.password", "protect.remove", "protect.unlock", SEP, "protect.properties"];
 const EDIT: &[&str] = &[
