@@ -1543,6 +1543,43 @@ fn a_long_bulleted_list_keeps_every_bullet_with_its_item() {
 }
 
 #[test]
+fn nearby_paragraphs_stay_out_of_table_while_band_joins() {
+    let table_rows = |blocks: &mut Vec<Block>| {
+        for (n, (a, b, c)) in [("Pin", "Name", "Function"), ("1", "VCC", "Supply"), ("2", "GND", "Ground")].into_iter().enumerate() {
+            let y = 700.0 - 14.0 * n as f64;
+            blocks.push(line(a, 72.0, 100.0, y));
+            blocks.push(line(b, 160.0, 210.0, y));
+            blocks.push(line(c, 280.0, 350.0, y));
+        }
+    };
+
+    // Paragraphs 50 pt above and 72 pt below a table (rows 14 pt apart) stay paragraphs.
+    let mut blocks = vec![line("A short paragraph well above the table.", 72.0, 260.0, 762.0)];
+    table_rows(&mut blocks);
+    blocks.push(line("A short paragraph well below the table.", 72.0, 260.0, 588.0));
+
+    let page = Page { width: 612.0, height: 792.0, blocks, ..Page::default() };
+    let h = html(std::slice::from_ref(&page), "Spec");
+    assert!(h.contains("<p>A short paragraph well above the table.</p>"), "above: {h}");
+    assert!(h.contains("<p>A short paragraph well below the table.</p>"), "below: {h}");
+    assert_eq!(h.matches("<tr>").count(), 3, "only the 3 table rows: {h}");
+
+    // A header band and totals row right against the table (14 pt pitch) still join it.
+    let mut band_blocks = vec![line("A short paragraph well above the table.", 72.0, 260.0, 776.0), line("Header band", 72.0, 200.0, 714.0)];
+    table_rows(&mut band_blocks);
+    band_blocks.push(line("Totals", 72.0, 200.0, 658.0));
+    band_blocks.push(line("A short paragraph well below the table.", 72.0, 260.0, 574.0));
+
+    let band_page = Page { width: 612.0, height: 792.0, blocks: band_blocks, ..Page::default() };
+    let bh = html(std::slice::from_ref(&band_page), "Spec");
+    assert!(bh.contains("<p>A short paragraph well above the table.</p>"), "above with band: {bh}");
+    assert!(bh.contains("<p>A short paragraph well below the table.</p>"), "below with band: {bh}");
+    assert!(bh.contains("<td colspan=\"2\">Header band</td>"), "header band: {bh}");
+    assert!(bh.contains("<td colspan=\"2\">Totals</td>"), "totals band: {bh}");
+    assert_eq!(bh.matches("<tr>").count(), 5, "header + 3 rows + totals: {bh}");
+}
+
+#[test]
 fn shared_base64_keeps_padded_unwrapped_export_bytes() {
     for (input, expected) in
         [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")]
