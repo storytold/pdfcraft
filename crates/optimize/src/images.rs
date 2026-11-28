@@ -72,7 +72,9 @@ struct Walk<'a> {
     budget: DecodeBudget,
     /// False once a use may have been missed (depth or work limit).
     complete: bool,
-    out: HashMap<ObjRef, f64>,
+    out: HashMap<ObjRef, ImageMeasurement>,
+    /// Reports retain measurable uses separately from unusable transforms.
+    reporting: bool,
     /// Images drawn or listed at least once where `/DefaultGray` or `/DefaultRGB` is in force, by
     /// object number: a reference with another generation reaches the same image.
     defaults: HashSet<u32>,
@@ -147,11 +149,31 @@ impl Walk<'_> {
                         Some(b"Image") => {
                             let (w, h) = (s.dict.int(b"Width").unwrap_or(0) as f64, s.dict.int(b"Height").unwrap_or(0) as f64);
                             let [a, b, c, d, ..] = top.0;
-                            let (sx, sy) = ((a * a + b * b).sqrt(), (c * c + d * d).sqrt());
-                            if w > 0.0 && h > 0.0 && sx > 1e-6 && sy > 1e-6 {
-                                let ppi = (w / (sx / 72.0)).min(h / (sy / 72.0));
-                                let e = self.out.entry(r).or_insert(f64::INFINITY);
-                                *e = e.min(ppi);
+                            let (sx, sy) = (a.hypot(b), c.hypot(d));
+                            let measurable = w > 0.0 && h > 0.0 && sx > 1e-6 && sy > 1e-6;
+                            let ppi = (w / (sx / 72.0)).min(h / (sy / 72.0));
+                            let measurement = ImageMeasurement {
+                                ppi,
+                                pixels: [
+                                    s.dict.int(b"Width").and_then(|n| n.try_into().ok()).unwrap_or(0),
+                                    s.dict.int(b"Height").and_then(|n| n.try_into().ok()).unwrap_or(0),
+                                ],
+                                size_pt: [sx, sy],
+                                in_form: !self.path.is_empty(),
+                                unmeasurable: 0,
+                            };
+                            if self.reporting && (!measurable || !ppi.is_finite() || !sx.is_finite() || !sy.is_finite()) {
+                                // An overflowing use must not erase a known low-resolution use.
+                                // Direct unusable placements are counted by the page inventory.
+                                let e = self.out.entry(r).or_insert(ImageMeasurement { ppi: f64::NAN, ..measurement });
+                                if measurement.in_form {
+                                    e.unmeasurable = e.unmeasurable.saturating_add(1);
+                                }
+                            } else if measurable {
+                                let e = self.out.entry(r).or_insert(measurement);
+                                if ppi < e.ppi || (self.reporting && !e.ppi.is_finite()) {
+                                    *e = ImageMeasurement { unmeasurable: e.unmeasurable, ..measurement };
+                                }
                             }
                             if defaults {
                                 self.defaults.insert(r.num);
@@ -261,20 +283,42 @@ fn remaps_device_spaces(doc: &Document, resources: &Dict) -> bool {
 /// decode within its budget or is damaged partway, every image is given `INFINITY` (never
 /// resampled), since its largest use may be among those missed.
 pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef, f64> {
-    let Ok((ppi, ..)) = walk_pages(doc, pages, &mut |_| true) else { return HashMap::new() };
-    ppi
+    let Ok((images, ..)) = walk_pages(doc, pages, false, &mut |_| true) else { return HashMap::new() };
+    images.into_iter().map(|(r, image)| (r, image.ppi)).collect()
+}
+
+/// An image's lowest-resolution placement, with dimensions from that same use.
+#[derive(Clone, Copy, Debug)]
+pub struct ImageMeasurement {
+    /// Minimum pixels per inch over measurable uses; NaN if none, infinity if the walk was incomplete.
+    pub ppi: f64,
+    /// Pixel dimensions, or zero for a dimension outside the supported `u32` range.
+    pub pixels: [u32; 2],
+    /// Length of each transformed image axis in physical points, including the page's UserUnit.
+    pub size_pt: [f64; 2],
+    /// Whether the selected placement is inside a Form rather than directly on the page.
+    pub in_form: bool,
+    /// Unmeasurable Form placements encountered separately from the selected finite use.
+    pub unmeasurable: usize,
+}
+
+/// The lowest-ppi measurable placement, retaining its dimensions and counting unusable Form uses.
+/// On a tie the first placement wins. Dimensions must not be used when `ppi` is not finite.
+pub fn image_measurements(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef, ImageMeasurement> {
+    let Ok((images, ..)) = walk_pages(doc, pages, true, &mut |_| true) else { return HashMap::new() };
+    images
 }
 
 /// What a walk of the pages found: each image's resolution, the images under remapped device
 /// spaces, and the references followed.
-type PagesWalked = (HashMap<ObjRef, f64>, HashSet<u32>, Read);
+type PagesWalked = (HashMap<ObjRef, ImageMeasurement>, HashSet<u32>, Read);
 
 /// [`effective_resolutions`], the images drawn or listed where `/DefaultGray` or `/DefaultRGB` is
 /// in force, by object number (all of them when a use may have been missed), and the references
 /// followed to reach them.
 ///
 /// `tick` hears how many pages are done, and stops the walk by returning false.
-fn walk_pages(doc: &Document, pages: &[ObjRef], tick: &mut dyn FnMut(usize) -> bool) -> Result<PagesWalked, OptimizeError> {
+fn walk_pages(doc: &Document, pages: &[ObjRef], reporting: bool, tick: &mut dyn FnMut(usize) -> bool) -> Result<PagesWalked, OptimizeError> {
     let mut walk = Walk {
         doc,
         path: Vec::new(),
@@ -284,6 +328,7 @@ fn walk_pages(doc: &Document, pages: &[ObjRef], tick: &mut dyn FnMut(usize) -> b
         budget: DecodeBudget::page(),
         complete: true,
         out: HashMap::new(),
+        reporting,
         defaults: HashSet::new(),
         read: Read::default(),
     };
@@ -306,7 +351,7 @@ fn walk_pages(doc: &Document, pages: &[ObjRef], tick: &mut dyn FnMut(usize) -> b
         walk.content(&data, &res, holder, Matrix([unit, 0.0, 0.0, unit, 0.0, 0.0]), false);
     }
     if !walk.complete {
-        walk.out.values_mut().for_each(|v| *v = f64::INFINITY);
+        walk.out.values_mut().for_each(|v| v.ppi = f64::INFINITY);
         walk.defaults.extend(walk.out.keys().map(|r| r.num));
     }
     Ok((walk.out, walk.defaults, walk.read))
@@ -1381,7 +1426,7 @@ pub(crate) fn run(
     progress: &mut dyn FnMut(Stage) -> bool,
     budget: &mut ImageBudget,
 ) -> Result<(), OptimizeError> {
-    let (ppi, mut defaults, read) = walk_pages(doc, pages, &mut |done| progress(Stage::Reading { done, total: pages.len() }))?;
+    let (ppi, mut defaults, read) = walk_pages(doc, pages, false, &mut |done| progress(Stage::Reading { done, total: pages.len() }))?;
     // Black-and-white RGB becomes grey, which default colour spaces would draw otherwise, and an
     // indexed image's palette says which of its samples a resampled one keeps, which they may
     // change: one used where the walk didn't look may be drawn so.
@@ -1397,7 +1442,7 @@ pub(crate) fn run(
             _ => None,
         })
         .collect();
-    let mut refs: Vec<(ObjRef, f64)> = ppi.into_iter().filter(|(r, _)| !masks.contains(r)).collect();
+    let mut refs: Vec<(ObjRef, f64)> = ppi.into_iter().filter(|(r, _)| !masks.contains(r)).map(|(r, image)| (r, image.ppi)).collect();
     refs.sort_by_key(|(r, _)| (r.num, r.generation));
     // Then the pictures' masks of one bit a sample, each once ([`decide_mask`]).
     let mask_refs = picture_masks(doc, &refs);
