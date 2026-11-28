@@ -4,6 +4,29 @@ pub(crate) fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
 }
 
+/// The operand of the last `name` in `args`, read the way `validate_options` and `positional` walk
+/// them: a token that is another option's operand is never taken for an option. [`flag`] matches
+/// any token, so in `--password --out input.pdf --out out.pdf` (a password of `--out`) it answered
+/// `input.pdf` for `--out` and the command wrote over its own source file (#7516). `Err` when
+/// `name` is the last token and so has no operand.
+pub(crate) fn value_of_flag<'a>(command: &str, args: &'a [String], specs: &[OptionSpec], name: &str) -> Result<Option<&'a str>, CliError> {
+    let mut i = 0;
+    let mut result = None;
+    while let Some(a) = args.get(i) {
+        if a == name {
+            let value = args.get(i + 1).map(String::as_str).ok_or_else(|| needs_value(command, name, None))?;
+            result = Some(value);
+            i += 2;
+            continue;
+        }
+        match specs.iter().find(|spec| spec.name == a.as_str()) {
+            Some(spec) if spec.takes_value => i += 2,
+            _ => i += 1,
+        }
+    }
+    Ok(result)
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct OptionSpec {
     pub(crate) name: &'static str,
@@ -150,4 +173,32 @@ pub(crate) fn positional<'a>(args: &'a [String], specs: &[OptionSpec]) -> Vec<&'
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(tokens: &[&str]) -> Vec<String> {
+        tokens.iter().map(|token| (*token).to_string()).collect()
+    }
+
+    /// #7516: a password that reads like an option is still a password, not that option.
+    #[test]
+    fn value_of_flag_skips_password_operand() {
+        let line = args(&["--password", "--out", "input.pdf", "--out", "out.pdf"]);
+        assert_eq!(value_of_flag("extract", &line, EXTRACT_OPTIONS, "--out").unwrap(), Some("out.pdf"));
+        assert_eq!(value_of_flag("extract", &line, EXTRACT_OPTIONS, "--password").unwrap(), Some("--out"));
+        // The old lookup, for contrast: it is why the call sites moved.
+        assert_eq!(flag(&line, "--out"), Some("input.pdf"));
+    }
+
+    #[test]
+    fn value_of_flag_reports_absent_and_dangling_options() {
+        let line = args(&["in.pdf", "--password", "--pages"]);
+        assert_eq!(value_of_flag("extract", &line, EXTRACT_OPTIONS, "--pages").unwrap(), None);
+        let dangling = args(&["in.pdf", "--pages"]);
+        let error = value_of_flag("extract", &dangling, EXTRACT_OPTIONS, "--pages").unwrap_err();
+        assert_eq!(error.to_string(), "extract: --pages needs a value");
+    }
 }

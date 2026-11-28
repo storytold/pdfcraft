@@ -1,6 +1,6 @@
 use super::options::{
-    COMBINE_OPTIONS, EXTRACT_OPTIONS, INFO_OPTIONS, RENDER_OPTIONS, SPLIT_OPTIONS, TEXT_OPTIONS, can_be_path_value, flag, needs_value, positional,
-    validate_options,
+    COMBINE_OPTIONS, EXTRACT_OPTIONS, INFO_OPTIONS, RENDER_OPTIONS, SPLIT_OPTIONS, TEXT_OPTIONS, can_be_path_value, needs_value, positional,
+    validate_options, value_of_flag,
 };
 use super::{Arc, CliError, ImageFormat, PageRenderer, Path, PathBuf, RenderConfig, RenderRequest, RequestKind, Write, inspect, stdout_line};
 
@@ -26,7 +26,7 @@ pub(crate) fn info(args: &[String]) -> Result<(), CliError> {
     validate_options("info", args, INFO_OPTIONS)?;
     let path = *positional(args, INFO_OPTIONS).first().ok_or("info: missing file")?;
     let bytes = read(path)?;
-    let password = flag(args, "--password");
+    let password = value_of_flag("info", args, INFO_OPTIONS, "--password")?;
     // The renderer takes only the user password of R2–R4 files; `Session::open` takes either.
     let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
     let mut info = inspect(bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
@@ -104,7 +104,7 @@ pub(crate) fn text(args: &[String]) -> Result<(), CliError> {
             options.next();
         }
     }
-    let password = flag(args, "--password");
+    let password = value_of_flag("text", args, TEXT_OPTIONS, "--password")?;
     let mut bytes = read(path)?;
     // The renderer takes only the user password of R2–R4 files; `Session::open` takes either.
     // Worked out from the file as read: `bytes` may become the session's display copy below.
@@ -306,7 +306,7 @@ fn file_stem(path: &str) -> String {
 
 pub(crate) fn combine(args: &[String]) -> Result<(), CliError> {
     validate_options("combine", args, COMBINE_OPTIONS)?;
-    let out = flag(args, "--out").ok_or("combine: missing --out")?;
+    let out = value_of_flag("combine", args, COMBINE_OPTIONS, "--out")?.ok_or("combine: missing --out")?;
     let inputs = positional(args, COMBINE_OPTIONS);
     if inputs.len() < 2 {
         return Err("combine: give at least two input files".into());
@@ -319,10 +319,10 @@ pub(crate) fn combine(args: &[String]) -> Result<(), CliError> {
 pub(crate) fn extract(args: &[String]) -> Result<(), CliError> {
     validate_options("extract", args, EXTRACT_OPTIONS)?;
     let path = *positional(args, EXTRACT_OPTIONS).first().ok_or("extract: missing file")?;
-    let out = flag(args, "--out").ok_or("extract: missing --out")?;
-    let pages = page_list(flag(args, "--pages").ok_or("extract: missing --pages")?)?;
+    let out = value_of_flag("extract", args, EXTRACT_OPTIONS, "--out")?.ok_or("extract: missing --out")?;
+    let pages = page_list(value_of_flag("extract", args, EXTRACT_OPTIONS, "--pages")?.ok_or("extract: missing --pages")?)?;
     let mut session = pdfcraft_engine::Session::new();
-    let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
+    let id = session.open(path, None, read(path)?, value_of_flag("extract", args, EXTRACT_OPTIONS, "--password")?).map_err(|e| e.to_string())?;
     let bytes = session.extract(id, &pages).map_err(|e| e.to_string())?;
     write_pdf(Path::new(out), &bytes)
 }
@@ -331,7 +331,7 @@ pub(crate) fn split(args: &[String]) -> Result<(), CliError> {
     validate_options("split", args, SPLIT_OPTIONS)?;
     use pdfcraft_engine::SplitBy;
     let path = *positional(args, SPLIT_OPTIONS).first().ok_or("split: missing file")?;
-    let by = match (flag(args, "--every"), flag(args, "--before")) {
+    let by = match (value_of_flag("split", args, SPLIT_OPTIONS, "--every")?, value_of_flag("split", args, SPLIT_OPTIONS, "--before")?) {
         (Some(n), None) => {
             // A count the splitter cannot hold is refused here, before the file is opened,
             // rather than silently clamped to 1 further down.
@@ -345,9 +345,9 @@ pub(crate) fn split(args: &[String]) -> Result<(), CliError> {
         (None, Some(list)) => SplitBy::Before(page_list(list)?),
         _ => return Err("split: give either --every N or --before PAGES".into()),
     };
-    let dir = PathBuf::from(flag(args, "--out-dir").unwrap_or("."));
+    let dir = PathBuf::from(value_of_flag("split", args, SPLIT_OPTIONS, "--out-dir")?.unwrap_or("."));
     let mut session = pdfcraft_engine::Session::new();
-    let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
+    let id = session.open(path, None, read(path)?, value_of_flag("split", args, SPLIT_OPTIONS, "--password")?).map_err(|e| e.to_string())?;
     let stem = file_stem(path);
     let parts = session.split(id, &by).map_err(|e| e.to_string())?;
     // An output folder that does not exist yet is created (#249); one that can't be is reported
@@ -376,11 +376,15 @@ pub(crate) fn parse_dpi(value: &str) -> Result<f32, String> {
 pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
     validate_options("render", args, RENDER_OPTIONS)?;
     let path = *positional(args, RENDER_OPTIONS).first().ok_or("render: missing file")?;
-    let page: usize =
-        flag(args, "--page").unwrap_or("1").parse().ok().filter(|page| *page > 0).ok_or("bad --page: expected a positive page number")?;
+    let page: usize = value_of_flag("render", args, RENDER_OPTIONS, "--page")?
+        .unwrap_or("1")
+        .parse()
+        .ok()
+        .filter(|page| *page > 0)
+        .ok_or("bad --page: expected a positive page number")?;
     let page_index = page - 1;
-    let dpi = parse_dpi(flag(args, "--dpi").unwrap_or("96"))?;
-    let out = flag(args, "--out").ok_or("render: missing --out (.png, .jpg, .tif or .pam)")?;
+    let dpi = parse_dpi(value_of_flag("render", args, RENDER_OPTIONS, "--dpi")?.unwrap_or("96"))?;
+    let out = value_of_flag("render", args, RENDER_OPTIONS, "--out")?.ok_or("render: missing --out (.png, .jpg, .tif or .pam)")?;
     // The file is what its name says (#248): a `.png` used to get a netpbm PAM stream.
     let format = match Path::new(out).extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).as_deref() {
         Some("png") => Some(ImageFormat::Png),
@@ -393,7 +397,7 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
     // of named-layer signatures (here with no trusted certificates); the CLI must agree with it
     // (and with independent viewers), while keeping the file it reads intact.
     let bytes = read(path)?;
-    let password = flag(args, "--password");
+    let password = value_of_flag("render", args, RENDER_OPTIONS, "--password")?;
     // The renderer takes only the user password of R2–R4 files; `Session::open` and the display
     // copy take either.
     let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
