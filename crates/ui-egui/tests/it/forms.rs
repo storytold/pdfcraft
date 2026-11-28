@@ -2038,8 +2038,6 @@ fn a_form_button_opens_its_attached_instructions_in_a_new_tab() {
     assert!(toast.chars().count() < 200, "{} characters", toast.chars().count());
 }
 
-
-
 /// A PDF of `pages` empty 100-point-square pages.
 fn small_pdf(pages: usize) -> String {
     let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", i + 3)).collect();

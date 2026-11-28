@@ -2377,7 +2377,6 @@ mod data_objects {
     }
 }
 
-
 mod runtime_highlight {
     use super::*;
     use crate::xfa::{XfaDoc, XfaEffect, XfaEvent, XfaNode, run_xfa};

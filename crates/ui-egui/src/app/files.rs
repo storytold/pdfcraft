@@ -25,6 +25,17 @@ pub(crate) fn same_file(open: &str, path: &str) -> bool {
     craft::platform::open::same_file(std::path::Path::new(open), std::path::Path::new(path), None)
 }
 
+/// Inputs to [`PdfCraftApp::try_open`], kept together so the open, the password prompt and the
+/// tab origin stay one value (and the function stays within the argument limit).
+struct TryOpen<'a> {
+    name: &'a str,
+    path: Option<String>,
+    bytes: std::sync::Arc<Vec<u8>>,
+    password: Option<&'a str>,
+    activate: bool,
+    from_attachment: Option<(DocId, pdfcraft_render::AttachmentSource, String)>,
+}
+
 impl PdfCraftApp {
     /// Shows `panel` as the right panel, or closes the one showing for `None`.
     pub(crate) fn set_right(&mut self, panel: Option<RightPanel>) {
@@ -130,7 +141,7 @@ impl PdfCraftApp {
             }
             return r;
         }
-        self.try_open(ctx, name, path, std::sync::Arc::new(bytes), None, activate, None)
+        self.try_open(ctx, TryOpen { name, path, bytes: std::sync::Arc::new(bytes), password: None, activate, from_attachment: None })
     }
 
     /// Hand `request` to the open queue; the result arrives later as a pending open, under the
@@ -323,16 +334,8 @@ impl PdfCraftApp {
 
     /// Open `bytes` on this thread: ask for a password if the document needs one, else add it
     /// as a tab (in front when `activate`).
-    fn try_open(
-        &mut self,
-        ctx: &egui::Context,
-        name: &str,
-        path: Option<String>,
-        bytes: std::sync::Arc<Vec<u8>>,
-        password: Option<&str>,
-        activate: bool,
-        from_attachment: Option<(DocId, pdfcraft_render::AttachmentSource, String)>,
-    ) -> Result<(), String> {
+    fn try_open(&mut self, ctx: &egui::Context, open: TryOpen<'_>) -> Result<(), String> {
+        let TryOpen { name, path, bytes, password, activate, from_attachment } = open;
         use pdfcraft_render::OpenError;
         // A new document opens with the remembered Highlight fields, which its scripts read; the
         // session keeps the document in front's.
@@ -557,7 +560,17 @@ impl PdfCraftApp {
                 }
                 // try_open records the origin on the new tab, or on the password prompt so it is
                 // kept after the file is unlocked.
-                if let Err(e) = self.try_open(ctx, &name, None, std::sync::Arc::new(bytes), None, true, Some(origin)) {
+                if let Err(e) = self.try_open(
+                    ctx,
+                    TryOpen {
+                        name: &name,
+                        path: None,
+                        bytes: std::sync::Arc::new(bytes),
+                        password: None,
+                        activate: true,
+                        from_attachment: Some(origin),
+                    },
+                ) {
                     self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
                 }
             }
@@ -764,7 +777,17 @@ impl PdfCraftApp {
     /// The web has no queue: the retry opens the held bytes at once.
     fn retry_inline(&mut self, ctx: &egui::Context, mut p: PasswordPrompt, pw: zeroize::Zeroizing<String>) {
         let after_open = p.after_open.clone();
-        let opened = self.try_open(ctx, &p.name, p.path.take(), p.bytes.clone(), Some(&pw), p.activate, p.from_attachment.clone());
+        let opened = self.try_open(
+            ctx,
+            TryOpen {
+                name: &p.name,
+                path: p.path.take(),
+                bytes: p.bytes.clone(),
+                password: Some(&pw),
+                activate: p.activate,
+                from_attachment: p.from_attachment.clone(),
+            },
+        );
         drop(pw);
         match opened {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
