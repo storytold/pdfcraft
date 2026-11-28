@@ -455,25 +455,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"C".to_vec(), rgb(style.color));
             d.set(b"Name".to_vec(), Object::name(icon.name()));
             d.set(b"F".to_vec(), Object::Int(FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE));
-            // The file: an embedded file stream inside a file specification (§7.11.4).
-            let mut params = Dict::new();
-            params.set(b"Size".to_vec(), Object::Int(data.len() as i64));
-            if let Some(date) = &meta.date {
-                params.set(b"ModDate".to_vec(), PdfString::literal(date.as_bytes().to_vec()));
-            }
-            let mut ef = Dict::new();
-            ef.set(b"Type".to_vec(), Object::name("EmbeddedFile"));
-            ef.set(b"Params".to_vec(), Object::Dict(params));
-            let ef = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(ef, data)));
-            let mut efd = Dict::new();
-            efd.set(b"F".to_vec(), Object::Ref(ef));
-            efd.set(b"UF".to_vec(), Object::Ref(ef));
-            let mut fs = Dict::new();
-            fs.set(b"Type".to_vec(), Object::name("Filespec"));
-            fs.set(b"F".to_vec(), PdfString::text(file.trim()));
-            fs.set(b"UF".to_vec(), PdfString::text(file.trim()));
-            fs.set(b"EF".to_vec(), Object::Dict(efd));
-            d.set(b"FS".to_vec(), Object::Ref(doc.add(Object::Dict(fs))));
+            d.set(b"FS".to_vec(), Object::Ref(attached_file(doc, file.trim(), data, meta)));
             if new.contents.is_empty() {
                 d.set(b"Contents".to_vec(), PdfString::text(file.trim()));
             }
@@ -537,6 +519,32 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     add_popup(doc, r, popup, &mut list)?;
     change_annots(doc, page, list)?;
     Ok(index)
+}
+
+/// A file specification holding `data` as an embedded file stream named `name` (§7.11.4).
+fn attached_file(doc: &mut Document, name: &str, data: &[u8], meta: &Meta) -> ObjRef {
+    let mut params = Dict::new();
+    params.set(b"Size".to_vec(), Object::Int(data.len() as i64));
+    if let Some(date) = &meta.date {
+        params.set(b"ModDate".to_vec(), PdfString::literal(date.as_bytes().to_vec()));
+    }
+    let mut ef = Dict::new();
+    ef.set(b"Type".to_vec(), Object::name("EmbeddedFile"));
+    // The media type, as the document-level attachment writes it.
+    if let Some(m) = pdfcraft_model::mime_for_name(name) {
+        ef.set(b"Subtype".to_vec(), Object::name(m));
+    }
+    ef.set(b"Params".to_vec(), Object::Dict(params));
+    let ef = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(ef, data)));
+    let mut efd = Dict::new();
+    efd.set(b"F".to_vec(), Object::Ref(ef));
+    efd.set(b"UF".to_vec(), Object::Ref(ef));
+    let mut fs = Dict::new();
+    fs.set(b"Type".to_vec(), Object::name("Filespec"));
+    fs.set(b"F".to_vec(), PdfString::text(name));
+    fs.set(b"UF".to_vec(), PdfString::text(name));
+    fs.set(b"EF".to_vec(), Object::Dict(efd));
+    doc.add(Object::Dict(fs))
 }
 
 /// Text box `tb` (user space; its text upright on a page turned by `turn`), grown down as displayed

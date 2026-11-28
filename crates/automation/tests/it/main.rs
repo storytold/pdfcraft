@@ -2,6 +2,7 @@
 
 mod action_failures;
 mod attachment_key;
+mod attachment_mime;
 mod automation;
 mod automation_roots;
 mod backdrop;

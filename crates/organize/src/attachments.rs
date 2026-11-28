@@ -6,6 +6,8 @@
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 
+pub use pdfcraft_model::mime_for_name;
+
 use crate::OrganizeError;
 use crate::import::{name_tree_entries, set_attachments, set_attachments_exact};
 
@@ -164,34 +166,4 @@ fn clear_embedded_files(doc: &mut Document) -> Result<(), OrganizeError> {
 /// the attachment's name.
 fn file_name(name: &str) -> String {
     name.rsplit(['/', '\\']).next().unwrap_or(name).trim().to_string()
-}
-
-/// A media type from the file's extension, for the embedded file's `/Subtype`; `None` when it
-/// is not one of the common kinds (the attachment is still fine without it).
-pub fn mime_for_name(name: &str) -> Option<&'static str> {
-    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase())?;
-    Some(match ext.as_str() {
-        "pdf" => "application/pdf",
-        "txt" | "log" | "md" => "text/plain",
-        "csv" => "text/csv",
-        "htm" | "html" => "text/html",
-        "xml" => "text/xml",
-        "json" => "application/json",
-        "zip" => "application/zip",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "tif" | "tiff" => "image/tiff",
-        "svg" => "image/svg+xml",
-        "doc" => "application/msword",
-        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "xls" => "application/vnd.ms-excel",
-        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "ppt" => "application/vnd.ms-powerpoint",
-        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "rtf" => "application/rtf",
-        "eml" => "message/rfc822",
-        "msg" => "application/vnd.ms-outlook",
-        _ => return None,
-    })
 }
