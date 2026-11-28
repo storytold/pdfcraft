@@ -234,10 +234,11 @@ fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError
     for (n, page) in pdfcraft_model::pages(doc).iter().enumerate() {
         // The glyphs themselves: `/ActualText` is the file's own claim about them, and an empty
         // or substitute one must not hide text a cover sits on.
-        let lines = pdfcraft_edit::glyph_text_lines(doc, page).map_err(|e| AuditError::Text(n, e.to_string()))?;
+        let mut blank_clips = std::collections::HashSet::new();
+        let lines = pdfcraft_edit::glyph_text_lines_with_blank_clips(doc, page, &mut blank_clips).map_err(|e| AuditError::Text(n, e.to_string()))?;
         budget.start_page(&lines);
         // 1. Opaque rectangles (filled, or painted by a thick stroke) over extractable text.
-        for r in cover::filled_rects(doc, &page.dict)? {
+        for r in cover::filled_rects(doc, &page.dict, &blank_clips)? {
             if let Some(covered) = budget.hidden_text(&lines, copying, std::slice::from_ref(&r.rect), |line| hides(&r, line))? {
                 let covered_text = budget.report_text(covered, copying)?;
                 out.push(AuditFinding { page: n, kind: rect_kind(&r), rect: r.rect, covered_text });
@@ -282,10 +283,16 @@ fn rect_kind(rect: &cover::FilledRect) -> FindingKind {
 /// Does `rect` hide `line`: painted after the start of the line and over it, and white or a cover
 /// ([`is_cover`]). Light covers in between (table shading) are not flagged.
 fn hides(rect: &cover::FilledRect, line: &TextLine) -> bool {
-    match rect_kind(rect) {
+    let kind = rect_kind(rect);
+    let hides = match kind {
         FindingKind::HiddenUnderWhite => rect.pos > line.first_paint_pos() && covers(&rect.rect, line),
         _ => is_cover(rect, line),
-    }
+    };
+    hides
+        && !rect
+            .glyph_source
+            .as_ref()
+            .is_some_and(|source| line.drawn_within(&source.operators) && !(source.painted && kind == FindingKind::HiddenUnderWhite))
 }
 
 /// Does `cover` hide a substantial part of what `line` draws? Three ways, any is enough:

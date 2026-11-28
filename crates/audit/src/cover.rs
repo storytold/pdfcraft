@@ -7,9 +7,12 @@
 //! out ("marker" style), counts as the rectangle the stroke paints (#2385). Graphics state tracked
 //! here is deliberately small: the CTM stack (`q`/`Q`/`cm`), the colors (`g`/`rg`/`k` and
 //! `G`/`RG`/`K`), the line width (`w`) and what ExtGState sets of them (`gs` reading `/ca`,
-//! `/CA` and `/LW`). Form XObjects are followed read-only with a depth cap. Anything fancier
-//! (other filled paths, slanted or bent strokes, shadings, patterns) is out of scope and
-//! documented as such.
+//! `/CA` and `/LW`), rectangular and glyph clipping, form bounds, and default-off
+//! optional-content groups. Rotated rectangles are conservatively bounded in user space.
+//! If only the source of a glyph clip is known, the audit excludes fills of that text object
+//! from its own cover findings and retains potential covers on independently drawn text.
+//! Form XObjects are followed read-only with a depth and decode budget. Other filled paths,
+//! slanted or bent strokes, shadings and patterns remain out of scope.
 //!
 //! Paint order: a page's content streams are one stream in pieces (ISO 32000-2 §7.8.2), so they
 //! are parsed joined and walked once with a single graphics state — state set in an earlier
@@ -18,8 +21,11 @@
 //! the joined stream)`; rectangles inside a form XObject carry the `Do` operator's position.
 //! Positions compare lexicographically in paint order.
 
+use std::collections::HashSet;
+use std::ops::Range;
+
 use pdfcraft_content::{Matrix, Op, Pieces, ops};
-use pdfcraft_cos::{DecodeBudget, Dict, Document, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
 
 use crate::AuditError;
 
@@ -40,6 +46,38 @@ pub struct FilledRect {
     /// Paint position: `(content-stream index, operator index in the joined stream)`.
     /// Rectangles inside a form XObject carry the `Do` operator's position.
     pub pos: (usize, usize),
+    /// Page operators of the text object whose own glyphs this paint fills.
+    pub glyph_source: Option<GlyphSource>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GlyphSource {
+    pub operators: Range<usize>,
+    pub painted: bool,
+}
+
+#[derive(Clone, Copy)]
+enum Clip {
+    Unbounded,
+    Rect([f64; 4]),
+    Empty,
+}
+
+impl Clip {
+    fn visible_rect(self, rect: [f64; 4]) -> Option<[f64; 4]> {
+        match self {
+            Self::Unbounded => Some(rect),
+            Self::Rect(clip) => {
+                let intersection = [rect[0].max(clip[0]), rect[1].max(clip[1]), rect[2].min(clip[2]), rect[3].min(clip[3])];
+                (intersection[0] < intersection[2] && intersection[1] < intersection[3]).then_some(intersection)
+            }
+            Self::Empty => None,
+        }
+    }
+
+    fn intersect_rect(&mut self, rect: [f64; 4]) {
+        *self = self.visible_rect(rect).map_or(Self::Empty, Self::Rect);
+    }
 }
 
 #[derive(Clone)]
@@ -49,6 +87,9 @@ struct Gs {
     alpha: f64,
     stroke: [f64; 3],
     stroke_alpha: f64,
+    clip: Clip,
+    text_render_mode: u8,
+    glyph_source: Option<GlyphSource>,
     /// Line width, in the space the path is drawn in.
     width: f64,
     /// Line cap (`J`, `/LC`): 0 butt, 1 round, 2 projecting square.
@@ -68,9 +109,9 @@ enum Path {
 
 impl Path {
     /// The rectangle a fill of this path paints, if the path is one.
-    fn rect(self) -> Option<[f64; 4]> {
+    fn rect(&self) -> Option<[f64; 4]> {
         match self {
-            Path::Rect(r) => Some(r),
+            Path::Rect(r) => Some(*r),
             Path::Lines(pts, _) => lines_rect(pts),
             Path::Empty | Path::Other => None,
         }
@@ -110,13 +151,11 @@ impl Path {
 /// The bounding box of a closed polygon that is an axis-aligned rectangle, or `None`. A repeated
 /// start point is dropped first; the remaining four corners must alternate horizontal and
 /// vertical edges.
-fn lines_rect(mut pts: Vec<[f64; 2]>) -> Option<[f64; 4]> {
+fn lines_rect(pts: &[[f64; 2]]) -> Option<[f64; 4]> {
     // CTM products leave rounding noise, so corners compare with a tolerance (in points).
     const EPS: f64 = 1e-6;
     let same = |a: f64, b: f64| (a - b).abs() <= EPS;
-    if pts.len() == 5 && same(pts[0][0], pts[4][0]) && same(pts[0][1], pts[4][1]) {
-        pts.pop();
-    }
+    let pts = if pts.len() == 5 && same(pts[0][0], pts[4][0]) && same(pts[0][1], pts[4][1]) { &pts[..4] } else { pts };
     let [a, b, c, d] = <[[f64; 2]; 4]>::try_from(pts).ok()?;
     let fits = |first_horizontal: bool| {
         [(a, b), (b, c), (c, d), (d, a)]
@@ -139,7 +178,18 @@ fn lines_rect(mut pts: Vec<[f64; 2]>) -> Option<[f64; 4]> {
 
 impl Default for Gs {
     fn default() -> Self {
-        Gs { ctm: Matrix::IDENTITY, fill: [0.0, 0.0, 0.0], alpha: 1.0, stroke: [0.0, 0.0, 0.0], stroke_alpha: 1.0, width: 1.0, cap: 0 }
+        Gs {
+            ctm: Matrix::IDENTITY,
+            fill: [0.0, 0.0, 0.0],
+            alpha: 1.0,
+            stroke: [0.0, 0.0, 0.0],
+            stroke_alpha: 1.0,
+            clip: Clip::Unbounded,
+            text_render_mode: 0,
+            glyph_source: None,
+            width: 1.0,
+            cap: 0,
+        }
     }
 }
 
@@ -151,6 +201,8 @@ struct Walker<'a> {
     /// Decoded bytes and form entries left for the page, its forms included: spending either
     /// fails the audit.
     budget: DecodeBudget,
+    off_layers: HashSet<ObjRef>,
+    blank_clips: &'a HashSet<usize>,
 }
 
 impl<'a> Walker<'a> {
@@ -160,6 +212,24 @@ impl<'a> Walker<'a> {
             return Err(AuditError::TooManyOps);
         }
         Ok(())
+    }
+
+    fn push_cover(&mut self, rect: Option<[f64; 4]>, gs: &Gs, stroke: bool, pos: (usize, usize)) {
+        let (alpha, rgb) = if stroke { (gs.stroke_alpha, gs.stroke) } else { (gs.alpha, gs.fill) };
+        if alpha >= 1.0
+            && let Some(rect) = rect.and_then(|rect| gs.clip.visible_rect(rect))
+        {
+            self.out.push(FilledRect { rect, rgb, pos, glyph_source: gs.glyph_source.clone() });
+        }
+    }
+
+    fn paint_path(&mut self, path: &Path, operator: &[u8], gs: &Gs, pos: (usize, usize)) {
+        if matches!(operator, b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s") {
+            self.push_cover(path.stroked_rect(gs), gs, true, pos);
+        }
+        if !matches!(operator, b"S" | b"s" | b"n") {
+            self.push_cover(path.rect(), gs, false, pos);
+        }
     }
 
     /// Walk one stream's operators, read one at a time (a stream of millions of short operators
@@ -176,6 +246,13 @@ impl<'a> Walker<'a> {
         at_do: Option<(usize, usize)>,
     ) -> Result<(), AuditError> {
         let mut path = Path::Empty;
+        let mut multiple_subpaths = false;
+        let mut clip_next = false;
+        let mut glyph_clip_pending = false;
+        let mut glyph_only_text = false;
+        let mut glyph_source_painted = false;
+        let mut text_start = 0;
+        let mut hidden_depth = 0usize;
         for (i, op) in ops.enumerate() {
             self.bump()?;
             let op = &op;
@@ -245,6 +322,7 @@ impl<'a> Walker<'a> {
                     }
                 }
                 b"re" => {
+                    multiple_subpaths |= !matches!(path, Path::Empty);
                     let rect = op.nums::<4>().and_then(|[x, y, w, h]| {
                         if [x, y, w, h].iter().all(|v| v.is_finite()) && w != 0.0 && h != 0.0 {
                             let r = gs.ctm.bbox([x.min(x + w), y.min(y + h), x.max(x + w), y.max(y + h)]);
@@ -256,6 +334,7 @@ impl<'a> Walker<'a> {
                     path = rect.map_or(Path::Other, Path::Rect);
                 }
                 b"m" => {
+                    multiple_subpaths |= !matches!(path, Path::Empty);
                     path = match (path, user_point(gs, op)) {
                         (Path::Empty, Some(p)) => Path::Lines(vec![p], false),
                         _ => Path::Other,
@@ -279,43 +358,81 @@ impl<'a> Walker<'a> {
                         _ => Path::Other,
                     };
                 }
-                // `b`/`b*` close the path before filling it, which the fill does anyway.
-                b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
+                b"W" | b"W*" => clip_next = true,
+                b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" | b"n" => {
                     let done = std::mem::replace(&mut path, Path::Empty);
-                    if matches!(op.op.as_slice(), b"B" | b"B*" | b"b" | b"b*")
-                        && let Some(r) = done.stroked_rect(gs)
-                        && gs.stroke_alpha >= 1.0
-                    {
-                        self.out.push(FilledRect { rect: r, rgb: gs.stroke, pos });
+                    if hidden_depth == 0 {
+                        self.paint_path(&done, op.op.as_slice(), gs, pos);
                     }
-                    if let Some(r) = done.rect()
-                        && gs.alpha >= 1.0
+                    // A clipping operator takes effect after the path-ending paint.
+                    if clip_next
+                        && !multiple_subpaths
+                        && let Some(rect) = done.rect()
                     {
-                        self.out.push(FilledRect { rect: r, rgb: gs.fill, pos });
+                        gs.clip.intersect_rect(rect);
+                    }
+                    clip_next = false;
+                    multiple_subpaths = false;
+                }
+                b"c" | b"v" | b"y" => path = Path::Other,
+                b"BT" => {
+                    glyph_clip_pending = false;
+                    glyph_only_text = true;
+                    glyph_source_painted = false;
+                    text_start = i;
+                }
+                b"Tr" => {
+                    if let Some(mode) = op.num(0).filter(|v| (0.0..=7.0).contains(v) && v.fract() == 0.0) {
+                        gs.text_render_mode = mode as u8;
                     }
                 }
-                b"S" | b"s" => {
-                    if let Some(r) = std::mem::replace(&mut path, Path::Empty).stroked_rect(gs)
-                        && gs.stroke_alpha >= 1.0
-                    {
-                        self.out.push(FilledRect { rect: r, rgb: gs.stroke, pos });
+                b"Tj" | b"TJ" | b"'" | b"\"" if shows_glyphs(op) => {
+                    let clips = gs.text_render_mode >= 4;
+                    glyph_clip_pending |= clips && (at_do.is_some() || !self.blank_clips.contains(&i));
+                    glyph_only_text &= clips;
+                    glyph_source_painted |= hidden_depth == 0
+                        && ((matches!(gs.text_render_mode, 4 | 6) && gs.alpha > 0.0)
+                            || (matches!(gs.text_render_mode, 5 | 6) && gs.stroke_alpha > 0.0));
+                }
+                b"ET" => {
+                    if std::mem::take(&mut glyph_clip_pending) {
+                        // Without glyph outlines, retain the rectangular bound as a conservative
+                        // estimate. Paint through the clip can still cover independently drawn text.
+                        gs.glyph_source =
+                            (glyph_only_text && at_do.is_none()).then_some(GlyphSource { operators: text_start..i, painted: glyph_source_painted });
                     }
                 }
-                b"n" => path = Path::Empty,
-                b"c" | b"v" | b"y" | b"W" | b"W*" => path = Path::Other,
+                b"BDC" => {
+                    if hidden_depth > 0 || (op.name(0) == Some(b"OC") && self.layer_is_off(resources, op.operands.get(1))) {
+                        hidden_depth += 1;
+                    }
+                }
+                b"BMC" if hidden_depth > 0 => hidden_depth += 1,
+                b"EMC" => hidden_depth = hidden_depth.saturating_sub(1),
                 b"Do" => {
-                    if let Some(name) = op.name(0) {
+                    if let Some(name) = op.name(0).filter(|_| hidden_depth == 0) {
                         if depth >= MAX_DEPTH {
                             return Err(AuditError::TooDeep);
                         }
                         self.walk_xobject(name, gs, resources, depth, pos)?;
                     }
                     path = Path::Empty;
+                    clip_next = false;
+                    multiple_subpaths = false;
                 }
                 _ => {}
             }
         }
         Ok(())
+    }
+
+    fn layer_is_off(&self, resources: &Dict, property: Option<&Object>) -> bool {
+        let Object::Name(name) = property.unwrap_or(&Object::Null) else {
+            return matches!(property, Some(Object::Ref(id)) if self.off_layers.contains(id));
+        };
+        let props = resources.get(b"Properties").map(|value| self.doc.resolve(value));
+        let layer = props.as_deref().and_then(Object::as_dict).and_then(|dict| dict.get(name));
+        matches!(layer, Some(Object::Ref(id)) if self.off_layers.contains(id))
     }
 
     /// Follow a form XObject read-only, composing its matrix onto the current CTM. State
@@ -329,6 +446,9 @@ impl<'a> Walker<'a> {
         let Object::Stream(stream) = &*resolved else { return Ok(()) };
         let dict = &stream.dict;
         if crate::subtype(self.doc, dict)?.as_deref() != Some(b"Form") {
+            return Ok(());
+        }
+        if matches!(dict.get(b"OC"), Some(Object::Ref(id)) if self.off_layers.contains(id)) {
             return Ok(());
         }
         let matrix = dict
@@ -350,6 +470,19 @@ impl<'a> Walker<'a> {
         // The XObject matrix maps form space into the user space active at `Do`.
         let mut sub_gs = gs.clone();
         sub_gs.ctm = matrix.then(&gs.ctm);
+        let bbox = dict.get(b"BBox").map(|value| self.doc.resolve(value));
+        if let Some([x0, y0, x1, y1]) =
+            bbox.as_deref().and_then(Object::as_array).and_then(|operands| <&[Object; 4]>::try_from(operands.as_slice()).ok()).and_then(|values| {
+                let [x0, y0, x1, y1] = values.each_ref().map(|value| self.doc.resolve(value).as_f64());
+                Some([x0?, y0?, x1?, y1?]).filter(|values| values.iter().all(|v| v.is_finite()))
+            })
+        {
+            let bounds = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
+            let bbox = sub_gs.ctm.bbox(bounds);
+            if bbox.iter().all(|v| v.is_finite()) {
+                sub_gs.clip.intersect_rect(bbox);
+            }
+        }
         let mut sub_stack = Vec::new();
         self.walk_ops(ops(&data), &mut sub_gs, &mut sub_stack, sub_resources, depth + 1, Some(pos))
     }
@@ -392,12 +525,37 @@ fn ext_state(doc: &Document, resources: &Dict, name: &[u8], gs: &mut Gs) {
     }
 }
 
+/// Empty shows and TJ positioning adjustments contribute no outline to a text clip.
+fn shows_glyphs(op: &Op) -> bool {
+    let nonempty = |value: &Object| matches!(value, Object::String(text) if !text.bytes.is_empty());
+    match op.operands.last() {
+        Some(Object::Array(items)) if op.is("TJ") => items.iter().any(nonempty),
+        Some(value) if !op.is("TJ") => nonempty(value),
+        _ => false,
+    }
+}
+
+/// Only explicit groups in `/D /OFF` suppress covers. `/BaseState`, `/ON` and
+/// optional-content membership dictionaries stay visible to the audit.
+fn off_layers(doc: &Document) -> HashSet<ObjRef> {
+    let Some(root) = doc.trailer().get(b"Root").map(|value| doc.resolve(value)) else { return HashSet::new() };
+    let props = root.as_dict().and_then(|dict| dict.get(b"OCProperties")).map(|value| doc.resolve(value));
+    let configuration = props.as_deref().and_then(Object::as_dict).and_then(|dict| dict.get(b"D")).map(|value| doc.resolve(value));
+    let off = configuration.as_deref().and_then(Object::as_dict).and_then(|dict| dict.get(b"OFF")).map(|value| doc.resolve(value));
+    off.as_deref()
+        .and_then(Object::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|value| if let Object::Ref(id) = value { Some(*id) } else { None })
+        .collect()
+}
+
 /// Every opaque filled rectangle drawn by a page's content (and its form XObjects), with paint
 /// positions. A page's content streams are walked once, joined, with one graphics state, so
 /// state set in an earlier stream is still in force in the later ones. Any content stream that
 /// cannot be decoded, or content and forms that decode or enter past one page's [`DecodeBudget`]
 /// in all, is an audit failure, never an empty result.
-pub fn filled_rects(doc: &Document, page: &Dict) -> Result<Vec<FilledRect>, AuditError> {
+pub fn filled_rects(doc: &Document, page: &Dict, blank_clips: &HashSet<usize>) -> Result<Vec<FilledRect>, AuditError> {
     let resources = page.get(b"Resources").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
     let contents: Vec<Object> = match page.get(b"Contents") {
         None => Vec::new(),
@@ -414,7 +572,7 @@ pub fn filled_rects(doc: &Document, page: &Dict) -> Result<Vec<FilledRect>, Audi
         }
     }
     let pieces = Pieces::join(&streams);
-    let mut w = Walker { doc, pieces: &pieces, out: Vec::new(), ops_seen: 0, budget };
+    let mut w = Walker { doc, pieces: &pieces, out: Vec::new(), ops_seen: 0, budget, off_layers: off_layers(doc), blank_clips };
     let mut gs = Gs::default();
     let mut stack = Vec::new();
     // Read one operator at a time: the joined stream can hold millions of them within the
