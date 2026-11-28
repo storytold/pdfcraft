@@ -6,7 +6,8 @@
 //!
 //! The new document gets an XMP packet of its own, holding that identification and the title.
 //! The source's packet is not copied: it can also claim standards the new document no longer
-//! meets, such as PDF/UA, whose structure tree is not copied.
+//! meets, such as PDF/UA when the structure tree is not copied. Combine keeps the PDF/UA part
+//! when every source's tags came along (see `import::tags`) and passes it to [`carry`].
 
 use std::collections::HashMap;
 
@@ -89,45 +90,62 @@ impl PrintStandard {
 /// (through `map`, what the pages already brought along), and, for PDF/X, the document
 /// information entries and the XMP metadata that identify it. The output intents are copied from
 /// `src`, so a standard that declares them needs the source document (`None` otherwise).
-pub(crate) fn carry(dst: &mut Document, src: Option<&Document>, standard: &PrintStandard, map: HashMap<ObjRef, ObjRef>) -> Result<(), OrganizeError> {
+/// `ua`: the PDF/UA part (`pdfuaid:part`) the new document still meets, which its XMP metadata
+/// then declares too.
+pub(crate) fn carry(
+    dst: &mut Document,
+    src: Option<&Document>,
+    standard: &PrintStandard,
+    map: HashMap<ObjRef, ObjRef>,
+    ua: Option<&str>,
+) -> Result<(), OrganizeError> {
     let root = dst.root().ok_or(OrganizeError::NoPageTree)?;
     if let Some(intents) = &standard.intents {
         let src = src.ok_or_else(|| OrganizeError::Invalid("the output intents' source document was not kept".into()))?;
         let copied = crate::import::copy_object(dst, src, intents, map)?;
         dst.update_dict(root, |c| c.set(b"OutputIntents".to_vec(), copied))?;
     }
-    let Some(version) = &standard.version else { return Ok(()) };
-    crate::set_info_entry(dst, b"GTS_PDFXVersion", Some(Object::String(PdfString::text(version))))?;
-    if let Some(c) = &standard.conformance {
-        crate::set_info_entry(dst, b"GTS_PDFXConformance", Some(Object::String(PdfString::text(c))))?;
+    let version = standard.version.as_deref();
+    if let Some(version) = version {
+        crate::set_info_entry(dst, b"GTS_PDFXVersion", Some(Object::String(PdfString::text(version))))?;
+        if let Some(c) = &standard.conformance {
+            crate::set_info_entry(dst, b"GTS_PDFXConformance", Some(Object::String(PdfString::text(c))))?;
+        }
+        if let Some(t) = standard.trapped {
+            crate::set_info_entry(dst, b"Trapped", Some(Object::name(t)))?;
+        }
     }
-    if let Some(t) = standard.trapped {
-        crate::set_info_entry(dst, b"Trapped", Some(Object::name(t)))?;
-    }
-    if standard.xmp {
+    if (version.is_some() && standard.xmp) || ua.is_some() {
         let mut md = Dict::new();
         md.set(b"Type".to_vec(), Object::name("Metadata"));
         md.set(b"Subtype".to_vec(), Object::name("XML"));
         // Uncompressed, so other tools can find it.
-        let m = dst.add(Object::Stream(Stream::from_raw(md, packet(dst, standard, version).into_bytes())));
+        let m = dst.add(Object::Stream(Stream::from_raw(md, packet(dst, standard, version, ua).into_bytes())));
         dst.update_dict(root, |c| c.set(b"Metadata".to_vec(), Object::Ref(m)))?;
     }
     Ok(())
 }
 
-/// The XMP packet identifying `doc` as `version`, with its title and trapping.
-fn packet(doc: &Document, standard: &PrintStandard, version: &str) -> String {
+/// The XMP packet identifying `doc` as `version` (PDF/X, with its trapping) and as PDF/UA part
+/// `ua`, with its title.
+fn packet(doc: &Document, standard: &PrintStandard, version: Option<&str>, ua: Option<&str>) -> String {
     let mut props = String::new();
     if let Some(t) = crate::info(doc, "Title").filter(|t| !t.trim().is_empty()) {
         props.push_str(&format!("   <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:title>\n", esc(&t)));
     }
-    if let Some(t) = standard.trapped {
-        props.push_str(&format!("   <pdf:Trapped>{t}</pdf:Trapped>\n"));
+    if let Some(version) = version {
+        if let Some(t) = standard.trapped {
+            props.push_str(&format!("   <pdf:Trapped>{t}</pdf:Trapped>\n"));
+        }
+        props.push_str(&format!("   <pdfxid:GTS_PDFXVersion>{}</pdfxid:GTS_PDFXVersion>\n", esc(version)));
+        if let Some(c) = &standard.conformance {
+            props.push_str(&format!("   <pdfxid:GTS_PDFXConformance>{}</pdfxid:GTS_PDFXConformance>\n", esc(c)));
+        }
     }
-    props.push_str(&format!("   <pdfxid:GTS_PDFXVersion>{}</pdfxid:GTS_PDFXVersion>\n", esc(version)));
-    if let Some(c) = &standard.conformance {
-        props.push_str(&format!("   <pdfxid:GTS_PDFXConformance>{}</pdfxid:GTS_PDFXConformance>\n", esc(c)));
+    if let Some(part) = ua {
+        props.push_str(&format!("   <pdfuaid:part>{}</pdfuaid:part>\n", esc(part)));
     }
+    let ua_ns = if ua.is_some() { "\n    xmlns:pdfuaid=\"http://www.aiim.org/pdfua/ns/id/\"" } else { "" };
     format!(
         "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
 <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
@@ -135,7 +153,7 @@ fn packet(doc: &Document, standard: &PrintStandard, version: &str) -> String {
   <rdf:Description rdf:about=\"\"\n\
     xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n\
     xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\"\n\
-    xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\">\n\
+    xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\"{ua_ns}>\n\
 {props}  </rdf:Description>\n\
  </rdf:RDF>\n\
 </x:xmpmeta>\n\
@@ -164,7 +182,7 @@ fn trapped(v: &[u8]) -> Option<&'static str> {
 }
 
 /// The catalog's XMP metadata, as text.
-fn metadata(doc: &Document, catalog: &Dict) -> Option<String> {
+pub(crate) fn metadata(doc: &Document, catalog: &Dict) -> Option<String> {
     match &*doc.resolve(catalog.get(b"Metadata")?) {
         Object::Stream(s) => s.decoded_within(MAX_DECODED).ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
         _ => None,
@@ -173,7 +191,7 @@ fn metadata(doc: &Document, catalog: &Dict) -> Option<String> {
 
 /// A simple XMP property, written as an attribute (`pdfxid:GTS_PDFXVersion="PDF/X-4"`) or as an
 /// element (`<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>`).
-fn xmp_value(xmp: &str, key: &str) -> Option<String> {
+pub(crate) fn xmp_value(xmp: &str, key: &str) -> Option<String> {
     for quote in ['"', '\''] {
         let attr = format!("{key}={quote}");
         if let Some(rest) = xmp.find(&attr).and_then(|i| xmp.get(i + attr.len()..)) {

@@ -7,6 +7,20 @@ use super::{
 /// Why printer's marks were refused for a print that goes as pictures.
 const MARKS_AS_PICTURES: &str = "printer marks print with the pages as they are, not as pictures: leave out as_image and app-managed colour (a document that allows only low-resolution printing always prints as pictures)";
 
+/// Extract Pages of one document, file after file ([`Session::page_extractor`]).
+pub struct PageExtractor<'s> {
+    session: &'s Session,
+    extractor: pdfcraft_organize::Extractor<'s>,
+}
+
+impl PageExtractor<'_> {
+    /// New PDF bytes containing copies of `pages` (as [`Session::extract`]).
+    pub fn extract(&self, pages: &[usize]) -> Result<Arc<Vec<u8>>, EditError> {
+        let out = self.extractor.extract(pages)?;
+        self.session.write_new(&out)
+    }
+}
+
 /// Whether a conversion may run LibreOffice for an Office document (seconds, in another
 /// process) or must refuse it because the caller is on the frame thread.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -527,6 +541,16 @@ impl Session {
         self.write_new(&out)
     }
 
+    /// Extract Pages for several files of one document (each page as its own file): the
+    /// permission is checked, and the document's tags read, once for all of them.
+    pub fn page_extractor(&self, id: DocId) -> Result<PageExtractor<'_>, EditError> {
+        let src = self.cos(id)?;
+        if src.permissions().is_some_and(|p| !p.extract_pages()) {
+            return Err(EditError::NotPermitted("extracting pages"));
+        }
+        Ok(PageExtractor { session: self, extractor: pdfcraft_organize::Extractor::new(src) })
+    }
+
     /// Split the document into several new PDFs.
     pub fn split(&self, id: DocId, by: &pdfcraft_organize::SplitBy) -> Result<Vec<SplitPart>, EditError> {
         let src = self.cos(id)?;
@@ -534,10 +558,12 @@ impl Session {
             return Err(EditError::NotPermitted("splitting the document"));
         }
         let n = pdfcraft_organize::page_count(src)?;
+        // The source's tags are read once for all the parts.
+        let extractor = pdfcraft_organize::Extractor::new(src);
         pdfcraft_organize::split_ranges(n, by)
             .into_iter()
             .map(|r| {
-                let doc = pdfcraft_organize::extract_pages(src, &r.clone().collect::<Vec<_>>())?;
+                let doc = extractor.extract(&r.clone().collect::<Vec<_>>())?;
                 Ok((r.start + 1, r.end, self.write_new(&doc)?))
             })
             .collect()
@@ -554,8 +580,9 @@ impl Session {
         let n = pdfcraft_organize::page_count(src)?;
         let mut cuts = Vec::new();
         let mut used = 0usize;
+        let extractor = pdfcraft_organize::Extractor::new(src);
         for p in 0..n {
-            let size = self.write_unchecked(&pdfcraft_organize::extract_pages(src, &[p])?)?.len();
+            let size = self.write_unchecked(&extractor.extract(&[p])?)?.len();
             if used > 0 && used + size > max_bytes {
                 cuts.push(p);
                 used = 0;

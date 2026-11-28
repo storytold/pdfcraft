@@ -468,18 +468,24 @@ impl PdfCraftApp {
         let base = if chosen.is_empty() { stem.clone() } else { chosen };
         if opts.separate {
             // Each page as its own file, in a chosen folder.
-            let mut named = Vec::new();
-            for &p in &pages {
-                match self.session.extract(id, &[p]) {
+            // The document's tags are read once for all the pages.
+            let extracted = self.session.page_extractor(id).and_then(|x| {
+                let mut named = Vec::new();
+                for &p in &pages {
+                    let bytes = x.extract(&[p])?;
                     // One page the user named is saved under exactly that name.
-                    Ok(bytes) if renamed && pages.len() == 1 => named.push((format!("{base}.pdf"), bytes)),
-                    Ok(bytes) => named.push((format!("{base} (page {}).pdf", p + 1), bytes)),
-                    Err(e) => {
-                        self.notify_fmt("Couldn't extract pages: {e}", &[("e", &e.to_string())]);
-                        return;
-                    }
+                    let name = if renamed && pages.len() == 1 { format!("{base}.pdf") } else { format!("{base} (page {}).pdf", p + 1) };
+                    named.push((name, bytes));
                 }
-            }
+                Ok(named)
+            });
+            let named = match extracted {
+                Ok(named) => named,
+                Err(e) => {
+                    self.notify_fmt("Couldn't extract pages: {e}", &[("e", &e.to_string())]);
+                    return;
+                }
+            };
             // Delete the pages only once their files are written, which is on a later frame when
             // the user chooses the folder, and only if they are still what was written: the
             // document must be unedited since (page numbers shift, and edits to those pages

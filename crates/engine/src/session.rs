@@ -21,6 +21,7 @@ use crate::{
 
 mod editing;
 mod files;
+pub use files::PageExtractor;
 mod save;
 mod view;
 
