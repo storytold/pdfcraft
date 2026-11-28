@@ -433,6 +433,8 @@ fn content(h: &XHost, node: usize, path: &str) -> String {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ItemList {
     pub(crate) entries: Vec<(String, String)>,
+    /// The list holds the values saved to the data (the template's `save="1"`, or the list methods' second).
+    pub(crate) saved: bool,
 }
 
 /// The entries of the field's `<items>` number `list` (the first is the one the list shows),
@@ -447,8 +449,92 @@ pub(crate) fn list_entries(h: &XHost, node: usize, list: usize) -> Vec<(String, 
         .unwrap_or_default()
 }
 
+/// A list's entries where they are kept, read in place.
+enum Entries<'a> {
+    State(&'a [(String, String)]),
+    Template(&'a [XfaProp]),
+}
+
+impl Entries<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Entries::State(e) => e.len(),
+            Entries::Template(e) => e.len(),
+        }
+    }
+
+    /// Entry `i`'s tag and the text it has before any write.
+    fn get(&self, i: usize) -> Option<(&str, &str)> {
+        match self {
+            Entries::State(e) => e.get(i).map(|(tag, t)| (tag.as_str(), t.as_str())),
+            Entries::Template(e) => e.get(i).map(|c| (c.tag.as_str(), c.text.as_deref().unwrap_or_default())),
+        }
+    }
+}
+
+fn entries(h: &XHost, node: usize, list: usize) -> Entries<'_> {
+    if let Some(lists) = h.nodes.get(node).and_then(|n| n.items.as_ref()) {
+        return Entries::State(lists.get(list).map_or(&[][..], |l| l.entries.as_slice()));
+    }
+    Entries::Template(template_prop(h, node, &join("", "items", list)).map_or(&[][..], |p| p.children.as_slice()))
+}
+
+/// Whether a script wrote the text of an entry of one of the node's lists.
+pub(crate) fn items_written(h: &XHost, node: usize) -> bool {
+    h.prop_writes.get(&node).is_some_and(|m| m.keys().any(|k| k.starts_with("items#")))
+}
+
+/// The texts a script wrote to entries of the node's lists, by (list, tag, nth of that tag), taken out of the property writes
+/// so the list methods can fold them into the run's copy of the lists (a written attribute stays).
+pub(crate) fn take_item_writes(h: &mut XHost, node: usize) -> HashMap<(usize, String, usize), String> {
+    let mut out = HashMap::new();
+    let Some(writes) = h.prop_writes.get_mut(&node) else { return out };
+    for (path, w) in writes.iter_mut() {
+        if let [("items", list), (tag, nth)] = steps(path).as_slice()
+            && let Some(t) = w.text.take()
+        {
+            out.insert((*list, (*tag).to_string(), *nth), t);
+        }
+    }
+    writes.retain(|path, w| !path.starts_with("items#") || w.text.is_some() || !w.attrs.is_empty());
+    out
+}
+
+/// How many entries list `list` has, without reading them.
+pub(crate) fn list_len(h: &XHost, node: usize, list: usize) -> usize {
+    entries(h, node, list).len()
+}
+
+/// The text of entry `i` of list `list` (a script's writes to entries folded in first: see [`items_written`]).
+pub(crate) fn list_text(h: &XHost, node: usize, list: usize, i: usize) -> Option<String> {
+    entries(h, node, list).get(i).map(|(_, t)| t.to_string())
+}
+
+/// Where the text `t` is in list `list`.
+pub(crate) fn list_position(h: &XHost, node: usize, list: usize, t: &str) -> Option<usize> {
+    let e = entries(h, node, list);
+    (0..e.len()).find(|i| e.get(*i).is_some_and(|(_, s)| s == t))
+}
+
+/// Which of the field's `<items>` lists holds the values saved to the data: the one the template marks `save="1"`, else the
+/// second when there are two (the list methods add one), else none (the shown text is the value).
+pub(crate) fn saved_list(h: &XHost, node: usize) -> Option<usize> {
+    // the run's copy marks the list it saves
+    if let Some(lists) = h.nodes.get(node).and_then(|n| n.items.as_ref()) {
+        return lists.iter().position(|l| l.saved);
+    }
+    let marked =
+        template_children(h, node, "").iter().filter(|p| p.tag == "items").position(|p| p.attrs.iter().any(|(k, v)| k == "save" && v == "1"));
+    marked.or_else(|| (list_count(h, node) >= 2).then_some(1))
+}
+
+/// Whether the field is a choice list (`<ui><choiceList>`).
+pub(crate) fn is_choice_list(h: &XHost, node: usize) -> bool {
+    template_prop_at(h, node, "ui#0").is_some_and(|ui| ui.children.iter().any(|w| w.tag == "choiceList"))
+}
+
 /// How many `<items>` lists the field has: the list state's, else the template's.
-fn list_count(h: &XHost, node: usize) -> usize {
+pub(crate) fn list_count(h: &XHost, node: usize) -> usize {
     match h.nodes.get(node).and_then(|n| n.items.as_ref()) {
         Some(lists) => lists.len(),
         None => template_children(h, node, "").iter().filter(|p| p.tag == "items").count(),
@@ -1062,7 +1148,7 @@ pub(crate) fn prop_object(ctx: &mut Context, node: usize, path: &str) -> JsResul
 }
 
 /// The node and path a property object (or its Proxy target) stands for.
-fn prop_ref(o: &JsObject, ctx: &mut Context) -> JsResult<(usize, String)> {
+pub(crate) fn prop_ref(o: &JsObject, ctx: &mut Context) -> JsResult<(usize, String)> {
     let n = o.get(JsString::from(NODE), ctx)?.to_number(ctx)?;
     if !n.is_finite() || n < 0.0 {
         return Err(error("not an XFA property"));
