@@ -219,6 +219,10 @@ pub struct DocView {
     /// default); off, it keeps the page display it was entered from. Set from the app's
     /// preference before full screen is entered.
     pub full_screen_fill: bool,
+    /// Page-raster quality after a drawing out of memory ([`crate::GpuHealth`], #606): 1.0
+    /// asks for the device scale, less asks for smaller rasters, which replace the held ones
+    /// the way a zoom-out does. Never below 1/8, so a page stays a recognizable picture.
+    pub(crate) gpu_quality: f32,
     /// Cut pages whose notice the reader dismissed: a page cut later shows it again.
     cut_notice_dismissed: std::collections::BTreeSet<usize>,
     pub find: Option<Find>,
@@ -625,6 +629,7 @@ impl DocView {
             interface: Default::default(),
             presentation: None,
             full_screen_fill: true,
+            gpu_quality: 1.0,
             cut_notice_dismissed: Default::default(),
             find: None,
             page_count: info.pages.len(),
@@ -710,6 +715,9 @@ impl DocView {
         // The revision stamps carry on, so the pictures on screen stay until their replacements land.
         fresh.revisions = std::mem::take(&mut self.revisions);
         fresh.viewport = self.viewport;
+        // #606: the lowered raster quality belongs to the session's drawing device, not to
+        // this document's version, so a rebuild does not silently ask for full-size rasters.
+        fresh.gpu_quality = self.gpu_quality;
         fresh.group = self.group;
         fresh.pinned = self.pinned;
         // Same view key (`pane`): the page view's remembered state and the grid's press id are still this view's.
@@ -1772,7 +1780,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         _ => None,
     };
     let view_key = view.view_key();
-    let DocView { view: state, session, momentary, revisions, reports, page_sizes, .. } = &mut *view;
+    let DocView { view: state, session, momentary, revisions, reports, page_sizes, gpu_quality, .. } = &mut *view;
     let tools = page_tools::PageToolCx {
         doc,
         info,
@@ -1842,7 +1850,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         find_marks: &find_marks,
         table_preview: table_preview.as_ref(),
     };
-    let source = DocPages::new(&app.session, doc_id).rotated(state.rotation).revisions(revisions).reports(reports);
+    let source = DocPages::new(&app.session, doc_id).rotated(state.rotation).revisions(revisions).reports(reports).quality(*gpu_quality);
     // A modal over the pages blocks the canvas's keys and presses in the framework, so the view needs no gate here.
     // Scope each tab's PageView by its view key so per-canvas gestures (like middle-button autoscroll) stay tab-local.
     let mut callbacks = PageCallbacks { session, momentary, cx: &cx, out: &mut body_out, parts: None, field_arrived: false };

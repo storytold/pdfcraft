@@ -195,6 +195,18 @@ impl PageXform {
         self.user_rect(info, page, r.map(|v| v as f32))
     }
 
+    /// This transform resized to a raster of `px` device pixels (width, height before the view
+    /// rotation), so each of its texels covers one screen pixel. The rectangle's corner must
+    /// already be on a whole pixel ([`snap_to_pixels`]). `ppp` must be the device pixels per
+    /// point the raster was drawn at, the #606 quality factor included: at quality 1.0 that is
+    /// the screen's own scale; lower quality paints its smaller raster into the page's full
+    /// displayed rectangle, upscaled and blurred by the sampler on purpose.
+    #[cfg(test)]
+    pub(crate) fn texel_aligned(&self, px: [usize; 2], ppp: f32) -> PageXform {
+        let (w, h) = (px[0] as f32 / ppp, px[1] as f32 / ppp);
+        let size = if self.rot % 180 == 90 { egui::vec2(h, w) } else { egui::vec2(w, h) };
+        PageXform { rect: Rect::from_min_size(self.rect.min, size), ..*self }
+    }
     /// Draw a texture covering the normalised page region, rotated with the view.
     pub fn paint_image(&self, painter: &egui::Painter, tex: egui::TextureId, u0: f32, v0: f32, u1: f32, v1: f32) {
         let mut mesh = egui::Mesh::with_texture(tex);

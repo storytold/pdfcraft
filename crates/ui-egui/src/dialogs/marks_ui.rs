@@ -1052,7 +1052,8 @@ impl PdfCraftApp {
         let count = doc.info.pages.len();
         let current = self.views.get(index).map_or(0, |v| v.current());
         let selection = self.selected_pages(index);
-        let source = crate::canvas::pictures::DocPages::new(&self.session, doc_id).revisions(&self.views[index].revisions);
+        let quality = self.views.get(index).map_or(self.gpu_health.quality(), |v| v.gpu_quality);
+        let source = crate::canvas::pictures::DocPages::new(&self.session, doc_id).revisions(&self.views[index].revisions).quality(quality);
         let units = MarginUnits::of(self.units);
         let d = &mut self.marks_draft;
         read_fields(d, &fields, kind, &units);

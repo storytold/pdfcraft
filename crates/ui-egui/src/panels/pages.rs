@@ -35,7 +35,7 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
         Text::new(crate::i18n::fmt(tl!("{n} pages selected"), &[("n", &count)])).show(ui);
     }
 
-    let source = crate::canvas::pictures::DocPages::new(&app.session, id);
+    let source = crate::canvas::pictures::DocPages::new(&app.session, id).quality(view.gpu_quality);
     let before = view.thumbnail_zoom();
     let mut zoom = f64::from(before);
     let current = view.current();

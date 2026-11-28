@@ -318,6 +318,74 @@ fn pipeline_creation_error_is_returned_and_device_remains_usable() {
     }
 }
 
+/// Regression test: wgpu's uncaptured-error handler, installed by `PdfCraftApp::logic`
+/// through `GpuHealth`, takes errors that arrive after start-up instead of closing the app.
+#[test]
+fn a_gpu_error_after_start_up_is_recorded_not_fatal() {
+    // Issue #606: every error wgpu can't hand back as a `Result` goes to the device's
+    // uncaptured-error handler, and the default one panics "as fatal" inside the driver's C
+    // code, where Rust can't unwind it, so the process aborts — that is the death #7111 and
+    // #6027 share. `catch_errors` (#519) covers only the window's surface and the renderer's
+    // first creation; `GpuHealth::observe` is what `PdfCraftApp::logic` puts on the device
+    // from its first frame, before that frame uploads any page. Take the `observe` call out
+    // and this test panics with wgpu's default message instead of reaching the asserts.
+    use eframe::{egui_wgpu, wgpu};
+    let _gpu = gpu();
+    let native = super::native_options(false, eframe::Renderer::Wgpu);
+    let egui_wgpu::WgpuSetup::CreateNew(setup) = &native.wgpu_options.wgpu_setup else { panic!("default setup creates its own instance") };
+    let instance = pollster::block_on(native.wgpu_options.wgpu_setup.new_instance());
+    let options = wgpu::RequestAdapterOptions { power_preference: setup.power_preference, ..Default::default() };
+    // CI runners have a software adapter (WARP, llvmpipe); a machine without any skips.
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&options)) else {
+        assert!(std::env::var_os("PDFCRAFT_TEST_REQUIRE_GPU").is_none(), "a GPU adapter is required for this run");
+        eprintln!("skipping device-error regression: no GPU adapter");
+        return;
+    };
+    let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&(setup.device_descriptor)(&adapter))) else {
+        assert!(std::env::var_os("PDFCRAFT_TEST_REQUIRE_GPU").is_none(), "a GPU adapter is required for this run");
+        eprintln!("skipping device-error regression: the adapter gives no device");
+        return;
+    };
+    let health = std::sync::Arc::new(pdfcraft_ui_egui::GpuHealth::default());
+    health.observe(&device);
+    // An error with no caller holding a `Result` for it: a texture one pixel wider than the
+    // device allows, asked outside any error scope, as every page upload effectively is.
+    let oversized = wgpu::Extent3d { width: device.limits().max_texture_dimension_2d.saturating_add(1), height: 1, depth_or_array_layers: 1 };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("issue-606"),
+        size: oversized,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    // Which "couldn't make this" error the machine answers with is its own — a validation
+    // error on most, out of memory on one short of it — but either is fatal unhandled, and
+    // the handler must have taken it: no notice means the error went somewhere else.
+    match health.take_notice() {
+        Some(pdfcraft_ui_egui::GpuNotice::LowMemory) => assert!(health.quality() < 1.0, "out of memory must lower quality, got {}", health.quality()),
+        Some(pdfcraft_ui_egui::GpuNotice::DeviceError) => assert_eq!(health.quality(), 1.0, "only out of memory lowers quality"),
+        None => panic!("the oversized texture's error never reached the handler"),
+    }
+    // The device is still usable afterwards: that is the whole promise. wgpu's default
+    // handler would have taken the process by now.
+    let small = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("issue-606"),
+        size: wgpu::Extent3d { width: 16, height: 16, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    small.create_view(&wgpu::TextureViewDescriptor::default());
+    assert!(device.poll(wgpu::PollType::wait_indefinitely()).is_ok(), "the device must stay usable");
+    drop(texture);
+}
 const NVIDIA: (u32, u32) = (0x10de, 0x2684);
 const NVIDIA_3090: (u32, u32) = (0x10de, 0x2204);
 const AMD_IGPU: (u32, u32) = (0x1002, 0x164e);

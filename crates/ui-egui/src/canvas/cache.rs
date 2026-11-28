@@ -188,7 +188,21 @@ impl DocView {
     /// Device scale of a page raster: exactly the device scale, as a raster at any other scale is
     /// resampled on screen, which blurs every line and glyph (#260).
     pub(super) fn render_scale(&self, ppp: f32) -> f32 {
-        self.view.zoom as f32 * PT * ppp
+        // Exactly the device scale: a raster at any other scale is resampled on screen, which
+        // blurs every line and glyph (#260) — after a drawing out of memory the quality
+        // factor (#606) takes that blur on purpose, so the pages still fit in memory.
+        self.view.zoom as f32 * PT * ppp * self.gpu_quality
+    }
+
+    /// Ask for smaller page rasters after the device couldn't allocate ([crate::GpuHealth],
+    /// #606): 1.0 asks nothing lower. The lower scale goes through the same request path as a
+    /// zoom-out, so the memory the device wouldn't give comes back the way it came: the frame
+    /// now wants its pages at the lower scale, and every raster that arrives runs
+    /// [dmit_texture]'s ordinary eviction, which first drops the off-screen holders the
+    /// new, smaller allowance no longer needs. On-screen pages keep their raster until their
+    /// own replacement lands, so nothing flashes; nothing here is special about quality.
+    pub(crate) fn set_gpu_quality(&mut self, quality: f32) {
+        self.gpu_quality = quality;
     }
 }
 

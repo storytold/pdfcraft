@@ -270,7 +270,7 @@ impl PdfCraftApp {
 
         let thumbs = Thumbnails::<PrintPage>::in_context(ctx, "print-preview", ThumbnailOptions::new().max_side(PREVIEW_MAX_SIDE as u32));
         // PLAN: assumed DocPages::new(&Session, DocId) -> DocPages (pdf-canvas-w10)
-        let pages = DocPages::new(&self.session, id);
+        let pages = DocPages::new(&self.session, id).quality(self.gpu_health.quality());
         let input = SheetInput {
             d: &self.print_draft,
             sizes: &sizes,

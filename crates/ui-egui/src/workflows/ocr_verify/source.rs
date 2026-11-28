@@ -50,7 +50,7 @@ fn thumbnails(ctx: &egui::Context) -> Thumbnails<usize> {
 /// The picture of `page` of `doc` as the store holds it, asked at `side` points on its longer
 /// side: ready, loading or failed.
 pub(super) fn page_state(app: &PdfCraftApp, ctx: &egui::Context, doc: DocId, page: usize, side: f32) -> TextureState {
-    let source = DocPages::new(&app.session, doc);
+    let source = DocPages::new(&app.session, doc).quality(app.gpu_health.quality());
     let request = ThumbRequest::for_cell(side, ctx.pixels_per_point());
     thumbnails(ctx).state(ctx, &source, &page, &request, Priority::VISIBLE)
 }
