@@ -19,7 +19,7 @@ use craft::ui::primitives::IconSpec;
 use craft::ui::style::DataColor;
 use egui::Color32;
 use pdfcraft_engine::DocId;
-use pdfcraft_engine::compare::{Comparison, Kind};
+use pdfcraft_engine::compare::{Comparison, Kind, PageKind};
 
 use crate::{PdfCraftApp, RightPanel};
 
@@ -33,7 +33,7 @@ pub struct CompareState {
     pub result: Comparison,
     /// The pages of the new file this comparison covers (0-based; empty: every page).
     pub pages: Vec<usize>,
-    /// Regions that look different (page, user-space box), page n against page n.
+    /// Regions that look different (new-page index, new-page user-space box), after page matching.
     pub visual: Vec<(usize, [f64; 4])>,
     pub selected: Option<usize>,
     /// Side by side: the old file on the left, the new on the right, scrolled and zoomed
@@ -53,6 +53,7 @@ pub const VISUAL: Color32 = Color32::from_rgb(0xF0, 0x8C, 0x1A);
 /// What the panel asks for.
 pub enum PanelAction {
     Select(usize),
+    SelectPage(usize),
     Mark,
     Report,
     Clear,
@@ -189,6 +190,48 @@ pub(crate) fn panel(ui: &mut egui::Ui, state: &Option<CompareState>, id: DocId) 
                 action = Some(PanelAction::Clear);
             }
         });
+        if !c.page_changes.is_empty() {
+            let page_order: Vec<usize> = (0..c.page_changes.len()).collect();
+            let mut page_sel = Selection::default();
+            let page_rows = keyed(&page_order, |i| *i);
+            List::new(tl!("Page changes").to_string()).select(SelectMode::Single).selection(Bind::bound(&mut page_sel)).show_items(
+                ui,
+                &page_rows,
+                &mut |key, item| {
+                    let Some(pc) = c.page_changes.get(*key) else { return ListRow::new(String::new()) };
+                    let (kind, page, text) = match pc.kind {
+                        PageKind::Moved => (
+                            Kind::Replaced,
+                            pc.new_page,
+                            crate::i18n::fmt(
+                                tl!("Page {old} → Page {new}"),
+                                &[("old", &(pc.old_page + 1).to_string()), ("new", &(pc.new_page + 1).to_string())],
+                            ),
+                        ),
+                        PageKind::Inserted => {
+                            (Kind::Inserted, pc.new_page, crate::i18n::fmt(tl!("+ Page {p}"), &[("p", &(pc.new_page + 1).to_string())]))
+                        }
+                        PageKind::Deleted => {
+                            (Kind::Deleted, pc.old_page, crate::i18n::fmt(tl!("− Page {p}"), &[("p", &(pc.old_page + 1).to_string())]))
+                        }
+                    };
+                    let kind_label = match pc.kind {
+                        PageKind::Inserted => tl!("Inserted page"),
+                        PageKind::Deleted => tl!("Deleted page"),
+                        PageKind::Moved => tl!("Moved page"),
+                    };
+                    let detail = crate::i18n::fmt(tl!("{kind} · page {p}"), &[("kind", kind_label), ("p", &(page + 1).to_string())]);
+                    ListRow::new(text)
+                        .detail(detail)
+                        .hue(DataColor::new(colour(kind)), HueTarget::Icon)
+                        .icon(IconSpec::svg(IconId::new("square")))
+                        .state(item.row.clone())
+                },
+            );
+            if let Some(picked) = page_sel.items.first().copied() {
+                action = Some(PanelAction::SelectPage(picked));
+            }
+        }
         let order: Vec<usize> = (0..c.changes.len()).filter(|_| s.show_text).take(2000).collect();
         let mut selection = Selection::new(s.selected.into_iter().collect(), s.selected, s.selected);
         let rows = keyed(&order, |i| *i);
@@ -236,11 +279,11 @@ impl PdfCraftApp {
         };
         match self.session.compare_pages(old, new, &pages) {
             Ok(result) => {
-                let mut visual = self.session.compare_visual(old, new, 72.0).unwrap_or_default();
+                let mut visual = self.session.compare_visual_pairs(old, new, &result.page_pairs, 72.0).unwrap_or_default();
                 if !pages.is_empty() {
                     visual.retain(|(page, _)| pages.contains(page));
                 }
-                let n = result.changes.len();
+                let n = result.changes.len() + result.page_changes.len();
                 // Side by side when the old version is open in a tab and the window has the room.
                 let side_by_side = self.views.iter().any(|v| v.id == old) && ctx.content_rect().width() >= 1000.0;
                 self.compare = Some(crate::compare_ui::CompareState {
@@ -287,6 +330,13 @@ impl PdfCraftApp {
                     let v = &mut self.views[oi];
                     v.go_to_page(old_target.0);
                     v.session.flash = Some((old_target.0, old_target.1.map(|x| x as f32), 0.0));
+                }
+            }
+            PanelAction::SelectPage(i) => {
+                let Some(pc) = s.result.page_changes.get(i).copied() else { return };
+                self.views[index].go_to_page(pc.new_page);
+                if let Some(oi) = self.views.iter().position(|v| v.id == old) {
+                    self.views[oi].go_to_page(pc.old_page);
                 }
             }
             PanelAction::SideBySide(on) => {
@@ -336,7 +386,7 @@ impl PdfCraftApp {
     fn shade_compare(&mut self, index: usize) {
         let Some(s) = self.compare.as_ref() else { return };
         let old = s.old;
-        let (old_marks, new_marks) = (shading(s, true), shading(s, false));
+        let (old_marks, new_marks) = (shading(s, true, &self.session), shading(s, false, &self.session));
         if let Some(v) = self.views.get_mut(index) {
             v.session.compare_marks = new_marks;
         }
@@ -350,7 +400,7 @@ impl PdfCraftApp {
 /// and the visual differences no text change there covers, so both versions read with their own
 /// shading. Hidden kinds are left out after the overlap test, so hiding the text does not uncover
 /// the visual differences a text change explains.
-fn shading(s: &CompareState, old: bool) -> Vec<(usize, [f32; 4], Color32)> {
+fn shading(s: &CompareState, old: bool, session: &pdfcraft_engine::Session) -> Vec<(usize, [f32; 4], Color32)> {
     let overlaps = |p: usize, r: [f32; 4], marks: &[(usize, [f32; 4], Color32)]| {
         marks.iter().any(|(mp, m, _)| *mp == p && m[0] <= r[2] && r[0] <= m[2] && m[1] <= r[3] && r[1] <= m[3])
     };
@@ -361,10 +411,28 @@ fn shading(s: &CompareState, old: bool) -> Vec<(usize, [f32; 4], Color32)> {
     }
     let mut visual = Vec::new();
     for (p, r) in &s.visual {
-        let r = r.map(|v| v as f32);
+        let (p, r) = if old {
+            let Some(old_p) = s.result.old_page(*p) else { continue };
+            let old_info = session.get(s.old).and_then(|d| d.info.pages.get(old_p));
+            let new_info = session.get(s.new).and_then(|d| d.info.pages.get(*p));
+            let r = if let (Some(oi), Some(ni)) = (old_info, new_info) {
+                let (nw, nh) = (ni.width.max(1e-3), ni.height.max(1e-3));
+                let map = |x: f64, y: f64| {
+                    let v = ni.user_to_view(x as f32, y as f32);
+                    oi.view_to_user(v[0] / nw * oi.width, v[1] / nh * oi.height)
+                };
+                let (a, b) = (map(r[0], r[1]), map(r[2], r[3]));
+                [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
+            } else {
+                r.map(|v| v as f32)
+            };
+            (old_p, r)
+        } else {
+            (*p, r.map(|v| v as f32))
+        };
         // The old file's half also skips a region overlapping one it already shades.
-        if !overlaps(*p, r, &text) && !(old && overlaps(*p, r, &visual)) {
-            visual.push((*p, r, VISUAL));
+        if !overlaps(p, r, &text) && !(old && overlaps(p, r, &visual)) {
+            visual.push((p, r, VISUAL));
         }
     }
     let mut out = if s.show_text { text } else { Vec::new() };
@@ -420,5 +488,77 @@ pub(crate) fn compare_area(app: &mut PdfCraftApp, old: usize, new: usize, ui: &m
     }
     if let Some(c) = app.compare.as_mut() {
         c.views = pair;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn blank_page_insertion_is_counted_and_shown_in_the_panel() {
+        let ctx = egui::Context::default();
+        let mut app = PdfCraftApp::new(&ctx);
+        app.set_option(&ctx, "language", "en").unwrap();
+        for pages in [1, 2] {
+            let bytes = app.session.create_blank(300.0, 400.0, pages).unwrap();
+            app.open_bytes(&ctx, "blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        }
+        app.compare_old = Some(app.views[0].id);
+        app.run_compare(&ctx);
+        let summary_ok = app.posted_notices.contains(&craft::ui::notices::PostedNotice::new("1 difference found"));
+        let new = app.views[1].id;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(640.0, 480.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                let _ = panel(ui, &app.compare, new);
+            },
+            app,
+        );
+        PdfCraftApp::install_runtime(&h.ctx);
+        h.run();
+        let page_visible = h.query_by_label_contains("+ Page 2").is_some();
+        assert!(summary_ok && page_visible, "summary_ok={summary_ok}, page_visible={page_visible}");
+        if let Ok(path) = std::env::var("PDFCRAFT_COMPARE_SHOT") {
+            h.render().unwrap().save(path).unwrap();
+        }
+        h.state_mut().compare.as_mut().unwrap().result.page_changes = vec![
+            pdfcraft_engine::compare::PageChange { kind: PageKind::Deleted, old_page: 4, new_page: 1 },
+            pdfcraft_engine::compare::PageChange { kind: PageKind::Moved, old_page: 3, new_page: 2 },
+        ];
+        h.run();
+        assert!(h.query_by_label_contains("− Page 5").is_some());
+        assert!(h.query_by_label_contains("Page 4 → Page 3").is_some());
+    }
+
+    #[test]
+    fn matched_visual_shading_keeps_page_mapping_and_filters() {
+        let ctx = egui::Context::default();
+        let mut app = PdfCraftApp::new(&ctx);
+        for (width, height, pages) in [(300.0, 400.0, 2), (600.0, 800.0, 3)] {
+            let bytes = app.session.create_blank(width, height, pages).unwrap();
+            app.open_bytes(&ctx, "blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        }
+        app.compare_old = Some(app.views[0].id);
+        app.run_compare(&ctx);
+        let s = app.compare.as_mut().unwrap();
+        s.result.page_pairs = vec![(0, 0), (1, 2)];
+        s.visual = vec![(2, [100.0, 200.0, 200.0, 400.0]), (1, [10.0, 20.0, 30.0, 40.0])];
+        app.shade_compare(1);
+        assert_eq!(app.views[0].session.compare_marks, [(1, [50.0, 100.0, 100.0, 200.0], VISUAL)]);
+        assert_eq!(app.views[1].session.compare_marks.len(), 2, "an inserted page has no old-page mark");
+        app.compare_action(&ctx, 1, PanelAction::Show { text: false, visual: true });
+        assert_eq!(app.views[0].session.compare_marks, [(1, [50.0, 100.0, 100.0, 200.0], VISUAL)]);
+        app.compare_action(&ctx, 1, PanelAction::Show { text: true, visual: false });
+        assert!(app.views.iter().all(|v| v.session.compare_marks.is_empty()));
+        use pdfcraft_engine::compare::{Change, Side};
+        app.compare.as_mut().unwrap().result.changes.push(Change {
+            kind: Kind::Replaced,
+            old: Side { page: 1, rects: vec![[50.0, 100.0, 100.0, 200.0]], ..Side::default() },
+            new: Side { page: 2, rects: vec![[100.0, 200.0, 200.0, 400.0]], ..Side::default() },
+        });
+        app.compare_action(&ctx, 1, PanelAction::Show { text: false, visual: true });
+        assert!(app.views[0].session.compare_marks.is_empty(), "hiding text must not reveal an overlapping mapped visual mark");
+        assert_eq!(app.views[1].session.compare_marks, [(1, [10.0, 20.0, 30.0, 40.0], VISUAL)]);
     }
 }
