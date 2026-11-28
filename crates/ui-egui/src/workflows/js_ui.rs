@@ -281,7 +281,7 @@ impl PdfCraftApp {
                     crate::forms_ui::refresh_draft(draft, (&before.0, &before.1), (crate::forms_ui::draft_text(f), &f.value));
                 }
             } else if run.layers {
-                self.views[i].invalidate_content();
+                self.views[i].invalidate_layers();
             } else {
                 for p in &run.pages {
                     self.views[i].page_changed(*p);

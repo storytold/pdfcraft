@@ -71,6 +71,17 @@ impl DocView {
         }
     }
 
+    /// Re-render page layers without an edit: also drop live-layer image selections and queued
+    /// grouped-text clicks whose indexes shift when layers toggle, while `invalidate_content`
+    /// keeps `image_selection` intact for edit/undo re-resolution.
+    pub fn invalidate_layers(&mut self) {
+        self.invalidate_content();
+        self.session.image_selection = None;
+        self.session.grouped_text_click = None;
+        self.session.picked_image = None;
+        self.session.pending_pick = None;
+    }
+
     /// Only `page` changed (a comment was added, edited or removed): re-render that page and
     /// re-read its text, keep everything else.
     pub fn page_changed(&mut self, page: usize) {

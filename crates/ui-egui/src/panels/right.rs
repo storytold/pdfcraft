@@ -126,7 +126,7 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, cx: &mut BodyCx<'_>,
     if let Some((layer, visible)) = result.layer
         && app.session.set_layer_visible(id, layer, visible)
     {
-        app.views[index].invalidate_content();
+        app.views[index].invalidate_layers();
     }
     match result.nav {
         Some(Nav::Page(p)) => app.views[index].go_to_page(p),

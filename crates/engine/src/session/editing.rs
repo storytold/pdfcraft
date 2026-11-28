@@ -162,6 +162,7 @@ impl Session {
         cx.pages = doc.info.pages.len();
         cx.highlight = highlight;
         cx.today = today;
+        cx.layers = doc.config.layers.clone();
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;

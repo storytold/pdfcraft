@@ -240,7 +240,7 @@ impl PdfCraftApp {
                 if let Some(i) = active {
                     let doc = self.views[i].id;
                     if self.session.reset_layers(doc) {
-                        self.views[i].invalidate_content();
+                        self.views[i].invalidate_layers();
                     }
                 }
             }

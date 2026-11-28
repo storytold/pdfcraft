@@ -5,7 +5,7 @@ use egui::Pos2;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::{ImageSelection, PdfCraftApp};
 
 /// One page with layers Red (on) and Green (off), a radio-button group, each drawing a band;
 /// a "show-red" push button turns Red on and a link toggles Green.
@@ -163,4 +163,36 @@ fn the_layers_panel_shows_the_order_tree() {
     let h = harness(|app| app.set_option(&egui::Context::default(), "panel", "layers").unwrap());
     assert!(h.query_by_label("Red").is_none() && h.query_by_label("Green").is_none(), "no /Order: none presented");
     h.get_by_label("This document lists no layers to show.");
+}
+
+/// Changing layer visibility without editing drops any selected page image (`image_selection`),
+/// because its 0-based `index` keys into live-visible `page_images` and shifts when layers change.
+#[test]
+fn layer_visibility_clears_stale_image_selection() {
+    let mut h = harness_with(fixture_with("/Order [5 0 R]"), |app| app.set_option(&egui::Context::default(), "panel", "layers").unwrap());
+    let link = at(&h, 230.0, 35.0);
+
+    // 1. Toggling a layer from the Layers panel clears `image_selection`.
+    h.state_mut().views[0].session.image_selection = Some(ImageSelection::at(0, 1));
+    h.get_by_role_and_label(Role::TreeItem, "Red").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].session.image_selection, None, "panel layer toggle clears stale image_selection");
+
+    // 2. Resetting layers to initial visibility clears `image_selection`.
+    h.state_mut().views[0].session.image_selection = Some(ImageSelection::at(0, 1));
+    h.get_by_label(craft::ui::docking::DockWords::default().panel_menu.as_str()).click();
+    h.run_steps(2);
+    h.get_by_label("Reset to Initial Visibility").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].session.image_selection, None, "resetting layers clears stale image_selection");
+
+    // 3. Running a `SetOCGState` link action clears `image_selection`.
+    h.state_mut().views[0].session.image_selection = Some(ImageSelection::at(0, 0));
+    click(&mut h, link);
+    assert_eq!(h.state().views[0].session.image_selection, None, "SetOCGState action clears stale image_selection");
+
+    // 4. Changing a layer via `--layer` option clears `image_selection`.
+    h.state_mut().views[0].session.image_selection = Some(ImageSelection::at(0, 0));
+    h.state_mut().set_option(&egui::Context::default(), "layer", "Green=off").unwrap();
+    assert_eq!(h.state().views[0].session.image_selection, None, "--layer option clears stale image_selection");
 }

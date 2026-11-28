@@ -74,7 +74,7 @@ impl Document {
     pub fn copy_objects(&self, page: usize, targets: &[ObjectTarget]) -> Result<ObjectClip, EditError> {
         self.check_copying()?;
         let editor = self.editor.as_ref().ok_or_else(|| EditError::ReadOnly("the document can't be read".into()))?;
-        let copied = pdfcraft_edit::copy_objects(&editor.cos, page, targets)?;
+        let copied = pdfcraft_edit::copy_objects_with_layers(&editor.cos, page, targets, &self.config.layers)?;
         Ok(ObjectClip { copied, source: editor.cos.clone(), doc: self.id, page })
     }
 
@@ -186,7 +186,13 @@ pub(crate) fn delete(
 }
 
 /// [`Edit::PasteObjects`]: the copy's resources as `doc` holds them, then the paste.
-pub(crate) fn paste(doc: &mut pdfcraft_cos::Document, page: usize, clip: &ObjectClip, offset: [f64; 2]) -> Result<(), EditError> {
+pub(crate) fn paste(
+    doc: &mut pdfcraft_cos::Document,
+    page: usize,
+    clip: &ObjectClip,
+    offset: [f64; 2],
+    layers: &[(i32, i32, bool)],
+) -> Result<(), EditError> {
     let resources = Object::Dict(clip.copied.resources.clone());
     let refused =
         |e: pdfcraft_organize::OrganizeError| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("the copied objects can't be pasted: {e}")));
@@ -202,7 +208,7 @@ pub(crate) fn paste(doc: &mut pdfcraft_cos::Document, page: usize, clip: &Object
         return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("the copied objects' resources could not be copied".into())));
     };
     let copied = pdfcraft_edit::CopiedObjects { resources, ..clip.copied.clone() };
-    pdfcraft_edit::paste_objects(doc, page, &copied, offset)?;
+    pdfcraft_edit::paste_objects_with_layers(doc, page, &copied, offset, layers)?;
     Ok(())
 }
 

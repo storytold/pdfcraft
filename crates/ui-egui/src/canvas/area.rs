@@ -270,6 +270,6 @@ pub(super) fn run_button(
 pub(super) fn set_layers(app: &mut PdfCraftApp, index: usize, changes: &[(LayerOp, (u32, u16))], preserve_rb: bool) {
     let id = app.views[index].id;
     if app.session.set_layer_state(id, changes, preserve_rb) {
-        app.views[index].invalidate_content();
+        app.views[index].invalidate_layers();
     }
 }
