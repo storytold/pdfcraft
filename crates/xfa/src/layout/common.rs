@@ -210,7 +210,7 @@ pub(super) fn split_line(w: &Widget) -> f64 {
 /// The rest of an empty field's widget below a page break: its box and the look of its border.
 pub(super) type WidgetRest = (Rect, WidgetBorder);
 
-/// An empty field's widget cut at `cut`: the widget down to the cut, and the rest of its box below
+/// An empty field's widget, or one whose text the page draws, cut at `cut`: the widget down to the cut, and the rest of its box below
 /// it to go on in the following content areas ([`widget_box`] draws each piece of it). A widget the
 /// cut doesn't cross stays whole on its side, as does one with no room above the cut for a line of
 /// its text: the second item is the widget when it all goes below.

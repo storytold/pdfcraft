@@ -73,6 +73,11 @@ const GROUPS: [(&str, &str, &str, &str, &str); 2] =
 /// reads this key).
 pub const ROUND_KEY: &[u8] = b"PCXfaRound";
 
+/// On a text field generated for an XFA field whose text runs across pages: the pages draw its
+/// value, as lines a page break falls between, and its widget draws no text over them (the forms
+/// layer reads this key).
+pub const PAGE_TEXT_KEY: &[u8] = b"PCXfaPageText";
+
 /// On an image XObject written for a picture: the SHA-256 (hex) of the picture's bytes. A
 /// re-layout (after every script event) finds the XObjects on the pages it replaces by this,
 /// and reuses them instead of decoding and embedding the same picture again. Nothing is kept
@@ -512,6 +517,9 @@ impl Emitter<'_> {
         d.set(b"BS".to_vec(), Object::Dict(bs));
         if matches!(w.kind, WidgetKind::CheckBox { round: true, .. } | WidgetKind::Radio { round: true, .. }) {
             d.set(ROUND_KEY.to_vec(), Object::Bool(true));
+        }
+        if w.page_text {
+            d.set(PAGE_TEXT_KEY.to_vec(), Object::Bool(true));
         }
         let (ff, top_level, under) = self.populate_widget_kind(w, &mut d, &mut mk)?;
         if !mk.is_empty() {

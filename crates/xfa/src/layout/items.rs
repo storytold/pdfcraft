@@ -157,6 +157,9 @@ pub struct Widget {
     pub views: Views,
     /// The field must be filled in (`Required`); a radio button, when its group must be.
     pub required: bool,
+    /// A text field whose value the page draws, as lines a page break falls between (it grew
+    /// past what a content area holds): the widget keeps the field fillable but draws no text.
+    pub page_text: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

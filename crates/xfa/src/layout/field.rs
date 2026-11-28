@@ -127,14 +127,16 @@ impl Layouter<'_> {
             // Shown as text, not as a field.
             return self.draw_value_text(&f.value, ui.inset(&f.ui_margin), &fctx.font, &fctx.para, &fctx.som);
         }
-        // A text field that grew past what a content area holds can't be one widget: its text
-        // is drawn as lines the page breaks fall between, and stays what the data holds.
+        // A text field that grew past what a content area holds splits between its lines (XFA 3.3
+        // pp. 290–291: the text of a text field is split below any line, and layout deals only
+        // with its appearance without the focus): its text is drawn as lines the page breaks fall
+        // between, and its widget, which the break splits in turn, keeps it a field that can be
+        // filled, drawing no text of its own.
+        let mut page_text = false;
         if f.grows_with_text() && rect.h > self.cursor().0.h + 0.01 {
             let value =
                 self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som_path()))).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
             if let Some(value) = value.filter(|t| !t.trim().is_empty()) {
-                let name = f.common.name.clone().unwrap_or_else(|| "a text field".into());
-                self.warn_once(format!("{name}: its text is longer than a page; it is shown across pages and can't be edited here"));
                 let m = Margin {
                     top: f.ui_margin.top + 2.0,
                     bottom: f.ui_margin.bottom + 2.0,
@@ -145,7 +147,8 @@ impl Layouter<'_> {
                 // In the face it was measured in, so it takes the lines it was given.
                 let face = Self::field_text_face(f, &fctx.font);
                 let block = text::layout(&text::plain(value.trim_end()), ui.inset(&m), &para, &face, &|_, _| String::new());
-                return self.push_block(block);
+                self.push_block(block)?;
+                page_text = true;
             }
         }
         let face = match (&f.ui, &f.caption) {
@@ -280,6 +283,7 @@ impl Layouter<'_> {
             // `push` sets where it shows.
             views: Views::ALL,
             required: f.required,
+            page_text,
         })))
     }
 }
