@@ -55,6 +55,18 @@ pub(crate) fn scripts_off_notice() -> String {
     tl!("This form's scripts are turned off because one ran too long. Reopen the document to run them again.").to_string()
 }
 
+/// The toast's shape of the first document-script error: the JavaScript console keeps the whole
+/// text, so the notice names the script and its error within one short line.
+fn short_doc_error(error: &str) -> String {
+    const MAX: usize = 200;
+    if error.chars().count() <= MAX {
+        return error.to_string();
+    }
+    let mut short: String = error.chars().take(MAX).collect();
+    short.push('…');
+    short
+}
+
 impl PdfCraftApp {
     /// Act on what scripts produced in document `id`: alerts are shown, console output goes to
     /// the console, print and page requests are carried out, links wait for the user's permission
@@ -73,7 +85,20 @@ impl PdfCraftApp {
             v.notice_dismissed = false;
             self.notify(scripts_off_notice());
         }
-        if out.is_empty() {
+        // A document-level script failed or was skipped (today, one over the 256 KiB limit):
+        // say so where the user looks, not only in the JavaScript console. Field-script
+        // errors stay console-only. The console keeps the whole text; the notice names the
+        // first error, shortened. It joins the form-message queue at the front: this run may
+        // also ask to submit, whose notice takes the toast, and a notice set now would be
+        // replaced before it was seen.
+        let empty = out.is_empty();
+        let mut alerts = out.alerts;
+        if let Some(first) = out.doc_errors.first() {
+            let detail = short_doc_error(first);
+            let text = crate::i18n::fmt(tl!("A document script couldn't run: {detail}"), &[("detail", &detail)]);
+            alerts.insert(0, Message { text, icon: MessageIcon::Error, ..Default::default() });
+        }
+        if empty && alerts.is_empty() {
             return;
         }
         self.js_console.log.extend(out.console.iter().cloned());
@@ -131,7 +156,7 @@ impl PdfCraftApp {
                 Request::Beep | Request::Reset(_) | Request::SpawnTemplate { .. } | Request::SetTemplateHidden { .. } => {}
             }
         }
-        self.show_script_messages(out.alerts);
+        self.show_script_messages(alerts);
     }
 
     fn focus_script_field(&mut self, id: DocId, view: Option<usize>, name: &str, object_id: Option<u64>) {
@@ -451,5 +476,72 @@ impl PdfCraftApp {
             }
             Err(e) => self.js_console.log.push(format!("Error: {e}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod doc_error_notice_tests {
+    use super::*;
+
+    /// A native app with a visible synthetic blank document and no renderer.
+    fn app(ctx: &egui::Context) -> (PdfCraftApp, DocId) {
+        let mut app = PdfCraftApp::for_unit_tests();
+        app.set_option(ctx, "language", "en").unwrap();
+        let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+        app.open_bytes(ctx, "synthetic.pdf", None, bytes.to_vec()).unwrap();
+        let id = app.active_ids().unwrap().1;
+        app.posted_notices.clear();
+        (app, id)
+    }
+
+    /// A document-level script that failed or was skipped (today, one over the 256 KiB
+    /// limit) is queued as a notice naming the script and its error; an ordinary field-script
+    /// error stays a JavaScript console line. The console keeps the error either way, and an
+    /// empty frame queues nothing more.
+    #[test]
+    fn a_failed_document_script_is_queued_but_a_field_error_is_not() {
+        let ctx = egui::Context::default();
+        let (mut app, id) = app(&ctx);
+        app.handle_js(&ctx, id, JsOutput { errors: vec!["TypeError: can't access property".into()], ..Default::default() });
+        assert!(app.script_messages.is_empty(), "a field-script error is console-only");
+        assert!(app.js_console.log.iter().any(|l| l.contains("can't access property")), "{:?}", app.js_console.log);
+        let detail = "document script 1: the script is too long (270 KiB; the limit is 256 KiB)";
+        app.handle_js(&ctx, id, JsOutput { errors: vec![detail.into()], doc_errors: vec![detail.into()], ..Default::default() });
+        assert_eq!(app.script_messages.len(), 1, "{:?}", app.script_messages);
+        let message = &app.script_messages[0];
+        assert_eq!(message.icon, MessageIcon::Error);
+        assert!(message.text.contains("A document script couldn't run"), "{}", message.text);
+        assert!(message.text.contains(detail), "{}", message.text);
+        assert!(app.js_console.log.iter().any(|l| l.contains(detail)), "{:?}", app.js_console.log);
+        app.handle_js(&ctx, id, JsOutput::default());
+        assert_eq!(app.script_messages.len(), 1, "an empty frame repeats nothing");
+    }
+
+    /// #7382: a failed document script's notice is not lost when the same output also asks to
+    /// submit: the submit notice is posted now and the error follows in the queue.
+    #[test]
+    fn a_document_script_error_waits_for_the_runs_submit_notice() {
+        let ctx = egui::Context::default();
+        let (mut app, id) = app(&ctx);
+        let detail = "document script 1: TypeError: boom";
+        app.handle_js(
+            &ctx,
+            id,
+            JsOutput { doc_errors: vec![detail.into()], requests: vec![Request::Submit("https://example.test/form".into())], ..Default::default() },
+        );
+        assert_eq!(app.posted_notices.len(), 1, "the submit notice is posted at once: {:?}", app.posted_notices);
+        assert_eq!(app.script_messages.len(), 1, "the error notice waits its turn");
+        assert!(app.script_messages[0].text.contains("document script"), "{:?}", app.script_messages);
+        assert!(app.script_messages[0].text.contains("boom"), "{:?}", app.script_messages);
+    }
+
+    #[test]
+    fn a_valid_document_shows_nothing() {
+        let ctx = egui::Context::default();
+        let (mut app, id) = app(&ctx);
+        app.handle_js(&ctx, id, JsOutput::default());
+        assert!(app.posted_notices.is_empty());
+        assert!(app.script_messages.is_empty());
+        assert!(app.js_console.log.is_empty());
     }
 }
