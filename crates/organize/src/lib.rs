@@ -124,6 +124,7 @@ impl Iterator for PageWalk<'_> {
                 continue;
             }
             let obj = self.doc.get(node);
+            let _ = PAGE_NODES_READ.try_with(|n| n.set(n.get().saturating_add(1)));
             let Some(d) = obj.as_dict() else { continue };
             let mut owners = inherited.clone();
             for (k, owner) in INHERITABLE.iter().zip(&mut owners) {
@@ -170,6 +171,26 @@ pub fn page_rotations(doc: &Document) -> Result<Vec<i64>, OrganizeError> {
 
 pub fn page_count(doc: &Document) -> Result<usize, OrganizeError> {
     Ok(walk(doc)?.len())
+}
+
+thread_local! {
+    /// Page-tree nodes [`PageWalk`] read on this thread.
+    static PAGE_NODES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many page-tree nodes this thread's walks have read. Per thread, so tests running in
+/// parallel don't count each other's; for tests that check how far a step reads the pages.
+#[doc(hidden)]
+pub fn page_nodes_read_on_this_thread() -> usize {
+    PAGE_NODES_READ.try_with(std::cell::Cell::get).unwrap_or(0)
+}
+
+/// Whether the page tree leads to a page: [`page_count`] above zero, read only as far as the
+/// first page. Opening a document asks this, and counting read every page to answer it, a full
+/// parse of each for a long document whose pages carry InDesign's `/PieceInfo` (#5873). No page
+/// tree has no pages.
+pub fn has_pages(doc: &Document) -> bool {
+    pages_root(doc).is_ok_and(|top| PageWalk::new(doc, top).next().is_some())
 }
 
 fn resolved_rotation(doc: &Document, attrs: &Dict) -> i64 {
