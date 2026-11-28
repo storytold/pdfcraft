@@ -5524,6 +5524,13 @@ fn thai_in_fill_sign_text_and_text_boxes_is_drawn_from_the_thai_face() {
     let d = &list(&doc, 0)[1];
     let (r, ys) = (rect(d), baselines(&ap_content(&doc, d)));
     assert!(ys[0] + hi * 24.0 <= r[3] + 1e-3 && ys[ys.len() - 1] + lo * 24.0 >= r[1] - 1e-3, "{ys:?} in {r:?}");
+    // Thai on an inner line keeps a short box growing to hold every line, as it always has,
+    // though its outer lines reach no further than their 1.2 em (review on #8570).
+    let shape = Shape::TextBox { rect: [100.0, 200.0, 400.0, 216.0], font_size: 24.0 };
+    let inner = NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: "\nน้ำ\n".into(), author: "Ada".into() };
+    let t = add_annotation(&mut doc, &inner, &meta("m")).unwrap();
+    let r = rect(&list(&doc, 0)[t]);
+    assert!(r[3] - r[1] >= 3.0 * 1.2 * 24.0, "{r:?}: grown for three lines");
 }
 
 /// Accented capitals rise past the 0.9 em a line is given above its first baseline (Å nearly to
