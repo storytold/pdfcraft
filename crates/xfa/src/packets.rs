@@ -185,6 +185,30 @@ pub(crate) fn has_signature(doc: &Document) -> bool {
     false
 }
 
+/// Longest tag name [`has_template_tag`] looks at: a prefix, a colon and `template`.
+const MAX_TAG_NAME: usize = 64;
+
+/// Whether `xdp` has a start tag whose local name is `template`, written without a prefix
+/// (`<template …>`) or with one (`<xfa:template …>`): XML names the same element either way
+/// (XFA 3.3 §XDP Namespace). A scan, not a parse; [`crate::parse`] then picks the packet by its
+/// namespace.
+fn has_template_tag(xdp: &str) -> bool {
+    let bytes = xdp.as_bytes();
+    let name_byte = |b: &u8| b.is_ascii_alphanumeric() || matches!(b, b':' | b'_' | b'-' | b'.') || *b >= 0x80;
+    bytes.iter().enumerate().filter(|(_, b)| **b == b'<').any(|(i, _)| {
+        let after = bytes.get(i.saturating_add(1)..).unwrap_or_default();
+        let len = after.iter().take(MAX_TAG_NAME + 1).take_while(|b| name_byte(b)).count();
+        let ends = after.get(len).is_some_and(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/'));
+        let name = after.get(..len).unwrap_or_default();
+        let local = match name.iter().position(|b| *b == b':') {
+            // A prefix is a name: it starts with a letter or `_`.
+            Some(p) => name.first().filter(|b| b.is_ascii_alphabetic() || **b == b'_' || **b >= 0x80).and_then(|_| name.get(p.saturating_add(1)..)),
+            None => Some(name),
+        };
+        len <= MAX_TAG_NAME && ends && local == Some(b"template".as_slice())
+    })
+}
+
 /// Read the XFA packets, if the document has any.
 pub fn read_packets(doc: &Document) -> Result<Option<Packets>, XfaError> {
     let Some(root) = doc.root() else { return Ok(None) };
@@ -242,7 +266,7 @@ pub fn read_packets(doc: &Document) -> Result<Option<Packets>, XfaError> {
                 }
                 i += if name.is_some() { 2 } else { 1 };
             }
-            if !xdp.contains("<template") {
+            if !has_template_tag(&xdp) {
                 xdp = template.unwrap_or_default();
             }
         }
@@ -253,7 +277,7 @@ pub fn read_packets(doc: &Document) -> Result<Option<Packets>, XfaError> {
         // Not a stream or an array: an XFA entry all the same, with nothing to lay out.
         _ => {}
     }
-    if !xdp.contains("<template") {
+    if !has_template_tag(&xdp) {
         xdp.clear();
     }
     Ok(Some(Packets { xdp, needs_rendering: needs_rendering.unwrap_or(false), has_fields }))

@@ -1535,6 +1535,45 @@ fn the_packets_can_be_one_stream_or_named_parts() {
     assert!(p.xdp.starts_with("<template>"), "{:?}", &p.xdp[..20.min(p.xdp.len())]);
 }
 
+/// A template packet written with a namespace prefix (`<xfa:template xmlns:xfa="…">`, the form
+/// XFA 3.3 itself shows) is the same element as one in the default namespace: it is read as one
+/// stream, inside an XDP envelope and as a named part of an array, and lays out the same fields
+/// (#8322). An element whose name only starts with `template` is not one.
+#[test]
+fn a_template_written_with_a_namespace_prefix_is_read() {
+    let ns = "http://www.xfa.org/schema/xfa-template/3.3/";
+    let body = |p: &str| {
+        format!(
+            r#"<{p}subform name="form1" layout="tb"><{p}pageSet><{p}pageArea name="page"><{p}contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><{p}medium short="612pt" long="792pt"/></{p}pageArea></{p}pageSet><{p}field name="first" w="108pt" h="18pt"><{p}ui><{p}textEdit/></{p}ui></{p}field><{p}field name="second" w="108pt" h="18pt"><{p}ui><{p}checkButton/></{p}ui></{p}field></{p}subform>"#
+        )
+    };
+    let plain = format!(r#"<template xmlns="{ns}">{}</template>"#, body(""));
+    let prefixed = format!(r#"<xfa:template xmlns:xfa="{ns}">{}</xfa:template>"#, body("xfa:"));
+    let names = |doc: &Document| -> Vec<String> {
+        let p = read_packets(doc).unwrap().unwrap();
+        layout_xml(&p.xdp).unwrap().pages.iter().flat_map(widgets).map(|w| w.name.clone()).collect()
+    };
+    let expected = names(&Document::open(Arc::new(shell(&plain))).unwrap());
+    assert_eq!(expected, ["first", "second"]);
+    assert_eq!(names(&Document::open(Arc::new(shell(&prefixed))).unwrap()), expected);
+    let enveloped = format!(r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">{prefixed}</xdp:xdp>"#);
+    assert_eq!(names(&Document::open(Arc::new(shell(&enveloped))).unwrap()), expected);
+    // The template as a named part of an array.
+    let mut doc = Document::open(Arc::new(shell(&prefixed))).unwrap();
+    let parts = vec![Object::String(pdfcraft_cos::PdfString::literal(b"template".to_vec())), Object::Ref(pdfcraft_cos::ObjRef::new(5, 0))];
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        let mut acro = c.get(b"AcroForm").and_then(Object::as_dict).cloned().unwrap();
+        acro.set(b"XFA".to_vec(), Object::Array(parts));
+        c.set(b"AcroForm".to_vec(), Object::Dict(acro));
+    })
+    .unwrap();
+    assert_eq!(names(&doc), expected);
+    // `<xfa:templates>` is another element.
+    let other = prefixed.replace("xfa:template", "xfa:templates");
+    assert_eq!(read_packets(&Document::open(Arc::new(shell(&other))).unwrap()).unwrap().unwrap().xdp, "");
+}
+
 /// Like [`shell`], but the packet bytes are given as-is.
 fn shell_bytes(packet: &[u8]) -> Vec<u8> {
     let text = shell("PLACEHOLDER");
