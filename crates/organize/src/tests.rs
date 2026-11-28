@@ -4985,6 +4985,196 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     assert!(attachments(&all));
 }
 
+/// A /Dests name tree with two leaves, the second naming only the page that is deleted, and a
+/// third whose first name goes: the empty leaf leaves the tree, and the others' /Limits are
+/// their first and last remaining names again (ISO 32000-2 §7.9.6). The root gets no /Limits.
+#[test]
+fn deleting_a_page_drops_empty_name_tree_leaves_and_fixes_limits() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Names << /Dests 6 0 R >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 200 200] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R >>".into(),                             // 3
+        "<< /Type /Page /Parent 2 0 R >>".into(),                             // 4
+        "<< /Type /Page /Parent 2 0 R >>".into(),                             // 5
+        "<< /Kids [7 0 R 8 0 R 9 0 R] >>".into(),                             // 6
+        "<< /Limits [(a) (b)] /Names [(a) [3 0 R /Fit] (b) [4 0 R /Fit]] >>".into(), // 7
+        "<< /Limits [(c) (d)] /Names [(c) [5 0 R /Fit] (d) [5 0 R /XYZ 0 0 0]] >>".into(), // 8
+        "<< /Limits [(e) (g)] /Names [(e) [5 0 R /Fit] (f) [3 0 R /Fit] (g) [4 0 R /Fit]] >>".into(), // 9
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[2]).unwrap();
+    let doc = save_and_reopen(&doc);
+    let names = catalog(&doc).get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_dict().cloned()).unwrap();
+    let root = doc.resolve(names.get(b"Dests").unwrap()).as_dict().cloned().unwrap();
+    assert!(!root.contains(b"Limits"), "the root has no /Limits");
+    let kids = root.get(b"Kids").and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(kids, [Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(9, 0))], "the emptied leaf is gone");
+    let limits = |n: u32| {
+        let d = doc.get(ObjRef::new(n, 0)).as_dict().cloned().unwrap();
+        d.get(b"Limits").and_then(Object::as_array).unwrap().iter().map(|k| k.as_string().unwrap().to_text()).collect::<Vec<_>>()
+    };
+    assert_eq!(limits(7), ["a", "b"], "an untouched leaf keeps its limits");
+    assert_eq!(limits(9), ["f", "g"], "a leaf that lost its first name starts at its new first name");
+
+    // Deleting the first two pages empties the first leaf and shrinks the last to one name.
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[0, 1]).unwrap();
+    let doc = save_and_reopen(&doc);
+    let names = catalog(&doc).get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_dict().cloned()).unwrap();
+    let root = doc.resolve(names.get(b"Dests").unwrap()).as_dict().cloned().unwrap();
+    let kids = root.get(b"Kids").and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(kids, [Object::Ref(ObjRef::new(8, 0)), Object::Ref(ObjRef::new(9, 0))]);
+    let leaf9 = doc.get(ObjRef::new(9, 0)).as_dict().cloned().unwrap();
+    assert_eq!(leaf9.get(b"Names").and_then(Object::as_array).map(Vec::len), Some(2), "only (e) is left");
+    assert_eq!(limits_of(&doc, 9), ["e", "e"]);
+
+    // A tree whose every name opens the deleted page keeps an empty root, not empty leaves.
+    let mut b = b;
+    b[5] = "<< /Kids [8 0 R] >>".into();
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[2]).unwrap();
+    let doc = save_and_reopen(&doc);
+    let names = catalog(&doc).get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_dict().cloned()).unwrap();
+    let root = doc.resolve(names.get(b"Dests").unwrap()).as_dict().cloned().unwrap();
+    assert!(!root.contains(b"Kids"), "{root:?}");
+    assert_eq!(root.get(b"Names").and_then(Object::as_array).map(Vec::len), Some(0));
+}
+
+fn limits_of(doc: &Document, n: u32) -> Vec<String> {
+    let d = doc.get(ObjRef::new(n, 0)).as_dict().cloned().unwrap();
+    d.get(b"Limits").and_then(Object::as_array).unwrap().iter().map(|k| k.as_string().unwrap().to_text()).collect()
+}
+
+/// A /Dests name tree as `nodes` (objects 5 on, 5 the root) over two pages, objects 3 and 4.
+fn dests_tree(nodes: &[String]) -> Vec<u8> {
+    let mut b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Names << /Dests 5 0 R >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+    ];
+    b.extend(nodes.iter().cloned());
+    build(&b, "/Root 1 0 R")
+}
+
+/// The /Kids of node `n`.
+fn kids_of(doc: &Document, n: u32) -> Vec<Object> {
+    let d = doc.get(ObjRef::new(n, 0)).as_dict().cloned().unwrap();
+    doc.resolve(d.get(b"Kids").unwrap()).as_array().cloned().unwrap()
+}
+
+/// The cleanup after pruning, in the shapes a tree can take (ISO 32000-2 §7.9.6, Table 36): a
+/// leaf whose only pair has a name for its key still leaves the tree when that pair goes. An
+/// intermediate node whose /Kids are out of key order gets the least and greatest key of its kids
+/// as /Limits, not its first kid's first key and its last kid's last. A leaf whose /Names is not
+/// pairs with string keys (a key left without its value) is left as it is, /Limits and all.
+#[test]
+fn deleting_a_page_tidies_name_trees_by_their_keys() {
+    let r = |s: &str| s.to_string();
+    // A leaf (8) whose one pair has the key /x, to the deleted page.
+    let nodes = [
+        r("<< /Kids [6 0 R 7 0 R] >>"),
+        r("<< /Limits [(a) (b)] /Names [(a) [3 0 R /Fit] (b) [3 0 R /Fit]] >>"),
+        r("<< /Limits [(x) (x)] /Names [/x [4 0 R /Fit]] >>"),
+    ];
+    let mut doc = open(dests_tree(&nodes));
+    delete_pages(&mut doc, &[1]).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(kids_of(&doc, 5), [Object::Ref(ObjRef::new(6, 0))], "the leaf whose pair went leaves the tree");
+}
+
+/// See [`deleting_a_page_tidies_name_trees_by_their_keys`]: /Kids out of key order.
+#[test]
+fn deleting_a_page_sets_name_tree_limits_from_the_least_and_greatest_keys() {
+    let r = |s: &str| s.to_string();
+    // An intermediate node (6) listing an m–z leaf before an a–b leaf.
+    let nodes = [
+        r("<< /Kids [6 0 R] >>"),
+        r("<< /Limits [(a) (z)] /Kids [7 0 R 8 0 R] >>"),
+        r("<< /Limits [(m) (z)] /Names [(m) [4 0 R /Fit] (n) [3 0 R /Fit] (z) [3 0 R /Fit]] >>"),
+        r("<< /Limits [(a) (b)] /Names [(a) [3 0 R /Fit] (b) [3 0 R /Fit]] >>"),
+    ];
+    let mut doc = open(dests_tree(&nodes));
+    delete_pages(&mut doc, &[1]).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(limits_of(&doc, 7), ["n", "z"]);
+    assert_eq!(limits_of(&doc, 6), ["a", "z"], "the least and greatest keys below, whatever the order of /Kids");
+}
+
+/// See [`deleting_a_page_tidies_name_trees_by_their_keys`]: a leaf that is not pairs.
+#[test]
+fn deleting_a_page_leaves_a_name_tree_leaf_that_is_not_pairs_as_it_is() {
+    let r = |s: &str| s.to_string();
+    // A leaf (6) with a key left without its value, next to one that loses a name.
+    let nodes = [
+        r("<< /Kids [6 0 R 7 0 R] >>"),
+        r("<< /Limits [(a) (z)] /Names [(a) [3 0 R /Fit] (z)] >>"),
+        r("<< /Limits [(c) (d)] /Names [(c) [4 0 R /Fit] (d) [3 0 R /Fit]] >>"),
+    ];
+    let mut doc = open(dests_tree(&nodes));
+    delete_pages(&mut doc, &[1]).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(limits_of(&doc, 7), ["d", "d"]);
+    assert_eq!(limits_of(&doc, 6), ["a", "z"], "a leaf that is not pairs keeps its /Limits");
+    assert_eq!(kids_of(&doc, 5).len(), 2);
+}
+
+/// See [`deleting_a_page_tidies_name_trees_by_their_keys`]: a root with both /Kids and /Names
+/// (Table 36 allows one) keeps its /Names when its only kid is left empty, and its pair to a page
+/// that stays.
+#[test]
+fn deleting_a_page_keeps_the_names_of_a_root_that_also_has_kids() {
+    let r = |s: &str| s.to_string();
+    let nodes = [r("<< /Kids [6 0 R] /Names [(keep) [3 0 R /Fit]] >>"), r("<< /Limits [(x) (x)] /Names [(x) [4 0 R /Fit]] >>")];
+    let mut doc = open(dests_tree(&nodes));
+    delete_pages(&mut doc, &[1]).unwrap();
+    let doc = save_and_reopen(&doc);
+    let root = doc.get(ObjRef::new(5, 0)).as_dict().cloned().unwrap();
+    let names = root.get(b"Names").and_then(Object::as_array).cloned().unwrap_or_default();
+    assert_eq!(names.first().and_then(Object::as_string).map(|k| k.to_text()), Some("keep".to_string()), "{root:?}");
+}
+
+/// Nodes the cleanup can't see whole stay as they are: a leaf at the depth limit (256 levels
+/// below the root) keeps its /Limits while one a level higher gets them fixed, and the nodes of a
+/// cycle keep their /Kids, though a kid of one is left empty.
+#[test]
+fn deleting_a_page_leaves_name_tree_nodes_past_the_limit_or_on_a_cycle_as_they_are() {
+    // The root (5), `levels` intermediate nodes, then the leaf, at depth `levels + 1`.
+    let chain = |levels: u32| {
+        let mut nodes = vec!["<< /Kids [6 0 R] >>".to_string()];
+        for n in 6..6 + levels {
+            nodes.push(format!("<< /Limits [(a) (z)] /Kids [{} 0 R] >>", n + 1));
+        }
+        nodes.push("<< /Limits [(a) (z)] /Names [(a) [3 0 R /Fit] (z) [4 0 R /Fit]] >>".into());
+        (nodes, 6 + levels)
+    };
+    for (levels, fixed) in [(254, true), (255, false)] {
+        let (nodes, leaf) = chain(levels);
+        let mut doc = open(dests_tree(&nodes));
+        delete_pages(&mut doc, &[1]).unwrap();
+        let doc = save_and_reopen(&doc);
+        let names = doc.get(ObjRef::new(leaf, 0)).as_dict().unwrap().get(b"Names").and_then(Object::as_array).map(Vec::len);
+        assert_eq!(names, Some(2), "{levels}: the pair to the deleted page went");
+        let want = if fixed { ["a", "a"] } else { ["a", "z"] };
+        assert_eq!(limits_of(&doc, leaf), want, "{levels} levels above the leaf");
+    }
+
+    // 6 lists 7, which lists 6 again: both are on a cycle. Leaf 9 is left empty.
+    let nodes = [
+        "<< /Kids [6 0 R] >>".to_string(),
+        "<< /Limits [(a) (z)] /Kids [7 0 R] >>".into(),
+        "<< /Limits [(a) (z)] /Kids [6 0 R 8 0 R 9 0 R] >>".into(),
+        "<< /Limits [(a) (a)] /Names [(a) [3 0 R /Fit]] >>".into(),
+        "<< /Limits [(z) (z)] /Names [(z) [4 0 R /Fit]] >>".into(),
+    ];
+    let mut doc = open(dests_tree(&nodes));
+    delete_pages(&mut doc, &[1]).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(kids_of(&doc, 7).len(), 3, "a node on a cycle keeps its /Kids");
+    assert_eq!(limits_of(&doc, 7), ["a", "z"]);
+    assert_eq!(limits_of(&doc, 6), ["a", "z"]);
+}
+
 /// #7687: a watermark source must clip and size the same visible area as the page.
 #[test]
 fn page_form_clips_crop_to_media_before_rotation() {
