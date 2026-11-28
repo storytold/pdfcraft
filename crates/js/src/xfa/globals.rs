@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use super::host::host;
 use super::instances::instance_manager;
-use super::model::{MAX_DEPTH, XfaDoc, XfaEffect, XfaEvent, clip, reset_names};
+use super::model::{MAX_DEPTH, XfaDoc, XfaEffect, XfaEvent, clip, payload, reset_names};
 use super::nodes::{node_index, node_object, noop, resolve_som, resolver, sink};
 use super::{
     Attribute, Context, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, data_object, function, js_string, platform, printd,
@@ -19,6 +21,25 @@ fn effect(ctx: &mut Context, e: XfaEffect) -> JsResult<()> {
 fn export_data_object(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let (name, open) = data_object(args, ctx)?;
     effect(ctx, XfaEffect::OpenAttachment { name, open })?;
+    Ok(JsValue::undefined())
+}
+
+/// `app.runtimeHighlight`: whether the viewer highlights form fields.
+fn runtime_highlight(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.highlight))
+}
+
+/// `app.runtimeHighlight = on`: asks the viewer to highlight form fields, or to stop.
+fn set_runtime_highlight(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let on = arg(args, 0).to_boolean();
+    let mut h = host(ctx)?.borrow_mut();
+    let e = XfaEffect::Highlight(on);
+    // Changed only when the request is kept: past the effect cap the script goes on reading the
+    // setting the viewer has.
+    if h.doc.highlight != on && h.reserve(&e, payload(&e)) {
+        h.doc.highlight = on;
+        h.record(e);
+    }
     Ok(JsValue::undefined())
 }
 
@@ -76,13 +97,13 @@ fn set_focus(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVal
     let som = match target.as_object() {
         Some(_) if node_index(&target, ctx).is_ok() => {
             let i = node_index(&target, ctx)?;
-            host(ctx)?.borrow().nodes.get(i).map(|n| n.som.clone()).unwrap_or_default()
+            host(ctx)?.borrow().nodes.get(i).map(|n| n.som.to_string()).unwrap_or_default()
         }
         _ => {
             let expr = text(&target, ctx)?;
             let h = host(ctx)?.borrow();
             let found = resolve_som(&h, h.current, &expr);
-            found.first().and_then(|i| h.nodes.get(*i)).map(|n| n.som.clone()).unwrap_or(expr)
+            found.first().and_then(|i| h.nodes.get(*i)).map(|n| n.som.to_string()).unwrap_or(expr)
         }
     };
     effect(ctx, XfaEffect::SetFocus(som))?;
@@ -219,6 +240,11 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
         .function(NativeFunction::from_fn_ptr(layout_page0), js_string!("absPage"), 1)
         .function(NativeFunction::from_fn_ptr(layout_page_count), js_string!("pageCount"), 0)
         .function(NativeFunction::from_fn_ptr(layout_page_count), js_string!("absPageCount"), 0)
+        // On screen every page is a sheet of its own: the sheet is the page, counted from 0
+        // as absPage counts (a form shows `sheet(this) + 1` as the sheet number), and the
+        // sheet count is the page count.
+        .function(NativeFunction::from_fn_ptr(layout_page0), js_string!("sheet"), 1)
+        .function(NativeFunction::from_fn_ptr(layout_page_count), js_string!("sheetCount"), 0)
         .function(NativeFunction::from_fn_ptr(relayout), js_string!("relayout"), 0)
         .function(NativeFunction::from_fn_ptr(relayout), js_string!("relayoutPageArea"), 0)
         .function(NativeFunction::from_fn_ptr(zero), js_string!("h"), 2)
@@ -285,7 +311,10 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
     ctx.register_global_property(js_string!("xfa"), xfa, rw)?;
     ctx.register_global_property(js_string!("event"), acrobat_ev, rw)?;
     ctx.register_global_property(js_string!("__xfa_this"), this_node, rw)?;
+    let highlight_get = function(ctx, NativeFunction::from_fn_ptr(runtime_highlight));
+    let highlight_set = function(ctx, NativeFunction::from_fn_ptr(set_runtime_highlight));
     let app = ObjectInitializer::new(ctx)
+        .accessor(js_string!("runtimeHighlight"), Some(highlight_get), Some(highlight_set), rw)
         .function(NativeFunction::from_fn_ptr(app_alert), js_string!("alert"), 4)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 1)
         .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
@@ -387,13 +416,13 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
         "DataView",
         "Intl",
     ];
-    let mut defined: Vec<String> = RESERVED.iter().map(ToString::to_string).collect();
+    let mut defined: HashSet<String> = RESERVED.iter().map(ToString::to_string).collect();
     for scope in scopes {
         let kids: Vec<(usize, String, bool)> = {
             let h = host(ctx)?.borrow();
             h.nodes
                 .get(scope)
-                .map(|n| n.children.iter().filter_map(|&c| h.nodes.get(c).map(|k| (c, k.name.clone(), k.repeatable && !k.gone))).collect())
+                .map(|n| n.children.iter().filter_map(|&c| h.nodes.get(c).map(|k| (c, k.name.to_string(), k.repeatable && !k.gone))).collect())
                 .unwrap_or_default()
         };
         for (c, name, repeatable) in kids {
@@ -406,7 +435,7 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
                 let im = instance_manager(ctx, scope, &name)?;
                 ctx.register_global_property(JsString::from(format!("_{name}").as_str()), im, rw)?;
             }
-            defined.push(name);
+            defined.insert(name);
         }
     }
     Ok(())
