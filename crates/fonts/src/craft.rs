@@ -135,6 +135,13 @@ pub fn document_japanese_fonts_for_style(serif: bool, bold: bool) -> Vec<&'stati
     document_faces(CRAFT_FONTS, serif, bold)
 }
 
+/// The `Hang` or `Kore` craft-fonts faces (NanumGothic): the Japanese faces have no Hangul, so text
+/// written into a PDF takes it from these. Empty without craft-fonts or when its revision has no
+/// Korean face.
+pub fn document_korean_fonts() -> Vec<&'static EmbeddedFace> {
+    CRAFT_FONTS.iter().filter(|f| f.has_script("Hang") || f.has_script("Kore")).collect()
+}
+
 /// The scripts the bundled Inter faces are for.
 static LATIN_SCRIPTS: &[&str] = &["Latn", "Cyrl", "Grek"];
 

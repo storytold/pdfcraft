@@ -376,6 +376,11 @@ fn no_hebrew_font() -> EditError {
     )
 }
 
+/// Hangul syllables and jamo (the compatibility and extended blocks too).
+fn is_hangul(ch: char) -> bool {
+    matches!(u32::from(ch), 0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7FF)
+}
+
 /// The faces a Type 3 replacement may draw `text` with, best first. Text with Hebrew takes the
 /// Hebrew face first (its Latin and digits too, so a line keeps one look), then the Japanese faces
 /// and the bundled Latin one for anything it lacks; other text takes the Japanese faces, and the
@@ -385,7 +390,14 @@ pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) 
     let japanese = pdfcraft_fonts::document_japanese_fonts_for_style(family == crate::added::Family::Times, bold);
     let latin = pdfcraft_fonts::document_latin_fonts(bold);
     if !text.chars().any(crate::bidi::is_hebrew) {
-        return Ok((japanese.into_iter().chain(latin).collect(), false));
+        // The Japanese faces have no Hangul (#2114): text with some takes the Korean face first, so
+        // its Latin letters and digits keep one look with it.
+        let korean = pdfcraft_fonts::document_korean_fonts();
+        return Ok(if text.chars().any(is_hangul) {
+            (korean.into_iter().chain(japanese).chain(latin).collect(), false)
+        } else {
+            (japanese.into_iter().chain(latin).collect(), false)
+        });
     }
     // Points are drawn on their letter with the font's positioning, which a one-glyph-per-
     // character Type 3 font can't do; refuse rather than print them beside the letter.
