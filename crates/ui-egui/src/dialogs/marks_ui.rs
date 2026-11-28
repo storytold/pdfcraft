@@ -24,7 +24,7 @@ use craft::ui::runtime::requests::PathKind;
 use craft::ui::style::DataColor;
 use craft::ui::text::TextField;
 use egui::{Color32, CornerRadius, Rect, pos2, vec2};
-use pdfcraft_engine::{Backdrop, Background, DocId, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
+use pdfcraft_engine::{Backdrop, Background, DocId, Edit, FontFamily, HeaderFooter, MarkKind, MarkSource, Repeat, Watermark, watermark_centres};
 
 use crate::PdfCraftApp;
 
@@ -388,6 +388,11 @@ fn opening_fields(d: &MarksDraft, kind: MarkKind, m: &MarginUnits) -> DialogFiel
                 f.set("wm.behind", FieldValue::Text(if d.wm.behind { "behind" } else { "above" }.into()));
                 f.set("wm.offset.0", FieldValue::Number(d.wm.offset[0]));
                 f.set("wm.offset.1", FieldValue::Number(d.wm.offset[1]));
+                let repeat = d.wm.repeat.unwrap_or_default();
+                f.set("wm.repeat", FieldValue::Bool(d.wm.repeat.is_some()));
+                f.set("wm.spacing.0", FieldValue::Number(repeat.spacing[0]));
+                f.set("wm.spacing.1", FieldValue::Number(repeat.spacing[1]));
+                f.set("wm.stagger", FieldValue::Bool(repeat.stagger));
             } else {
                 f.set("file.scale", FieldValue::Number(d.bg.scale * 100.0));
                 f.set("marks.bg.colour", colour_value(d.bg.color));
@@ -458,6 +463,14 @@ fn read_fields(d: &mut MarksDraft, f: &DialogFields, kind: MarkKind, m: &MarginU
                         *slot = v;
                     }
                 }
+                if let Some(on) = f.bool("wm.repeat") {
+                    let mut repeat = d.wm.repeat.unwrap_or_default();
+                    for (k, slot) in repeat.spacing.iter_mut().enumerate() {
+                        *slot = f.number(&format!("wm.spacing.{k}")).unwrap_or(*slot);
+                    }
+                    repeat.stagger = f.bool("wm.stagger").unwrap_or(repeat.stagger);
+                    d.wm.repeat = on.then_some(repeat);
+                }
             } else {
                 d.bg.scale = scale.unwrap_or(d.bg.scale);
                 d.bg.color = colour_of(f, "marks.bg.colour", d.bg.color);
@@ -477,16 +490,48 @@ struct Notes {
     /// Whether OK can be pressed, and why not when the text can't be drawn.
     ready: bool,
     reason: Option<String>,
+    /// Said without holding OK back: a repeated picture that may need too many copies.
+    warning: Option<String>,
     /// How many pages the range selects.
     applies: usize,
 }
 
+/// The watermark the dialog would add, as the engine lays it out. A picture that isn't imported
+/// yet stands in as a square.
+fn probe(d: &MarksDraft) -> Watermark {
+    let mut wm = d.wm.clone();
+    if d.use_file {
+        wm.source = Some(MarkSource::placeholder());
+    }
+    if d.fit {
+        wm.font_size = 0.0;
+    }
+    wm
+}
+
+/// Whether a repeat needs more copies than the engine draws on any of `pages`. Pages of one size
+/// give one answer, so each size is checked once.
+fn too_many_copies(d: &MarksDraft, pages: &[usize], sizes: &[(f64, f64)]) -> bool {
+    if d.wm.repeat.is_none() || (!d.use_file && d.wm.text.trim().is_empty()) {
+        return false;
+    }
+    let wm = probe(d);
+    let mut seen = HashSet::new();
+    pages.iter().filter_map(|&p| sizes.get(p)).any(|&size| seen.insert((size.0.to_bits(), size.1.to_bits())) && watermark_centres(&wm, size).is_err())
+}
+
 /// The notes for the draft `d` read from the dialog's values; `has_file` is whether the file row
 /// holds a name.
-fn notes_of(kind: MarkKind, d: &MarksDraft, has_file: bool, g: &Geometry, selection: &[usize]) -> Notes {
-    let applies = d.range.pages(g.count, g.current, selection).len();
+fn notes_of(kind: MarkKind, d: &MarksDraft, has_file: bool, g: &Geometry, selection: &[usize], sizes: &[(f64, f64)]) -> Notes {
+    let pages = d.range.pages(g.count, g.current, selection);
+    let applies = pages.len();
     let refused = undrawable(kind, d);
+    // A picture's real size is only known once the engine imports it, so the square stand-in can
+    // only warn; the engine makes the final call.
+    let too_many = (kind == MarkKind::Watermark && too_many_copies(d, &pages, sizes))
+        .then(|| tl!("Too many copies: increase the spacing or the size.").to_string());
     let ready = refused.is_none()
+        && (d.use_file || too_many.is_none())
         && match kind {
             MarkKind::HeaderFooter => d.hf.text.iter().any(|x| !x.trim().is_empty()),
             MarkKind::Watermark => {
@@ -500,7 +545,9 @@ fn notes_of(kind: MarkKind, d: &MarksDraft, has_file: bool, g: &Geometry, select
             MarkKind::PrinterMarks => true,
         }
         && applies > 0;
-    Notes { ready, reason: refused.map(|c| crate::content_ui::undrawable_message(c).to_string()), applies }
+    let (held, warning) = if d.use_file { (None, too_many) } else { (too_many, None) };
+    let reason = refused.map(|c| crate::content_ui::undrawable_message(c).to_string()).or(held);
+    Notes { ready, reason, warning, applies }
 }
 
 /// What the rows need to know about the document, fixed while the dialog is open.
@@ -621,6 +668,16 @@ fn rows(kind: MarkKind, g: &Geometry) -> Vec<Param> {
                     Param::number(format!("wm.offset.{k}"), label, 0.0, 1.0, 1).unit(UnitKind::Points).bounds(Some(-MAX_OFFSET), Some(MAX_OFFSET)),
                 );
             }
+            rows.push(Param::new("wm.repeat", tl!("Repeat"), ParamKind::bool(false)));
+            for (k, label) in [(0, tl!("Horizontal space between copies")), (1, tl!("Vertical space between copies"))] {
+                rows.push(
+                    Param::number(format!("wm.spacing.{k}"), label, Repeat::default().spacing[k], 1.0, 1)
+                        .unit(UnitKind::Points)
+                        .bounds(Some(0.0), Some(MAX_OFFSET))
+                        .visible_when("wm.repeat", true),
+                );
+            }
+            rows.push(Param::new("wm.stagger", tl!("Stagger rows"), ParamKind::bool(false)).visible_when("wm.repeat", true));
         }
         MarkKind::Background => {
             let source = [("colour".to_string(), tl!("From colour").to_string()), ("file".to_string(), tl!("File").to_string())];
@@ -839,11 +896,15 @@ fn thumbnail_picture(ctx: &egui::Context, source: &impl ThumbSource<usize>, page
 fn overlay(kind: MarkKind, d: &MarksDraft, size: (f64, f64)) -> SharedOverlay {
     let hf = d.hf.clone();
     let (wm, fit, use_file) = (d.wm.clone(), d.fit, d.use_file);
+    // Where the copies go: the engine's own layout, so the preview and the result agree. A layout
+    // that was refused (too many copies) draws none.
+    let centres = if kind == MarkKind::Watermark { watermark_centres(&probe(d), size).unwrap_or_default() } else { Vec::new() };
     let file_name = d.file.as_ref().map(|f| f.0.clone());
     let (page_w, page_h) = (size.0.max(1.0), size.1.max(1.0));
     Arc::new(move |cx: &ContentPainterCx<'_>, _: CanvasTransform, r: Rect| {
         let p = &cx.painter;
         let s = (f64::from(r.width()) / page_w) as f32;
+        let spots = || centres.iter().map(|&(x, y)| pos2(r.left() + x as f32 * s, r.bottom() - y as f32 * s));
         match kind {
             MarkKind::HeaderFooter => {
                 if hf.shrink {
@@ -873,8 +934,12 @@ fn overlay(kind: MarkKind, d: &MarksDraft, size: (f64, f64)) -> SharedOverlay {
             }
             MarkKind::Watermark if use_file => {
                 if let Some(name) = &file_name {
-                    p.rect_stroke(r.shrink(6.0), CornerRadius::ZERO, egui::Stroke::new(1.0, Color32::GRAY), egui::StrokeKind::Inside);
-                    p.text(r.center(), egui::Align2::CENTER_CENTER, name.clone(), egui::FontId::proportional(10.0), Color32::GRAY);
+                    let side = r.width().min(r.height()) * wm.scale as f32;
+                    for centre in spots() {
+                        let frame = Rect::from_center_size(centre, vec2(side, side));
+                        p.rect_stroke(frame, CornerRadius::ZERO, egui::Stroke::new(1.0, Color32::GRAY), egui::StrokeKind::Inside);
+                        p.text(centre, egui::Align2::CENTER_CENTER, name.clone(), egui::FontId::proportional(10.0), Color32::GRAY);
+                    }
                 }
             }
             MarkKind::Watermark => {
@@ -892,8 +957,9 @@ fn overlay(kind: MarkKind, d: &MarksDraft, size: (f64, f64)) -> SharedOverlay {
                 let half = galley.size() / 2.0;
                 let (sn, cs) = angle.sin_cos();
                 let offset = vec2(half.x * cs - half.y * sn, half.x * sn + half.y * cs);
-                let centre = r.center() + vec2(wm.offset[0] as f32 * s, -wm.offset[1] as f32 * s);
-                p.add(egui::epaint::TextShape::new(centre - offset, galley, Color32::BLACK).with_angle(angle));
+                for centre in spots() {
+                    p.add(egui::epaint::TextShape::new(centre - offset, galley.clone(), Color32::BLACK).with_angle(angle));
+                }
             }
             MarkKind::Background if use_file => {
                 if let Some(name) = &file_name {
@@ -925,6 +991,8 @@ impl PdfCraftApp {
         let geometry = Geometry { count, current, units };
         let fields = opening_fields(&self.marks_draft, kind, &units);
         let base = self.marks_draft.clone();
+        let sizes: Vec<(f64, f64)> =
+            self.session.get(id).map_or_else(Vec::new, |d| d.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect());
         let heading = title(kind, replace);
         // Passed inline: a closure made apart from the call gets one lifetime for its argument and result.
         // PLAN: assumed `self.dialogs: DialogHost`, `self.host`/`self.wake` (pdf-hub-w1 note 11)
@@ -932,7 +1000,8 @@ impl PdfCraftApp {
             let mut draft = base.clone();
             read_fields(&mut draft, fields, kind, &units);
             let has_file = fields.text("file.path").is_some_and(|p| !p.is_empty());
-            let notes = notes_of(kind, &draft, has_file, &geometry, &selection);
+            let notes = notes_of(kind, &draft, has_file, &geometry, &selection, &sizes);
+            let warning = notes.warning.clone();
             let applies = notes.applies;
             let refusal = notes.reason.clone();
             let mut dialog = ParamDialog::new(dialog_key(kind), heading.clone(), rows(kind, &geometry))
@@ -950,8 +1019,8 @@ impl PdfCraftApp {
                     } else {
                         crate::i18n::fmt(tl!("Applies to {n} pages"), &[("n", &applies.to_string())])
                     };
-                    if let Some(reason) = &refusal {
-                        Text::new(reason.clone()).tone(craft::theme::variant::Tone::Bad).show(ui);
+                    for said in refusal.iter().chain(&warning) {
+                        Text::new(said.clone()).tone(craft::theme::variant::Tone::Bad).show(ui);
                     }
                     Text::new(applies).show(ui);
                     if replace {
@@ -1202,6 +1271,41 @@ mod tests {
         d.bg.replace_backdrop = false;
         assert_eq!(background_tint(&d, Some(Backdrop::Fill)), Color32::WHITE, "its white backdrop stays and hides it");
         assert_eq!(background_tint(&d, None), colour, "unticked changes nothing without a backdrop");
+    }
+
+    #[test]
+    fn the_watermark_edit_carries_the_repeat() {
+        let mut d = MarksDraft::default();
+        let units = MarginUnits { per: 1.0, kind: UnitKind::Points, decimals: 1 };
+        let mut fields = opening_fields(&d, MarkKind::Watermark, &units);
+        fields.set("wm.repeat", FieldValue::Bool(true));
+        fields.set("wm.spacing.0", FieldValue::Number(20.0));
+        fields.set("wm.spacing.1", FieldValue::Number(30.0));
+        fields.set("wm.stagger", FieldValue::Bool(true));
+        read_fields(&mut d, &fields, MarkKind::Watermark, &units);
+        match edit(&d, MarkKind::Watermark, 3, 0, &[]) {
+            Edit::AddWatermark { settings, .. } => assert_eq!(settings.repeat, Some(Repeat { spacing: [20.0, 30.0], stagger: true })),
+            other => panic!("expected AddWatermark, got {other:?}"),
+        }
+        // Off by default: a watermark is drawn once.
+        assert_eq!(MarksDraft::default().wm.repeat, None);
+    }
+
+    /// A 6-point "I" with no gap needs thousands of copies on a 300 x 400 page, and few on a
+    /// tiny one: OK is held back for any page the range takes, not only the one shown.
+    #[test]
+    fn a_repeat_too_big_for_any_selected_page_holds_ok_back() {
+        let mut d = MarksDraft { fit: false, ..MarksDraft::default() };
+        d.wm.text = "I".into();
+        d.wm.font_size = 6.0;
+        d.wm.repeat = Some(Repeat { spacing: [0.0, 0.0], stagger: false });
+        let sizes = [(20.0, 20.0), (300.0, 400.0)];
+        let g = Geometry { count: 2, current: 0, units: MarginUnits { per: 1.0, kind: UnitKind::Points, decimals: 1 } };
+        let notes = |d: &MarksDraft| notes_of(MarkKind::Watermark, d, false, &g, &[], &sizes);
+        assert!(!notes(&d).ready && notes(&d).reason.is_some());
+        assert!(!too_many_copies(&d, &[0], &sizes), "the small page alone takes it");
+        d.wm.repeat = Some(Repeat { spacing: [60.0, 60.0], stagger: true });
+        assert!(notes(&d).ready && notes(&d).reason.is_none());
     }
 
     #[test]

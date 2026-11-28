@@ -242,6 +242,69 @@ fn watermark_and_background_dialogs() {
     assert_eq!(marks(&h).len(), 2);
 }
 
+const TOO_MANY: &str = "Too many copies: increase the spacing or the size.";
+
+/// The smallest text the dialog allows (6 points), a narrow "I" and no gap: thousands of copies
+/// on a 300 x 400 page.
+fn ask_for_too_many_copies(h: &mut Rig) {
+    for (field, value) in [
+        ("wm.text", json!("I")),
+        ("wm.fit", json!(false)),
+        ("wm.size", json!(6.0)),
+        ("wm.repeat", json!(true)),
+        ("wm.spacing.0", json!(0.0)),
+        ("wm.spacing.1", json!(0.0)),
+    ] {
+        set_field(h, MarkKind::Watermark, field, value);
+    }
+    h.steps(2);
+}
+
+#[test]
+fn a_watermark_can_be_repeated_and_a_repeat_that_needs_too_many_copies_is_held_back() {
+    let mut h = harness();
+    h.execute("edit.watermark");
+    h.steps(2);
+    h.get_by_label("Repeat");
+    assert!(h.query_by_label("Stagger rows").is_none(), "the spacing rows appear with the repeat");
+    ask_for_too_many_copies(&mut h);
+    h.get_by_label("Stagger rows");
+    h.get_by_label(TOO_MANY);
+    assert!(ok_disabled(&h), "OK is held back");
+    // More room between the copies and it can go ahead.
+    set_field(&mut h, MarkKind::Watermark, "wm.spacing.0", json!(60.0));
+    set_field(&mut h, MarkKind::Watermark, "wm.spacing.1", json!(60.0));
+    h.steps(2);
+    assert!(h.query_by_label(TOO_MANY).is_none());
+    h.get_by_label("OK").click();
+    h.steps(4);
+    assert!(!is_open(&h));
+    assert_eq!(marks(&h), [MarkKind::Watermark]);
+}
+
+#[test]
+fn a_repeat_too_big_for_any_selected_page_holds_ok_back_not_only_for_the_page_shown() {
+    // Page 1 (the one shown) is tiny and takes the repeat; page 2 is 300 x 400 and does not.
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let mut h = harness_with(pdf);
+    h.execute("edit.watermark");
+    h.steps(2);
+    ask_for_too_many_copies(&mut h);
+    h.get_by_label(TOO_MANY);
+    assert!(ok_disabled(&h), "OK is held back");
+    // Leaving the big page out of the range lets it go ahead.
+    set_range(&mut h, MarkKind::Watermark, PageRange { scope: PageScope::Range, from: 1, to: Some(1), subset: Subset::All });
+    h.steps(2);
+    assert!(!ok_disabled(&h), "OK is available");
+}
+
 #[test]
 fn backgrounds_and_watermarks_from_a_file() {
     let files = Arc::new(craft::host::ScriptedFiles::answering([craft::host::Picked::Contents(vec![("letterhead.pdf".into(), FIXTURE.to_vec())])]));
