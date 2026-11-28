@@ -179,7 +179,7 @@ impl PdfCraftApp {
         if self.preferences.is_none() {
             // The app that opens PDFs may have changed in the Finder since Preferences last showed it.
             #[cfg(target_os = "macos")]
-            crate::platform::macos_default_app::refresh(crate::platform::macos_default_app::Request::Idle);
+            crate::platform::macos_default_app::reread();
             self.preferences = Some(PreferencesSession::new(self));
         }
     }
@@ -270,6 +270,7 @@ impl DefaultAppText {
             Opener::OtherCopy(folder) => i18n::fmt(tl!("PDFs open in the copy of PdfCraft in {folder}."), &[("folder", folder)]),
             Opener::Other(app) => i18n::fmt(tl!("PDFs open in {app}."), &[("app", app)]),
             Opener::Nothing => tl!("macOS names no app that opens PDFs.").to_string(),
+            Opener::Unknown => tl!("This macOS can't say which app opens PDFs. macOS 12 or later can make PdfCraft that app.").to_string(),
         };
         let status = if !s.can_set {
             format!("{opener} {}", tl!("Only an installed PdfCraft app can be made the app that opens PDFs."))

@@ -22,6 +22,8 @@ pub(crate) enum Opener {
     Other(String),
     /// LaunchServices names no app.
     Nothing,
+    /// This macOS (before 12) has no way to ask which app opens PDFs.
+    Unknown,
 }
 
 /// Where the last "make PdfCraft the default" request stands.
@@ -65,6 +67,10 @@ fn pdf_type() -> Option<objc2::rc::Retained<objc2_uniform_type_identifiers::UTTy
 fn query() -> Opener {
     use objc2_app_kit::NSWorkspace;
     use objc2_foundation::{NSFileManager, NSString};
+    // `URLForApplicationToOpenContentType:` is macOS 12 and later; the app runs from macOS 11.
+    if !objc2::available!(macos = 12.0) {
+        return Opener::Unknown;
+    }
     let Some(pdf) = pdf_type() else { return Opener::Nothing };
     let Some(url) = NSWorkspace::sharedWorkspace().URLForApplicationToOpenContentType(&pdf) else { return Opener::Nothing };
     let Some(path) = url.to_file_path() else { return Opener::Nothing };
@@ -84,6 +90,19 @@ fn query() -> Opener {
 pub(crate) fn refresh(request: Request) {
     let status = Status { opener: query(), request, can_set: this_bundle().is_some() };
     *STATUS.lock().unwrap_or_else(PoisonError::into_inner) = Some(status);
+}
+
+/// Read the current opener again when Preferences opens. A request macOS hasn't answered stays
+/// waiting, so reopening Preferences can't enable the button for a second request.
+pub(crate) fn reread() {
+    let opener = query();
+    let can_set = this_bundle().is_some();
+    let mut slot = STATUS.lock().unwrap_or_else(PoisonError::into_inner);
+    let request = match slot.as_ref().map(|s| s.request) {
+        Some(Request::Waiting) => Request::Waiting,
+        _ => Request::Idle,
+    };
+    *slot = Some(Status { opener, request, can_set });
 }
 
 /// The last status read, reading it the first time.
