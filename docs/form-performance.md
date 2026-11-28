@@ -4,7 +4,11 @@ Status: implemented; proposed as an independent performance PR. Last reviewed an
 2026-10-19. Measurements below are historical synthetic evidence collected before this split,
 not fresh measurements on upstream main. No private document is needed for the benchmark.
 
-## Architecture
+## Historical benchmark architecture
+
+This section describes the runner used for the measurements below. Native AcroForm events now
+use a retained per-document `ScriptSession`; see
+[Runtime and lifecycle](acroform-script-workflows.md#runtime-and-lifecycle).
 
 - `crates/ui-egui/src/tools/forms_ui.rs` queues `Edit::SetFieldValue` for a text commit or checkbox
   toggle. `crates/automation/src/forms.rs::form_fill` uses the same edit API.
