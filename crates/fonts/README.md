@@ -77,7 +77,7 @@ The descriptor does not change glyph programs or replace the Type 3 `FontBBox` m
 only Gothic Regular, so it cannot preserve bold. No new font assets or changes to that input are
 needed.
 
-wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Telu`, `Hebr` or `Thai` face, to keep the web build small: the web build
+wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Telu`, `Hebr`, `Thai` or `Geor` face, to keep the web build small: the web build
 currently has no Chinese face, so Chinese there still shows the replacement glyph.
 Font files are never
 committed here (docs/development.md "Fonts and attribution").

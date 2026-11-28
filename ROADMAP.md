@@ -5,6 +5,8 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-17 | **Last updated:** 2026-11-17 | **Change:** patch (M7: Georgian interface face, size stated; estimates unchanged)
+
 > **Last reviewed:** 2026-11-04 | **Last updated:** 2026-11-04 | **Change:** minor (M7: paragraph boundaries respect row typography and page-wide filled panels; estimates unchanged)
 
 > **Last reviewed:** 2026-11-16 | **Last updated:** 2026-11-16 | **Change:** patch (M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged)
@@ -270,6 +272,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-11-18 (M7, #7687):** PDF-page watermarks clip the source CropBox to MediaBox before sizing and rotating the imported form. Synthetic geometry and save/reopen render regressions cover oversized and partially overlapping crops; estimates unchanged.
 
+- **2026-11-17 (M7, Georgian interface font):** The Georgian interface face is craft-fonts' Noto Sans Georgian (`Geor`, SIL OFL-1.1, one 232 KB variable TrueType file; craft-fonts `b076417b`, the pin main already has). Desktop builds with craft-fonts embed it; the web build keeps it too (`web-craft-fonts: true` in the release workflow is left to a maintainer), so a web build with craft-fonts grows by 232 KB (231,988 bytes) before compression. Estimates unchanged.
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
 

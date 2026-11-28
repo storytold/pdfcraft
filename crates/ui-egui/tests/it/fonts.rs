@@ -11,6 +11,7 @@ const JAPANESE: &str = "日本語の文字";
 const CHINESE: &str = "简体中文欢迎";
 const ARABIC: &str = "واحد اثنين";
 const TELUGU: &str = "తెలుగు ఫైల్";
+const GEORGIAN: &str = "ქართული ენა აბგდევზთიკლმნოპჟრსტუფქღყშჩცძწჭხჯჰ";
 const DEVANAGARI: &str = "हिंदी पाठ सम्पादन";
 
 /// The embedded craft-i18n catalogs `code` reads (the shared one and PdfCraft's), one text; empty
@@ -158,6 +159,23 @@ fn telugu_ui_text_uses_craft_fonts() {
     let apart = layout_widths(&mut fonts, "క్\u{200c}ష");
     for (j, a) in joined.iter().zip(&apart) {
         assert!(j < a, "క్ష is one conjunct, narrower than క్‌ష: {j} vs {a}");
+    }
+}
+
+/// Built with a craft-fonts Georgian face, Georgian text (the whole Mkhedruli alphabet) has real
+/// glyphs in every family, from a Georgian face placed after the app's own fonts.
+#[test]
+fn georgian_ui_text_uses_craft_fonts() {
+    let georgian: Vec<String> = pdfcraft_fonts::ui_georgian_fonts().iter().map(|f| f.name()).collect();
+    if georgian.is_empty() {
+        eprintln!("skipping georgian_ui_text_uses_craft_fonts: no Geor face bundled (set CRAFT_FONTS_DIR with a Georgian face to run it)");
+        return;
+    }
+    let defs = definitions("ka");
+    assert_script_order(&defs, Lang::from_code("ka").is_some(), |name| georgian.iter().any(|face| face == name));
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, GEORGIAN), "{id:?} lacks {GEORGIAN}");
     }
 }
 

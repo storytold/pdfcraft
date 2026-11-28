@@ -58,6 +58,12 @@ pub fn document_thai_font() -> Option<&'static EmbeddedFace> {
     ui_thai_fonts().into_iter().next()
 }
 
+/// The `Geor` craft-fonts faces for Georgian interface text, in manifest order. Empty when built
+/// without craft-fonts or when it has no Georgian face.
+pub fn ui_georgian_fonts() -> Vec<&'static EmbeddedFace> {
+    CRAFT_FONTS.iter().filter(|f| f.has_script("Geor")).collect()
+}
+
 /// The `Deva` craft-fonts faces for Devanagari interface text (the Hindi catalog, file names,
 /// document titles), in manifest order. Empty when built without craft-fonts or when its revision
 /// has no Devanagari face; a desktop build then falls back to one font already installed on the

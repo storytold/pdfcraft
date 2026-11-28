@@ -1,7 +1,7 @@
 //! Embeds the fonts of the optional craft-fonts build input (`CRAFT_FONTS_DIR`) as `CRAFT_FONTS`.
 //! The recipe is craft-fonts' `docs/integration.md`; unset, `CRAFT_FONTS` is empty. It only reads
 //! the local checkout (no network). On wasm32 it embeds only the UI faces (BIZ UDPGothic Regular
-//! and any `Arab`, `Telu`, `Hebr`, `Thai` or `Deva` face), to keep the web build within hosting
+//! and any `Arab`, `Telu`, `Hebr`, `Thai`, `Deva` or `Geor` face), to keep the web build within hosting
 //! limits (Cloudflare Pages: 25 MiB per file). Native builds also read the optional
 //! `fonts/simplified-chinese-manifest.txt` (LXGW WenKai Lite); it is never embedded on wasm.
 //! `CRAFT_FONTS_REQUIRED` makes both the checkout and that native manifest required.
@@ -97,8 +97,8 @@ fn manifest(dir: &std::path::Path, manifest: &std::path::Path, wasm: bool, stric
         }
         // Arabic interface faces are small, so the web build keeps them too. Telugu faces too, for
         // the Telugu interface; the Hebrew ones (small), for Hebrew text and Edit text on the web;
-        // and Devanagari, for the Hindi interface (one small face).
-        let web_face = (family == "BIZ UDPGothic" && style == "Regular") || ["Arab", "Telu", "Hebr", "Thai", "Deva"].into_iter().any(has);
+        // Devanagari, for the Hindi interface (one small face); and Georgian, for the Georgian interface (one face).
+        let web_face = (family == "BIZ UDPGothic" && style == "Regular") || ["Arab", "Telu", "Hebr", "Thai", "Deva", "Geor"].into_iter().any(has);
         if wasm && !web_face {
             continue;
         }
