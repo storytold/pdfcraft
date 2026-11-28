@@ -261,60 +261,144 @@ fn election(socket: &std::path::Path) -> Option<std::fs::File> {
     }
 }
 
-/// [`claim`] with the socket at `path`.
+/// The sockets a launch tries, in order: `primary`, then the same name in [`alt_dir`] where this
+/// platform has one. The first launch listens on the first it can use and a later one connects to
+/// each in turn, so both sides agree on the list.
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+fn candidates(primary: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut all = vec![primary.to_path_buf()];
+    if let (Some(alt), Some(name)) = (alt_dir(), primary.file_name()) {
+        all.push(alt.join(name));
+    }
+    all
+}
+
+/// The folder to turn to when sockets in `%LOCALAPPDATA%\PdfCraft` can't be used: on a Windows 11
+/// build 26300 PC every socket there answered "The file cannot be accessed by the system" (os
+/// error 1920) to a look at it, even one just bound, and could not be deleted, so a second launch
+/// could never connect to the first. `%LOCALAPPDATA%\Temp\PdfCraft` is private to the user like
+/// the first folder. It is named from `%LOCALAPPDATA%` and never from `%TEMP%`, which a user or a
+/// policy can point at a folder other accounts can write to. None elsewhere, and when
+/// `%LOCALAPPDATA%` is unset.
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+fn alt_dir() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(|d| std::path::PathBuf::from(d).join("Temp").join("PdfCraft"))
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Whether a failed look at a socket path means it can't hold a usable socket. NotFound is a path
+/// with nothing there yet, and PermissionDenied is what an exiting instance's delete-pending
+/// socket answers (the remove and bind steps retry it as busy). Anything else, such as os error
+/// 1920, gives the candidate up.
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+fn cant_be_looked_at(e: &std::io::Error) -> bool {
+    !matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied)
+}
+
+/// [`claim`] with the socket at `path` (and its [`candidates`]).
 #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
 fn claim_at(path: &std::path::Path, files: &[String], may_hand_off: bool, combine: bool) -> Claim {
-    // Released when this function returns: by then this launch listens, or has handed over.
-    let _election = election(path);
+    claim_among(&candidates(path), files, may_hand_off, combine)
+}
+
+/// [`claim`] with the socket at the first of `paths` that works.
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+fn claim_among(paths: &[std::path::PathBuf], files: &[String], may_hand_off: bool, combine: bool) -> Claim {
+    let Some(first) = paths.first() else { return Claim::Alone };
+    // Released when this function returns: by then this launch listens, or has handed over. One
+    // lock, beside the first candidate, covers every candidate.
+    let _election = election(first);
+    // Candidates this launch can't use, skipped from then on.
+    let mut unusable = vec![false; paths.len()];
     // Two launches can start together: the one that loses the race to bind hands over to the
     // one that won. A third round is for a socket that vanishes in between.
-    for _ in 0..3 {
-        match UnixStream::connect(path) {
-            Ok(stream) => {
-                if !may_hand_off {
-                    return Claim::Alone;
-                }
-                return match hand_off(&stream, files, combine) {
-                    Ok(()) => Claim::HandedOff,
-                    Err(e) => {
-                        log::warn!("couldn't hand the files to the running PdfCraft ({e}); opening a new window");
-                        Claim::Alone
-                    }
-                };
+    'rounds: for _ in 0..3 {
+        // A running PdfCraft may listen on any candidate (the first may be unusable), so look at
+        // all of them before becoming the first.
+        for path in paths {
+            let Ok(stream) = UnixStream::connect(path) else { continue };
+            if !may_hand_off {
+                return Claim::Alone;
             }
-            // Nobody is listening: no socket yet, or one left by a PdfCraft that didn't exit
-            // cleanly (connecting to it is refused). Clear it and become the first. Removed
-            // without asking `path.exists()` first: on Windows that follows the socket's reparse
-            // point, which can fail, and a leftover socket would then block every later start.
-            Err(_) => match std::fs::remove_file(path) {
+            return match hand_off(&stream, files, combine) {
+                Ok(()) => Claim::HandedOff,
+                Err(e) => {
+                    log::warn!("couldn't hand the files to the running PdfCraft ({e}); opening a new window");
+                    Claim::Alone
+                }
+            };
+        }
+        // Nobody is listening: no socket yet, or one left by a PdfCraft that didn't exit
+        // cleanly (connecting to it is refused). Clear one and become the first.
+        for (path, skipped) in paths.iter().zip(unusable.iter_mut()) {
+            if *skipped {
+                continue;
+            }
+            // A socket that can't even be looked at (not merely missing) is no use, and binding
+            // beside it would only leave one more file that can't be deleted.
+            if let Err(e) = std::fs::symlink_metadata(path)
+                && cant_be_looked_at(&e)
+            {
+                log::info!("single instance: {} can't be looked at ({e}); trying another socket", path.display());
+                *skipped = true;
+                continue;
+            }
+            // Removed without asking `path.exists()` first: on Windows that follows the socket's
+            // reparse point, which can fail, and a leftover socket would then block every later
+            // start.
+            match std::fs::remove_file(path) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 // Another launch has bound the socket and is about to listen: try it again.
                 Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
                     std::thread::sleep(Duration::from_millis(50));
-                    continue;
+                    continue 'rounds;
                 }
                 Err(e) => {
-                    log::info!("single instance off: can't clear {} ({e})", path.display());
-                    return Claim::Alone;
+                    log::info!("single instance: can't clear {} ({e}); trying another socket", path.display());
+                    *skipped = true;
+                    continue;
                 }
-            },
-        }
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        match UnixListener::bind(path) {
-            Ok(listener) => return serve(listener),
-            // Another launch bound it first: hand over to that one on the next round.
-            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => continue,
-            // Older Windows, a path too long for a socket address, a file system without socket
-            // support (some network or removable drives): this launch works as before.
-            Err(e) => {
-                log::info!("single instance off: can't listen at {} ({e})", path.display());
-                return Claim::Alone;
+            }
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            match UnixListener::bind(path) {
+                Ok(listener) => {
+                    // Bound, but a socket nobody can connect to is no use: look at it as a later
+                    // launch would.
+                    if let Err(e) = std::fs::symlink_metadata(path)
+                        && cant_be_looked_at(&e)
+                    {
+                        drop(listener);
+                        let _ = std::fs::remove_file(path);
+                        log::warn!("single instance: the socket {} can't be looked at once bound ({e}); trying another socket", path.display());
+                        *skipped = true;
+                        continue;
+                    }
+                    return serve(listener);
+                }
+                // Another launch bound it first: hand over to that one on the next round.
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => continue 'rounds,
+                // Older Windows, a path too long for a socket address, a file system without
+                // socket support (some network or removable drives): try the next candidate.
+                Err(e) => {
+                    log::info!("single instance: can't listen at {} ({e}); trying another socket", path.display());
+                    *skipped = true;
+                }
             }
         }
+        if unusable.iter().all(|u| *u) {
+            break;
+        }
     }
+    log::info!("single instance off: no usable socket among {} candidate(s) from {}", paths.len(), first.display());
     Claim::Alone
 }
 
@@ -539,5 +623,64 @@ mod tests {
         // `symlink_metadata`, not `exists`, which follows the socket's reparse point and can fail.
         assert!(std::fs::symlink_metadata(&path).is_ok(), "the socket file stays behind");
         assert!(matches!(claim_at(&path, &["C:\\a.pdf".into()], true, false), Claim::Primary(_)));
+    }
+
+    /// A folder that is really a file: looking at a socket "inside" it answers NotADirectory, as
+    /// os error 1920 does on the affected Windows PC, so the folder can't hold a socket.
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    fn unusable_candidate(test: &str) -> std::path::PathBuf {
+        let dir = socket(test).parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+        std::fs::create_dir_all(&dir).unwrap();
+        let folder = dir.join("not-a-folder");
+        std::fs::write(&folder, b"").unwrap();
+        folder.join("instance-s1.sock")
+    }
+
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    #[test]
+    fn a_folder_whose_sockets_cant_be_used_falls_back_to_the_next_candidate() {
+        let bad = unusable_candidate("fallback");
+        let good = socket("fallback-good");
+        let paths = [bad.clone(), good.clone()];
+        let Claim::Primary(first) = claim_among(&paths, &[], true, false) else { panic!("the first launch listens on the fallback") };
+        let mut poll = first.connect(&egui::Context::default(), false);
+        assert!(std::fs::symlink_metadata(&good).is_ok(), "it listens on the second candidate");
+        // A later launch finds it there, though the first candidate never works.
+        assert!(matches!(claim_among(&paths, &["C:\\a.pdf".into()], true, false), Claim::HandedOff));
+        assert!(matches!(poll().as_slice(), [OsEvent::Open(p)] if p == &["C:\\a.pdf"]));
+    }
+
+    // Unix only: removing a directory as a file gives IsADirectory there, but
+    // PermissionDenied on Windows, which the code retries as "busy".
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn a_socket_that_cant_be_cleared_falls_back_to_the_next_candidate() {
+        let stuck = socket("stuck");
+        // A directory where the socket should be: removing it as a file fails, as an undeletable
+        // stale socket does on Windows 11 build 26300.
+        std::fs::create_dir_all(&stuck).unwrap();
+        let good = socket("stuck-good");
+        assert!(matches!(claim_among(&[stuck, good.clone()], &[], true, false), Claim::Primary(_)));
+        assert!(std::fs::symlink_metadata(&good).is_ok());
+    }
+
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    #[test]
+    fn when_no_candidate_works_the_launch_is_alone() {
+        let paths = [unusable_candidate("none"), unusable_candidate("none-2")];
+        assert!(matches!(claim_among(&paths, &[], true, false), Claim::Alone));
+        assert!(matches!(claim_among(&[], &[], true, false), Claim::Alone));
+    }
+
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    #[test]
+    fn the_alternative_folder_is_tried_after_the_first_with_the_same_name() {
+        let primary = socket("alt");
+        let all = candidates(&primary);
+        assert_eq!(all.first(), Some(&primary));
+        match alt_dir() {
+            Some(alt) => assert_eq!(all.get(1), Some(&alt.join(primary.file_name().unwrap()))),
+            None => assert_eq!(all.len(), 1),
+        }
     }
 }
