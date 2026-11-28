@@ -231,6 +231,24 @@ fn selected_text_copy_command_requires_selection() {
     assert!(!app.execute(&egui::Context::default(), "edit.copy"));
 }
 
+/// #8189: after Find, a drag-selection leaves the Find field so Ctrl+C copies the page text.
+/// A double-click already does; the drag never clicks another widget, so the field kept the keys.
+#[test]
+fn drag_after_find_copies_the_page_selection() {
+    let clipboard = RecordingClipboard::default();
+    let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), readable_zoom);
+    h.state_mut().views[0].open_find();
+    h.run_steps(8);
+    assert!(h.ctx.memory(|m| m.focused()).is_some(), "the find field has the keyboard");
+    let end = h.state().views[0].glyph_screen_pos(0, 8).expect("glyph");
+    drag(&mut h, at, end);
+    let selected = h.state().views[0].selected_text().expect("the drag selected page text");
+    assert!(h.ctx.memory(|m| m.focused()).is_none(), "the drag left the find field");
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::C);
+    h.run_steps(4);
+    assert!(copied(&clipboard, &selected), "Ctrl+C copies the page selection, got {:?}", clipboard.copied());
+}
+
 #[test]
 fn selected_text_copy_floating_button_honours_permissions() {
     use egui_kittest::kittest::Queryable;

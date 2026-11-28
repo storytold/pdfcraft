@@ -246,8 +246,9 @@ fn select_tool<'a>(
     picks: PickSlots<'a>,
     xforms: &'a [(usize, PageXform)],
     dragged: &'a mut bool,
+    ended: &'a mut bool,
 ) -> PageSelectTool<'a> {
-    PageSelectTool::new(cx.pages, texts, text, cx.info, picks, xforms, cx.doc.edit_generation(), dragged)
+    PageSelectTool::new(cx.pages, texts, text, cx.info, picks, xforms, cx.doc.edit_generation(), dragged, ended)
 }
 
 /// The Insert text tool's snap on `page`, the page the comments tool works on: the caret's tip and side in the page's
@@ -304,7 +305,8 @@ pub(crate) fn page_tool<'a>(
         QuickTool::Select | QuickTool::ColumnSelect | QuickTool::Comment(_) | QuickTool::Redact => {
             let texts: &'a DocTexts<'a> = texts_slot.insert(DocTexts::new(&session.texts, &session.text_failed, cx.rotation, cx.sizes));
             let picks = PickSlots::new(&mut session.pending_pick, &mut session.picked_image, &mut session.actions_dismissed);
-            let select = select_tool(&cx, &mut session.text, texts, picks, xforms, &mut session.select_dragged).cap_clicks(tool != QuickTool::Select);
+            let select = select_tool(&cx, &mut session.text, texts, picks, xforms, &mut session.select_dragged, &mut session.select_drag_ended)
+                .cap_clicks(tool != QuickTool::Select);
             let over_text = {
                 let pages = cx.pages;
                 move |at: Pos2| {

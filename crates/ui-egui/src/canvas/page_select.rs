@@ -55,6 +55,8 @@ pub(crate) struct PageSelectTool<'a> {
     /// Whether `drag` ran in the active gesture: a plain single click without a drag clears the
     /// single-glyph press anchor on release, as production's text selection did.
     dragged: &'a mut bool,
+    /// Set when a drag ends, so the page body can move the keyboard off a text field (#8189).
+    ended: &'a mut bool,
     column: bool,
 }
 
@@ -73,8 +75,9 @@ impl<'a> PageSelectTool<'a> {
         xforms: &'a [(usize, PageXform)],
         generation: u64,
         dragged: &'a mut bool,
+        ended: &'a mut bool,
     ) -> Self {
-        Self { text: TextSelectTool::new(pages, texts, text), info, picks, xforms, generation, cap_clicks: false, dragged, column: false }
+        Self { text: TextSelectTool::new(pages, texts, text), info, picks, xforms, generation, cap_clicks: false, dragged, ended, column: false }
     }
 
     /// The Column Select tool is active.
@@ -128,11 +131,15 @@ impl CanvasTool for PageSelectTool<'_> {
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         let clicks = if self.cap_clicks && pointer.clicks > 2 { 1 } else { pointer.clicks };
+        let dragged = *self.dragged;
         self.text.release(pointer, cx);
-        if !*self.dragged && clicks < 2 && !pointer.mods.shift {
+        if !dragged && clicks < 2 && !pointer.mods.shift {
             self.text.key(&ToolKey::Cancel, cx);
         }
         *self.dragged = false;
+        if dragged {
+            *self.ended = true;
+        }
     }
 
     fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
