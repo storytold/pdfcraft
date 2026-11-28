@@ -615,6 +615,20 @@ fn line_width(doc: &Document, wd: &Dict) -> f64 {
 /// Comb fields stop drawing their cells past this many; they would be a solid block anyway.
 const MAX_COMB_DIVIDERS: usize = 500;
 
+/// The cell, of `cells`, where a comb field with quadding `q` draws the first of the `len`
+/// characters it shows (ISO 32000-2 12.7.4.3 Table 228, Q, and 12.7.5.3 Table 231, Comb): the
+/// first cell when left-justified, ⌊(cells − len) / 2⌋ when centred, cells − len when
+/// right-justified. Each character is then centred in its own cell. A field showing as many
+/// characters as it has cells (it draws no more) starts at the first cell whatever its quadding.
+fn comb_first_cell(q: i64, cells: usize, len: usize) -> usize {
+    let free = cells.saturating_sub(len);
+    match q {
+        1 => free / 2,
+        2 => free,
+        _ => 0,
+    }
+}
+
 /// The lines between the `cells` positions of a comb field `w` × `h` (ISO 32000-2 Table 228,
 /// Comb: the field is divided into `MaxLen` equally spaced positions), in the border's colour and
 /// width, inside the border. None without a border, or past [`MAX_COMB_DIVIDERS`] cells.
@@ -964,9 +978,10 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                     let cells = f.max_len.unwrap_or(1).max(1);
                     let cell = width / cells as f64;
                     c.push_str(&comb_dividers(doc, &wd, width, height, cells));
+                    let first = comb_first_cell(q, cells, text.chars().take(cells).count());
                     for (i, ch) in text.chars().take(cells).enumerate() {
                         let s = ch.to_string();
-                        show(cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s);
+                        show(cell * first.saturating_add(i) as f64 + (cell - width_of(&s, size)) / 2.0, y, &s);
                     }
                 } else {
                     let tw = width_of(&text.replace(['\n', '\r'], " "), size);
