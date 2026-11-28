@@ -23,6 +23,8 @@ pub(crate) struct OpenPrompts {
     pub(crate) sanitize: Option<DialogId>,
     /// The question about locking placed signatures into the page before a save (`pending_lock`).
     pub(crate) lock_signatures: Option<DialogId>,
+    /// The Remove security question and the document it is about (#2168).
+    pub(crate) remove_security: Option<(DialogId, DocId)>,
     /// The confirmation question before deleting pages.
     pub(crate) delete_pages: Option<DialogId>,
 }
@@ -77,6 +79,32 @@ impl PdfCraftApp {
             .button(PromptChoice::Cancel, tl!("Cancel"))
             .instance("revert");
         self.prompts.revert = Some(self.dialogs.open(prompt));
+    }
+
+    /// "Remove security?" over the active document (#2168): Proceed removes its passwords and
+    /// restrictions, which the next save writes.
+    pub(crate) fn ask_remove_security(&mut self) {
+        let Some((_, id)) = self.active_ids() else { return };
+        let prompt = StandardPrompt::custom(tl!("The passwords and the restrictions are removed when you save."))
+            .title(tl!("Remove security?"))
+            .button(PromptChoice::Proceed, tl!("Remove security"))
+            .button(PromptChoice::Cancel, tl!("Cancel"))
+            .tag(id)
+            .instance("remove-security");
+        self.prompts.remove_security = Some((self.dialogs.open(prompt), id));
+    }
+
+    /// The Remove security answer: Proceed removes the security of document `id` on its tab,
+    /// whichever tab is active by then.
+    fn resolve_remove_security(&mut self, ctx: &egui::Context, id: DocId, remove: bool) {
+        if !remove {
+            return;
+        }
+        let Some(i) = self.asking_tab(id) else { return };
+        self.active = Some(i);
+        if self.apply_edit(ctx, pdfcraft_engine::Edit::RemoveProtection) {
+            self.notify_tr("Security will be removed when you save");
+        }
     }
 
     /// "Open this web page?" when a document's link, button or script asks to open an address (#90, #91). Shows
@@ -161,6 +189,16 @@ impl PdfCraftApp {
                 // The document was closed before an answer: nothing to ask any more.
                 self.dialogs.cancel_by_id(ctx, dialog);
                 self.prompts.full_screen = None;
+            }
+        }
+        if let Some((dialog, doc)) = self.prompts.remove_security {
+            if let Some(remove) = proceeded(self.dialogs.take_by_id::<StandardPrompt>(dialog)) {
+                self.prompts.remove_security = None;
+                self.resolve_remove_security(ctx, doc, remove);
+            } else if self.session.get(doc).is_none() {
+                // The document was closed before an answer: nothing to remove any more.
+                self.dialogs.cancel_by_id(ctx, dialog);
+                self.prompts.remove_security = None;
             }
         }
         if let Some(dialog) = self.prompts.revert

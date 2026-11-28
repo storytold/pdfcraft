@@ -451,6 +451,8 @@ impl PdfCraftApp {
             return;
         }
         let Some((i, id)) = self.active_ids() else { return };
+        // Extracted pages are a new, unprotected document, as Combine's are (#2168): said, not slipped in.
+        let unprotected = self.session.get(id).is_some_and(|d| d.info.encrypted);
         let pages = match pages_to_extract(&opts.pages, self.views[i].target_pages(), self.views[i].page_count()) {
             Ok(pages) => pages,
             Err(e) => {
@@ -485,6 +487,9 @@ impl PdfCraftApp {
             // document must be unedited since (page numbers shift, and edits to those pages
             // aren't in the files) and still the active one (deleting edits the active document).
             let generation = self.session.get(id).map(|d| d.edit_generation());
+            if unprotected {
+                self.notify_tr("The extracted pages aren't protected: the original's security settings don't carry over.");
+            }
             let delete = move |app: &mut Self, ctx: &egui::Context| {
                 if !opts.delete {
                     return;
@@ -511,6 +516,11 @@ impl PdfCraftApp {
                     tl!("Extracted 1 page").to_string()
                 } else {
                     crate::i18n::fmt(tl!("Extracted {n} pages"), &[("n", &pages.len().to_string())])
+                };
+                let message = if unprotected {
+                    format!("{message}. {}", tl!("The extracted pages aren't protected: the original's security settings don't carry over."))
+                } else {
+                    message
                 };
                 // Save As offers the tab's name, so a name typed in the dialog is kept.
                 let name = if renamed { format!("{base}.pdf") } else { format!("{stem} (extract).pdf") };
@@ -664,6 +674,10 @@ impl PdfCraftApp {
                 (unique, bytes)
             })
             .collect();
+        // The parts are new, unprotected documents, as Combine's result is (#2168).
+        if self.session.get(id).is_some_and(|d| d.info.encrypted) {
+            self.notify_tr("The split files aren't protected: the original's security settings don't carry over.");
+        }
         self.write_files(&named, "Choose a folder for the split files");
     }
 

@@ -2949,6 +2949,10 @@ fn remove_security_asks_for_the_permissions_password_first() {
     assert!(h.execute("protect.remove"));
     h.run_steps(2);
     type_password(&mut h, "owner");
+    // Unlocked: Remove security now asks (#2168).
+    h.get_by_role_and_label(Role::Dialog, "Remove security?");
+    h.get_all_by_label("Remove security").last().expect("the button").click();
+    h.run_steps(3);
     let doc = h.state().session.get(id).unwrap();
     assert!(doc.dirty && doc.security_summary().is_none(), "security is removed (written by the next save)");
 }
@@ -2973,6 +2977,45 @@ fn a_secured_form_shows_its_form_notice_and_its_security() {
     h.get_by_label("Hide field highlights");
     h.get_by_label("Security settings");
     h.get_by_label("Unlock…");
+}
+
+/// Remove security asks first (#2168): Cancel keeps the protection, confirming removes it.
+#[test]
+fn removing_security_asks_first() {
+    let mut h = harness(1, |app| {
+        let p = pdfcraft_engine::Protection { open_password: Some("pw".into()), ..Default::default() };
+        app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::Protect(p));
+    });
+    let id = h.state().active_ids().unwrap().1;
+    assert!(h.state().session.get(id).unwrap().security_summary().is_some());
+    assert!(h.execute("protect.remove"));
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Dialog, "Remove security?");
+    h.get_all_by_label("Cancel").last().expect("the button").click();
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(Role::Dialog, "Remove security?").is_none(), "the question is gone");
+    assert!(h.state().session.get(id).unwrap().security_summary().is_some(), "cancelled: still protected");
+    assert!(h.execute("protect.remove"));
+    h.run_steps(2);
+    h.get_all_by_label("Remove security").last().expect("the button").click();
+    h.run_steps(3);
+    assert!(h.state().session.get(id).unwrap().security_summary().is_none(), "confirmed: removed");
+    assert_eq!(crate::support::shown_notice(&h).as_deref(), Some("Security will be removed when you save"));
+}
+
+/// Extracting pages of a protected document says that the new file isn't protected (#2168),
+/// as Combine does.
+#[test]
+fn extracting_from_a_protected_document_says_the_pages_are_not_protected() {
+    let mut h = harness(1, |app| {
+        app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", -1)).unwrap();
+    });
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    h.state_mut().extract_selection(&ctx, Default::default());
+    h.run_steps(3);
+    let notice = crate::support::shown_notice(&h).unwrap_or_default();
+    assert!(notice.contains("The extracted pages aren't protected"), "{notice}");
 }
 
 #[test]

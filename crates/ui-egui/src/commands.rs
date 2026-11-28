@@ -440,11 +440,8 @@ impl PdfCraftApp {
             "protect.password" => self.open_protect(),
             "prepress.convert_colors" => self.open_convert_colours(ctx),
             "prepress.hairlines" => self.open_fix_hairlines(ctx),
-            "protect.remove" => {
-                if self.apply_edit(ctx, Edit::RemoveProtection) {
-                    self.notify_tr("Security will be removed when you save");
-                }
-            }
+            // Asks first (#2168); the answer removes it (`prompts_pass`).
+            "protect.remove" => self.ask_remove_security(),
             link if pdfcraft_engine::links::for_command(link).is_some() => {
                 if let Some(l) = pdfcraft_engine::links::for_command(link) {
                     self.open_url(l.url);
