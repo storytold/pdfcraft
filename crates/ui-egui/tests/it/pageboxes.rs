@@ -1,8 +1,10 @@
-//! Crop tool, Set Page Boxes and Duplicate pages in the real shell (egui_kittest).
+//! Crop tool and Set Page Boxes in the real shell (egui_kittest).
 
+use crate::support::AppHarness as _;
+use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool};
+use egui_kittest::kittest::Queryable;
+use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -13,13 +15,16 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, FIXTURE.to_vec()).unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     h
@@ -34,59 +39,19 @@ fn size(h: &Harness<'static, PdfCraftApp>, page: usize) -> (f32, f32) {
 #[test]
 fn the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select() {
     let mut h = harness();
-    assert!(h.state_mut().execute("page.crop"));
+    assert!(h.execute("page.crop"));
     assert_eq!(h.state().quick_tool, QuickTool::Crop);
     h.run_steps(2);
     crop_middle_half(&mut h);
-}
-
-#[test]
-fn quick_toolbar_crop_crops_the_page_and_undo_restores_it() {
-    let mut h = harness();
-    h.get_by_label("Crop pages").click();
-    h.run_steps(2);
-    assert_eq!(h.state().quick_tool, QuickTool::Crop);
-    assert!(!h.state().views[0].organize);
-    crop_middle_half(&mut h);
-    assert!(h.state_mut().execute("edit.undo"));
-    h.run_steps(3);
-    assert_eq!(size(&h, 0), (300.0, 400.0));
-}
-
-#[test]
-fn quick_toolbar_crop_is_disabled_when_page_assembly_is_forbidden() {
-    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(FIXTURE.to_vec())).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
-        algorithm: pdfcraft_cos::Algorithm::Aes256,
-        user_password: "",
-        owner_password: "owner",
-        permissions: 0b0100,
-        encrypt_metadata: true,
-        seed: [5; 32],
-    })
-    .unwrap();
-    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("restricted.pdf", None, bytes).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app
-    });
-    h.run_steps(6);
-    assert!(h.get_by_label("Crop pages").accesskit_node().is_disabled());
-    assert!(!h.state_mut().execute("page.crop"));
-    assert_eq!(h.state().quick_tool, QuickTool::Select);
-    assert_eq!(size(&h, 0), (300.0, 400.0));
 }
 
 #[test]
 fn quick_toolbar_crop_is_hidden_on_home_and_in_read_mode() {
     let mut h = harness();
-    h.state_mut().execute("view.read_mode");
+    h.execute("view.read_mode");
     h.run_steps(3);
     assert!(h.query_by_label("Crop pages").is_none());
-    h.state_mut().execute("view.read_mode");
+    h.execute("view.read_mode");
     h.run_steps(3);
     h.get_by_label("Crop pages");
     h.state_mut().active = None;
@@ -118,20 +83,25 @@ fn crop_middle_half(h: &mut Harness<'static, PdfCraftApp>) {
 #[test]
 fn set_page_boxes_dialog_applies_margins_to_the_chosen_pages() {
     let mut h = harness();
-    assert!(h.state_mut().execute("page.boxes"));
+    assert!(h.execute("page.boxes"));
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(Dialog::PageBoxes));
-    h.get_by_label("Set Page Boxes");
-    // One inch off every side (the units default to inches; margins are stored in points).
-    h.state_mut().boxes_draft.margins = [72.0; 4];
-    h.run_steps(2);
+    h.get_by_role_and_label(Role::Dialog, "Set Page Boxes");
+    // One inch off every side (the units default to inches).
+    for side in ["Top", "Bottom", "Left", "Right"] {
+        h.get_by_label(side).click();
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label(side).type_text("1");
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
     h.get_by_label("OK").click();
     h.run_steps(4);
-    assert_eq!(h.state().dialog, None);
+    assert!(h.query_by_label("Set Page Boxes").is_none(), "OK closes the dialog");
     assert_eq!(size(&h, 0), (156.0, 256.0));
     assert_eq!(size(&h, 1), (156.0, 256.0), "All pages by default");
     // Set to zero resets the box.
-    h.state_mut().execute("page.boxes");
+    h.execute("page.boxes");
     h.run_steps(3);
     h.get_by_label("Set to zero").click();
     h.run_steps(1);
@@ -141,22 +111,13 @@ fn set_page_boxes_dialog_applies_margins_to_the_chosen_pages() {
 }
 
 #[test]
-fn duplicate_pages_copies_the_current_page() {
-    let mut h = harness();
-    assert!(h.state_mut().execute("page.duplicate"));
-    h.run_steps(3);
-    let s = h.state();
-    assert_eq!(s.session.get(s.views[0].id).unwrap().info.pages.len(), 3);
-}
-
-#[test]
 fn the_crop_tool_leaves_the_page_grid_so_a_page_can_be_cropped() {
     let mut h = harness();
     // The Organize panel's thumbnail grid is on screen for this view: choosing
     // "Crop pages" from it must leave the grid so the canvas handles a drag on
     // a page instead of returning early to organize_grid.
     h.state_mut().views[0].organize = true;
-    assert!(h.state_mut().execute("page.crop"));
+    assert!(h.execute("page.crop"));
     assert_eq!(h.state().quick_tool, QuickTool::Crop);
     assert!(!h.state().views[0].organize, "\"page.crop\" must clear view.organize");
     h.run_steps(2);

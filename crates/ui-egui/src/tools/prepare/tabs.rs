@@ -1,5 +1,21 @@
+use craft::behavior::{Value, keyed};
+use craft::theme::variant::Tone;
+use craft::ui::buttons::Button;
+use craft::ui::choice::{Radio, RadioGroup};
+use craft::ui::contract::{
+    Bind, CollectionEvent, Entry, FieldLayout, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, SideLabel, Sizing,
+    clicked,
+};
+use craft::ui::display::Text;
+use craft::ui::form::{Field, Help};
+use craft::ui::layout_components::Stack;
+use craft::ui::list::{List, ListRow, RowEvent, TrailingFace, TrailingPart};
+use craft::ui::runtime::env::Label;
+use craft::ui::text::TextField;
+
 use super::draft::{ACTION_KINDS, ActionDraft, FieldDraft};
-use super::{CalcOp, Calculate, DATE_PRESETS, Format, TIME_PRESETS, Validate, format_value, theme, widgets};
+use super::properties::{check, code_row, count_row, note, select_row, text_row};
+use super::{CalcOp, Calculate, DATE_PRESETS, Format, TIME_PRESETS, Validate, format_value};
 
 /// The categories of the Format tab.
 #[derive(Clone, Copy, PartialEq)]
@@ -29,34 +45,59 @@ const NEGATIVES: [&str; 4] = ["-1,234.01", "1,234.01 (red)", "(1,234.01)", "(1,2
 
 const SPECIALS: [&str; 5] = ["Zip Code", "Zip Code + 4", "Phone Number", "Social Security Number", "Arbitrary Mask"];
 
+/// The Delete part of an action's row.
+const DELETE: TrailingPart = TrailingPart::new(0);
+/// The Edit part of a script action's row.
+const EDIT: TrailingPart = TrailingPart::new(1);
+
+/// A group of radio buttons over `options`, with the rows of `after(ui, value)` shown under the button of the
+/// value they belong to; the group's value is written back when another is chosen.
+fn radios<T: Value + Copy>(ui: &mut egui::Ui, name: &str, value: &mut T, options: &[(T, &str)], mut after: impl FnMut(&mut egui::Ui, T)) {
+    let shown = *value;
+    RadioGroup::new(name.to_owned(), Bind::bound(value)).show(ui, |ui, _| {
+        Stack::new().show(ui, |ui, cx| {
+            for (at, (option, label)) in options.iter().enumerate() {
+                let side = SideLabel::new().layout(FieldLayout::After);
+                cx.labelled(ui, at, Label::from((*label).to_owned()), side, Radio::new(*option));
+                if *option == shown {
+                    after(ui, *option);
+                }
+            }
+        });
+    });
+}
+
+/// A choice among the `names`, numbered from 0, over `value`.
+fn index_row<T: Value + Copy + TryFrom<usize> + Into<usize>>(ui: &mut egui::Ui, salt: &'static str, label: &str, value: &mut T, names: &[&str]) {
+    let entries: Vec<Entry<usize>> = names.iter().enumerate().map(|(i, name)| Entry::new(i, (*name).to_owned())).collect();
+    let mut shown: usize = (*value).into();
+    select_row(ui, salt, label, &mut shown, &entries);
+    if let Ok(v) = T::try_from(shown) {
+        *value = v;
+    }
+}
+
+/// A whole number of `decimals` places.
+fn decimals_row(ui: &mut egui::Ui, salt: &'static str, decimals: &mut u8) {
+    let mut shown = usize::from(*decimals);
+    count_row(ui, salt, tl!("Decimal places:"), &mut shown, 0..=10, true);
+    *decimals = u8::try_from(shown).unwrap_or(10);
+}
+
 /// Draw the field-format editor for the selected category and its options.
-pub(super) fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
+pub(super) fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
     let cat = category(&d.format);
     let mut picked = cat;
-    ui.horizontal(|ui| {
-        ui.label(tl!("Select format category:"));
-        craft_ui::ComboBox::from_id_salt("format-cat")
-            .selected_text(tl!(match cat {
-                Category::None => "None",
-                Category::Number => "Number",
-                Category::Percent => "Percentage",
-                Category::Date => "Date",
-                Category::Time => "Time",
-                Category::Special => "Special",
-            }))
-            .show_ui(ui, |ui| {
-                for (c, l) in [
-                    (Category::None, tl!("None")),
-                    (Category::Number, tl!("Number")),
-                    (Category::Percent, tl!("Percentage")),
-                    (Category::Date, tl!("Date")),
-                    (Category::Time, tl!("Time")),
-                    (Category::Special, tl!("Special")),
-                ] {
-                    ui.selectable_value(&mut picked, c, l);
-                }
-            });
-    });
+    let categories = [
+        (Category::None, tl!("None")),
+        (Category::Number, tl!("Number")),
+        (Category::Percent, tl!("Percentage")),
+        (Category::Date, tl!("Date")),
+        (Category::Time, tl!("Time")),
+        (Category::Special, tl!("Special")),
+    ]
+    .map(|(c, name)| Entry::new(c, name));
+    select_row(ui, "format-cat", tl!("Select format category:"), &mut picked, &categories);
     if picked != cat {
         d.format = match picked {
             Category::None => Format::None,
@@ -67,7 +108,6 @@ pub(super) fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme
             Category::Special => Format::Special(0),
         };
     }
-    ui.add_space(8.0);
     let sample = match &d.format {
         Format::Number { .. } | Format::Percent { .. } => "-1234.5",
         Format::Date(_) => "10/1/2026",
@@ -77,117 +117,66 @@ pub(super) fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme
         Format::Special(_) => "123456789",
         _ => "",
     };
-    match &mut d.format {
-        Format::None => {
-            ui.label(egui::RichText::new(tl!("The value is shown as typed.")).color(t.text_muted));
-        }
+    let mut format = d.format.clone();
+    match &mut format {
+        Format::None => note(ui, tl!("The value is shown as typed.")),
         Format::Number { decimals, sep, neg, currency, prepend } => {
-            egui::Grid::new("fmt-number").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                ui.label(tl!("Decimal places:"));
-                ui.add(egui::DragValue::new(decimals).range(0..=10));
-                ui.end_row();
-                ui.label(tl!("Separator style:"));
-                craft_ui::ComboBox::from_id_salt("fmt-sep").selected_text(SEPARATORS[(*sep).min(4) as usize]).show_ui(ui, |ui| {
-                    for (i, s) in SEPARATORS.iter().enumerate() {
-                        ui.selectable_value(sep, i as u8, *s);
-                    }
-                });
-                ui.end_row();
-                ui.label(tl!("Currency symbol:"));
-                ui.horizontal(|ui| {
-                    craft_ui::ComboBox::from_id_salt("fmt-cur")
-                        .selected_text(if currency.is_empty() { tl!("None") } else { currency.as_str() })
-                        .width(70.0)
-                        .show_ui(ui, |ui| {
-                            for c in ["", "$", "€", "£", "¥", "CHF "] {
-                                ui.selectable_value(currency, c.to_string(), if c.is_empty() { tl!("None") } else { c });
-                            }
-                        });
-                    ui.add(widgets::checkbox(prepend, tl!("Before the number")));
-                });
-                ui.end_row();
-                ui.label(tl!("Negative number style:"));
-                craft_ui::ComboBox::from_id_salt("fmt-neg").selected_text(NEGATIVES[(*neg).min(3) as usize]).show_ui(ui, |ui| {
-                    for (i, s) in NEGATIVES.iter().enumerate() {
-                        ui.selectable_value(neg, i as u8, *s);
-                    }
-                });
-                ui.end_row();
-            });
+            decimals_row(ui, "fmt-decimals", decimals);
+            index_row(ui, "fmt-sep", tl!("Separator style:"), sep, &SEPARATORS);
+            let symbols = ["", "$", "€", "£", "¥", "CHF "].map(|c| Entry::new(c.to_string(), if c.is_empty() { tl!("None") } else { c }));
+            select_row(ui, "fmt-cur", tl!("Currency symbol:"), currency, &symbols);
+            check(ui, tl!("Before the number"), prepend, true);
+            index_row(ui, "fmt-neg", tl!("Negative number style:"), neg, &NEGATIVES);
         }
         Format::Percent { decimals, sep } => {
-            egui::Grid::new("fmt-pct").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                ui.label(tl!("Decimal places:"));
-                ui.add(egui::DragValue::new(decimals).range(0..=10));
-                ui.end_row();
-                ui.label(tl!("Separator style:"));
-                craft_ui::ComboBox::from_id_salt("fmt-psep").selected_text(SEPARATORS[(*sep).min(4) as usize]).show_ui(ui, |ui| {
-                    for (i, s) in SEPARATORS.iter().enumerate() {
-                        ui.selectable_value(sep, i as u8, *s);
-                    }
-                });
-                ui.end_row();
-            });
+            decimals_row(ui, "fmt-pdecimals", decimals);
+            index_row(ui, "fmt-psep", tl!("Separator style:"), sep, &SEPARATORS);
         }
         Format::Date(p) | Format::Time(p) => {
-            let presets: Vec<&str> = if matches!(cat, Category::Time) || picked == Category::Time {
+            let presets: Vec<&str> = if picked == Category::Time {
                 TIME_PRESETS.to_vec()
             } else {
                 DATE_PRESETS.iter().copied().chain(["m/d/yyyy", "mm/dd/yyyy", "yyyy-mm-dd", "dd/mm/yyyy"]).collect()
             };
-            ui.horizontal(|ui| {
-                ui.label(tl!("Format:"));
-                craft_ui::ComboBox::from_id_salt("fmt-date").selected_text(p.as_str()).width(170.0).show_ui(ui, |ui| {
-                    for pr in presets {
-                        ui.selectable_value(p, pr.to_string(), pr);
-                    }
-                });
-                let custom = ui.label(tl!("Custom:"));
-                ui.add(crate::widgets::line(p).desired_width(120.0)).labelled_by(custom.id);
-            });
+            let entries: Vec<Entry<String>> = presets.into_iter().map(|pr| Entry::new(pr.to_string(), pr)).collect();
+            select_row(ui, "fmt-date", tl!("Format:"), p, &entries);
+            text_row(ui, "fmt-custom", tl!("Custom:"), p);
         }
         Format::Special(n) => {
-            let mut idx = *n as usize;
-            craft_ui::ComboBox::from_id_salt("fmt-special").selected_text(tl!(SPECIALS[idx.min(4)])).show_ui(ui, |ui| {
-                for (i, s) in SPECIALS.iter().enumerate() {
-                    ui.selectable_value(&mut idx, i, tl!(s));
-                }
-            });
+            let mut idx = usize::from(*n);
+            special_row(ui, &mut idx);
             if idx == 4 {
-                d.format = Format::Mask("999-999".into());
+                format = Format::Mask("999-999".into());
             } else {
-                *n = idx as u8;
+                *n = u8::try_from(idx).unwrap_or(0);
             }
         }
         Format::Mask(m) => {
             let mut idx = 4usize;
-            craft_ui::ComboBox::from_id_salt("fmt-special").selected_text(tl!(SPECIALS[4])).show_ui(ui, |ui| {
-                for (i, s) in SPECIALS.iter().enumerate() {
-                    ui.selectable_value(&mut idx, i, tl!(s));
-                }
-            });
-            ui.horizontal(|ui| {
-                let mask = ui.label(tl!("Mask:"));
-                ui.add(crate::widgets::line(m).desired_width(160.0)).labelled_by(mask.id);
-            });
-            ui.label(egui::RichText::new(tl!("9 digit, A letter, O letter or digit, X any character")).small().color(t.text_faint));
+            special_row(ui, &mut idx);
+            text_row(ui, "fmt-mask", tl!("Mask:"), m);
+            note(ui, tl!("9 digit, A letter, O letter or digit, X any character"));
             if idx < 4 {
-                d.format = Format::Special(idx as u8);
+                format = Format::Special(u8::try_from(idx).unwrap_or(0));
             }
         }
     }
+    d.format = format;
     if !sample.is_empty() && d.format != Format::None {
-        ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new(crate::i18n::fmt(tl!("Example: {sample}"), &[("sample", &format_value(&d.format, sample))])).color(t.text_muted),
-        );
+        note(ui, crate::i18n::fmt(tl!("Example: {sample}"), &[("sample", &format_value(&d.format, sample))]));
     }
+}
+
+/// The Special format's choice among the zip, phone, social security and mask formats.
+fn special_row(ui: &mut egui::Ui, idx: &mut usize) {
+    let entries: Vec<Entry<usize>> = SPECIALS.iter().enumerate().map(|(i, s)| Entry::new(i, tl!(s))).collect();
+    select_row(ui, "fmt-special", tl!("Special:"), idx, &entries);
 }
 
 pub(super) fn validate_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
     let mut ranged = matches!(d.validate, Validate::Range { .. });
-    widgets::radio_value(ui, &mut ranged, false, tl!("Field value is not validated"));
-    widgets::radio_value(ui, &mut ranged, true, tl!("Field value is in range:"));
+    let options = [(false, tl!("Field value is not validated")), (true, tl!("Field value is in range:"))];
+    radios(ui, tl!("Validation"), &mut ranged, &options, |_, _| {});
     if !ranged {
         d.validate = Validate::None;
         return;
@@ -196,48 +185,32 @@ pub(super) fn validate_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
         d.validate = Validate::Range { min: Some(0.0), max: Some(100.0) };
     }
     if let Validate::Range { min, max } = &mut d.validate {
-        ui.horizontal(|ui| {
-            let mut has = min.is_some();
-            ui.add(widgets::checkbox(&mut has, tl!("From:")));
-            let mut v = min.unwrap_or(0.0);
-            ui.add_enabled(has, egui::DragValue::new(&mut v).speed(1.0));
-            *min = has.then_some(v);
-            let mut has = max.is_some();
-            ui.add(widgets::checkbox(&mut has, tl!("To:")));
-            let mut v = max.unwrap_or(100.0);
-            ui.add_enabled(has, egui::DragValue::new(&mut v).speed(1.0));
-            *max = has.then_some(v);
-        });
+        for (salt, label, bound, fallback) in [("min", tl!("From:"), min, 0.0), ("max", tl!("To:"), max, 100.0)] {
+            let mut has = bound.is_some();
+            check(ui, label, &mut has, true);
+            let mut v = bound.unwrap_or(fallback);
+            super::properties::number_row(ui, salt, label, &mut v, f64::MIN..=f64::MAX, None, has);
+            *bound = has.then_some(v);
+        }
     }
 }
 
-pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
+pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
     use pdfcraft_engine::FieldTrigger as T;
     let editing = d.editing.is_some();
-    ui.label(egui::RichText::new(if editing { tl!("Edit Action") } else { tl!("Add an Action") }).font(theme::semibold(13.0)));
+    Text::new(if editing { tl!("Edit Action") } else { tl!("Add an Action") }).show(ui);
+    // Editing changes the script of one trigger's action: its trigger and kind stay.
+    Stack::new().enabled(!editing).show(ui, |ui, _| {
+        let triggers: Vec<Entry<T>> = T::ALL.iter().map(|tr| Entry::new(*tr, tl!(tr.label()))).collect();
+        select_row(ui, "action-trigger", tl!("Select Trigger:"), &mut d.new_action.trigger, &triggers);
+        let kinds: Vec<Entry<usize>> = ACTION_KINDS.iter().enumerate().map(|(i, k)| Entry::new(i, tl!(k))).collect();
+        select_row(ui, "action-kind", tl!("Select Action:"), &mut d.new_action.kind, &kinds);
+    });
     let a = &mut d.new_action;
-    egui::Grid::new("field-actions-add").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-        ui.label(tl!("Select Trigger:"));
-        // Editing changes the script of one trigger's action: its trigger and kind stay.
-        ui.add_enabled_ui(!editing, |ui| {
-            craft_ui::ComboBox::from_id_salt("action-trigger").selected_text(tl!(a.trigger.label())).width(220.0).show_ui(ui, |ui| {
-                for tr in T::ALL {
-                    ui.selectable_value(&mut a.trigger, tr, tl!(tr.label()));
-                }
-            });
-        });
-        ui.end_row();
-        ui.label(tl!("Select Action:"));
-        ui.add_enabled_ui(!editing, |ui| {
-            craft_ui::ComboBox::from_id_salt("action-kind").selected_text(tl!(ACTION_KINDS[a.kind])).width(220.0).show_ui(ui, |ui| {
-                for (i, k) in ACTION_KINDS.iter().enumerate() {
-                    ui.selectable_value(&mut a.kind, i, tl!(k));
-                }
-            });
-        });
-        ui.end_row();
+    if a.kind == 0 {
+        code_row(ui, "action-text", tl!("Script:"), &mut a.text, 3);
+    } else {
         let hint = match a.kind {
-            0 => "JavaScript",
             1 => "https://…",
             2 => tl!("Fields to reset (comma-separated; empty: all)"),
             3 => tl!("Print, NextPage, PrevPage, FirstPage or LastPage"),
@@ -245,20 +218,12 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
             5 | 6 => tl!("Field names (comma-separated)"),
             _ => tl!("URL to submit to"),
         };
-        ui.label(if a.kind == 0 { tl!("Script:") } else { tl!("Value:") });
-        if a.kind == 0 {
-            ui.add(crate::widgets::block(&mut a.text).code_editor().desired_rows(3).desired_width(340.0).hint_text(hint).id_salt("action-text"));
-        } else {
-            ui.add(crate::widgets::line(&mut a.text).desired_width(340.0).hint_text(hint).id_salt("action-text"));
-        }
-        ui.end_row();
-    });
-    let mut error = None;
-    let (mut commit, mut discard) = (false, false);
-    ui.horizontal(|ui| {
-        commit = ui.button(if editing { tl!("Update") } else { tl!("Add") }).clicked();
-        discard = editing && ui.button(tl!("Discard")).clicked();
-    });
+        Field::new(tl!("Value:")).id_salt("action-text").show(ui, |ui, _| {
+            TextField::new(tl!("Value:"), Bind::bound(&mut a.text)).placeholder(hint).show(ui);
+        });
+    }
+    let commit = clicked(&Button::new(if editing { tl!("Update") } else { tl!("Add") }).show(ui));
+    let discard = editing && clicked(&Button::new(tl!("Discard")).show(ui));
     if commit {
         match d.new_action.action() {
             Ok(act) => {
@@ -269,60 +234,66 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
                 d.new_action.text.clear();
                 d.editing = None;
             }
-            Err(e) => error = Some(e),
+            Err(e) => note(ui, tl!(&e).to_owned()),
         }
     }
     if discard {
         d.new_action = ActionDraft::default();
         d.editing = None;
     }
-    if let Some(e) = error {
-        ui.label(egui::RichText::new(tl!(&e)).small().color(t.text_muted));
+    Text::new(tl!("Actions")).show(ui);
+    if d.actions.is_empty() {
+        note(ui, tl!("No actions"));
+        return;
     }
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new(tl!("Actions")).font(theme::semibold(13.0)));
-    egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        if d.actions.is_empty() {
-            ui.label(egui::RichText::new(tl!("No actions")).color(t.text_muted));
-        }
-        let (mut remove, mut edit) = (None, None);
-        for (i, (tr, act)) in d.actions.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(tl!(tr.label())).strong());
-                let more = d.chained.iter().find(|(x, _)| x == tr).map_or(0, |(_, n)| *n);
-                if more == 0 {
-                    ui.label(act.describe());
-                } else {
-                    let then = crate::i18n::trn(crate::i18n::current(), more as u64, "then {n} more action", "then {n} more actions");
-                    ui.label(format!("{}, {then}", act.describe()));
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.push_id(i, |ui| {
-                        if ui.button(tl!("Delete")).clicked() {
-                            remove = Some(i);
-                        }
-                        if let pdfcraft_engine::FieldAction::JavaScript(js) = act
-                            && ui.add_enabled(d.editing.is_none(), egui::Button::new(tl!("Edit"))).clicked()
-                        {
-                            edit = Some((*tr, js.clone()));
-                        }
-                    });
-                });
-            });
-        }
-        if let Some((trigger, text)) = edit {
-            d.new_action = ActionDraft { trigger, kind: 0, text };
-            d.editing = Some(trigger);
-        }
-        if let Some(i) = remove {
-            if d.actions.get(i).map(|(x, _)| Some(*x)) == Some(d.editing) {
-                d.new_action = ActionDraft::default();
-                d.editing = None;
+    let rows: Vec<usize> = (0..d.actions.len()).collect();
+    let source = keyed(&rows, |row: &usize| *row);
+    let (actions, chained) = (&d.actions, &d.chained);
+    let list = List::<usize>::new(tl!("Actions")).select(SelectMode::None).sizing(Sizing::Content).natural_height(true).show_items(
+        ui,
+        &source,
+        &mut |row, _| {
+            let Some((tr, act)) = actions.get(*row) else { return ListRow::new("") };
+            let more = chained.iter().find(|(x, _)| x == tr).map_or(0, |(_, n)| *n);
+            let summary = if more == 0 {
+                act.describe()
+            } else {
+                let then = crate::i18n::trn(crate::i18n::current(), more as u64, "then {n} more action", "then {n} more actions");
+                format!("{}, {then}", act.describe())
+            };
+            let delete = Label::from(crate::i18n::fmt(tl!("Delete {o}"), &[("o", tl!(tr.label()))]));
+            let mut item =
+                ListRow::new(format!("{}: {summary}", tl!(tr.label()))).trailing_part(DELETE, TrailingFace::Strong(tl!("Delete").into()), delete);
+            if !editing && matches!(act, pdfcraft_engine::FieldAction::JavaScript(_)) {
+                item = item.trailing_part(EDIT, TrailingFace::Strong(tl!("Edit").into()), tl!("Edit"));
             }
-            d.actions.remove(i);
+            item
+        },
+    );
+    let (mut remove, mut edit) = (None, None);
+    for event in list.events {
+        if let CollectionEvent::Item(row, RowEvent::Trailing { part, .. }) = event {
+            match part {
+                DELETE => remove = Some(row),
+                EDIT => edit = Some(row),
+                _ => {}
+            }
         }
-    });
+    }
+    if let Some((trigger, text)) = edit.and_then(|i| match d.actions.get(i) {
+        Some((tr, pdfcraft_engine::FieldAction::JavaScript(js))) if d.editing.is_none() => Some((*tr, js.clone())),
+        _ => None,
+    }) {
+        d.new_action = ActionDraft { trigger, kind: 0, text };
+        d.editing = Some(trigger);
+    }
+    if let Some(i) = remove.filter(|i| *i < d.actions.len()) {
+        if d.actions.get(i).map(|(x, _)| Some(*x)) == Some(d.editing) {
+            d.new_action = ActionDraft::default();
+            d.editing = None;
+        }
+        d.actions.remove(i);
+    }
 }
 
 /// The longest custom calculation script the Calculate tab offers to edit. A file can carry far
@@ -331,7 +302,7 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
 /// unless another calculation is chosen. The JavaScript engine runs no script past 256 KiB either.
 const MAX_EDITED_SCRIPT: usize = 256 * 1024;
 
-pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
+pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
     #[derive(PartialEq, Clone, Copy)]
     enum Mode {
         None,
@@ -351,8 +322,42 @@ pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::th
         Calculate::Custom(_) => Mode::Custom,
     };
     let mut m = mode;
-    widgets::radio_value(ui, &mut m, Mode::None, tl!("Value is not calculated"));
-    widgets::radio_value(ui, &mut m, Mode::Simple, tl!("Value is the"));
+    let options = [
+        (Mode::None, tl!("Value is not calculated")),
+        (Mode::Simple, tl!("Value is the")),
+        (Mode::Notation, tl!("Simplified field notation:")),
+        (Mode::Custom, tl!("Custom calculation script:")),
+    ];
+    let calculate = &mut d.calculate;
+    let (others, refused) = (&d.others, &mut d.script_refused);
+    radios(ui, tl!("Calculation"), &mut m, &options, |ui, shown| match (shown, &mut *calculate) {
+        (Mode::Simple, Calculate::Simple { op, fields }) => {
+            let ops: Vec<Entry<CalcOp>> = CalcOp::ALL.iter().map(|o| Entry::new(*o, tl!(o.label()))).collect();
+            select_row(ui, "calc-op", tl!("Operation:"), op, &ops);
+            Text::new(tl!("of the following fields:")).show(ui);
+            Stack::new().scroll(Scroll::vertical()).show(ui, |ui, _| {
+                for name in others {
+                    let mut on = fields.contains(name);
+                    if check(ui, name, &mut on, true) {
+                        if on {
+                            fields.push(name.clone());
+                        } else {
+                            fields.retain(|f| f != name);
+                        }
+                    }
+                }
+            });
+        }
+        (Mode::Notation, Calculate::Notation(expr)) => {
+            let label = tl!("Simplified field notation:");
+            Field::new(label).id_salt("calc-notation").show(ui, |ui, _| {
+                TextField::new(label, Bind::bound(&mut *expr)).lines(2).placeholder("Price * Quantity").show(ui);
+            });
+            note(ui, tl!("Field names with + - * / and parentheses; put \\ before spaces in names."));
+        }
+        (Mode::Custom, Calculate::Custom(js)) => custom_script(ui, js, refused),
+        _ => {}
+    });
     if m != mode {
         d.calculate = match m {
             Mode::None => Calculate::None,
@@ -361,94 +366,51 @@ pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::th
             Mode::Custom => custom(d),
         };
     }
-    if let Calculate::Simple { op, fields } = &mut d.calculate {
-        ui.horizontal(|ui| {
-            ui.add_space(24.0);
-            craft_ui::ComboBox::from_id_salt("calc-op").selected_text(tl!(op.label())).show_ui(ui, |ui| {
-                for o in CalcOp::ALL {
-                    ui.selectable_value(op, o, tl!(o.label()));
-                }
-            });
-            ui.label(tl!("of the following fields:"));
-        });
-        egui::ScrollArea::vertical().max_height(110.0).show(ui, |ui| {
-            for name in &d.others {
-                let mut on = fields.contains(name);
-                if ui.add(widgets::checkbox(&mut on, name)).changed() {
-                    if on {
-                        fields.push(name.clone());
-                    } else {
-                        fields.retain(|f| f != name);
-                    }
-                }
-            }
-        });
-    }
-    let mut m2 = match d.calculate {
-        Calculate::Notation(_) => Mode::Notation,
-        _ => m,
-    };
-    if widgets::radio_value(ui, &mut m2, Mode::Notation, tl!("Simplified field notation:")).clicked()
-        && !matches!(d.calculate, Calculate::Notation(_))
-    {
-        d.calculate = Calculate::Notation(String::new());
-    }
-    if let Calculate::Notation(expr) = &mut d.calculate {
-        ui.add(crate::widgets::block(expr).hint_text("Price * Quantity").desired_rows(2).desired_width(420.0));
-        ui.label(egui::RichText::new(tl!("Field names with + - * / and parentheses; put \\ before spaces in names.")).small().color(t.text_faint));
-    }
-    let mut m3 = match d.calculate {
-        Calculate::Custom(_) => Mode::Custom,
-        _ => m2,
-    };
-    let radio = widgets::radio_value(ui, &mut m3, Mode::Custom, tl!("Custom calculation script:"));
-    if radio.clicked() && !matches!(d.calculate, Calculate::Custom(_)) {
-        d.calculate = custom(d);
-    }
     if !matches!(d.calculate, Calculate::Custom(_)) {
         d.script_refused = false;
     }
-    if let Calculate::Custom(js) = &mut d.calculate {
-        // The box is named by its radio, and a note about it is its description too, so a screen
-        // reader on the box hears it.
-        let script_box = |ui: &mut egui::Ui, text: &mut dyn egui::TextBuffer| {
-            let edit = crate::widgets::block(text).code_editor().hint_text("event.value = …;").desired_rows(6).desired_width(420.0);
-            let scroll = egui::ScrollArea::vertical().id_salt("calc-script").max_height(180.0);
-            scroll.show(ui, |ui| ui.add(edit.char_limit(MAX_EDITED_SCRIPT + 1)).labelled_by(radio.id).id).inner
-        };
-        let describe = |ui: &egui::Ui, id: egui::Id, note: &str| {
-            let note = note.to_owned();
-            ui.ctx().accesskit_node_builder(id, |node| node.set_description(note));
-        };
-        if js.len() > MAX_EDITED_SCRIPT {
-            // Too long to edit: its start is shown, read-only (selectable, so it can be copied).
-            let kib = (js.len() / 1024).to_string();
-            let note =
-                crate::i18n::fmt(tl!("This script is too long to edit here ({kib} KiB); its start is shown. It is kept as it is."), &[("kib", &kib)]);
-            let mut start: &str = &js[..js.floor_char_boundary(MAX_EDITED_SCRIPT)];
-            let id = script_box(ui, &mut start);
-            describe(ui, id, &note);
-            ui.label(egui::RichText::new(note).small().color(t.text_faint));
-        } else {
-            // The box edits a copy: an edit that would take the script past the limit (a large
-            // paste) is refused and said so, rather than hiding the box the user is typing in.
-            // The box itself takes at most one character past the limit, so a huge paste is cut
-            // there before it is laid out, and is still over the limit to refuse. The limit is on
-            // bytes (`len`), as the JavaScript engine's is; the cut counts characters, which is
-            // what laying out costs.
-            let mut draft = js.clone();
-            let id = script_box(ui, &mut draft);
-            if draft != *js {
-                d.script_refused = draft.len() > MAX_EDITED_SCRIPT;
-                if !d.script_refused {
-                    *js = draft;
-                }
-            }
-            if d.script_refused {
-                let refusal = tl!("A script edited here can be at most 256 KiB long; that change wasn't made.");
-                describe(ui, id, refusal);
-                ui.colored_label(ui.visuals().error_fg_color, refusal);
-            }
+}
+
+/// The most lines the script box grows to before its text scrolls inside it: about the 180 points production's box
+/// stopped at. Without it a long script would grow the box past what any layout can show.
+const SCRIPT_LINES: usize = 10;
+
+/// The custom calculation script's box, with the 256 KiB rule on what it edits.
+fn custom_script(ui: &mut egui::Ui, js: &mut String, refused: &mut bool) {
+    let label = tl!("Custom calculation script:");
+    if js.len() > MAX_EDITED_SCRIPT {
+        // Too long to edit: its start is shown, read-only (selectable, so it can be copied).
+        let kib = (js.len() / 1024).to_string();
+        let note_text =
+            crate::i18n::fmt(tl!("This script is too long to edit here ({kib} KiB); its start is shown. It is kept as it is."), &[("kib", &kib)]);
+        let start = js.get(..js.floor_char_boundary(MAX_EDITED_SCRIPT)).unwrap_or_default().to_string();
+        Field::new(label).id_salt("calc-script").help(Help::Text(note_text.into())).show(ui, |ui, _| {
+            TextField::new(label, Bind::given(start.clone())).lines(6).max_lines(SCRIPT_LINES).mono().read_only(true).show(ui);
+        });
+        return;
+    }
+    // The box edits a copy: an edit that would take the script past the limit (a large paste) is refused and
+    // said so, rather than hiding the box the user is typing in. The limit is on bytes (`len`), as the JavaScript
+    // engine's is, so `TextField::limit`, which counts characters, is not used.
+    // The refusal is the box's help line, under it and in its description, until an edit is taken.
+    let mut draft = js.clone();
+    let mut field = Field::new(label).id_salt("calc-script");
+    if *refused {
+        field = field.help(Help::Status(Tone::Bad, tl!("A script edited here can be at most 256 KiB long; that change wasn't made.").into()));
+    }
+    field.show(ui, |ui, _| {
+        TextField::new(label, Bind::bound(&mut draft))
+            .lines(6)
+            .max_lines(SCRIPT_LINES)
+            .mono()
+            .tab_inserts(true)
+            .placeholder("event.value = …;")
+            .show(ui);
+    });
+    if draft != *js {
+        *refused = draft.len() > MAX_EDITED_SCRIPT;
+        if !*refused {
+            *js = draft;
         }
     }
 }

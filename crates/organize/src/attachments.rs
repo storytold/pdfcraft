@@ -114,7 +114,7 @@ pub fn set_attachment_description(doc: &mut Document, key: &str, description: Op
 }
 
 /// The `/EmbeddedFiles` entries (key, file specification), in tree order.
-fn entries(doc: &Document) -> Vec<(Vec<u8>, Object)> {
+pub(crate) fn entries(doc: &Document) -> Vec<(Vec<u8>, Object)> {
     let Some(tree) = doc
         .root()
         .and_then(|r| doc.get(r).as_dict().cloned())
