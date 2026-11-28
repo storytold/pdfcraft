@@ -8943,6 +8943,39 @@ fn xfa_dates_are_written_and_read_back_in_their_data_picture() {
     assert_eq!(value("when"), vec!["10/18/2026".to_string()]);
 }
 
+/// #8411: an XFA time field is a time, not a date. Its data's canonical `HH:MM:SS` shows in the
+/// field's time picture, a time typed there goes back to the data canonically, and text that
+/// is no time is kept as typed.
+#[test]
+fn xfa_time_fields_show_their_picture_and_keep_canonical_times_in_the_data() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::time_template(
+        "<form><page><start>14:30:00</start><at>08:15:00</at></page></form>",
+    )));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, bytes, None).expect("opens");
+    let value =
+        |s: &Session, id, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap_or_else(|| panic!("no field {n}")).value.clone();
+    assert_eq!(value(&s, id, "start"), vec!["2:30 PM".to_string()], "shown in its time picture");
+    assert_eq!(value(&s, id, "at"), vec!["08:15:00".to_string()], "canonical without a picture");
+    let actions = |s: &Session, id, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().actions.clone();
+    for name in ["start", "at"] {
+        let a = actions(&s, id, name);
+        assert!(matches!(a.format, pdfcraft_forms::af::Format::Time(_)), "{name} formats a time: {:?}", a.format);
+        assert!(a.xfa_date, "{name} keeps text its pattern doesn't read");
+    }
+    s.apply(id, Edit::SetFieldValue { name: "start".into(), value: FieldValue::Text("9:05 PM".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "at".into(), value: FieldValue::Text("after lunch".into()) }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).unwrap();
+    let at = |som: &str| data.text_at(&pdfcraft_xfa::som_to_path(som)).map(str::to_string);
+    assert_eq!(at("form[0].page[0].start[0]").as_deref(), Some("21:05:00"), "canonical in the data");
+    assert_eq!(at("form[0].page[0].at[0]").as_deref(), Some("after lunch"), "no time: kept as typed");
+    let id2 = s.open("again.pdf", None, saved, None).unwrap();
+    assert_eq!(value(&s, id2, "start"), vec!["9:05 PM".to_string()]);
+    assert_eq!(value(&s, id2, "at"), vec!["after lunch".to_string()]);
+}
+
 /// Same-named date fields are each written in their own data picture, and a data picture
 /// without a day keeps the ISO date.
 #[test]

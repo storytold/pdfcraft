@@ -809,6 +809,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
     let scripts = parse_events(n);
     let numeric = matches!(kind, Ui::NumericEdit)
         || value_el.is_some_and(|v| v.children().any(|c| c.is_element() && matches!(c.tag_name().name(), "decimal" | "integer" | "float")));
+    let time = value_el.is_some_and(|v| v.children().any(|c| c.is_element() && c.tag_name().name() == "time"));
     let (items, item_values) = parse_items(n, warnings);
     let choice = match (kind == Ui::ChoiceList, ui_el) {
         (true, Some(e)) => {
@@ -861,6 +862,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         validate_message,
         required: must_be_filled(validate_el),
         numeric,
+        time,
         display_picture: child(n, "format").and_then(|f| child(f, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
         keep_intact: child(n, "keep").and_then(|k| k.attribute("intact")).is_some_and(|v| v == "contentArea" || v == "pageArea"),
     }

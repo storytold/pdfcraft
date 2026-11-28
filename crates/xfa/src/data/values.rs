@@ -1,5 +1,6 @@
 use super::dates::{data_date_pattern, data_to_iso, iso_to_data, iso_to_pattern, pattern_to_iso};
 use super::path::{data_path, parse_datasets, som_to_path};
+use super::times::{pattern_to_canonical, time_in_pattern};
 use super::{DataPath, Dict, Document, ObjRef, Object, Template};
 
 /// What a field holds, for writing the datasets.
@@ -150,6 +151,26 @@ fn date_pattern_of(doc: &Document, f: &FieldDatum) -> Option<String> {
     named(b"K", "AFDate_KeystrokeEx(").or_else(|| named(b"F", "AFDate_FormatEx("))
 }
 
+/// The time patterns of a time field PdfCraft laid out (#8411): its `AFTime_KeystrokeEx`, which
+/// it holds the time in, then its `AFTime_FormatEx`, which a time may also be typed in.
+fn time_patterns_of(doc: &Document, f: &FieldDatum) -> Option<Vec<String>> {
+    let d = doc.get(f.obj);
+    let d = d.as_dict()?;
+    // Only the fields PdfCraft generated: another form's time script says nothing of its data.
+    d.get(crate::DATE_KEY)?;
+    let aa = doc.resolve(d.get(b"AA")?);
+    let aa = aa.as_dict()?;
+    let named = |key: &[u8], call: &str| -> Option<String> {
+        let action = doc.resolve(aa.get(key)?);
+        let js = text_of(doc, action.as_dict()?, b"JS")?;
+        let rest = js.get(js.find(call)? + call.len()..)?;
+        let body = rest.get(rest.find('"')? + 1..)?;
+        Some(body.get(..body.find('"')?)?.to_string())
+    };
+    let patterns: Vec<String> = [named(b"K", "AFTime_KeystrokeEx("), named(b"F", "AFTime_FormatEx(")].into_iter().flatten().collect();
+    (!patterns.is_empty()).then_some(patterns)
+}
+
 /// A value to write: where (the field's SOM path, and the data path it binds to) and what.
 pub(super) struct Want {
     pub(super) som: String,
@@ -189,6 +210,10 @@ pub(super) fn wanted(doc: &Document, fields: &[FieldDatum], tpl: Option<&Templat
             continue;
         }
         let text = match &f.data {
+            // A time goes into the data canonically (`HH:MM:SS`); text that isn't one, as typed.
+            FieldData::Text(t) if let Some(ps) = time_patterns_of(doc, f) => {
+                ps.iter().find_map(|p| pattern_to_canonical(t, p)).unwrap_or_else(|| t.clone())
+            }
             FieldData::Text(t) => match date_pattern_of(doc, f) {
                 Some(p) => match pattern_to_iso(t, &p) {
                     // The date goes into the data in the field's data picture, or as an ISO date.
@@ -233,6 +258,7 @@ fn values_at(doc: &Document, tpl: Option<&Template>, fields: &[FieldDatum]) -> V
         let Some(text) = data.value_at(&path) else { continue };
         let text = text.as_str();
         let value = match &f.data {
+            FieldData::Text(_) if let Some(ps) = time_patterns_of(doc, f) => FieldData::Text(time_in_pattern(text, &ps[0])),
             FieldData::Text(_) => FieldData::Text(match date_pattern_of(doc, f) {
                 Some(pat) => iso_to_pattern(&data_to_iso(text, data_date_pattern(tpl, &som).as_deref()), &pat),
                 None => text.to_string(),

@@ -51,6 +51,8 @@ pub struct Stripped {
     pub field_keys: usize,
     /// Date fields now holding and typed in the pattern they show ([`static_date`]).
     pub date_fields: usize,
+    /// Time fields now holding and typed in the pattern they show ([`static_date`]).
+    pub time_fields: usize,
 }
 
 impl Stripped {
@@ -78,6 +80,12 @@ impl Stripped {
             out.push(format!(
                 "{} date field(s) now hold and take their dates as they show them: a static form can't keep a date one way and show it another",
                 self.date_fields
+            ));
+        }
+        if self.time_fields > 0 {
+            out.push(format!(
+                "{} time field(s) now hold and take their times as they show them: a static form can't keep a time one way and show it another",
+                self.time_fields
             ));
         }
         out
@@ -121,15 +129,16 @@ pub fn xfa_shape(doc: &Document) -> Option<XfaShape> {
 /// A field's values to write: the key (`/V` or `/DV`) and its new text.
 type NewValues = Vec<(&'static [u8], String)>;
 
-/// A date field PdfCraft laid out, made one a static form keeps working in other viewers. The
+/// A date or time field PdfCraft laid out, made one a static form keeps working in other viewers. The
 /// layout keeps its value as an ISO date (or as typed), types it in its edit pattern (`/AA /K`)
 /// and shows it in its display pattern (`/AA /F`). A static form can do neither: another viewer
 /// checks typing against the keystroke pattern but reads the value again in the format's, so
 /// only dates that read both ways pass, and those show misread. So its keystroke takes the
 /// format's pattern, and its value and default value, when they read as dates in the edit
-/// pattern or as ISO dates, are written in it. The new `/AA` and values, or `None` when nothing
-/// changes.
-fn static_date(doc: &Document, d: &Dict) -> Option<(Dict, NewValues)> {
+/// pattern or as ISO dates, are written in it. A time field's the same, its value read in the
+/// edit pattern or canonically (`HH:MM:SS`). The new `/AA` and values, or `None` when nothing
+/// changes, and whether it is a time field.
+fn static_date(doc: &Document, d: &Dict) -> Option<(Dict, NewValues, bool)> {
     let aa = doc.resolve(d.get(b"AA")?).as_dict()?.clone();
     let pattern = |key: &[u8], call: &str| {
         let action = doc.resolve(aa.get(key)?).as_dict()?.clone();
@@ -137,6 +146,23 @@ fn static_date(doc: &Document, d: &Dict) -> Option<(Dict, NewValues)> {
         let rest = js.trim().strip_prefix(call)?.trim_start().strip_prefix("(\"")?;
         rest.split_once("\")").map(|(p, _)| p.to_string())
     };
+    // A time field (#8411): the same, its value read in the typed pattern or canonically.
+    if let (Some(shown), Some(typed)) = (pattern(b"F", "AFTime_FormatEx"), pattern(b"K", "AFTime_KeystrokeEx")) {
+        let mut aa = aa;
+        if typed != shown {
+            aa.set(b"K".to_vec(), js_action(&format!("AFTime_KeystrokeEx(\"{shown}\");")));
+        }
+        let mut values = Vec::new();
+        for key in [b"V".as_slice(), b"DV"] {
+            let Some(text) = d.get(key).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())) else { continue };
+            let canonical = crate::data::pattern_to_canonical(&text, &typed).unwrap_or_else(|| text.clone());
+            let written = crate::data::time_in_pattern(&canonical, &shown);
+            if written != text {
+                values.push((key, written));
+            }
+        }
+        return (typed != shown || !values.is_empty()).then_some((aa, values, true));
+    }
     let shown = pattern(b"F", "AFDate_FormatEx")?;
     let typed = pattern(b"K", "AFDate_KeystrokeEx")?;
     let mut aa = aa;
@@ -151,7 +177,7 @@ fn static_date(doc: &Document, d: &Dict) -> Option<(Dict, NewValues)> {
             values.push((key, iso));
         }
     }
-    (typed != shown || !values.is_empty()).then_some((aa, values))
+    (typed != shown || !values.is_empty()).then_some((aa, values, false))
 }
 
 /// Most field dictionaries walked for their private keys.
@@ -238,9 +264,13 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
             out.image_fields += 1;
         }
         if d.contains(DATE_KEY)
-            && let Some((aa, values)) = static_date(doc, &d)
+            && let Some((aa, values, time)) = static_date(doc, &d)
         {
-            out.date_fields += 1;
+            if time {
+                out.time_fields += 1;
+            } else {
+                out.date_fields += 1;
+            }
             doc.update_dict(r, |d| {
                 d.set(b"AA".to_vec(), Object::Dict(aa));
                 for (k, v) in values {
@@ -404,5 +434,25 @@ mod tests {
         let out = strip(&mut doc).unwrap();
         assert_eq!(out.script_buttons, 1);
         assert!(!doc.get(kid).as_dict().unwrap().contains(CLICK_KEY));
+    }
+
+    /// #8411: a time field typed in one pattern and shown in another is made one a static form
+    /// keeps: typed as it shows, its value written that way.
+    #[test]
+    fn a_time_field_takes_and_holds_its_time_as_it_shows_it() {
+        let doc = Document::new_empty();
+        let mut aa = Dict::new();
+        aa.set(b"F".to_vec(), js_action("AFTime_FormatEx(\"h:MM tt\");"));
+        aa.set(b"K".to_vec(), js_action("AFTime_KeystrokeEx(\"HH:MM\");"));
+        let mut d = Dict::new();
+        d.set(DATE_KEY.to_vec(), Object::Bool(true));
+        d.set(b"AA".to_vec(), Object::Dict(aa));
+        d.set(b"V".to_vec(), Object::String(PdfString::text("14:30")));
+        d.set(b"DV".to_vec(), Object::String(PdfString::text("not yet")));
+        let (aa, values, time) = static_date(&doc, &d).expect("changes");
+        assert!(time);
+        let k = aa.get(b"K").and_then(|k| k.as_dict()).and_then(|k| k.get(b"JS")).and_then(|j| j.as_string()).map(|j| j.to_text());
+        assert_eq!(k.as_deref(), Some("AFTime_KeystrokeEx(\"h:MM tt\");"));
+        assert_eq!(values, vec![(b"V".as_slice(), "2:30 PM".to_string())], "a time is written as shown; other text stays");
     }
 }
