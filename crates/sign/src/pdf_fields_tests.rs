@@ -446,3 +446,26 @@ fn a_widget_shows_with_a_box_over_half_a_point_unless_hidden_or_noview() {
     endless.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Real(f64::INFINITY), Object::Int(10)]));
     assert!(!widget_shown(&doc, &endless), "a box needs finite corners");
 }
+
+/// A signature widget that no page's `/Annots` lists is placed by its `/P`. That page is found in
+/// one walk of the page tree for the whole listing: the tree was walked again for every such
+/// field, so thousands of fields over a long `/Kids` array took minutes to list.
+#[test]
+fn widgets_placed_by_their_p_share_one_page_walk() {
+    const FIELDS: usize = 10_000;
+    const KIDS: usize = 200_000;
+    let fields: String = (0..FIELDS).map(|i| format!("<< /FT /Sig /T (s{i}) /Subtype /Widget /Rect [0 0 10 10] /P 4 0 R >> ")).collect();
+    let kids = "3 0 R ".repeat(KIDS);
+    let pdf = Pdf::new()
+        .obj(format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{fields}] >> >>"))
+        .obj(format!("<< /Type /Pages /Kids [{kids}4 0 R] /Count 2 >>"))
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>");
+    let doc = Document::open(Arc::new(pdf.build())).unwrap();
+    let started = std::time::Instant::now();
+    let listed = list(&doc, doc.bytes(), &TrustStore::default());
+    let took = started.elapsed();
+    assert_eq!(listed.len(), FIELDS);
+    assert!(listed.iter().all(|s| s.page == Some(1)), "each widget is on the page its /P names");
+    assert!(took < std::time::Duration::from_secs(10), "took {took:?}");
+}

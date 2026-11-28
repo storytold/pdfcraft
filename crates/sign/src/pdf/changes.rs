@@ -110,7 +110,9 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
     // it and draw another object than the one compared below, so the page could show new content
     // while every comparison here finds the signed object untouched. No writer has a reason to
     // add such an entry after signing: it is never a permitted change.
-    for (_, num) in doc.xref_oddities().iter().filter(|o| !old.xref_oddities().contains(o)) {
+    // Looked up in a set: a list search for each entry made this quadratic in their number.
+    let signed_oddities: HashSet<&(u64, u32)> = old.xref_oddities().iter().collect();
+    for (_, num) in doc.xref_oddities().iter().filter(|o| !signed_oddities.contains(o)) {
         let what = if old_content.contains(num) || signed_pages.contains(num) { kind::PAGE_CONTENT } else { kind::OTHER };
         if !disallowed.contains(&what) {
             disallowed.push(what);
