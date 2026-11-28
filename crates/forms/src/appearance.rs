@@ -341,7 +341,7 @@ impl FontText {
                 let mut held = std::collections::HashSet::new();
                 s.chars()
                     .map(|c| if c == '\t' { ' ' } else { c })
-                    .find(|c| !held.contains(c) && !(metrics.encode(c.encode_utf8(&mut [0; 4])).is_some() && held.insert(*c)))
+                    .find(|c| !(held.contains(c) || metrics.encode(c.encode_utf8(&mut [0; 4])).is_some() && held.insert(*c)))
             }
             Self::Unicode(cmap) => cmap.first_unencodable(s),
         }

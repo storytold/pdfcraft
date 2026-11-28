@@ -382,10 +382,8 @@ fn tree_holders(doc: &Document) -> Result<Vec<Object>, PatternProblem> {
     let mut visit =
         |dict: &Dict, is_page: bool, stack: &mut Vec<ObjRef>, inline: &mut Vec<Dict>, holders: &mut Vec<Object>| -> Result<(), PatternProblem> {
             match dict.get(b"Parent") {
-                Some(Object::Ref(parent)) => {
-                    if seen.insert(*parent) {
-                        stack.push(*parent);
-                    }
+                Some(Object::Ref(parent)) if seen.insert(*parent) => {
+                    stack.push(*parent);
                 }
                 Some(Object::Dict(parent)) => {
                     if inline.len() >= MAX_DEPTH {

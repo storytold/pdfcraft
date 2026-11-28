@@ -173,10 +173,8 @@ fn referenced_names(doc: &Document) -> HashSet<Vec<u8>> {
     }
     while let Some(o) = stack.pop() {
         match o {
-            Object::Ref(r) => {
-                if seen.insert(r) {
-                    stack.push(doc.get(r).as_ref().clone());
-                }
+            Object::Ref(r) if seen.insert(r) => {
+                stack.push(doc.get(r).as_ref().clone());
             }
             Object::Dict(d) => {
                 // Resolve first: /Dest and a GoTo's /D may be an indirect reference to the name

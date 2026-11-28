@@ -226,7 +226,7 @@ impl WorkQueue {
 
     /// A shared-parser timeout may belong to another page holding a cold-load gate.
     /// Retry still-current demand after the pool switches permanently to private parsers.
-    #[cfg(any(test, not(target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn retry(&self, request: RenderRequest) {
         lock(&self.state).retry(request);
         self.changed.notify_all();
@@ -279,7 +279,7 @@ impl ResultReceiver {
         result.ok_or(if closed { std::sync::mpsc::TryRecvError::Disconnected } else { std::sync::mpsc::TryRecvError::Empty })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(super) fn recv_timeout(&self, timeout: Duration) -> Result<RenderedPage, std::sync::mpsc::RecvTimeoutError> {
         let start = std::time::Instant::now();
         loop {

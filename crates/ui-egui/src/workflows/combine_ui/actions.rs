@@ -180,15 +180,11 @@ impl PdfCraftApp {
     fn combine_preview_action(&mut self, action: RowAction) {
         let ids: Vec<u64> = self.combine_draft.iter().map(|f| f.id).collect();
         match action {
-            RowAction::Preview(id) => {
-                if ids.contains(&id) {
-                    self.combine_tab.preview = Some(Preview { file: id, at: 0, page: None, pages: None });
-                }
+            RowAction::Preview(id) if ids.contains(&id) => {
+                self.combine_tab.preview = Some(Preview { file: id, at: 0, page: None, pages: None });
             }
-            RowAction::PreviewAt(id, at) => {
-                if ids.contains(&id) {
-                    self.combine_tab.preview = Some(Preview { file: id, at, page: None, pages: None });
-                }
+            RowAction::PreviewAt(id, at) if ids.contains(&id) => {
+                self.combine_tab.preview = Some(Preview { file: id, at, page: None, pages: None });
             }
             RowAction::Expand(id, on) => {
                 if on {

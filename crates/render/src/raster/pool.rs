@@ -1,10 +1,12 @@
 use super::{
-    Arc, AssertUnwindSafe, AtomicRenderStats, InterpreterSettings, JoinHandle, Mutex, Ordering, PageRenderer, Pdf, Pixels, RenderCache, RenderConfig,
-    RenderRequest, RenderStats, RenderedPage, RequestFailureKey, RequestKind, ResultReceiver, Stopwatch, SyncSender, WorkQueue, catch_unwind, finish,
-    panic_message, parse, render_page, take_warnings, warning_settings,
+    Arc, AtomicRenderStats, JoinHandle, Mutex, PageRenderer, Pixels, RenderConfig, RenderRequest, RenderStats, RenderedPage, ResultReceiver,
+    SyncSender, WorkQueue,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use super::{AtomicBool, Receiver, sync_channel};
+use super::{
+    AssertUnwindSafe, AtomicBool, InterpreterSettings, Ordering, Pdf, Receiver, RenderCache, RequestFailureKey, RequestKind, Stopwatch, catch_unwind,
+    finish, panic_message, parse, render_page, sync_channel, take_warnings, warning_settings,
+};
 
 /// How long one page may render before the pool gives up on it (the watchdog).
 pub const STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(20);
@@ -66,6 +68,7 @@ pub(super) struct Shared {
     pub(super) busy: Mutex<Vec<Option<Busy>>>,
     /// Exact requests the watchdog gave up on: answered with an error at once, so a pathological
     /// request cannot trap every worker in turn while other scales, tiles, or generations remain usable.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) stuck: Mutex<std::collections::HashSet<RequestFailureKey>>,
     stats: AtomicRenderStats,
     /// Per worker id: set to stop that worker's render at its next content operator once nobody
@@ -240,8 +243,11 @@ pub struct RenderPool {
     pub(super) shared: Arc<Shared>,
     wake: Mutex<Vec<SyncSender<()>>>,
     pub(super) results: ResultReceiver,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) results_tx: Arc<WorkQueue>,
+    #[cfg(not(target_arch = "wasm32"))]
     bytes: Arc<Vec<u8>>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) config: RenderConfig,
     pub(super) _workers: Mutex<Vec<JoinHandle<()>>>,
     stuck_after: std::time::Duration,
@@ -260,14 +266,18 @@ impl RenderPool {
     fn with_mode(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig, inline: bool) -> Self {
         let threads = if inline || cfg!(target_arch = "wasm32") { 0 } else { threads.max(1) };
         let shared = Arc::new(Shared::default());
+        #[cfg(not(target_arch = "wasm32"))]
         let results_tx = shared.queue.clone();
         let results = ResultReceiver(shared.queue.clone());
         let mut pool = Self {
             shared,
             wake: Mutex::new(Vec::new()),
             results,
+            #[cfg(not(target_arch = "wasm32"))]
             results_tx,
+            #[cfg(not(target_arch = "wasm32"))]
             bytes: bytes.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
             config: config.clone(),
             _workers: Mutex::new(Vec::new()),
             stuck_after: STUCK_AFTER,
