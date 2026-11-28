@@ -451,7 +451,8 @@ fn escape_leaves_full_screen(h: &mut Harness<'static, PdfCraftApp>, _c: &Control
     assert!(!h.state().full_screen(), "Escape leaves full screen");
 }
 
-/// Check that choosing Edit ▸ Pages ▸ Delete pages in the menu bar reduces the page count once.
+/// Check that choosing Edit ▸ Pages ▸ Delete pages in the menu bar asks, and the confirmation
+/// deletes the page once.
 #[test]
 fn the_pages_menu_comes_from_the_registry() {
     let mut h = harness();
@@ -459,6 +460,9 @@ fn the_pages_menu_comes_from_the_registry() {
     support::menu_row(&h, "Pages").hover();
     h.run_steps(3);
     support::menu_row(&h, "Delete pages").click();
+    h.run_steps(3);
+    // The menu's ask opens the dialog; Delete confirms the deletion.
+    h.get_by_label("Delete").click();
     h.run_steps(3);
     let app = h.state();
     assert_eq!(app.session.get(app.views[0].id).unwrap().info.pages.len(), 2);

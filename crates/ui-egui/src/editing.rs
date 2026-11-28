@@ -65,7 +65,7 @@ fn select_after_edit(
             if let Some(&first) = pages.iter().min() {
                 clear_shifted_page_comment_state(view, first);
             }
-            view.select_pages(&[]);
+            view.clear_page_selection(None);
         }
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).
@@ -559,6 +559,16 @@ impl PdfCraftApp {
                     self.lock_signatures_now(ctx, id);
                 }
             }
+            // The panel asked before deleting pages: open the confirmation dialog, which queues
+            // the edit when confirmed.
+            Some(crate::canvas::ViewAction::ConfirmDeletePages { pages, generation }) => {
+                // The panel captured the pages with the document's generation when it asked: an
+                // edit that ran since makes those indices stale, so the ask is dropped rather
+                // than shown, and never names the newer document.
+                if self.views.get(i).and_then(|v| self.session.get(v.id)).is_some_and(|d| d.edit_generation() == generation) {
+                    self.request_delete_pages(i, pages);
+                }
+            }
             Some(crate::canvas::ViewAction::CameraNext(command)) => {
                 self.leave_camera(i);
                 self.execute(ctx, command);
@@ -706,6 +716,54 @@ impl PdfCraftApp {
             Err(e) => {
                 let label = crate::i18n::action_label("Enhance camera image");
                 self.notify_fmt("{label} failed: {e}", &[("label", &label), ("e", &e.to_string())]);
+            }
+        }
+    }
+
+    /// Ask before deleting `pages` (0-based) of the document in view `index` via a page's
+    /// right-click menu: the confirmation dialog queues the edit when confirmed. A deletion
+    /// that would leave the document without a page is refused silently.
+    pub fn request_delete_pages(&mut self, index: usize, pages: Vec<usize>) {
+        let Some(id) = self.views.get(index).map(|v| v.id) else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        let mut pages = pages;
+        pages.sort_unstable();
+        pages.dedup();
+        if pages.is_empty() || pages.len() >= doc.info.pages.len() {
+            return;
+        }
+        self.delete_pages_draft = Some(crate::DeletePagesDraft { doc: id, generation: doc.edit_generation(), pages: pages.clone() });
+        self.ask_delete_pages(&pages);
+    }
+
+    /// The confirmation's Delete: queue the deletion the draft holds. A document changed since
+    /// the dialog opened (another edit ran behind it) deletes nothing, so the pages those
+    /// indices named are not the pages deleted.
+    pub fn confirm_delete_pages(&mut self, ctx: &egui::Context) {
+        if let Some(dialog) = self.prompts.delete_pages.take() {
+            self.dialogs.cancel_by_id(ctx, dialog);
+        }
+        let Some(d) = self.delete_pages_draft.take() else { return };
+        let still_there =
+            self.active_ids().is_some_and(|(_, id)| id == d.doc) && self.session.get(d.doc).is_some_and(|doc| doc.edit_generation() == d.generation);
+        if !still_there {
+            self.notify_tr("The document changed while the dialog was open, so nothing was changed. Delete the pages again.");
+            return;
+        }
+        let Some((i, id)) = self.active_ids() else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        let n = doc.info.pages.len();
+        let current = self.views.get(i).map(|v| v.current()).unwrap_or(0);
+        let before = d.pages.iter().filter(|p| **p < current).count();
+        let target_current = current.saturating_sub(before).min(n.saturating_sub(d.pages.len() + 1));
+
+        if self.apply_edit(ctx, Edit::DeletePages { pages: d.pages }) {
+            // The view keeps the page it showed, or the one after the deleted run, as the
+            // right-click delete did before it asked: pages deleted before it shift it up, and a page
+            // deleted itself is replaced by what followed the deleted run (or the last page).
+            if let Some(v) = self.views.get_mut(i) {
+                v.view.current = target_current;
+                v.clear_page_selection(None);
             }
         }
     }

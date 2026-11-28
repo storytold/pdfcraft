@@ -85,7 +85,7 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
             ThumbnailEvent::Delete(_) => {
                 // The menu bar owns keys while its menu is open, even over the thumbnails.
                 if editable && !craft::ui::menu::bar::is_open(ui.ctx()) {
-                    result.edit = delete_pages(view, count);
+                    delete_pages(view, count, doc.edit_generation());
                 }
             }
             ThumbnailEvent::ContextMenu(request) => target = Some(request.key),
@@ -123,7 +123,7 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
             // Never every page: a document keeps at least one.
             let some_left = view.target_pages().len() < count;
             if MenuItem::new(tl!("Delete pages")).enabled(editable && some_left).show(ui).ran {
-                result.edit = delete_pages(view, count);
+                delete_pages(view, count, doc.edit_generation());
             }
         });
         if menu.output.closed.is_some() {
@@ -136,21 +136,16 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     result
 }
 
-/// Queue deleting the selection (or the current page) of a document of `n` pages, unless that
-/// would leave no page. The selection goes; the current page stays on the page it showed, or on
-/// the page that follows the deleted ones. The edit is returned for the caller to queue.
-fn delete_pages(view: &mut crate::DocView, n: usize) -> Option<pdfcraft_engine::Edit> {
+/// Ask before deleting the selection (or the current page) of a document of `n` pages whose
+/// edits are at `generation`, unless that would leave no page. The pages and the generation are
+/// captured now; the current page and the selection change only when the confirmation deletes
+/// them, and an edit that ran since drops the ask.
+fn delete_pages(view: &mut crate::DocView, n: usize, generation: u64) {
     let mut pages = view.target_pages();
     pages.sort_unstable();
     pages.dedup();
     if pages.is_empty() || pages.len() >= n {
-        return None;
+        return;
     }
-    // Deleted pages before it shift it up; if it was deleted itself, the page after the deleted
-    // run lands where it was (or the last page, when the deletion ran to the end).
-    let current = view.current();
-    let before = pages.iter().filter(|p| **p < current).count();
-    view.view.current = current.saturating_sub(before).min(n.saturating_sub(pages.len() + 1));
-    view.clear_page_selection(None);
-    Some(pdfcraft_engine::Edit::DeletePages { pages })
+    view.pending_action = Some(crate::canvas::ViewAction::ConfirmDeletePages { pages, generation });
 }

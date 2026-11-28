@@ -97,6 +97,15 @@ pub enum QuickTool {
     ColumnSelect,
 }
 
+/// Delete pages: the document and pages (0-based) the confirmation would delete, and the
+/// document's edit generation when the dialog opened.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeletePagesDraft {
+    pub doc: DocId,
+    pub generation: u64,
+    pub pages: Vec<usize>,
+}
+
 /// Page Properties: the document and pages it applies to (0-based), the document's edit
 /// generation when the dialog opened, and the pages' tab order as they have it (`None` when they
 /// differ). The order chosen is the hosted dialog's value.

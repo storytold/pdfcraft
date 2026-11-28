@@ -416,6 +416,11 @@ pub struct PageSession {
 }
 
 impl PageSession {
+    /// Whether a page-box drag (Snapshot, Crop, Redact, or signature area) is currently active.
+    pub fn is_box_dragging(&self) -> bool {
+        self.box_drag.is_active()
+    }
+
     /// The session of a newly opened document.
     fn new(info: &DocInfo, highlight_fields: bool) -> Self {
         Self {
@@ -478,7 +483,7 @@ impl PageSession {
 }
 
 /// Organize-toolbar actions that need the app (file pickers, new tabs, dialogs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ViewAction {
     InsertFromFile,
     /// Insert files at a gap of the page grid (0 = before the first page).
@@ -515,6 +520,12 @@ pub enum ViewAction {
     },
     /// Lock now, on the notice shown after a signature is placed (#2149).
     LockSignatures,
+    /// Ask before deleting the pages the panel picked, captured with the document's edit
+    /// generation when the ask was made.
+    ConfirmDeletePages {
+        pages: Vec<usize>,
+        generation: u64,
+    },
 }
 
 impl DocView {
@@ -2249,7 +2260,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
             app.add_image_dialog();
         }
         Some(PageMenuAction::DeletePage(page)) => {
-            app.views[index].session.pending_edit = Some(pdfcraft_engine::Edit::DeletePages { pages: vec![page] });
+            app.request_delete_pages(index, vec![page]);
         }
         Some(PageMenuAction::ExportPdf) => {
             app.select_tool(ctx, "export");
