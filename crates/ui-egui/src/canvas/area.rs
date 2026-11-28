@@ -1,4 +1,4 @@
-use super::{DocInfo, HashSet, LayerOp, PageXform, PdfCraftApp, Pos2, Rect, Vec2, pos2, vec2};
+use super::{DestView, DocInfo, HashSet, LayerOp, PageXform, PdfCraftApp, Pos2, Rect, Vec2, pos2, vec2};
 
 /// Whether what the pages show of the signatures differs between `before` and `after`: a verdict,
 /// or whether a signature's appearance draws it.
@@ -208,7 +208,12 @@ pub(super) fn run_button(
             other => app.notify_fmt("{name}: the {other} action isn't supported yet", &[("name", name), ("other", other)]),
         },
         B::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Button),
-        B::GoTo(p) => app.views[index].go_to_page(p.min(pages.saturating_sub(1))),
+        B::GoTo { page, view } => {
+            let dest = view.map_or(DestView::Top, |(kind, operands)| DestView::from_operands(Some(&kind), &operands));
+            // Through `apply_destination_at`, so a named lookup still pending from an earlier click is dropped.
+            app.apply_destination_at(index, pdfcraft_render::RemoteDestination::Page { page, view: dest });
+        }
+        B::GoToNamed(name) => app.apply_destination_at(index, pdfcraft_render::RemoteDestination::Named(name)),
         B::ShowHide { fields, hide } => {
             let listed = |n: &String| fields.iter().any(|f| n == f || n.starts_with(&format!("{f}.")));
             // `display.hidden` 1, `display.visible` 0, as a script setting `field.display` would.

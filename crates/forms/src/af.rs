@@ -221,8 +221,16 @@ pub enum ButtonAction {
     /// A named action: Print, NextPage, PrevPage, FirstPage, LastPage, …
     Named(String),
     Uri(String),
-    /// Go to a page (0-based) in this document.
-    GoTo(usize),
+    /// Go to a page (0-based) in this document, placed as its explicit destination asks: the
+    /// destination type (`XYZ`, `FitH`, `FitR`, …) and up to four operands after it, `None` for
+    /// a null or a non-number (read by `pdfcraft_render::DestView::from_operands`). `view` is
+    /// `None` when the destination gives no type: the page's top.
+    GoTo {
+        page: usize,
+        view: Option<(Vec<u8>, Vec<Option<f32>>)>,
+    },
+    /// Go to a named destination (ISO 32000-2 §12.3.2.4) of this document, looked up when clicked.
+    GoToNamed(String),
     /// A hide action (§12.6.4.11): hide the listed fields (and their kids), or show them when
     /// `hide` is false.
     ShowHide {
