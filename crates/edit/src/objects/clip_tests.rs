@@ -324,6 +324,34 @@ fn a_copy_brings_the_resources_a_soft_mask_group_names() {
     assert!(matches!(&pasted, Err(EditError::Invalid(why)) if why.contains("uses its resources")), "{pasted:?}");
 }
 
+/// A graphics state's `/Font` selects a font as `Tf` does: a Type 3 font there without resources
+/// of its own draws its glyphs with the page's, so the copy brings the font a glyph names, and a
+/// page whose /F1 is another font refuses the paste instead of drawing the glyph with it.
+#[test]
+fn a_copy_brings_the_resources_a_graphics_state_font_names() {
+    let glyph = "1000 0 0 0 1000 1000 d1 BT /F1 800 Tf 0 0 Td (g) Tj ET";
+    let mut doc = pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 7 0 R /F2 7 0 R >> /ExtGState << /GS0 << /Font [9 0 R 20] >> >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 8 0 R >> >> >>".into(),
+        stream("q /GS0 gs BT /F2 20 Tf 20 200 Td (aaa) Tj ET Q"),
+        stream(""),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".into(),
+        "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 10 0 R >> \
+         /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] >>"
+            .into(),
+        stream(glyph),
+    ]);
+    let all: Vec<_> = editable_objects(&doc, 0).unwrap().into_iter().map(|o| o.target).collect();
+    let copied = copy_objects(&doc, 0, &all).unwrap();
+    let font = copied.resources.get(b"Font").and_then(Object::as_dict).and_then(|f| f.get(b"F1")).cloned();
+    assert_eq!(font, Some(Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))), "{:?}", copied.resources);
+    let pasted = paste_objects(&mut doc, 1, &copied, [0.0, 0.0]);
+    assert!(matches!(&pasted, Err(EditError::Invalid(why)) if why.contains("uses its resources")), "{pasted:?}");
+}
+
 /// When the items that inherit the page's resources draw more than can be read, the names they
 /// use aren't all known, so the copy takes every resource of the page rather than some.
 #[test]
