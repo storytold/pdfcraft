@@ -163,9 +163,28 @@ pub(crate) fn is_comment_dict(d: &Dict) -> bool {
 
 /// The comment annotation at `(page, index)` as an indirect object (inline dictionaries are promoted).
 pub(crate) fn annot_ref(doc: &mut Document, page: usize, index: usize) -> Result<(ObjRef, ObjRef), AnnotError> {
+    annot_ref_checked(doc, page, index, |_, _| Ok(()))
+}
+
+/// Validate the annotation before promoting an inline dictionary or changing its page.
+pub(crate) fn annot_ref_checked(
+    doc: &mut Document,
+    page: usize,
+    index: usize,
+    check: impl FnOnce(&Document, &Dict) -> Result<(), AnnotError>,
+) -> Result<(ObjRef, ObjRef), AnnotError> {
     let p = page_ref(doc, page)?;
     let mut list = annots(doc, p);
     let entry = list.get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    match &entry {
+        Object::Ref(r) if doc.get(*r).as_dict().is_some_and(is_comment_dict) => {
+            let object = doc.get(*r);
+            let d = object.as_dict().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+            check(doc, d)?;
+        }
+        Object::Dict(d) if is_comment_dict(d) => check(doc, d)?,
+        _ => return Err(AnnotError::NoSuchAnnotation { page, index }),
+    }
     let r = match entry {
         Object::Ref(r) if doc.get(r).as_dict().is_some_and(is_comment_dict) => r,
         Object::Dict(d) if is_comment_dict(&d) => {
