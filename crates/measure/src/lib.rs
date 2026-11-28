@@ -438,6 +438,11 @@ fn annot(doc: &Document, page_index: usize, index: usize) -> Result<(ObjRef, Dic
     let o = doc.get(r);
     Ok((r, o.as_dict().cloned().ok_or_else(|| invalid("invalid annotation dictionary"))?))
 }
+/// The on-page caption: the detail label, when set, followed by the formatted value.
+fn caption_text(user_label: &str, value: &str) -> String {
+    let label = user_label.trim();
+    if label.is_empty() { value.to_string() } else { format!("{label}: {value}") }
+}
 pub fn add(doc: &mut Document, new: &NewMeasurement, meta: &Meta) -> Result<usize> {
     validate_geometry(new.kind, &new.points)?;
     let info = reading(new.kind, &new.points, &new.scale)?;
@@ -459,9 +464,10 @@ pub fn add(doc: &mut Document, new: &NewMeasurement, meta: &Meta) -> Result<usiz
         }
         Kind::Area => Shape::Polygon { vertices: new.points.clone(), cloud: false },
     };
+    let caption = caption_text(&new.label, &info.label);
     let index = pdfcraft_annot::add_annotation(
         doc,
-        &NewAnnotation { page: new.page, shape, style: new.style.clone(), contents: info.label.clone(), author: new.author.clone() },
+        &NewAnnotation { page: new.page, shape, style: new.style.clone(), contents: caption.clone(), author: new.author.clone() },
         meta,
     )?;
     let (r, mut d) = annot(doc, new.page, index)?;
@@ -469,17 +475,17 @@ pub fn add(doc: &mut Document, new: &NewMeasurement, meta: &Meta) -> Result<usiz
     d.set(b"Measure".to_vec(), Object::Dict(new.scale.dictionary()?));
     d.set(b"Subj".to_vec(), PdfString::text(new.kind.name()));
     d.set(b"PCMeasureLabel".to_vec(), PdfString::text(&new.label));
-    d.set(b"PCMeasureValue".to_vec(), PdfString::text(&info.label));
+    d.set(b"PCMeasureValue".to_vec(), PdfString::text(&caption));
     if new.kind == Kind::Distance {
         d.set(b"LE".to_vec(), Object::Array(vec![Object::name("OpenArrow"), Object::name("OpenArrow")]));
         d.set(b"Cap".to_vec(), Object::Bool(true));
         d.set(b"CP".to_vec(), Object::name("Top"));
     }
-    // Leave room for the readable numeric caption above the geometry.
+    // Leave room for the readable caption above the geometry.
     if let Some(rect) = d.get(b"Rect").and_then(Object::as_array) {
         let values: Option<Vec<f64>> = rect.iter().map(Object::as_f64).collect();
         if let Some(v) = values.filter(|v| v.len() == 4) {
-            let width = (info.label.len() as f64 * 6.0).max(40.0);
+            let width = (caption.len() as f64 * 6.0).max(40.0);
             let cx = (v[0] + v[2]) * 0.5;
             d.set(b"Rect".to_vec(), nums([v[0].min(cx - width / 2.0), v[1], v[2].max(cx + width / 2.0), v[3] + 16.0]));
         }
