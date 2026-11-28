@@ -129,6 +129,22 @@ fn radio_button(doc: &pdfcraft_cos::Document, f: &pdfcraft_forms::Field, datum: 
         .unwrap_or_else(|| item.to_owned())
 }
 
+/// The document's XFA shape, with the fields a viewer finds counted as its fields: a static form
+/// whose `/Fields` list leaves its widgets out (or is empty) still has fields, which every viewer
+/// fills from the page annotations ([`pdfcraft_forms::fields`] adopts them, and the reader calls
+/// such a form static). Only `/Fields` itself would make it a dynamic form never laid out, so
+/// flattening it would keep the XFA over pages that no longer hold a field. `reader_dynamic` is
+/// the document reader's own call ([`pdfcraft_render::Xfa::Dynamic`]): when it reads the form as
+/// dynamic, the fields found on the pages don't count, as the reader would lay it out again from
+/// its template (it reads field trees less deep than [`pdfcraft_forms::fields`] does).
+pub(crate) fn xfa_shape(doc: &pdfcraft_cos::Document, reader_dynamic: bool) -> Option<pdfcraft_xfa::XfaShape> {
+    let mut shape = pdfcraft_xfa::xfa_shape(doc)?;
+    if !shape.has_fields && !reader_dynamic {
+        shape.has_fields = !pdfcraft_forms::fields(doc).is_empty();
+    }
+    Some(shape)
+}
+
 /// Take the XFA out of `doc` and note what went with it: the packets, data no field showed,
 /// buttons that did nothing but run scripts, and fields whose value differs from the form's
 /// data (data PdfCraft could not read into them, now lost).

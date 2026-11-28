@@ -10099,6 +10099,61 @@ fn flattening_an_xfa_form_bakes_its_pages_and_takes_the_xfa_out() {
     assert_eq!(s.get(id).unwrap().info.xfa, Some(pdfcraft_render::Xfa::Dynamic));
 }
 
+/// A static XFA form whose `/Fields` lists none of its fields (an empty array, or the top field
+/// dictionary itself in place of an array), its widgets only on the page, which viewers fill all
+/// the same: flattening bakes the widgets and takes the XFA out, as for a static form that lists
+/// its fields. Kept, the XFA would be read as a dynamic form on reopening and laid out again over
+/// pages that no longer hold a field: a blank page.
+#[test]
+fn flattening_a_static_xfa_form_that_lists_no_fields_takes_the_xfa_out() {
+    for fields in [b"/Fields []     ", b"/Fields 6 0 R  "] {
+        let label = String::from_utf8_lossy(fields).trim().to_string();
+        let mut bytes = pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name><agree>1</agree></page1></form1>");
+        // Rewritten in place, so the cross-reference offsets stay right.
+        let at = bytes.windows(15).position(|w| w == b"/Fields [6 0 R]").expect("the fixture lists its field");
+        bytes.splice(at..at + 15, *fields);
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("static.pdf", None, Arc::new(bytes), None).expect("opens");
+        let d = s.get(id).unwrap();
+        assert_eq!(d.info.xfa, Some(pdfcraft_render::Xfa::Static), "{label}: the widgets on the page are its fields");
+        assert!(!d.is_signed(), "{label}: no signature anywhere");
+        assert!(d.form.iter().any(|f| f.name == "form1[0].page1[0].name[0]"), "{label}: {:?}", d.form);
+        s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap_or_else(|e| panic!("{label}: {e}"));
+        let d = s.get(id).unwrap();
+        assert_eq!((d.info.xfa, d.form.len()), (None, 0), "{label}: a plain PDF now: {:?}", d.info.warnings);
+        assert!(!d.info.warnings.iter().any(|w| w.contains("The XFA was kept")), "{label}: {:?}", d.info.warnings);
+        assert!(page_texts(&s, id).join("\n").contains("Ada"), "{label}: the value is page content");
+        // Saved and reopened: no XFA left to lay out, the same page.
+        let saved = s.save_bytes(id).unwrap();
+        assert!(pdfcraft_xfa::read_packets(&pdfcraft_cos::Document::open(saved.clone()).unwrap()).unwrap().is_none());
+        let id2 = s.open("flat.pdf", None, saved, None).unwrap();
+        let d2 = s.get(id2).unwrap();
+        assert_eq!((d2.info.xfa, d2.form.len(), d2.xfa.is_none()), (None, 0, true), "{label}");
+        assert!(page_texts(&s, id2).join("\n").contains("Ada"), "{label}");
+        // Converting it to a static form keeps its fields and takes the XFA out too.
+        s.undo(id).unwrap();
+        s.apply(id, Edit::XfaToStatic).unwrap_or_else(|e| panic!("{label}: {e}"));
+        let d = s.get(id).unwrap();
+        assert_eq!(d.info.xfa, None, "{label}");
+        assert!(d.form.iter().any(|f| f.name == "form1[0].page1[0].name[0]" && f.value == vec!["Ada".to_string()]), "{label}: {:?}", d.form);
+    }
+}
+
+/// The fields found on the pages make a form whose `/Fields` lists none strippable only while
+/// the document reader reads it as static. One the reader reads as dynamic (it walks field trees
+/// less deep than the form reader, so a widget deep in a tree is a field to one and not the
+/// other) would be laid out again from its template, so it keeps its XFA, as a dynamic form
+/// never laid out does.
+#[test]
+fn page_fields_make_an_unlisted_xfa_form_strippable_only_when_the_reader_reads_it_as_static() {
+    let mut bytes = pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name><agree>1</agree></page1></form1>");
+    let at = bytes.windows(15).position(|w| w == b"/Fields [6 0 R]").expect("the fixture lists its field");
+    bytes.splice(at..at + 15, *b"/Fields []     ");
+    let doc = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+    assert!(crate::xfa_form::xfa_shape(&doc, false).unwrap().strippable(), "read as static: its page fields count");
+    assert!(!crate::xfa_form::xfa_shape(&doc, true).unwrap().strippable(), "read as dynamic: they don't");
+}
+
 #[test]
 fn a_dynamic_xfa_form_that_was_never_laid_out_keeps_its_xfa_and_the_user_is_told_what_went() {
     // A template that can't be read: the form keeps its placeholder page and its XFA.
@@ -11709,7 +11764,8 @@ fn a_signature_named_one_byte_past_the_cap_still_blocks_a_full_rewrite() {
     let (s, id) = open_signed_field_named(4097);
     let doc = s.get(id).unwrap();
     let unread = doc.signatures.iter().find(|r| r.field == "UnreadFields");
-    let said = unread.map(|r| (r.signed, r.status, r.details.first().is_some_and(|d| d.message.starts_with("This form has too many fields"))));
+    let said = unread
+        .map(|r| (r.signed, r.status, r.details.first().is_some_and(|d| d.message.starts_with("PdfCraft could not read all of this form's fields"))));
     assert_eq!(said, Some((true, SignatureStatus::Unknown, true)), "{:?}", doc.signatures);
     assert_eq!(s.save_full_bytes(id).unwrap_err(), EditError::Signed);
 }

@@ -264,6 +264,8 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_relaid: bool,
     /// The edit took the XFA out of the form: what went with it, for the document's warnings.
     pub(crate) xfa_removed: Vec<String>,
+    /// The document reader reads the form as a dynamic XFA form ([`pdfcraft_render::Xfa::Dynamic`]).
+    pub(crate) xfa_dynamic: bool,
     /// Pages in the document, for `xfa.layout.pageCount()`.
     pub(crate) pages: usize,
     /// Whether the viewer highlights form fields, for `app.runtimeHighlight`.
@@ -335,6 +337,7 @@ impl EditCtx {
             xfa_time_scale: 1,
             xfa_relaid: false,
             xfa_removed: Vec::new(),
+            xfa_dynamic: false,
             pages: 0,
             highlight: false,
             date: now.map(pdfcraft_cos::pdf_date),
@@ -1127,7 +1130,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             // An XFA form's fields baked into the pages: the XFA goes too, or Adobe's viewers
             // would lay the form out again from its template over the baked pages. A dynamic
             // form that was never laid out keeps its XFA: without it only placeholders remain.
-            let shape = (*fields).then(|| pdfcraft_xfa::xfa_shape(doc)).flatten();
+            let shape = (*fields).then(|| crate::xfa_form::xfa_shape(doc, cx.xfa_dynamic)).flatten();
             let n = pdfcraft_model::pages(doc).len();
             pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), *comments, *fields)?;
             match shape {
@@ -1137,7 +1140,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
         }
         Edit::XfaToStatic => {
-            let Some(shape) = pdfcraft_xfa::xfa_shape(doc) else {
+            let Some(shape) = crate::xfa_form::xfa_shape(doc, cx.xfa_dynamic) else {
                 return Err(EditError::Invalid("this document is not an XFA form".into()));
             };
             if !shape.strippable() {
