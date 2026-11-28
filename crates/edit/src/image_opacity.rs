@@ -63,7 +63,10 @@ pub(crate) fn set_image_opacity(doc: &mut Document, page: usize, img: &PageImage
         Some(Op::new("gs", vec![Object::name(&name)]))
     };
     let target = img.op;
+    // Our scope removed whole when it holds nothing but `q gs Do Q`; anything else in it stays.
+    let bare = ours.filter(|&at| gs.is_none() && at.checked_add(1) == Some(target) && ops.get(target.saturating_add(1)).is_some_and(|o| o.is("Q")));
     let changed = crate::text::splice(&pieces, &ops, |index| match (ours, &gs) {
+        _ if bare.is_some_and(|at| at.checked_sub(1) == Some(index) || index == at || target.checked_add(1) == Some(index)) => (Vec::new(), false),
         (Some(at), Some(gs)) if index == at => (vec![gs.clone()], false),
         (Some(at), None) if index == at => (Vec::new(), false),
         (None, Some(gs)) if index == target => (vec![Op::new("q", vec![]), gs.clone()], true),

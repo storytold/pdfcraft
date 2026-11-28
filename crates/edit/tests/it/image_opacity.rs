@@ -95,7 +95,9 @@ fn setting_opacity_again_replaces_it_instead_of_stacking() {
     opacity(&mut doc, 0, 1.0);
     assert!(grey(&doc, 50, 50) < 20, "100% makes it opaque again");
     assert_eq!(count(&doc, &["gs"]), [0], "and takes our state away");
-    assert!(count(&doc, &["q", "Q"]).iter().zip(&plain).all(|(now, was)| now <= &(was + 1)), "no wrappers pile up");
+    opacity(&mut doc, 0, 0.5);
+    opacity(&mut doc, 0, 1.0);
+    assert_eq!(count(&doc, &["q", "Q", "gs"]), [plain[0], plain[1], 0], "no wrappers pile up: the page is as it was");
     assert!((image_opacities(&doc, 0).unwrap()[0] - 1.0).abs() < 1e-6);
     assert!(change_image(&mut doc, 0, 0, &ImageChange::Opacity(1.0)).is_err(), "already opaque: nothing to change");
 }
