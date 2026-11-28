@@ -295,6 +295,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     ),
     c("ui.dock.reset", "Reset side panels", VIEW, None, Nothing, "settings"),
     c("view.theme", "Switch light / dark theme", None, None, Nothing, "moon"),
+    c("view.selection_bar", "Show or hide the text selection popup", None, None, Nothing, "highlighter"),
     c("view.theme.system", "Use system setting", None, None, Nothing, "settings"),
     c("view.theme.light", "Light gray", None, None, Nothing, "sun"),
     c("view.theme.dark", "Dark gray", None, None, Nothing, "moon"),
