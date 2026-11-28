@@ -6228,6 +6228,7 @@ dependencies = [
  "pdfcraft-model",
  "pdfcraft-organize",
  "pdfcraft-platform",
+ "pdfcraft-print",
  "pdfcraft-prc-render",
  "pdfcraft-render",
  "pdfcraft-xfa",

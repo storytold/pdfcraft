@@ -1,7 +1,7 @@
 use super::{
-    Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hairlines, HairlinesFixed, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI,
-    OptimizeReport, SaveOptions, Session, SourceKind, SplitPart, decode_text, guard, office_to_pdf, open_source, open_source_with, optimize, print,
-    print_layer_states, print_raster, set_default_layer_state, source_kind, writable, write_full,
+    Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hairlines, HairlinesFixed, Hidden, ImagePage, ImageResolution,
+    LOW_RESOLUTION_PRINT_DPI, OptimizeReport, SaveOptions, Session, SourceKind, SplitPart, decode_text, guard, office_to_pdf, open_source,
+    open_source_with, optimize, print, print_layer_states, print_raster, set_default_layer_state, source_kind, writable, write_full,
 };
 
 /// Why printer's marks were refused for a print that goes as pictures.
@@ -31,6 +31,30 @@ impl Session {
         self.write_new(&pdfcraft_create::from_images(images)?)
     }
 
+    /// A paper size by name, in points (portrait): the names `pdfcraft_print::PAPERS` lists, and
+    /// the short spellings people use for them ("a4", "letter", "legal", "tabloid"). Case and
+    /// surrounding spaces don't matter. `None` for a name that isn't one of them.
+    pub fn paper_size(name: &str) -> Option<(f64, f64)> {
+        let want = name.trim().to_ascii_lowercase();
+        let short = match want.as_str() {
+            "letter" => "us letter",
+            "legal" => "us legal",
+            other => other,
+        };
+        pdfcraft_print::PAPERS.iter().find(|(paper, _)| paper.to_ascii_lowercase() == short).map(|(_, size)| *size)
+    }
+
+    /// Create image pages on `page`: one page per image as before, or every image on a page of one
+    /// size, scaled to fit and centred.
+    pub fn create_from_images_on_pages(
+        &self,
+        images: &[(String, Vec<u8>)],
+        resolution: ImageResolution,
+        page: ImagePage,
+    ) -> Result<Arc<Vec<u8>>, EditError> {
+        self.write_new(&pdfcraft_create::from_images_on_pages(images, resolution, page)?)
+    }
+
     /// Create image pages at embedded resolution or a fixed dpi, without resampling.
     pub fn create_from_images_with_resolution(&self, images: &[(String, Vec<u8>)], resolution: ImageResolution) -> Result<Arc<Vec<u8>>, EditError> {
         self.write_new(&pdfcraft_create::from_images_with_resolution(images, resolution)?)
@@ -57,17 +81,23 @@ impl Session {
     /// An Office document runs LibreOffice ([`office_to_pdf`]), which takes seconds: keep it off
     /// the frame thread ([`Self::convert_to_pdf_inline`] there).
     pub fn convert_to_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
-        self.convert(name, bytes, Office::Convert)
+        self.convert(name, bytes, Office::Convert, ImagePage::Image)
+    }
+
+    /// [`Self::convert_to_pdf`], placing an image source on `page`. A PDF, text or Office source is
+    /// unaffected: only an image has a page size of its own to replace.
+    pub fn convert_to_pdf_on_pages(&self, name: &str, bytes: &Arc<Vec<u8>>, page: ImagePage) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
+        self.convert(name, bytes, Office::Convert, page)
     }
 
     /// [`Self::convert_to_pdf`] for a caller on the frame thread, which must not wait seconds for
     /// LibreOffice: an Office document is refused, pointing to File ▸ Open, which converts it in
     /// the background.
     pub fn convert_to_pdf_inline(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
-        self.convert(name, bytes, Office::Refuse)
+        self.convert(name, bytes, Office::Refuse, ImagePage::Image)
     }
 
-    fn convert(&self, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
+    fn convert(&self, name: &str, bytes: &Arc<Vec<u8>>, office: Office, page: ImagePage) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
         let Some(kind) = source_kind(name, bytes) else {
             return Err(EditError::Source(format!(
                 "{name}: this file type can't be converted; use a PDF, an image, a .txt file or a Word, Excel or PowerPoint file"
@@ -82,7 +112,7 @@ impl Session {
         // Image decoders read untrusted bytes: a panic in one must not take the app down.
         let created = guard(|| match kind {
             SourceKind::Pdf => open_source(name, bytes).map(|_| bytes.clone()),
-            SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
+            SourceKind::Image => self.create_from_images_on_pages(&[(name.to_string(), bytes.to_vec())], ImageResolution::Embedded, page),
             SourceKind::Text => self.create_from_text(title, &decode_text(bytes)),
             SourceKind::Office => office_to_pdf(name, bytes),
         })
@@ -108,7 +138,7 @@ impl Session {
 
     fn insert_source_with(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<(usize, Arc<Vec<u8>>), EditError> {
         if !matches!(source_kind(name, bytes), Some(SourceKind::Pdf)) {
-            let (_, pdf) = self.convert(name, bytes, office)?;
+            let (_, pdf) = self.convert(name, bytes, office, ImagePage::Image)?;
             return Ok((self.page_count_of(name, &pdf)?, pdf));
         }
         let src = crate::sources::open_source_into(name, bytes, self.cos(dest)?)?;
@@ -129,6 +159,16 @@ impl Session {
         self.as_pdf_with(name, bytes, Office::Convert)
     }
 
+    /// [`Self::as_pdf`], placing an image source on `page`.
+    pub fn as_pdf_on_pages(&self, name: &str, bytes: &Arc<Vec<u8>>, page: ImagePage) -> Result<Arc<Vec<u8>>, EditError> {
+        let pdf = match source_kind(name, bytes) {
+            Some(SourceKind::Pdf) => true,
+            Some(SourceKind::Image | SourceKind::Text | SourceKind::Office) => false,
+            None => name.to_ascii_lowercase().ends_with(".pdf"),
+        };
+        if pdf { Ok(bytes.clone()) } else { self.convert(name, bytes, Office::Convert, page).map(|(_, pdf)| pdf) }
+    }
+
     /// [`Self::as_pdf`] on the frame thread: Office documents are refused, as
     /// [`Self::convert_to_pdf_inline`] refuses them.
     pub fn as_pdf_inline(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
@@ -141,7 +181,7 @@ impl Session {
             Some(SourceKind::Image | SourceKind::Text | SourceKind::Office) => false,
             None => name.to_ascii_lowercase().ends_with(".pdf"),
         };
-        if pdf { Ok(bytes.clone()) } else { self.convert(name, bytes, office).map(|(_, pdf)| pdf) }
+        if pdf { Ok(bytes.clone()) } else { self.convert(name, bytes, office, ImagePage::Image).map(|(_, pdf)| pdf) }
     }
 
     /// Reduce File Size: Acrobat's defaults (colour and grey images above 225 ppi to 150 ppi,
