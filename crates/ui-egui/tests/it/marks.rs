@@ -691,3 +691,92 @@ fn update_previews_the_page_without_the_marks_it_replaces() {
     let page = wait_for_preview(&mut h, "the page without the old header", |i| count(i, blue) == 0).image;
     assert!(at(&page, 0.5, 0.75) == yellow && count(&page, red) > 200, "the background and watermark stay");
 }
+
+/// Verifies that the Bates numbering controls in the Header & Footer dialog configure digit
+/// zero-padding, start number, prefix, and suffix, insert and update the Bates token in the
+/// target box, and render zero-padded Bates numbers onto the document pages (#4853).
+#[test]
+fn bates_numbering_dialog_configures_digits_and_padding() {
+    let mut h = harness();
+    assert!(h.execute("edit.bates"));
+    h.steps(3);
+    assert!(is_open(&h));
+    assert_eq!(fields(&h, MarkKind::HeaderFooter).int("hf.focused"), Some(5));
+    assert_eq!(fields(&h, MarkKind::HeaderFooter).text("hf.text.5"), Some("<<Bates Number#6#1##>>"));
+    assert_eq!(fields(&h, MarkKind::HeaderFooter).int("bates.digits"), Some(6));
+    assert_eq!(fields(&h, MarkKind::HeaderFooter).int("bates.start"), Some(1));
+
+    // All four Bates controls are present with their accessible roles and labels.
+    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Digits");
+    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Start");
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Prefix");
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Suffix");
+
+    // Changing Digits (6 -> 8) and Start (1 -> 42) updates the token in box 5 in place.
+    set_field(&mut h, MarkKind::HeaderFooter, "bates.digits", json!(8));
+    set_field(&mut h, MarkKind::HeaderFooter, "bates.start", json!(42));
+    h.steps(2);
+    assert_eq!(fields(&h, MarkKind::HeaderFooter).text("hf.text.5"), Some("<<Bates Number#8#42##>>"));
+
+    // Typing a prefix in the UI updates the existing Bates token in box 5 in place (delimiters stripped).
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Prefix").focus();
+    h.steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Prefix").type_text("DOC-#<>");
+    h.steps(2);
+    assert_eq!(fields(&h, MarkKind::HeaderFooter).text("bates.prefix"), Some("DOC-"));
+    assert_eq!(fields(&h, MarkKind::HeaderFooter).text("hf.text.5"), Some("<<Bates Number#8#42#DOC-#>>"));
+
+    // Clear box 5, type a suffix, focus box 3, and insert via "Insert Bates Number".
+    set_field(&mut h, MarkKind::HeaderFooter, "hf.text.5", json!(""));
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Suffix").focus();
+    h.steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Suffix").type_text("-CONF");
+    h.steps(2);
+    h.get_by_label(BOX_LABELS[3]).click();
+    h.steps(2);
+    h.get_by_label("Insert Bates Number").click();
+    h.steps(2);
+    assert_eq!(fields(&h, MarkKind::HeaderFooter).text("hf.text.3"), Some("<<Bates Number#8#42#DOC-#-CONF>>"));
+
+    h.get_by_label("OK").click();
+    h.steps(4);
+    assert!(!is_open(&h));
+    assert_eq!(marks(&h), [MarkKind::HeaderFooter]);
+
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), pdfcraft_render::RenderConfig::default());
+    let texts: Vec<String> = (0..r.page_count())
+        .map(|page| {
+            let out = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
+            out.text.map(|t| t.plain_text().trim().to_string()).unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(texts, ["DOC-00000042-CONF", "DOC-00000043-CONF", "DOC-00000044-CONF"]);
+
+    // Reopening edit.bates with an existing token in box 5 populates the Bates fields from it.
+    h.state_mut().marks_draft.hf.text[3].clear();
+    h.state_mut().marks_draft.hf.text[5] = "<<Bates Number#9#15##>>".into();
+    assert!(h.execute("edit.bates"));
+    h.steps(2);
+    assert_eq!(fields(&h, MarkKind::HeaderFooter).int("bates.digits"), Some(9), "parsed from the existing token on open");
+    assert_eq!(fields(&h, MarkKind::HeaderFooter).int("bates.start"), Some(15), "parsed from the existing token on open");
+    h.get_by_label("Cancel").click();
+    h.steps(2);
+
+    // When box 0 contains a Bates token and box 5 is empty, edit.bates inserts the token into box 5.
+    h.state_mut().marks_draft.hf.text[0] = "<<Bates Number#7#10#CASE-#-A>>".into();
+    h.state_mut().marks_draft.hf.text[5].clear();
+    assert!(h.execute("edit.bates"));
+    h.steps(2);
+    assert_eq!(fields(&h, MarkKind::HeaderFooter).int("hf.focused"), Some(5));
+    assert_eq!(fields(&h, MarkKind::HeaderFooter).text("hf.text.5"), Some("<<Bates Number#7#10#CASE-#-A>>"));
+    h.get_by_label("Cancel").click();
+    h.steps(2);
+
+    // Nonempty text in box 5 without a Bates token preserves the existing text and appends the token.
+    h.state_mut().marks_draft.hf.text[5] = "Case: ".into();
+    assert!(h.execute("edit.bates"));
+    h.steps(2);
+    assert_eq!(fields(&h, MarkKind::HeaderFooter).text("hf.text.5"), Some("Case: <<Bates Number#7#10#CASE-#-A>>"));
+}

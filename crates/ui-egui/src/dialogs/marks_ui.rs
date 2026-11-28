@@ -126,6 +126,25 @@ impl MarksDraft {
             self.bg.replace_backdrop = true;
         }
     }
+
+    /// Initializes the Bates controls (`bates_digits`, `bates_start`, `bates_prefix`,
+    /// `bates_suffix`) from the first complete `<<Bates Number...>>` token in the focused
+    /// header/footer box (or any other header/footer box if the focused box has none).
+    /// Returns `true` when an existing Bates token was found and parsed, or `false` when no
+    /// complete Bates token exists (preserving the current draft values).
+    pub(crate) fn sync_bates_from_hf(&mut self) -> bool {
+        let parsed =
+            self.hf.text.get(self.focused_box).and_then(|t| parse_bates_token(t)).or_else(|| self.hf.text.iter().find_map(|t| parse_bates_token(t)));
+        if let Some((digits, start, prefix, suffix)) = parsed {
+            self.bates_digits = digits;
+            self.bates_start = start;
+            self.bates_prefix = prefix;
+            self.bates_suffix = suffix;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// How many runs of pages a message lists before it stops with "…".
@@ -155,6 +174,7 @@ fn pages_phrase(pages: &[usize], one: &str, many: &str) -> String {
     crate::i18n::fmt(template, &[("pages", &parts.join(", "))])
 }
 
+/// Working state for the Header & Footer, Watermark, and Background dialogs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MarksDraft {
     pub hf: HeaderFooter,
@@ -163,10 +183,18 @@ pub struct MarksDraft {
     pub range: PageRange,
     /// Replace existing marks of this kind (Update).
     pub replace: bool,
-    /// Which header/footer box Insert Page Number / Insert Date type into.
+    /// Which header/footer box Insert Page Number / Insert Date / Insert Bates Number type into.
     pub focused_box: usize,
     pub page_format: usize,
     pub date_format: usize,
+    /// Number of digits for Bates numbering (1 to 15, default 6).
+    pub bates_digits: usize,
+    /// Starting number for Bates numbering (default 1).
+    pub bates_start: u64,
+    /// Prefix for Bates numbering (default empty).
+    pub bates_prefix: String,
+    /// Suffix for Bates numbering (default empty).
+    pub bates_suffix: String,
     /// Watermark: size the text to the page.
     pub fit: bool,
     /// Source ▸ File (watermark or background): the file picked, and the page of a PDF (1-based).
@@ -181,6 +209,7 @@ pub struct MarksDraft {
 }
 
 impl Default for MarksDraft {
+    /// Creates default dialog draft state, with 6-digit Bates numbering starting at 1.
     fn default() -> Self {
         Self {
             hf: HeaderFooter::default(),
@@ -191,6 +220,10 @@ impl Default for MarksDraft {
             focused_box: 1,
             page_format: 0,
             date_format: 0,
+            bates_digits: 6,
+            bates_start: 1,
+            bates_prefix: String::new(),
+            bates_suffix: String::new(),
             fit: true,
             use_file: false,
             file: None,
@@ -218,6 +251,104 @@ const DATE_FORMATS: [&str; 11] = [
 ];
 const BOX_NAMES: [&str; 6] =
     ["Left Header Text", "Center Header Text", "Right Header Text", "Left Footer Text", "Center Footer Text", "Right Footer Text"];
+
+const BATES_KEYS: [&str; 4] = ["bates.digits", "bates.start", "bates.prefix", "bates.suffix"];
+
+/// Strips Bates token delimiter characters (`#`, `<`, `>`) from a prefix or suffix.
+fn sanitize_bates_affix(text: &str) -> String {
+    text.replace(['#', '<', '>'], "")
+}
+
+/// Builds a sanitized Bates number token string.
+pub(crate) fn format_bates_token(digits: usize, start: u64, prefix: &str, suffix: &str) -> String {
+    let clean_prefix = sanitize_bates_affix(prefix);
+    let clean_suffix = sanitize_bates_affix(suffix);
+    format!("<<Bates Number#{}#{}#{}#{}>>", digits.clamp(1, 15), start.max(1), clean_prefix, clean_suffix)
+}
+
+/// Parses the first complete `<<Bates Number#digits#start#prefix#suffix>>` token in `text`,
+/// returning `(digits, start, prefix, suffix)` when present.
+pub(crate) fn parse_bates_token(text: &str) -> Option<(usize, u64, String, String)> {
+    let mut rest = text;
+    while let Some(open) = rest.find("<<Bates Number") {
+        let after_open = rest.get(open + 2..)?;
+        let close_rel = after_open.find(">>")?;
+        let token_body = after_open.get(..close_rel)?;
+        if let Some(next_open_rel) = token_body.find("<<") {
+            let advance = open + 2 + next_open_rel;
+            rest = rest.get(advance..)?;
+            continue;
+        }
+        if token_body == "Bates Number" || token_body.starts_with("Bates Number#") {
+            let parts: Vec<&str> = token_body.split('#').collect();
+            let digits = parts.get(1).and_then(|d| d.parse::<usize>().ok()).unwrap_or(6).clamp(1, 15);
+            let start = parts.get(2).and_then(|s| s.parse::<u64>().ok()).unwrap_or(1).max(1);
+            let prefix = parts.get(3).copied().unwrap_or("").to_string();
+            let suffix = parts.get(4).copied().unwrap_or("").to_string();
+            return Some((digits, start, prefix, suffix));
+        }
+        rest = after_open.get(close_rel + 2..)?;
+    }
+    None
+}
+
+/// Updates all complete `<<Bates Number...>>` tokens in `text` if present, stopping at token
+/// boundaries so incomplete tokens never swallow subsequent tokens.
+fn update_bates_token_in_text(text: &mut String, digits: usize, start: u64, prefix: &str, suffix: &str) {
+    let new_token = format_bates_token(digits, start, prefix, suffix);
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    let mut replaced = false;
+    while let Some(open) = rest.find("<<Bates Number") {
+        let Some(after_open) = rest.get(open + 2..) else {
+            break;
+        };
+        let Some(close_rel) = after_open.find(">>") else {
+            break;
+        };
+        let Some(token_body) = after_open.get(..close_rel) else {
+            break;
+        };
+        if let Some(next_open_rel) = token_body.find("<<") {
+            let advance = open + 2 + next_open_rel;
+            if let Some(prefix_slice) = rest.get(..advance) {
+                out.push_str(prefix_slice);
+            }
+            rest = rest.get(advance..).unwrap_or("");
+            continue;
+        }
+        if token_body == "Bates Number" || token_body.starts_with("Bates Number#") {
+            if let Some(before) = rest.get(..open) {
+                out.push_str(before);
+            }
+            out.push_str(&new_token);
+            replaced = true;
+        } else if let Some(unmatched) = rest.get(..open + 2 + close_rel + 2) {
+            out.push_str(unmatched);
+        }
+        rest = after_open.get(close_rel + 2..).unwrap_or("");
+    }
+    if replaced {
+        out.push_str(rest);
+        *text = out;
+    }
+}
+
+/// Updates all complete `<<Bates Number...>>` tokens in the focused header/footer box, or in any
+/// other box if the focused box does not contain one.
+fn update_bates_token(hf: &mut HeaderFooter, focused_box: usize, digits: usize, start: u64, prefix: &str, suffix: &str) {
+    if let Some(box_text) = hf.text.get_mut(focused_box)
+        && parse_bates_token(box_text).is_some()
+    {
+        update_bates_token_in_text(box_text, digits, start, prefix, suffix);
+        return;
+    }
+    for box_text in &mut hf.text {
+        if parse_bates_token(box_text).is_some() {
+            update_bates_token_in_text(box_text, digits, start, prefix, suffix);
+        }
+    }
+}
 
 /// The key of the dialog for `kind`, which the host pass finds it by.
 fn dialog_key(kind: MarkKind) -> &'static str {
@@ -370,6 +501,10 @@ fn opening_fields(d: &MarksDraft, kind: MarkKind, m: &MarginUnits) -> DialogFiel
             f.set("page_format", FieldValue::Text(d.page_format.to_string()));
             f.set("date_format", FieldValue::Text(d.date_format.to_string()));
             f.set("hf.start", FieldValue::Int(i64::from(d.hf.start_number)));
+            f.set("bates.digits", FieldValue::Int(d.bates_digits.clamp(1, 15) as i64));
+            f.set("bates.start", FieldValue::Int(d.bates_start.clamp(1, 999_999) as i64));
+            f.set("bates.prefix", FieldValue::Text(sanitize_bates_affix(&d.bates_prefix)));
+            f.set("bates.suffix", FieldValue::Text(sanitize_bates_affix(&d.bates_suffix)));
             f.set("shrink", FieldValue::Bool(d.hf.shrink));
         }
         MarkKind::Watermark | MarkKind::Background => {
@@ -436,6 +571,14 @@ fn read_fields(d: &mut MarksDraft, f: &DialogFields, kind: MarkKind, m: &MarginU
             d.page_format = f.text("page_format").and_then(|k| k.parse().ok()).filter(|k| *k < PAGE_FORMATS.len()).unwrap_or(d.page_format);
             d.date_format = f.text("date_format").and_then(|k| k.parse().ok()).filter(|k| *k < DATE_FORMATS.len()).unwrap_or(d.date_format);
             d.hf.start_number = f.int("hf.start").map_or(d.hf.start_number, |n| n.clamp(1, 999_999) as u32);
+            d.bates_digits = f.int("bates.digits").map_or(d.bates_digits, |n| n.clamp(1, 15) as usize);
+            d.bates_start = f.int("bates.start").map_or(d.bates_start, |n| n.clamp(1, 999_999) as u64);
+            if let Some(prefix) = f.text("bates.prefix") {
+                d.bates_prefix = sanitize_bates_affix(prefix);
+            }
+            if let Some(suffix) = f.text("bates.suffix") {
+                d.bates_suffix = sanitize_bates_affix(suffix);
+            }
             d.hf.shrink = f.bool("shrink").unwrap_or(d.hf.shrink);
         }
         MarkKind::Watermark | MarkKind::Background => {
@@ -601,6 +744,10 @@ fn rows(kind: MarkKind, g: &Geometry) -> Vec<Param> {
             rows.push(Param::new("page_format", tl!("Page number format"), choice(list(&PAGE_FORMATS), "0")));
             rows.push(Param::new("date_format", tl!("Date format"), choice(list(&DATE_FORMATS), "0")).beside_previous());
             rows.push(Param::new("hf.start", tl!("Start page number"), ParamKind::int(Some(1), Some(999_999), 1)).beside_previous());
+            rows.push(Param::new("bates.digits", tl!("Digits"), ParamKind::int(Some(1), Some(15), 6)));
+            rows.push(Param::new("bates.start", tl!("Start"), ParamKind::int(Some(1), Some(999_999), 1)).beside_previous());
+            rows.push(Param::new("bates.prefix", tl!("Prefix"), ParamKind::text("")).field_chars(8).beside_previous());
+            rows.push(Param::new("bates.suffix", tl!("Suffix"), ParamKind::text("")).field_chars(8).beside_previous());
             rows.push(Param::new("shrink", tl!("Shrink the page content to make room for the header and footer"), ParamKind::bool(false)));
         }
         MarkKind::Watermark => {
@@ -920,6 +1067,9 @@ impl PdfCraftApp {
         let selection = self.selected_pages(index);
         self.marks_draft.replace = replace;
         self.marks_draft.opened(kind);
+        if kind == MarkKind::HeaderFooter {
+            self.marks_draft.sync_bates_from_hf();
+        }
         self.marks_draft.preview = None;
         let units = MarginUnits::of(self.units);
         let geometry = Geometry { count, current, units };
@@ -940,7 +1090,11 @@ impl PdfCraftApp {
                 .previews(true)
                 .ok_enabled(notes.ready)
                 .extra_buttons(if kind == MarkKind::HeaderFooter {
-                    vec![("insert.page".to_string(), tl!("Insert Page Number").into()), ("insert.date".to_string(), tl!("Insert Date").into())]
+                    vec![
+                        ("insert.page".to_string(), tl!("Insert Page Number").into()),
+                        ("insert.date".to_string(), tl!("Insert Date").into()),
+                        ("insert.bates".to_string(), tl!("Insert Bates Number").into()),
+                    ]
                 } else {
                     Vec::new()
                 })
@@ -995,11 +1149,11 @@ impl PdfCraftApp {
             return;
         };
 
-        let (fields, colour, path, action, step) = {
+        let (mut fields, edited, colour, path, action, step) = {
             let Some(dialog) = self.dialogs.get_mut_by_id::<HostedParamDialog>(id) else {
                 return;
             };
-            (dialog.fields().clone(), dialog.pick_color(), dialog.pick_path(), dialog.take_action(), dialog.take_preview_step())
+            (dialog.fields().clone(), dialog.take_edited(), dialog.pick_color(), dialog.pick_path(), dialog.take_action(), dialog.take_preview_step())
         };
         if let Some(request) = colour {
             let key = request.key.clone();
@@ -1032,13 +1186,57 @@ impl PdfCraftApp {
                 }
             });
         }
+        if kind == MarkKind::HeaderFooter && edited.iter().any(|k| BATES_KEYS.contains(&k.as_str())) {
+            for key in ["bates.prefix", "bates.suffix"] {
+                if let Some(raw) = fields.text(key) {
+                    let clean = sanitize_bates_affix(raw);
+                    if clean != raw {
+                        fields.set(key, FieldValue::Text(clean.clone()));
+                        if let Some(dialog) = self.dialogs.get_mut_by_id::<HostedParamDialog>(id) {
+                            dialog.set_field(key, FieldValue::Text(clean));
+                        }
+                    }
+                }
+            }
+            let digits = fields.int("bates.digits").map_or(self.marks_draft.bates_digits, |n| n.clamp(1, 15) as usize);
+            let start = fields.int("bates.start").map_or(self.marks_draft.bates_start, |n| n.clamp(1, 999_999) as u64);
+            let prefix = fields.text("bates.prefix").map(sanitize_bates_affix).unwrap_or_else(|| self.marks_draft.bates_prefix.clone());
+            let suffix = fields.text("bates.suffix").map(sanitize_bates_affix).unwrap_or_else(|| self.marks_draft.bates_suffix.clone());
+            let focused = fields.int("hf.focused").map_or(self.marks_draft.focused_box, |k| k.clamp(0, 5) as usize);
+            let mut hf = self.marks_draft.hf.clone();
+            for (k, slot) in hf.text.iter_mut().enumerate() {
+                if let Some(text) = fields.text(&format!("hf.text.{k}")) {
+                    text.clone_into(slot);
+                }
+            }
+            update_bates_token(&mut hf, focused, digits, start, &prefix, &suffix);
+            for (k, text) in hf.text.iter().enumerate() {
+                let key = format!("hf.text.{k}");
+                if fields.text(&key) != Some(text.as_str()) {
+                    fields.set(key.clone(), FieldValue::Text(text.clone()));
+                    if let Some(dialog) = self.dialogs.get_mut_by_id::<HostedParamDialog>(id) {
+                        dialog.set_field(key, FieldValue::Text(text.clone()));
+                    }
+                }
+            }
+        }
         if let Some(action) = action {
-            let (formats, key): (&[&str], _) = if action == "insert.page" { (&PAGE_FORMATS, "page_format") } else { (&DATE_FORMATS, "date_format") };
-            let format = fields.text(key).and_then(|k| k.parse::<usize>().ok()).and_then(|k| formats.get(k));
             let focused = fields.int("hf.focused").map_or(0, |k| k.clamp(0, 5));
-            if let Some(format) = format {
+            let token = if action == "insert.bates" {
+                let digits = fields.int("bates.digits").map_or(self.marks_draft.bates_digits, |n| n.clamp(1, 15) as usize);
+                let start = fields.int("bates.start").map_or(self.marks_draft.bates_start, |n| n.clamp(1, 999_999) as u64);
+                let prefix = fields.text("bates.prefix").map(sanitize_bates_affix).unwrap_or_else(|| self.marks_draft.bates_prefix.clone());
+                let suffix = fields.text("bates.suffix").map(sanitize_bates_affix).unwrap_or_else(|| self.marks_draft.bates_suffix.clone());
+                Some(format_bates_token(digits, start, &prefix, &suffix))
+            } else {
+                let (formats, key): (&[&str], _) =
+                    if action == "insert.page" { (&PAGE_FORMATS, "page_format") } else { (&DATE_FORMATS, "date_format") };
+                fields.text(key).and_then(|k| k.parse::<usize>().ok()).and_then(|k| formats.get(k)).map(|s| (*s).to_string())
+            };
+            if let Some(token) = token {
                 let box_key = format!("hf.text.{focused}");
-                let text = format!("{}{format}", fields.text(&box_key).unwrap_or_default());
+                let text = format!("{}{token}", fields.text(&box_key).unwrap_or_default());
+                fields.set(box_key.clone(), FieldValue::Text(text.clone()));
                 if let Some(dialog) = self.dialogs.get_mut_by_id::<HostedParamDialog>(id) {
                     dialog.set_field(box_key, FieldValue::Text(text));
                 }
@@ -1098,7 +1296,30 @@ impl PdfCraftApp {
         let current = self.views.get(index).map_or(0, |v| v.current());
         let selection = self.selected_pages(index);
         let units = MarginUnits::of(self.units);
+        let prev_bates = (
+            self.marks_draft.bates_digits,
+            self.marks_draft.bates_start,
+            self.marks_draft.bates_prefix.clone(),
+            self.marks_draft.bates_suffix.clone(),
+        );
         read_fields(&mut self.marks_draft, &answer.fields, kind, &units);
+        if kind == MarkKind::HeaderFooter
+            && (
+                self.marks_draft.bates_digits,
+                self.marks_draft.bates_start,
+                self.marks_draft.bates_prefix.as_str(),
+                self.marks_draft.bates_suffix.as_str(),
+            ) != (prev_bates.0, prev_bates.1, prev_bates.2.as_str(), prev_bates.3.as_str())
+        {
+            update_bates_token(
+                &mut self.marks_draft.hf,
+                self.marks_draft.focused_box,
+                self.marks_draft.bates_digits,
+                self.marks_draft.bates_start,
+                &self.marks_draft.bates_prefix,
+                &self.marks_draft.bates_suffix,
+            );
+        }
         let edit = edit(&self.marks_draft, kind, count, current, &selection);
         self.apply_edit(ctx, edit);
     }
@@ -1204,6 +1425,7 @@ mod tests {
         assert_eq!(background_tint(&d, None), colour, "unticked changes nothing without a backdrop");
     }
 
+    /// Verifies that the watermark edit created by the dialog preserves the configured offset.
     #[test]
     fn the_watermark_edit_carries_the_offset() {
         let mut d = MarksDraft::default();
@@ -1217,5 +1439,69 @@ mod tests {
             Edit::AddWatermark { settings, .. } => assert_eq!(settings.offset, [-72.0, 36.0]),
             other => panic!("expected AddWatermark, got {other:?}"),
         }
+    }
+
+    /// Verifies Bates token formatting, delimiter sanitization, multi-token replacement, boundary
+    /// safety around unclosed tokens, draft synchronization from existing tokens, and Param field
+    /// round-tripping.
+    #[test]
+    fn bates_token_formatting_and_in_place_updates() {
+        assert_eq!(format_bates_token(8, 1, "DOC-", "-X"), "<<Bates Number#8#1#DOC-#-X>>");
+        assert_eq!(format_bates_token(0, 42, "A#B<C>", "D>E"), "<<Bates Number#1#42#ABC#DE>>");
+        assert_eq!(format_bates_token(20, 1, "", ""), "<<Bates Number#15#1##>>");
+
+        let mut hf = HeaderFooter::default();
+        hf.text[5] = "Ref: <<Bates Number#6#1##>> / <<Bates Number#6#1##>> end".into();
+        update_bates_token(&mut hf, 5, 8, 100, "DOC-", "-CONF");
+        assert_eq!(hf.text[5], "Ref: <<Bates Number#8#100#DOC-#-CONF>> / <<Bates Number#8#100#DOC-#-CONF>> end");
+
+        // Updates the box holding the Bates token even when another box is focused.
+        update_bates_token(&mut hf, 0, 4, 5, "P-", "");
+        assert_eq!(hf.text[5], "Ref: <<Bates Number#4#5#P-#>> / <<Bates Number#4#5#P-#>> end");
+
+        // An unclosed Bates token before a later token does not swallow the later token.
+        let mut incomplete = "<<Bates Number#6#1## <<1>>".to_string();
+        update_bates_token_in_text(&mut incomplete, 8, 10, "X-", "-Y");
+        assert_eq!(incomplete, "<<Bates Number#6#1## <<1>>");
+
+        // Synchronizing a draft from an existing token populates the Bates fields.
+        let mut draft = MarksDraft::default();
+        draft.hf.text[5] = "<<Bates Number#9#25#CASE-#-A>>".into();
+        assert!(draft.sync_bates_from_hf());
+        assert_eq!(draft.bates_digits, 9);
+        assert_eq!(draft.bates_start, 25);
+        assert_eq!(draft.bates_prefix, "CASE-");
+        assert_eq!(draft.bates_suffix, "-A");
+
+        // When focused_box contains a token, sync_bates_from_hf prioritizes it over other boxes.
+        let mut draft = MarksDraft::default();
+        draft.hf.text[0] = "<<Bates Number#4#10#OTHER-#>>".into();
+        draft.hf.text[5] = "<<Bates Number#7#50#PRIORITY-#-Z>>".into();
+        draft.focused_box = 5;
+        assert!(draft.sync_bates_from_hf());
+        assert_eq!(draft.bates_digits, 7);
+        assert_eq!(draft.bates_start, 50);
+        assert_eq!(draft.bates_prefix, "PRIORITY-");
+        assert_eq!(draft.bates_suffix, "-Z");
+        update_bates_token(&mut draft.hf, 5, 3, 60, "NEW-", "");
+        assert_eq!(draft.hf.text[5], "<<Bates Number#3#60#NEW-#>>");
+        assert_eq!(draft.hf.text[0], "<<Bates Number#4#10#OTHER-#>>");
+
+        // Opening and reading dialog fields round-trip Bates options and strip delimiters.
+        let units = MarginUnits { per: 1.0, kind: UnitKind::Points, decimals: 1 };
+        let mut fields = opening_fields(&draft, MarkKind::HeaderFooter, &units);
+        assert_eq!(fields.int("bates.digits"), Some(7));
+        assert_eq!(fields.int("bates.start"), Some(50));
+        assert_eq!(fields.text("bates.prefix"), Some("PRIORITY-"));
+        assert_eq!(fields.text("bates.suffix"), Some("-Z"));
+        fields.set("bates.digits", FieldValue::Int(8));
+        fields.set("bates.start", FieldValue::Int(42));
+        fields.set("bates.prefix", FieldValue::Text("A#B<".into()));
+        fields.set("bates.suffix", FieldValue::Text(">C".into()));
+        read_fields(&mut draft, &fields, MarkKind::HeaderFooter, &units);
+        assert_eq!(draft.bates_digits, 8);
+        assert_eq!(draft.bates_start, 42);
+        assert_eq!(draft.bates_prefix, "AB");
+        assert_eq!(draft.bates_suffix, "C");
     }
 }
