@@ -217,11 +217,7 @@ fn info_value(doc: &lopdf::Document, key: &str) -> Option<String> {
 }
 
 fn pdf_string(bytes: &[u8]) -> String {
-    if let Some(utf16) = bytes.strip_prefix(&[0xfe, 0xff]) {
-        let units: Vec<u16> = utf16.as_chunks::<2>().0.iter().map(|pair| u16::from_be_bytes(*pair)).collect();
-        return String::from_utf16_lossy(&units);
-    }
-    String::from_utf8_lossy(bytes).into_owned()
+    pdfcraft_cos::PdfString::literal(bytes).to_text()
 }
 
 fn plist_value(plist: &str, key: &str) -> Option<String> {
@@ -307,10 +303,29 @@ fn bounded_text(value: &str, limit: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Options, parse_args, pdf_registration, plist_value};
+    use super::{Options, parse_args, pdf_registration, pdf_string, plist_value};
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn metadata_strings_use_pdfdocencoding() {
+        for (bytes, expected) in [(b"caf\xE9".as_slice(), "café"), (b"price \xA0".as_slice(), "price €")] {
+            assert_eq!(pdf_string(bytes), expected);
+        }
+    }
+
+    #[test]
+    fn metadata_strings_keep_unicode_and_plain_text() {
+        for (bytes, expected) in [
+            (b"plain text".as_slice(), "plain text"),
+            (b"\xFE\xFF\x00c\x00a\x00f\x00\xE9".as_slice(), "café"),
+            (b"\xEF\xBB\xBFcaf\xC3\xA9".as_slice(), "café"),
+            (b"caf\xC3\xA9".as_slice(), "café"),
+        ] {
+            assert_eq!(pdf_string(bytes), expected);
+        }
     }
 
     #[test]
