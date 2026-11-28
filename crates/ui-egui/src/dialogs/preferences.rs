@@ -83,6 +83,7 @@ struct PrefsDraft {
     units: Unit,
     scroll_speed: ScrollSpeed,
     invert_middle_drag: bool,
+    ignore_asian_width: bool,
     author: String,
     hide_empty_highlight_hover: bool,
     flatten_fill_sign_on_save: bool,
@@ -119,6 +120,7 @@ impl PrefsDraft {
             units: app.units,
             scroll_speed: app.scroll_speed,
             invert_middle_drag: app.invert_middle_drag,
+            ignore_asian_width: app.ignore_asian_width,
             author: app.comment_prefs.author.clone(),
             hide_empty_highlight_hover: app.comment_prefs.hide_empty_highlight_hover,
             flatten_fill_sign_on_save: app.flatten_fill_sign_on_save,
@@ -160,6 +162,7 @@ impl PrefsDraft {
             units: Unit::default(),
             scroll_speed: ScrollSpeed::default(),
             invert_middle_drag: false,
+            ignore_asian_width: true,
             author: prefs.author,
             hide_empty_highlight_hover: prefs.hide_empty_highlight_hover,
             flatten_fill_sign_on_save: false,
@@ -410,7 +413,15 @@ fn date_language_picker_name(ctx: &egui::Context, l: &pdfcraft_engine::dates::Da
 
 impl PreferencesModel for Prefs<'_> {
     fn pages(&self) -> Vec<PageSpec<'_>> {
-        vec![self.general_page(), self.appearance_page(), self.documents_page(), self.comment_page(), self.fill_sign_page(), self.javascript_page()]
+        vec![
+            self.general_page(),
+            self.appearance_page(),
+            self.documents_page(),
+            self.comment_page(),
+            self.fill_sign_page(),
+            self.search_page(),
+            self.javascript_page(),
+        ]
     }
 
     fn set(&mut self, key: &str, value: PrefValue) {
@@ -479,6 +490,7 @@ impl PreferencesModel for Prefs<'_> {
             ("view.units", PrefValue::Choice(id)) => d.units = lookup(&unit_table(), &id).unwrap_or(d.units),
             ("view.scroll_speed", PrefValue::Choice(id)) => d.scroll_speed = lookup(&speed_table(), &id).unwrap_or(d.scroll_speed),
             ("view.invert_middle", PrefValue::Bool(v)) => d.invert_middle_drag = v,
+            ("search.ignore_width", PrefValue::Bool(v)) => d.ignore_asian_width = v,
             ("comment.author", PrefValue::Text(v)) => d.author = v.chars().take(crate::MAX_AUTHOR_CHARS).collect(),
             ("comment.hide_hover", PrefValue::Bool(v)) => d.hide_empty_highlight_hover = v,
             ("fill.flatten", PrefValue::Bool(v)) => d.flatten_fill_sign_on_save = v,
@@ -581,6 +593,7 @@ impl PreferencesModel for Prefs<'_> {
                 d.date_format = fresh.date_format;
                 d.date_language = fresh.date_language;
             }
+            "search" => d.ignore_asian_width = fresh.ignore_asian_width,
             "javascript" => d.javascript = fresh.javascript,
             _ => {}
         }
@@ -648,6 +661,7 @@ impl PreferencesDraft for Prefs<'_> {
         self.app.units = d.units;
         self.app.scroll_speed = d.scroll_speed;
         self.app.invert_middle_drag = d.invert_middle_drag;
+        self.app.ignore_asian_width = d.ignore_asian_width;
         self.app.comment_prefs.author = d.author;
         self.app.comment_prefs.hide_empty_highlight_hover = d.hide_empty_highlight_hover;
         self.app.flatten_fill_sign_on_save = d.flatten_fill_sign_on_save;
@@ -826,6 +840,15 @@ impl Prefs<'_> {
             RowSpec::new("fill.date_language", tl!("Language"), RowKind::choice(language, languages)).keywords(tl!("Date format")),
         ];
         PageSpec::new("fill", tl!("Fill & Sign"), rows)
+    }
+
+    fn search_page(&self) -> PageSpec<'_> {
+        // The description names the forms in words: drawing kana needs the optional craft-fonts faces.
+        let rows =
+            vec![RowSpec::new("search.ignore_width", tl!("Ignore Asian character width"), RowKind::Bool(self.draft.ignore_asian_width)).help(tl!(
+                "Finds both half-width and full-width forms of the characters you search for, such as Latin letters, digits and katakana."
+            ))];
+        PageSpec::new("search", tl!("Search"), rows)
     }
 
     fn javascript_page(&self) -> PageSpec<'_> {

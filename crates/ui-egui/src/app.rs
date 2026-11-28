@@ -322,6 +322,7 @@ impl PdfCraftApp {
             show_page_edge_shadows: true,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             invert_middle_drag: false,
+            ignore_asian_width: true,
             animation_effects: craft::theme::MotionChoice::System,
             full_screen_escape_exits: true,
             full_screen_fill: true,
@@ -846,6 +847,11 @@ impl PdfCraftApp {
             for view in &mut self.views {
                 view.session.pending_pick = None;
             }
+        }
+        // Preferences ▸ Search, wherever it was changed from: a search in a view it changes runs again.
+        let ignore_width = self.ignore_asian_width;
+        for view in &mut self.views {
+            view.set_find_ignore_width(ignore_width);
         }
         // Forms' scripts read Highlight fields as `app.runtimeHighlight`.
         let highlight = self.active.and_then(|i| self.views.get(i)).map_or(self.highlight_fields, |v| v.session.highlight_fields);

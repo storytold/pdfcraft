@@ -45,6 +45,7 @@ mod export;
 mod field_triggers;
 mod fill_sign;
 mod find_replace;
+mod find_width;
 mod folders;
 mod fonts;
 mod forms;

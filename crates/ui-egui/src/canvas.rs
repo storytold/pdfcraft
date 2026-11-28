@@ -218,6 +218,9 @@ pub struct DocView {
     /// Cut pages whose notice the reader dismissed: a page cut later shows it again.
     cut_notice_dismissed: std::collections::BTreeSet<usize>,
     pub find: Option<Find>,
+    /// Whether this view's find ignores character width (Preferences ▸ Search, which the app
+    /// copies in through [`DocView::set_find_ignore_width`]).
+    find_ignore_width: bool,
     page_count: usize,
     /// Page sizes (width, height) in points (view space, unrotated by the view), for the page transforms.
     page_sizes: Vec<(f32, f32)>,
@@ -621,6 +624,7 @@ impl DocView {
             full_screen_fill: true,
             cut_notice_dismissed: Default::default(),
             find: None,
+            find_ignore_width: true,
             page_count: info.pages.len(),
             page_sizes: info.pages.iter().map(|p| (p.width, p.height)).collect(),
             auto_ocr_tried: Default::default(),
@@ -701,6 +705,7 @@ impl DocView {
         fresh.back = std::mem::take(&mut self.back);
         fresh.forward = std::mem::take(&mut self.forward);
         fresh.find = self.find.take();
+        fresh.find_ignore_width = self.find_ignore_width;
         // The revision stamps carry on, so the pictures on screen stay until their replacements land.
         fresh.revisions = std::mem::take(&mut self.revisions);
         fresh.viewport = self.viewport;
@@ -728,6 +733,7 @@ impl DocView {
         v.view = self.view.clone();
         v.view.go_to(self.view.current);
         v.page_input = self.page_input.clone();
+        v.find_ignore_width = self.find_ignore_width;
         v.notice_dismissed = self.notice_dismissed;
         v.scripts_off_noted = self.scripts_off_noted;
         v.full_screen_fill = self.full_screen_fill;

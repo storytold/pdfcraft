@@ -28,6 +28,9 @@
 //! - `ui.quit {}`: normal native exit, or `quitting: false, needs_confirmation: true` and the
 //!   existing save prompt when any document has unsaved edits or typing. No discard parameter.
 //! - `ui.command {id}`: run a registry command (as the menu would). `ui.commands` lists them.
+//! - `ui.set {key: "ignore_asian_width", value: "true"|"false"}` sets Preferences ▸ Search ▸
+//!   Ignore Asian character width (find matches halfwidth and fullwidth forms at their ordinary
+//!   width); `ui.state.ignore_asian_width` reports it.
 //! - `ui.set {key, value}`: view options (`--page`, `--zoom`, …), plus persistent preferences.
 //!   `select` accepts physical page numbers and ranges such as `1,12,16-18`; blank clears the
 //!   explicit selection. `ui.state.active.selected_pages` reports it.

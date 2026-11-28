@@ -51,8 +51,36 @@ impl DocView {
         f.bar.open_replace();
     }
 
+    /// Whether find ignores character width here (Preferences ▸ Search).
+    pub(crate) fn find_ignore_width(&self) -> bool {
+        self.find_ignore_width
+    }
+
+    /// Set Preferences ▸ Search ▸ Ignore Asian character width for this view. A change searches
+    /// again, as changing a find option does.
+    pub(crate) fn set_find_ignore_width(&mut self, ignore: bool) {
+        if self.find_ignore_width == ignore {
+            return;
+        }
+        self.find_ignore_width = ignore;
+        if self.find.as_ref().is_some_and(|f| !f.case_query.trim().is_empty()) {
+            self.rerun_find();
+        }
+    }
+
+    /// The options this view's search uses.
+    fn find_options(&self) -> Option<pdfcraft_render::text::FindOptions> {
+        let f = self.find.as_ref()?;
+        Some(pdfcraft_render::text::FindOptions {
+            case_sensitive: f.options.match_case,
+            whole_words: f.options.whole_word,
+            ignore_width: self.find_ignore_width,
+        })
+    }
+
     /// Re-run the search on all pages whose text is known (after the query changed).
     pub fn rerun_find(&mut self) {
+        let Some(opts) = self.find_options() else { return };
         let current = self.view.current;
         let Some(f) = self.find.as_mut() else { return };
         f.case_query = f.query.clone();
@@ -68,7 +96,7 @@ impl DocView {
         let mut reveal = false;
         for &p in &pages {
             if let Some(text) = self.session.texts.get(&p) {
-                reveal |= f.matches.set_page(p, text.find_opts(&f.case_query, f.options.match_case, f.options.whole_word));
+                reveal |= f.matches.set_page(p, text.find_with_options(&f.case_query, opts, usize::MAX));
             }
         }
         let target = f.matches.current_match().map(|m| m.page).filter(|_| reveal);
@@ -78,11 +106,12 @@ impl DocView {
     }
 
     pub(super) fn refresh_find_page(&mut self, page: usize) {
+        let Some(opts) = self.find_options() else { return };
         let (Some(f), Some(text)) = (self.find.as_mut(), self.session.texts.get(&page)) else { return };
         if f.case_query.trim().is_empty() {
             return;
         }
-        let reveal = f.matches.set_page(page, text.find_opts(&f.case_query, f.options.match_case, f.options.whole_word));
+        let reveal = f.matches.set_page(page, text.find_with_options(&f.case_query, opts, usize::MAX));
         let target = f.matches.current_match().map(|m| m.page).filter(|_| reveal);
         if let Some(p) = target {
             self.flash_match(p);

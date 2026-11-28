@@ -33,6 +33,8 @@ pub struct Layout {
     pub theme: Option<ModeChoice>,
     pub scroll_speed: Option<crate::scroll_speed::ScrollSpeed>,
     pub invert_middle_drag: Option<bool>,
+    /// Preferences ▸ Search ▸ Ignore Asian character width; missing means on.
+    pub ignore_asian_width: Option<bool>,
     pub animation_effects: Option<MotionChoice>,
     pub default_mode: Option<crate::Mode>,
     pub default_layout: Option<String>,
@@ -539,6 +541,7 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
             theme,
             scroll_speed: r.typed("scroll_speed"),
             invert_middle_drag: r.bool("invert_middle_drag"),
+            ignore_asian_width: r.bool("ignore_asian_width"),
             animation_effects,
             default_mode: r.typed("default_mode"),
             default_layout: r.string("default_layout"),

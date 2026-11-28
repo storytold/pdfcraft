@@ -223,12 +223,17 @@ impl PdfCraftApp {
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         let mut edits = Vec::new();
         let author = self.comment_prefs.author.clone();
+        let opts = pdfcraft_render::text::FindOptions {
+            case_sensitive: d.case_sensitive,
+            whole_words: d.whole_words,
+            ignore_width: self.ignore_asian_width,
+        };
         for (page, page_info) in doc.info.pages.iter().enumerate() {
             let out = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
             let Some(text) = out.text else { continue };
             let hits = match d.mode {
                 SearchMode::Patterns => text.find_with(|c| pdfcraft_engine::find_pattern(d.pattern, c)),
-                _ => needles.iter().flat_map(|w| text.find_opts(w, d.case_sensitive, d.whole_words)).collect(),
+                _ => needles.iter().flat_map(|w| text.find_with_options(w, opts, usize::MAX)).collect(),
             };
             for h in hits {
                 let quads: Vec<[f64; 8]> = text.line_rects(h).into_iter().map(|r| page_info.view_rect_to_quad(r)).collect();

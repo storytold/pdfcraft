@@ -4,15 +4,22 @@
 //! separated by one space, except where a line of Chinese or Japanese runs on to the next: a break
 //! between two such characters is no word break, so it reads as nothing and "検知機構" is found
 //! when the line ends after "検知". A Latin compatibility ligature (U+FB00–U+FB06) reads as its
-//! letters in the page and in the query, so "office" finds "o\u{FB03}ce". A word divided by a
-//! hyphen at the end of a line is also found whole: where a line ends in a hyphen between two
-//! letters, the text is searched a second time without the hyphen and the line break ("example"
-//! finds "exam-" + "ple") and a third time with the hyphen but without the break ("exam-ple"). A
-//! hit in any reading counts; where hits from different readings overlap, the one that starts
-//! first is kept (the longer on a tie). A soft hyphen needs no second reading: it draws nothing,
-//! and a line that ends in one always runs on.
+//! letters in the page and in the query, so "office" finds "o\u{FB03}ce". A character of the
+//! Halfwidth and Fullwidth Forms block (U+FF00–U+FFEF) reads as the character its `<wide>` or
+//! `<narrow>` compatibility decomposition names, and a voiced or semi-voiced katakana as its base
+//! and combining sound mark, in the page and in the query, so "ABC" finds "ＡＢＣ", "カナ" finds
+//! "ｶﾅ" and "ガ" finds "ｶﾞ" drawn as two glyphs, each way round; a hit never ends between a kana
+//! and its sound mark, so "カ" finds neither. This width folding is on unless the search asks
+//! for width to count ([`FindOptions::ignore_width`]). An ideographic space (U+3000) is whitespace and
+//! reads as one space like any other. A word divided by a hyphen at the end of a line is also
+//! found whole: where a line ends in a hyphen between two letters, the text is searched a second
+//! time without the hyphen and the line break ("example" finds "exam-" + "ple") and a third time
+//! with the hyphen but without the break ("exam-ple"). A hit in any reading counts; where hits
+//! from different readings overlap, the one that starts first is kept (the longer on a tie). A
+//! soft hyphen needs no second reading: it draws nothing, and a line that ends in one always runs
+//! on.
 use super::device::ligature_letters;
-use super::{PageText, fold_case};
+use super::{FindOptions, PageText, fold_case};
 use std::ops::Range;
 
 /// How a line ending in a hyphen between two letters is read.
@@ -37,11 +44,105 @@ fn breaks_before(page: &PageText, i: usize) -> bool {
     i.checked_sub(1).and_then(|previous| page.line_of.get(previous)).zip(page.line_of.get(i)).is_some_and(|(a, b)| a != b)
 }
 
-pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: bool, limit: usize) -> Vec<Range<usize>> {
+/// `s` as find compares it, in the page and in the query alike: ligatures as their letters, with
+/// `ignore_width` the halfwidth and fullwidth forms as their ordinary width ([`fold_width`]), and,
+/// unless `case_sensitive`, case folded. Each step works per character, so a glyph's text folds
+/// on its own and every folded character keeps the glyph it came from.
+fn search_fold(s: &str, opts: FindOptions) -> String {
+    let s = ligature_letters(s.to_owned());
+    let s = if opts.ignore_width { fold_width(s) } else { s };
+    if opts.case_sensitive { s } else { fold_case(&s) }
+}
+
+/// The full-width katakana of the halfwidth katakana U+FF65..=U+FF9D, in order: each one's
+/// `<narrow>` decomposition in UnicodeData.txt.
+const HALFWIDTH_KATAKANA: &str = "・ヲァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン";
+
+/// The character a halfwidth or fullwidth form stands for: the target of its `<wide>` or
+/// `<narrow>` compatibility decomposition (UnicodeData.txt, field 5; UAX #44), which every
+/// assigned character of the Halfwidth and Fullwidth Forms block (U+FF00–U+FFEF) has. Fullwidth
+/// ASCII becomes ASCII, halfwidth katakana and Hangul become their ordinary forms, and the
+/// halfwidth voiced and semi-voiced sound marks become the combining marks U+3099 and U+309A.
+/// Only width differs: unlike NFKC this leaves superscripts, circled numbers, compatibility
+/// ideographs and the like alone, and goes one level down, so U+FFE3 FULLWIDTH MACRON stays a
+/// macron rather than a space and a combining mark.
+fn narrow_or_wide(c: char) -> Option<char> {
+    let cp = u32::from(c);
+    let to = match cp {
+        // Fullwidth ASCII, ! to ~, sits 0xFEE0 above it.
+        0xFF01..=0xFF5E => cp.checked_sub(0xFEE0)?,
+        0xFF5F => 0x2985,
+        0xFF60 => 0x2986,
+        0xFF61 => 0x3002,
+        0xFF62 => 0x300C,
+        0xFF63 => 0x300D,
+        0xFF64 => 0x3001,
+        0xFF65..=0xFF9D => return HALFWIDTH_KATAKANA.chars().nth(usize::try_from(cp.checked_sub(0xFF65)?).ok()?),
+        0xFF9E => 0x3099,
+        0xFF9F => 0x309A,
+        // Halfwidth Hangul: the filler, then the compatibility jamo in runs.
+        0xFFA0 => 0x3164,
+        0xFFA1..=0xFFBE => cp.checked_sub(0xFFA1 - 0x3131)?,
+        0xFFC2..=0xFFC7 => cp.checked_sub(0xFFC2 - 0x314F)?,
+        0xFFCA..=0xFFCF => cp.checked_sub(0xFFCA - 0x3155)?,
+        0xFFD2..=0xFFD7 => cp.checked_sub(0xFFD2 - 0x315B)?,
+        0xFFDA..=0xFFDC => cp.checked_sub(0xFFDA - 0x3161)?,
+        0xFFE0 => 0xA2,
+        0xFFE1 => 0xA3,
+        0xFFE2 => 0xAC,
+        0xFFE3 => 0xAF,
+        0xFFE4 => 0xA6,
+        0xFFE5 => 0xA5,
+        0xFFE6 => 0x20A9,
+        0xFFE8 => 0x2502,
+        0xFFE9..=0xFFEC => cp.checked_sub(0xFFE9 - 0x2190)?,
+        0xFFED => 0x25A0,
+        0xFFEE => 0x25CB,
+        _ => return None,
+    };
+    char::from_u32(to)
+}
+
+/// A voiced or semi-voiced katakana as its canonical decomposition (UnicodeData.txt): the base
+/// katakana and U+3099 COMBINING KATAKANA-HIRAGANA VOICED SOUND MARK or U+309A SEMI-VOICED. A
+/// halfwidth katakana takes its sound mark as a character of its own (ｶﾞ), often drawn as a
+/// glyph of its own, so the full-width ガ has to read as two characters for the two to match.
+fn decompose_katakana(c: char) -> Option<[char; 2]> {
+    let cp = u32::from(c);
+    let (base, mark) = match cp {
+        0x30AC..=0x30C2 if cp % 2 == 0 => (cp.checked_sub(1)?, 0x3099),
+        0x30C5 | 0x30C7 | 0x30C9 | 0x30D0 | 0x30D3 | 0x30D6 | 0x30D9 | 0x30DC | 0x30FE => (cp.checked_sub(1)?, 0x3099),
+        0x30D1 | 0x30D4 | 0x30D7 | 0x30DA | 0x30DD => (cp.checked_sub(2)?, 0x309A),
+        0x30F4 => (0x30A6, 0x3099),
+        0x30F7..=0x30FA => (cp.checked_sub(8)?, 0x3099),
+        _ => return None,
+    };
+    Some([char::from_u32(base)?, char::from_u32(mark)?])
+}
+
+/// `text` with every halfwidth or fullwidth form at its ordinary width ([`narrow_or_wide`]) and
+/// every voiced or semi-voiced katakana decomposed ([`decompose_katakana`]).
+fn fold_width(text: String) -> String {
+    let folds = |c: char| narrow_or_wide(c).is_some() || decompose_katakana(c).is_some();
+    if !text.chars().any(folds) {
+        return text;
+    }
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        let c = narrow_or_wide(c).unwrap_or(c);
+        match decompose_katakana(c) {
+            Some(parts) => out.extend(parts),
+            None => out.push(c),
+        }
+    }
+    out
+}
+
+pub(super) fn find(page: &PageText, query: &str, opts: FindOptions, limit: usize) -> Vec<Range<usize>> {
     if limit == 0 {
         return Vec::new();
     }
-    let fold = |s: &str| if sensitive { ligature_letters(s.to_owned()) } else { fold_case(&ligature_letters(s.to_owned())) };
+    let fold = |s: &str| search_fold(s, opts);
     let query: String = fold(query).chars().filter(|&c| !is_invisible(c)).collect();
     let needle: Vec<char> = query.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     if needle.is_empty() {
@@ -54,7 +155,7 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
     let mut hits: Vec<(Range<usize>, usize)> = Vec::new();
     for (r, &reading) in readings.iter().enumerate() {
         let (chars, zero_width_space) = characters(page, &texts, &divided, reading);
-        let found = search(&chars, &zero_width_space, &needle, &prefix, whole_words, limit);
+        let found = search(&chars, &zero_width_space, &needle, &prefix, opts, limit);
         hits.extend(found.into_iter().map(|hit| (hit, r)));
     }
     if readings.len() == 1 {
@@ -86,11 +187,11 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
 /// [`super::find_in_text`]: the same search over a string (find and replace matches a paragraph's
 /// text with it), as the byte ranges of the characters each hit covers. Hyphenated line ends do
 /// not arise in a string, so there is the one reading.
-pub(super) fn find_in_text(text: &str, query: &str, sensitive: bool, whole_words: bool, limit: usize) -> Vec<Range<usize>> {
+pub(super) fn find_in_text(text: &str, query: &str, opts: FindOptions, limit: usize) -> Vec<Range<usize>> {
     if limit == 0 {
         return Vec::new();
     }
-    let fold = |s: &str| if sensitive { ligature_letters(s.to_owned()) } else { fold_case(&ligature_letters(s.to_owned())) };
+    let fold = |s: &str| search_fold(s, opts);
     let query: String = fold(query).chars().filter(|&c| !is_invisible(c)).collect();
     let needle: Vec<char> = query.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     if needle.is_empty() {
@@ -115,7 +216,7 @@ pub(super) fn find_in_text(text: &str, query: &str, sensitive: bool, whole_words
         }
     }
     let starts: Vec<usize> = text.char_indices().map(|(at, _)| at).chain(std::iter::once(text.len())).collect();
-    search(&chars, &zero_width_space, &needle, &prefix_table(&needle), whole_words, limit)
+    search(&chars, &zero_width_space, &needle, &prefix_table(&needle), opts, limit)
         .into_iter()
         .filter_map(|hit| Some(*starts.get(hit.start)?..*starts.get(hit.end)?))
         .collect()
@@ -133,6 +234,14 @@ fn prefix_table(needle: &[char]) -> Vec<usize> {
         }
     }
     prefix
+}
+
+/// Whether `c`, the character before a line-end hyphen, ends a word: a letter, or the voiced or
+/// semi-voiced sound mark U+3099 or U+309A after one. Ignoring width writes ガ as カ and U+3099,
+/// and the halfwidth mark ﾞ as U+3099; the marks are not letters, so without them a word divided
+/// after ガ or ｶﾞ would match whole only where width counts.
+fn ends_a_word(c: char) -> bool {
+    c.is_alphabetic() || matches!(c, '\u{3099}' | '\u{309A}')
 }
 
 /// Whether glyph `i` ends its line with a hyphen that follows a letter of its word, and the next
@@ -153,7 +262,7 @@ fn divides(page: &PageText, texts: &[String], i: usize) -> bool {
         None => None,
     };
     let Some(next) = i.checked_add(1) else { return false };
-    before.is_some_and(char::is_alphabetic)
+    before.is_some_and(ends_a_word)
         && breaks_before(page, next)
         && texts.get(next).and_then(|t| t.chars().find(|&c| !is_invisible(c))).is_some_and(char::is_alphabetic)
 }
@@ -166,8 +275,10 @@ fn characters(page: &PageText, texts: &[String], divided: &[bool], reading: Hyph
     let mut chars: Vec<(char, usize)> = Vec::new();
     let mut zero_width_space: Vec<bool> = Vec::new();
     let mut pending_zero_width_space = false;
-    // The last character pushed other than a variation selector, kept as characters are pushed so
-    // a long run of selectors costs no rescan.
+    // The page's own character behind the last one pushed other than a variation selector, kept
+    // as characters are pushed so a long run of selectors costs no rescan. It is the page's
+    // character, not the folded one: a FULLWIDTH COMMA ends a line of Chinese that runs on,
+    // though find reads it as an ASCII comma.
     let mut last_base: Option<char> = None;
     for (i, text) in texts.iter().enumerate() {
         let line_break = breaks_before(page, i);
@@ -194,6 +305,7 @@ fn characters(page: &PageText, texts: &[String], divided: &[bool], reading: Hyph
         } else {
             None
         };
+        let mut pushed_base = false;
         for (at, c) in text.char_indices() {
             if is_invisible(c) {
                 pending_zero_width_space |= c == '\u{200B}';
@@ -205,12 +317,17 @@ fn characters(page: &PageText, texts: &[String], divided: &[bool], reading: Hyph
             let c = if c.is_whitespace() { ' ' } else { c };
             if c != ' ' || chars.last().is_none_or(|last| last.0 != ' ') {
                 chars.push((c, i));
-                if !is_variation_selector(c) {
-                    last_base = Some(c);
-                }
+                pushed_base |= !is_variation_selector(c);
                 zero_width_space.push(pending_zero_width_space && c != ' ');
                 pending_zero_width_space = false;
             }
+        }
+        // The glyph's last visible character other than a variation selector, as the page has it.
+        // The hyphen the joined reading drops and the letters a ligature or case folds to are no
+        // characters `unspaced` lists, so reading the page's text tells only the width forms apart.
+        if pushed_base {
+            let raw = page.glyphs.get(i).and_then(|g| g.text.chars().rev().find(|&c| !is_invisible(c) && !is_variation_selector(c)));
+            last_base = raw.map(|c| if c.is_whitespace() { ' ' } else { c }).or(last_base);
         }
     }
     (chars, zero_width_space)
@@ -223,9 +340,10 @@ fn search(
     zero_width_space: &[bool],
     needle: &[char],
     prefix: &[usize],
-    whole_words: bool,
+    opts: FindOptions,
     limit: usize,
 ) -> Vec<Range<usize>> {
+    let whole_words = opts.whole_words;
     if needle.len() > chars.len() {
         return Vec::new();
     }
@@ -237,6 +355,8 @@ fn search(
     let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|c| c.0.is_alphanumeric() && (c.0.is_numeric() || !unspaced_script(c.0)));
     // A skipped zero width space before the first character or after the last is a boundary.
     let after_break = |i: usize| zero_width_space.get(i).copied().unwrap_or(false);
+    // A hiragana or katakana letter, which a following U+3099 or U+309A voices.
+    let kana = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|&(c, _)| matches!(c, '\u{3041}'..='\u{3096}' | '\u{309D}'..='\u{30FF}'));
     let mut hits = Vec::new();
     for (i, &(c, owner)) in chars.iter().enumerate() {
         matched = advance(needle, prefix, matched, c);
@@ -246,7 +366,12 @@ fn search(
         let end = i.saturating_add(1);
         let start = end.saturating_sub(needle.len());
         let bounded = !whole_words || ((after_break(start) || !word(start.checked_sub(1))) && (after_break(end) || !word(Some(end))));
-        if bounded {
+        // Nor does a hit end on a kana whose sound mark follows: カ is not found in ガ, which find
+        // reads as カ and U+3099, any more than in ｶﾞ. A mark after anything else marks no kana.
+        // Where width counts, ガ stays one character and find matches characters as written.
+        let sound_mark = opts.ignore_width && chars.get(end).is_some_and(|&(next, _)| matches!(next, '\u{3099}' | '\u{309A}'));
+        let whole_kana = !(sound_mark && kana(end.checked_sub(1)));
+        if bounded && whole_kana {
             if let Some((_, first)) = chars.get(start)
                 && let Some(last) = owner.checked_add(1)
             {
@@ -258,7 +383,7 @@ fn search(
             // Only accepted hits consume their full span: literal search is non-overlapping.
             matched = 0;
         } else {
-            // A word-boundary rejection must still allow an overlapping later candidate.
+            // A word-boundary or sound-mark rejection must still allow an overlapping later candidate.
             matched = prefix.last().copied().unwrap_or_default();
         }
     }
@@ -396,4 +521,91 @@ fn unspaced_script(c: char) -> bool {
         // to J, compatibility supplement).
         | 0x20000..=0x3FFFF
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decompose_katakana, fold_width, narrow_or_wide};
+
+    /// Characters of the Halfwidth and Fullwidth Forms block and the target of their `<wide>` or
+    /// `<narrow>` decomposition in UnicodeData.txt (Unicode 15.1), in runs that step by one on
+    /// both sides: (first, last, first's target). The halfwidth katakana these leave out are
+    /// checked one by one below, and the count checks that none of the block's 225 is missed.
+    const RUNS: &[(u32, u32, u32)] = &[
+        (0xFF01, 0xFF5E, 0x21),
+        (0xFF5F, 0xFF60, 0x2985),
+        (0xFF61, 0xFF61, 0x3002),
+        (0xFF62, 0xFF63, 0x300C),
+        (0xFF64, 0xFF64, 0x3001),
+        (0xFF65, 0xFF65, 0x30FB),
+        (0xFF66, 0xFF66, 0x30F2),
+        (0xFF67, 0xFF67, 0x30A1),
+        (0xFF6F, 0xFF6F, 0x30C3),
+        (0xFF70, 0xFF70, 0x30FC),
+        (0xFF71, 0xFF71, 0x30A2),
+        (0xFF75, 0xFF76, 0x30AA),
+        (0xFF82, 0xFF82, 0x30C4),
+        (0xFF85, 0xFF8A, 0x30CA),
+        (0xFF8F, 0xFF93, 0x30DE),
+        (0xFF96, 0xFF9B, 0x30E8),
+        (0xFF9C, 0xFF9C, 0x30EF),
+        (0xFF9D, 0xFF9D, 0x30F3),
+        (0xFF9E, 0xFF9F, 0x3099),
+        (0xFFA0, 0xFFA0, 0x3164),
+        (0xFFA1, 0xFFBE, 0x3131),
+        (0xFFC2, 0xFFC7, 0x314F),
+        (0xFFCA, 0xFFCF, 0x3155),
+        (0xFFD2, 0xFFD7, 0x315B),
+        (0xFFDA, 0xFFDC, 0x3161),
+        (0xFFE0, 0xFFE1, 0xA2),
+        (0xFFE2, 0xFFE2, 0xAC),
+        (0xFFE3, 0xFFE3, 0xAF),
+        (0xFFE4, 0xFFE4, 0xA6),
+        (0xFFE5, 0xFFE5, 0xA5),
+        (0xFFE6, 0xFFE6, 0x20A9),
+        (0xFFE8, 0xFFE8, 0x2502),
+        (0xFFE9, 0xFFEC, 0x2190),
+        (0xFFED, 0xFFED, 0x25A0),
+        (0xFFEE, 0xFFEE, 0x25CB),
+    ];
+
+    #[test]
+    fn every_width_form_maps_to_its_unicode_decomposition_and_nothing_else_moves() {
+        for &(first, last, to) in RUNS {
+            for cp in first..=last {
+                let c = char::from_u32(cp).unwrap();
+                assert_eq!(narrow_or_wide(c), char::from_u32(to + (cp - first)), "U+{cp:04X}");
+            }
+        }
+        let mapped = (0xFF00..=0xFFEF).filter_map(char::from_u32).filter(|&c| narrow_or_wide(c).is_some()).count();
+        assert_eq!(mapped, 225, "the block's <wide> and <narrow> characters, no more");
+        // Outside the block nothing folds, the targets included: folding is one way and one level.
+        for cp in (0..0xFF00).chain(0xFFF0..0x11000) {
+            if let Some(c) = char::from_u32(cp) {
+                assert_eq!(narrow_or_wide(c), None, "U+{cp:04X}");
+            }
+        }
+        // The halfwidth katakana between the runs above, one by one.
+        assert_eq!(
+            fold_width("ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ".into()),
+            "ヲァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン"
+        );
+    }
+
+    #[test]
+    fn voiced_katakana_decompose_as_unicode_data_gives_them() {
+        // Every katakana with a canonical decomposition to a base and U+3099 or U+309A.
+        let voiced = "ガギグゲゴザジズゼゾダヂヅデドバビブベボヴヷヸヹヺヾ";
+        let bases = "カキクケコサシスセソタチツテトハヒフヘホウワヰヱヲヽ";
+        for (v, b) in voiced.chars().zip(bases.chars()) {
+            assert_eq!(decompose_katakana(v), Some([b, '\u{3099}']), "{v}");
+        }
+        for (v, b) in "パピプペポ".chars().zip("ハヒフヘホ".chars()) {
+            assert_eq!(decompose_katakana(v), Some([b, '\u{309A}']), "{v}");
+        }
+        let decomposed = (0x3000..=0x30FF).filter_map(char::from_u32).filter(|&c| decompose_katakana(c).is_some()).count();
+        assert_eq!(decomposed, 31, "no other character decomposes");
+        assert_eq!(fold_width("ｶﾞｲﾄﾞ ﾊﾟﾝ".into()), fold_width("ガイド パン".into()));
+        assert_eq!(fold_width("plain text".into()), "plain text");
+    }
 }

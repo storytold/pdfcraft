@@ -22,6 +22,7 @@ impl PdfCraftApp {
             with: find.replacement.clone(),
             case_sensitive: find.options.match_case,
             whole_words: find.options.whole_word,
+            ignore_width: view.find_ignore_width(),
         };
         let Some(doc) = self.session.get(view.id) else { return };
         let (pages, which, found) = if all {
