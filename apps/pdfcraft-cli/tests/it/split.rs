@@ -1,5 +1,6 @@
 //! `split --out-dir DIR` creates DIR when it does not exist yet (#249), and says so when it can't.
 //! `--every` must be a positive whole number of pages, checked before the file is opened.
+//! A part that can't be written fails the split with every existing output as it was (#1793).
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -92,5 +93,26 @@ fn a_non_positive_or_unparseable_every_is_refused_before_the_file_is_opened() {
         );
         assert!(!out_dir.exists(), "--every {value}: nothing may be written");
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every part is staged before any replaces an existing file (#1793): a part that can't be
+/// written fails the split with the earlier outputs as they were, and no staging file left over.
+#[test]
+fn a_part_that_cannot_be_written_leaves_every_existing_output_as_it_was() {
+    let dir = workdir("blocked");
+    let parts = dir.join("parts");
+    std::fs::create_dir_all(parts.join("report-p2.pdf")).unwrap();
+    std::fs::write(parts.join("report-p1.pdf"), b"PREVIOUS").unwrap();
+    let out = split(&dir, &parts);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("report-p2.pdf"), "{stderr}");
+    assert!(out.stdout.is_empty(), "no part is listed when the split fails");
+    assert_eq!(std::fs::read(parts.join("report-p1.pdf")).unwrap(), b"PREVIOUS", "an earlier output was replaced");
+    assert!(!parts.join("report-p3.pdf").exists());
+    let mut left: Vec<_> = std::fs::read_dir(&parts).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    left.sort();
+    assert_eq!(left, ["report-p1.pdf", "report-p2.pdf"], "no staging file is left behind");
     let _ = std::fs::remove_dir_all(&dir);
 }
