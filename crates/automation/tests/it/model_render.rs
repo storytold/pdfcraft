@@ -300,3 +300,21 @@ fn a_wrong_orbit_is_a_clear_error() {
         assert!(err.contains("orbit must be") && err.contains(reason), "{bad}: {err}");
     }
 }
+
+#[test]
+fn a_lighting_scheme_lights_the_model() {
+    let (_dir, mut a) = setup("lighting");
+    let doc = open(&mut a, "prc.pdf");
+    let centre = |a: &mut Automation, lighting: &str| {
+        let args = json!({ "doc": doc, "page": 1, "width": 64, "height": 48, "direction": [0, 0, -1], "perspective": false, "lighting": lighting });
+        let out = a.call("model_render", &args).unwrap();
+        let Content::Png { data, .. } = &out[0] else { panic!("expected a PNG") };
+        rgb(data, 32, 24)
+    };
+    // Head on, the headlamp gives the colour times 0.1 + [0.8, 0.8, 0.9].
+    assert_eq!(centre(&mut a, "headlamp"), [171, 173, 200]);
+    assert_eq!(centre(&mut a, "unlit"), [190, 192, 200]);
+    assert_ne!(centre(&mut a, "primary"), centre(&mut a, "headlight"), "the primary lights tint the model");
+    let err = a.call("model_render", &json!({ "doc": doc, "page": 1, "lighting": "CAD" })).unwrap_err().to_string();
+    assert!(err.contains("lighting must be headlight, unlit or one of white,"), "{err}");
+}
