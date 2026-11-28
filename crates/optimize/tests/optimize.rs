@@ -4186,6 +4186,37 @@ fn a_deeply_nested_form_is_measured_at_its_largest_use() {
 }
 
 #[test]
+fn saves_nested_past_the_limit_leave_every_image_at_full_resolution() {
+    // The innermost save is opened after a scale-down and closed before the image is drawn, half
+    // as large as the matrix after it says: 720 px over 1 in, 720 ppi. 256 saves open at once
+    // keep their matrices; the 257th is only counted, and the matrix closing it restores isn't
+    // known, so the image may be drawn larger than it measures.
+    for (saves, ppi) in [(256, 720.0), (257, f64::INFINITY)] {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 720, 720, 1, false, None);
+        let open = "q ".repeat(saves - 1);
+        let close = "Q ".repeat(saves - 1);
+        let p = page(&mut doc, &[("Im", img)], &format!("{open}0.5 0 0 0.5 0 0 cm q Q 144 0 0 144 0 0 cm /Im Do {close}"));
+        assert_eq!(effective_resolutions(&doc, &[p]).get(&img).copied(), Some(ppi), "{saves} saves");
+        let report = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(report.images_resampled, usize::from(ppi.is_finite()), "{saves} saves: {report:?}");
+    }
+}
+
+#[test]
+fn a_page_of_dense_content_is_measured_an_operator_at_a_time() {
+    // 48 MiB of `0 g`: parsed whole before the walk, its 12.6 million operators took more than
+    // 1.5 GB.
+    let mut c = "0 g\n".repeat(12 << 20);
+    c.push_str("q 72 0 0 72 0 0 cm /Im Do Q");
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, 720, 720, 1, false, None);
+    let p = page(&mut doc, &[("Im", img)], &c);
+    drop(c);
+    assert_eq!(effective_resolutions(&doc, &[p]).get(&img).copied(), Some(720.0));
+}
+
+#[test]
 fn a_form_drawing_itself_is_walked_once_per_use() {
     let mut doc = Document::new_empty();
     let img = image(&mut doc, 1200, 1200, 3, false, None);
