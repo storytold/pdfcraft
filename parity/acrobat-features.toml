@@ -8580,11 +8580,11 @@ title = "Ink manager"
 area = "L"
 tier = "P1"
 milestone = "M11"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["print_inks"]
+evidence = ["crates/preflight/src/inks.rs::inks_are_listed_with_their_alternates_and_the_pages_that_draw_from_them", "crates/preflight/src/inks.rs::a_resource_cycle_ends_and_a_flood_of_names_is_cut_off", "crates/preflight/src/inks.rs::resources_nested_past_the_depth_limit_leave_the_list_incomplete", "crates/preflight/src/inks.rs::process_inks_survive_a_flood_and_too_many_alternates_leave_the_list_incomplete", "crates/preflight/src/inks.rs::names_that_differ_only_in_bytes_that_arent_text_stay_two_inks", "crates/preflight/src/inks.rs::a_page_with_no_type_is_still_a_page_the_walk_stops_at", "crates/preflight/src/inks.rs::a_names_array_longer_than_a_space_can_be_is_read_only_to_the_limit", "crates/automation/tests/it/automation.rs::listing_inks_through_tools"]
+notes = "Read only, headless: print_inks lists the Separation and DeviceN inks, process or spot, the alternate spaces each is defined with, and the pages whose resources name it (whether or not content paints with it). At most 1024 spot inks are listed, the rest counted as dropped; a DeviceN space is read up to 32 colorants. complete is false when a walk reached a limit, so an ink or a page may be missing. Missing: no panel, no ink aliasing, no spot-to-process conversion, no output-time ink handling."
 
 [[feature]]
 id = "print.ink-aliases"

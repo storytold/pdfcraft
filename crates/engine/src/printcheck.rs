@@ -154,6 +154,15 @@ impl OpenDocument {
     }
 }
 
+impl OpenDocument {
+    /// The inks the document names and the pages whose resources name each. `None` when there
+    /// is no object graph to read. Reads the file and does not edit it.
+    pub fn inks(&self) -> Option<pdfcraft_preflight::InkList> {
+        let doc = &self.editor.as_ref()?.cos;
+        Some(pdfcraft_preflight::inks(doc, &pdfcraft_model::pages(doc)))
+    }
+}
+
 fn inspect(doc: &Document) -> PrintReadiness {
     let declared = pdfcraft_preflight::declared(doc);
     let pdfa_issues = pdfcraft_preflight::verify(doc, Level::A2b);

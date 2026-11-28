@@ -26,6 +26,7 @@
 mod gstate;
 mod header;
 pub mod icc;
+mod inks;
 mod limits;
 mod spot;
 mod trailer;
@@ -34,6 +35,7 @@ mod xmp;
 mod xmp_extension;
 mod xmp_types;
 
+pub use inks::{Ink, InkList, MAX_INKS, inks};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 /// The PDF/A part and conformance level.

@@ -10288,6 +10288,32 @@ fn print_readiness_through_tools() {
 }
 
 #[test]
+fn listing_inks_through_tools() {
+    let dir = workdir("print-inks");
+    std::fs::write(
+        dir.join("inks.pdf"),
+        pdf_of(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << /G [/Separation /Gold /DeviceCMYK 5 0 R] >> >> >>",
+            "<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0 1 0] /N 1 >>",
+        ]),
+    )
+    .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "inks.pdf" }))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let r = ok(&mut a, "print_inks", json!({ "doc": doc }));
+    let gold = r["inks"].as_array().unwrap().iter().find(|i| i["name"] == "Gold").cloned().unwrap_or_default();
+    assert_eq!(gold["pages"], json!([2]), "the second page draws from it, counted from 1: {r}");
+    assert_eq!(gold["process"], false, "{r}");
+    assert_eq!(r["complete"], true, "{r}");
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc })), before, "listing doesn't change the document");
+    assert!(a.call("print_inks", &json!({ "doc": 999 })).is_err());
+}
+
+#[test]
 fn exporting_to_word_html_and_rtf() {
     let dir = workdir("office");
     let mut a = auto(&dir);
