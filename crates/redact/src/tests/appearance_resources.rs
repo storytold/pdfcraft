@@ -157,3 +157,54 @@ fn a_type3_glyph_a_surviving_glyph_shows_is_kept() {
     assert!(!full_save_holds(&doc, b"UNUSED_NESTED_GLYPH_A"), "a glyph nothing shows survived");
     assert!(!full_save_holds(&doc, b"UNUSED_NESTED_GLYPH_B"), "a glyph nothing shows survived");
 }
+
+/// A page showing glyph A of `fonts` Type 3 fonts that all list one glyph program (object 5),
+/// which shows glyph C of the font `/N` (object 7, which the page lists but never selects) through
+/// `resources`: the fonts' `/Resources` entry, empty for none. Object 6 is a resource dictionary
+/// naming `/N`.
+fn fonts_sharing_a_glyph(fonts: usize, resources: &str) -> Document {
+    let names: String = (0..fonts).map(|i| format!("/T{i} {} 0 R ", 11 + i)).collect();
+    let shows: String = (0..fonts).map(|i| format!("/T{i} 10 Tf (A) Tj ")).collect();
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << {names}/N 7 0 R >> >> >>").into_bytes(),
+        stream("", format!("BT 10 100 Td {shows}ET").as_bytes()),
+        stream("", b"BT /N 1000 Tf (C) Tj ET % SHARED_GLYPH"),
+        b"<< /Font << /N 7 0 R >> >>".to_vec(),
+        type3_abc(8),
+        stream("", b"% UNUSED_NESTED_GLYPH_A"),
+        stream("", b"% UNUSED_NESTED_GLYPH_B"),
+        stream("", b"% NESTED_GLYPH_C"),
+    ];
+    objs.extend((0..fonts).map(|_| {
+        format!("<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 65 /Widths [0] /Encoding << /Differences [65 /A] >> /CharProcs << /A 5 0 R >> {resources}>>")
+            .into_bytes()
+    }));
+    let mut doc = pdf(objs);
+    // The glyphs are drawn at x 10 with no width, so a mark away from them leaves them all.
+    mark(&mut doc, 0, &[[200.0, 200.0, 250.0, 250.0]], "");
+    doc
+}
+
+/// How many content streams the Type 3 scan reads to redact `doc`.
+fn scans_to_redact(mut doc: Document) -> usize {
+    let before = crate::type3::stream_scans();
+    apply(&mut doc, None).unwrap();
+    crate::type3::stream_scans() - before
+}
+
+/// Following the glyphs that surviving glyphs show reads a glyph program that many Type 3 fonts
+/// share once for all of them when they have the same resources (none, or one object), not once
+/// per font; what it shows through those resources is still kept.
+#[test]
+fn a_glyph_program_fonts_share_is_followed_once() {
+    for resources in ["", "/Resources 6 0 R "] {
+        let one = scans_to_redact(fonts_sharing_a_glyph(1, resources));
+        assert_eq!(scans_to_redact(fonts_sharing_a_glyph(40, resources)), one, "resources {resources:?}");
+    }
+    let mut doc = fonts_sharing_a_glyph(40, "/Resources 6 0 R ");
+    apply(&mut doc, None).unwrap();
+    assert!(full_save_holds(&doc, b"NESTED_GLYPH_C"), "the glyph the shared program shows was unlinked");
+    assert!(!full_save_holds(&doc, b"UNUSED_NESTED_GLYPH_A"), "a glyph nothing shows survived");
+}

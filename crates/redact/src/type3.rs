@@ -538,6 +538,19 @@ fn add_soft_mask_ops(doc: &Document, res: &Dict, ops: &mut Vec<pdfcraft_content:
     Ok(())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Content stream objects [`scan_stream_object`] has read on this thread.
+    static STREAM_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many content stream objects the Type 3 scan has read on this thread, for tests to count
+/// the work.
+#[cfg(test)]
+pub(crate) fn stream_scans() -> usize {
+    STREAM_SCANS.with(std::cell::Cell::get)
+}
+
 /// Scan a content stream object (a form, a pattern cell, a soft mask group or an appearance), once
 /// per (stream, font, drawing holder). One with resources of its own draws through them; one
 /// without draws through its caller's.
@@ -556,6 +569,8 @@ fn scan_stream_object(
     if !ctx.seen_forms.insert((r, current_font, through)) {
         return Ok(());
     }
+    #[cfg(test)]
+    STREAM_SCANS.with(|n| n.set(n.get() + 1));
     let data = ctx.doc.with_direct_parms(s).decoded()?;
     match own_res {
         Some(own) => scan_content_stream(ctx, std::slice::from_ref(&data), r, &own, current_font, depth + 1),
@@ -804,8 +819,16 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
                 continue;
             };
             let font_res = font.get(b"Resources").and_then(|r| ctx.doc.resolve(r).as_dict().cloned()).unwrap_or_default();
+            // The program draws through its font's resources, so fonts that share one program and
+            // the same resources (none, or one object) see the same glyphs in it: it is read once
+            // for all of them, not once per font.
+            let through = match font.get(b"Resources") {
+                None => proc_ref,
+                Some(Object::Ref(shared)) => *shared,
+                Some(_) => font_ref,
+            };
             // What can't be read here is the glyph's program, and is refused as such.
-            scan_stream_object(&mut ctx, &font_res, font_ref, proc_ref, None, 0).map_err(|e| match e {
+            scan_stream_object(&mut ctx, &font_res, through, proc_ref, None, 0).map_err(|e| match e {
                 RedactError::Refused(why) if why == CONTENT_UNREADABLE => RedactError::Refused(GLYPH_UNREADABLE.into()),
                 e => e,
             })?;
