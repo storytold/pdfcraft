@@ -66,6 +66,7 @@ fn results(app: &mut PdfCraftApp, ctx: &egui::Context) {
     app.fix_hairlines_pass(ctx);
     app.page_boxes_pass(ctx);
     app.protect_pass(ctx);
+    app.certificate_pass(ctx);
     app.pdfa_pass(ctx);
     app.word_count_pass(ctx);
     app.prompts_pass(ctx);

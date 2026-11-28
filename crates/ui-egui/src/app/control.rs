@@ -485,6 +485,7 @@ impl PdfCraftApp {
             "shortcuts" => self.open_shortcuts(ctx),
             "split" => self.open_split(ctx, false),
             "protect" => self.open_protect(),
+            "encrypt-certificate" => self.open_certificate(),
             "page-boxes" => self.open_page_boxes(ctx, false),
             "header-footer" => self.open_marks(ctx, MarkKind::HeaderFooter, false),
             "watermark" => self.open_marks(ctx, MarkKind::Watermark, false),

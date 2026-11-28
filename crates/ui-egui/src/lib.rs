@@ -47,6 +47,7 @@ pub mod marks {
     pub use crate::marks_ui::MarksDraft;
     pub use craft::pages::{PageRange, PageScope, Subset};
 }
+pub use certificate_ui::{CertificateDraft, Recipient};
 pub use content_ui::TextDraft;
 pub use create_ui::Clip;
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignGraphic, SignStep};
@@ -112,6 +113,7 @@ pub use canvas::scroll_speed;
 use canvas::signature_drag;
 use canvas::zoom_snap;
 pub use dialogs::bookmark_styles_ui;
+use dialogs::certificate_ui;
 use dialogs::comment_props;
 use dialogs::convert_colours_ui;
 use dialogs::hairlines_ui;

@@ -432,12 +432,19 @@ impl PdfCraftApp {
             "file.word_count" => self.open_word_count(),
             "protect.properties" => self.open_properties(ctx, PropsTab::Security),
             // A restricted document's security changes once its permissions password is entered.
-            "protect.password" | "protect.remove" if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.can_unlock()) => {
-                let then = if id == "protect.password" { "protect.password" } else { "protect.remove" };
+            "protect.password" | "protect.certificate" | "protect.remove"
+                if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.can_unlock()) =>
+            {
+                let then = match id {
+                    "protect.password" => "protect.password",
+                    "protect.certificate" => "protect.certificate",
+                    _ => "protect.remove",
+                };
                 self.request_unlock(Some(then));
             }
             "protect.unlock" => self.request_unlock(None),
             "protect.password" => self.open_protect(),
+            "protect.certificate" => self.open_certificate(),
             "prepress.convert_colors" => self.open_convert_colours(ctx),
             "prepress.hairlines" => self.open_fix_hairlines(ctx),
             "protect.remove" => {

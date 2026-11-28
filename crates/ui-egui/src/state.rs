@@ -245,6 +245,11 @@ pub struct PasswordPrompt {
     pub(crate) then: Option<&'static str>,
     /// A link destination to apply after the linked PDF is unlocked.
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
+    /// The document is encrypted with certificates: the digital ID file chosen to open it
+    /// (empty until one is), whose password is `digital_id_password`.
+    pub digital_id: Option<String>,
+    /// What is typed into the digital ID prompt's password field.
+    pub digital_id_password: String,
     /// A launch-time display override, applied only after this PDF is unlocked.
     pub(crate) display_override: Option<(craft::pages::PageDisplay, bool)>,
     /// Optional tab group and originating pane to join once unlocked ("New tab in group").

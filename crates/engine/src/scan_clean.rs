@@ -129,7 +129,7 @@ impl Session {
         }
         let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(String::new()))?;
         if let Some(p) = editor.cos.permissions() {
-            check_permission(&Edit::EnhanceScan { images: Vec::new() }, &p)?;
+            check_permission(&Edit::EnhanceScan { images: Vec::new() }, &p).map_err(|e| crate::protection::note_certificate(e, &editor.cos))?;
         }
         let all = doc.info.pages.len();
         let mut wanted: Vec<usize> = if pages.is_empty() { (0..all).collect() } else { pages.to_vec() };

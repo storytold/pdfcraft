@@ -464,20 +464,27 @@ fn security_rows(doc: &Document) -> Vec<PropertyRow> {
     };
     let opened = if sec.pending {
         tl!("— (protection is applied when you save)")
+    } else if sec.certificate && sec.owner {
+        tl!("Your digital ID (no restrictions apply)")
+    } else if sec.certificate {
+        tl!("Your digital ID")
     } else if sec.owner {
         tl!("Owner password (no restrictions apply)")
     } else {
         tl!("User password")
     };
     let mut rows = vec![
-        value("Security method", tl!("Password security").to_string()),
+        // Certificate security opens with a digital ID, not a password.
+        value("Security method", if sec.certificate { tl!("Certificate security") } else { tl!("Password security") }.to_string()),
         value("Encryption", sec.method.clone()),
         value("Opened with", opened.to_string()),
     ];
-    // A restricted document asks for its permissions password first.
-    if doc.allows_security_change() || doc.can_unlock() {
+    // A restricted document asks for its permissions password first; a certificate's document has
+    // none (a recipient with all permissions changes it).
+    let unlock = doc.can_unlock() && !sec.certificate;
+    if doc.allows_security_change() || unlock {
         let mut actions = Vec::new();
-        if doc.can_unlock() {
+        if unlock {
             actions.push(button("protect.unlock", "Unlock…"));
         }
         actions.push(button("protect.password", "Change settings…"));
