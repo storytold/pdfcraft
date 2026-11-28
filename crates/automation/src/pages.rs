@@ -510,7 +510,7 @@ fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str 
     use pdfcraft_render::RenderWarning;
     match warning {
         RenderWarning::ContentTruncated => {
-            "content past the page's safety budget, or a picture whose JBIG2 mask is past a decoder limit, was skipped"
+            "content past the page's safety budget, an image too large to decode, or a picture whose JBIG2 mask is past a decoder limit, was skipped"
         }
         RenderWarning::ColourFallback => "a colour that could not be computed was painted in a fallback colour",
         RenderWarning::MalformedIndexedImage => "an image with a malformed Indexed colour table may be drawn wrongly or not at all",

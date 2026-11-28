@@ -157,7 +157,9 @@ fn page_render_says_a_picture_was_left_out_for_its_jbig2_mask() {
     let Some(Content::Json(report)) = out.get(1) else { panic!("expected the warnings as JSON: {out:?}") };
     assert_eq!(
         report["warnings"],
-        json!(["content past the page's safety budget, or a picture whose JBIG2 mask is past a decoder limit, was skipped"])
+        json!([
+            "content past the page's safety budget, an image too large to decode, or a picture whose JBIG2 mask is past a decoder limit, was skipped"
+        ])
     );
     let _ = std::fs::remove_dir_all(dir);
 }

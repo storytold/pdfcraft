@@ -4702,8 +4702,9 @@ fn a_picture_whose_jbig2_mask_a_decoder_limit_refuses_is_not_drawn() {
 /// A JBIG2 image drawn on its own that a limit refuses, a stencil mask included, takes nothing else
 /// out, so it is a failed image, as it was before #6722: only a picture's mask refused by a limit
 /// is reported as content left out, with the picture it takes along (patch 73). Refused by the
-/// decoder's bound on a side or by the renderer's bound on pixels, each image's `/Width` and
-/// `/Height` those of its JBIG2 page.
+/// decoder's bound on a side, each image's `/Width` and `/Height` those of its JBIG2 page. Past the
+/// renderer's bound on pixels (65,535 squared, past even the 2^29 a JBIG2 image is drawn reduced up
+/// to), an image is too large to decode, which is content left out (patch 113).
 #[test]
 fn a_jbig2_image_drawn_on_its_own_that_a_limit_refuses_is_a_failed_image() {
     use hayro::hayro_interpret::font::Glyph;
@@ -4763,10 +4764,11 @@ fn a_jbig2_image_drawn_on_its_own_that_a_limit_refuses_is_a_failed_image() {
     let stencil = "/ImageMask true";
     let raster = "/BitsPerComponent 1 /ColorSpace /DeviceGray";
     let failed = ["ImageDecodeFailure"];
+    let left_out = ["ContentTruncated"];
     assert_eq!(warnings(stencil, (65536, 2)), failed, "a stencil mask past the decoder's bound on a side");
-    assert_eq!(warnings(stencil, (65535, 65535)), failed, "a stencil mask past the renderer's bound on pixels");
+    assert_eq!(warnings(stencil, (65535, 65535)), left_out, "a stencil mask past the renderer's bound on pixels");
     assert_eq!(warnings(raster, (65536, 2)), failed, "an image past the decoder's bound on a side");
-    assert_eq!(warnings(raster, (65535, 65535)), failed, "an image past the renderer's bound on pixels");
+    assert_eq!(warnings(raster, (65535, 65535)), left_out, "an image past the renderer's bound on pixels");
 }
 
 /// What refused one image says nothing of the next: after a picture one of the decoder's limits
@@ -5280,22 +5282,29 @@ fn jbig2_new_symbols_count_towards_a_pages_bound() {
     assert!(!jbig2_image_draws(&stream(300)), "of 300 rows they don't");
 }
 
-/// New symbols are held to what the page has left, headers included, not to the whole bound. These
-/// two regions leave it 512 words, and the dictionary after them exports nothing, so only that
-/// check can refuse it.
+/// New symbols are held to what the page has left, headers included, not to the whole bound. A page
+/// may hold two bitmaps of 2^28 pixels, each with the padding of up to 65,535 rows of 31 bits
+/// (storytold/craft-libs#2177): (2^28 + 65,535 × 31) / 32 rounded up, 8,452,096 words, and 44 more
+/// for the bitmap and its entry (12 and 32 on a 64-bit target). These three regions of 16,384
+/// columns, 512 words a row, have 16,384, 16,383 and 248 rows: 16,903,680 words and 44 each, which
+/// leaves 2 × (8,452,096 + 44) − 16,903,680 − 3 × 44 = 468. A symbol of one column takes a word a
+/// row and 12 for itself, so one of 456 rows fits and one of 457 doesn't, and one of no width takes
+/// 12, so 39 headers fit and 40 don't. The dictionary exports nothing, so only that check can
+/// refuse it.
 #[test]
 fn jbig2_new_symbols_are_held_to_what_a_page_has_left() {
     let stream = |dictionary: &[u8]| {
         let mut stream = black_jbig2_page();
         jbig2_segment(&mut stream, 1, 36, &[], &jbig2_white_region(16384, 16384));
         jbig2_segment(&mut stream, 2, 36, &[], &jbig2_white_region(16384, 16383));
-        jbig2_segment(&mut stream, 3, 0, &[], dictionary);
+        jbig2_segment(&mut stream, 3, 36, &[], &jbig2_white_region(16384, 248));
+        jbig2_segment(&mut stream, 4, 0, &[], dictionary);
         stream
     };
-    assert!(jbig2_image_draws(&stream(&narrow_jbig2_dictionary(1, 100))), "100 rows fit");
-    assert!(!jbig2_image_draws(&stream(&narrow_jbig2_dictionary(1, 1000))), "1,000 rows don't");
-    assert!(jbig2_image_draws(&stream(&zero_width_jbig2_dictionary(10, false))), "10 headers fit");
-    assert!(!jbig2_image_draws(&stream(&zero_width_jbig2_dictionary(100, false))), "100 headers don't");
+    assert!(jbig2_image_draws(&stream(&narrow_jbig2_dictionary(1, 456))), "456 rows fit");
+    assert!(!jbig2_image_draws(&stream(&narrow_jbig2_dictionary(1, 457))), "457 rows don't");
+    assert!(jbig2_image_draws(&stream(&zero_width_jbig2_dictionary(39, false))), "39 headers fit");
+    assert!(!jbig2_image_draws(&stream(&zero_width_jbig2_dictionary(40, false))), "40 headers don't");
 }
 
 /// Pattern dictionaries count towards the bound, with no shifted copies to do it for them: at 44
@@ -9938,6 +9947,10 @@ mod type3_proc_cache;
 // A picture that doesn't decode is decoded once however often it is drawn (vendored
 // hayro-interpret patch 91).
 mod failed_image_decodes;
+
+// A JBIG2 image past 2^28 pixels is drawn reduced, and one too large to draw is reported (vendored
+// hayro-jbig2 patch 19, hayro-syntax patch 53, hayro-interpret patch 113).
+mod jbig2_past_full_size;
 
 // A page past its rasterizer coverage leaves the rest out and says so (vendored vello_cpu patch 1).
 mod coverage_budget;
