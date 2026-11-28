@@ -868,6 +868,47 @@ fn two_same_page_links_keep_both_origins() {
 }
 
 #[test]
+fn leaving_a_page_from_a_new_place_keeps_the_place_a_link_recorded() {
+    // A same-page link records (1, 0.5); the reader then leaves page 1 from a quarter
+    // down it for page 3. The place left is a new entry, not a replacement of the
+    // recorded one: Previous view can still reach the link's place behind it.
+    let info = pdfcraft_render::DocInfo { pages: (0..3).map(|_| page_info()).collect(), ..Default::default() };
+    let mut v = view(5, PageDisplay::Single, true);
+    drawn_at(&mut v, 1, 200.0);
+    v.go_to_dest(1, DestView::Xyz { left: None, top: Some(300.0), zoom: None }, &info);
+    assert_eq!(v.back, vec![(1, 0.5)]);
+    drawn_at(&mut v, 1, 100.0);
+    v.go_to_page(3);
+    assert_eq!(v.back, vec![(1, 0.5), (1, 0.25)], "leaving from a new place appends, it does not replace");
+    drawn_at(&mut v, 3, 0.0);
+    assert!(v.view_history(false));
+    assert_goto(&v, 1, 0.25, "Previous view goes back to the place page 1 was left from");
+    assert_eq!(v.back, vec![(1, 0.5)], "the link's recorded place is still behind it");
+}
+
+#[test]
+fn a_pending_point_jump_records_where_the_window_top_comes_to_rest() {
+    // A find jump parks its match as a point for the middle of the window. Previous
+    // view before a frame has drawn it records the place being left as that jump's own
+    // place: where the window's top comes to rest, half the window's height above the
+    // match, not at the match itself.
+    let mut v = history_search_view();
+    v.go_to_match(1);
+    assert!(matches!(v.view.go_to, Some(GoTo::Point { page: 3, view: (0.5, 0.5), .. })), "the match's point is pending");
+    v.viewport = Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 600.0));
+    v.view.zoom = 1.0;
+    assert!(v.view_history(false));
+    // The match centre is 270 pt down the 400 pt page; centred in a 600 pt window at
+    // zoom 1, the window's top rests 300 pt above it, 30 pt above the page's top.
+    assert_eq!(v.forward.len(), 1);
+    assert_eq!(v.forward[0].0, 3);
+    assert!((v.forward[0].1 - -0.075).abs() < 1e-6, "recorded {:?}, expected (3, -0.075)", v.forward[0]);
+    // And Next view takes the reader back to that resting place.
+    assert!(v.view_history(true));
+    assert_goto(&v, 3, -0.075, "Next view returns to where the point jump comes to rest");
+}
+
+#[test]
 fn explicit_search_jumps_record_history_and_keep_match_destination() {
     for step in [false, true] {
         let mut v = history_search_view();

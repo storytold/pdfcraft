@@ -103,9 +103,23 @@ impl DocView {
         if let Some(go_to) = &self.view.go_to {
             let pending = match go_to {
                 GoTo::Top { page: p, fraction } if *p == page => Some(*fraction as f32),
-                GoTo::Corner { page: p, at } | GoTo::Point { page: p, at, .. } if *p == page => self.page_sizes.get(page).map(|&(w, h)| {
+                GoTo::Corner { page: p, at } if *p == page => self.page_sizes.get(page).map(|&(w, h)| {
                     let dh = if self.view.rotation % 180 == 90 { w } else { h };
                     (at.y as f32) / dh
+                }),
+                // A point is placed at its anchor of the window, not at the window's top:
+                // the place history keeps is where the window's top edge comes to rest,
+                // which is the point less the anchor's share of the window's height, in
+                // page points at the current zoom. A point axis left NaN keeps that axis's
+                // offset, so there is no vertical place to record.
+                GoTo::Point { page: p, at, view: anchor } if *p == page => self.page_sizes.get(page).and_then(|&(w, h)| {
+                    let dh = if self.view.rotation % 180 == 90 { w } else { h };
+                    let zoom = self.view.zoom as f32;
+                    if !at.y.is_finite() || zoom <= 0.0 {
+                        return None;
+                    }
+                    let top = at.y as f32 - anchor.1 as f32 * self.viewport_rect().height() / zoom;
+                    Some((top / dh).clamp(-1.0, 1.0))
                 }),
                 _ => None,
             };
@@ -135,17 +149,16 @@ impl DocView {
         (page, frac.clamp(-1.0, 1.0))
     }
 
-    /// Records the place the reader leaves, for Previous view / Next view: the page last left
-    /// again is updated to where the reader is on it now, rather than stacked.
+    /// Records the place the reader leaves, for Previous view / Next view. Distinct places
+    /// are kept as distinct entries, even on the same page; an exact repeat of the last
+    /// entry is not duplicated (the rule `go_to_dest` and `reveal_rect` keep for same-page
+    /// jumps).
     fn remember_place(&mut self) {
         let here = self.history_place();
-        match self.back.last_mut() {
-            Some(last) if last.0 == here.0 => *last = here,
-            _ => {
-                self.back.push(here);
-                if self.back.len() > 200 {
-                    self.back.remove(0);
-                }
+        if self.back.last() != Some(&here) {
+            self.back.push(here);
+            if self.back.len() > 200 {
+                self.back.remove(0);
             }
         }
         self.forward.clear();
