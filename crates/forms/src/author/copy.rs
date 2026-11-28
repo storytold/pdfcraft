@@ -3,12 +3,55 @@
 
 use super::lifecycle::WIDGET_KEYS;
 use super::look::redraw_field;
-use super::tree::{add_to_fields, add_to_page, ensure_form, free_name, top_names};
+use super::tree::{add_to_fields, add_to_page, ensure_form, free_name, inherited, top_names};
 use super::{Dict, Document, FieldKind, FormError, Object, PdfString, Widget, fields, invalid, page_refs};
 
-/// Field entries a kid inherits from its ancestors (ISO 32000-2 §12.7.4.1, Tables 226 and 228;
-/// `MaxLen` from Table 229, and a check box or radio group's `Opt`).
-const INHERITED_KEYS: [&[u8]; 8] = [b"FT", b"Ff", b"V", b"DV", b"DA", b"Q", b"MaxLen", b"Opt"];
+/// Keys a copy never takes from its source: what ties a field into the tree, names it, or binds
+/// it to a structure element or an XFA template node.
+pub(super) const COPY_DROPS: [&[u8]; 8] = [b"Kids", b"Parent", b"T", b"NM", b"StructParent", b"PCSom", b"PCXfaNode", b"PCItems"];
+
+/// Give widget `w` a look of its own: every stream its `/AP` reaches (`/N`, `/D`, `/R`, directly
+/// or per state) is added again as a new object, and an indirect `/MK` or `/BS` becomes direct,
+/// so redrawing or restyling the copy can't change the source. Resources the streams use stay
+/// shared.
+pub(super) fn own_look(doc: &mut Document, w: &mut Dict) {
+    for key in [&b"MK"[..], b"BS"] {
+        if let Some(value) = w.get(key).filter(|v| Object::as_ref(v).is_some())
+            && let Some(dict) = doc.resolve(value).as_dict().cloned()
+        {
+            w.set(key.to_vec(), Object::Dict(dict));
+        }
+    }
+    let Some(ap) = w.get(b"AP").and_then(|o| doc.resolve(o).as_dict().cloned()) else { return };
+    let mut fresh = Dict::new();
+    for (key, look) in ap.iter() {
+        let owned = match &*doc.resolve(look) {
+            Object::Stream(_) => own_stream(doc, look),
+            Object::Dict(states) => {
+                let mut mine = Dict::new();
+                for (state, stream) in states.iter() {
+                    let value = own_stream(doc, stream);
+                    mine.set(state.clone(), value);
+                }
+                Object::Dict(mine)
+            }
+            _ => look.clone(),
+        };
+        fresh.set(key.clone(), owned);
+    }
+    w.set(b"AP".to_vec(), Object::Dict(fresh));
+}
+
+/// A new object holding the stream `look` refers to; anything else as it is.
+fn own_stream(doc: &mut Document, look: &Object) -> Object {
+    match Object::as_ref(look) {
+        Some(r) if matches!(&*doc.get(r), Object::Stream(_)) => {
+            let stream = (*doc.get(r)).clone();
+            Object::Ref(doc.add(stream))
+        }
+        _ => look.clone(),
+    }
+}
 
 /// `name` as a position in a button field's `/Opt` (`/0`, `/1` ...), as ISO 32000-2 lets the
 /// on states of buttons with `/Opt` be named.
@@ -82,21 +125,13 @@ pub fn copy_field(doc: &mut Document, name: &str, widgets: &[usize], page: usize
     let own = doc.get(f.obj).as_dict().cloned().unwrap_or_default();
     let mut field = Dict::new();
     for (k, v) in own.iter() {
-        if !matches!(k.as_slice(), b"Parent" | b"Kids" | b"T") && !WIDGET_KEYS.contains(&k.as_slice()) {
+        if !COPY_DROPS.contains(&k.as_slice()) && !WIDGET_KEYS.contains(&k.as_slice()) {
             field.set(k.clone(), v.clone());
         }
     }
     // The copy is a top-level field: it takes along what the original inherits.
-    let mut seen = std::collections::HashSet::from([f.obj]);
-    let mut up = own.reference(b"Parent");
-    while let Some(p) = up.filter(|p| seen.len() < 64 && seen.insert(*p)) {
-        let Some(d) = doc.get(p).as_dict().cloned() else { break };
-        for k in INHERITED_KEYS {
-            if let (false, Some(v)) = (field.contains(k), d.get(k)) {
-                field.set(k.to_vec(), v.clone());
-            }
-        }
-        up = d.reference(b"Parent");
+    for (k, v) in inherited(doc, f.obj).iter() {
+        field.set(k.clone(), v.clone());
     }
     // A signature's value is someone's signature: the copy is a blank signature field.
     let signature = field.name(b"FT") == Some(&b"Sig"[..]);
@@ -143,14 +178,16 @@ pub fn copy_field(doc: &mut Document, name: &str, widgets: &[usize], page: usize
         } else {
             doc.get(w.obj).as_dict().cloned().unwrap_or_default()
         };
-        d.remove(b"Parent");
-        d.remove(b"StructParent");
+        for k in COPY_DROPS {
+            d.remove(k);
+        }
         // The signer's visible signature isn't the copy's: redrawn blank below.
         if signature {
             d.remove(b"AP");
             d.remove(b"AS");
         }
         renumber_states(doc, &mut d, &moved);
+        own_look(doc, &mut d);
         d.set(b"P".to_vec(), Object::Ref(page_ref));
         let r = w.rect;
         let rect = [r[0] + offset[0], r[1] + offset[1], r[2] + offset[0], r[3] + offset[1]];

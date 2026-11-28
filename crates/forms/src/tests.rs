@@ -7942,3 +7942,84 @@ fn a_copied_signed_signature_field_is_drawn_blank() {
     let n = w.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.get(b"N").cloned()));
     assert_ne!(n, Some(Object::Ref(ObjRef::new(7, 0))), "the copy must not show the signer's appearance");
 }
+
+/// The widget's `/AP /N` stream, when it is one stream.
+fn normal_look(doc: &Document, f: &Field) -> Option<ObjRef> {
+    let w = doc.get(f.widgets.first()?.obj);
+    let ap = doc.resolve(w.as_dict()?.get(b"AP")?);
+    ap.as_dict()?.reference(b"N")
+}
+
+#[test]
+fn a_pasted_field_does_not_share_its_look_with_the_source() {
+    let mut doc = fixture();
+    // The source's border and background dictionaries are indirect: shared, they would be
+    // restyled in place for both.
+    let source = field(&fields(&doc), "name").obj;
+    let mk = doc.add(doc.get(source).as_dict().unwrap().get(b"MK").unwrap().clone());
+    let mut bs = pdfcraft_cos::Dict::new();
+    bs.set(b"W".to_vec(), Object::Real(1.0));
+    let bs = doc.add(Object::Dict(bs));
+    doc.update_dict(source, |d| {
+        d.set(b"MK".to_vec(), Object::Ref(mk));
+        d.set(b"BS".to_vec(), Object::Ref(bs));
+    })
+    .unwrap();
+    let copy = copy_field(&mut doc, "name", &[], 0, [0.0, -300.0]).unwrap();
+    let before = look(&doc, field(&fields(&doc), "name"));
+    assert_eq!(look(&doc, field(&fields(&doc), &copy)), before, "the copy looks like the source");
+    let props = FieldProps {
+        appearance: Some(LookPatch { fill: Some(Some([0.0, 0.0, 1.0])), width: Some(3.0), ..Default::default() }),
+        ..Default::default()
+    };
+    set_props(&mut doc, &copy, &props).unwrap();
+    let all = fields(&doc);
+    assert_eq!(look(&doc, field(&all, "name")), before, "restyling the copy left the source alone");
+    assert_ne!(look(&doc, field(&all, &copy)), before);
+
+    // A password field's appearance is redrawn in place when its value changes.
+    set_value(&mut doc, "pin", &FieldValue::Text("12".into())).unwrap();
+    let pin = copy_field(&mut doc, "pin", &[], 0, [0.0, -300.0]).unwrap();
+    let all = fields(&doc);
+    let (source, copied) = (normal_look(&doc, field(&all, "pin")).unwrap(), normal_look(&doc, field(&all, &pin)).unwrap());
+    assert_ne!(source, copied, "the copy has an appearance stream of its own");
+    assert_eq!(doc.get(source), doc.get(copied), "with the source's content");
+    let before = doc.get(source);
+    set_value(&mut doc, &pin, &FieldValue::Text("123456".into())).unwrap();
+    assert_eq!(doc.get(source), before, "filling in the copy left the source's look as it was");
+}
+
+#[test]
+fn a_transparent_borderless_multiline_field_pastes_onto_another_page_as_it_was() {
+    // A calendar day: a multiline text field with no background or border.
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 8 0 R] /Count 2 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Mon1) /Ff 4096 /DA (/Helv 8 Tf 0 g) /F 4 /MK << >> /BS << /W 0 >> \
+         /Rect [40 600 120 680] /P 3 0 R /AP << /N 7 0 R >> >>"
+            .into(),
+        "<< /Length 4 /BBox [0 0 80 80] >>\nstream\n/Tx \nendstream".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let copy = copy_field(&mut doc, "Mon1", &[], 1, [0.0, 0.0]).unwrap();
+    assert_eq!(copy, "Mon2", "the next free name");
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let (s, c) = (field(&all, "Mon1"), field(&all, &copy));
+    assert!(c.has(flags::MULTILINE), "still multiline");
+    assert_eq!(look(&doc, c), look(&doc, s), "same look");
+    let l = look(&doc, c);
+    assert_eq!((l.fill, l.border), (None, None), "still transparent with no border");
+    assert_eq!((c.widgets[0].page, c.widgets[0].rect), (Some(1), s.widgets[0].rect), "on page 2, in the same place");
+    assert_eq!((s.widgets[0].page, all.len()), (Some(0), 2), "the source stays on page 1");
+    let w = doc.get(c.widgets[0].obj);
+    let w = w.as_dict().unwrap();
+    assert_eq!(w.get(b"F").and_then(Object::as_int), Some(4), "printable, as the source");
+    let (sa, ca) = (normal_look(&doc, s).unwrap(), normal_look(&doc, c).unwrap());
+    assert_ne!(sa, ca);
+    assert_eq!(doc.get(sa), doc.get(ca), "the source's appearance, not a redrawn one");
+}
