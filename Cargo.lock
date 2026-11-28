@@ -1448,7 +1448,7 @@ dependencies = [
  "craft-tracked",
  "craft-ui-macros",
  "emath",
- "kurbo 0.13.1",
+ "kurbo",
  "serde",
  "smallvec",
 ]
@@ -1467,7 +1467,7 @@ dependencies = [
  "craft-theme",
  "craft-ui",
  "egui",
- "kurbo 0.13.1",
+ "kurbo",
  "serde",
 ]
 
@@ -1611,7 +1611,7 @@ dependencies = [
  "craft-theme",
  "craft-ui",
  "egui",
- "kurbo 0.13.1",
+ "kurbo",
  "serde",
  "serde_json",
 ]
@@ -1623,7 +1623,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=0a6e42b80bfd586aee6ee1
 dependencies = [
  "chrono",
  "craft-xml",
- "kurbo 0.13.1",
+ "kurbo",
  "log",
  "serde",
 ]
@@ -1645,7 +1645,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=0a6e42b80bfd586aee6ee1
 dependencies = [
  "fontique",
  "harfrust 0.13.3",
- "kurbo 0.13.1",
+ "kurbo",
  "skrifa 0.47.0",
  "thiserror 2.0.21",
  "unicode-bidi",
@@ -1787,7 +1787,7 @@ dependencies = [
  "craft-theme",
  "craft-ui",
  "egui",
- "kurbo 0.13.1",
+ "kurbo",
  "serde",
  "serde_json",
 ]
@@ -1839,7 +1839,7 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=0a6e42b80bfd586aee6ee1144aa98cf1ea37a844#0a6e42b80bfd586aee6ee1144aa98cf1ea37a844"
 dependencies = [
  "craft-xml",
- "roxmltree 0.21.2",
+ "roxmltree",
  "serde",
 ]
 
@@ -1888,7 +1888,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=0a6e42b80bfd586aee6ee1
 dependencies = [
  "encoding_rs",
  "image",
- "kurbo 0.13.1",
+ "kurbo",
  "thiserror 2.0.21",
 ]
 
@@ -1942,7 +1942,7 @@ dependencies = [
  "craft-theme",
  "craft-ui",
  "egui",
- "kurbo 0.13.1",
+ "kurbo",
  "serde",
  "serde_json",
 ]
@@ -2045,7 +2045,7 @@ dependencies = [
  "craft-drawingml",
  "craft-opc",
  "craft-xml",
- "kurbo 0.13.1",
+ "kurbo",
  "log",
  "serde",
  "serde_json",
@@ -2075,7 +2075,7 @@ dependencies = [
  "js-sys",
  "log",
  "miniz_oxide 0.9.1",
- "roxmltree 0.21.2",
+ "roxmltree",
  "serde",
  "serde_json",
  "tempfile",
@@ -2113,7 +2113,7 @@ dependencies = [
  "craft-ui",
  "egui",
  "image",
- "kurbo 0.13.1",
+ "kurbo",
  "serde",
 ]
 
@@ -2165,12 +2165,12 @@ source = "git+https://github.com/storytold/craft-libs?rev=0a6e42b80bfd586aee6ee1
 dependencies = [
  "craft-xml",
  "flate2",
- "kurbo 0.13.1",
+ "kurbo",
  "quick-xml 0.41.0",
- "resvg 0.48.1",
- "roxmltree 0.21.2",
+ "resvg",
+ "roxmltree",
  "thiserror 2.0.21",
- "usvg 0.48.1",
+ "usvg",
  "vectorcraft-geom",
  "vectorcraft-pathops",
 ]
@@ -3152,20 +3152,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "egui_extras"
-version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
-dependencies = [
- "ahash",
- "egui",
- "enum-map",
- "itertools 0.15.0",
- "log",
- "profiling",
- "resvg 0.45.1",
-]
-
-[[package]]
 name = "egui_glow"
 version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
@@ -3261,26 +3247,6 @@ name = "endi"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
-
-[[package]]
-name = "enum-map"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4532960034c15ba2f55e9eee631040ecc473c32e6c4b200828c759840f13a06"
-dependencies = [
- "enum-map-derive",
-]
-
-[[package]]
-name = "enum-map-derive"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7127272f64b3e098f7d81f350d672081b879bff896d219c42370dc858b1af9ff"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.6",
-]
 
 [[package]]
 name = "enumflags2"
@@ -3633,7 +3599,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parlance",
  "read-fonts 0.41.0",
- "roxmltree 0.21.2",
+ "roxmltree",
  "smallvec",
  "windows",
  "windows-core",
@@ -4147,7 +4113,7 @@ dependencies = [
  "bytemuck",
  "hayro-interpret",
  "image",
- "kurbo 0.13.1",
+ "kurbo",
  "log",
  "pic-scale",
  "vello_cpu 0.0.8",
@@ -4176,7 +4142,7 @@ dependencies = [
  "bitflags 2.13.2",
  "hayro-cmap",
  "hayro-syntax",
- "kurbo 0.13.1",
+ "kurbo",
  "moxcms",
  "phf 0.13.1",
  "rustc-hash 2.1.3",
@@ -4731,12 +4697,6 @@ dependencies = [
 
 [[package]]
 name = "imagesize"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edcd27d72f2f071c64249075f42e205ff93c9a4c5f6c6da53e79ed9f9832c285"
-
-[[package]]
-name = "imagesize"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65b27460c2c92b037f3f94c538ed9a3342f3fdf923606781629ccb35f82d042a"
@@ -4962,17 +4922,6 @@ dependencies = [
 
 [[package]]
 name = "kurbo"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c62026ae44756f8a599ba21140f350303d4f08dcdcc71b5ad9c9bb8128c13c62"
-dependencies = [
- "arrayvec",
- "euclid",
- "smallvec",
-]
-
-[[package]]
-name = "kurbo"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b60dfc32f652b926df6192e55525b16d186c69d47876c3ead4da5cc9f8450e2"
@@ -5084,7 +5033,7 @@ version = "0.5.0"
 source = "git+https://github.com/storytold/craft-libs?rev=0a6e42b80bfd586aee6ee1144aa98cf1ea37a844#0a6e42b80bfd586aee6ee1144aa98cf1ea37a844"
 dependencies = [
  "arrayvec",
- "kurbo 0.13.1",
+ "kurbo",
  "polycool",
  "rustc-hash 2.1.3",
  "smallvec",
@@ -6227,7 +6176,6 @@ dependencies = [
  "pdfcraft-fonts",
  "pdfcraft-model",
  "pdfcraft-organize",
- "pdfcraft-platform",
  "pdfcraft-prc-render",
  "pdfcraft-render",
  "pdfcraft-xfa",
@@ -6315,7 +6263,7 @@ version = "0.22.0"
 dependencies = [
  "hayro-syntax",
  "icu_segmenter",
- "kurbo 0.13.1",
+ "kurbo",
  "pdfcraft-annot",
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -6382,7 +6330,6 @@ dependencies = [
  "craft-docx",
  "craft-html",
  "craft-markdown",
- "craft-mime",
  "craft-pptx",
  "craft-rtf",
  "craft-wordmodel",
@@ -6398,7 +6345,6 @@ version = "0.22.0"
 dependencies = [
  "craft-pdf",
  "proptest",
- "weezl 0.2.1",
 ]
 
 [[package]]
@@ -6599,7 +6545,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hayro",
  "hayro-syntax",
- "kurbo 0.13.1",
+ "kurbo",
  "log",
  "lopdf",
  "pdfcraft-content",
@@ -6621,20 +6567,15 @@ dependencies = [
  "aes",
  "aws-lc-rs",
  "base64 0.23.1",
- "bp256",
- "bp384",
  "cbc",
  "chrono",
  "craft-pkcs7",
- "crypto-bigint",
  "des",
  "ecdsa",
- "ed25519-dalek",
  "getrandom 0.4.3",
  "hmac 0.13.0",
  "p256",
  "p384",
- "p521",
  "pbkdf2",
  "pdfcraft-annot",
  "pdfcraft-content",
@@ -6670,18 +6611,14 @@ dependencies = [
  "craft",
  "craft-i18n",
  "craft-image-codecs",
- "craft-keymap",
- "craft-menu",
  "craft-quit",
  "craft-ui",
  "craft-update",
  "edit-session",
  "eframe",
  "egui",
- "egui_extras",
  "egui_kittest",
  "flate2",
- "getrandom 0.4.3",
  "image",
  "js-sys",
  "log",
@@ -6698,7 +6635,6 @@ dependencies = [
  "pdfcraft-render",
  "pdfcraft-xfa",
  "plist",
- "proptest",
  "rfd",
  "rustix 1.1.6",
  "serde",
@@ -6707,7 +6643,6 @@ dependencies = [
  "sys-locale",
  "tempfile",
  "toml",
- "unicode-bidi",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -6740,7 +6675,6 @@ dependencies = [
  "base64 0.23.1",
  "craft-image-codecs",
  "craft-xfa",
- "craft-xml",
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "sha2 0.11.1",
@@ -6799,7 +6733,7 @@ checksum = "839c8299360d2e998bdb106dc0a6cd71dcc5f4df51df1b620361bf50e283cca6"
 dependencies = [
  "bytemuck",
  "color",
- "kurbo 0.13.1",
+ "kurbo",
  "linebender_resource_handle",
  "smallvec",
 ]
@@ -7627,20 +7561,6 @@ dependencies = [
 
 [[package]]
 name = "resvg"
-version = "0.45.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8928798c0a55e03c9ca6c4c6846f76377427d2c1e1f7e6de3c06ae57942df43"
-dependencies = [
- "log",
- "pico-args",
- "rgb",
- "svgtypes 0.15.3",
- "tiny-skia 0.11.4",
- "usvg 0.45.1",
-]
-
-[[package]]
-name = "resvg"
 version = "0.48.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67e3803f97b999e80cbf7c6ecdd07a8102204d92e1633cf48783720c521196bd"
@@ -7649,9 +7569,9 @@ dependencies = [
  "log",
  "pico-args",
  "rgb",
- "svgtypes 0.16.2",
- "tiny-skia 0.12.0",
- "usvg 0.48.1",
+ "svgtypes",
+ "tiny-skia",
+ "usvg",
 ]
 
 [[package]]
@@ -7736,12 +7656,6 @@ dependencies = [
  "typeid",
  "unicode-ident",
 ]
-
-[[package]]
-name = "roxmltree"
-version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "roxmltree"
@@ -8786,21 +8700,11 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "svgtypes"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68c7541fff44b35860c1a7a47a7cadf3e4a304c457b58f9870d9706ece028afc"
-dependencies = [
- "kurbo 0.11.3",
- "siphasher",
-]
-
-[[package]]
-name = "svgtypes"
 version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f12b12995e3638c70618c1facb1ce65302f6a6f706b675f07c58a5d7391120e"
 dependencies = [
- "kurbo 0.13.1",
+ "kurbo",
  "siphasher",
 ]
 
@@ -9068,21 +8972,6 @@ dependencies = [
 
 [[package]]
 name = "tiny-skia"
-version = "0.11.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83d13394d44dae3207b52a326c0c85a8bf87f1541f23b0d143811088497b09ab"
-dependencies = [
- "arrayref",
- "arrayvec",
- "bytemuck",
- "cfg-if",
- "log",
- "png 0.17.16",
- "tiny-skia-path 0.11.4",
-]
-
-[[package]]
-name = "tiny-skia"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47ffee5eaaf5527f630fb0e356b90ebdec84d5d18d937c5e440350f88c5a91ea"
@@ -9093,18 +8982,7 @@ dependencies = [
  "cfg-if",
  "log",
  "png 0.18.1",
- "tiny-skia-path 0.12.0",
-]
-
-[[package]]
-name = "tiny-skia-path"
-version = "0.11.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c9e7fc0c2e86a30b117d0462aa261b72b7a99b7ebd7deb3a14ceda95c5bdc93"
-dependencies = [
- "arrayref",
- "bytemuck",
- "strict-num",
+ "tiny-skia-path",
 ]
 
 [[package]]
@@ -9499,43 +9377,21 @@ dependencies = [
 
 [[package]]
 name = "usvg"
-version = "0.45.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80be9b06fbae3b8b303400ab20778c80bbaf338f563afe567cf3c9eea17b47ef"
-dependencies = [
- "base64 0.22.1",
- "data-url",
- "flate2",
- "imagesize 0.13.0",
- "kurbo 0.11.3",
- "log",
- "pico-args",
- "roxmltree 0.20.0",
- "simplecss",
- "siphasher",
- "strict-num",
- "svgtypes 0.15.3",
- "tiny-skia-path 0.11.4",
- "xmlwriter",
-]
-
-[[package]]
-name = "usvg"
 version = "0.48.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "977d0a4abdef933f424a99fe09f95576e089b90aebc6f016a3bc813762493e91"
 dependencies = [
  "data-url",
- "imagesize 0.15.0",
- "kurbo 0.13.1",
+ "imagesize",
+ "kurbo",
  "log",
  "pico-args",
- "roxmltree 0.21.2",
+ "roxmltree",
  "simplecss",
  "siphasher",
  "strict-num",
- "svgtypes 0.16.2",
- "tiny-skia-path 0.12.0",
+ "svgtypes",
+ "tiny-skia-path",
 ]
 
 [[package]]
@@ -9572,7 +9428,7 @@ name = "vectorcraft-geom"
 version = "0.18.0"
 source = "git+https://github.com/storytold/vectorcraft.git?rev=6b3a6b8788ebcb420d69449199cbdf323888d27e#6b3a6b8788ebcb420d69449199cbdf323888d27e"
 dependencies = [
- "kurbo 0.13.1",
+ "kurbo",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -9582,7 +9438,7 @@ name = "vectorcraft-pathops"
 version = "0.18.0"
 source = "git+https://github.com/storytold/vectorcraft.git?rev=6b3a6b8788ebcb420d69449199cbdf323888d27e#6b3a6b8788ebcb420d69449199cbdf323888d27e"
 dependencies = [
- "kurbo 0.13.1",
+ "kurbo",
  "linesweeper",
  "thiserror 2.0.21",
  "vectorcraft-geom",
@@ -10739,12 +10595,6 @@ name = "xml-rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
-
-[[package]]
-name = "xmlwriter"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"

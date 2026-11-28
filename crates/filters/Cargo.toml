@@ -15,4 +15,3 @@ craft-pdf = { workspace = true }
 
 [dev-dependencies]
 proptest.workspace = true
-weezl.workspace = true

@@ -12,7 +12,6 @@ workspace = true
 
 [dependencies]
 craft-markdown.workspace = true
-craft-mime.workspace = true
 craft-rtf = { workspace = true, features = ["doc"] }
 craft-wordmodel.workspace = true
 craft-docx.workspace = true

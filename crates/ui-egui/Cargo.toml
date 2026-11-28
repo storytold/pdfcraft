@@ -14,9 +14,6 @@ workspace = true
 craft = { workspace = true, features = ["ui", "ui-app","draw", "pages", "print", "review", "docpath", "font-catalog", "text", "text-font-picker", "text-find", "font-manager", "theme-store", "imaging", "window", "settings", "platform", "platform-clipboard", "atomic", "automation", "keymap", "menu", "quit", "web-host"] }
 edit-session = { workspace = true }
 craft-ui = { workspace = true }
-# The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
-craft-menu = { workspace = true }
-craft-keymap = { workspace = true }
 # Interface translations over the embedded craft-i18n catalogs (`build.rs`, `src/i18n.rs`).
 craft-i18n = { workspace = true }
 # Quit from the menus asks the window to close, so the unsaved-changes check runs; on macOS a window
@@ -31,7 +28,6 @@ pdfcraft-render = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-platform = { workspace = true }
 egui = { workspace = true, features = ["bytemuck", "default_fonts", "monochrome_emoji_fonts"] }
-egui_extras = { workspace = true }
 # `glow` is always on: `eframe::App::on_exit` takes a GL context when that feature is enabled.
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "persistence", "links", "clipboard"] }
 serde = { workspace = true }
@@ -49,9 +45,6 @@ bytemuck = { version = "1", features = ["extern_crate_alloc"] }
 rfd = { workspace = true }
 craft-image-codecs = { workspace = true }
 base64 = "0.23"
-# Unicode bidi paragraph segmentation for right-to-left comment wrapping; egui 0.37's epaint owns
-# display reordering. Already in the tree through egui’s epaint.
-unicode-bidi = "0.3"
 # Checks that an installed fallback font parses and has the glyphs, and reads the vertical metrics
 # that put fallback faces on the interface's baseline (#1676); the same skrifa egui uses.
 skrifa = "0.44"
@@ -61,8 +54,6 @@ skrifa = "0.44"
 # (`dialogs`) sit on rfd's blocking panels and threads, so they are native too; the web saves through the
 # platform's BrowserFiles (`editing/save.rs`).
 craft = { workspace = true, features = ["update", "platform-clipboard-system", "dialogs"] }
-# Control-channel tokens.
-getrandom = "0.4"
 # Create ▸ Clipboard (images; already in the tree through egui-winit).
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
 
@@ -104,7 +95,6 @@ egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"
 image = { version = "0.25", default-features = false }
 # Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.
 skrifa = "0.44"
-proptest = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }
