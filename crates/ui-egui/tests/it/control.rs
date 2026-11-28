@@ -52,7 +52,7 @@ pub(crate) fn app_on(host: Host) -> PdfCraftApp {
 
 /// An app on the default host: threads run its jobs and every picker answers Cancelled.
 pub(crate) fn new_app() -> PdfCraftApp {
-    app_on(Host::builder(info()).build())
+    app_on(Host::builder(info()).i18n(pdfcraft_ui_egui::i18n::host_catalogs()).build())
 }
 
 /// An app whose pickers answer from `files`.
@@ -176,6 +176,81 @@ fn reply(response: &ControlResponse) -> Reply {
 
 pub(crate) fn ok(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, params: Value) -> Value {
     call(h, c, method, params).unwrap_or_else(|e| panic!("{method}: {e}"))
+}
+
+/// A pointer click at the centre of a widget `ui.inspect` returned, as a user clicks it. The mode
+/// tabs and combo boxes react to a pointer press, not to the accessibility click that `ui.click`
+/// sends for a `label` or `id`.
+fn click_center(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, widget: &Value) {
+    let rect = &widget["rect"];
+    let x = (rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap()) / 2.0;
+    let y = (rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap()) / 2.0;
+    ok(h, c, "ui.click", json!({ "x": x, "y": y }));
+    h.run_steps(2);
+}
+
+/// Clicks the mode tab labelled `label` with the pointer.
+fn click_tab(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, label: &str) {
+    let tab = ok(h, c, "ui.inspect", json!({ "query": label, "role": "Tab" }));
+    click_center(h, c, &tab["widgets"][0]);
+}
+
+/// Scrolls the open drop-down list with the mouse wheel until the option `label` is shown, as a
+/// user does: the list lays out only the rows in view, so an option further down has no widget yet.
+fn scroll_list_to(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    use egui::accesskit::Role;
+    for _ in 0..40 {
+        let shown = h.query_all_by_role_and_label(Role::ListBoxOption, label).next().map(|option| option.scroll_to_me()).is_some();
+        if shown {
+            h.run_steps(3);
+            return;
+        }
+        let list = h.query_all_by_role(Role::ListBox).next().expect("an open drop-down list").rect();
+        h.event(egui::Event::PointerMoved(list.center()));
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -60.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.run_steps(3);
+    }
+    panic!("{label} is not offered in the open drop-down list");
+}
+
+/// One wheel step of `dy` points over the middle of `area`.
+fn wheel_over(h: &mut Harness<'static, PdfCraftApp>, area: egui::Rect, dy: f32) {
+    h.event(egui::Event::PointerMoved(area.center()));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, dy),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(3);
+}
+
+/// Scrolls the open window's table from its top with the mouse wheel until a widget reads `label`,
+/// as a user does: the table lays out only the rows in view, so a row further down has no widget
+/// yet. Text outside the table (the title, the buttons) is found without scrolling.
+fn scroll_table_to(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, label: &str) {
+    use egui::accesskit::Role;
+    let shown = |h: &mut Harness<'static, PdfCraftApp>| ok(h, c, "ui.inspect", json!({ "query": label }))["count"].as_u64().unwrap_or(0) > 0;
+    if shown(h) {
+        return;
+    }
+    let Some(table) = h.query_all_by_role(Role::Table).next().map(|t| t.rect()) else { return };
+    for _ in 0..20 {
+        wheel_over(h, table, 400.0);
+    }
+    for _ in 0..200 {
+        if shown(h) {
+            return;
+        }
+        wheel_over(h, table, -60.0);
+    }
 }
 
 /// Presses `from`, moves through `steps` points to `to` and releases, the way `ui.drag` did: a
@@ -447,23 +522,23 @@ fn theme_commands_and_options_report_preference_and_effective_colours() {
 }
 
 #[test]
-fn lithuanian_inspector_title_updates_through_the_control_channel() {
-    if crate::support::skip_without_catalogs("lithuanian_inspector_title_updates_through_the_control_channel") {
+fn lithuanian_comments_tab_panel_title_updates_through_the_control_channel() {
+    if crate::support::skip_without_catalogs("lithuanian_comments_tab_panel_title_updates_through_the_control_channel") {
         return;
     }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "comments" }));
     h.run_steps(2);
-    h.get_by_label("Inspector");
+    h.get_by_role_and_label(egui::accesskit::Role::TabPanel, "Comments");
     let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "lt" }));
     h.run_steps(2);
-    h.get_by_label("Inspektorius");
-    assert!(h.query_by_label("Inspector").is_none());
+    h.get_by_role_and_label(egui::accesskit::Role::TabPanel, "Komentarai");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::TabPanel, "Comments").is_none());
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"], documents);
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "en" }));
     h.run_steps(2);
-    h.get_by_label("Inspector");
+    h.get_by_role_and_label(egui::accesskit::Role::TabPanel, "Comments");
 }
 
 /// Switching the interface language changes labels only: documents, their dirty state and the
@@ -824,13 +899,14 @@ fn middle_button_pans_while_held_outside_linux() {
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Crop;
     let p = h.state().views[0].viewport_rect().center();
     let top = h.state().views[0].page_screen_rect(1).unwrap().top();
-    drag(&mut h, &c, json!([p.x, p.y]), json!([p.x, p.y - 60.0]), 12, &[], "middle");
+    // Both axes span a real crop, so misrouting cannot pass as an undersized selection.
+    drag(&mut h, &c, json!([p.x, p.y]), json!([p.x + 60.0, p.y - 60.0]), 12, &[], "middle");
     h.run_steps(2);
     let moved = h.state().views[0].page_screen_rect(1).unwrap().top();
     assert!((moved - (top - 60.0)).abs() < 1.0, "the page follows the pointer 1:1: {top} -> {moved}");
     h.run_steps(8);
     assert_eq!(h.state().views[0].page_screen_rect(1).unwrap().top(), moved, "no drift after release");
-    assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
+    assert!(!crate::support::dialog_open(&h), "the Crop tool must not receive a wheel drag");
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
@@ -867,7 +943,8 @@ fn japanese_controls_and_search_keep_command_ids() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "ja" }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "ja");
-    ok(&mut h, &c, "ui.click", json!({ "label": "変換" }));
+    h.run_steps(2);
+    click_tab(&mut h, &c, "変換");
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Convert");
 
     ok(&mut h, &c, "ui.command", json!({ "id": "app.preferences" }));
@@ -888,7 +965,8 @@ fn japanese_controls_and_search_keep_command_ids() {
     }
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["name"], "doc.pdf");
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "en" }));
-    ok(&mut h, &c, "ui.click", json!({ "label": "All tools" }));
+    h.run_steps(2);
+    click_tab(&mut h, &c, "All tools");
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "AllTools");
 }
 
@@ -902,7 +980,8 @@ fn german_preferences_and_search_keep_command_ids() {
     }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "de" }));
-    ok(&mut h, &c, "ui.click", json!({ "label": "Konvertieren" }));
+    h.run_steps(2);
+    click_tab(&mut h, &c, "Konvertieren");
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Convert");
     ok(&mut h, &c, "ui.command", json!({ "id": "app.preferences" }));
     h.run_steps(2);
@@ -910,12 +989,12 @@ fn german_preferences_and_search_keep_command_ids() {
     assert!(prefs["count"].as_u64().unwrap() > 0, "{prefs}");
     let selector = ok(&mut h, &c, "ui.inspect", json!({ "query": "Deutsch" }));
     let combo = selector["widgets"].as_array().unwrap().iter().find(|w| w["role"] == "ComboBox").expect("language selector");
-    ok(&mut h, &c, "ui.click", json!({ "id": combo["id"] }));
+    click_center(&mut h, &c, combo);
     ok(&mut h, &c, "ui.click", json!({ "label": "English" }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "en");
     let selector = ok(&mut h, &c, "ui.inspect", json!({ "query": "English" }));
     let combo = selector["widgets"].as_array().unwrap().iter().find(|w| w["role"] == "ComboBox").expect("language selector");
-    ok(&mut h, &c, "ui.click", json!({ "id": combo["id"] }));
+    click_center(&mut h, &c, combo);
     ok(&mut h, &c, "ui.click", json!({ "label": "Deutsch" }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "de");
     ok(&mut h, &c, "ui.click", json!({ "label": "OK" }));
@@ -960,12 +1039,15 @@ fn ukrainian_preferences_and_search_keep_command_ids() {
     for (dialog, label) in [("properties", "Властивості документа"), ("protect", "Захистити паролем"), ("about", "Учасники")]
     {
         ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": dialog }));
+        settle(&mut h);
         let found = ok(&mut h, &c, "ui.inspect", json!({ "query": label }));
         assert!(found["count"].as_u64().unwrap() > 0, "{dialog}: {found}");
     }
     ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "none" }));
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    // Direct test-side edits queue a notice; let the UI publish it before querying ui.state.
+    settle(&mut h);
     let state = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(state["language"], "uk");
     assert_eq!(state["notice"], "Помилка «Видалити сторінки»: a document must keep at least one page");
@@ -1009,7 +1091,8 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
     {
         let selector = ok(&mut h, &c, "ui.inspect", json!({ "query": current }));
         let combo = selector["widgets"].as_array().unwrap().iter().find(|w| w["role"] == "ComboBox").expect("language selector");
-        ok(&mut h, &c, "ui.click", json!({ "id": combo["id"] }));
+        click_center(&mut h, &c, combo);
+        scroll_list_to(&mut h, next);
         ok(&mut h, &c, "ui.click", json!({ "label": next }));
         assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], code);
     }
@@ -1020,10 +1103,22 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
     ok(&mut h, &c, "ui.click", json!({ "label": "OK" }));
 
     ok(&mut h, &c, "ui.command", json!({ "id": "help.shortcuts" }));
-    for label in ["キーボードショートカット", "開く", "環境設定", "次／前の検索結果", "ダブルクリック", "閉じる"]
-    {
-        let found = ok(&mut h, &c, "ui.inspect", json!({ "query": label }));
+    let expect_shown = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
+        scroll_table_to(h, &c, label);
+        let found = ok(h, &c, "ui.inspect", json!({ "query": label }));
         assert!(found["count"].as_u64().unwrap() > 0, "{label}: {found}");
+    };
+    for label in ["キーボードショートカット", "開く", "環境設定"] {
+        expect_shown(&mut h, label);
+    }
+    // The keys the document view handles itself are listed under Show ▸ Fixed Keys.
+    let show = ok(&mut h, &c, "ui.inspect", json!({ "query": "表示:" }));
+    let show = show["widgets"].as_array().unwrap().iter().find(|w| w["role"] == "ComboBox").expect("the Show selector").clone();
+    click_center(&mut h, &c, &show);
+    scroll_list_to(&mut h, "Fixed Keys");
+    ok(&mut h, &c, "ui.click", json!({ "label": "Fixed Keys" }));
+    for label in ["次／前の検索結果", "ダブルクリック", "閉じる"] {
+        expect_shown(&mut h, label);
     }
     let english = ok(&mut h, &c, "ui.inspect", json!({ "query": "Next / previous match" }));
     assert_eq!(english["count"], 0);
@@ -1059,6 +1154,8 @@ fn japanese_dialogs_errors_and_custom_action_names() {
     ok(&mut h, &c, "ui.set", json!({"key": "dialog", "value": "none"}));
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    // Direct test-side edits queue a notice; let the UI publish it before querying ui.state.
+    settle(&mut h);
     let state = ok(&mut h, &c, "ui.state", json!({}));
     // The frame is translated; the engine's own error text is shown as it is.
     assert_eq!(state["notice"], "操作「ページを削除」に失敗しました: a document must keep at least one page");
@@ -1093,8 +1190,9 @@ fn simplified_chinese_signature_prompts_and_errors_keep_document_state() {
     settle(&mut h);
     ok(&mut h, &c, "ui.set", json!({"key": "dialog", "value": "signature"}));
     settle(&mut h);
-    let typed = ok(&mut h, &c, "ui.inspect", json!({"query": "请输入您的签名。"}));
+    let typed = ok(&mut h, &c, "ui.inspect", json!({"query": "输入文本"}));
     assert!(typed["count"].as_u64().unwrap() > 0, "{typed}");
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "输入文本");
     // The shell also has a Draw control; the modal's button is registered after the shell.
     let draw = ok(&mut h, &c, "ui.inspect", json!({"query": "绘制"}));
     let id = draw["widgets"]
@@ -1106,11 +1204,14 @@ fn simplified_chinese_signature_prompts_and_errors_keep_document_state() {
         .expect("signature Draw button")["id"]
         .clone();
     ok(&mut h, &c, "ui.click", json!({"id": id}));
-    let drawn = ok(&mut h, &c, "ui.inspect", json!({"query": "请在下方绘制您的签名。"}));
-    assert!(drawn["count"].as_u64().unwrap() > 0, "{drawn}");
+    settle(&mut h);
+    h.get_by_role_and_label(egui::accesskit::Role::Image, "绘制");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::TextInput, "输入文本").is_none(), "Draw replaces the translated type field");
     ok(&mut h, &c, "ui.click", json!({"label": "取消"}));
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    // Direct test-side edits queue a notice; let the UI publish it before querying ui.state.
+    settle(&mut h);
     let state = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(state["notice"], "删除页面失败：a document must keep at least one page");
     assert_eq!(state["documents"], documents, "a language change and failed edit must preserve the document");
