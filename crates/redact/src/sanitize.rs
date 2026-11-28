@@ -882,8 +882,23 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     remove_counted(doc, which, &counts, false)
 }
 
+/// The reference that holds the object `r` leads to through references to references, followed as
+/// far as `Document::resolve` follows them (32).
+fn last_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
+    for _ in 0..32 {
+        match &*doc.get(r) {
+            Object::Ref(next) => r = *next,
+            _ => break,
+        }
+    }
+    r
+}
+
 /// Take off every page the annotations the chosen categories remove (with `fields`, the widgets
-/// flattening kept), and the actions of those that stay when links, actions and scripts go.
+/// flattening kept), and the actions of those that stay when links, actions and scripts go. A
+/// reply that stays to one that goes (`/IRT`, ISO 32000-2 §12.5.6.2) loses its `/IRT` and `/RT`,
+/// which would keep what it answered, and so an attachment's file or a link's address, in a full
+/// save: it stays as an annotation of its own.
 fn drop_page_annotations(doc: &mut Document, which: &[Hidden], fields: bool) -> Result<(), RedactError> {
     // Annotations: comments, attachments, links, actions, and the widgets flattening kept (hidden
     // ones, and ones with nothing to draw), which still hold their field's value and parent.
@@ -903,20 +918,44 @@ fn drop_page_annotations(doc: &mut Document, which: &[Hidden], fields: bool) -> 
         .filter_map(|a| a.as_ref())
         .filter(|&r| doc.get(r).as_dict().is_some_and(drop_annot))
         .collect();
+    // The annotation a `/Parent` or `/IRT` names, followed through references to references.
+    let named = |doc: &Document, d: &Dict, key: &[u8]| d.get(key).and_then(Object::as_ref).map(|r| last_ref(doc, r));
+    // A pop-up goes with the annotation its `/Parent` names, held by reference or written in place.
+    let popup_of_removed = |doc: &Document, d: &Dict| {
+        crate::subtype(doc, d).as_deref() == Some(b"Popup") && named(doc, d, b"Parent").is_some_and(|x| removed.contains(&x))
+    };
+    // What goes: the annotations removed, and the pop-ups that go with them.
+    let gone: std::collections::HashSet<ObjRef> = pages
+        .iter()
+        .flat_map(|p| annots_of(doc, &p.dict))
+        .filter_map(|a| a.as_ref())
+        .filter(|&r| removed.contains(&r) || doc.get(r).as_dict().is_some_and(|d| popup_of_removed(doc, d)))
+        .collect();
     for p in pages {
         let list = annots_of(doc, &p.dict);
         let mut kept = Vec::new();
         for a in list {
             let Some(r) = a.as_ref() else {
-                if !doc.resolve(&a).as_dict().is_some_and(drop_annot) {
-                    kept.push(a);
+                match doc.resolve(&a).as_dict().cloned() {
+                    Some(d) if drop_annot(&d) || popup_of_removed(doc, &d) => {}
+                    Some(mut d) if named(doc, &d, b"IRT").is_some_and(|x| gone.contains(&x)) => {
+                        d.remove(b"IRT");
+                        d.remove(b"RT");
+                        kept.push(Object::Dict(d));
+                    }
+                    _ => kept.push(a),
                 }
                 continue;
             };
-            let d = doc.get(r).as_dict().cloned().unwrap_or_default();
-            let parent_gone = d.get(b"Parent").and_then(Object::as_ref).is_some_and(|x| removed.contains(&x));
-            if removed.contains(&r) || (d.name(b"Subtype") == Some(b"Popup") && parent_gone) {
+            if gone.contains(&r) {
                 continue;
+            }
+            let d = doc.get(r).as_dict().cloned().unwrap_or_default();
+            if named(doc, &d, b"IRT").is_some_and(|x| gone.contains(&x)) {
+                doc.update_dict(r, |d| {
+                    d.remove(b"IRT");
+                    d.remove(b"RT");
+                })?;
             }
             if which.contains(&Hidden::LinksActionsScripts) && (d.contains(b"AA") || (d.name(b"Subtype") == Some(b"Widget") && d.contains(b"A"))) {
                 doc.update_dict(r, |d| {
