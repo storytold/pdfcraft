@@ -251,7 +251,7 @@ impl PdfCraftApp {
             recent_view: name_of(&self.recent_view),
             recent_sort: name_of(&self.recent_sort),
         };
-        let hotbar = settings::Hotbar { tools: Some(self.hotbar.tools.clone()) };
+        let hotbar = settings::Hotbar { tools: Some(self.hotbar.tools.clone()), hidden: Some(self.hotbar.hidden) };
         // Kept only while the preference is on.
         let session = settings::Session { last_session: self.reopen_last_session.then(|| json_text(&self.session_to_save())).flatten() };
         PdfCraftSettings { layout, print, behavior, view, comment, signature, dock, recent, hotbar, session }
@@ -280,6 +280,9 @@ impl PdfCraftApp {
     fn apply_hotbar(&mut self, s: &settings::Hotbar) {
         if let Some(tools) = &s.tools {
             self.hotbar.tools = tools.clone();
+        }
+        if let Some(hidden) = s.hidden {
+            self.hotbar.hidden = hidden;
         }
     }
 

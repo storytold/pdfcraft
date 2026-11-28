@@ -200,6 +200,7 @@ impl Recent {
 #[serde(default)]
 pub struct Hotbar {
     pub tools: Option<Vec<String>>,
+    pub hidden: Option<bool>,
 }
 
 impl Hotbar {
@@ -635,14 +636,17 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
         }
     };
 
-    // The last release's `hotbar` object keeps a tool list and a docked side; the side belongs to the dock workspace now.
+    // Legacy `hotbar` objects keep a tool list and a docked side; the side belongs to the dock workspace now.
     // PLAN: assumed `hotbar::migrate_legacy(&Value) -> (Vec<String>, Option<String>)` (chrome-w18)
     // PLAN: `side_panels::migrate` (chrome-w13) takes no hotbar side, so the legacy docked side is not carried into the workspace
     let hotbar_tools = match root.get("hotbar") {
-        Some(legacy) if legacy.is_object() => Some(crate::hotbar::migrate_legacy(legacy).0),
+        Some(legacy) if legacy.get("tools").is_some_and(Value::is_array) => {
+            Some(crate::hotbar::migrate_legacy(legacy).0)
+        }
         _ => None,
     };
-    let hotbar = Hotbar { tools: hotbar_tools };
+    let hotbar_hidden = root.get("hotbar").and_then(|hotbar| hotbar.get("hidden")).and_then(Value::as_bool);
+    let hotbar = Hotbar { tools: hotbar_tools, hidden: hotbar_hidden };
 
     let dock = {
         let r = Reader::new(&root, Dock::KEY, &mut errors);
