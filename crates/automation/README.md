@@ -135,7 +135,7 @@ The release packages ship `pdfcraft-cli` alongside the desktop app, so no build 
 |---|---|
 | Windows (MSI) | `%LOCALAPPDATA%\Programs\ArtCraft\PdfCraft\pdfcraft-cli.exe` by default (`C:\Program Files\ArtCraft\PdfCraft\pdfcraft-cli.exe` for an all-users install, under `Program Files (x86)` instead for the 32-bit build, or wherever you installed it otherwise), not on `PATH` |
 | Linux (deb, rpm) | `/usr/bin/pdfcraft-cli` |
-| macOS | the separate `pdfcraft-cli-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
+| macOS | the separate `pdfcraft-cli-<version>-macos-universal.zip` release asset for Apple silicon and Intel (the `.app` holds only the desktop app) |
 
 ```sh
 # Windows (PowerShell), default install folder
