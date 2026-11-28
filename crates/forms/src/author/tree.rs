@@ -1,4 +1,4 @@
-use super::{Dict, Document, Field, FormError, ObjRef, Object, PdfString, invalid};
+use super::{Dict, Document, Field, FormError, ObjRef, Object, PdfString, invalid, page_refs};
 
 /// The AcroForm dictionary's reference, creating the form (with `/Helv` in `/DR`) if needed.
 pub(crate) fn ensure_form(doc: &mut Document) -> Result<ObjRef, FormError> {
@@ -395,7 +395,10 @@ pub(super) fn detach(doc: &mut Document, field: ObjRef) -> Result<(), FormError>
 /// Take `field` out of every `/Kids` that still lists it. A damaged file can name a kid without
 /// giving it the matching `/Parent` back-pointer (ISO 32000-2 §12.7.4), so the owner never came
 /// up as the parent above: without this the reader would keep listing the kid and Delete Field
-/// would report success while the field stayed in the form (#8027).
+/// would report success while the field stayed in the form (#8027). The walk covers what the
+/// reader reads: it starts from the `/Fields` entries and the page widgets it adopts when
+/// `/Fields` leaves them out, and from each node it also follows the `/Parent` up, the way
+/// `unlisted_root` reads a nameless kid through the owner its `/Parent` names.
 fn remove_stray_kids(doc: &mut Document, field: ObjRef) -> Result<(), FormError> {
     let Some(root) = doc.root() else { return Ok(()) };
     let Some(af) = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) else { return Ok(()) };
@@ -405,16 +408,40 @@ fn remove_stray_kids(doc: &mut Document, field: ObjRef) -> Result<(), FormError>
         .and_then(|d| d.get(b"Fields").cloned())
         .map(|f| doc.resolve(&f).as_array().cloned().unwrap_or_default())
         .unwrap_or_default();
+    for p in page_refs(doc) {
+        let Some(a) = doc.get(p).as_dict().and_then(|d| d.get(b"Annots").cloned()) else { continue };
+        for e in doc.resolve(&a).as_array().cloned().unwrap_or_default() {
+            let adopted = e.as_ref().is_some_and(|w| {
+                let obj = doc.get(w);
+                obj.as_dict()
+                    .is_some_and(|d| d.name(b"Subtype") == Some(b"Widget") && (d.contains(b"FT") || d.contains(b"T") || d.contains(b"Parent")))
+            });
+            if adopted {
+                stack.push(e);
+            }
+        }
+    }
+    // No visit cap: a cap only bounds how much of the tree the cleanup reaches, and an owner it
+    // stops short of keeps the kid listed while Delete Field reports success (#8027). Loops end
+    // at the seen set, like the reader's walks, which keep their own limits.
     let mut seen = std::collections::HashSet::new();
     while let Some(o) = stack.pop() {
         let Some(r) = o.as_ref() else { continue };
-        if !seen.insert(r) || seen.len() > 4096 {
+        if !seen.insert(r) {
             continue;
         }
         let mut d = match doc.get(r).as_dict().cloned() {
             Some(d) => d,
             None => continue,
         };
+        // The reader reads a node through the topmost owner its `/Parent` names, as far up as
+        // `unlisted_root` follows it, so the owners reached only that way are cleaned up too.
+        let mut up = d.reference(b"Parent");
+        let mut chain = std::collections::HashSet::new();
+        while let Some(p) = up.filter(|p| chain.insert(*p) && chain.len() <= 64) {
+            stack.push(Object::Ref(p));
+            up = doc.get(p).as_dict().and_then(|pd| pd.reference(b"Parent"));
+        }
         if let Some(kids_obj) = d.get(b"Kids").cloned() {
             let kids = doc.resolve(&kids_obj).as_array().cloned().unwrap_or_default();
             if kids.iter().any(|k| k.as_ref() == Some(field)) {
