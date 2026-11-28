@@ -89,8 +89,9 @@ pub struct RenderConfig {
     /// The page clears to transparent instead of white (or the reading background): for a page
     /// holding only what is laid over another raster, such as a comment while it is dragged.
     pub transparent: bool,
-    /// Draw a CID font of an Adobe CJK collection that the PDF does not embed with one face already
-    /// installed on this machine (see `system_font`). Off by default and on only for on-screen
+    /// Draw a CID font that the PDF does not embed, of an Adobe CJK collection or (on Windows) of
+    /// the Identity collection named after a listed face, with one face already installed on this
+    /// machine (see `system_font`). Off by default and on only for on-screen
     /// viewer and preview rasters: exports, printing and OCR render without it, so nothing drawn with an
     /// installed font is saved or printed (licences.md; docs/development.md "Fonts and attribution").
     pub system_fonts: bool,
