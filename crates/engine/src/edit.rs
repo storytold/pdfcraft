@@ -67,6 +67,15 @@ pub enum Edit {
         bytes: Arc<Vec<u8>>,
         src_pages: Vec<usize>,
     },
+    /// Replace only `/Contents` and `/Resources` of `pages` with `src_pages` of another PDF,
+    /// keeping the target pages' boxes (`/MediaBox`, `/CropBox`, etc.), `/Rotate`, `/UserUnit`,
+    /// annotations and bookmarks untouched (used by ClearScan).
+    ReplacePageContent {
+        pages: Vec<usize>,
+        name: String,
+        bytes: Arc<Vec<u8>>,
+        src_pages: Vec<usize>,
+    },
     /// Set Page Boxes / Crop: set (or reset) one box on `pages`.
     SetPageBox {
         pages: Vec<usize>,

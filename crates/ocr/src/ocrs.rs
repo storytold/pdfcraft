@@ -121,7 +121,7 @@ fn pad_line(line: &mut [RotatedRect]) -> Option<RectF> {
 
 /// `rect` ([left, top, right, bottom]) clipped to `to`; unchanged if that leaves nothing: a word
 /// wholly in the padding is a letter the line found had cut off, and keeps its own box.
-fn clip(rect: [f32; 4], to: Option<RectF>) -> [f32; 4] {
+pub(crate) fn clip(rect: [f32; 4], to: Option<RectF>) -> [f32; 4] {
     let Some(to) = to else { return rect };
     let [l, t, r, b] = rect;
     let clipped = [l.max(to.left()), t.max(to.top()), r.min(to.right()), b.min(to.bottom())];
@@ -171,8 +171,9 @@ impl Ocr {
         Self::load(&Models::find().ok_or(OcrError::NoModels)?)
     }
 
-    /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
-    pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
+    /// Shared detect → pad → recognize pipeline for both plain and annotated outputs, so
+    /// ClearScan gets the same tiled detection on large pages and line padding as Recognize Text.
+    fn recognize_lines(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<(ocrs::TextLine, Option<RectF>)>, OcrError> {
         if pixels.is_empty() {
             return Err(OcrError::EmptyImage);
         }
@@ -190,11 +191,15 @@ impl Ocr {
         let mut lines = self.engine.find_text_lines(&input, &found);
         let before: Vec<Option<RectF>> = lines.iter_mut().map(|l| pad_line(l)).collect();
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
+        Ok(read.into_iter().zip(before).filter_map(|(line, before)| line.map(|l| (l, before))).collect())
+    }
+
+    /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
+    pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
         use ocrs::TextItem;
+        let read = self.recognize_lines(pixels, width, height)?;
         Ok(read
             .into_iter()
-            .zip(before)
-            .filter_map(|(line, before)| line.map(|l| (l, before)))
             .map(|(line, before)| Line {
                 words: line
                     .words()
@@ -207,6 +212,20 @@ impl Ocr {
             })
             .filter(|l| !l.words.is_empty())
             .collect())
+    }
+
+    /// The same recognition, keeping what glyph work needs: per-character boxes grouped into
+    /// words, and each line's baseline, x-height, cap height and descent
+    /// ([`crate::annotations::AnnotatedLine`]). Boxes are in the pixel space of the image read.
+    pub fn recognize_annotated(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<crate::annotations::AnnotatedLine>, OcrError> {
+        let read = self.recognize_lines(pixels, width, height)?;
+        Ok(crate::annotations::from_text_lines(read))
+    }
+
+    /// Recognize a ClearScan page's deskewed greyscale. The annotations come back in the
+    /// deskewed frame, and the page's `to_original` maps them onto the scan.
+    pub fn recognize_page(&self, page: &crate::scan_prep::PreprocessedPage) -> Result<Vec<crate::annotations::AnnotatedLine>, OcrError> {
+        self.recognize_annotated(page.grey.data(), page.grey.width(), page.grey.height())
     }
 
     /// The words in a page, `rgb` (1 or 3 bytes per pixel) prepared as `page`. A page at least

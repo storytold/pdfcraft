@@ -577,6 +577,19 @@ pub fn duplicate_pages(doc: &mut Document, indices: &[usize], at: Option<usize>)
 /// `src`. As in Acrobat, only what the page shows changes (contents, resources and page boxes);
 /// the original pages' links, comments, form widgets and the bookmarks pointing at them stay.
 pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_pages: &[usize]) -> Result<(), OrganizeError> {
+    const SHOWN: [&[u8]; 8] = [b"Contents", b"Resources", b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox", b"Rotate"];
+    replace_pages_keys(doc, targets, src, src_pages, &SHOWN)
+}
+
+/// Replace only the `/Contents` and `/Resources` of `targets` (in order) with those of
+/// `src_pages` of `src`, keeping every page box (`/MediaBox`, `/CropBox`, `/BleedBox`, `/TrimBox`,
+/// `/ArtBox`), `/Rotate`, `/UserUnit`, and all annotations/links/widgets/bookmarks untouched.
+pub fn replace_page_content(doc: &mut Document, targets: &[usize], src: &Document, src_pages: &[usize]) -> Result<(), OrganizeError> {
+    const CONTENT_KEYS: [&[u8]; 2] = [b"Contents", b"Resources"];
+    replace_pages_keys(doc, targets, src, src_pages, &CONTENT_KEYS)
+}
+
+fn replace_pages_keys(doc: &mut Document, targets: &[usize], src: &Document, src_pages: &[usize], keys: &[&[u8]]) -> Result<(), OrganizeError> {
     let n = page_count(doc)?;
     check(targets, n)?;
     if targets.len() != src_pages.len() || targets.is_empty() {
@@ -584,14 +597,13 @@ pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_
     }
     let imported = import_pages(doc, src, src_pages, n)?;
     let all = walk(doc)?;
-    const SHOWN: [&[u8]; 8] = [b"Contents", b"Resources", b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox", b"Rotate"];
     for (t, new) in targets.iter().zip(&imported) {
         // The imported page with its inherited attributes resolved.
         let (_, inherited) = all.iter().find(|(r, _)| r == new).cloned().unwrap_or((*new, Dict::new()));
         let src_dict = doc.get(*new).as_dict().cloned().unwrap_or_default();
         let target = all[*t].0;
         doc.update_dict(target, |d| {
-            for k in SHOWN {
+            for &k in keys {
                 match src_dict.get(k).or_else(|| inherited.get(k)) {
                     Some(v) => d.set(k.to_vec(), v.clone()),
                     None => {

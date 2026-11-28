@@ -697,9 +697,13 @@ impl PdfCraftApp {
             self.notify_tr("Optimization is already running");
             return;
         }
-        // Both jobs share the progress card and capture the same document state.
+        // These jobs share the progress card and capture the same document state.
         if self.scan_clean_run.is_some() {
             self.notify_tr("Scanned pages are already being enhanced");
+            return;
+        }
+        if self.clearscan_run.is_some() {
+            self.notify_tr("Text recognition is already running");
             return;
         }
         let job = match self.session.optimize_job(id, settings, discard) {
@@ -836,5 +840,19 @@ mod tests {
         assert!(h.query_by_label("Cancel").is_none(), "the card and its Cancel are gone");
         assert!(h.query_by_label_contains("Optimizing… image 4 of 10").is_none());
         assert!(h.query_all_by_label("Optimization cancelled").next().is_some());
+    }
+
+    #[test]
+    fn optimization_waits_while_clearscan_is_running() {
+        let mut app = PdfCraftApp::for_unit_tests();
+        let ctx = egui::Context::default();
+        app.set_option(&ctx, "language", "en").unwrap();
+        app.open_bytes(&ctx, "notes.txt", None, b"hello".to_vec()).unwrap();
+        let (_, doc) = app.active_ids().unwrap();
+        app.clearscan_run = Some(crate::workflows::ocr_ui::ClearScanRun { doc, progress: Arc::default(), generation: 0, pending: None, shown: true });
+        app.optimize_with_draft(&ctx, &OptimizeDraft::default());
+        assert!(app.optimize_run.is_none());
+        let notices = crate::notices::texts(&mut app, &ctx);
+        assert!(notices.iter().any(|t| t.contains("Text recognition is already running")), "{notices:?}");
     }
 }

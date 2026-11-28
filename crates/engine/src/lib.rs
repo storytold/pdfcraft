@@ -20,6 +20,7 @@ pub mod camera;
 pub mod camera_clean;
 pub mod camera_edges;
 pub mod catalog;
+pub mod clearscan;
 pub mod commands;
 mod comments;
 pub mod compare;

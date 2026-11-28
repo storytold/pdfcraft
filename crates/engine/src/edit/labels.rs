@@ -194,7 +194,7 @@ impl Edit {
             Edit::SpawnTemplate { name, .. } => Label::with("Add a page from template {name}", name.as_str()),
             Edit::SetTemplateHidden { name, hidden: false } => Label::with("Show template {name}", name.as_str()),
             Edit::SetTemplateHidden { name, hidden: true } => Label::with("Hide template {name}", name.as_str()),
-            Edit::ReplacePages { pages, .. } => plural("Replace page", "Replace pages", pages.len()),
+            Edit::ReplacePages { pages, .. } | Edit::ReplacePageContent { pages, .. } => plural("Replace page", "Replace pages", pages.len()),
             Edit::SetPageBox { pages, which: PageBox::Crop, .. } => plural("Crop page", "Crop pages", pages.len()),
             Edit::SetPageBox { .. } => Label::of("Set page boxes"),
             Edit::SetTransition { .. } => Label::of("Set page transitions"),
