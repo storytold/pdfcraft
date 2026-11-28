@@ -1417,13 +1417,17 @@ fn children_first(events: Vec<ScriptEvent>) -> Vec<ScriptEvent> {
 /// value stays, as Acrobat marks the field invalid rather than reverting it. `before` holds each
 /// field's value before the edit: a check box or radio group set to the value it had runs no
 /// click scripts, since nothing was clicked. A field named twice (a batch that sets it twice)
-/// is compared the second time with what the first left, so it is clicked once at most. The
-/// SOM paths whose exit scripts ran go into `exited`.
+/// is compared the second time with what the first left, so it is clicked once at most. A check
+/// box or radio group that has the focus (`focus`, the SOM path of its widget or of one of the
+/// group's buttons) runs no exit scripts here: it keeps the focus as it changes, and runs them
+/// once, when it loses it ([`crate::Session::field_focus`]), as another viewer does. The SOM
+/// paths whose exit scripts ran go into `exited`.
 pub(crate) fn on_changes(
     doc: &mut pdfcraft_cos::Document,
     tpl: &Template,
     names: &[String],
     before: &HashMap<String, Vec<String>>,
+    focus: Option<&str>,
     run: &mut XfaRun,
     exited: &mut Vec<String>,
 ) -> Result<(), String> {
@@ -1446,26 +1450,38 @@ pub(crate) fn on_changes(
                 }
             }
         }
-        if let Some(b) = button {
+        // A text field's value is committed as it loses the focus, and a value set without the
+        // focus on the field (form_fill, a script) has no focus to lose: their exit follows.
+        let keeps_focus = focus.is_some_and(|at| {
+            use pdfcraft_forms::FieldKind as K;
+            r.fields().get(name).is_some_and(|f| match f.kind {
+                K::CheckBox => at == som,
+                K::Radio => at == som || f.buttons.iter().any(|(_, b)| b == at),
+                _ => false,
+            })
+        });
+        if !keeps_focus {
+            if let Some(b) = button {
+                let mut ran_exit = false;
+                for ev in r.events_of(b, "exit") {
+                    ran_exit |= r.run(&ev, &value)?.is_some();
+                }
+                if ran_exit {
+                    exited.push(b.to_string());
+                }
+            }
+            // Noted only when an exit script ran, whether it succeeded or failed: it has run for this
+            // focus loss, and a failed script keeps what it changed before its error, so running it
+            // again would repeat that and the error. One the event's budget skipped, or one never
+            // reached because an earlier script stopped the run, is still to run when the field
+            // loses focus.
             let mut ran_exit = false;
-            for ev in r.events_of(b, "exit") {
+            for ev in r.events_of(&som, "exit") {
                 ran_exit |= r.run(&ev, &value)?.is_some();
             }
             if ran_exit {
-                exited.push(b.to_string());
+                exited.push(som.clone());
             }
-        }
-        // Noted only when an exit script ran, whether it succeeded or failed: it has run for this
-        // focus loss, and a failed script keeps what it changed before its error, so running it
-        // again would repeat that and the error. One the event's budget skipped, or one never
-        // reached because an earlier script stopped the run, is still to run when the field
-        // loses focus.
-        let mut ran_exit = false;
-        for ev in r.events_of(&som, "exit") {
-            ran_exit |= r.run(&ev, &value)?.is_some();
-        }
-        if ran_exit {
-            exited.push(som.clone());
         }
         for ev in r.events_of(&som, "validate") {
             let Some(o) = r.run(&ev, &value)? else { continue };
@@ -1573,7 +1589,34 @@ pub(crate) fn widget_som(doc: &pdfcraft_cos::Document, field: &pdfcraft_forms::F
     som_of(w.obj).or_else(|| som_of(field.obj))
 }
 
+/// The objects whose `activity` scripts (`enter` or `exit`) run as the focus reaches or leaves the
+/// field at `som`, in that order, read from one build of the live form. With `crossing`, the
+/// radio group `som` is a button of comes first on enter and last on exit. Each comes with
+/// whether the live form gives it such a script.
+pub(crate) fn focus_targets(doc: &pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str, crossing: bool) -> Vec<(String, bool)> {
+    let uses = pdfcraft_xfa::page_area_uses(doc, tpl);
+    let live = pdfcraft_xfa::form_tree_paged(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc), &uses);
+    let group = som
+        .rsplit_once('.')
+        .filter(|_| crossing)
+        .and_then(|(parent, _)| find_container(&live.root, parent, 0))
+        .filter(|n| n.kind == Some(NodeKind::ExclGroup))
+        .map(|n| n.som.clone());
+    let field = Some(som.to_string());
+    let order = if activity == "enter" { [group, field] } else { [field, group] };
+    order
+        .into_iter()
+        .flatten()
+        .map(|at| {
+            let has = live.events.iter().any(|e| e.som == at && e.activity == activity);
+            (at, has)
+        })
+        .collect()
+}
+
 /// Does the live form give SOM path `som` an `activity` script?
+/// `focus_targets` is the group-aware query the focus path uses.
+#[allow(dead_code)]
 pub(crate) fn has_event(doc: &pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str) -> bool {
     // Page-master copies have a SOM path of their own on each page (`master[1]…`).
     let uses = pdfcraft_xfa::page_area_uses(doc, tpl);

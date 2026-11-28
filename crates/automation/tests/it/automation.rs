@@ -11401,6 +11401,28 @@ fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
     check(&mut a, doc);
 }
 
+/// form_focus runs a radio group's own enter and exit scripts when the focus enters or leaves the
+/// group, and not when within_group says it moves between two of its buttons.
+#[test]
+fn a_radio_groups_own_focus_scripts_run_through_form_focus() {
+    let dir = workdir("xfa-group-focus");
+    std::fs::write(dir.join("group.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::group_focus_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "group.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let group = fields["fields"].as_array().unwrap().iter().find(|f| f["type"] == "radio").unwrap()["name"].clone();
+    let log = |a: &mut Automation| {
+        let fields = ok(a, "form_fields", json!({ "doc": doc }));
+        fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "log").map(|f| f["value"].clone()).unwrap_or(Value::Null)
+    };
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "event": "enter" }));
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "event": "exit", "within_group": true }));
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "widget": 2, "event": "enter", "within_group": true }));
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "widget": 2, "event": "exit" }));
+    assert_eq!(log(&mut a), json!("grp enter|r1 enter|r1 exit|r2 enter|r2 exit|grp exit"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// form_focus runs a field's XFA enter and exit scripts on every focus change; scripts that
 /// change nothing leave no edit, a radio button's own scripts run for its widget, and unknown
 /// fields, widgets and events are refused.
@@ -11547,6 +11569,37 @@ fn xfa_check_box_and_radio_clicks_run_through_form_fill() {
     let no = answer["options"].as_array().and_then(|o| o.get(1)).and_then(|o| o.as_str().map(str::to_string)).unwrap_or_else(|| panic!("{answer}"));
     ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "answer": no } }));
     assert!(log(&mut a).ends_with("group click;no click;no exit;group exit;"), "{}", log(&mut a));
+}
+
+/// A check box filled while form_focus has put the focus on it keeps its exit for the focus
+/// loss: filled twice, it runs its exit once, on form_focus exit. Filled without the focus on
+/// it, its exit follows the change.
+#[test]
+fn a_check_box_filled_with_the_focus_runs_its_exit_on_form_focus_exit() {
+    let dir = workdir("xfa-toggle-focus");
+    std::fs::write(dir.join("toggle.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::toggle_focus_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "toggle.pdf" }))["doc"].as_u64().unwrap();
+    let log = |a: &mut Automation| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        f["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == "log")
+            .map(|f| f["value"].as_str().unwrap_or_default().to_string())
+            .unwrap_or_default()
+    };
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": "cb", "event": "enter" }));
+    for on in [true, false] {
+        ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "cb": on } }));
+    }
+    assert_eq!(log(&mut a), "cb enter 0|cb change 1|cb click 1|cb change 0|cb click 0", "no exit while it has the focus");
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": "cb", "event": "exit" }));
+    assert!(log(&mut a).ends_with("|cb click 0|cb exit 0"), "{}", log(&mut a));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "cb": true } }));
+    assert!(log(&mut a).ends_with("|cb exit 0|cb change 1|cb click 1|cb exit 1"), "without the focus: {}", log(&mut a));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A form whose opening script runs away has its scripts turned off, and doc_info says so.

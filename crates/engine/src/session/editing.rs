@@ -284,7 +284,8 @@ impl Session {
                 // only those). The values before the edit tell a click from a value set again.
                 let before: std::collections::HashMap<String, Vec<String>> =
                     doc.form.iter().filter(|f| changed.contains(&f.name)).map(|f| (f.name.clone(), f.value.clone())).collect();
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &before, &mut run, &mut exited))
+                let focus = doc.xfa_focus.clone();
+                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &before, focus.as_deref(), &mut run, &mut exited))
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;
