@@ -398,8 +398,12 @@ impl CommentView {
     /// Undo or Redo just ran. Either may have put annotations back or taken them away, on any
     /// page, so a (page, index) held here may now name another one. The selection and the inline
     /// editor close, its unsaved text with it, rather than Save writing that text over whatever
-    /// took its place; so do the pop-ups' unsaved text and drags.
+    /// took its place; so do the pop-ups' unsaved text and drags. A move, resize or reshape still
+    /// held ends too (#8540): released, it would apply to whatever annotation now has its index.
     pub(crate) fn history_stepped(&mut self) {
+        if self.tool.in_flight().is_some() {
+            self.tool.cancel_drawing();
+        }
         self.clear_selection();
         self.panel.editing = None;
         self.popup_drafts.clear();
