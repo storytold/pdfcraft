@@ -20,7 +20,11 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
 - **images**: fully covered → removed; partly covered → a copy with the covered pixels cleared
   (8/16-bit and 1/2/4-bit images, image masks; Flate/LZW/RL/A85/AHx, and CCITT fax or JBIG2 as
   the last filter, decoded through `ImageBudget::decode`, a JBIG2 image with its
-  `/JBIG2Globals`; `/DecodeParms` given by reference, numbers inside included, count). The copy
+  `/JBIG2Globals`; `/DecodeParms` given by reference, numbers inside included, count). JPEG and
+  JPEG 2000 images (`DCTDecode`, `JPXDecode` as the only filter) in DeviceGray, DeviceRGB or
+  DeviceCMYK are decoded (`pdfcraft_filters::decode_dct`, `decode_jpx`, paid for from the run's
+  allowance first) so unmarked parts of a scan remain; a CMYK JPEG keeps its samples as stored and
+  its `/Decode`, and a JPEG 2000 copy names its bit depth and colour space and drops `/Decode`. The copy
   is Flate, or for a one-bit image of one component (a scan as a rule) CCITT Group 4, or JBIG2
   when it was JBIG2, whichever is smallest as stored, coded from the cleared samples; it refers to
   no globals. Globals hold the shapes of every image that shares them (a scan's pages, often),
@@ -47,8 +51,10 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   run's image allowance, every filter stage and the JBIG2 decoder's own work included, after what
   clearing spent: past it `apply` is refused as one clearing too many images is
   (`RedactError::ImagesPastAllowance`), and `remove_hidden`, which chose no pages, as one past the
-  run's budget. Codecs redaction doesn't decode (DCT, JPX) are
-  removed whole (fail-closed), and so is a JBIG2 image whose page isn't its size (the renderer
+  run's budget. JPEG and JPEG 2000 images in another colour
+  space (ICCBased, Indexed), image masks, a JPEG with a `/ColorTransform` of its own, JPEG 2000
+  with alpha, with a palette under a named colour space or a component mapping of more than four
+  entries, and data that doesn't decode to the dictionary's size are removed whole (fail-closed), and so is a JBIG2 image whose page isn't its size (the renderer
   draws the whole page into the image, so the rows cleared wouldn't be the ones shown) or of more
   than one bit or component, and Group 3 on bytes (`/K` 0 or more, `/EncodedByteAlign`): PdfCraft's
   renderer draws some of its layouts (the fill ending each end-of-line code on a byte) as other
@@ -217,5 +223,6 @@ Patterns are heuristic: dates, protocol identifiers and longer number runs are r
 `CodeSet::from_id("foia")?.overlay(&["(b)(6)"])` gives the overlay text for the picked codes.
 Custom code sets aren't supported yet.
 
-Not yet: pattern locales, struct-tree/alt-text cleanup, re-encoding of DCT images (they are removed
-instead).
+Not yet: pattern locales, struct-tree/alt-text cleanup, JPEG and JPEG 2000 images outside the
+device spaces (ICCBased, Indexed), with alpha, or with their own `/ColorTransform` (those are
+removed whole, fail-closed).
