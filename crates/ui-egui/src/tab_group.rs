@@ -562,6 +562,32 @@ mod tests {
     }
 
     #[test]
+    fn dragging_a_member_to_the_edge_of_another_group_ungroups_it() {
+        let mut app = PdfCraftApp::for_unit_tests();
+        let ctx = egui::Context::default();
+        for name in ["a1.pdf", "a2.pdf", "b1.pdf", "b2.pdf"] {
+            app.open_bytes(&ctx, name, None, FIXTURE.to_vec()).unwrap();
+        }
+        let a = app.create_tab_group("A".into(), TabGroupColor::Blue);
+        let b = app.create_tab_group("B".into(), TabGroupColor::Green);
+        app.add_tab_to_group(0, a);
+        app.add_tab_to_group(1, a);
+        app.add_tab_to_group(2, b);
+        app.add_tab_to_group(3, b);
+
+        // Drag a1.pdf behind b2.pdf: it sits after group B's last member, so it joins neither
+        // group, and group A keeps a2.pdf.
+        let tabs = app.tabs_in(crate::panes::Place::Main);
+        app.move_tab_in_strip(0, &tabs, 3);
+
+        let names: Vec<String> = app.views.iter().map(|v| app.session.get(v.id).unwrap().name.clone()).collect();
+        assert_eq!(names, ["a2.pdf", "b1.pdf", "b2.pdf", "a1.pdf"]);
+        assert_eq!(app.views[3].group, None);
+        assert_eq!(app.views[0].group, Some(a));
+        assert_eq!(app.views[2].group, Some(b));
+    }
+
+    #[test]
     fn moving_last_member_to_another_group_cleans_up_previous_group() {
         let mut app = PdfCraftApp::for_unit_tests();
         let ctx = egui::Context::default();

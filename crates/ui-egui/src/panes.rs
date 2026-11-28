@@ -253,7 +253,8 @@ impl PdfCraftApp {
                 self.views[new_idx].group = left_group;
             } else if old_group.is_some() && (left_group == old_group || right_group == old_group) {
                 self.views[new_idx].group = old_group;
-            } else if left_group.is_none() && right_group.is_none() {
+            } else {
+                // Dropped outside its group, or at the edge of another one: not a member of either.
                 self.views[new_idx].group = None;
             }
         }
