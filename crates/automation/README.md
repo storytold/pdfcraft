@@ -37,6 +37,11 @@ DeviceCMYK `k`), so text added to a print file can be 100 K black. `content_list
 
 - Tool names are `snake_case` (`page_rotate`): MCP clients reject dots. `ToolDef::command` links a tool to the registry id it automates (`page.rotate`), and `command_list` reports the link.
 - Pages and positions are **1-based**. Rectangles are PDF points with the origin at the top-left of the displayed page.
+- `accessibility_check` results include `tested`: the applicable structure elements actually
+  inspected by each structure rule (zero when none were visited), or `null` for other rules,
+  manual checks and skipped rules. See [the checker's counting semantics](../a11y/README.md).
+  A `passed` result with `tested: 0` carries no element coverage. Existing status and summary
+  counters retain their meaning; the counters count rules, not elements.
 - Unknown arguments are rejected, so typos fail loudly.
 - Tools that change a document return its summary (`doc`, `pages`, `dirty`, `undo`, `redo`, …).
 - `comment_image_preview` returns JSON and a PNG: `layer: "background"` (the default) gives the page without the selected image signature/initials; `layer: "image"` gives its embedded image with alpha. The metadata supplies its displayed rectangle, document rotation, `image_rotation` (how far clockwise the image is shown turned: 0 for one placed by PdfCraft, which keeps it upright as displayed) and annotation opacity. Each result can be saved with the CLI's `--out`. Cache the background and transform the image for live movement/resizing; `comment_edit` commits the final geometry in one undo step. Previewing never changes the document.

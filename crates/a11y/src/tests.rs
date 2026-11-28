@@ -635,6 +635,51 @@ fn a_well_tagged_document_passes() {
 }
 
 #[test]
+fn structure_rules_count_the_elements_they_inspect() {
+    let report = check(&pdf(&good(), "/Info 8 0 R"), &Options::default());
+    for (rule, tested) in [
+        (Rule::FiguresAltText, 1),
+        (Rule::NestedAltText, 1),
+        (Rule::AltTextAssociated, 1),
+        (Rule::AltTextHidesAnnotation, 1),
+        (Rule::OtherElementsAltText, 0),
+        (Rule::TableRows, 2),
+        (Rule::TableCells, 4),
+        (Rule::TableHeaders, 1),
+        (Rule::TableRegularity, 1),
+        (Rule::TableSummary, 1),
+        (Rule::ListItems, 1),
+        (Rule::LblLBody, 2),
+        (Rule::HeadingNesting, 1),
+    ] {
+        let result = report.result(rule).unwrap();
+        assert_eq!(result.tested, Some(tested), "{rule:?}");
+        assert_eq!(result.status, Status::Passed, "{rule:?}");
+    }
+    // The role-mapped Photo counts, as does the figure missing its alternate text.
+    let figures = check(&figures_doc(), &Options::default());
+    assert_eq!(figures.result(Rule::FiguresAltText).unwrap().tested, Some(2));
+    assert_eq!(status(&figures, Rule::FiguresAltText), Status::Failed);
+    assert_eq!(figures.result(Rule::NestedAltText).unwrap().tested, Some(1));
+}
+
+#[test]
+fn structure_coverage_counts_alt_elements_and_shared_tags_once() {
+    let doc = structure_doc(&[
+        "<< /S /Document /K [4 0 R 4 0 R 5 0 R] >>".into(),
+        "<< /S /Figure /Alt (Outer) /K [0 << /S /Figure >> << /S /Formula /ActualText (Inner) /K 1 >> 4 0 R] >>".into(),
+        "<< /S /Formula >>".into(),
+    ]);
+    let report = check(&doc, &Options::default());
+    for rule in [Rule::FiguresAltText, Rule::OtherElementsAltText, Rule::NestedAltText, Rule::AltTextAssociated, Rule::AltTextHidesAnnotation] {
+        assert_eq!(report.result(rule).unwrap().tested, Some(2), "{rule:?}");
+    }
+    assert_eq!(status(&report, Rule::FiguresAltText), Status::Passed, "inherited alternate text still applies");
+    assert_eq!(status(&report, Rule::OtherElementsAltText), Status::Failed);
+    assert_eq!(status(&report, Rule::NestedAltText), Status::Failed);
+}
+
+#[test]
 fn structure_problems_are_found() {
     let mut objs = good();
     objs[6] = "<< /S /Document /P 6 0 R /Pg 3 0 R /K [\
@@ -668,6 +713,9 @@ fn structure_problems_are_found() {
     let mut got = failed(&r);
     got.sort();
     assert_eq!(got, want);
+    for rule in want {
+        assert!(r.result(rule).unwrap().tested.is_some_and(|n| n > 0), "{rule:?}");
+    }
     let h = &r.result(Rule::HeadingNesting).unwrap().findings[0].message;
     assert!(h.contains("H3") && h.contains("H1"), "{h}");
     assert!(r.result(Rule::TableRegularity).unwrap().findings[0].message.contains("between 1 and 2"));
@@ -865,6 +913,7 @@ fn a_rule_lists_its_first_findings_and_counts_the_rest() {
     let figures = vec!["<< /S /Figure >>".to_string(); 300].join(" ");
     let doc = structure_doc(&[format!("<< /S /Document /K [{figures}] >>")]);
     let r = checked(&doc, &[Rule::FiguresAltText]);
+    assert_eq!(r.result(Rule::FiguresAltText).unwrap().tested, Some(300), "coverage is not truncated with findings");
     let found = &r.result(Rule::FiguresAltText).unwrap().findings;
     assert_eq!(found.len(), 201);
     assert_eq!(found[200].message, "… and 100 more");
@@ -881,6 +930,7 @@ fn cycles_shared_kids_and_missing_kids_are_read_once() {
     ]);
     let r = checked(&doc, &[Rule::FiguresAltText]);
     assert_eq!(r.result(Rule::FiguresAltText).unwrap().findings.len(), 1);
+    assert_eq!(r.result(Rule::FiguresAltText).unwrap().tested, Some(1));
 }
 
 #[test]
@@ -888,6 +938,7 @@ fn structure_findings_identify_indirect_elements_without_guessing_inline_objects
     let doc = structure_doc(&["<< /S /Document /K [4 0 R << /S /Figure >>] >>".into(), "<< /S /Figure >>".into()]);
     let r = checked(&doc, &[Rule::FiguresAltText]);
     let found = &r.result(Rule::FiguresAltText).unwrap().findings;
+    assert_eq!(r.result(Rule::FiguresAltText).unwrap().tested, Some(2));
     assert_eq!(found.len(), 2);
     assert_eq!(found[0].object.map(|r| r.num), Some(4));
     assert_eq!(found[1].object, None);
@@ -901,6 +952,7 @@ fn nesting_is_read_to_the_depth_limit_and_no_further() {
         let mut objs: Vec<String> = (0..sections).map(|i| format!("<< /S /Sect /K {} 0 R >>", 4 + i)).collect();
         objs.push("<< /S /Figure >>".into());
         let r = checked(&structure_doc(&objs), &[Rule::FiguresAltText]);
+        assert_eq!(r.result(Rule::FiguresAltText).unwrap().tested, Some(r.result(Rule::FiguresAltText).unwrap().findings.len()));
         r.result(Rule::FiguresAltText).unwrap().findings.len()
     };
     assert_eq!(figure_within(250), 1, "within the depth limit");
@@ -1166,11 +1218,13 @@ fn rules_have_ids_and_the_report_lists_them() {
     let other = report_html(&report, "a<b>.pdf", "2026-10-02", "es", &|w| format!("«{w}»"));
     assert!(other.contains("<html lang=\"es\">") && other.contains("<h3>«Headings»</h3>") && other.contains("a&lt;b&gt;.pdf"));
     assert!(!other.contains(">Headings<"), "an English heading is left in the report: {other}");
-    let manual_only = Report { results: vec![RuleResult { rule: Rule::LogicalReadingOrder, status: Status::Manual, findings: Vec::new() }] };
+    let manual_only =
+        Report { results: vec![RuleResult { rule: Rule::LogicalReadingOrder, status: Status::Manual, tested: None, findings: Vec::new() }] };
     let manual_html = report_html(&manual_only, "review.pdf", "2026-10-02", "en", &in_english);
     assert!(manual_html.contains("<p>Needs manual check: 1</p>"));
     assert!(!manual_html.contains("no problems"));
-    let all_passed = Report { results: vec![RuleResult { rule: Rule::LogicalReadingOrder, status: Status::Passed, findings: Vec::new() }] };
+    let all_passed =
+        Report { results: vec![RuleResult { rule: Rule::LogicalReadingOrder, status: Status::Passed, tested: None, findings: Vec::new() }] };
     let passed_html = report_html(&all_passed, "review.pdf", "2026-10-02", "en", &in_english);
     assert!(passed_html.contains("<p>The checker found no problems in this document.</p>"), "{passed_html}");
 }

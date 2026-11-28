@@ -591,7 +591,16 @@ impl Table {
 #[derive(Default)]
 struct Found {
     total: usize,
+    tested: usize,
     kept: BinaryHeap<Kept>,
+}
+
+/// One structure rule's findings and the elements inspected by that rule.
+#[derive(Default)]
+pub(crate) struct Checked {
+    pub findings: Vec<Finding>,
+    pub total: usize,
+    pub tested: usize,
 }
 
 /// A finding that is kept. The heap orders them by document position, so its top is the last one
@@ -634,9 +643,9 @@ impl Found {
         }
     }
 
-    fn into_result(self) -> (Vec<Finding>, usize) {
+    fn into_result(self) -> Checked {
         let findings = self.kept.into_sorted_vec().into_iter().map(|k| k.finding).collect();
-        (findings, self.total)
+        Checked { findings, total: self.total, tested: self.tested }
     }
 }
 
@@ -650,6 +659,36 @@ struct Checks {
 }
 
 impl Checks {
+    fn tested(&mut self, rule: Rule) {
+        if let Some(found) = self.found.get_mut(&rule) {
+            found.tested = found.tested.saturating_add(1);
+        }
+    }
+
+    /// Count where the rules read their elements, not through a separate listing that could
+    /// have different role mapping, reference handling or limits from the actual check.
+    fn inspect(&mut self, e: &Frame) {
+        if e.alt {
+            for rule in [Rule::NestedAltText, Rule::AltTextAssociated, Rule::AltTextHidesAnnotation] {
+                self.tested(rule);
+            }
+        }
+        let rules: &[Rule] = match e.kind {
+            Kind::Figure => &[Rule::FiguresAltText],
+            Kind::Formula => &[Rule::OtherElementsAltText],
+            Kind::Table => &[Rule::TableHeaders, Rule::TableRegularity, Rule::TableSummary],
+            Kind::Tr => &[Rule::TableRows],
+            Kind::Th | Kind::Td => &[Rule::TableCells],
+            Kind::Li => &[Rule::ListItems],
+            Kind::Lbl | Kind::LBody => &[Rule::LblLBody],
+            Kind::Heading(_) => &[Rule::HeadingNesting],
+            _ => &[],
+        };
+        for &rule in rules {
+            self.tested(rule);
+        }
+    }
+
     fn add(&mut self, rule: Rule, index: usize, make: impl FnOnce() -> Finding) {
         if let Some(found) = self.found.get_mut(&rule) {
             found.add(index, make);
@@ -664,6 +703,7 @@ impl Checks {
 
 impl Visitor for Checks {
     fn enter(&mut self, ancestors: &[Frame], e: &Frame) {
+        self.inspect(e);
         let parent = ancestors.last().map(|p| p.kind);
         if e.alt && e.alt_above {
             self.add(Rule::NestedAltText, e.index, || finding(e, "its alternate text is inside another element's and will never be read"));
@@ -765,8 +805,8 @@ impl Visitor for Checks {
 }
 
 /// Evaluates the structure rules in `selected` in one walk of the tree. Each rule's result is its
-/// first `MAX_FINDINGS` findings in document order, and the total number of findings.
-pub(crate) fn run(doc: &Document, pages: &[Page], selected: &BTreeSet<Rule>) -> BTreeMap<Rule, (Vec<Finding>, usize)> {
+/// first `MAX_FINDINGS` findings in document order, the total findings, and applicable elements visited.
+pub(crate) fn run(doc: &Document, pages: &[Page], selected: &BTreeSet<Rule>) -> BTreeMap<Rule, Checked> {
     let found: BTreeMap<Rule, Found> = RULES.into_iter().filter(|r| selected.contains(r)).map(|r| (r, Found::default())).collect();
     if found.is_empty() {
         return BTreeMap::new();

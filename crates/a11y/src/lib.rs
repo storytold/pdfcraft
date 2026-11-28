@@ -591,6 +591,11 @@ pub const WORDINGS: &[&str] = &[
 pub struct RuleResult {
     pub rule: Rule,
     pub status: Status,
+    /// Applicable structure elements actually inspected, including passes and failures.
+    /// `Some(0)` means none were visited; `None` means this rule has no element count,
+    /// or was manual or skipped. See the crate README for each structure rule's unit and
+    /// the walk's limits. This is not a count of findings or proof of accessibility.
+    pub tested: Option<usize>,
     pub findings: Vec<Finding>,
 }
 
@@ -648,14 +653,15 @@ pub fn check(doc: &Document, options: &Options) -> Report {
     let mut results = Vec::with_capacity(32);
     for rule in Rule::ALL {
         if !options.rules.contains(&rule) {
-            results.push(RuleResult { rule, status: Status::Skipped, findings: Vec::new() });
+            results.push(RuleResult { rule, status: Status::Skipped, tested: None, findings: Vec::new() });
             continue;
         }
         if rule.manual() {
-            results.push(RuleResult { rule, status: Status::Manual, findings: Vec::new() });
+            results.push(RuleResult { rule, status: Status::Manual, tested: None, findings: Vec::new() });
             continue;
         }
         // `total` counts every finding; `findings` holds the first MAX_FINDINGS of them.
+        let mut tested = None;
         let (mut findings, total) = match rule.category() {
             Category::Document => {
                 let found = content::document_rule(doc, rule, &pages, &scan);
@@ -667,7 +673,11 @@ pub fn check(doc: &Document, options: &Options) -> Report {
                 let n = found.len();
                 (found, n)
             }
-            _ => tree_rules.remove(&rule).unwrap_or_default(),
+            _ => {
+                let result = tree_rules.remove(&rule).unwrap_or_default();
+                tested = Some(result.tested);
+                (result.findings, result.total)
+            }
         };
         if rule.category() == Category::AlternateText && findings.iter().any(|f| f.object.is_some()) {
             let bounds = figure_bounds.get_or_insert_with(|| {
@@ -696,7 +706,7 @@ pub fn check(doc: &Document, options: &Options) -> Report {
                 _ => false,
             };
         if unsure {
-            results.push(RuleResult { rule, status: Status::Manual, findings: Vec::new() });
+            results.push(RuleResult { rule, status: Status::Manual, tested: None, findings: Vec::new() });
             continue;
         }
         if total > MAX_FINDINGS {
@@ -705,7 +715,7 @@ pub fn check(doc: &Document, options: &Options) -> Report {
             findings.push(Finding::worded(None, AND_MORE, vec![("{n}", more.to_string())]));
         }
         let status = if findings.is_empty() { Status::Passed } else { Status::Failed };
-        results.push(RuleResult { rule, status, findings });
+        results.push(RuleResult { rule, status, tested, findings });
     }
     Report { results }
 }

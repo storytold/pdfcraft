@@ -14,6 +14,11 @@ let html = report_html(&report, "file.pdf", "2026-10-02", "en", &in_english);  /
   associated with content, hides annotation, other elements), Tables (rows, cells, headers,
   regularity with row/column spans, summary), Lists (items, Lbl/LBody) and Headings (nesting).
 - Each result is Passed, Failed (with findings and pages), Needs manual check, or Skipped.
+- Structure rules also report `tested`, the number of applicable structure elements inspected
+  (including passing and failing elements). Zero distinguishes an empty check from an inspected
+  pass; it does not establish accessibility. Other rules, manual checks and skipped rules use
+  `None` (`null` in automation), not an invented count. Statuses and summary counters still count
+  rules, including passes with zero inspected elements.
 - **Content checks** walk the page content streams (and form XObjects) tracking marked
   content: painting outside MCID-marked or `/Artifact` content is untagged.
 - **Character encoding** accepts a predefined non-Identity CJK CMap or an Adobe CJK
@@ -26,3 +31,12 @@ let html = report_html(&report, "file.pdf", "2026-10-02", "en", &in_english);  /
   order) live in the engine (`Document::accessibility_fix`).
 
 Not yet: autotagging, the Tags/Order/Content panels, the Reading Order tool (M12.1–M12.2).
+
+`tested` counts figures for `figures-alt-text`, formulas for `other-elements-alt-text`, and
+elements with nonempty `/Alt` or `/ActualText` for the other alternate-text rules. Tables count
+for headers, regularity and summary; `TR` elements for rows; `TH`/`TD` for cells; `LI` for list
+items; `Lbl`/`LBody` for their parent check; and numbered headings for heading nesting. These are
+the elements the existing bounded tree walk actually visits, after role mapping: repeated
+indirect references count once, inline elements count as encountered, and elements beyond the
+depth limit do not count. Counts are not truncated with findings. As with those rules' findings,
+the `pages` option does not restrict structure coverage; it restricts page rules only.
