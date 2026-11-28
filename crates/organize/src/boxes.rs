@@ -71,24 +71,26 @@ fn intersect(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
     [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])]
 }
 
-/// Clips rectangle `a` to `b`, returning `None` when their intersection has no positive area.
-fn clip(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
-    let r = intersect(a, b);
-    (r[2] > r[0] && r[3] > r[1]).then_some(r)
-}
-
-/// The effective boxes of every page: media, crop, bleed, trim, art.
+/// The effective boxes of every page: media, crop, bleed, trim, art. Each is normalized and
+/// clipped as the renderer reads it ([`pdfcraft_model::Page::crop`]), so the crop box is the
+/// region a viewer shows, whatever corners, extra entries or overflowing numbers the file has.
 pub fn page_boxes(doc: &Document) -> Result<Vec<[[f64; 4]; 5]>, OrganizeError> {
+    const OWN: [&[u8]; 3] = [b"BleedBox", b"TrimBox", b"ArtBox"];
     Ok(walk(doc)?
-        .iter()
-        .map(|(page, inherited)| {
-            let obj = doc.get(*page);
-            let d = obj.as_dict().cloned().unwrap_or_default();
-            let own = |k: &[u8]| rect_of(d.get(k).or_else(|| inherited.get(k)), doc);
-            let media = own(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
-            let crop = own(b"CropBox").and_then(|c| clip(c, media)).unwrap_or(media);
-            let child = |k: &[u8]| rect_of(d.get(k), doc).and_then(|c| clip(c, media)).unwrap_or(crop);
-            [media, crop, child(b"BleedBox"), child(b"TrimBox"), child(b"ArtBox")]
+        .into_iter()
+        .map(|(obj, mut dict)| {
+            // `walk` gives the inherited attributes (media and crop box among them); the other
+            // three boxes are the page's own.
+            if let Some(own) = doc.get(obj).as_dict() {
+                for k in OWN {
+                    if let Some(v) = own.get(k) {
+                        dict.set(k.to_vec(), v.clone());
+                    }
+                }
+            }
+            let page = pdfcraft_model::Page { obj, dict };
+            let [bleed, trim, art] = OWN.map(|k| page.boundary_box(doc, k));
+            [page.media(doc), page.crop(doc), bleed, trim, art]
         })
         .collect())
 }

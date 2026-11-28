@@ -187,10 +187,10 @@ pub fn tools() -> Vec<ToolDef> {
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),
         t("doc_list", "List open documents", "List the open documents with their ids, page counts and unsaved state.").ro().with(schema(json!({}), &[])),
-        t("doc_info", "Inspect a document", "Metadata, page sizes and labels, bookmarks, annotations, form fields, links, layers and the Layers panel's tree (layer_order), page transitions and display times, the destination it opens at, attachments (and, for a PDF portfolio, the one it presents first), fonts, security, repair notes and the objects that could not be read.")
+        t("doc_info", "Inspect a document", "Metadata, page sizes and labels, page boxes for the pages listed in box_pages (media, crop, bleed, trim, art, normalized and clipped as displayed: `boxes` as points from the top-left of the displayed page, the same rect page_set_box takes; `boxes_user` in PDF user space), bookmarks, annotations, form fields, links, layers and the Layers panel's tree (layer_order), page transitions and display times, the destination it opens at, attachments (and, for a PDF portfolio, the one it presents first), fonts, security, repair notes and the objects that could not be read.")
             .ro()
             .cmd("file.properties")
-            .with(schema(json!({ "doc": doc() }), &["doc"])),
+            .with(schema(json!({ "doc": doc(), "box_pages": pages("whose page boxes to list (none when omitted, so a long document's reply stays small)") }), &["doc"])),
         t("doc_close", "Close a document", "Close a document. Fails if it has unsaved changes unless discard_changes is true.")
             .cmd("file.close")
             .with(schema(json!({ "doc": doc(), "discard_changes": { "type": "boolean" } }), &["doc"])),

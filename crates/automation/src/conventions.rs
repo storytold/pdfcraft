@@ -103,9 +103,9 @@ impl Automation {
 
     pub(crate) fn doc_inspect(&self, args: &Args) -> Result<Value> {
         if args.opt_int("doc")?.is_some() {
-            return Ok(info(self.doc(args)?));
+            return Ok(info(self.doc(args)?, &Default::default()));
         }
-        Ok(json!({"documents":self.session.docs().iter().map(info).collect::<Vec<_>>()}))
+        Ok(json!({"documents":self.session.docs().iter().map(|d| info(d, &Default::default())).collect::<Vec<_>>()}))
     }
 
     /// A bounded PNG of the page, with its render warnings after it as `page_render` gives them.

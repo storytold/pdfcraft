@@ -50,16 +50,29 @@ impl Page {
     /// `/MediaBox`, or one without area (a side of at most 1/4096 pt, as the renderer measures
     /// it), is US Letter, as the renderer and inspector size it.
     pub fn crop(&self, doc: &Document) -> [f64; 4] {
-        let media = rect(doc, self.dict.get(b"MediaBox"))
-            .filter(|m| m[2] - m[0] > MIN_BOX_SIDE && m[3] - m[1] > MIN_BOX_SIDE)
-            .unwrap_or([0.0, 0.0, 612.0, 792.0]);
-        match box_coords(doc, self.dict.get(b"CropBox")) {
-            Some(c) => {
-                let r = [c[0].max(media[0]), c[1].max(media[1]), c[2].min(media[2]), c[3].min(media[3])];
-                if r[2] - r[0] > MIN_BOX_SIDE && r[3] - r[1] > MIN_BOX_SIDE { r } else { media }
-            }
-            None => media,
-        }
+        let media = self.media(doc);
+        self.clipped(doc, b"CropBox", media).unwrap_or(media)
+    }
+
+    /// The media box as the renderer reads it, normalized; US Letter when it is missing, not
+    /// four finite numbers, without area (a side of at most 1/4096 pt) or too large to scale.
+    pub fn media(&self, doc: &Document) -> [f64; 4] {
+        rect(doc, self.dict.get(b"MediaBox")).filter(|m| m[2] - m[0] > MIN_BOX_SIDE && m[3] - m[1] > MIN_BOX_SIDE).unwrap_or([0.0, 0.0, 612.0, 792.0])
+    }
+
+    /// The page's bleed, trim or art box (`key`: `BleedBox`, `TrimBox` or `ArtBox`; not
+    /// inherited) as a reader takes it (ISO 32000-2 §14.11.2.1): normalized and clipped to the
+    /// media box, like [`Self::crop`]. The crop box when the page has none, or when it is
+    /// malformed or keeps no area inside the media box.
+    pub fn boundary_box(&self, doc: &Document, key: &[u8]) -> [f64; 4] {
+        self.clipped(doc, key, self.media(doc)).unwrap_or_else(|| self.crop(doc))
+    }
+
+    /// Box `key` normalized and clipped to `media`, when that leaves it some area.
+    fn clipped(&self, doc: &Document, key: &[u8], media: [f64; 4]) -> Option<[f64; 4]> {
+        let c = box_coords(doc, self.dict.get(key))?;
+        let r = [c[0].max(media[0]), c[1].max(media[1]), c[2].min(media[2]), c[3].min(media[3])];
+        (r[2] - r[0] > MIN_BOX_SIDE && r[3] - r[1] > MIN_BOX_SIDE).then_some(r)
     }
 
     /// Clockwise rotation when displayed: 0, 90, 180 or 270. A `/Rotate` that isn't a multiple

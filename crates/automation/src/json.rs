@@ -1,4 +1,6 @@
 use super::error::{Result, ToolError};
+use std::collections::BTreeSet;
+
 use super::{Document, Value, comments, json};
 
 /// How far from the page's corner a bookmark's position may be given, in points (a PDF page is at
@@ -281,7 +283,8 @@ pub(crate) fn summary(d: &Document) -> Value {
 
 /// What `doc_info` returns for an open document: its metadata, security, pages, bookmarks,
 /// comments, fields, links, layers, transitions, attachments, fonts, warnings and repairs.
-pub(crate) fn info(d: &Document) -> Value {
+/// `box_pages` (0-based) are the pages whose five boxes are listed.
+pub(crate) fn info(d: &Document, box_pages: &BTreeSet<usize>) -> Value {
     let i = &d.info;
     let page1 = |p: usize| p + 1;
     let mut security = security(d);
@@ -312,9 +315,7 @@ pub(crate) fn info(d: &Document) -> Value {
         // What was rewritten from, or could not be written to, the XFA data.
         "xfa_warnings": d.xfa_warnings,
         "security": security,
-        "pages": i.pages.iter().enumerate().map(|(n, p)| json!({
-            "page": n + 1, "label": p.label, "width": p.width, "height": p.height, "rotation": p.rotation,
-        })).collect::<Vec<_>>(),
+        "pages": pages(d, box_pages),
         "outline": outline(i, &i.outline),
         "outline_more": i.outline_more,
         // Rectangles use the tools' convention (top-left of the displayed page, like
@@ -367,6 +368,34 @@ pub(crate) fn info(d: &Document) -> Value {
         // lost. Last, so it includes what reading the fields above failed on.
         "unreadable_objects": d.unreadable_objects(),
     })
+}
+
+/// `doc_info`'s `pages`. Only the pages in `box_pages` (0-based) carry their five page boxes
+/// (ISO 32000-2 §14.11.2), so the reply stays small on a long document. Effective values: a
+/// missing box is its parent's, and each is normalized and clipped to the media box as the
+/// renderer reads it. `boxes` is in the tools' convention (points from the top-left of the
+/// displayed page, after `/Rotate`), so a rect given to page_set_box reads back unchanged: the
+/// crop box is the displayed page, [0, 0, width, height], and the media box can reach past it,
+/// so its coordinates may be negative. `boxes_user` is the same five boxes in PDF user space
+/// ([x0, y0, x1, y1], y up, unrotated), for prepress checks. Both null when the document can't
+/// be read for editing.
+fn pages(d: &Document, box_pages: &BTreeSet<usize>) -> Vec<Value> {
+    let i = &d.info;
+    let boxes = if box_pages.is_empty() { Vec::new() } else { d.page_boxes() };
+    let named = |f: &dyn Fn([f64; 4]) -> Value, b: &[[f64; 4]; 5]| json!({ "media": f(b[0]), "crop": f(b[1]), "bleed": f(b[2]), "trim": f(b[3]), "art": f(b[4]) });
+    i.pages
+        .iter()
+        .enumerate()
+        .map(|(n, p)| {
+            let mut page = json!({ "page": n + 1, "label": p.label, "width": p.width, "height": p.height, "rotation": p.rotation });
+            if box_pages.contains(&n) {
+                let b = boxes.get(n);
+                page["boxes"] = json!(b.map(|b| named(&|r| json!(view_rect(i, n, r.map(|v| v as f32))), b)));
+                page["boxes_user"] = json!(b.map(|b| named(&|r| json!(r), b)));
+            }
+            page
+        })
+        .collect()
 }
 
 /// A user-space rectangle on 0-based `page` in displayed-page coordinates (points from the
