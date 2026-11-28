@@ -1,4 +1,4 @@
-//! Encrypt a PDF: `cargo run -p pdfcraft-cos --example protect in.pdf out.pdf rc4-40|rc4-128|aes-128|aes-256 USER OWNER`
+//! Encrypt a PDF: `cargo run -p pdfcraft-cos --example protect in.pdf out.pdf rc4-40|rc4-128|rc4-128-crypt-filter|aes-128|aes-256 USER OWNER`
 /// 32 fresh bytes for the file key. `RandomState` is seeded by the operating system (as the
 /// engine's `entropy` uses it), so every run encrypts with a different key.
 fn seed() -> [u8; 32] {
@@ -18,6 +18,7 @@ fn main() {
     let algorithm = match alg.as_str() {
         "rc4-40" => pdfcraft_cos::Algorithm::Rc4_40,
         "rc4-128" => pdfcraft_cos::Algorithm::Rc4_128,
+        "rc4-128-crypt-filter" => pdfcraft_cos::Algorithm::Rc4_128CryptFilter,
         "aes-128" => pdfcraft_cos::Algorithm::Aes128,
         _ => pdfcraft_cos::Algorithm::Aes256,
     };

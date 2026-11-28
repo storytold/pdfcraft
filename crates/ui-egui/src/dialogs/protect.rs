@@ -175,11 +175,15 @@ fn body(ui: &mut Ui, d: &mut ProtectDraft) -> bool {
 fn advanced_rows(ui: &mut Ui, d: &mut ProtectDraft) {
     use Algorithm as A;
     let restricts = d.restricts();
+    // The guide's compatibility names with the PDF version each needs, as the guide gives them
+    // (ISO 32000-2 Table 20 and Table 25; 256-bit AES in a PDF 1.7 file is declared as Adobe
+    // extension level 8).
     let algos = [
-        Entry::new(A::Aes256, text("Acrobat X and later (256-bit AES)")),
-        Entry::new(A::Aes128, text("Acrobat 7.0 and later (128-bit AES)")),
-        Entry::new(A::Rc4_128, text("Acrobat 5.0 and later (128-bit RC4)")),
-        Entry::new(A::Rc4_40, text("Acrobat 3.0 and later (40-bit RC4)")),
+        Entry::new(A::Aes256, text("Acrobat X and later (PDF 1.7, 256-bit AES)")),
+        Entry::new(A::Aes128, text("Acrobat 7.0 and later (PDF 1.6, 128-bit AES)")),
+        Entry::new(A::Rc4_128CryptFilter, text("Acrobat 6.0 and later (PDF 1.5, 128-bit RC4)")),
+        Entry::new(A::Rc4_128, text("Acrobat 5.0 and later (PDF 1.4, 128-bit RC4)")),
+        Entry::new(A::Rc4_40, text("Acrobat 3.0 and later (PDF 1.3, 40-bit RC4)")),
     ];
     let label = text("Compatibility");
     Field::new(label.clone()).show(ui, |ui, _| {
@@ -187,15 +191,12 @@ fn advanced_rows(ui: &mut Ui, d: &mut ProtectDraft) {
             d.protection.algorithm = a;
         }
     });
-    // Unencrypted metadata needs crypt filters (Acrobat 6.0 and later), which RC4 lacks.
-    let rc4 = d.protection.algorithm == A::Rc4_40 || d.protection.algorithm == A::Rc4_128;
-    if rc4 {
+    // Unencrypted metadata needs crypt filters (Acrobat 6.0 and later, PDF 1.5).
+    let filters = d.protection.algorithm.has_crypt_filters();
+    if !filters {
         d.protection.encrypt_metadata = true;
     }
-    let mut what = vec![Entry::new(true, text("All document contents"))];
-    if !rc4 {
-        what.push(Entry::new(false, text("All document contents except metadata")));
-    }
+    let what = [Entry::new(true, text("All document contents")), Entry::new(false, text("All document contents except metadata")).enabled(filters)];
     let label = text("Encrypt");
     Field::new(label.clone()).show(ui, |ui, _| {
         if let Some(all) = Select::new(label.clone(), Bind::given(d.protection.encrypt_metadata), &what).show(ui).value().copied() {

@@ -92,6 +92,81 @@ fn editing_restrictions_via_advanced_options() {
     assert!(h.state().session.get(id).unwrap().allows_security_change());
 }
 
+/// Advanced Options lists the guide's five compatibility levels, each with the PDF version it
+/// needs, and offers "All document contents except metadata" from Acrobat 6.0 on (Acrobat 9 guide:
+/// "This option is available when you select a compatibility to Acrobat 6.0 and later"): the
+/// levels whose encryption has crypt filters, where ISO 32000-2 Table 21 `EncryptMetadata` means
+/// something. Acrobat 6.0 writes 128-bit RC4 through a crypt filter (`/V 4`, `/CFM /V2`).
+#[test]
+fn acrobat_6_and_later_can_leave_the_metadata_unencrypted() {
+    use egui::accesskit::Role;
+
+    let mut h = harness();
+    assert!(h.execute("protect.password"));
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Button, "Advanced Options").click();
+    h.run_steps(2);
+    let open = |h: &mut Harness<'static, PdfCraftApp>, caption: &str| {
+        h.get_by_role_and_label(Role::ComboBox, caption).click();
+        h.run_steps(2);
+    };
+    let item = |h: &Harness<'static, PdfCraftApp>, label: &str| {
+        h.query_all_by(|n| n.label().as_deref() == Some(label) && n.role() != Role::ComboBox).next().map(|n| n.rect())
+    };
+    let pick = |h: &mut Harness<'static, PdfCraftApp>, caption: &str, to: &str| {
+        h.get_by_role_and_label(Role::ComboBox, caption).click();
+        h.run_steps(2);
+        h.get_by(|n| n.label().as_deref() == Some(to) && n.role() != Role::ComboBox).click_accesskit();
+        h.run_steps(2);
+    };
+    const X: &str = "Acrobat X and later (PDF 1.7, 256-bit AES)";
+    const A6: &str = "Acrobat 6.0 and later (PDF 1.5, 128-bit RC4)";
+    const EXCEPT: &str = "All document contents except metadata";
+    // Whether the Encrypt list offers EXCEPT.
+    let offered = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.get_by_role_and_label(Role::ComboBox, "Encrypt").click();
+        h.run_steps(2);
+        let on = h.query_all_by(|n| n.label().as_deref() == Some(EXCEPT) && n.role() != Role::ComboBox && !n.is_disabled()).next().is_some();
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        on
+    };
+    // The list, in the guide's order.
+    let levels = [
+        X,
+        "Acrobat 7.0 and later (PDF 1.6, 128-bit AES)",
+        A6,
+        "Acrobat 5.0 and later (PDF 1.4, 128-bit RC4)",
+        "Acrobat 3.0 and later (PDF 1.3, 40-bit RC4)",
+    ];
+    open(&mut h, "Compatibility");
+    let tops: Vec<f32> = levels.iter().map(|l| item(&h, l).expect(l).top()).collect();
+    assert!(tops.windows(2).all(|w| w[0] < w[1]), "in the guide's order: {tops:?}");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(offered(&mut h), "Acrobat X");
+    for (level, wanted) in levels.iter().zip([true, true, true, false, false]).skip(1) {
+        pick(&mut h, "Compatibility", level);
+        assert_eq!(offered(&mut h), wanted, "{level}");
+    }
+    pick(&mut h, "Compatibility", A6);
+    pick(&mut h, "Encrypt", EXCEPT);
+    type_into(&mut h, "Type Password", "Open-Sesame-42");
+    type_into(&mut h, "Re-type Password", "Open-Sesame-42");
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    let raw = String::from_utf8_lossy(&bytes);
+    for entry in ["/V 4", "/R 4", "/CFM /V2", "/EncryptMetadata false"] {
+        assert!(raw.contains(entry), "{entry} missing");
+    }
+    // The fixture is PDF 1.7 already: the version is never lowered.
+    assert!(raw.starts_with("%PDF-1.7"));
+    let mut s = pdfcraft_engine::Session::new();
+    assert!(s.open("p.pdf", None, bytes, Some("Open-Sesame-42")).is_ok());
+}
+
 /// Advanced Options sets an open password and a permissions password together, as the guide's
 /// Password Security settings do ("setting both types of passwords is often beneficial"): the
 /// saved file needs the open password to open, opens restricted with it, and the permissions
