@@ -7589,11 +7589,11 @@ title = "Unembed fonts"
 area = "K"
 tier = "P2"
 milestone = "M11"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_unembed_fonts"]
+evidence = ["crates/automation/tests/it/unembed_fonts.rs::unembedding_shrinks_the_saved_file_and_keeps_the_text", "crates/optimize/tests/optimize/unembed_fonts.rs::a_standard_encoded_font_loses_its_program_and_keeps_its_metrics", "crates/optimize/tests/optimize/unembed_fonts.rs::fonts_a_substitute_cannot_stand_in_for_keep_their_programs", "crates/optimize/tests/optimize/unembed_fonts.rs::a_descriptor_shared_with_a_font_that_stays_blocks_both", "crates/optimize/tests/optimize/unembed_fonts.rs::a_program_another_font_still_uses_is_not_counted_as_freed"]
+notes = "headless only (doc_unembed_fonts, with dry_run); no panel in the PDF Optimizer dialog yet. Simple Type 1 and TrueType fonts with a standard encoding, or non-symbolic, lose their program, /CIDSet and /CharSet and, by default, the subset tag; widths, metrics, /Encoding and /ToUnicode stay. Type 3, composite, symbolic built-in-encoded and widthless fonts, direct font dictionaries and descriptors shared with a font that stays are refused with a reason. The programs go on the next full save, which the edit asks for. Breaks PDF/A and PDF/X conformance, reported as loses_conformance"
 
 [[feature]]
 id = "optimize.flatten-transparency"

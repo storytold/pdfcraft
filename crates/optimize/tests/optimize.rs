@@ -9,6 +9,9 @@ use pdfcraft_optimize::{
     effective_resolutions, optimize,
 };
 
+#[path = "optimize/unembed_fonts.rs"]
+mod unembed_fonts;
+
 /// What image `s` decodes to, its fax or JBIG2 data included, with no limit on the work: the
 /// samples an operation would read through its `ImageBudget`.
 fn decoded_image(doc: &Document, s: &Stream) -> Result<Vec<u8>, pdfcraft_cos::CosError> {

@@ -260,6 +260,11 @@ fn fixture(a: &mut Automation, root: &Path, tool: &str) -> serde_json::Map<Strin
             let args = json!({ "steps": [{ "step": "set_title", "arg": "Confined" }] });
             args.as_object().cloned().unwrap_or_default()
         }
+        // An open document, so the hostile values reach the font names and flags.
+        "doc_unembed_fonts" => {
+            let doc = blank_doc(a);
+            json!({ "doc": doc }).as_object().cloned().unwrap_or_default()
+        }
         _ => serde_json::Map::new(),
     }
 }

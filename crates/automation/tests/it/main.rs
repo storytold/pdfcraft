@@ -28,4 +28,5 @@ mod render_warnings;
 mod suggest_outline;
 mod text_copy;
 mod timesheet_compat;
+mod unembed_fonts;
 mod unreadable_objects;

@@ -37,6 +37,7 @@ mod redact;
 mod signing;
 mod text_cache;
 mod tools;
+mod unembed_fonts;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

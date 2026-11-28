@@ -161,6 +161,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::SetDocumentScript { .. }
         | Edit::SetFieldScript { .. }
         | Edit::RemoveStandardId { .. }
+        | Edit::UnembedFonts { .. }
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
         | Edit::PrepareText { .. }
@@ -553,6 +554,22 @@ fn invalidate_form_script_snapshot(cx: &mut EditCtx) {
     }
 }
 
+/// Unembed fonts; an error when a name matches no font or nothing can be unembedded. The programs
+/// go only on a full rewrite, so the document asks for one.
+fn unembed_fonts(doc: &mut pdfcraft_cos::Document, fonts: &Option<Vec<String>>, keep_subset_tag: bool) -> Result<(), EditError> {
+    let request = pdfcraft_optimize::unembed::Request { fonts: fonts.clone(), keep_subset_tag };
+    let preview = pdfcraft_optimize::unembed::plan(doc, &request);
+    if !preview.unmatched.is_empty() {
+        return Err(EditError::Invalid(format!("no font is named {}", preview.unmatched.join(", "))));
+    }
+    if preview.unembedded() == 0 {
+        return Err(EditError::Invalid("no font can be unembedded".into()));
+    }
+    pdfcraft_optimize::unembed::unembed(doc, &request).map_err(|e| EditError::Invalid(e.to_string()))?;
+    doc.require_full_save();
+    Ok(())
+}
+
 /// Perform an edit on a working copy (the caller discards it on error).
 pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
     match edit {
@@ -930,6 +947,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_preflight::convert(doc, *level).map_err(|e| EditError::Invalid(e.to_string()))?;
         }
         Edit::RemoveStandardId { standard } => pdfcraft_organize::remove_standard_id(doc, *standard)?,
+        Edit::UnembedFonts { fonts, keep_subset_tag } => unembed_fonts(doc, fonts, *keep_subset_tag)?,
         Edit::SetDocumentScript { name, script } => pdfcraft_forms::set_document_script(doc, name, script.as_deref())?,
         Edit::AddOcrText { page, words } => {
             crate::ocr::layer::add_text(doc, *page, words)?;

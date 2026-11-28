@@ -357,6 +357,7 @@ impl Automation {
                 json!({ "path": path.to_string_lossy(), "written": written, "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged, "images_refused": images_refused })
             }
             "doc_optimize" => self.doc_optimize(&a)?,
+            "doc_unembed_fonts" => self.unembed_fonts(&a)?,
             "doc_initial_view" => self.doc_initial_view(&a)?,
             "doc_revisions" => self.doc_revisions(&a)?,
             "text_lines" => {
