@@ -9949,6 +9949,10 @@ mod symbolic_truetype_cmap;
 // length gives (vendored hayro-interpret patch 83).
 mod truetype_loca_format;
 
+// A TrueType font whose last `loca` offset is out of order ends its last glyph at the end of
+// `glyf` (vendored hayro-interpret patch 109).
+mod truetype_loca_last_glyph;
+
 // An Arial (#5889) or Times New Roman (#6449) the PDF doesn't embed draws the glyphs its codes
 // name.
 mod non_embedded_arial;
