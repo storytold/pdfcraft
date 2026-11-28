@@ -45,6 +45,7 @@ mod links;
 mod pool;
 mod samples;
 mod tiles;
+pub mod unembed;
 mod unused;
 
 pub use audit::{SpaceCategory, SpaceUse, audit_space};

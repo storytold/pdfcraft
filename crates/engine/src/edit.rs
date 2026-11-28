@@ -472,6 +472,12 @@ pub enum Edit {
     RemoveStandardId {
         standard: Standard,
     },
+    /// PDF Optimizer: take the programs out of the fonts named (by `/BaseFont`, with or without
+    /// the subset tag), or of every font a substitute can stand in for.
+    UnembedFonts {
+        fonts: Option<Vec<String>>,
+        keep_subset_tag: bool,
+    },
     /// What a script (button or console) changed in form fields: values, appearance colours,
     /// read-only, required and visibility.
     ApplyScriptChanges {

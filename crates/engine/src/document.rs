@@ -302,6 +302,11 @@ impl Document {
         self.editor.as_ref().map(|e| optimize::audit_space(&e.cos, self.bytes.len() as u64)).unwrap_or_default()
     }
 
+    /// What Unembed fonts would do to each font, without changing the document.
+    pub fn unembed_fonts_plan(&self, request: &optimize::unembed::Request) -> optimize::unembed::Plan {
+        self.editor.as_ref().map(|e| optimize::unembed::plan(&e.cos, request)).unwrap_or_default()
+    }
+
     /// [`Self::audit_space`] as a job over a copy of the document's state, to run in the background.
     pub fn space_audit_job(&self) -> SpaceAuditJob {
         SpaceAuditJob { cos: self.editor.as_ref().map(|e| e.cos.clone()), size: self.bytes.len() as u64 }
