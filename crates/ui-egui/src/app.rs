@@ -463,6 +463,7 @@ impl PdfCraftApp {
             last_copied_file: None,
             clipboard,
             page_props_draft: None,
+            delete_pages_draft: None,
             form_preview: false,
             #[cfg(not(target_arch = "wasm32"))]
             recovery: store,

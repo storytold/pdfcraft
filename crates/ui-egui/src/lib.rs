@@ -140,8 +140,8 @@ pub use platform::ui_scale;
 #[cfg(not(target_arch = "wasm32"))]
 use state::OpenRequest;
 pub use state::{
-    CommentClip, LeftPanel, LinkOrigin, Mode, OpenOutcome, PageClip, PagePropsDraft, PasswordPrompt, PendingLink, PendingRemoteLink, QuickTool,
-    RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel, UnlockPrompt,
+    CommentClip, DeletePagesDraft, LeftPanel, LinkOrigin, Mode, OpenOutcome, PageClip, PagePropsDraft, PasswordPrompt, PendingLink,
+    PendingRemoteLink, QuickTool, RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel, UnlockPrompt,
 };
 pub use tools::bulk_fields;
 use tools::calc_order_ui;
@@ -640,6 +640,8 @@ pub struct PdfCraftApp {
     pub(crate) clipboard: craft::platform::clipboard::Clipboard,
     /// Page Properties: which pages, and the tab order they have.
     pub page_props_draft: Option<PagePropsDraft>,
+    /// Delete pages: the document and pages the confirmation dialog would delete.
+    pub delete_pages_draft: Option<DeletePagesDraft>,
     /// Prepare a form ▸ Preview: fill the form instead of editing its fields.
     pub form_preview: bool,
     /// Where autosaves go (`None`: autosave off, e.g. on the web and in tests).
