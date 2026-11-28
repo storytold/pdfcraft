@@ -194,9 +194,17 @@ impl Automation {
         let id = self.doc(a)?.id;
         let target = self.resolve(a.str("path")?, true)?;
         // The same file under another spelling (`sub/../x.pdf`, a link) counts too: compare the
-        // resolved paths. A target that doesn't exist yet can't be the original.
-        let own_file = self.doc(a)?.path.as_deref().is_some_and(|p| {
-            Path::new(p) == target || std::fs::canonicalize(p).ok().is_some_and(|own| std::fs::canonicalize(&target).ok() == Some(own))
+        // resolved paths. The original's path goes through the same confinement first, so a
+        // file swapped for a link out of the root is never followed; one that can't be confined
+        // is compared as written only. A target that doesn't exist yet can't be the original.
+        let own = self.doc(a)?.path.clone();
+        let own_file = own.as_deref().is_some_and(|p| {
+            Path::new(p) == target
+                || self
+                    .resolve_for(p, file_access::Access::Read, true)
+                    .ok()
+                    .and_then(|confined| std::fs::canonicalize(confined).ok())
+                    .is_some_and(|own| std::fs::canonicalize(&target).ok() == Some(own))
         });
         if own_file {
             return Err(failed("path is the document's own file: choose a new file for the copy"));
