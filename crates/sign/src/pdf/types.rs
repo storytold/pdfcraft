@@ -178,6 +178,7 @@ pub const WORDINGS: &[&str] = &[
     "The signature's signed attributes name a content type other than data, so it is not a signature of the document.",
     "The document has been altered or corrupted since the signature was applied.",
     "The signer's certificate is not in the signature.",
+    "The signer's certificate is not the one the signature names.",
     "The signature value does not match the signer's certificate: the signature is corrupt.",
     "The signature could not be checked ({}).",
     "The signature could not be verified ({}).",

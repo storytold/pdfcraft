@@ -32,8 +32,9 @@ pub struct SignerInfo {
     pub message_digest: Option<Vec<u8>>,
     pub content_type: Option<String>,
     pub signing_time: Option<Time>,
-    /// ESS signing-certificate(-v2) present (CAdES).
-    pub signing_certificate: bool,
+    /// The certificate each ESS signing-certificate(-v2) attribute names (CAdES), in the order
+    /// of the attributes: the first ESSCertID(v2) of each. Empty when there is none.
+    pub signing_certificate: Vec<EssCertId>,
     pub scheme: Scheme,
     /// The digest named by the signature algorithm, when it names one.
     pub scheme_digest: Option<DigestAlg>,
@@ -42,6 +43,28 @@ pub struct SignerInfo {
     pub timestamp: bool,
     /// The attached token's raw CMS bytes, when present.
     pub timestamp_token: Option<Vec<u8>>,
+}
+
+/// The signer's certificate as a signing-certificate(-v2) attribute names it (RFC 2634 §5.4,
+/// RFC 5035 §4): the hash of the whole certificate and, optionally, its issuer and serial.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EssCertId {
+    /// SHA-1 for an ESSCertID; the named hash, SHA-256 by default, for an ESSCertIDv2.
+    pub digest: DigestAlg,
+    pub hash: Vec<u8>,
+    /// The issuer's directory name from `issuerSerial`, when it gives one.
+    pub issuer: Option<Vec<u8>>,
+    /// The serial number from `issuerSerial`, when it is present.
+    pub serial: Option<Vec<u8>>,
+}
+
+impl EssCertId {
+    /// Whether `cert` is the certificate this names.
+    pub fn names(&self, cert: &Certificate) -> bool {
+        self.digest.digest(&[cert.raw.as_slice()]) == self.hash
+            && self.serial.as_deref().is_none_or(|s| strip(s) == strip(&cert.serial))
+            && self.issuer.as_deref().is_none_or(|i| cert.issuer.same_as(i))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -172,12 +195,21 @@ impl SignedData {
         Ok(SignedData { certificates, signer, content, econtent_type, quirks })
     }
 
-    /// The signer's certificate among those carried.
+    /// The signer's certificate among those carried. When more than one matches the SID (two
+    /// certificates for one key can share a key identifier), the one the signed attributes name.
     pub fn signer_certificate(&self) -> Option<&Certificate> {
-        self.certificates.iter().find(|c| match &self.signer.sid {
+        let mut by_sid = self.certificates.iter().filter(|c| match &self.signer.sid {
             SignerId::IssuerSerial { issuer, serial } => &c.issuer.raw == issuer && strip(&c.serial) == strip(serial),
             SignerId::KeyId(k) => c.subject_key_id.as_ref() == Some(k),
-        })
+        });
+        by_sid.clone().find(|c| self.signed_attrs_name(c)).or_else(|| by_sid.next())
+    }
+
+    /// Whether the signed attributes name `cert` as the signer's certificate, when they name one.
+    /// The SID and the carried certificates are not signed, so without this check a certificate
+    /// for the same key with another name could stand in for the one the signer chose.
+    pub fn signed_attrs_name(&self, cert: &Certificate) -> bool {
+        self.signer.signing_certificate.iter().all(|id| id.names(cert))
     }
 
     /// Check the signature value with `cert`'s key. `content_digest` is the digest of the
@@ -265,7 +297,45 @@ fn parse_signer_id(sid: &Tlv<'_>) -> Result<SignerId, SignError> {
     }
 }
 
-type SignedAttrs = (Vec<u8>, Option<Vec<u8>>, Option<String>, Option<Time>, bool);
+type SignedAttrs = (Vec<u8>, Option<Vec<u8>>, Option<String>, Option<Time>, Vec<EssCertId>);
+
+/// The first ESSCertID of a SigningCertificate (`v2` false) or the first ESSCertIDv2 of a
+/// SigningCertificateV2: the signer's own certificate (RFC 2634 §5.4, RFC 5035 §3).
+fn parse_ess_cert_id(value: &Tlv<'_>, v2: bool) -> Result<EssCertId, SignError> {
+    let unreadable = || bad("the signing-certificate attribute");
+    // SigningCertificate(V2) ::= SEQUENCE { certs SEQUENCE OF ESSCertID(v2), policies OPTIONAL }
+    let certs = value.expect(tag::SEQUENCE, "signing certificate")?.children()?;
+    let ids = certs.first().ok_or_else(unreadable)?.expect(tag::SEQUENCE, "ESSCertIDs")?.children()?;
+    let id = ids.first().ok_or_else(unreadable)?.expect(tag::SEQUENCE, "ESSCertID")?.children()?;
+    let mut fields = id.iter();
+    let mut field = fields.next().ok_or_else(unreadable)?;
+    let mut digest = if v2 { DigestAlg::Sha256 } else { DigestAlg::Sha1 };
+    // ESSCertIDv2 ::= SEQUENCE { hashAlgorithm DEFAULT sha256, certHash, issuerSerial OPTIONAL }
+    if v2 && field.tag == tag::SEQUENCE {
+        let o = field.children()?.first().ok_or_else(unreadable)?.oid()?;
+        digest = DigestAlg::from_oid(&o).ok_or_else(|| SignError::Unsupported(format!("signing-certificate hash {o}")))?;
+        field = fields.next().ok_or_else(unreadable)?;
+    }
+    if field.tag != tag::OCTET_STRING {
+        return Err(unreadable());
+    }
+    let hash = field.value.to_vec();
+    let (mut issuer, mut serial) = (None, None);
+    if let Some(issuer_serial) = fields.next() {
+        // IssuerSerial ::= SEQUENCE { issuer GeneralNames, serialNumber CertificateSerialNumber }
+        let p = issuer_serial.expect(tag::SEQUENCE, "issuerSerial")?.children()?;
+        let [names, number] = p.as_slice() else { return Err(unreadable()) };
+        if names.tag != tag::SEQUENCE || number.tag != tag::INTEGER || number.value.is_empty() {
+            return Err(unreadable());
+        }
+        // A directoryName ([4], explicit: Name is a CHOICE) is how a certificate's issuer is named.
+        if let Some(name) = names.children()?.into_iter().find(|n| n.tag == tag::ctx(4)) {
+            issuer = Some(name.inner()?.raw.to_vec());
+        }
+        serial = Some(number.value.to_vec());
+    }
+    Ok(EssCertId { digest, hash, issuer, serial })
+}
 
 fn parse_signed_attrs(attrs: &Tlv<'_>) -> Result<SignedAttrs, SignError> {
     // Signed over the DER SET OF, i.e. the same contents with the universal SET tag.
@@ -274,7 +344,7 @@ fn parse_signed_attrs(attrs: &Tlv<'_>) -> Result<SignedAttrs, SignError> {
     if let Some(t) = set.first_mut() {
         *t = tag::SET;
     }
-    let (mut message_digest, mut content_type, mut signing_time, mut signing_certificate) = (None, None, None, false);
+    let (mut message_digest, mut content_type, mut signing_time, mut signing_certificate) = (None, None, None, Vec::new());
     let (mut seen_type, mut seen_digest) = (false, false);
     for a in attrs.children()? {
         let p = a.children()?;
@@ -298,7 +368,11 @@ fn parse_signed_attrs(attrs: &Tlv<'_>) -> Result<SignedAttrs, SignError> {
             // A value that is not an OID would skip every content-type check after this.
             (CONTENT_TYPE, Some(v)) => content_type = Some(v.oid()?),
             (SIGNING_TIME, Some(v)) => signing_time = v.time().ok(),
-            (SIGNING_CERT_V2 | SIGNING_CERT, _) => signing_certificate = true,
+            // One that can't be read can't name the signer's certificate, which the attribute is for.
+            (SIGNING_CERT_V2 | SIGNING_CERT, v) => {
+                let v = v.ok_or_else(|| bad("the signing-certificate attribute"))?;
+                signing_certificate.push(parse_ess_cert_id(&v, o == SIGNING_CERT_V2)?);
+            }
             _ => {}
         }
     }
@@ -314,7 +388,7 @@ fn parse_signer(si: &Tlv<'_>) -> Result<SignerInfo, SignError> {
     let d_oid = digest_alg.first().ok_or_else(|| bad("digestAlgorithm"))?.oid()?;
     let digest = DigestAlg::from_oid(&d_oid).ok_or_else(|| SignError::Unsupported(format!("digest {d_oid}")))?;
     let mut next = it.next().ok_or_else(|| bad("signatureAlgorithm"))?;
-    let (mut signed_attrs, mut message_digest, mut content_type, mut signing_time, mut signing_certificate) = (None, None, None, None, false);
+    let (mut signed_attrs, mut message_digest, mut content_type, mut signing_time, mut signing_certificate) = (None, None, None, None, Vec::new());
     if next.tag == tag::ctx(0) {
         let (set, md, ct, st, sc) = parse_signed_attrs(&next)?;
         (signed_attrs, message_digest, content_type, signing_time, signing_certificate) = (Some(set), md, ct, st, sc);

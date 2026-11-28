@@ -5,8 +5,11 @@
 use std::sync::Arc;
 
 use pdfcraft_cos::Document;
+use pdfcraft_sign::cms::EssCertId;
 use pdfcraft_sign::der::{self, Time, tag};
+use pdfcraft_sign::keys::DigestAlg;
 use pdfcraft_sign::pkcs12::DigitalId;
+use pdfcraft_sign::timestamp::{TimestampIssuance, TimestampQuery, TimestampSigner, parse_token, respond};
 use pdfcraft_sign::x509::{Certificate, Name, build_chain, build_chain_noted};
 use pdfcraft_sign::{PrivateKey, SignOptions, Status, TrustStore, signatures};
 
@@ -46,7 +49,11 @@ struct Party {
 
 /// A certificate for a fresh key, signed by `issuer` (or by itself).
 fn issue(cn: &str, issuer: Option<&Party>, valid: (u32, u32), extensions: &[Vec<u8>]) -> Party {
-    let key = PrivateKey::generate_p256().unwrap();
+    issue_for(PrivateKey::generate_p256().unwrap(), cn, issuer, valid, extensions)
+}
+
+/// A certificate for `key`, signed by `issuer` (or by itself).
+fn issue_for(key: PrivateKey, cn: &str, issuer: Option<&Party>, valid: (u32, u32), extensions: &[Vec<u8>]) -> Party {
     let name = Name::build(cn, "", "Chain Tests", "", "US");
     let signer = issuer.map_or(&key, |i| &i.key);
     let issuer_name = issuer.map_or(&name, |i| &i.name);
@@ -361,4 +368,112 @@ fn an_issuer_with_an_unprocessed_critical_extension_does_not_vouch() {
     let l = end_entity("Leaf", &i);
     let pool = [i.cert.clone(), constrained_root.cert.clone()];
     assert_eq!(names(&build_chain(&l.cert, &pool, None)), ["Leaf", "Under Constrained Root", "Name Constrained Root"]);
+}
+
+/// `cms` (a ContentInfo, possibly followed by padding) rewritten, without any private key, so its
+/// SID names `cert` and it carries `carried`, in that order; the signed attributes and the
+/// signature value stay as they were.
+fn name_another_signer(cms: &[u8], cert: &Certificate, carried: &[&Certificate]) -> Vec<u8> {
+    let (ci, _) = der::Tlv::parse(cms).unwrap();
+    let ci = ci.children().unwrap();
+    let sd = ci[1].inner().unwrap().children().unwrap();
+    let [version, digests, encap, _certs, signers] = sd.as_slice() else { panic!("SignedData with certificates") };
+    let signer = signers.children().unwrap()[0].children().unwrap();
+    let sid = der::seq(&[&cert.issuer.raw, &der::uint(&cert.serial)]);
+    let mut fields: Vec<&[u8]> = signer.iter().map(|t| t.raw).collect();
+    fields[1] = &sid;
+    let signer = der::seq(&fields);
+    let carried: Vec<u8> = carried.iter().flat_map(|c| c.raw.iter().copied()).collect();
+    let sd = der::seq(&[version.raw, digests.raw, encap.raw, &der::tlv(tag::ctx(0), &carried), &der::set_of(&[&signer])]);
+    der::seq(&[ci[0].raw, &der::explicit(0, &sd)])
+}
+
+/// `pdf` with the CMS in its last signature's `/Contents` passed through `rewrite`. The new CMS is
+/// padded to the old length, so no byte outside `/Contents` changes.
+fn rewrite_contents(pdf: &[u8], rewrite: impl Fn(&[u8]) -> Vec<u8>) -> Vec<u8> {
+    let at = pdf.windows(10).rposition(|w| w == b"/ByteRange").unwrap();
+    let open = at + pdf[at..].iter().position(|&b| b == b'[').unwrap();
+    let close = open + pdf[open..].iter().position(|&b| b == b']').unwrap();
+    let range: Vec<usize> = std::str::from_utf8(&pdf[open + 1..close]).unwrap().split_whitespace().map(|n| n.parse().unwrap()).collect();
+    // `<` hex `>` lies between the two ranges.
+    let (from, to) = (range[0] + range[1] + 1, range[2] - 1);
+    let hex = std::str::from_utf8(&pdf[from..to]).unwrap();
+    let cms: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
+    let mut new_hex: String = rewrite(&cms).iter().map(|b| format!("{b:02X}")).collect();
+    assert!(new_hex.len() <= to - from, "the rewritten CMS fits the placeholder");
+    new_hex.extend(std::iter::repeat_n('0', to - from - new_hex.len()));
+    let mut out = pdf.to_vec();
+    out[from..to].copy_from_slice(new_hex.as_bytes());
+    out
+}
+
+/// Two certificates the same CA issued for the same key under different names. The signed
+/// attributes of a signature or a timestamp token name the one the signer chose; the other, put in
+/// its place in the unsigned part of the CMS, must not take its name (#7926).
+#[test]
+fn another_certificate_for_the_same_key_does_not_take_the_signers_place() {
+    let r = root();
+    let exts = [basic_constraints(false, None), key_usage(DIGITAL_SIGNATURE)];
+    let Party { key, cert: chosen, .. } = issue_for(PrivateKey::generate_p256().unwrap(), "Alice Personal", Some(&r), FOREVER, &exts);
+    let Party { key, cert: other, .. } = issue_for(key, "Alice Director of Finance", Some(&r), FOREVER, &exts);
+    // The same issuer and serial as the chosen one (the test CA numbers by name length), so the
+    // SID matches both.
+    let Party { key, cert: twin, .. } = issue_for(key, "Alice Director", Some(&r), FOREVER, &exts);
+    assert_eq!(chosen.public_key, other.public_key);
+    assert_eq!((&chosen.issuer, &chosen.serial), (&twin.issuer, &twin.serial));
+    let id = DigitalId { key, certificate: chosen, chain: Vec::new(), friendly_name: None };
+
+    let doc = Document::open(Arc::new(fixture())).unwrap();
+    let opts = SignOptions { page: 0, rect: None, date: "D:20260601120000Z".into(), ..SignOptions::default() };
+    let signed = pdfcraft_sign::sign(&doc, &id, &opts).unwrap();
+    let trust = TrustStore { certs: vec![r.cert.clone()] };
+    let check = |pdf: &[u8]| signatures(&Document::open(Arc::new(pdf.to_vec())).unwrap(), pdf, &trust).into_iter().rfind(|s| s.signed).unwrap();
+    let control = check(&signed);
+    assert_eq!(control.status, Status::Valid, "{:?}", control.details);
+    let swapped = rewrite_contents(&signed, |cms| name_another_signer(cms, &other, &[&other]));
+    assert_eq!(swapped.len(), signed.len());
+    let s = check(&swapped);
+    assert_ne!(s.status, Status::Valid, "{:?}", s.details);
+    assert!(!s.signer.unwrap_or_default().contains("Director"), "the other certificate's name is not shown as the signer's");
+    // Two carried certificates the SID matches: the one the signed attributes name is the signer's,
+    // wherever it is in the list.
+    let both = rewrite_contents(&signed, |cms| name_another_signer(cms, &id.certificate, &[&twin, &id.certificate]));
+    let s = check(&both);
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert!(!s.signer.unwrap_or_default().contains("Director"), "the twin's name is not shown as the signer's");
+
+    // A timestamp token names its authority's certificate the same way.
+    let query = TimestampQuery::new(DigestAlg::Sha256, DigestAlg::Sha256.digest(&[b"stamped".as_slice()])).unwrap();
+    let response = respond(
+        TimestampSigner { key: &id.key, certificate: &id.certificate, chain: &[], digest: DigestAlg::Sha256 },
+        TimestampIssuance { query: &query, policy: "1.2.3.4", generation_time: time(2026), serial: 1 },
+    )
+    .unwrap();
+    let token = der::Tlv::parse_all(&response).unwrap().children().unwrap()[1].raw.to_vec();
+    assert!(parse_token(&token).is_ok());
+    assert!(parse_token(&name_another_signer(&token, &other, &[&other])).is_err());
+    assert!(parse_token(&name_another_signer(&token, &id.certificate, &[&twin, &id.certificate])).is_ok());
+}
+
+/// The issuer a signing-certificate attribute gives is compared as a name (RFC 5280 §7.1), not as
+/// bytes: written in the other string type or case it is still the certificate's issuer; with its
+/// RDNs in another order it is another name.
+#[test]
+fn the_signing_certificate_attribute_gives_the_issuer_as_a_name() {
+    let r = root();
+    let cert = end_entity("Leaf", &r).cert;
+    let named_by = |rdns: &[&[u8]]| EssCertId {
+        digest: DigestAlg::Sha256,
+        hash: DigestAlg::Sha256.digest(&[cert.raw.as_slice()]),
+        issuer: Some(der::seq(rdns)),
+        serial: Some(cert.serial.clone()),
+    };
+    let rdn = |oid: &str, value: Vec<u8>| der::set_of(&[&der::seq(&[&der::oid(oid), &value])]);
+    // The issuer has C as a PrintableString and O and CN as UTF8Strings.
+    let c = rdn("2.5.4.6", der::utf8("us"));
+    let o = rdn("2.5.4.10", der::printable("CHAIN  TESTS"));
+    let cn = rdn("2.5.4.3", der::printable("test root"));
+    assert_ne!(der::seq(&[&c, &o, &cn]), cert.issuer.raw);
+    assert!(named_by(&[&c, &o, &cn]).names(&cert), "the same name in other string types and case");
+    assert!(!named_by(&[&cn, &o, &c]).names(&cert), "the same RDNs in reverse order");
 }

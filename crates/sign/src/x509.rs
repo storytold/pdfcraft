@@ -34,6 +34,15 @@ impl Name {
         Ok(Name { attrs, raw: t.raw.to_vec() })
     }
 
+    /// Whether the DER name `other` is this name under RFC 5280 §7.1: the same RDNs in the same
+    /// order, each with the same attribute types. PrintableString and UTF8String values compare
+    /// after case folding and insignificant-space handling (RFC 4518, without its Unicode
+    /// normalization), so the name written in the other string type or case is still this name.
+    /// Other values compare by their encoding.
+    pub fn same_as(&self, other: &[u8]) -> bool {
+        self.raw == other || prepared(&self.raw).is_some_and(|a| prepared(other).is_some_and(|b| a == b))
+    }
+
     fn get(&self, oid: &str) -> Option<&str> {
         self.attrs.iter().find(|(o, _)| o == oid).map(|(_, v)| v.as_str())
     }
@@ -105,6 +114,43 @@ impl Name {
         let raw = der::tlv(tag::SEQUENCE, &rdns.concat());
         Name { attrs, raw }
     }
+}
+
+/// An attribute value as names compare it: prepared text, or the tag and bytes of anything else.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Prepared {
+    Text(String),
+    Other(u8, Vec<u8>),
+}
+
+/// A name as it compares: its RDNs in order, each a sorted list of (attribute type, value).
+type PreparedName = Vec<Vec<(Vec<u8>, Prepared)>>;
+
+/// The RDNs of the DER name `raw`, in order, each its (attribute type, prepared value) pairs
+/// sorted (an RDN is a SET). `None` when `raw` is not a name.
+fn prepared(raw: &[u8]) -> Option<PreparedName> {
+    let name = Tlv::parse_all(raw).ok()?.expect(tag::SEQUENCE, "Name").ok()?;
+    let mut rdns = Vec::new();
+    for rdn in name.children().ok()? {
+        let mut atvs = Vec::new();
+        for atv in rdn.children().ok()? {
+            let parts = atv.children().ok()?;
+            let [o, v] = parts.as_slice() else { return None };
+            let text = match v.tag {
+                tag::PRINTABLE_STRING | tag::UTF8_STRING => std::str::from_utf8(v.value).ok(),
+                _ => None,
+            };
+            let value = match text {
+                // RFC 4518 §2.3 case folding and §2.6.1 insignificant space handling.
+                Some(s) => Prepared::Text(s.split_whitespace().map(str::to_lowercase).collect::<Vec<_>>().join(" ")),
+                None => Prepared::Other(v.tag, v.value.to_vec()),
+            };
+            atvs.push((o.raw.to_vec(), value));
+        }
+        atvs.sort();
+        rdns.push(atvs);
+    }
+    Some(rdns)
 }
 
 /// A parsed certificate.
