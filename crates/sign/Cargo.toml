@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 # Existing shared ASN.1 codec; PDF signature policy remains local.
-craft-pkcs7 = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft-pkcs7 = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "e43c6a520f6df60ca3285f24781a778a4f5f6d3f" }
 pdfcraft-cos = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-content = { workspace = true }

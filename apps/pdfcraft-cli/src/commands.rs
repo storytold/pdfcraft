@@ -454,6 +454,9 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
                     "warning: page {page}: a Type 3 font has no /Widths; its glyphs were spaced by the widths their glyph procedures give"
                 );
             }
+            pdfcraft_render::RenderWarning::ImageNotDecoded => {
+                let _ = writeln!(std::io::stderr().lock(), "warning: page {page}: an image that could not be decoded was not drawn");
+            }
         }
     }
     Ok(())

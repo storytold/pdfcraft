@@ -299,6 +299,10 @@ pub enum RenderWarning {
     /// A Type 3 font without the `/Widths` it requires (ISO 32000-2 Table 110) was used; its
     /// glyphs were spaced by the widths their glyph procedures give.
     Type3WidthsMissing,
+    /// An image (an image XObject, an inline image, or an image's soft mask or stencil mask)
+    /// could not be decoded and was not drawn: its data is damaged, or uses a filter or
+    /// parameters the decoders refuse. Reported once per page however many images it affects.
+    ImageNotDecoded,
 }
 
 /// Counters for work performed by a renderer or render pool.
@@ -519,10 +523,12 @@ fn warning_settings(settings: &InterpreterSettings, warnings: Arc<Mutex<Vec<Rend
     InterpreterSettings {
         warning_sink: Arc::new(move |warning| {
             // Nested forms, Type 3 glyphs and patterns are interpreted again and each reports the
-            // exhausted budget: each warning is recorded once per page.
+            // exhausted budget, and several images can fail to decode on one page: each warning
+            // is recorded once per page.
             let warning = match warning {
                 InterpreterWarning::ContentTruncated => RenderWarning::ContentTruncated,
-                InterpreterWarning::UnsupportedFont | InterpreterWarning::ImageDecodeFailure => return,
+                InterpreterWarning::ImageDecodeFailure => RenderWarning::ImageNotDecoded,
+                InterpreterWarning::UnsupportedFont => return,
             };
             let mut warnings = lock(&target);
             if !warnings.contains(&warning) {
