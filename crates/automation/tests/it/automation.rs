@@ -8899,6 +8899,29 @@ fn optimizing_discards_an_embedded_search_index_through_tools() {
     assert_eq!(piece_info("small.pdf"), ["Illustrator"]);
 }
 
+/// Content newer than the chosen version is listed in `doc_optimize`'s result, not hidden.
+#[test]
+fn optimizing_to_an_older_version_lists_newer_content() {
+    let dir = workdir("optimize-newer");
+    let pdf = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /UserUnit 2 >>",
+    ]);
+    std::fs::write(dir.join("big.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "big.pdf" }))["doc"].as_u64().unwrap();
+    let listed = |r: &Value| r["newer_content"].as_array().is_some_and(|l| l.iter().any(|e| e["construct"] == "/UserUnit"));
+    let old = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "v14.pdf", "compatibility": "1.4" }));
+    assert!(listed(&old), "{old}");
+    let new = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "v17.pdf", "compatibility": "1.7" }));
+    assert!(!listed(&new), "{new}");
+    // A target size that can't be met: every attempt is made, and the kept copy is still checked.
+    let sized = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "sized.pdf", "compatibility": "1.4", "target_bytes": 1 }));
+    assert_eq!(sized["target_reached"], false, "{sized}");
+    assert!(listed(&sized), "{sized}");
+}
+
 #[test]
 fn optimizing_through_tools() {
     let dir = workdir("optimize");
