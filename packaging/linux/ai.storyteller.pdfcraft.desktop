@@ -12,3 +12,12 @@ StartupWMClass=ai.storyteller.pdfcraft
 Categories=Office;Viewer;
 Keywords=pdf;viewer;editor;annotate;sign;forms;merge;split;
 MimeType=application/pdf;
+Actions=Combine;
+
+# A launcher shortcut only (a quicklist entry: it has no selection, so it opens an empty Combine tab).
+# The right-click entries on selected PDFs and pictures are the file managers' own files next to this
+# one: kio-servicemenus/ (Dolphin), nemo-actions/ (Nemo), file-manager-actions/ (PCManFM) and
+# nautilus-scripts/ (GNOME Files, copied by hand).
+[Desktop Action Combine]
+Name=Combine files in PdfCraft
+Exec=pdfcraft --combine %U

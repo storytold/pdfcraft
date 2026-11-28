@@ -1279,6 +1279,43 @@ fn intake_harness() -> (Harness<'static, PdfCraftApp>, craft::platform::open::In
 }
 
 #[test]
+fn pdfs_and_pictures_from_the_file_managers_combine_entry_fill_one_list_in_order() {
+    // #585: "Combine files" on PDFs and pictures selected together opens Combine files with them
+    // listed in the order they arrive (one `--combine a b c` keeps the order given; Explorer's
+    // one-process-per-file selection reaches the first instance in no defined order); pictures become PDFs as they join (#569). Nothing is opened
+    // or combined until Combine is pressed.
+    let dir = std::env::temp_dir().join(format!("pdfcraft-os-combine-list-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = |name: &str| dir.join(name);
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbImage::from_pixel(40, 20, image::Rgb([90, 120, 200])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    for (name, bytes) in [("b.pdf", FIXTURE.to_vec()), ("photo.png", png.into_inner()), ("a.pdf", FIXTURE.to_vec()), ("c.pdf", FIXTURE.to_vec())] {
+        std::fs::write(dir.join(name), bytes).unwrap();
+    }
+    let (mut h, sender) = intake_harness();
+    // A running PdfCraft is handed a `--combine` list a file at a time (`single_instance`), since
+    // the intake sorts each batch.
+    for name in ["b.pdf", "missing.pdf", "photo.png", "a.pdf"] {
+        sender.open_for(vec![path(name)], "combine");
+    }
+    let names = |h: &Harness<'_, PdfCraftApp>| h.state().combine_draft.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+    support::wait_until(&mut h, "the files to combine", |app| app.combine_draft.len() == 3);
+    assert!(h.state().combine_showing(), "the Combine files tab shows");
+    h.run_steps(3);
+    assert_eq!(names(&h), ["b.pdf", "photo.png", "a.pdf"], "in the order the request lists them; the file that can't be read is left out");
+    assert!(h.state().combine_draft.iter().all(|f| f.bytes.starts_with(b"%PDF-") && f.problem.is_none()), "all PDFs, none with a problem");
+    h.get_by_label_contains("missing.pdf");
+    assert!(h.state().views.is_empty(), "nothing is opened or combined");
+    // A later launch's files join the same list, after the others.
+    sender.open_for(vec![path("c.pdf")], "combine");
+    support::wait_until(&mut h, "the later file", |app| app.combine_draft.len() == 4);
+    assert_eq!(names(&h), ["b.pdf", "photo.png", "a.pdf", "c.pdf"]);
+    assert!(h.state().views.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn files_and_quit_from_the_operating_system() {
     // #73: macOS hands Finder double-clicks, Open With and Dock drops over as Apple events.
     let name = format!("pdfcraft-os-open-{}.pdf", std::process::id());

@@ -459,7 +459,7 @@ impl PdfCraftApp {
     /// launch of its own and the running PdfCraft collects them here. Nothing to add shows the
     /// tab all the same.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn combine_paths(&mut self, ctx: &egui::Context, paths: &[String]) {
+    pub fn combine_paths(&mut self, _ctx: &egui::Context, paths: &[String]) {
         // A file still opening from before (another launch's Open), or waiting for its password,
         // opens in the background, so finishing doesn't hide the tab shown here; a later Open
         // still comes to the front. An open that something waits on keeps its focus: a chosen
@@ -477,8 +477,24 @@ impl PdfCraftApp {
             prompt.activate = false;
         }
         self.open_combine_tab();
-        let paths: Vec<std::path::PathBuf> = paths.iter().map(std::path::PathBuf::from).collect();
-        self.use_paths(ctx, crate::files::FilePurpose::Combine, &paths);
+        // A file that can't be read is said and left out; the others still join.
+        let mut incoming = Vec::new();
+        for path in paths.iter().map(std::path::Path::new) {
+            let name = path.file_name().map_or_else(|| path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+                    incoming.push(Incoming { name, bytes: Arc::new(bytes), modified, note: None, open_doc: None });
+                }
+                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+            }
+        }
+        if !incoming.is_empty() {
+            // Files handed over by the file manager keep the order they arrived in (the combined
+            // document follows it), not the sort a person last picked in the list.
+            self.combine_tab.sort = None;
+            self.stage_combine_with(incoming);
+        }
     }
 
     /// Add the PDFs, images and text files in `dir` to the Combine files list, as one undo step.
