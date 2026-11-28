@@ -6,6 +6,12 @@
 //! bytes, which PdfCraft's renderer may draw as other rows, and a JBIG2 page of other rows than the
 //! image's. Images whose codec PdfCraft can't decode (DCT, JPX), and those, return `None`, and the
 //! caller removes the whole image instead; that is fail-closed.
+//!
+//! An image's soft mask (`/SMask`) and explicit mask (a `/Mask` stream) are images of their own,
+//! mapped onto the same unit square (ISO 32000-2 §8.9.6.3, §11.6.5.3): each gets a cleared copy of
+//! its own, through the same code, so a picture with transparency (a PNG with an alpha channel, as
+//! a rule) keeps what the marks don't cover. A mask that can't be cleared removes the whole image,
+//! as before. A colour-key `/Mask` array holds no samples and stays as it is.
 
 use pdfcraft_content::{Matrix, overlaps};
 use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
@@ -38,18 +44,51 @@ pub(crate) fn components(doc: &Document, s: &Stream) -> Option<usize> {
     })
 }
 
-/// `Ok(Some(copy))` with the covered pixels cleared, `Ok(None)` when no pixel intersects,
-/// `Err(())` when the image can't be cleared (the caller removes it).
+/// An image with the covered pixels cleared, and the cleared copies of its masks.
+pub(crate) struct Cleared {
+    /// The image's copy. Its `/SMask` and `/Mask` still name the originals: the caller adds each
+    /// of `masks` to the document and points the entry at it.
+    pub image: Stream,
+    /// The mask entries (`/SMask`, `/Mask`) whose samples were under a mark, with their cleared
+    /// copies. A mask none of whose samples were covered keeps the original.
+    pub masks: Vec<(&'static [u8], Stream)>,
+}
+
+/// The mask entries of an image, which hold images of their own.
+const MASKS: [&[u8]; 2] = [b"SMask", b"Mask"];
+
+/// `Ok(Some(copy))` with the covered pixels cleared, in the image and in its masks, `Ok(None)` when
+/// no pixel intersects, `Err(())` when the image or one of its masks can't be cleared (the caller
+/// removes it).
 #[allow(clippy::result_unit_err)]
-pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Result<Option<Stream>, ()> {
-    decode_and_clear(doc, s, ctm, rects, budget).ok_or(())
+pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Result<Option<Cleared>, ()> {
+    let Some(image) = decode_and_clear(doc, s, ctm, rects, budget).ok_or(())? else { return Ok(None) };
+    let mut masks = Vec::new();
+    for key in MASKS {
+        let Some(entry) = s.dict.get(key) else { continue };
+        match &*crate::globals::followed(doc, entry) {
+            // A mask covers the image's unit square at a resolution of its own, so it is cleared
+            // through the same matrix. A mask with a mask of its own isn't one (§11.6.5.3): it,
+            // or anything it would keep, can't be told apart, so the image goes. A null entry,
+            // directly or through a reference, is as if absent (§7.3.7).
+            Object::Stream(m)
+                if !MASKS.iter().any(|k| m.dict.get(k).is_some_and(|e| !matches!(&*crate::globals::followed(doc, e), Object::Null))) =>
+            {
+                if let Some(copy) = decode_and_clear(doc, m, ctm, rects, budget).ok_or(())? {
+                    masks.push((key, copy));
+                }
+            }
+            // Colour-key masking: ranges of colours, no samples (§8.9.6.4).
+            Object::Array(_) if key == b"Mask" => {}
+            // A null entry is as if absent (§7.3.7).
+            Object::Null => {}
+            _ => return Err(()),
+        }
+    }
+    Ok(Some(Cleared { image, masks }))
 }
 
 fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Option<Option<Stream>> {
-    // Separate masks can retain the original image data.
-    if s.dict.contains(b"SMask") || s.dict.contains(b"Mask") {
-        return None;
-    }
     let supported = |n: &[u8]| {
         matches!(
             n,
