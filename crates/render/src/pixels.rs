@@ -33,6 +33,109 @@ impl Pixels {
     pub(crate) fn byte_capacity(&self) -> usize {
         self.0.capacity().saturating_mul(4)
     }
+
+    /// Invert all color channels in place.
+    ///
+    /// In premultiplied RGBA8, each color channel is bounded by alpha `a` (`0 <= c <= a`).
+    /// Inverting the color while preserving alpha produces `a - c`. For opaque pixels
+    /// (`a == 255`), this simplifies to `255 - c`. Transparent pixels (`a == 0`) remain
+    /// transparent. Inverting twice is an exact identity.
+    pub fn invert(&mut self) {
+        for chunk in self.bytes_mut().as_chunks_mut::<4>().0 {
+            let a = chunk[3];
+            chunk[0] = a.saturating_sub(chunk[0]);
+            chunk[1] = a.saturating_sub(chunk[1]);
+            chunk[2] = a.saturating_sub(chunk[2]);
+        }
+    }
+
+    /// Invert with a chosen palette: a white page pixel becomes `palette.paper` and a black one
+    /// `palette.ink`, with every other value in between per channel (so colour images keep their
+    /// hues, inverted). The default palette (black paper, white ink) is exactly [`Self::invert`].
+    pub fn recolor(&mut self, palette: InvertPalette) {
+        if palette == InvertPalette::default() {
+            return self.invert();
+        }
+        for chunk in self.bytes_mut().as_chunks_mut::<4>().0 {
+            let a = i32::from(chunk[3]);
+            for (c, (&paper, &ink)) in chunk[..3].iter_mut().zip(palette.paper.iter().zip(&palette.ink)) {
+                let (paper, ink) = (i32::from(paper), i32::from(ink));
+                // Premultiplied: the paper share of the pixel plus the ink share, `a - c` of 255.
+                let v = (paper * a + (ink - paper) * (a - i32::from(*c).min(a))) / 255;
+                *c = v.clamp(0, a) as u8;
+            }
+        }
+    }
+}
+
+/// The colours a page takes in inverted (dark) reading mode. The default, black paper and white
+/// ink, is a plain colour inversion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct InvertPalette {
+    /// What the page background (white in the document) becomes.
+    pub paper: [u8; 3],
+    /// What black text and line art become.
+    pub ink: [u8; 3],
+}
+
+impl InvertPalette {
+    /// Pure black paper and pure white ink (high contrast).
+    pub const PURE: Self = Self { paper: [0, 0, 0], ink: [255, 255, 255] };
+    /// Soft dark gray paper (#222226) and off-white ink (#dcdcdc), a restful dark theme.
+    pub const SOFT_DARK: Self = Self { paper: [0x22, 0x22, 0x26], ink: [0xdc, 0xdc, 0xdc] };
+    /// Warm sepia night reading.
+    pub const SEPIA: Self = Self { paper: [0x2a, 0x24, 0x20], ink: [0xea, 0xd8, 0xc4] };
+}
+
+impl InvertPalette {
+    /// The palette a tool or setting names: `soft_dark`, `black_and_white` or `sepia`, or
+    /// `custom` with `paper` and `ink` as `#rrggbb`. The colours belong to `custom` alone.
+    pub fn parse(name: &str, paper: Option<&str>, ink: Option<&str>) -> Result<Self, String> {
+        let preset = match name {
+            "soft_dark" => Some(Self::SOFT_DARK),
+            "black_and_white" => Some(Self::PURE),
+            "sepia" => Some(Self::SEPIA),
+            "custom" => None,
+            other => return Err(format!("unknown palette {other:?}; expected soft_dark, black_and_white, sepia or custom")),
+        };
+        match (preset, paper, ink) {
+            (Some(palette), None, None) => Ok(palette),
+            (Some(_), _, _) => Err("paper and ink only go with palette \"custom\"".into()),
+            (None, Some(paper), Some(ink)) => {
+                Ok(Self { paper: crate::reading::parse_hex("paper", paper)?, ink: crate::reading::parse_hex("ink", ink)? })
+            }
+            (None, _, _) => Err("palette \"custom\" needs both paper and ink (#rrggbb)".into()),
+        }
+    }
+
+    /// The name [`Self::parse`] accepts for this palette: a preset's, or `custom`.
+    pub fn name(&self) -> &'static str {
+        if *self == Self::SOFT_DARK {
+            "soft_dark"
+        } else if *self == Self::PURE {
+            "black_and_white"
+        } else if *self == Self::SEPIA {
+            "sepia"
+        } else {
+            "custom"
+        }
+    }
+
+    /// The paper colour as lowercase `#rrggbb`.
+    pub fn paper_hex(&self) -> String {
+        crate::reading::hex(self.paper)
+    }
+
+    /// The ink colour as lowercase `#rrggbb`.
+    pub fn ink_hex(&self) -> String {
+        crate::reading::hex(self.ink)
+    }
+}
+
+impl Default for InvertPalette {
+    fn default() -> Self {
+        Self::PURE
+    }
 }
 
 /// Pixels from words, one per pixel, its bytes in R, G, B, A memory order.
@@ -59,6 +162,80 @@ impl AsRef<[u8]> for Pixels {
 impl std::fmt::Debug for Pixels {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Pixels({} bytes)", self.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recolor_maps_white_to_paper_and_black_to_ink() {
+        let palette = InvertPalette { paper: [20, 30, 40], ink: [200, 210, 220] };
+        let mut pixels = Pixels::from(vec![
+            u32::from_ne_bytes([255, 255, 255, 255]),
+            u32::from_ne_bytes([0, 0, 0, 255]),
+            u32::from_ne_bytes([0, 0, 0, 0]),
+            // Malformed premultiplied pixel (c > a) must not panic or wrap.
+            u32::from_ne_bytes([255, 0, 9, 10]),
+        ]);
+        pixels.recolor(palette);
+        assert_eq!(&pixels[0..4], &[20, 30, 40, 255]);
+        assert_eq!(&pixels[4..8], &[200, 210, 220, 255]);
+        assert_eq!(&pixels[8..12], &[0, 0, 0, 0]);
+        assert!(pixels[12..15].iter().all(|&c| c <= 10));
+        // The default palette is exactly the plain inversion.
+        let (mut a, mut b) =
+            (Pixels::from(vec![u32::from_ne_bytes([200, 100, 50, 255])]), Pixels::from(vec![u32::from_ne_bytes([200, 100, 50, 255])]));
+        a.recolor(InvertPalette::default());
+        b.invert();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn palettes_parse_by_name_and_round_trip() {
+        for palette in [InvertPalette::SOFT_DARK, InvertPalette::PURE, InvertPalette::SEPIA] {
+            assert_eq!(InvertPalette::parse(palette.name(), None, None), Ok(palette));
+        }
+        let custom = InvertPalette::parse("custom", Some("#102030"), Some("#A0B0C0")).unwrap();
+        assert_eq!((custom.paper, custom.ink, custom.name()), ([0x10, 0x20, 0x30], [0xa0, 0xb0, 0xc0], "custom"));
+        assert_eq!((custom.paper_hex().as_str(), custom.ink_hex().as_str()), ("#102030", "#a0b0c0"));
+        // Colours belong to custom alone, custom needs both, and nothing else parses.
+        assert!(InvertPalette::parse("sepia", Some("#000000"), None).is_err());
+        assert!(InvertPalette::parse("custom", Some("#000000"), None).is_err());
+        assert!(InvertPalette::parse("custom", Some("#00000"), Some("#ffffff")).is_err());
+        assert!(InvertPalette::parse("neon", None, None).is_err());
+    }
+
+    #[test]
+    fn invert_pixels_preserves_alpha_and_round_trips() {
+        let mut pixels = Pixels::from(vec![
+            // Opaque white -> black
+            u32::from_ne_bytes([255, 255, 255, 255]),
+            // Opaque black -> white
+            u32::from_ne_bytes([0, 0, 0, 255]),
+            // Opaque color [200, 100, 50, 255] -> [55, 155, 205, 255]
+            u32::from_ne_bytes([200, 100, 50, 255]),
+            // Fully transparent [0, 0, 0, 0] -> [0, 0, 0, 0]
+            u32::from_ne_bytes([0, 0, 0, 0]),
+            // Semi-transparent [50, 25, 10, 100] -> [50, 75, 90, 100]
+            u32::from_ne_bytes([50, 25, 10, 100]),
+        ]);
+
+        pixels.invert();
+        assert_eq!(&pixels[0..4], &[0, 0, 0, 255]);
+        assert_eq!(&pixels[4..8], &[255, 255, 255, 255]);
+        assert_eq!(&pixels[8..12], &[55, 155, 205, 255]);
+        assert_eq!(&pixels[12..16], &[0, 0, 0, 0]);
+        assert_eq!(&pixels[16..20], &[50, 75, 90, 100]);
+
+        // Double inversion returns exactly to original
+        pixels.invert();
+        assert_eq!(&pixels[0..4], &[255, 255, 255, 255]);
+        assert_eq!(&pixels[4..8], &[0, 0, 0, 255]);
+        assert_eq!(&pixels[8..12], &[200, 100, 50, 255]);
+        assert_eq!(&pixels[12..16], &[0, 0, 0, 0]);
+        assert_eq!(&pixels[16..20], &[50, 25, 10, 100]);
     }
 }
 

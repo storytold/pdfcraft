@@ -115,6 +115,10 @@ impl Behavior {
 #[serde(default)]
 pub struct View {
     pub reading_colors: Option<pdfcraft_render::ReadingColors>,
+    /// The inverted view for night reading: whether it is on, its palette and its mode.
+    pub invert_colors: Option<bool>,
+    pub invert_palette: Option<pdfcraft_render::InvertPalette>,
+    pub invert_keep_images: Option<bool>,
     /// Absent follows the system: TOML has no null.
     pub ui_scale: Option<f64>,
     pub date_format: Option<String>,
@@ -604,6 +608,9 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
         let mut r = Reader::new(&root, View::KEY, &mut errors);
         View {
             reading_colors: r.typed("reading_colors"),
+            invert_colors: r.bool("invert_colors"),
+            invert_palette: r.typed("invert_palette"),
+            invert_keep_images: r.bool("invert_keep_images"),
             ui_scale: r.f64("ui_scale"),
             date_format: r.string("date_format"),
             date_language: r.string("date_language"),

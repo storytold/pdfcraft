@@ -1698,13 +1698,17 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let allowed = doc.allows_annotation();
     let can_modify = doc.allows_modification();
     let form = doc.form.clone();
-    let paper = app.session.reading_colors(doc_id).and_then(|c| c.params).map_or(Color32::WHITE, |p| {
-        let [r, g, b] = p.background;
-        Color32::from_rgb(r, g, b)
-    });
+    let paper = page_paper(app, doc_id);
     let table_preview = crate::field_table_ui::preview(&mut app.dialogs, doc_id);
     // Full screen shows the pages on black, as production does.
-    let surround = if app.full_screen_document() { PasteboardColor::Black } else { PasteboardColor::Default };
+    // Around an inverted (dark) page the light theme's pale pasteboard would glare.
+    let surround = if app.full_screen_document() {
+        PasteboardColor::Black
+    } else if app.invert_colors && !ui.visuals().dark_mode {
+        PasteboardColor::DarkGray
+    } else {
+        PasteboardColor::Default
+    };
     let view = &mut app.views[index];
     // PLAN: assumed `page_tools::seen_tool(&PageSession, QuickTool) -> QuickTool`, the placing rule `page_tool`
     // applies (copied comments on the pointer make the page see Select), so the parts gate on the same tool.
@@ -2326,3 +2330,14 @@ mod tests;
 pub(crate) use page_box_drag::PageBoxDrag;
 pub(crate) mod page_menu;
 pub(crate) mod page_select;
+
+/// A page's colour before its raster arrives: the inverted view's paper (both its modes clear
+/// white to it), else the reading-colours background, else white.
+fn page_paper(app: &PdfCraftApp, id: pdfcraft_engine::DocId) -> Color32 {
+    let [r, g, b] = if app.invert_colors {
+        app.invert_palette.paper
+    } else {
+        app.session.reading_colors(id).and_then(|c| c.params).map_or([255, 255, 255], |p| p.background)
+    };
+    Color32::from_rgb(r, g, b)
+}

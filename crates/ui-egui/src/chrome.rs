@@ -97,10 +97,34 @@ fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     };
     // The button names the choice it shows; a click steps to the next one.
     let theme_label = format!("{}: {theme_label}", tl!("Display theme"));
+    // Night reading: a click inverts the page colours; a right-click picks the mode and palette.
+    let (invert_on, keep_images, palette) = (app.invert_colors, app.invert_keep_images, app.invert_palette);
+    let invert_pick = std::cell::Cell::new(None);
     let out = TitleBar::new()
         .trailing(|ui, _| {
             Button::command("help.discord").label("Discord").icon(IconId::new("messages-square")).tooltip(tl!("Join the ArtCraft Discord")).show(ui);
             IconButton::command(IconId::new("circle-help"), "help.shortcuts").show(ui);
+            let invert_button = IconButton::command(IconId::new("contrast"), "view.invert_colors").selected(invert_on).show(ui);
+            let opener = invert_button.response().clone();
+            Menu::context(tl!("Invert colors"), &opener).show(ui, |ui, _| {
+                MenuItem::command("view.invert_colors").show(ui);
+                for (keep, label) in [(false, tl!("Invert everything")), (true, tl!("Text only, keep images"))] {
+                    if MenuItem::new(label).radio_mark(keep_images == keep).show(ui).ran {
+                        invert_pick.set(Some(InvertPick::Mode(keep)));
+                    }
+                }
+                for (preset, label) in [
+                    (pdfcraft_render::InvertPalette::SOFT_DARK, tl!("Soft dark gray")),
+                    (pdfcraft_render::InvertPalette::PURE, tl!("Black and white")),
+                    (pdfcraft_render::InvertPalette::SEPIA, tl!("Sepia night")),
+                ] {
+                    if MenuItem::new(label).radio_mark(palette == preset).show(ui).ran {
+                        invert_pick.set(Some(InvertPick::Palette(preset)));
+                    }
+                }
+                let appearance = CommandRef::with_params("app.preferences", serde_json::json!({ "tab": "appearance" }));
+                MenuItem::command(appearance).label(tl!("Appearance settings…")).show(ui);
+            });
             let theme_button = IconButton::command(IconId::new(theme_icon), ThemeChoice::NextMode.command()).label(theme_label.clone()).show(ui);
             let opener = theme_button.response().clone();
             Menu::context(tl!("Appearance"), &opener).show(ui, |ui, _| {
@@ -121,6 +145,26 @@ fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if out.close_requested {
         app.request_quit(&ctx);
     }
+    // Picking a mode or a palette also turns the inverted view on.
+    match invert_pick.into_inner() {
+        Some(InvertPick::Mode(keep)) => {
+            app.set_invert_keep_images(keep);
+            app.set_invert_colors(true);
+        }
+        Some(InvertPick::Palette(preset)) => {
+            app.set_invert_palette(preset);
+            app.set_invert_colors(true);
+        }
+        None => {}
+    }
+}
+
+/// A choice in the right-click menu of the title bar's invert-colours button.
+#[derive(Clone, Copy)]
+enum InvertPick {
+    /// Text only with pictures kept (`true`), or every pixel.
+    Mode(bool),
+    Palette(pdfcraft_render::InvertPalette),
 }
 
 /// What the rail shows under the page box: the page count, or, when the current page's label is

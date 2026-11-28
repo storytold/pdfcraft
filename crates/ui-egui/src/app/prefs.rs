@@ -122,6 +122,45 @@ impl PdfCraftApp {
         }
     }
 
+    /// Gives document `id` the app-wide inverted view: whether it is on, its mode and its palette.
+    /// The engine decides what that means for drawing, so the reading-colours preference is left
+    /// alone and comes back when the view is turned off. `true` when anything changed.
+    pub(crate) fn apply_invert(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let keep = self.session.set_invert_keep_images(id, self.invert_keep_images);
+        let palette = self.session.set_invert_palette(id, self.invert_palette);
+        let on = self.session.set_invert_colors(id, self.invert_colors);
+        keep || palette || on
+    }
+
+    /// [`Self::apply_invert`] for every open document; the ones it touches re-render.
+    fn apply_invert_all(&mut self) {
+        for i in 0..self.views.len() {
+            let id = self.views[i].id;
+            if self.apply_invert(id) {
+                self.views[i].invalidate_content();
+            }
+        }
+    }
+
+    /// Invert page colours (View ▸ Invert colors): sets the app-wide preference and applies it to
+    /// every open document. The files never change.
+    pub fn set_invert_colors(&mut self, invert: bool) {
+        self.invert_colors = invert;
+        self.apply_invert_all();
+    }
+
+    /// Set the paper and ink colours of the inverted view, for every open document.
+    pub fn set_invert_palette(&mut self, palette: pdfcraft_render::InvertPalette) {
+        self.invert_palette = palette;
+        self.apply_invert_all();
+    }
+
+    /// Whether the inverted view keeps pictures as they are (text only) or inverts every pixel.
+    pub fn set_invert_keep_images(&mut self, keep: bool) {
+        self.invert_keep_images = keep;
+        self.apply_invert_all();
+    }
+
     /// Today in `fmt` (or Preferences ▸ Date format), with month and weekday names in the date
     /// language, or the interface language when it follows that.
     pub fn date_text(&self, fmt: Option<&str>) -> Result<String, String> {
@@ -199,6 +238,9 @@ impl PdfCraftApp {
         };
         let view = settings::View {
             reading_colors: Some(self.reading_colors),
+            invert_colors: Some(self.invert_colors),
+            invert_palette: Some(self.invert_palette),
+            invert_keep_images: Some(self.invert_keep_images),
             ui_scale: self.ui_scale.map(f64::from),
             date_format: Some(self.session.date_format().to_string()),
             date_language: self.session.date_language().map(str::to_string),
@@ -533,6 +575,16 @@ impl PdfCraftApp {
     fn apply_view(&mut self, v: &settings::View) {
         if let Some(colors) = v.reading_colors {
             self.reading_colors = colors;
+        }
+        if let Some(on) = v.invert_colors {
+            self.invert_colors = on;
+        }
+        // Settings are untrusted: a palette that isn't two #rgb byte triples keeps the default.
+        if let Some(palette) = v.invert_palette {
+            self.invert_palette = palette;
+        }
+        if let Some(keep) = v.invert_keep_images {
+            self.invert_keep_images = keep;
         }
         // A size out of range follows the system, and so does none: TOML has no null to save it as.
         self.ui_scale = v.ui_scale.and_then(ui_scale::valid);

@@ -73,6 +73,9 @@ struct PrefsDraft {
     system_title_bar: bool,
     show_page_edge_shadows: bool,
     reading_colors: pdfcraft_render::ReadingColors,
+    invert_colors: bool,
+    invert_keep_images: bool,
+    invert_palette: pdfcraft_render::InvertPalette,
     default_mode: Mode,
     view_defaults: ViewDefaults,
     full_screen_fill: bool,
@@ -109,6 +112,9 @@ impl PrefsDraft {
             system_title_bar: app.title_bar_choice == TitleBarPref::System,
             show_page_edge_shadows: app.show_page_edge_shadows,
             reading_colors: app.reading_colors,
+            invert_colors: app.invert_colors,
+            invert_keep_images: app.invert_keep_images,
+            invert_palette: app.invert_palette,
             default_mode: app.default_mode,
             view_defaults: app.view_defaults,
             full_screen_fill: app.full_screen_fill,
@@ -150,6 +156,9 @@ impl PrefsDraft {
             system_title_bar: false,
             show_page_edge_shadows: true,
             reading_colors: Default::default(),
+            invert_colors: false,
+            invert_keep_images: true,
+            invert_palette: pdfcraft_render::InvertPalette::default(),
             default_mode: Mode::AllTools,
             view_defaults: ViewDefaults::default(),
             full_screen_fill: true,
@@ -383,6 +392,20 @@ fn reading_presets() -> [(&'static str, &'static str, pdfcraft_render::ReadingCo
     ]
 }
 
+/// The inverted view's modes: every pixel, or text and line art only with pictures kept.
+fn invert_mode_table<'a>() -> Table<'a, bool> {
+    vec![(false, "everything", tl!("Invert everything")), (true, "keep_images", tl!("Text only, keep images"))]
+}
+
+/// The inverted view's preset palettes, by the names `InvertPalette::name` gives them.
+fn invert_presets() -> [(pdfcraft_render::InvertPalette, &'static str, &'static str); 3] {
+    [
+        (pdfcraft_render::InvertPalette::SOFT_DARK, "soft_dark", tl!("Soft dark gray")),
+        (pdfcraft_render::InvertPalette::PURE, "black_and_white", tl!("Black and white")),
+        (pdfcraft_render::InvertPalette::SEPIA, "sepia", tl!("Sepia night")),
+    ]
+}
+
 fn rgb(c: [u8; 3]) -> Rgba {
     Rgba([c[0], c[1], c[2], 255])
 }
@@ -463,6 +486,17 @@ impl PreferencesModel for Prefs<'_> {
                     p.line_art = v;
                 }
             }
+            ("appearance.invert.on", PrefValue::Bool(v)) => d.invert_colors = v,
+            ("appearance.invert.mode", PrefValue::Choice(id)) => {
+                d.invert_keep_images = lookup(&invert_mode_table(), &id).unwrap_or(d.invert_keep_images)
+            }
+            ("appearance.invert.palette", PrefValue::Choice(id)) => {
+                if let Some((palette, ..)) = invert_presets().into_iter().find(|(_, name, _)| *name == id) {
+                    d.invert_palette = palette;
+                }
+            }
+            ("appearance.invert.paper", PrefValue::Color(c)) => d.invert_palette.paper = [c.0[0], c.0[1], c.0[2]],
+            ("appearance.invert.ink", PrefValue::Color(c)) => d.invert_palette.ink = [c.0[0], c.0[1], c.0[2]],
             ("view.mode", PrefValue::Choice(id)) => d.default_mode = lookup(&mode_table(), &id).unwrap_or(d.default_mode),
             ("view.layout", PrefValue::Choice(id)) => d.view_defaults.display = lookup(&layout_table(), &id).unwrap_or(d.view_defaults.display),
             ("view.continuous", PrefValue::Bool(v)) => d.view_defaults.continuous = v,
@@ -558,6 +592,9 @@ impl PreferencesModel for Prefs<'_> {
                 *self.selection = SelectionChange::default();
                 d.show_page_edge_shadows = fresh.show_page_edge_shadows;
                 d.reading_colors = fresh.reading_colors;
+                d.invert_colors = fresh.invert_colors;
+                d.invert_keep_images = fresh.invert_keep_images;
+                d.invert_palette = fresh.invert_palette;
                 d.highlight_fields = fresh.highlight_fields;
             }
             "documents" => {
@@ -638,6 +675,9 @@ impl PreferencesDraft for Prefs<'_> {
         }
         self.app.show_page_edge_shadows = d.show_page_edge_shadows;
         self.app.set_reading_colors(d.reading_colors);
+        self.app.set_invert_keep_images(d.invert_keep_images);
+        self.app.set_invert_palette(d.invert_palette);
+        self.app.set_invert_colors(d.invert_colors);
         self.app.default_mode = d.default_mode;
         self.app.view_defaults = d.view_defaults;
         self.app.full_screen_fill = d.full_screen_fill;
@@ -751,6 +791,17 @@ impl Prefs<'_> {
             RowSpec::new("appearance.reading.line_art", tl!("Change the colour of line art as well as text"), RowKind::Bool(line_art))
                 .enabled(custom),
         ];
+        // While it is on, the inverted view replaces the reading colours above, which come back when it is off.
+        let palette = d.invert_palette.name();
+        let mut palettes: Vec<_> = invert_presets().iter().map(|(_, id, label)| Entry::new(*id, *label)).collect();
+        palettes.push(Entry::new("custom", tl!("Custom")));
+        let invert = vec![
+            RowSpec::new("appearance.invert.on", tl!("Invert colors"), RowKind::Bool(d.invert_colors)),
+            choice_row("appearance.invert.mode", tl!("Invert"), d.invert_keep_images, &invert_mode_table()),
+            RowSpec::new("appearance.invert.palette", tl!("Palette"), RowKind::choice(palette, palettes)),
+            RowSpec::new("appearance.invert.paper", tl!("Inverted page background"), RowKind::Color(rgb(d.invert_palette.paper))),
+            RowSpec::new("appearance.invert.ink", tl!("Inverted text"), RowKind::Color(rgb(d.invert_palette.ink))),
+        ];
         let display = vec![
             RowSpec::new("appearance.edge_shadows", tl!("Show Page Edge Shadows"), RowKind::Bool(d.show_page_edge_shadows)),
             RowSpec::new("appearance.highlight_fields", tl!("Highlight fields"), RowKind::Bool(d.highlight_fields)),
@@ -758,6 +809,7 @@ impl Prefs<'_> {
         PageSpec::custom("appearance", tl_ctx!("theme", "Appearance"))
             .group(GroupSpec::new(None, display))
             .group(GroupSpec::new(Some(tl!("Reading colours")), reading))
+            .group(GroupSpec::new(Some(tl!("Invert colors")), invert))
             .footnote(tl!("Colours are remapped while rendering; the document itself never changes."))
     }
 
