@@ -459,6 +459,11 @@ struct SignedDataInput<'a> {
 fn build(input: SignedDataInput<'_>) -> Result<Vec<u8>, SignError> {
     use craft_pkcs7::cms::{SigningCertificate, SigningInput};
     let SignedDataInput { key, cert, chain, alg, content_type, content, content_digest } = input;
+    // RFC 8419 §3.1: with signed attributes, an Ed25519 signer's digest algorithm is SHA-512.
+    // PureEdDSA ignores `alg` when signing, so another digest would be named but not checked.
+    if matches!(key.public_key(), crate::keys::PublicKey::Ed25519(_)) && alg != DigestAlg::Sha512 {
+        return Err(SignError::Unsupported(format!("{} with Ed25519 (RFC 8419 requires SHA-512)", alg.name())));
+    }
     let chain: Vec<&[u8]> = chain.iter().map(|c| c.raw.as_slice()).collect();
     // Keep the app's platform/keychain provider and error intact. Only the public certificate
     // material and exact signed-attribute bytes cross the shared writer boundary.

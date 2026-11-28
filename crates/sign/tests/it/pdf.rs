@@ -3834,3 +3834,62 @@ fn the_catalogs_perms_do_not_change_under_no_changes() {
         );
     }
 }
+
+/// #7083: a digital ID with an Ed25519 key (PKCS #8 OID 1.3.101.112) signs. The CMS follows
+/// RFC 8419: SHA-512 digests the document, id-Ed25519 names the signature, and the signature is
+/// over the signed attributes themselves. It survives a .p12 round trip and validates like the
+/// other key types: trusted it is valid, and a changed byte makes it invalid.
+#[test]
+fn an_ed25519_digital_id_signs_and_validates() {
+    // RFC 8032 §7.1 test 1: the seed and the public key it gives.
+    let seed: [u8; 32] = [
+        0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69,
+        0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60,
+    ];
+    let public: [u8; 32] = [
+        0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23,
+        0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a,
+    ];
+    // PrivateKeyInfo (RFC 8410 §7): version 0, id-Ed25519, and the seed as a CurvePrivateKey.
+    let pkcs8 = der::seq(&[&der::int(0), &der::seq(&[&der::oid("1.3.101.112")]), &der::octets(&der::octets(&seed))]);
+    let key = pdfcraft_sign::PrivateKey::from_pkcs8(&pkcs8).unwrap();
+    let name = Name::build("Ada Lovelace", "", "", "", "");
+    // Valid from before `opts`' signing time.
+    let from = Time { year: 2026, month: 10, day: 1, hour: 0, minute: 0, second: 0 };
+    let certificate = Certificate::self_signed(&name, &key, from, 5, &[0x25, 0x51]).unwrap();
+    assert!(certificate.is_self_signed(), "the certificate's own Ed25519 signature checks");
+    assert_eq!(certificate.public_key, pdfcraft_sign::PublicKey::Ed25519(public.to_vec()), "the key RFC 8032 gives for the seed");
+    let id = DigitalId { key, certificate, chain: Vec::new(), friendly_name: None };
+    let id = pkcs12::open(&pkcs12::write(&id, "s3cret12").unwrap(), "s3cret12").unwrap();
+
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let doc = open(&signed);
+    let s = signatures(&doc, &signed, &TrustStore::default()).into_iter().find(|s| s.signed).expect("a signed field");
+    assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("identity is unknown")), "{:?}", s.details);
+    let trusted = signatures(&doc, &signed, &TrustStore { certs: vec![id.certificate.clone()] });
+    let s = trusted.iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+
+    // SHA-512 for the content, id-Ed25519 for the signature.
+    assert_eq!(s.digest, Some(pdfcraft_sign::DigestAlg::Sha512));
+    assert_eq!(s.algorithm.as_deref(), Some("Ed25519 with SHA-512"));
+
+    let mut tampered = signed.clone();
+    let i = tampered.windows(13).position(|w| w == b"Contract text").unwrap();
+    tampered[i] = b'K';
+    let s = signatures(&open(&tampered), &tampered, &TrustStore { certs: vec![id.certificate.clone()] }).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+
+    // RFC 8419 §3.1: an Ed25519 CMS names SHA-512 only. Asked for another digest, it refuses
+    // rather than write a SignerInfo whose digest the signature doesn't follow.
+    for alg in [pdfcraft_sign::DigestAlg::Sha256, pdfcraft_sign::DigestAlg::Sha384] {
+        let digest = alg.digest(&[b"content"]);
+        let r = pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &[], alg, &digest);
+        assert!(matches!(r, Err(pdfcraft_sign::SignError::Unsupported(_))), "{alg:?}: {r:?}");
+        let r = pdfcraft_sign::cms::sign_encapsulated(&id.key, &id.certificate, &[], alg, "1.2.840.113549.1.7.1", b"content");
+        assert!(matches!(r, Err(pdfcraft_sign::SignError::Unsupported(_))), "{alg:?}: {r:?}");
+    }
+    let digest = pdfcraft_sign::DigestAlg::Sha512.digest(&[b"content"]);
+    pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &[], pdfcraft_sign::DigestAlg::Sha512, &digest).unwrap();
+}
