@@ -71,7 +71,8 @@ needs a prompt to open is listed and asks at signing (issue #179).
 - **Validation:** `/ByteRange` and the CMS are read from the file's own bytes; the digest,
   the signature value and the signer's chain (against a `TrustStore`) are checked. Later
   revisions are diffed against the signed one, and the changes are classified (signing, form
-  fill, comments, metadata, page content, document structure) under the DocMDP permissions.
+  fill, comments, metadata, page content, document structure, pages added from the signed
+  page templates) under the DocMDP permissions.
   The verdict follows Acrobat: valid, unknown (intact but the identity isn't trusted) or invalid.
 - **Chains are checked, not just linked.** `x509::build_chain` only takes an issuer whose key
   verifies the certificate below it *and* that may issue: `basicConstraints` CA:TRUE (an old v1
