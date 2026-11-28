@@ -65,8 +65,9 @@ pub struct Focus {
 #[derive(Clone, Debug, Default)]
 pub struct FormView {
     pub focus: Option<Focus>,
-    /// The draft whose edit is queued (`DocView::pending_edit`): if the field refuses the value,
-    /// the editor reopens with it rather than losing the typing.
+    /// The draft whose edit is queued (`DocView::pending_edit`): if the field's format refuses
+    /// the value, the editor reopens with it rather than losing the typing. A value the field's
+    /// validate action rejects is dropped, and the field keeps its value.
     pub(crate) committed: Option<Focus>,
     /// The editor handed the keys on (Tab, Shift+Tab): the field the session moved to takes the key focus in the
     /// next pass, from its page part, as Tab onto the part would give it.

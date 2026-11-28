@@ -11,8 +11,13 @@ impl PdfCraftApp {
     pub(super) fn prepare_raw_input(&mut self, ctx: &egui::Context, _raw: &mut egui::RawInput) {
         self.set_title_bar_choice(ctx, self.title_bar_choice);
         self.control_before_input(ctx);
+        let typing_refused = std::mem::take(&mut self.typing_refused);
         embed::before_input(ctx, |output| {
             for fired in &output.fired {
+                // A key pressed with typing the field refused (⌘S right after Enter) goes with the refusal.
+                if typing_refused && fired.source == craft::ui::runtime::commands::FireSource::Key {
+                    continue;
+                }
                 self.run_fired(ctx, fired);
             }
             for declined in &output.declined {

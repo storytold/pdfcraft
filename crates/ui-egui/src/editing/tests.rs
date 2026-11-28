@@ -267,3 +267,62 @@ fn recolouring_print_ink_text_in_its_box_drops_the_ink_without_an_empty_step() {
     let finished = finish(&mut app);
     assert!(finished.is_none(), "an empty Undo step: {finished:?}");
 }
+
+/// One page with a text field `qty` (value 4) whose validate action (ISO 32000-2 Table 199
+/// `/V`) rejects anything over 100.
+fn validated_form() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (qty) /V (4) /Rect [20 350 280 372] /P 3 0 R /F 4 /AA << /V << /S /JavaScript /JS (if (event.value > 100) { app.alert('At most 100'); event.rc = false; }) >> >> >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// #4498: a toolbar Save (Organize ▸ Save pages) queued in the frame whose typed value the
+/// validate action rejects does not run behind the refusal, just as a ⌘S pressed with it does not.
+#[test]
+fn a_save_action_queued_with_a_rejected_value_does_not_run() {
+    let (mut h, files, jobs) = shown_with_picks();
+    let ctx = egui::Context::default();
+    let app = h.state_mut();
+    app.open_bytes(&ctx, "order.pdf", None, validated_form()).unwrap();
+    app.active = Some(0);
+    let view = &mut app.views[0];
+    view.session.forms.committed = Some(crate::forms_ui::Focus {
+        name: "qty".into(),
+        obj: None,
+        widget: 0,
+        text: "4500".into(),
+        picked: Vec::new(),
+        selection: Default::default(),
+        list_open: false,
+        calendar_open: false,
+    });
+    view.session.pending_edit =
+        Some(pdfcraft_engine::Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_engine::FieldValue::Text("4500".into()) });
+    view.pending_action = Some(crate::canvas::ViewAction::Save);
+    assert!(!app.process_pending_edits(&ctx), "the validate action rejects 4500");
+    assert!(app.views[0].pending_action.is_none(), "the queued Save is not left to run later");
+    for _ in 0..4 {
+        jobs.run_all();
+        h.run_steps(1);
+    }
+    assert!(files.requests().is_empty(), "the queued Save does not run behind the refusal: {:?}", files.requests());
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.form.iter().find(|f| f.name == "qty").map(|f| f.value.clone()), Some(vec!["4".to_string()]), "qty keeps its value");
+}

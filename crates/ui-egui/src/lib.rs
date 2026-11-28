@@ -261,6 +261,9 @@ pub struct PdfCraftApp {
     /// The active document during the previous frame, so a deferred keyboard Save from that frame
     /// never saves a different document that became active before the next frame's `before_input`.
     pub(crate) last_frame_active: Option<DocId>,
+    /// A field refused the typing committed this frame: the shortcuts pressed in the same frame
+    /// (⌘S right after Enter), which fire at the start of the next, don't run behind the refusal.
+    pub(crate) typing_refused: bool,
     pub mode: Mode,
     /// Workspace used for newly opened PDFs; independent of PDF Initial View metadata.
     pub default_mode: Mode,
